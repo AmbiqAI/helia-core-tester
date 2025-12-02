@@ -255,12 +255,22 @@ def setup_cmsis5(downloads_dir: Path, force: bool = False) -> None:
     """Clone CMSIS-5 repository."""
     cmsis5_dir = downloads_dir / "CMSIS_5"
     
-    if cmsis5_dir.exists() and not force:
+    # Check if it's a valid installation (has .git or CMSIS subdirectory)
+    is_valid_install = cmsis5_dir.exists() and (
+        (cmsis5_dir / ".git").exists() or 
+        (cmsis5_dir / "CMSIS").exists()
+    )
+    
+    if is_valid_install and not force:
         print("CMSIS-5 already installed. If you wish to install a new version, please delete the old folder.")
         return
     
     if force and cmsis5_dir.exists():
         print("Removing existing CMSIS-5 installation...")
+        shutil.rmtree(cmsis5_dir)
+    elif cmsis5_dir.exists() and not is_valid_install:
+        # Directory exists but is empty/invalid, remove it
+        print("Removing invalid/empty CMSIS-5 directory...")
         shutil.rmtree(cmsis5_dir)
     
     print("Cloning CMSIS-5...")
@@ -277,17 +287,27 @@ def setup_ethos_u_platform(downloads_dir: Path, force: bool = False) -> None:
     """Clone Ethos-U core platform repository."""
     ethos_dir = downloads_dir / "ethos-u-core-platform"
     
-    if ethos_dir.exists() and not force:
+    # Check if it's a valid installation (has .git or core_platform subdirectory)
+    is_valid_install = ethos_dir.exists() and (
+        (ethos_dir / ".git").exists() or 
+        (ethos_dir / "core_platform").exists()
+    )
+    
+    if is_valid_install and not force:
         print("Ethos-U core platform already installed. If you wish to install a new version, please delete the old folder.")
         return
     
     if force and ethos_dir.exists():
         print("Removing existing Ethos-U core platform installation...")
         shutil.rmtree(ethos_dir)
+    elif ethos_dir.exists() and not is_valid_install:
+        # Directory exists but is empty/invalid, remove it
+        print("Removing invalid/empty Ethos-U core platform directory...")
+        shutil.rmtree(ethos_dir)
     
     print("Cloning Ethos-U core platform...")
     run_command(
-        ["git", "clone", "--quiet", "--depth=1", "https://review.mlplatform.org/ml/ethos-u/ethos-u-core-platform"],
+        ["git", "clone", "--quiet", "--depth=1", "https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-core-platform.git"],
         cwd=downloads_dir,
         description="Cloning Ethos-U core platform"
     )
