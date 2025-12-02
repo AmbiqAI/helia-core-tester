@@ -15,16 +15,30 @@ A comprehensive toolkit for CMSIS-NN testing, model generation, and FVP simulati
 
 ### Prerequisites
 
+You can either manually set up dependencies or use the automated setup:
+
+**Option 1: Automated setup (recommended)**
+```bash
+# From the repository root - this will initialize submodules and install dependencies
+python3 cmsis_nn_tools/cli.py --setup
+```
+
+**Option 2: Manual setup**
 1. **Initialize submodules**:
    ```bash
    git submodule update --init --recursive
    ```
 
-2. **Run the tool**:
+2. **Install Python dependencies**:
    ```bash
-   # From the repository root
-   python3 cmsis_nn_tools/cli.py --help
+   python3 -m pip install -r requirements.txt
    ```
+
+**Run the tool**:
+```bash
+# From the repository root
+python3 cmsis_nn_tools/cli.py --help
+```
 
 ## Usage
 
@@ -33,6 +47,9 @@ A comprehensive toolkit for CMSIS-NN testing, model generation, and FVP simulati
 ```bash
 # Run complete pipeline (default: cortex-m55)
 python3 cmsis_nn_tools/cli.py
+
+# Setup dependencies and run pipeline
+python3 cmsis_nn_tools/cli.py --setup
 
 # Specify CPU
 python3 cmsis_nn_tools/cli.py --cpu cortex-m4
@@ -81,6 +98,7 @@ python3 cmsis_nn_tools/cli.py --opt "-O2" --jobs 8
 - `--no-fail-fast`: Don't stop on first test failure
 
 #### General Options
+- `--setup`: Initialize git submodules and install Python dependencies
 - `--verbose, -v`: Show detailed output
 - `--dry-run`: Show what would be done without actually doing it
 - `--quiet, -q`: Reduce output verbosity

@@ -3,6 +3,7 @@ Command-line interface for CMSIS-NN Tools.
 """
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -97,6 +98,8 @@ Examples:
                        help="Show the latest test report summary")
     
     # General options
+    parser.add_argument("--setup", action="store_true",
+                       help="Initialize git submodules and install Python dependencies")
     parser.add_argument("--verbose", "-v", action="store_true",
                        help="Show detailed output")
     parser.add_argument("--dry-run", action="store_true",
@@ -123,6 +126,40 @@ def main() -> int:
     """Main entry point."""
     parser = create_parser()
     args = parser.parse_args()
+    
+    # Setup: Initialize submodules and install dependencies (only if --setup is passed)
+    if args.setup:
+        repo_root = Path(__file__).resolve().parent.parent
+        
+        print("Initializing git submodules...")
+        try:
+            subprocess.run(
+                ["git", "submodule", "update", "--init", "--recursive"],
+                cwd=repo_root,
+                check=True
+            )
+            print("Git submodules initialized successfully.")
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: Failed to initialize git submodules: {e}", file=sys.stderr)
+            # Continue anyway - submodules might already be initialized
+        except FileNotFoundError:
+            print("Warning: git not found, skipping submodule initialization", file=sys.stderr)
+        
+        print("Installing Python dependencies...")
+        requirements_file = repo_root / "requirements.txt"
+        if requirements_file.exists():
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-r", str(requirements_file)],
+                    cwd=repo_root,
+                    check=True
+                )
+                print("Python dependencies installed successfully.")
+            except subprocess.CalledProcessError as e:
+                print(f"Error: Failed to install dependencies: {e}", file=sys.stderr)
+                return 1
+        else:
+            print(f"Warning: requirements.txt not found at {requirements_file}", file=sys.stderr)
     
     # Create configuration
     config = Config()
