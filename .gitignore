@@ -1,5 +1,4 @@
 .cursor/
-.devcontainer/
 pytest_cache/
 build*/
 GeneratedTests/
