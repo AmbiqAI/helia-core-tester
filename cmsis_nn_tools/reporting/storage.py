@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
-from .models import TestReport, TestResult, TestStatus
+from .models import TestReport, TestResult, TestStatus, DescriptorResult
 
 
 class ReportStorage:
@@ -203,39 +203,99 @@ class ReportStorage:
     
     def _dict_to_report(self, data: Dict[str, Any]) -> TestReport:
         """Convert dictionary to TestReport object."""
-        # Convert results
-        results = []
-        for result_data in data.get('results', []):
-            result = TestResult(
-                test_name=result_data['test_name'],
-                status=TestStatus(result_data['status']),
-                duration=result_data['duration'],
-                cpu=result_data['cpu'],
-                elf_path=Path(result_data['elf_path']),
-                failure_reason=result_data.get('failure_reason'),
-                skip_reason=result_data.get('skip_reason'),
-                output_lines=result_data.get('output_lines', []),
-                timestamp=datetime.fromisoformat(result_data['timestamp']),
-                memory_usage=result_data.get('memory_usage'),
-                cycles=result_data.get('cycles'),
-                exit_code=result_data.get('exit_code'),
-                error_type=result_data.get('error_type')
+        # Check if this is the new descriptor-centric format
+        if 'descriptor_results' in data:
+            # New format: descriptor-centric
+            descriptor_results = {}
+            for desc_name, desc_data in data.get('descriptor_results', {}).items():
+                # Convert test_result if present
+                test_result = None
+                if desc_data.get('test_result'):
+                    tr_data = desc_data['test_result']
+                    test_result = TestResult(
+                        test_name=tr_data['test_name'],
+                        status=TestStatus(tr_data['status']),
+                        duration=tr_data['duration'],
+                        cpu=tr_data['cpu'],
+                        elf_path=Path(tr_data['elf_path']),
+                        failure_reason=tr_data.get('failure_reason'),
+                        skip_reason=tr_data.get('skip_reason'),
+                        output_lines=tr_data.get('output_lines', []),
+                        timestamp=datetime.fromisoformat(tr_data['timestamp']),
+                        memory_usage=tr_data.get('memory_usage'),
+                        cycles=tr_data.get('cycles'),
+                        exit_code=tr_data.get('exit_code'),
+                        error_type=tr_data.get('error_type'),
+                        descriptor_name=tr_data.get('descriptor_name')
+                    )
+                
+                # Create DescriptorResult
+                descriptor_results[desc_name] = DescriptorResult(
+                    descriptor_name=desc_data['descriptor_name'],
+                    descriptor_path=Path(desc_data['descriptor_path']),
+                    descriptor_content=desc_data['descriptor_content'],
+                    status=TestStatus(desc_data['status']),
+                    test_result=test_result,
+                    failure_stage=desc_data.get('failure_stage'),
+                    failure_reason=desc_data.get('failure_reason')
+                )
+            
+            # Create report
+            report = TestReport(
+                run_id=data['run_id'],
+                start_time=datetime.fromisoformat(data['start_time']),
+                end_time=datetime.fromisoformat(data['end_time']),
+                cpu=data['cpu'],
+                descriptor_results=descriptor_results,
+                all_descriptors=data.get('all_descriptors', [])
             )
-            results.append(result)
-        
-        # Create report
-        report = TestReport(
-            run_id=data['run_id'],
-            start_time=datetime.fromisoformat(data['start_time']),
-            end_time=datetime.fromisoformat(data['end_time']),
-            cpu=data['cpu'],
-            total_tests=data['total_tests'],
-            passed=data['passed'],
-            failed=data['failed'],
-            skipped=data['skipped'],
-            timed_out=data.get('timed_out', 0),
-            errors=data.get('errors', 0),
-            results=results
-        )
+        else:
+            # Old format: backward compatibility - convert to descriptor-centric
+            results = []
+            for result_data in data.get('results', []):
+                result = TestResult(
+                    test_name=result_data['test_name'],
+                    status=TestStatus(result_data['status']),
+                    duration=result_data['duration'],
+                    cpu=result_data['cpu'],
+                    elf_path=Path(result_data['elf_path']),
+                    failure_reason=result_data.get('failure_reason'),
+                    skip_reason=result_data.get('skip_reason'),
+                    output_lines=result_data.get('output_lines', []),
+                    timestamp=datetime.fromisoformat(result_data['timestamp']),
+                    memory_usage=result_data.get('memory_usage'),
+                    cycles=result_data.get('cycles'),
+                    exit_code=result_data.get('exit_code'),
+                    error_type=result_data.get('error_type'),
+                    descriptor_name=result_data.get('descriptor_name')
+                )
+                results.append(result)
+            
+            # Convert old format to new format
+            descriptor_results = {}
+            for result in results:
+                desc_name = result.descriptor_name or result.test_name
+                # Create a minimal descriptor content
+                desc_content = {'name': desc_name}
+                
+                descriptor_results[desc_name] = DescriptorResult(
+                    descriptor_name=desc_name,
+                    descriptor_path=Path(f"descriptors/{desc_name}.yaml"),
+                    descriptor_content=desc_content,
+                    status=result.status,
+                    test_result=result,
+                    failure_stage="execution" if result.status != TestStatus.PASS else None,
+                    failure_reason=result.failure_reason
+                )
+            
+            # Create report
+            report = TestReport(
+                run_id=data['run_id'],
+                start_time=datetime.fromisoformat(data['start_time']),
+                end_time=datetime.fromisoformat(data['end_time']),
+                cpu=data['cpu'],
+                descriptor_results=descriptor_results,
+                all_descriptors=list(descriptor_results.values())
+            )
         
         return report

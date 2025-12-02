@@ -345,9 +345,10 @@ class FullTestPipeline:
         if not self.config.fail_fast:
             cmd.append("--no-fail-fast")
         
-        # Enable reporting if configured
-        if hasattr(self.config, 'enable_reporting') and self.config.enable_reporting:
-            cmd.append("--enable-reporting")
+        # Reporting configuration (enabled by default, use --no-report to disable)
+        if hasattr(self.config, 'enable_reporting'):
+            if not self.config.enable_reporting:
+                cmd.append("--no-report")
             if hasattr(self.config, 'report_formats') and self.config.report_formats:
                 cmd.extend(["--report-formats"] + self.config.report_formats)
             if hasattr(self.config, 'report_dir') and self.config.report_dir:

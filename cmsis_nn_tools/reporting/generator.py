@@ -3,10 +3,11 @@ Report generator for multiple output formats.
 """
 
 import json
+import yaml
 from pathlib import Path
 from typing import List, Dict
 
-from .models import TestReport
+from .models import TestReport, TestStatus
 
 
 class ReportGenerator:
@@ -15,6 +16,14 @@ class ReportGenerator:
     def __init__(self, output_dir: Path = Path("reports")):
         self.output_dir = output_dir
         self.output_dir.mkdir(exist_ok=True)
+    
+    def _escape_html(self, text: str) -> str:
+        """Escape HTML special characters."""
+        return (text.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace('"', "&quot;")
+                   .replace("'", "&#x27;"))
     
     def generate_reports(self, 
                         report: TestReport, 
@@ -85,27 +94,35 @@ class ReportGenerator:
         return file_path
     
     def _create_html_content(self, report: TestReport) -> str:
-        """Create HTML content for the report."""
+        """Create HTML content for the report - descriptor-centric."""
         status_counts = report.get_status_counts()
-        failed_tests = report.get_failed_tests()
-        passed_tests = report.get_passed_tests()
-        skipped_tests = report.get_skipped_tests()
         
         # Calculate percentages
         total = report.total_tests
         pass_rate = (status_counts["passed"] / total * 100) if total > 0 else 0
         fail_rate = (status_counts["failed"] / total * 100) if total > 0 else 0
-        skip_rate = (status_counts["skipped"] / total * 100) if total > 0 else 0
+        
+        # Build status cards HTML
+        status_cards = []
+        for status_name, count in status_counts.items():
+            if count > 0:
+                rate = (count / total * 100) if total > 0 else 0
+                status_class = status_name.replace("_", "-")
+                status_cards.append(f"""
+        <div class="summary-card {status_class}">
+            <h3>{count}</h3>
+            <p>{status_name.replace('_', ' ').title()}<br>({rate:.1f}%)</p>
+        </div>""")
         
         html = f"""
 <!DOCTYPE html>
 <html>
 <head>
-    <title>CMSIS-NN Test Report - {report.cpu}</title>
+    <title>CMSIS-NN Descriptor Test Report - {report.cpu}</title>
     <style>
         body {{ font-family: Arial, sans-serif; margin: 20px; }}
         .header {{ background-color: #f0f0f0; padding: 20px; border-radius: 5px; }}
-        .summary {{ display: flex; gap: 20px; margin: 20px 0; }}
+        .summary {{ display: flex; gap: 20px; margin: 20px 0; flex-wrap: wrap; }}
         .summary-card {{ 
             background-color: #e8f4fd; 
             padding: 15px; 
@@ -116,6 +133,12 @@ class ReportGenerator:
         .passed {{ background-color: #d4edda; }}
         .failed {{ background-color: #f8d7da; }}
         .skipped {{ background-color: #fff3cd; }}
+        .not-run {{ background-color: #e9ecef; }}
+        .build-failed {{ background-color: #f8d7da; }}
+        .generation-failed {{ background-color: #f8d7da; }}
+        .conversion-failed {{ background-color: #f8d7da; }}
+        .timeout {{ background-color: #e7d3ff; }}
+        .error {{ background-color: #f8d7da; }}
         .results-table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
         .results-table th, .results-table td {{ 
             border: 1px solid #ddd; 
@@ -128,25 +151,43 @@ class ReportGenerator:
         .status-skip {{ color: orange; font-weight: bold; }}
         .status-timeout {{ color: purple; font-weight: bold; }}
         .status-error {{ color: darkred; font-weight: bold; }}
-        .failure-details {{ 
+        .status-not-run {{ color: gray; font-weight: bold; }}
+        .status-build-failed {{ color: red; font-weight: bold; }}
+        .status-generation-failed {{ color: red; font-weight: bold; }}
+        .status-conversion-failed {{ color: red; font-weight: bold; }}
+        .descriptor-details {{ 
             background-color: #f8f9fa; 
+            padding: 10px; 
+            border-left: 4px solid #007bff;
+            margin: 5px 0;
+        }}
+        .test-details {{ 
+            background-color: #fff3cd; 
+            padding: 10px; 
+            border-left: 4px solid #ffc107;
+            margin: 5px 0;
+        }}
+        .failure-details {{ 
+            background-color: #f8d7da; 
             padding: 10px; 
             border-left: 4px solid #dc3545;
             margin: 5px 0;
         }}
-        .expandable {{ cursor: pointer; }}
+        .expandable {{ cursor: pointer; background-color: #007bff; color: white; border: none; padding: 5px 10px; border-radius: 3px; }}
+        .expandable:hover {{ background-color: #0056b3; }}
         .hidden {{ display: none; }}
+        .yaml-content {{ background-color: #f8f9fa; padding: 10px; border-radius: 3px; font-family: monospace; white-space: pre-wrap; }}
     </style>
     <script>
-        function toggleDetails(testName) {{
-            var details = document.getElementById('details-' + testName);
+        function toggleDetails(descName, type) {{
+            var details = document.getElementById(type + '-' + descName);
             details.classList.toggle('hidden');
         }}
     </script>
 </head>
 <body>
     <div class="header">
-        <h1>CMSIS-NN Test Report</h1>
+        <h1>CMSIS-NN Descriptor Test Report</h1>
         <p><strong>CPU:</strong> {report.cpu}</p>
         <p><strong>Run ID:</strong> {report.run_id}</p>
         <p><strong>Start Time:</strong> {report.start_time.strftime('%Y-%m-%d %H:%M:%S')}</p>
@@ -155,25 +196,16 @@ class ReportGenerator:
     </div>
     
     <div class="summary">
-        <div class="summary-card passed">
-            <h3>{status_counts["passed"]}</h3>
-            <p>Passed<br>({pass_rate:.1f}%)</p>
-        </div>
-        <div class="summary-card failed">
-            <h3>{status_counts["failed"]}</h3>
-            <p>Failed<br>({fail_rate:.1f}%)</p>
-        </div>
-        <div class="summary-card skipped">
-            <h3>{status_counts["skipped"]}</h3>
-            <p>Skipped<br>({skip_rate:.1f}%)</p>
-        </div>
+{''.join(status_cards)}
     </div>
     
-    <h2>Test Results</h2>
+    <h2>Descriptor Results</h2>
     <table class="results-table">
         <thead>
             <tr>
-                <th>Test Name</th>
+                <th>Descriptor Name</th>
+                <th>Operator</th>
+                <th>DTypes</th>
                 <th>Status</th>
                 <th>Duration (s)</th>
                 <th>Failure Reason</th>
@@ -183,50 +215,86 @@ class ReportGenerator:
         <tbody>
 """
         
-        # Add test results
-        for result in report.results:
-            status_class = f"status-{result.status.value.lower()}"
-            failure_reason = result.failure_reason or result.skip_reason or ""
+        # Sort descriptors by name for consistent display
+        sorted_descriptors = sorted(report.descriptor_results.items())
+        
+        for desc_name, desc_result in sorted_descriptors:
+            desc_content = desc_result.descriptor_content
+            operator = desc_content.get('operator', 'N/A')
+            activation_dtype = desc_content.get('activation_dtype', 'N/A')
+            weight_dtype = desc_content.get('weight_dtype', 'N/A')
+            dtypes = f"{activation_dtype}/{weight_dtype}"
+            
+            status_class = f"status-{desc_result.status.value.lower().replace('_', '-')}"
+            duration = desc_result.test_result.duration if desc_result.test_result else 0.0
+            failure_reason = desc_result.failure_reason or ""
+            
+            # Escape quotes for JavaScript
+            safe_desc_name = desc_name.replace("'", "\\'").replace('"', '\\"')
+            
+            # Build test button HTML separately to avoid f-string issues
+            test_button = ""
+            if desc_result.test_result:
+                test_button = f'<button class="expandable" onclick="toggleDetails(\'{safe_desc_name}\', \'test\')">Show Test</button>'
             
             html += f"""
             <tr>
-                <td>{result.test_name}</td>
-                <td class="{status_class}">{result.status.value}</td>
-                <td>{result.duration:.2f}</td>
-                <td>{failure_reason}</td>
+                <td><strong>{desc_name}</strong></td>
+                <td>{operator}</td>
+                <td>{dtypes}</td>
+                <td class="{status_class}">{desc_result.status.value}</td>
+                <td>{duration:.2f}</td>
+                <td>{failure_reason[:50]}{'...' if len(failure_reason) > 50 else ''}</td>
                 <td>
-                    <button class="expandable" onclick="toggleDetails('{result.test_name}')">
-                        Show Details
+                    <button class="expandable" onclick="toggleDetails('{safe_desc_name}', 'desc')">
+                        Show Descriptor
                     </button>
+                    {test_button}
                 </td>
             </tr>
-            <tr id="details-{result.test_name}" class="hidden">
-                <td colspan="5">
-                    <div class="failure-details">
-                        <p><strong>ELF Path:</strong> {result.elf_path}</p>
-                        <p><strong>Timestamp:</strong> {result.timestamp.strftime('%Y-%m-%d %H:%M:%S')}</p>
-"""
-            
-            if result.cycles:
-                html += f"<p><strong>Cycles:</strong> {result.cycles:,}</p>"
-            if result.memory_usage:
-                html += f"<p><strong>Memory Usage:</strong> {result.memory_usage:,} bytes</p>"
-            if result.exit_code is not None:
-                html += f"<p><strong>Exit Code:</strong> {result.exit_code}</p>"
-            
-            if result.output_lines:
-                html += "<p><strong>Output:</strong></p><pre>"
-                for line in result.output_lines[:20]:  # Limit output
-                    html += f"{line}\n"
-                if len(result.output_lines) > 20:
-                    html += "... (truncated)"
-                html += "</pre>"
-            
-            html += """
+            <tr id="desc-{safe_desc_name}" class="hidden">
+                <td colspan="7">
+                    <div class="descriptor-details">
+                        <h4>Descriptor Content (YAML)</h4>
+                        <div class="yaml-content">{self._escape_html(yaml.dump(desc_content, default_flow_style=False))}</div>
+                        <p><strong>Descriptor Path:</strong> {desc_result.descriptor_path}</p>
                     </div>
                 </td>
-            </tr>
-"""
+            </tr>"""
+            
+            if desc_result.test_result:
+                test_result = desc_result.test_result
+                html += f"""
+            <tr id="test-{safe_desc_name}" class="hidden">
+                <td colspan="7">
+                    <div class="test-details">
+                        <h4>Test Result Details</h4>
+                        <p><strong>Test Name:</strong> {test_result.test_name}</p>
+                        <p><strong>Status:</strong> {test_result.status.value}</p>
+                        <p><strong>Duration:</strong> {test_result.duration:.2f} seconds</p>
+                        <p><strong>ELF Path:</strong> {test_result.elf_path}</p>
+                        <p><strong>Timestamp:</strong> {test_result.timestamp.strftime('%Y-%m-%d %H:%M:%S')}</p>"""
+                
+                if test_result.cycles:
+                    html += f"<p><strong>Cycles:</strong> {test_result.cycles:,}</p>"
+                if test_result.memory_usage:
+                    html += f"<p><strong>Memory Usage:</strong> {test_result.memory_usage:,} bytes</p>"
+                if test_result.exit_code is not None:
+                    html += f"<p><strong>Exit Code:</strong> {test_result.exit_code}</p>"
+                if test_result.failure_reason:
+                    html += f"<p><strong>Failure Reason:</strong> {test_result.failure_reason}</p>"
+                if test_result.output_lines:
+                    html += "<p><strong>Output:</strong></p><pre>"
+                    for line in test_result.output_lines[:20]:
+                        html += f"{self._escape_html(line)}\n"
+                    if len(test_result.output_lines) > 20:
+                        html += "... (truncated)"
+                    html += "</pre>"
+                
+                html += """
+                    </div>
+                </td>
+            </tr>"""
         
         html += """
         </tbody>
@@ -237,19 +305,13 @@ class ReportGenerator:
         return html
     
     def _create_markdown_content(self, report: TestReport) -> str:
-        """Create Markdown content for the report."""
+        """Create Markdown content for the report - descriptor-centric."""
         status_counts = report.get_status_counts()
-        failed_tests = report.get_failed_tests()
-        passed_tests = report.get_passed_tests()
-        skipped_tests = report.get_skipped_tests()
         
         # Calculate percentages
         total = report.total_tests
-        pass_rate = (status_counts["passed"] / total * 100) if total > 0 else 0
-        fail_rate = (status_counts["failed"] / total * 100) if total > 0 else 0
-        skip_rate = (status_counts["skipped"] / total * 100) if total > 0 else 0
         
-        md = f"""# CMSIS-NN Test Report
+        md = f"""# CMSIS-NN Descriptor Test Report
 
 ## Summary
 
@@ -257,62 +319,79 @@ class ReportGenerator:
 - **Run ID:** {report.run_id}
 - **Start Time:** {report.start_time.strftime('%Y-%m-%d %H:%M:%S')}
 - **Duration:** {report.duration:.2f} seconds
-- **Total Tests:** {report.total_tests}
+- **Total Descriptors:** {report.total_tests}
 
 ## Results Overview
 
 | Status | Count | Percentage |
 |--------|-------|------------|
-| Passed | {status_counts["passed"]} | {pass_rate:.1f}% |
-| Failed | {status_counts["failed"]} | {fail_rate:.1f}% |
-| Skipped | {status_counts["skipped"]} | {skip_rate:.1f}% |
 """
         
-        if status_counts["timed_out"] > 0:
-            timeout_rate = (status_counts["timed_out"] / total * 100)
-            md += f"| Timed Out | {status_counts['timed_out']} | {timeout_rate:.1f}% |\n"
+        # Add all status types
+        for status_name, count in status_counts.items():
+            if count > 0:
+                rate = (count / total * 100) if total > 0 else 0
+                status_display = status_name.replace('_', ' ').title()
+                md += f"| {status_display} | {count} | {rate:.1f}% |\n"
         
-        if status_counts["errors"] > 0:
-            error_rate = (status_counts["errors"] / total * 100)
-            md += f"| Errors | {status_counts['errors']} | {error_rate:.1f}% |\n"
+        md += "\n## Descriptor Results\n\n"
         
-        md += "\n## Test Results\n\n"
+        # Sort descriptors by name
+        sorted_descriptors = sorted(report.descriptor_results.items())
         
-        # Add summary table
-        md += "| Test Name | Status | Duration (s) | Failure Reason |\n"
-        md += "|-----------|--------|--------------|----------------|\n"
-        
-        for result in report.results:
+        for desc_name, desc_result in sorted_descriptors:
+            desc_content = desc_result.descriptor_content
+            operator = desc_content.get('operator', 'N/A')
+            activation_dtype = desc_content.get('activation_dtype', 'N/A')
+            weight_dtype = desc_content.get('weight_dtype', 'N/A')
             
-            failure_reason = result.failure_reason or result.skip_reason or ""
-            md += f"| {result.test_name} | {result.duration:.2f} | {failure_reason} |\n"
-        
-        # Add detailed failure information
-        if failed_tests:
-            md += "\n## Failed Tests Details\n\n"
-            for result in failed_tests:
-                md += f"### {result.test_name}\n\n"
-                md += f"- **Status:** {result.status.value}\n"
-                md += f"- **Duration:** {result.duration:.2f} seconds\n"
-                md += f"- **ELF Path:** `{result.elf_path}`\n"
-                md += f"- **Timestamp:** {result.timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            md += f"### {desc_name}\n\n"
+            md += f"- **Status:** {desc_result.status.value}\n"
+            md += f"- **Operator:** {operator}\n"
+            md += f"- **Activation DType:** {activation_dtype}\n"
+            md += f"- **Weight DType:** {weight_dtype}\n"
+            
+            if desc_result.failure_stage:
+                md += f"- **Failure Stage:** {desc_result.failure_stage}\n"
+            if desc_result.failure_reason:
+                md += f"- **Failure Reason:** {desc_result.failure_reason}\n"
+            
+            md += f"- **Descriptor Path:** `{desc_result.descriptor_path}`\n\n"
+            
+            # Add full descriptor content
+            md += "**Descriptor Content (YAML):**\n```yaml\n"
+            md += yaml.dump(desc_content, default_flow_style=False)
+            md += "```\n\n"
+            
+            # Add test result if available
+            if desc_result.test_result:
+                test_result = desc_result.test_result
+                md += "**Test Result:**\n\n"
+                md += f"- **Test Name:** {test_result.test_name}\n"
+                md += f"- **Status:** {test_result.status.value}\n"
+                md += f"- **Duration:** {test_result.duration:.2f} seconds\n"
+                md += f"- **ELF Path:** `{test_result.elf_path}`\n"
+                md += f"- **Timestamp:** {test_result.timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n"
                 
-                if result.cycles:
-                    md += f"- **Cycles:** {result.cycles:,}\n"
-                if result.memory_usage:
-                    md += f"- **Memory Usage:** {result.memory_usage:,} bytes\n"
-                if result.exit_code is not None:
-                    md += f"- **Exit Code:** {result.exit_code}\n"
+                if test_result.cycles:
+                    md += f"- **Cycles:** {test_result.cycles:,}\n"
+                if test_result.memory_usage:
+                    md += f"- **Memory Usage:** {test_result.memory_usage:,} bytes\n"
+                if test_result.exit_code is not None:
+                    md += f"- **Exit Code:** {test_result.exit_code}\n"
+                if test_result.failure_reason:
+                    md += f"- **Failure Reason:** {test_result.failure_reason}\n"
                 
-                if result.failure_reason:
-                    md += f"- **Failure Reason:** {result.failure_reason}\n"
-                
-                if result.output_lines:
-                    md += "\n**Output:**\n```\n"
-                    for line in result.output_lines[:30]:  # Limit output
+                if test_result.output_lines:
+                    md += "\n**Test Output:**\n```\n"
+                    for line in test_result.output_lines[:30]:
                         md += f"{line}\n"
-                    if len(result.output_lines) > 30:
+                    if len(test_result.output_lines) > 30:
                         md += "... (truncated)\n"
-                    md += "```\n\n"
+                    md += "```\n"
+            else:
+                md += "**Test Result:** Not executed\n"
+            
+            md += "\n---\n\n"
         
         return md

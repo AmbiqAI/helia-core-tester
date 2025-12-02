@@ -163,6 +163,11 @@ def cmake_configure(source_dir: Path, build_dir: Path, toolchain_file: Path, cpu
                     cmsis5: Path, optimization: str, extra_defs: List[str], generator: Optional[str],
                     quiet: bool, env: dict) -> None:
     build_dir.mkdir(parents=True, exist_ok=True)
+    
+    cmake_cache = build_dir / "CMakeCache.txt"
+    if cmake_cache.exists():
+        cmake_cache.unlink()
+    
     cmd = [
         "cmake",
         "-S", str(source_dir),
@@ -203,7 +208,7 @@ def find_elves(build_dir: Path) -> List[Path]:
     return [p for p in build_dir.rglob("*.elf") if p.is_file()]
 
 
-def run_fvp_with_reporting(fvp_exe: Path, elf: Path, timeout: float, quiet: bool, extra_args: List[str], env: dict, cpu: str) -> TestResult:
+def run_fvp_with_reporting(fvp_exe: Path, elf: Path, timeout: float, quiet: bool, extra_args: List[str], env: dict, cpu: str, descriptor_name: Optional[str] = None) -> TestResult:
     """
     Run FVP with comprehensive result reporting.
     
@@ -252,7 +257,8 @@ def run_fvp_with_reporting(fvp_exe: Path, elf: Path, timeout: float, quiet: bool
             failure_reason="Test execution timed out",
             timestamp=datetime.now(),
             exit_code=124,
-            error_type="timeout"
+            error_type="timeout",
+            descriptor_name=descriptor_name or elf.stem
         )
     
     except Exception as e:
@@ -270,14 +276,15 @@ def run_fvp_with_reporting(fvp_exe: Path, elf: Path, timeout: float, quiet: bool
             failure_reason=f"Execution error: {str(e)}",
             timestamp=datetime.now(),
             exit_code=-1,
-            error_type="crash"
+            error_type="crash",
+            descriptor_name=descriptor_name or elf.stem
         )
     
     end_time = time.time()
     duration = end_time - start_time
     
     # Parse the output to create TestResult
-    result = parser.parse_fvp_output(output, elf, cpu, duration, exit_code)
+    result = parser.parse_fvp_output(output, elf, cpu, duration, exit_code, descriptor_name=descriptor_name)
     
     # Display results (maintain existing behavior)
     if result.status == TestStatus.PASS:
@@ -380,12 +387,13 @@ def parse_cpus(cpu_str: str) -> List[str]:
 
 
 
-def run_tests_with_reporting(cpus: List[str], 
+def run_tests_with_reporting(cpus: List[str],
                            source_dir: Path,
                            toolchain_file: Path,
                            cmsis5: Path,
                            fvp_exe: Path,
-                           args) -> Tuple[List[TestResult], bool]:
+                           args,
+                           env: dict) -> Tuple[List[TestResult], bool]:
     """
     Run tests with comprehensive reporting.
     
@@ -395,14 +403,16 @@ def run_tests_with_reporting(cpus: List[str],
     try:
         from .reporting.storage import ReportStorage
         from .reporting.generator import ReportGenerator
-        from .reporting.models import TestReport, TestStatus
+        from .reporting.models import TestReport, TestStatus, DescriptorResult
+        from .reporting.descriptor_tracker import DescriptorTracker
     except ImportError:
         # Fallback for when running as standalone script
         import sys
         sys.path.append(str(Path(__file__).parent))
         from reporting.storage import ReportStorage
         from reporting.generator import ReportGenerator
-        from reporting.models import TestReport, TestStatus
+        from reporting.models import TestReport, TestStatus, DescriptorResult
+        from reporting.descriptor_tracker import DescriptorTracker
     
     all_results = []
     any_fail = False
@@ -412,13 +422,18 @@ def run_tests_with_reporting(cpus: List[str],
     storage = ReportStorage()
     generator = ReportGenerator()
     
+    # Initialize descriptor tracking
+    descriptors_dir = source_dir / "descriptors"
+    generated_tests_dir = source_dir / "GeneratedTests"
+    tracker = DescriptorTracker(descriptors_dir)
+    all_descriptors_dict = tracker.load_all_descriptors()
+    
     for cpu in cpus:
         print(f"\nTarget: {cpu} (gcc)")
         build_dir = source_dir / f"build-{cpu}-gcc"
         
         if not args.no_build:
-            # Build first
-            env = os.environ.copy()
+            # Build first - use the env passed in (which has PATH set correctly)
             cmake_configure(
                 source_dir=source_dir,
                 build_dir=build_dir,
@@ -444,14 +459,20 @@ def run_tests_with_reporting(cpus: List[str],
         # Run tests for this CPU
         cpu_results = []
         for elf in sorted(elves):
+            # Try to map test name to descriptor
+            test_name = elf.stem
+            descriptor = tracker.map_test_to_descriptor(test_name, all_descriptors_dict)
+            descriptor_name = descriptor.get('name') if descriptor else test_name
+            
             result = run_fvp_with_reporting(
                 fvp_exe=fvp_exe, 
                 elf=elf, 
                 timeout=args.timeout_run,
                 quiet=args.quiet, 
                 extra_args=args.fvp_arg, 
-                env=os.environ.copy(),
-                cpu=cpu
+                env=env,
+                cpu=cpu,
+                descriptor_name=descriptor_name
             )
             cpu_results.append(result)
             all_results.append(result)
@@ -468,24 +489,82 @@ def run_tests_with_reporting(cpus: List[str],
     # Generate report
     end_time = datetime.now()
     
-    # Count results by status
-    status_counts = {}
-    for status in TestStatus:
-        status_counts[status.value.lower()] = sum(1 for r in all_results if r.status == status)
+    # Build descriptor_results: map each descriptor to its status and test result
+    descriptor_results = {}
     
-    # Create test report
+    # First, map test results to descriptors by descriptor_name
+    test_result_map = {}
+    for result in all_results:
+        desc_name = result.descriptor_name or result.test_name
+        # If we already have a result for this descriptor, keep the one with better status
+        if desc_name not in test_result_map or result.status == TestStatus.PASS:
+            test_result_map[desc_name] = result
+    
+    # Process all descriptors
+    for desc_name, desc_content in all_descriptors_dict.items():
+        test_result = test_result_map.get(desc_name)
+        
+        # Check all CPU build directories for ELF files
+        # Use the first CPU's build dir as primary, but check others too
+        primary_build_dir = source_dir / f"build-{cpus[0]}-gcc" if cpus else source_dir / "build-cortex-m55-gcc"
+        
+        # Determine status
+        status, failure_stage, failure_reason = tracker.determine_descriptor_status(
+            descriptor_name=desc_name,
+            test_result=test_result,
+            build_dir=primary_build_dir,
+            generated_tests_dir=generated_tests_dir
+        )
+        
+        # Get descriptor path
+        desc_path = tracker.get_descriptor_path(desc_name)
+        
+        # Create DescriptorResult
+        descriptor_results[desc_name] = DescriptorResult(
+            descriptor_name=desc_name,
+            descriptor_path=desc_path,
+            descriptor_content=desc_content,
+            status=status,
+            test_result=test_result,
+            failure_stage=failure_stage,
+            failure_reason=failure_reason
+        )
+    
+    # Handle descriptors that might have been in test results but not in loaded descriptors
+    # (edge case: test name doesn't match descriptor name exactly)
+    for result in all_results:
+        if result.descriptor_name and result.descriptor_name not in descriptor_results:
+            # Try to find matching descriptor
+            desc = tracker.map_test_to_descriptor(result.test_name, all_descriptors_dict)
+            if desc:
+                desc_name = desc.get('name', result.descriptor_name)
+                if desc_name not in descriptor_results:
+                    primary_build_dir = source_dir / f"build-{cpus[0]}-gcc" if cpus else source_dir / "build-cortex-m55-gcc"
+                    status, failure_stage, failure_reason = tracker.determine_descriptor_status(
+                        descriptor_name=desc_name,
+                        test_result=result,
+                        build_dir=primary_build_dir,
+                        generated_tests_dir=generated_tests_dir
+                    )
+                    desc_path = tracker.get_descriptor_path(desc_name)
+                    descriptor_results[desc_name] = DescriptorResult(
+                        descriptor_name=desc_name,
+                        descriptor_path=desc_path,
+                        descriptor_content=desc,
+                        status=status,
+                        test_result=result,
+                        failure_stage=failure_stage,
+                        failure_reason=failure_reason
+                    )
+    
+    # Create test report with descriptor_results
     report = TestReport(
         run_id=f"run_{start_time.strftime('%Y%m%d_%H%M%S')}",
         start_time=start_time,
         end_time=end_time,
         cpu=",".join(cpus),
-        total_tests=len(all_results),
-        passed=status_counts.get('pass', 0),
-        failed=status_counts.get('fail', 0),
-        skipped=status_counts.get('skip', 0),
-        timed_out=status_counts.get('timeout', 0),
-        errors=status_counts.get('error', 0),
-        results=all_results
+        descriptor_results=descriptor_results,
+        all_descriptors=list(all_descriptors_dict.values())
     )
     
     # Save and generate reports
@@ -525,7 +604,7 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--fvp-arg", action="append", default=[], help="Extra args to pass to the FVP (repeatable)")
     
     # Reporting options
-    ap.add_argument("--enable-reporting", action="store_true", help="Enable comprehensive test reporting")
+    ap.add_argument("--no-report", action="store_true", help="Disable comprehensive test reporting (enabled by default)")
     ap.add_argument("--report-formats", nargs="+", choices=["json", "html", "md"], default=["json"], 
                    help="Report formats to generate (default: json)")
     ap.add_argument("--report-dir", type=Path, default=Path("reports"), help="Directory to save reports")
@@ -553,15 +632,17 @@ def main(argv: List[str]) -> int:
 
     cpus = parse_cpus(args.cpu)
     
-    # Use reporting if enabled
-    if args.enable_reporting:
+    # Use reporting if enabled (default: enabled, unless --no-report is set)
+    enable_reporting = not args.no_report
+    if enable_reporting:
         results, success = run_tests_with_reporting(
             cpus=cpus,
             source_dir=source_dir,
             toolchain_file=toolchain_file,
             cmsis5=cmsis5,
             fvp_exe=fvp_exe,
-            args=args
+            args=args,
+            env=env
         )
         
         if success:

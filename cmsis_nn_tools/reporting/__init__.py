@@ -8,15 +8,19 @@ This module provides comprehensive test reporting functionality including:
 - Report storage and retrieval
 """
 
-from .models import TestResult, TestReport
+from .models import TestResult, TestReport, DescriptorResult, TestStatus
 from .parser import TestResultParser
 from .generator import ReportGenerator
 from .storage import ReportStorage
+from .descriptor_tracker import DescriptorTracker
 
 __all__ = [
     "TestResult",
-    "TestReport", 
+    "TestReport",
+    "DescriptorResult",
+    "TestStatus",
     "TestResultParser",
     "ReportGenerator",
-    "ReportStorage"
+    "ReportStorage",
+    "DescriptorTracker"
 ]

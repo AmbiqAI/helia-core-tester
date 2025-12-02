@@ -31,7 +31,8 @@ class TestResultParser:
                         elf_path: Path, 
                         cpu: str, 
                         duration: float,
-                        exit_code: Optional[int] = None) -> TestResult:
+                        exit_code: Optional[int] = None,
+                        descriptor_name: Optional[str] = None) -> TestResult:
         """
         Parse FVP output to extract test result.
         
@@ -41,12 +42,17 @@ class TestResultParser:
             cpu: Target CPU
             duration: Test execution duration in seconds
             exit_code: Process exit code
+            descriptor_name: Optional descriptor name to link test to descriptor
             
         Returns:
             TestResult object
         """
         lines = output.split('\n')
         test_name = self._extract_test_name(elf_path)
+        
+        # Use provided descriptor_name or extract from test_name
+        if descriptor_name is None:
+            descriptor_name = test_name
         
         # Determine test status
         status, failure_reason, skip_reason, error_type = self._determine_status(
@@ -73,7 +79,8 @@ class TestResultParser:
             memory_usage=memory_usage,
             cycles=cycles,
             exit_code=exit_code,
-            error_type=error_type
+            error_type=error_type,
+            descriptor_name=descriptor_name
         )
     
     def _extract_test_name(self, elf_path: Path) -> str:

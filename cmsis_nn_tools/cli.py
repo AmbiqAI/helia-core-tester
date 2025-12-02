@@ -87,8 +87,8 @@ Examples:
                        help="Don't stop on first test failure")
     
     # Reporting options
-    parser.add_argument("--enable-reporting", action="store_true",
-                       help="Enable comprehensive test reporting")
+    parser.add_argument("--no-report", action="store_true",
+                       help="Disable comprehensive test reporting (enabled by default)")
     parser.add_argument("--report-formats", nargs="+", 
                        choices=["json", "html", "md"], default=["json"],
                        help="Report formats to generate (default: json)")
@@ -193,7 +193,7 @@ def main() -> int:
     config.skip_run = args.skip_run
     
     # Reporting configuration
-    config.enable_reporting = args.enable_reporting
+    config.enable_reporting = not args.no_report
     config.report_formats = args.report_formats
     config.report_dir = args.report_dir
     
