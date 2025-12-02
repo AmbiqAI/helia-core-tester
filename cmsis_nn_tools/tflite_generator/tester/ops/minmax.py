@@ -86,10 +86,6 @@ def _broadcast_axes(shape_ref: Tuple[int, ...], shape_other: Tuple[int, ...]) ->
     return tuple(axes)
 
 
-# ----------------------------
-# Main op
-# ----------------------------
-
 class OpMinMax(OperationBase):
     """
     Maximum and Minimum operation implementation with optional forced shared scale.

@@ -42,7 +42,7 @@ python3 cmsis_nn_tools/cli.py --cpu cortex-m4
 
 ```bash
 # Run with specific filters
-python3 cmsis_nn_tools/cli.py --op Conv2D --dtype S8 --limit 5
+python3 cmsis_nn_tools/cli.py --op conv2D --dtype S8 --limit 5
 
 # Skip certain steps
 python3 cmsis_nn_tools/cli.py --skip-generation --skip-conversion
@@ -95,23 +95,27 @@ All Python lives under `cmsis_nn_tools/`:
 - `cmsis_nn_tools.core.config`: Configuration management
 - `cmsis_nn_tools.core.logger`: Logging configuration
 
-### Generator Modules
-- `cmsis_nn_tools/generators/tflite_generator.py`: TFLite model generation and conversion
-- `cmsis_nn_tools/generators/test_runner_generator.py`: Unity test runner generation
+### Main Scripts
+- `cmsis_nn_tools/cli.py`: Command-line interface entry point
+- `cmsis_nn_tools/build_and_run_fvp.py`: FVP build and test execution
 
-### Builder Modules
-- `cmsis_nn_tools/builders/fvp_builder.py`: FVP build operations
+### Scripts
+- `cmsis_nn_tools/scripts/generate_test_runners.py`: Unity test runner generation
+- `cmsis_nn_tools/scripts/setup_dependencies.py`: Dependency download and setup
+- `cmsis_nn_tools/scripts/collect_coverage.py`: Coverage data collection
 
-### Runner Modules
-- `cmsis_nn_tools/runners/fvp_runner.py`: FVP test execution
+### TFLite Generator
+- `cmsis_nn_tools/tflite_generator/` contains:
+  - `test_ops.py`, `conftest.py`: TFLite model generation via pytest
+  - `tester/ops/`: Operator implementations
+  - `tester/io/`: I/O utilities
+  - `tester/descriptors/`: Test descriptor schemas and examples
 
 ### Utility Modules
 - `cmsis_nn_tools/utils/command_runner.py`: Command execution utilities
 
-### TFLite Generator Tree (moved in-repo)
-- `cmsis_nn_tools/tflite_generator/` contains:
-  - `test_ops.py`, `conftest.py`
-  - `tester/ops/`, `tester/io/`, `tester/descriptors/`
+### Reporting Modules
+- `cmsis_nn_tools/reporting/`: Test result parsing, storage, and report generation
 
 ## Development
 
