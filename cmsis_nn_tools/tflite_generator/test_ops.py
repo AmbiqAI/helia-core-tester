@@ -41,6 +41,21 @@ from tester.ops.reducemax import OpReduceMax
 from tester.ops.reducemin import OpReduceMin
 from tester.ops.argmax import OpArgMax
 from tester.ops.argmin import OpArgMin
+from tester.ops.fill import OpFill
+from tester.ops.zeros_like import OpZerosLike
+from tester.ops.reshape import OpReshape
+from tester.ops.shape import OpShape
+from tester.ops.slice import OpSlice
+from tester.ops.squeeze import OpSqueeze
+from tester.ops.space_to_depth import OpSpaceToDepth
+from tester.ops.depth_to_space import OpDepthToSpace
+from tester.ops.split import OpSplit
+from tester.ops.pack import OpPack
+from tester.ops.unpack import OpUnpack
+from tester.ops.concatenation import OpConcatenation
+from tester.ops.space_to_batch_nd import OpSpaceToBatchND
+from tester.ops.batch_to_space_nd import OpBatchToSpaceND
+from tester.ops.variable_update import OpVariableUpdate
 from tester.ops.transposeconv import OpTransposeConv
 from tester.ops.equal import OpEqual
 from tester.ops.not_equal import OpNotEqual
@@ -83,6 +98,21 @@ OP_MAP = {
     'ReduceMin': OpReduceMin,
     'ArgMax': OpArgMax,
     'ArgMin': OpArgMin,
+    'Fill': OpFill,
+    'ZerosLike': OpZerosLike,
+    'Reshape': OpReshape,
+    'Shape': OpShape,
+    'Slice': OpSlice,
+    'Squeeze': OpSqueeze,
+    'SpaceToDepth': OpSpaceToDepth,
+    'DepthToSpace': OpDepthToSpace,
+    'Split': OpSplit,
+    'Pack': OpPack,
+    'Unpack': OpUnpack,
+    'Concatenation': OpConcatenation,
+    'SpaceToBatchND': OpSpaceToBatchND,
+    'BatchToSpaceND': OpBatchToSpaceND,
+    'VariableUpdate': OpVariableUpdate,
     'TransposeConv': OpTransposeConv,
     'Equal': OpEqual,
     'NotEqual': OpNotEqual,

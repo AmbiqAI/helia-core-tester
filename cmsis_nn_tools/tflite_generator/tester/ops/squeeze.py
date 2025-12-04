@@ -1,5 +1,5 @@
 """
-StridedSlice operation implementation.
+Squeeze operation implementation.
 """
 
 from typing import Dict, Any
@@ -8,37 +8,32 @@ import tensorflow as tf
 from .base import OperationBase
 
 
-class OpStridedSlice(OperationBase):
+class OpSqueeze(OperationBase):
     """
-    StridedSlice operation.
+    Squeeze operation - removes dimensions of size 1.
     """
     
     def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for StridedSlice operation."""
+        """Build Keras model for Squeeze operation."""
         input_shape = self.desc['input_shape']
+        axes = self.desc.get('axes', None)
+        
         inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
         
-        # Get begin, end, and strides from descriptor
-        begin = self.desc.get('begin', [0, 0, 0, 0])
-        end = self.desc.get('end', None)
-        strides = self.desc.get('strides', [1, 1, 1, 1])
-        shrink_axis_mask = self.desc.get('shrink_axis_mask', 0)
-        
-        # If end is not provided, use default (all dimensions)
-        if end is None:
-            end = [-1] * len(begin)
-        
-        # StridedSlice operation
-        def strided_slice_op(x):
-            return tf.strided_slice(
-                x,
-                begin=begin,
-                end=end,
-                strides=strides,
-                shrink_axis_mask=shrink_axis_mask
-            )
-        
-        x = tf.keras.layers.Lambda(strided_slice_op, name='strided_slice')(inputs)
+        # Squeeze operation
+        if axes is not None:
+            # Adjust axes to account for batch dimension removal
+            axes_adjusted = [a - 1 if a > 0 else a for a in axes]
+            x = tf.keras.layers.Lambda(
+                lambda x: tf.squeeze(x, axis=axes_adjusted),
+                name='squeeze'
+            )(inputs)
+        else:
+            # Squeeze all dimensions of size 1
+            x = tf.keras.layers.Lambda(
+                lambda x: tf.squeeze(x),
+                name='squeeze'
+            )(inputs)
         
         model = tf.keras.Model(inputs=inputs, outputs=x)
         return model
@@ -48,10 +43,8 @@ class OpStridedSlice(OperationBase):
         import tensorflow as tf
         import numpy as np
         
-        # Create converter
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
-        # Apply quantization based on activation_dtype
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         
         if activation_dtype == 'S8':
@@ -59,8 +52,6 @@ class OpStridedSlice(OperationBase):
             converter.target_spec.supported_types = [tf.int8]
             converter.inference_input_type = tf.int8
             converter.inference_output_type = tf.int8
-            # Ensure all operations use int8 (including StridedSlice)
-            converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
         elif activation_dtype == 'S16':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_ops = [
@@ -69,20 +60,15 @@ class OpStridedSlice(OperationBase):
             converter.inference_input_type = tf.int16
             converter.inference_output_type = tf.int16
         
-        # Generate representative dataset
         def representative_data_gen():
             for _ in range(100):
                 if 'input_shape' in self.desc:
                     inputs = self.rng.uniform(-1.0, 1.0, size=self.desc['input_shape']).astype(np.float32)
                     yield [inputs]
-                elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
-                    inputs1 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_1_shape']).astype(np.float32)
-                    inputs2 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_2_shape']).astype(np.float32)
-                    yield [inputs1, inputs2]
         
         converter.representative_dataset = representative_data_gen
         
-        # Convert and save
         tflite_model = converter.convert()
         with open(out_path, 'wb') as f:
             f.write(tflite_model)
+

@@ -4,7 +4,7 @@
   "properties": {
     "operator": {
       "type": "string",
-      "enum": ["FullyConnected", "Conv2D", "DepthwiseConv2D", "MatMul", "Elementwise", "Add", "Sub", "Mul", "Maximum", "Minimum", "Relu", "Relu6", "LeakyRelu", "Softmax", "Tanh", "Logistic", "HardSwish", "PReLU", "Quantize", "Dequantize", "Pooling", "Transpose", "StridedSlice", "Pad", "LSTM", "SVDF", "Mean", "ReduceMax", "ReduceMin", "ArgMax", "ArgMin", "TransposeConv", "Equal", "NotEqual", "Greater", "GreaterEqual", "Less", "LessEqual"]
+      "enum": ["FullyConnected", "Conv2D", "DepthwiseConv2D", "MatMul", "Elementwise", "Add", "Sub", "Mul", "Maximum", "Minimum", "Relu", "Relu6", "LeakyRelu", "Softmax", "Tanh", "Logistic", "HardSwish", "PReLU", "Quantize", "Dequantize", "Pooling", "Transpose", "StridedSlice", "Pad", "LSTM", "SVDF", "Mean", "ReduceMax", "ReduceMin", "ArgMax", "ArgMin", "TransposeConv", "Equal", "NotEqual", "Greater", "GreaterEqual", "Less", "LessEqual", "Fill", "ZerosLike", "Reshape", "Shape", "Slice", "Squeeze", "SpaceToDepth", "DepthToSpace", "Split", "Pack", "Unpack", "Concatenation", "SpaceToBatchND", "BatchToSpaceND", "VariableUpdate"]
     },
     "name": {
       "type": "string",
@@ -86,6 +86,83 @@
     },
     "keepdims": {
       "type": "boolean"
+    },
+    "output_shape": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 1},
+      "minItems": 1
+    },
+    "value": {
+      "type": "number"
+    },
+    "target_shape": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 1},
+      "minItems": 1
+    },
+    "begin": {
+      "type": "array",
+      "items": {"type": "integer"},
+      "minItems": 1
+    },
+    "end": {
+      "type": "array",
+      "items": {"type": "integer"},
+      "minItems": 1
+    },
+    "shrink_axis_mask": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "size": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 1},
+      "minItems": 1
+    },
+    "block_size": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "block_shape": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 1},
+      "minItems": 1
+    },
+    "paddings": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {"type": "integer", "minimum": 0},
+        "minItems": 2,
+        "maxItems": 2
+      }
+    },
+    "crops": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {"type": "integer", "minimum": 0},
+        "minItems": 2,
+        "maxItems": 2
+      }
+    },
+    "num_splits": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "size_splits": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 1},
+      "minItems": 1
+    },
+    "num_tensors": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "value_shape": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 1},
+      "minItems": 1
     },
     "hint": {
       "type": "object",
@@ -405,6 +482,126 @@
       },
       "then": {
         "required": ["input_shape", "axis"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Fill"}}
+      },
+      "then": {
+        "required": ["output_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "ZerosLike"}}
+      },
+      "then": {
+        "required": ["input_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Reshape"}}
+      },
+      "then": {
+        "required": ["input_shape", "target_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Shape"}}
+      },
+      "then": {
+        "required": ["input_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Slice"}}
+      },
+      "then": {
+        "required": ["input_shape", "begin", "size"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Squeeze"}}
+      },
+      "then": {
+        "required": ["input_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "SpaceToDepth"}}
+      },
+      "then": {
+        "required": ["input_shape", "block_size"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "DepthToSpace"}}
+      },
+      "then": {
+        "required": ["input_shape", "block_size"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Split"}}
+      },
+      "then": {
+        "required": ["input_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Pack"}}
+      },
+      "then": {
+        "required": ["num_tensors"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Unpack"}}
+      },
+      "then": {
+        "required": ["input_shape", "axis", "num_tensors"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Concatenation"}}
+      },
+      "then": {
+        "required": ["axis"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "SpaceToBatchND"}}
+      },
+      "then": {
+        "required": ["input_shape", "block_shape", "paddings"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "BatchToSpaceND"}}
+      },
+      "then": {
+        "required": ["input_shape", "block_shape", "crops"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "VariableUpdate"}}
+      },
+      "then": {
+        "required": []
       }
     }
   ]
