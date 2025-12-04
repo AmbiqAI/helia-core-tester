@@ -86,3 +86,13 @@ input_shape: [1, 16]
 filter_shape: [12, 16]
 use_bias: true
 
+operator: FullyConnected
+name: fullyconnected_int8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 10]
+filter_shape: [6, 1, 1, 10]
+

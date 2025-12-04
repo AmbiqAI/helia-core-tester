@@ -1,17 +1,48 @@
 {
-    "build": {
-        "dockerfile": "Dockerfile",
-        "context": ".."
-    },
-    "customizations": {
-        "vscode": {
-            "extensions": [
+	"name": "CMSIS AOT Tester",
+	"image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+	
+	// Use a consistent user - this ensures the same user is always used
+	"remoteUser": "vscode",
+	
+	// Features to install
+	"features": {
+		"ghcr.io/devcontainers/features/git:1": {
+			"version": "latest"
+		},
+		"ghcr.io/devcontainers/features/python:1": {
+			"version": "3.11"
+		}
+	},
+	
+	// Mount git config from host - automatically syncs your host git config to the container
+	// This ensures you always use the same git user without manual configuration
+	"mounts": [
+		"source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,consistency=cached"
+	],
+	
+	// Alternative: If you prefer environment variables instead of mounting, uncomment below
+	// and comment out the mounts section above
+	// "containerEnv": {
+	// 	"GIT_USER_NAME": "${localEnv:GIT_USER_NAME}",
+	// 	"GIT_USER_EMAIL": "${localEnv:GIT_USER_EMAIL}"
+	// },
+	// "postCreateCommand": "if [ -n \"$GIT_USER_NAME\" ] && [ -n \"$GIT_USER_EMAIL\" ]; then git config --global user.name \"$GIT_USER_NAME\" && git config --global user.email \"$GIT_USER_EMAIL\"; fi",
+	
+	// Install build tools: git-lfs, cmake, and build-essential
+	"postCreateCommand": "sudo apt-get update && sudo apt-get install -y git-lfs cmake build-essential && git lfs install",
+	
+	// Customize container settings
+	"customizations": {
+		"vscode": {
+			"extensions": [
                 "GitHub.copilot",
                 "GitHub.copilot-chat",
                 "tamasfe.even-better-toml",
                 "mechatroner.rainbow-csv",
-                "ms-python.python",
-                "charliermarsh.ruff",
+				"ms-python.python",
+				"ms-python.vscode-pylance",
+				"charliermarsh.ruff",
                 "jeff-hykin.better-cpp-syntax",
                 "ms-vscode.cpptools",
                 "ms-vscode.cpptools-extension-pack",
@@ -22,14 +53,7 @@
                 "mcu-debug.debug-tracker-vscode",
                 "mcu-debug.rtos-views",
                 "mcu-debug.peripheral-viewer"
-            ]
-        }
-    },
-    "postCreateCommand": "./.devcontainer/install.sh",
-    "features": {
-        "ghcr.io/devcontainers/features/github-cli:1": {
-            "installDirectlyFromGitHubRelease": true,
-            "version": "latest"
-        }
-    }
+			]
+		}
+	}
 }

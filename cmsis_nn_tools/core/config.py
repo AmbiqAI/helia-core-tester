@@ -43,7 +43,7 @@ class Config:
     skip_run: bool = False
     
     # Reporting configuration
-    enable_reporting: bool = False
+    enable_reporting: bool = True
     report_formats: list = field(default_factory=lambda: ["json"])
     report_dir: Path = field(default_factory=lambda: Path("reports"))
     

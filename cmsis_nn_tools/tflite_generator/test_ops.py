@@ -23,6 +23,10 @@ from tester.ops.relu import OpRelu
 from tester.ops.relu6 import OpRelu6
 from tester.ops.leakyrelu import OpLeakyRelu
 from tester.ops.softmax import OpSoftmax
+from tester.ops.tanh import OpTanh
+from tester.ops.logistic import OpLogistic
+from tester.ops.hard_swish import OpHardSwish
+from tester.ops.prelu import OpPReLU
 from tester.ops.quantize import OpQuantize
 from tester.ops.dequantize import OpDequantize
 from tester.ops.pooling import OpPooling
@@ -34,6 +38,12 @@ from tester.ops.svdf import OpSVDF
 from tester.ops.mean import OpMean
 from tester.ops.reducemax import OpReduceMax
 from tester.ops.transposeconv import OpTransposeConv
+from tester.ops.equal import OpEqual
+from tester.ops.not_equal import OpNotEqual
+from tester.ops.greater import OpGreater
+from tester.ops.greater_equal import OpGreaterEqual
+from tester.ops.less import OpLess
+from tester.ops.less_equal import OpLessEqual
 
 
 # Operation mapping
@@ -51,6 +61,10 @@ OP_MAP = {
     'Relu6': OpRelu6,
     'LeakyRelu': OpLeakyRelu,
     'Softmax': OpSoftmax,
+    'Tanh': OpTanh,
+    'Logistic': OpLogistic,
+    'HardSwish': OpHardSwish,
+    'PReLU': OpPReLU,
     'Quantize': OpQuantize,
     'Dequantize': OpDequantize,
     'Pooling': OpPooling,
@@ -62,6 +76,12 @@ OP_MAP = {
     'Mean': OpMean,
     'ReduceMax': OpReduceMax,
     'TransposeConv': OpTransposeConv,
+    'Equal': OpEqual,
+    'NotEqual': OpNotEqual,
+    'Greater': OpGreater,
+    'GreaterEqual': OpGreaterEqual,
+    'Less': OpLess,
+    'LessEqual': OpLessEqual,
 }
 
 

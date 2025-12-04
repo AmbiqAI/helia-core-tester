@@ -1,0 +1,18 @@
+operator: Mean
+name: mean_int8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 32, 32, 3]
+---
+operator: Mean
+name: mean_int16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 32, 32, 3]
+

@@ -4,7 +4,7 @@
   "properties": {
     "operator": {
       "type": "string",
-      "enum": ["FullyConnected", "Conv2D", "DepthwiseConv2D", "MatMul", "Elementwise", "Add", "Mul", "Maximum", "Minimum", "Relu", "Relu6", "LeakyRelu", "Softmax", "Quantize", "Dequantize", "Pooling", "Transpose", "StridedSlice", "Pad", "LSTM", "SVDF", "Mean", "ReduceMax", "TransposeConv"]
+      "enum": ["FullyConnected", "Conv2D", "DepthwiseConv2D", "MatMul", "Elementwise", "Add", "Mul", "Maximum", "Minimum", "Relu", "Relu6", "LeakyRelu", "Softmax", "Tanh", "Logistic", "HardSwish", "PReLU", "Quantize", "Dequantize", "Pooling", "Transpose", "StridedSlice", "Pad", "LSTM", "SVDF", "Mean", "ReduceMax", "TransposeConv", "Equal", "NotEqual", "Greater", "GreaterEqual", "Less", "LessEqual"]
     },
     "name": {
       "type": "string",
@@ -239,6 +239,86 @@
       },
       "then": {
         "required": ["input_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Tanh"}}
+      },
+      "then": {
+        "required": ["input_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Logistic"}}
+      },
+      "then": {
+        "required": ["input_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "HardSwish"}}
+      },
+      "then": {
+        "required": ["input_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "PReLU"}}
+      },
+      "then": {
+        "required": ["input_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Equal"}}
+      },
+      "then": {
+        "required": ["input_1_shape", "input_2_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "NotEqual"}}
+      },
+      "then": {
+        "required": ["input_1_shape", "input_2_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Greater"}}
+      },
+      "then": {
+        "required": ["input_1_shape", "input_2_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "GreaterEqual"}}
+      },
+      "then": {
+        "required": ["input_1_shape", "input_2_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "Less"}}
+      },
+      "then": {
+        "required": ["input_1_shape", "input_2_shape"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"operator": {"const": "LessEqual"}}
+      },
+      "then": {
+        "required": ["input_1_shape", "input_2_shape"]
       }
     }
   ]

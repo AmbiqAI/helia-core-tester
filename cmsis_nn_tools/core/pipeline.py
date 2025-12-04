@@ -37,7 +37,7 @@ class FullTestPipeline:
             'cortex-m4': 'apollo4l_evb',
             'cortex-m55': 'apollo510_evb',
         }
-        return platform_mapping.get(cpu, 'apollo510_evb')  # Default to apollo510_evb
+        return platform_mapping.get(cpu, 'apollo4l_evb')
     
     def run(self) -> bool:
         """
@@ -55,7 +55,6 @@ class FullTestPipeline:
         overall_success = True
         
         try:
-            # Step 1: Generate TFLite models
             if not self.config.skip_generation:
                 success = self._step1_generate_tflite_models()
                 if not success:
@@ -66,7 +65,6 @@ class FullTestPipeline:
             else:
                 self.logger.info("Skipping TFLite model generation")
             
-            # Step 2: Convert TFLite models
             if not self.config.skip_conversion and overall_success:
                 success = self._step2_convert_tflite_models()
                 if not success:
@@ -77,7 +75,6 @@ class FullTestPipeline:
             else:
                 self.logger.info("Skipping TFLite to C conversion")
             
-            # Step 3: Generate test runners (first attempt)
             if not self.config.skip_runners and overall_success:
                 success = self._step3_generate_test_runners()
                 if not success:
@@ -88,7 +85,6 @@ class FullTestPipeline:
             else:
                 self.logger.info("Skipping test runner generation")
             
-            # Step 3.5: Generate test runners after conversion (if needed)
             if not self.config.skip_runners and overall_success and not self.config.skip_conversion:
                 success = self._step3_5_generate_test_runners_after_conversion()
                 if not success:
@@ -97,7 +93,6 @@ class FullTestPipeline:
                         self.logger.error("Stopping due to failure in test runner generation")
                         return False
             
-            # Step 4: Build for FVP
             if not self.config.skip_build and overall_success:
                 success = self._step4_build_fvp()
                 if not success:
@@ -108,7 +103,6 @@ class FullTestPipeline:
             else:
                 self.logger.info("Skipping FVP build")
             
-            # Step 5: Run tests
             if not self.config.skip_run and overall_success:
                 success = self._step5_run_tests()
                 if not success:
@@ -116,7 +110,6 @@ class FullTestPipeline:
             else:
                 self.logger.info("Skipping FVP test execution")
             
-            # Print summary
             end_time = time.time()
             duration = end_time - start_time
             
@@ -140,10 +133,8 @@ class FullTestPipeline:
             self.logger.error(f"tflite generator directory not found: {self.config.tflite_generator_dir.absolute()}")
             return False
         
-        # Build pytest command
         cmd = ["pytest", "test_ops.py::test_generation", "-v"]
         
-        # Add filters
         if self.config.op_filter:
             cmd.extend(["--op", self.config.op_filter])
         if self.config.dtype_filter:
@@ -168,7 +159,6 @@ class FullTestPipeline:
             self.logger.error(f"Generated tests directory not found: {self.config.generated_tests_dir}")
             return False
         
-        # Find all TFLite files
         tflite_files = list(self.config.generated_tests_dir.rglob("*.tflite"))
         if not tflite_files:
             self.logger.error(f"No TFLite files found in {self.config.generated_tests_dir}")
@@ -185,16 +175,12 @@ class FullTestPipeline:
         platform_name = self._get_platform_name(self.config.cpu)
         self.logger.info(f"Using platform: {platform_name} for CPU: {self.config.cpu}")
     
-        # Convert each TFLite file
         success_count = 0
         for tflite_file in tflite_files:
-            # Determine output directory (same as TFLite file directory)
             output_dir = tflite_file.parent
             
-            # Extract module name from filename
             module_name = tflite_file.stem
             
-            # Build helia-aot command (use Python module from modules directory)
             helia_aot_path = self.config.project_root / "modules" / "helia-aot"
             cmd = [
                 "python3", "-m", "helia_aot.cli.main",
@@ -235,14 +221,12 @@ class FullTestPipeline:
             self.logger.error(f"Test runner script not found: {script_path}")
             return False
         
-        # Check if there are any model headers to generate runners for
         model_headers = list(self.config.generated_tests_dir.rglob("includes-api/*_model.h"))
         if not model_headers:
             self.logger.warning("No model headers found - test runners will be generated after TFLite conversion")
             self.logger.info("This step will be skipped for now and run after conversion")
             return True
         
-        # Build command
         cmd = ["python3", str(script_path), "--root", str(self.config.generated_tests_dir)]
         if self.config.verbose:
             cmd.append("--verbose")
@@ -259,7 +243,6 @@ class FullTestPipeline:
     
     def _step3_5_generate_test_runners_after_conversion(self) -> bool:
         """Step 3.5: Generate test runners after conversion if needed."""
-        # Check if we need to generate runners after conversion
         model_headers = list(self.config.generated_tests_dir.rglob("includes-api/*_model.h"))
         if not model_headers:
             self.logger.info("Generating test runners after TFLite conversion...")
@@ -274,19 +257,16 @@ class FullTestPipeline:
             self.logger.info("Dry run mode - would build for FVP")
             return True
         
-        # Use the existing build_and_run_fvp.py script but only build
         script_path = self.config.project_root / "cmsis_nn_tools" / "build_and_run_fvp.py"
         if not script_path.exists():
             self.logger.error(f"Build script not found: {script_path}")
             return False
         
-        # Build command (only build, don't run)
-        # Use CMake definition instead of --opt to avoid argument parsing issues
         cmd = [
             "python3", str(script_path),
             "--cpu", self.config.cpu,
             "--cmake-def", f"CMSIS_OPTIMIZATION_LEVEL={self.config.optimization}",
-            "--no-run",  # Only build, don't run
+            "--no-run",
         ]
         
         if self.config.jobs:
@@ -300,7 +280,6 @@ class FullTestPipeline:
             return True
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Failed to build for FVP (exit code {e.returncode})")
-            # Re-run with output capture to get error details
             try:
                 result = subprocess.run(
                     cmd,
@@ -313,7 +292,7 @@ class FullTestPipeline:
                 if result.stderr:
                     self.logger.error(f"stderr: {result.stderr}")
             except Exception:
-                pass  # Ignore errors in error reporting
+                pass
             return False
         except FileNotFoundError as e:
             self.logger.error(f"Failed to build for FVP: {e}")
@@ -327,17 +306,15 @@ class FullTestPipeline:
             self.logger.info("Dry run mode - would run tests on FVP")
             return True
         
-        # Use the existing build_and_run_fvp.py script but only run
         script_path = self.config.project_root / "cmsis_nn_tools" / "build_and_run_fvp.py"
         if not script_path.exists():
             self.logger.error(f"Build script not found: {script_path}")
             return False
         
-        # Build command (only run, don't build)
         cmd = [
             "python3", str(script_path),
             "--cpu", self.config.cpu,
-            "--no-build",  # Only run, don't build
+            "--no-build",
         ]
         
         if self.config.timeout > 0:
@@ -345,18 +322,15 @@ class FullTestPipeline:
         if not self.config.fail_fast:
             cmd.append("--no-fail-fast")
         
-        # Enable reporting if configured
-        if hasattr(self.config, 'enable_reporting') and self.config.enable_reporting:
-            cmd.append("--enable-reporting")
+        if hasattr(self.config, 'enable_reporting'):
+            if not self.config.enable_reporting:
+                cmd.append("--no-report")
             if hasattr(self.config, 'report_formats') and self.config.report_formats:
                 cmd.extend(["--report-formats"] + self.config.report_formats)
             if hasattr(self.config, 'report_dir') and self.config.report_dir:
                 cmd.extend(["--report-dir", str(self.config.report_dir)])
         
-        # Always show real-time output for test runs (don't use --quiet)
-        
         try:
-            # Run with real-time output streaming
             self.logger.info("Running tests on FVP (real-time output):")
             self.logger.info("=" * 60)
             
@@ -364,7 +338,7 @@ class FullTestPipeline:
                 cmd,
                 check=True,
                 text=True,
-                bufsize=1,  # Line buffered
+                bufsize=1,
                 universal_newlines=True
             )
             
