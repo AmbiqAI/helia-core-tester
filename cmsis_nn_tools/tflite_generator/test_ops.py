@@ -17,6 +17,7 @@ from tester.ops.dwconv import OpDepthwiseConv2D
 from tester.ops.matmul_batch import OpMatMul
 from tester.ops.elementwise import OpElementwise
 from tester.ops.add import OpAdd
+from tester.ops.sub import OpSub
 from tester.ops.mul import OpMul
 from tester.ops.minmax import OpMinMax
 from tester.ops.relu import OpRelu
@@ -54,6 +55,7 @@ OP_MAP = {
     'MatMul': OpMatMul,
     'Elementwise': OpElementwise,
     'Add': OpAdd,
+    'Sub': OpSub,
     'Mul': OpMul,
     'Maximum': OpMinMax,
     'Minimum': OpMinMax,

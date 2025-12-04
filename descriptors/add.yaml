@@ -55,4 +55,14 @@ variations:
   - name: add_broadcast_2
     input_1_shape: [1, 1, 1, 8]
     input_2_shape: [1, 16, 16, 8]
+---
+operator: Add
+name: add_dual_inputs_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 4, 4, 3]
+input_2_shape: [1, 4, 4, 3]
 

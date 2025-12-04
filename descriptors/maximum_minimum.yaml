@@ -28,4 +28,44 @@ activation_dtype: S16
 weight_dtype: S8
 input_1_shape: [1, 2, 2, 7]
 input_2_shape: [1, 2, 2, 7]
+---
+operator: Maximum
+name: maximum_dual_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 3]
+---
+operator: Maximum
+name: maximum_broadcast_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 1, 1, 3]
+---
+operator: Minimum
+name: minimum_dual_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 3, 2, 2]
+input_2_shape: [1, 3, 2, 2]
+---
+operator: Minimum
+name: minimum_broadcast_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 3, 2, 2]
+input_2_shape: [1, 1, 2, 1]
 

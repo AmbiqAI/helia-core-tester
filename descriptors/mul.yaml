@@ -17,4 +17,24 @@ hint:
   call_style: per_tensor
 input_1_shape: [1, 32, 32, 3]
 input_2_shape: [1, 32, 32, 3]
+---
+operator: Mul
+name: mul_dual_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 3, 2]
+input_2_shape: [1, 2, 3, 2]
+---
+operator: Mul
+name: mul_broadcast_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 3, 2]
+input_2_shape: [1, 1, 3, 1]
 

@@ -66,7 +66,8 @@ def _validate_and_normalize_descriptor(desc: Dict[str, Any]) -> Dict[str, Any]:
         elif operator in ['Conv2D', 'DepthwiseConv2D']:
             if 'input_shape' not in desc or 'filter_shape' not in desc:
                 raise ValueError(f"{operator} requires input_shape and filter_shape")
-        elif operator in ['MatMul', 'Elementwise', 'Add', 'Mul', 'Maximum', 'Minimum']:
+        elif operator in ['MatMul', 'Elementwise', 'Add', 'Sub', 'Mul', 'Maximum', 'Minimum',
+                          'Equal', 'NotEqual', 'Greater', 'GreaterEqual', 'Less', 'LessEqual']:
             if 'input_1_shape' not in desc or 'input_2_shape' not in desc:
                 raise ValueError(f"{operator} requires input_1_shape and input_2_shape")
         elif operator == 'Pooling':
@@ -74,7 +75,8 @@ def _validate_and_normalize_descriptor(desc: Dict[str, Any]) -> Dict[str, Any]:
                 raise ValueError(f"{operator} requires input_shape and pool_size (or filter_shape)")
         elif operator in ['Relu', 'Relu6', 'LeakyRelu', 'Softmax', 'Quantize', 'Dequantize', 
                          'Transpose', 'StridedSlice', 'Pad', 'LSTM', 'SVDF',
-                         'Mean', 'ReduceMax', 'TransposeConv']:
+                         'Mean', 'ReduceMax', 'TransposeConv',
+                         'Tanh', 'Logistic', 'HardSwish', 'PReLU']:
             if 'input_shape' not in desc:
                 raise ValueError(f"{operator} requires input_shape")
         else:
