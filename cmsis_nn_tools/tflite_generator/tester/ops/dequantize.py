@@ -26,10 +26,8 @@ class OpDequantize(OperationBase):
         import tensorflow as tf
         import numpy as np
         
-        # Create converter
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
-        # Apply quantization based on activation_dtype
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         
         if activation_dtype == 'S8':
@@ -40,10 +38,7 @@ class OpDequantize(OperationBase):
         elif activation_dtype == 'S16':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_types = [tf.int16]
-            # For int16 quantization, keep input/output as float32
-            # For int16 quantization, keep input/output as float32
         
-        # Generate representative dataset
         def representative_data_gen():
             for _ in range(100):
                 if 'input_shape' in self.desc:
@@ -56,7 +51,6 @@ class OpDequantize(OperationBase):
         
         converter.representative_dataset = representative_data_gen
         
-        # Convert and save
         tflite_model = converter.convert()
         with open(out_path, 'wb') as f:
             f.write(tflite_model)

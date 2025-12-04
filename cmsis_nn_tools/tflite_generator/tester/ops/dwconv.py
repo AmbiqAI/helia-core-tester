@@ -67,8 +67,7 @@ class OpDepthwiseConv2D(OperationBase):
         elif activation_dtype == 'S16':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_types = [tf.int16]
-            # For int16 quantization, keep input/output as float32
-            # For int16 quantization, keep input/output as float32
+
         
         # Generate representative dataset
         def representative_data_gen():

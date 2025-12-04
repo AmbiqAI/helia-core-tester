@@ -1,0 +1,88 @@
+operator: FullyConnected
+name: fully_connected_basic_relu_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU
+hint:
+  call_style: per_tensor
+input_shape: [1, 8]
+filter_shape: [4, 8]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_basic_relu_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU
+hint:
+  call_style: per_tensor
+input_shape: [1, 16]
+filter_shape: [8, 16]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_no_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 10]
+filter_shape: [5, 10]
+use_bias: false
+---
+operator: FullyConnected
+name: fully_connected_no_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 10]
+filter_shape: [5, 10]
+use_bias: false
+---
+operator: FullyConnected
+name: fully_connected_batch3_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU
+hint:
+  call_style: per_tensor
+input_shape: [3, 6]
+filter_shape: [4, 6]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_batch3_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU
+hint:
+  call_style: per_tensor
+input_shape: [3, 6]
+filter_shape: [4, 6]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_wide_output_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU
+hint:
+  call_style: per_tensor
+input_shape: [1, 16]
+filter_shape: [12, 16]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_wide_output_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: RELU
+hint:
+  call_style: per_tensor
+input_shape: [1, 16]
+filter_shape: [12, 16]
+use_bias: true
+
