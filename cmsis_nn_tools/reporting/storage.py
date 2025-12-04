@@ -72,7 +72,6 @@ class ReportStorage:
                 with open(file_path, 'r') as f:
                     data = json.load(f)
                 
-                # Filter by CPU if specified
                 if cpu and data.get('cpu') != cpu:
                     continue
                 
@@ -118,9 +117,8 @@ class ReportStorage:
         Returns:
             Summary statistics dictionary
         """
-        reports = self.list_reports(cpu=cpu, limit=100)  # Get more reports for analysis
+        reports = self.list_reports(cpu=cpu, limit=100)
         
-        # Filter by date
         cutoff_date = datetime.now().timestamp() - (days * 24 * 60 * 60)
         recent_reports = []
         
@@ -141,7 +139,6 @@ class ReportStorage:
                 'trend': 'no_data'
             }
         
-        # Calculate statistics
         total_runs = len(recent_reports)
         total_duration = sum(r['duration'] for r in recent_reports)
         avg_duration = total_duration / total_runs if total_runs > 0 else 0
@@ -150,7 +147,6 @@ class ReportStorage:
         total_passed = sum(r['passed'] for r in recent_reports)
         avg_pass_rate = (total_passed / total_tests * 100) if total_tests > 0 else 0
         
-        # Calculate trend (comparing first half to second half)
         trend = 'stable'
         if len(recent_reports) >= 4:
             mid_point = len(recent_reports) // 2
@@ -192,7 +188,6 @@ class ReportStorage:
         
         for file_path in self.reports_dir.glob("test_report_*.json"):
             try:
-                # Check file modification time
                 if file_path.stat().st_mtime < cutoff_date:
                     file_path.unlink()
                     removed_count += 1
@@ -203,12 +198,9 @@ class ReportStorage:
     
     def _dict_to_report(self, data: Dict[str, Any]) -> TestReport:
         """Convert dictionary to TestReport object."""
-        # Check if this is the new descriptor-centric format
         if 'descriptor_results' in data:
-            # New format: descriptor-centric
             descriptor_results = {}
             for desc_name, desc_data in data.get('descriptor_results', {}).items():
-                # Convert test_result if present
                 test_result = None
                 if desc_data.get('test_result'):
                     tr_data = desc_data['test_result']
@@ -229,7 +221,6 @@ class ReportStorage:
                         descriptor_name=tr_data.get('descriptor_name')
                     )
                 
-                # Create DescriptorResult
                 descriptor_results[desc_name] = DescriptorResult(
                     descriptor_name=desc_data['descriptor_name'],
                     descriptor_path=Path(desc_data['descriptor_path']),
@@ -240,7 +231,6 @@ class ReportStorage:
                     failure_reason=desc_data.get('failure_reason')
                 )
             
-            # Create report
             report = TestReport(
                 run_id=data['run_id'],
                 start_time=datetime.fromisoformat(data['start_time']),
@@ -250,7 +240,6 @@ class ReportStorage:
                 all_descriptors=data.get('all_descriptors', [])
             )
         else:
-            # Old format: backward compatibility - convert to descriptor-centric
             results = []
             for result_data in data.get('results', []):
                 result = TestResult(
@@ -270,12 +259,10 @@ class ReportStorage:
                     descriptor_name=result_data.get('descriptor_name')
                 )
                 results.append(result)
-            
-            # Convert old format to new format
+
             descriptor_results = {}
             for result in results:
                 desc_name = result.descriptor_name or result.test_name
-                # Create a minimal descriptor content
                 desc_content = {'name': desc_name}
                 
                 descriptor_results[desc_name] = DescriptorResult(
@@ -287,8 +274,6 @@ class ReportStorage:
                     failure_stage="execution" if result.status != TestStatus.PASS else None,
                     failure_reason=result.failure_reason
                 )
-            
-            # Create report
             report = TestReport(
                 run_id=data['run_id'],
                 start_time=datetime.fromisoformat(data['start_time']),

@@ -9,12 +9,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import sys
 
-# Import descriptor loading functionality
 try:
     from ...tflite_generator.tester.io.descriptors import load_all_descriptors
 except ImportError:
-    # Fallback for when running as standalone
-    # Add the cmsis_nn_tools directory to path
     cmsis_nn_tools_dir = Path(__file__).parent.parent
     sys.path.insert(0, str(cmsis_nn_tools_dir))
     from tflite_generator.tester.io.descriptors import load_all_descriptors
@@ -49,13 +46,10 @@ class DescriptorTracker:
         try:
             descriptors_list = load_all_descriptors(str(self.descriptors_dir))
             
-            # Convert to dictionary keyed by name
             for desc in descriptors_list:
                 name = desc.get('name')
                 if name:
                     self._descriptors[name] = desc
-                    # Try to find the source file
-                    # This is approximate - we'll search for the descriptor
                     self._descriptor_paths[name] = self._find_descriptor_file(name)
             
             return self._descriptors
@@ -65,11 +59,9 @@ class DescriptorTracker:
     
     def _find_descriptor_file(self, descriptor_name: str) -> Path:
         """Find the YAML file containing this descriptor."""
-        # Search for YAML files that might contain this descriptor
         for yaml_file in self.descriptors_dir.rglob("*.yaml"):
             if yaml_file.stem in descriptor_name or descriptor_name in yaml_file.stem:
                 return yaml_file
-        # Fallback to a default path
         return self.descriptors_dir / f"{descriptor_name}.yaml"
     
     def map_test_to_descriptor(self, test_name: str, descriptors: Optional[Dict[str, Dict]] = None) -> Optional[Dict]:
@@ -86,11 +78,9 @@ class DescriptorTracker:
         if descriptors is None:
             descriptors = self._descriptors
         
-        # Direct match
         if test_name in descriptors:
             return descriptors[test_name]
         
-        # Try partial matches (for variations)
         for desc_name, desc in descriptors.items():
             if test_name.startswith(desc_name) or desc_name.startswith(test_name):
                 return desc
@@ -112,7 +102,6 @@ class DescriptorTracker:
         missing = []
         
         for desc_name in descriptors.keys():
-            # Check if any test result matches this descriptor
             found = False
             for test_name in test_names:
                 if desc_name == test_name or desc_name.startswith(test_name) or test_name.startswith(desc_name):
@@ -143,7 +132,6 @@ class DescriptorTracker:
             Tuple of (status, failure_stage, failure_reason)
         """
         if test_result:
-            # Test was executed - use its status
             if test_result.status == TestStatus.PASS:
                 return TestStatus.PASS, None, None
             elif test_result.status == TestStatus.FAIL:
@@ -157,14 +145,10 @@ class DescriptorTracker:
             else:
                 return test_result.status, "execution", test_result.failure_reason
         
-        # No test result - check what stage failed
-        # Check for ELF file (build stage)
         elf_path = build_dir / "tests" / f"{descriptor_name}.elf"
         if not elf_path.exists():
-            # Check for model header (conversion stage)
             model_header = generated_tests_dir / descriptor_name / "includes-api" / f"{descriptor_name}_model.h"
             if not model_header.exists():
-                # Check for TFLite file (generation stage)
                 tflite_file = generated_tests_dir / descriptor_name / f"{descriptor_name}.tflite"
                 if not tflite_file.exists():
                     return TestStatus.GENERATION_FAILED, "generation", "TFLite model not generated"
@@ -173,7 +157,6 @@ class DescriptorTracker:
             else:
                 return TestStatus.BUILD_FAILED, "build", "ELF file not found in build directory"
         else:
-            # ELF exists but test wasn't run
             return TestStatus.NOT_RUN, None, "Test not executed"
     
     def get_descriptor_path(self, descriptor_name: str) -> Path:

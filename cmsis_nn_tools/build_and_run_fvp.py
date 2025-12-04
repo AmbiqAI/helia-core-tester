@@ -387,7 +387,7 @@ def parse_cpus(cpu_str: str) -> List[str]:
 
 
 
-def run_tests_with_reporting(cpus: List[str],
+def run_tests_with_reporting(cpus: List[str], 
                            source_dir: Path,
                            toolchain_file: Path,
                            cmsis5: Path,
@@ -401,7 +401,6 @@ def run_tests_with_reporting(cpus: List[str],
         Tuple of (list of TestResult objects, overall success)
     """
     try:
-        from .reporting.storage import ReportStorage
         from .reporting.generator import ReportGenerator
         from .reporting.models import TestReport, TestStatus, DescriptorResult
         from .reporting.descriptor_tracker import DescriptorTracker
@@ -409,7 +408,6 @@ def run_tests_with_reporting(cpus: List[str],
         # Fallback for when running as standalone script
         import sys
         sys.path.append(str(Path(__file__).parent))
-        from reporting.storage import ReportStorage
         from reporting.generator import ReportGenerator
         from reporting.models import TestReport, TestStatus, DescriptorResult
         from reporting.descriptor_tracker import DescriptorTracker
@@ -419,7 +417,6 @@ def run_tests_with_reporting(cpus: List[str],
     start_time = datetime.now()
     
     # Initialize reporting
-    storage = ReportStorage()
     generator = ReportGenerator()
     
     # Initialize descriptor tracking
@@ -500,13 +497,40 @@ def run_tests_with_reporting(cpus: List[str],
         if desc_name not in test_result_map or result.status == TestStatus.PASS:
             test_result_map[desc_name] = result
     
-    # Process all descriptors
-    for desc_name, desc_content in all_descriptors_dict.items():
-        test_result = test_result_map.get(desc_name)
+    # Get set of descriptors that were actually generated/run
+    # This includes descriptors that have:
+    # 1. A test result (were run)
+    # 2. A generated TFLite file (were generated)
+    # 3. A build artifact (ELF file)
+    # This ensures total_tests reflects only the filtered descriptors
+    active_descriptors = set()
+    
+    # Add descriptors from test results
+    for result in all_results:
+        desc_name = result.descriptor_name or result.test_name
+        active_descriptors.add(desc_name)
+    
+    # Add descriptors that have generated artifacts
+    primary_build_dir = source_dir / f"build-{cpus[0]}-gcc" if cpus else source_dir / "build-cortex-m55-gcc"
+    for desc_name in all_descriptors_dict.keys():
+        # Check for TFLite file (generation stage)
+        tflite_file = generated_tests_dir / desc_name / f"{desc_name}.tflite"
+        # Check for model header (conversion stage)
+        model_header = generated_tests_dir / desc_name / "includes-api" / f"{desc_name}_model.h"
+        # Check for ELF file (build stage)
+        elf_path = primary_build_dir / "tests" / f"{desc_name}.elf"
         
-        # Check all CPU build directories for ELF files
-        # Use the first CPU's build dir as primary, but check others too
-        primary_build_dir = source_dir / f"build-{cpus[0]}-gcc" if cpus else source_dir / "build-cortex-m55-gcc"
+        if tflite_file.exists() or model_header.exists() or elf_path.exists():
+            active_descriptors.add(desc_name)
+    
+    # Process only active descriptors (those that were actually generated/run)
+    for desc_name in active_descriptors:
+        desc_content = all_descriptors_dict.get(desc_name)
+        if not desc_content:
+            # Descriptor not in loaded descriptors - skip
+            continue
+        
+        test_result = test_result_map.get(desc_name)
         
         # Determine status
         status, failure_stage, failure_reason = tracker.determine_descriptor_status(
@@ -539,6 +563,8 @@ def run_tests_with_reporting(cpus: List[str],
             if desc:
                 desc_name = desc.get('name', result.descriptor_name)
                 if desc_name not in descriptor_results:
+                    # Add to active descriptors if not already there
+                    active_descriptors.add(desc_name)
                     primary_build_dir = source_dir / f"build-{cpus[0]}-gcc" if cpus else source_dir / "build-cortex-m55-gcc"
                     status, failure_stage, failure_reason = tracker.determine_descriptor_status(
                         descriptor_name=desc_name,
@@ -567,15 +593,11 @@ def run_tests_with_reporting(cpus: List[str],
         all_descriptors=list(all_descriptors_dict.values())
     )
     
-    # Save and generate reports
-    report_file = storage.save_report(report)
-    print(f"\nTest report saved to: {report_file}")
-    
-    # Generate additional report formats if requested
-    if hasattr(args, 'report_formats') and args.report_formats:
-        generated_files = generator.generate_reports(report, args.report_formats)
-        for format_type, file_path in generated_files.items():
-            print(f"{format_type.upper()} report generated: {file_path}")
+    # Generate reports in requested formats (defaults to JSON if none specified)
+    report_formats = getattr(args, 'report_formats', None) or ["json"]
+    generated_files = generator.generate_reports(report, report_formats)
+    for format_type, file_path in generated_files.items():
+        print(f"{format_type.upper()} report generated: {file_path}")
     
     return all_results, not any_fail
 

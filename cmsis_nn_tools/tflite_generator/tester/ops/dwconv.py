@@ -21,18 +21,44 @@ class OpDepthwiseConv2D(OperationBase):
         # Build model with float32 inputs (will be quantized later)
         inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
         
-        # DepthwiseConv2D layer with random bias initialization
-        dwconv = tf.keras.layers.DepthwiseConv2D(
-            kernel_size=filter_shape[1:3],
-            strides=self.desc.get('strides', [1, 1]),
-            padding=self.desc.get('padding', 'valid'),
-            use_bias=True,
-            bias_initializer=tf.keras.initializers.RandomUniform(minval=-1.0, maxval=1.0),
-            name='depthwise_conv2d'
-        )
+        # Normalize padding (match reference implementation)
+        padding = self.desc.get('padding', 'valid')
+        if padding is not None:
+            padding = str(padding).lower()
+        else:
+            padding = 'valid'
+        
+        dwconv_kwargs = {
+            'kernel_size': filter_shape[0:2],
+            'strides': self.desc.get('strides', [1, 1]),
+            'padding': padding,
+            'depth_multiplier': self.desc.get('depth_multiplier', 1),
+            'use_bias': self.desc.get('use_bias', True),
+            'name': 'depthwise_conv2d'
+        }
+        
+        if 'dilation' in self.desc:
+            dilation = self.desc['dilation']
+            if isinstance(dilation, (int, float)):
+                dilation = [int(dilation), int(dilation)]
+            elif isinstance(dilation, (list, tuple)):
+                if len(dilation) != 2:
+                    raise ValueError(f"Invalid dilation: {dilation}. Must be 2 integers or a single integer")
+                dilation = [int(dilation[0]), int(dilation[1])]
+            else:
+                raise ValueError(f"Invalid dilation type: {type(dilation)}. Must be int or list/tuple of 2 ints")
+            
+            if any(d <= 0 for d in dilation):
+                raise ValueError(f"Invalid dilation values: {dilation}. Must be positive integers")
+            
+            dwconv_kwargs['dilation_rate'] = tuple(dilation)
+        
+        if dwconv_kwargs['use_bias']:
+            dwconv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(minval=-1.0, maxval=1.0)
+        
+        dwconv = tf.keras.layers.DepthwiseConv2D(**dwconv_kwargs)
         x = dwconv(inputs)
         
-        # Apply activation if specified
         activation = self.desc.get('activation', 'NONE')
         if activation == 'RELU':
             x = tf.keras.layers.ReLU()(x)
@@ -53,10 +79,8 @@ class OpDepthwiseConv2D(OperationBase):
         import tensorflow as tf
         import numpy as np
         
-        # Create converter
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
-        # Apply quantization based on activation_dtype
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         
         if activation_dtype == 'S8':
@@ -67,10 +91,7 @@ class OpDepthwiseConv2D(OperationBase):
         elif activation_dtype == 'S16':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_types = [tf.int16]
-            # For int16 quantization, keep input/output as float32
-            # For int16 quantization, keep input/output as float32
         
-        # Generate representative dataset
         def representative_data_gen():
             for _ in range(100):
                 if 'input_shape' in self.desc:

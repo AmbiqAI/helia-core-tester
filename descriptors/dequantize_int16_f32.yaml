@@ -1,9 +1,0 @@
-operator: Dequantize
-name: dequantize_int16_f32
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-hint:
-  call_style: per_tensor
-input_shape: [1, 32, 32, 3]
-filter_shape: [1, 1, 1, 1]

@@ -41,9 +41,11 @@ class OpLeakyRelu(OperationBase):
             converter.inference_output_type = tf.int8
         elif activation_dtype == 'S16':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int16]
-            # For int16 quantization, keep input/output as float32
-            # For int16 quantization, keep input/output as float32
+            converter.target_spec.supported_ops = [
+                tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8
+            ]
+            converter.inference_input_type = tf.int16
+            converter.inference_output_type = tf.int16
         
         # Generate representative dataset
         def representative_data_gen():

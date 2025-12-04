@@ -18,13 +18,22 @@ class OpTransposeConv(OperationBase):
         input_shape = self.desc['input_shape']
         filter_shape = self.desc['filter_shape']
         inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        x = tf.keras.layers.Conv2DTranspose(
-            filters=filter_shape[-1],  # Number of output channels
-            kernel_size=filter_shape[1:3],  # Kernel size
-            strides=self.desc.get('strides', [1, 1]),
-            padding=self.desc.get('padding', 'valid'),
-            use_bias=True
-        )(inputs)
+        
+        # TransposeConv layer
+        # filter_shape is [KH, KW, OutCh, InCh] in TensorFlow format
+        transpose_conv_kwargs = {
+            'filters': filter_shape[2],  # Number of output channels (third dimension)
+            'kernel_size': filter_shape[0:2],  # Kernel height and width (first two dimensions)
+            'strides': self.desc.get('strides', [1, 1]),
+            'padding': self.desc.get('padding', 'valid').lower(),
+            'use_bias': self.desc.get('use_bias', True)
+        }
+        
+        # Add bias initializer only if use_bias is True
+        if transpose_conv_kwargs['use_bias']:
+            transpose_conv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(minval=-1.0, maxval=1.0)
+        
+        x = tf.keras.layers.Conv2DTranspose(**transpose_conv_kwargs)(inputs)
         model = tf.keras.Model(inputs=inputs, outputs=x)
         return model
 

@@ -65,10 +65,10 @@ class DescriptorResult:
     """Result for a single descriptor."""
     descriptor_name: str
     descriptor_path: Path
-    descriptor_content: Dict[str, Any]  # Full YAML content
+    descriptor_content: Dict[str, Any]  
     status: TestStatus
-    test_result: Optional[TestResult] = None  # If test was executed
-    failure_stage: Optional[str] = None  # "generation", "conversion", "build", "execution"
+    test_result: Optional[TestResult] = None
+    failure_stage: Optional[str] = None
     failure_reason: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
@@ -96,7 +96,6 @@ class TestReport:
     summary: str = ""
     duration: float = 0.0
     
-    # Computed fields (calculated from descriptor_results)
     total_tests: int = 0
     passed: int = 0
     failed: int = 0

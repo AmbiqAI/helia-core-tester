@@ -97,12 +97,10 @@ class ReportGenerator:
         """Create HTML content for the report - descriptor-centric."""
         status_counts = report.get_status_counts()
         
-        # Calculate percentages
         total = report.total_tests
         pass_rate = (status_counts["passed"] / total * 100) if total > 0 else 0
         fail_rate = (status_counts["failed"] / total * 100) if total > 0 else 0
         
-        # Build status cards HTML
         status_cards = []
         for status_name, count in status_counts.items():
             if count > 0:
@@ -215,7 +213,6 @@ class ReportGenerator:
         <tbody>
 """
         
-        # Sort descriptors by name for consistent display
         sorted_descriptors = sorted(report.descriptor_results.items())
         
         for desc_name, desc_result in sorted_descriptors:
@@ -229,10 +226,8 @@ class ReportGenerator:
             duration = desc_result.test_result.duration if desc_result.test_result else 0.0
             failure_reason = desc_result.failure_reason or ""
             
-            # Escape quotes for JavaScript
             safe_desc_name = desc_name.replace("'", "\\'").replace('"', '\\"')
             
-            # Build test button HTML separately to avoid f-string issues
             test_button = ""
             if desc_result.test_result:
                 test_button = f'<button class="expandable" onclick="toggleDetails(\'{safe_desc_name}\', \'test\')">Show Test</button>'
@@ -274,7 +269,7 @@ class ReportGenerator:
                         <p><strong>Duration:</strong> {test_result.duration:.2f} seconds</p>
                         <p><strong>ELF Path:</strong> {test_result.elf_path}</p>
                         <p><strong>Timestamp:</strong> {test_result.timestamp.strftime('%Y-%m-%d %H:%M:%S')}</p>"""
-                
+            
                 if test_result.cycles:
                     html += f"<p><strong>Cycles:</strong> {test_result.cycles:,}</p>"
                 if test_result.memory_usage:
@@ -289,9 +284,9 @@ class ReportGenerator:
                         html += f"{self._escape_html(line)}\n"
                     if len(test_result.output_lines) > 20:
                         html += "... (truncated)"
-                    html += "</pre>"
-                
-                html += """
+                html += "</pre>"
+            
+            html += """
                     </div>
                 </td>
             </tr>"""
@@ -308,7 +303,6 @@ class ReportGenerator:
         """Create Markdown content for the report - descriptor-centric."""
         status_counts = report.get_status_counts()
         
-        # Calculate percentages
         total = report.total_tests
         
         md = f"""# CMSIS-NN Descriptor Test Report
@@ -327,7 +321,6 @@ class ReportGenerator:
 |--------|-------|------------|
 """
         
-        # Add all status types
         for status_name, count in status_counts.items():
             if count > 0:
                 rate = (count / total * 100) if total > 0 else 0
@@ -336,7 +329,6 @@ class ReportGenerator:
         
         md += "\n## Descriptor Results\n\n"
         
-        # Sort descriptors by name
         sorted_descriptors = sorted(report.descriptor_results.items())
         
         for desc_name, desc_result in sorted_descriptors:
@@ -350,20 +342,18 @@ class ReportGenerator:
             md += f"- **Operator:** {operator}\n"
             md += f"- **Activation DType:** {activation_dtype}\n"
             md += f"- **Weight DType:** {weight_dtype}\n"
-            
+        
             if desc_result.failure_stage:
                 md += f"- **Failure Stage:** {desc_result.failure_stage}\n"
             if desc_result.failure_reason:
                 md += f"- **Failure Reason:** {desc_result.failure_reason}\n"
             
             md += f"- **Descriptor Path:** `{desc_result.descriptor_path}`\n\n"
-            
-            # Add full descriptor content
+        
             md += "**Descriptor Content (YAML):**\n```yaml\n"
             md += yaml.dump(desc_content, default_flow_style=False)
             md += "```\n\n"
             
-            # Add test result if available
             if desc_result.test_result:
                 test_result = desc_result.test_result
                 md += "**Test Result:**\n\n"
