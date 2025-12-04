@@ -1,78 +1,77 @@
 operator: Pooling
-name: avgpool_int8
+name: max_pool_basic_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
+pooling_type: MAX
 hint:
   call_style: per_tensor
-input_shape: [1, 32, 32, 3]
+input_shape: [1, 8, 8, 3]
 pool_size: [2, 2]
 strides: [2, 2]
-padding: valid
+padding: SAME
 ---
 operator: Pooling
-name: avgpool_int16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-hint:
-  call_style: per_tensor
-input_shape: [1, 32, 32, 3]
-pool_size: [2, 2]
-strides: [2, 2]
-padding: valid
----
-operator: Pooling
-name: max_pool_int8
+name: max_pool_global_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
+pooling_type: MAX
 hint:
   call_style: per_tensor
-input_shape: [1, 32, 32, 3]
-pool_size: [2, 2]
-strides: [2, 2]
-padding: valid
+input_shape: [1, 5, 5, 2]
+pool_size: [5, 5]
+strides: [1, 1]
+padding: VALID
 ---
 operator: Pooling
-name: max_pool_int16
+name: max_pool_stride1_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
+pooling_type: MAX
 hint:
   call_style: per_tensor
-input_shape: [1, 32, 32, 3]
-pool_size: [2, 2]
-strides: [2, 2]
-padding: valid
+input_shape: [1, 6, 6, 3]
+pool_size: [3, 3]
+strides: [1, 1]
+padding: SAME
 ---
 operator: Pooling
-name: pooling_int8
+name: average_pool_basic_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
+pooling_type: AVERAGE
 hint:
   call_style: per_tensor
-variations:
-  - name: pooling_s8
-    activation_dtype: S8
-    weight_dtype: S8
-    input_shape: [1, 16, 16, 8]
-    pool_size: [2, 2]
-    strides: [2, 2]
-    padding: valid
-  - name: pooling_s16
-    activation_dtype: S16
-    weight_dtype: S8
-    input_shape: [1, 16, 16, 8]
-    pool_size: [2, 2]
-    strides: [2, 2]
-    padding: valid
-  - name: pooling_different_size
-    activation_dtype: S8
-    weight_dtype: S8
-    input_shape: [1, 32, 32, 16]
-    pool_size: [3, 3]
-    strides: [2, 2]
-    padding: same
-
+input_shape: [1, 8, 8, 3]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: SAME
+---
+operator: Pooling
+name: average_pool_global_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+pooling_type: AVERAGE
+hint:
+  call_style: per_tensor
+input_shape: [1, 4, 4, 4]
+pool_size: [4, 4]
+strides: [1, 1]
+padding: VALID
+---
+operator: Pooling
+name: average_pool_valid_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+pooling_type: AVERAGE
+hint:
+  call_style: per_tensor
+input_shape: [1, 7, 7, 2]
+pool_size: [3, 3]
+strides: [2, 2]
+padding: VALID

@@ -49,6 +49,32 @@
     "use_bias": {
       "type": "boolean"
     },
+    "adj_x": {
+      "type": "boolean"
+    },
+    "adj_y": {
+      "type": "boolean"
+    },
+    "pooling_type": {
+      "type": "string",
+      "enum": ["AVERAGE", "MAX"]
+    },
+    "pool_size": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 1},
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "strides": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 1},
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "padding": {
+      "type": "string",
+      "enum": ["valid", "same", "VALID", "SAME"]
+    },
     "hint": {
       "type": "object",
       "properties": {
@@ -206,7 +232,7 @@
         "properties": {"operator": {"const": "Pooling"}}
       },
       "then": {
-        "required": ["input_shape"]
+        "required": ["input_shape", "pooling_type", "pool_size"]
       }
     },
     {

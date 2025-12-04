@@ -23,17 +23,22 @@ class OpPooling(OperationBase):
         # Determine pooling type
         pooling_type = self.desc.get('pooling_type', 'AVERAGE')
         
+        # Normalize padding to lowercase
+        padding = self.desc.get('padding', 'valid')
+        if isinstance(padding, str):
+            padding = padding.lower()
+        
         if pooling_type == 'AVERAGE':
             x = tf.keras.layers.AveragePooling2D(
                 pool_size=self.desc.get('pool_size', [2, 2]),
                 strides=self.desc.get('strides', [2, 2]),
-                padding=self.desc.get('padding', 'valid')
+                padding=padding
             )(inputs)
         elif pooling_type == 'MAX':
             x = tf.keras.layers.MaxPooling2D(
                 pool_size=self.desc.get('pool_size', [2, 2]),
                 strides=self.desc.get('strides', [2, 2]),
-                padding=self.desc.get('padding', 'valid')
+                padding=padding
             )(inputs)
         else:
             raise ValueError(f"Unsupported pooling_type: {pooling_type}")
