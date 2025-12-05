@@ -251,7 +251,9 @@ def load_all_descriptors(descriptors_dir: str) -> List[Dict[str, Any]]:
     """
     Load and validate all descriptors in directory.
     Supports multiple descriptors per YAML file (separated by ---).
-    Descriptors from the same file are numbered: filename_1, filename_2, etc.
+    Preserves original names from YAML descriptors when present.
+    Falls back to numbered names (filename_1, filename_2, etc.) only when
+    no name is specified in the descriptor.
     
     Args:
         descriptors_dir: Directory containing YAML descriptors
@@ -267,25 +269,32 @@ def load_all_descriptors(descriptors_dir: str) -> List[Dict[str, Any]]:
             # load_descriptor now returns a list (supports multiple docs per file)
             descs = load_descriptor(desc_path)
             
-            # Get base filename without extension for numbering
+            # Get base filename without extension for numbering (fallback only)
             file_base = Path(desc_path).stem
             
-            # If multiple descriptors from same file, number them
+            # If multiple descriptors from same file, preserve original names when available
             if len(descs) > 1:
                 # Expand variations into individual descriptors for each descriptor
                 for idx, desc in enumerate(descs, start=1):
-                    # Create numbered name based on YAML filename
-                    numbered_name = f"{file_base}_{idx}"
-                    
-                    # Create a copy and update the name
+                    # Create a copy
                     desc_copy = desc.copy()
-                    desc_copy['name'] = numbered_name
+                    
+                    # Preserve original name if it exists, otherwise use numbered name
+                    if 'name' not in desc_copy or not desc_copy['name']:
+                        # No name specified, use numbered name as fallback
+                        desc_copy['name'] = f"{file_base}_{idx}"
+                    # If name exists, keep it as-is (preserve original meaningful names)
                     
                     expanded_descs = expand_descriptor_variations(desc_copy)
                     descriptors.extend(expanded_descs)
             else:
-                # Single descriptor - use original name or file-based name
+                # Single descriptor - preserve original name if present
                 for desc in descs:
+                    # If no name specified, use file-based name as fallback
+                    if 'name' not in desc or not desc['name']:
+                        desc['name'] = file_base
+                    # Otherwise, keep the original name
+                    
                     expanded_descs = expand_descriptor_variations(desc)
                     descriptors.extend(expanded_descs)
         except Exception as e:

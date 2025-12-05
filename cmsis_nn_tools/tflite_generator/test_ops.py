@@ -134,8 +134,11 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     Returns:
         True if test should run
     """
+    if filters.get('name'):
+        if desc['name'] != filters['name']:
+            return False
 
-    if filters['op']:
+    if filters.get('op'):
         filter_op = filters['op']
         desc_name = desc['name']
         base_name = desc.get('_base_name', None)
@@ -149,11 +152,11 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
             return False
         
     # Filter by activation dtype
-    if filters['dtype'] and desc['activation_dtype'] != filters['dtype']:
+    if filters.get('dtype') and desc['activation_dtype'] != filters['dtype']:
         return False
         
     # Filter by weight dtype
-    if filters['wtype'] and desc['weight_dtype'] != filters['wtype']:
+    if filters.get('wtype') and desc['weight_dtype'] != filters['wtype']:
         return False
             
     return True

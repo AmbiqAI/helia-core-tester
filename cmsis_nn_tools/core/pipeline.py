@@ -139,6 +139,8 @@ class FullTestPipeline:
             cmd.extend(["--op", self.config.op_filter])
         if self.config.dtype_filter:
             cmd.extend(["--dtype", self.config.dtype_filter])
+        if self.config.name_filter:
+            cmd.extend(["--name", self.config.name_filter])
         if self.config.limit:
             cmd.extend(["--limit", str(self.config.limit)])
         

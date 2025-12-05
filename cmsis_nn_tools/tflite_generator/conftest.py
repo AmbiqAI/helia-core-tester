@@ -16,6 +16,8 @@ def pytest_addoption(parser):
                     help="Filter by activation dtype (S8, S16)")
     parser.addoption("--wtype", action="store", default=None,
                     help="Filter by weight dtype (S8, S4)")
+    parser.addoption("--name", action="store", default=None,
+                    help="Filter by exact test name")
     parser.addoption("--limit", action="store", type=int, default=None,
                     help="Limit number of tests to run")
 
@@ -57,5 +59,6 @@ def test_filters(request):
         'op': request.config.getoption("--op"),
         'dtype': request.config.getoption("--dtype"),
         'wtype': request.config.getoption("--wtype"),
+        'name': request.config.getoption("--name"),
         'limit': request.config.getoption("--limit")
     }

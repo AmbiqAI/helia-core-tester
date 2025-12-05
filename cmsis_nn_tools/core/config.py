@@ -33,6 +33,7 @@ class Config:
     # Filters
     op_filter: Optional[str] = None
     dtype_filter: Optional[str] = None
+    name_filter: Optional[str] = None
     limit: Optional[int] = None
     
     # Skip options
@@ -80,6 +81,7 @@ class Config:
             "dry_run": self.dry_run,
             "op_filter": self.op_filter,
             "dtype_filter": self.dtype_filter,
+            "name_filter": self.name_filter,
             "limit": self.limit,
             "skip_generation": self.skip_generation,
             "skip_conversion": self.skip_conversion,

@@ -67,6 +67,8 @@ Examples:
                        help="Generate only specific operator (e.g., 'Conv2D')")
     parser.add_argument("--dtype", type=str, default=None,
                        help="Generate only specific dtype (e.g., 'S8', 'S16')")
+    parser.add_argument("--name", type=str, default=None,
+                       help="Generate only specific test by name")
     parser.add_argument("--limit", type=int, default=None,
                        help="Limit number of models to generate")
     
@@ -185,6 +187,7 @@ def main() -> int:
     config.dry_run = args.dry_run
     config.op_filter = args.op
     config.dtype_filter = args.dtype
+    config.name_filter = args.name
     config.limit = args.limit
     config.skip_generation = args.skip_generation
     config.skip_conversion = args.skip_conversion
