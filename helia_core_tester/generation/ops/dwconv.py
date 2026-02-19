@@ -2,11 +2,12 @@
 DepthwiseConv2D operation implementation.
 """
 
-from typing import Dict, Optional
+from typing import Dict, Any, Optional
 from pathlib import Path
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops.base import OperationBase
+from helia_core_tester.generation.kernel_dispatch import resolve_depthwise_conv2d_kernel
 
 
 def vector_sum_s8(
@@ -151,35 +152,11 @@ class OpDepthwiseConv2D(OperationBase):
             f.write(tflite_model)
     
     def _select_cmsis_depthwise_conv_kernel(self) -> Dict[str, str]:
-        """
-        Pick CMSIS-NN wrapper + C types from descriptor dtypes.
-        
-        DepthwiseConv2D support:
-        - S8 activations, S8 weights  -> arm_depthwise_conv_wrapper_s8, int32 bias
-        - S16 activations, S8 weights -> arm_depthwise_conv_wrapper_s16, int64 bias
-        """
-        act = str(self.desc.get("activation_dtype", "S8")).upper()
-        w = str(self.desc.get("weight_dtype", "S8")).upper()
-        
-        if act == "S8" and w == "S8":
-            return {
-                "kernel_fn": "arm_depthwise_conv_wrapper_s8",
-                "kernel_get_buffer_size_fn": "arm_depthwise_conv_wrapper_s8_get_buffer_size",
-                "input_c_type": "int8_t",
-                "output_c_type": "int8_t",
-                "bias_c_type": "int32_t",
-            }
-        
-        if act == "S16" and w == "S8":
-            return {
-                "kernel_fn": "arm_depthwise_conv_wrapper_s16",
-                "kernel_get_buffer_size_fn": "arm_depthwise_conv_wrapper_s16_get_buffer_size",
-                "input_c_type": "int16_t",
-                "output_c_type": "int16_t",
-                "bias_c_type": "int64_t",
-            }
-        
-        raise NotImplementedError(f"Unsupported DepthwiseConv2D dtype combo: {act} x {w}")
+        return resolve_depthwise_conv2d_kernel(
+            activation_dtype=self.desc.get("activation_dtype", "S8"),
+            weight_dtype=self.desc.get("weight_dtype", "S8"),
+            cpu=self.target_cpu,
+        )
     
     def generate_c_files(self, output_dir: Path) -> None:
         """
@@ -190,6 +167,30 @@ class OpDepthwiseConv2D(OperationBase):
         
         name = self.desc['name']
         
+        # #region agent log
+        import json
+        log_path = "/workspaces/cmsis-aot-tester/.cursor/debug.log"
+        log_entry_yaml = {
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "YAML_PARSER",
+            "location": "dwconv.py:generate_c_files_yaml",
+            "message": "YAML descriptor dimensions",
+            "data": {
+                "name": name,
+                "desc_input_shape": list(self.desc.get('input_shape', [])),
+                "desc_filter_shape": list(self.desc.get('filter_shape', [])),
+                "desc_depth_multiplier": int(self.desc.get('depth_multiplier', 1)),
+                "desc_use_bias": bool(self.desc.get('use_bias', True))
+            },
+            "timestamp": int(__import__('time').time() * 1000)
+        }
+        try:
+            with open(log_path, 'a') as f:
+                f.write(json.dumps(log_entry_yaml) + '\n')
+        except:
+            pass
+        # #endregion
         
         tflite_path = output_dir / f"{name}.tflite"
         if not tflite_path.exists():
@@ -204,13 +205,12 @@ class OpDepthwiseConv2D(OperationBase):
             get_operator_tensors_from_litert,
             get_tensor_shape_from_litert,
             get_tensor_quantization_from_litert,
+            run_inference_litert_tensor,
         )
         
         model, subgraph = load_litert_model(str(tflite_path))
         
-        # Pick the DepthwiseConv2D operator index.
-        # Dilation is commonly lowered to SpaceToBatchND -> DepthwiseConv2D -> BatchToSpaceND,
-        # so the first operator is not necessarily DepthwiseConv2D.
+        # Get operator tensors.
         if len(subgraph.operators) == 0:
             raise ValueError("No operators found in model")
 
@@ -218,10 +218,13 @@ class OpDepthwiseConv2D(OperationBase):
         bts_op_index = None
         try:
             from ai_edge_litert import schema_py_generated as litert
+
+            found_dw = False
             for i, op in enumerate(subgraph.operators):
                 opcode = model.operatorCodes[op.opcodeIndex]
-                if opcode.builtinCode == litert.BuiltinOperator.DEPTHWISE_CONV_2D:
+                if not found_dw and opcode.builtinCode == litert.BuiltinOperator.DEPTHWISE_CONV_2D:
                     dw_op_index = i
+                    found_dw = True
                 if opcode.builtinCode == litert.BuiltinOperator.BATCH_TO_SPACE_ND:
                     bts_op_index = i
         except Exception:
@@ -231,39 +234,33 @@ class OpDepthwiseConv2D(OperationBase):
 
         op_tensors = get_operator_tensors_from_litert(model, subgraph, dw_op_index)
         
-        # Extract shapes from LiteRT.
-        # Prefer subgraph I/O shapes (model input/output). If missing, fall back to op tensors.
+        # Extract shapes from LiteRT
+        if not op_tensors['inputs']:
+            raise ValueError("No input tensors found")
+        if not op_tensors['outputs']:
+            raise ValueError("No output tensors found")
+        
+        # Prefer model I/O tensors when available for input quantization.
         input_tensor = None
         output_tensor = None
-        input_shape = None
-        output_shape = None
+        if subgraph.inputs is not None and len(subgraph.inputs) > 0:
+            input_tensor = subgraph.tensors[int(subgraph.inputs[0])]
+        if subgraph.outputs is not None and len(subgraph.outputs) > 0:
+            output_tensor = subgraph.tensors[int(subgraph.outputs[0])]
 
-        if subgraph.inputs and subgraph.outputs:
-            input_tensor = subgraph.tensors[subgraph.inputs[0]]
-            output_tensor = subgraph.tensors[subgraph.outputs[0]]
-            input_shape = get_tensor_shape_from_litert(input_tensor)
-            output_shape = get_tensor_shape_from_litert(output_tensor)
-        else:
-            # Fallback: subgraph I/O not populated. Use first op input and last op output.
-            # This preserves model I/O even when the schema omits subgraph inputs/outputs.
-            first_op = subgraph.operators[0]
-            last_op = subgraph.operators[-1]
-            if first_op.inputs is not None and len(first_op.inputs) > 0:
-                input_tensor = subgraph.tensors[int(first_op.inputs[0])]
-                input_shape = get_tensor_shape_from_litert(input_tensor)
-            if last_op.outputs is not None and len(last_op.outputs) > 0:
-                output_tensor = subgraph.tensors[int(last_op.outputs[0])]
-                output_shape = get_tensor_shape_from_litert(output_tensor)
-
-        if input_shape is None or output_shape is None:
-            if not op_tensors['inputs'] or not op_tensors['outputs']:
-                raise ValueError("No subgraph inputs/outputs found and op tensors are missing")
+        # Get shapes from LiteRT.
+        # Use model input/output shapes when available so CMSIS parameters map to
+        # the true external tensor contract, not internal lowered tensors.
+        input_shape = get_tensor_shape_from_litert(input_tensor) if input_tensor is not None else None
+        output_shape = get_tensor_shape_from_litert(output_tensor) if output_tensor is not None else None
+        if input_shape is None:
             input_shape = op_tensors['inputs'][0]['shape']
+        if output_shape is None:
             output_shape = op_tensors['outputs'][0]['shape']
 
-        # If BatchToSpaceND exists, use its output tensor for expected output.
-        # This matches the dilated depthwise output (SpaceToBatch -> Depthwise -> BatchToSpace),
-        # which CMSIS should match.
+        # If BatchToSpaceND exists, use its output tensor shape.
+        # This matches the dilated depthwise output
+        # (SpaceToBatch -> Depthwise -> BatchToSpace), which CMSIS should match.
         expected_tensor = None
         if bts_op_index is not None:
             bts_outs = subgraph.operators[bts_op_index].outputs
@@ -279,12 +276,19 @@ class OpDepthwiseConv2D(OperationBase):
         if output_shape is not None:
             output_shape = tuple(output_shape)
         
+        if input_shape is None:
+            raise ValueError("Unable to resolve input shape from model I/O or depthwise op tensor")
+        if output_shape is None:
+            raise ValueError("Unable to resolve output shape from model I/O or selected expected tensor")
+
         # Ensure shapes are 4D (NHWC)
         if len(input_shape) < 4:
             input_shape = (1,) + input_shape if len(input_shape) == 3 else input_shape
         if len(output_shape) < 4:
             output_shape = (1,) + output_shape if len(output_shape) == 3 else output_shape
         
+        # For depthwise conv with dilation, LiteRT may return incorrect output channels
+        # Calculate correct output_channels from descriptor and fix output_shape if needed
         depth_multiplier = self.desc.get('depth_multiplier', 1)
         input_channels = input_shape[3] if len(input_shape) > 3 else 1
         expected_output_channels = input_channels * depth_multiplier
@@ -293,16 +297,21 @@ class OpDepthwiseConv2D(OperationBase):
             output_shape = tuple(list(output_shape[:3]) + [expected_output_channels])
         
         # Extract quantization parameters.
-        # Use subgraph I/O quantization to match model I/O when available, else fall back to op tensors.
+        # Use model I/O quantization when available, unless we explicitly target
+        # BatchToSpaceND output for dilated depthwise lowering.
         if expected_tensor is not None:
-            input_quant = get_tensor_quantization_from_litert(input_tensor) if input_tensor is not None else None
+            input_quant = (
+                get_tensor_quantization_from_litert(input_tensor)
+                if input_tensor is not None
+                else op_tensors['inputs'][0]['quantization']
+            )
             output_quant = get_tensor_quantization_from_litert(expected_tensor)
         elif input_tensor is not None and output_tensor is not None:
             input_quant = get_tensor_quantization_from_litert(input_tensor)
             output_quant = get_tensor_quantization_from_litert(output_tensor)
         else:
-            input_quant = op_tensors['inputs'][0]['quantization'] if op_tensors['inputs'] else None
-            output_quant = op_tensors['outputs'][0]['quantization'] if op_tensors['outputs'] else None
+            input_quant = op_tensors['inputs'][0]['quantization']
+            output_quant = op_tensors['outputs'][0]['quantization']
         
         # Find weight quantization (from weight tensor in inputs)
         weight_quant = None
@@ -327,9 +336,11 @@ class OpDepthwiseConv2D(OperationBase):
         expected_output_channels = input_channels * depth_multiplier
         
         # Validate and fix biases if needed
+        # For depthwise conv with dilation, LiteRT may extract wrong bias tensor
         if biases is not None:
             bias_shape = biases.shape if hasattr(biases, 'shape') else None
             if bias_shape is not None:
+                # If bias is 2D (like (2, 2) for dilation params), it's wrong
                 if len(bias_shape) > 1:
                     print(f"Warning: Biases have wrong shape {bias_shape}, searching for correct 1D bias tensor...")
                     biases = None  # Reset to search for correct one
@@ -362,6 +373,28 @@ class OpDepthwiseConv2D(OperationBase):
                         print(f"Found correct bias tensor: shape={tensor_shape}, size={tensor_data.size}")
                         break
         
+        # #region agent log
+        log_entry_tflite = {
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "YAML_PARSER",
+            "location": "dwconv.py:generate_c_files_tflite",
+            "message": "TFLite interpreter dimensions",
+            "data": {
+                "name": name,
+                "tflite_input_shape": list(input_shape),
+                "tflite_output_shape": list(output_shape),
+                "weights_shape": list(weights.shape) if weights is not None else None,
+                "biases_shape": list(biases.shape) if biases is not None else None
+            },
+            "timestamp": int(__import__('time').time() * 1000)
+        }
+        try:
+            with open(log_path, 'a') as f:
+                f.write(json.dumps(log_entry_tflite) + '\n')
+        except:
+            pass
+        # #endregion
         
         # Weight tensor for TFLite DepthwiseConv2D can be in different formats:
         # - TFLite format: [1, H, W, C_OUT] where C_OUT = input_channels * depth_multiplier
@@ -371,6 +404,27 @@ class OpDepthwiseConv2D(OperationBase):
         # uses it as the first dimension in the transposed filter: {filter_dims->c, h, w, n}
         if weights is not None:
             filter_shape = tuple(weights.shape)
+            # #region agent log
+            log_entry_weight_shape = {
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "YAML_PARSER",
+                "location": "dwconv.py:weight_shape_from_tflite",
+                "message": "Weight tensor shape from TFLite",
+                "data": {
+                    "name": name,
+                    "tflite_weight_shape": list(filter_shape),
+                    "is_tflite_format": filter_shape[0] == 1 if len(filter_shape) == 4 else False,
+                    "desc_filter_shape": list(self.desc.get('filter_shape', []))
+                },
+                "timestamp": int(__import__('time').time() * 1000)
+            }
+            try:
+                with open(log_path, 'a') as f:
+                    f.write(json.dumps(log_entry_weight_shape) + '\n')
+            except:
+                pass
+            # #endregion
             # Ensure weights are int8 in generated C
             if weights.dtype != np.int8:
                 weights = weights.astype(np.int8)
@@ -378,6 +432,26 @@ class OpDepthwiseConv2D(OperationBase):
             # Fallback: descriptor is [H, W, I, M]
             fs = tuple(self.desc['filter_shape'])
             filter_shape = fs
+            # #region agent log
+            log_entry_weight_shape = {
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "YAML_PARSER",
+                "location": "dwconv.py:weight_shape_from_desc",
+                "message": "Weight tensor shape from descriptor (fallback)",
+                "data": {
+                    "name": name,
+                    "desc_filter_shape": list(filter_shape),
+                    "weights_is_none": True
+                },
+                "timestamp": int(__import__('time').time() * 1000)
+            }
+            try:
+                with open(log_path, 'a') as f:
+                    f.write(json.dumps(log_entry_weight_shape) + '\n')
+            except:
+                pass
+            # #endregion
         
         builder = TemplateContextBuilder()
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
@@ -400,10 +474,61 @@ class OpDepthwiseConv2D(OperationBase):
         if output_shape[3] != output_channels:
             print(f"Warning: LiteRT output_channels ({output_shape[3]}) != calculated ({output_channels}). Using calculated value.")
         
+        # #region agent log
+        import json
+        import os
+        log_path = "/workspaces/cmsis-aot-tester/.cursor/debug.log"
+        log_entry = {
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "A",
+            "location": "dwconv.py:filter_dims",
+            "message": "Filter dimensions calculation",
+            "data": {
+                "name": name,
+                "filter_shape": list(filter_shape) if hasattr(filter_shape, '__iter__') else str(filter_shape),
+                "input_shape": list(input_shape),
+                "output_shape": list(output_shape),
+                "input_channels": int(input_channels),
+                "output_channels": int(output_channels),
+                "depth_multiplier": int(depth_multiplier)
+            },
+            "timestamp": int(__import__('time').time() * 1000)
+        }
+        try:
+            with open(log_path, 'a') as f:
+                f.write(json.dumps(log_entry) + '\n')
+        except:
+            pass
+        # #endregion
         
         if len(filter_shape) == 4:
             # Check if TFLite format [1, H, W, C_OUT] or descriptor format [H, W, I, M]
             is_tflite_format = filter_shape[0] == 1
+            # #region agent log
+            log_entry_format_decision = {
+                "sessionId": "debug-session",
+                "runId": "run1",
+                "hypothesisId": "YAML_PARSER",
+                "location": "dwconv.py:format_decision",
+                "message": "Filter format decision",
+                "data": {
+                    "name": name,
+                    "filter_shape": list(filter_shape),
+                    "is_tflite_format": is_tflite_format,
+                    "filter_shape_0": int(filter_shape[0]),
+                    "depth_multiplier": int(depth_multiplier),
+                    "input_channels": int(input_channels),
+                    "output_channels": int(output_channels)
+                },
+                "timestamp": int(__import__('time').time() * 1000)
+            }
+            try:
+                with open(log_path, 'a') as f:
+                    f.write(json.dumps(log_entry_format_decision) + '\n')
+            except:
+                pass
+            # #endregion
             if is_tflite_format:
                 # TFLite format: [1, H, W, C_OUT]
                 # Extract H and W from indices 1 and 2
@@ -451,6 +576,27 @@ class OpDepthwiseConv2D(OperationBase):
         else:
             raise ValueError(f"Unsupported filter shape: {filter_shape}")
         
+        # #region agent log
+        log_entry2 = {
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "A",
+            "location": "dwconv.py:filter_dims_result",
+            "message": "Filter dimensions result",
+            "data": {
+                "name": name,
+                "filter_dims": filter_dims,
+                "filter_dims_c_is_output_channels": filter_dims['c'] == output_channels,
+                "filter_dims_c_is_input_channels": filter_dims['c'] == input_channels
+            },
+            "timestamp": int(__import__('time').time() * 1000)
+        }
+        try:
+            with open(log_path, 'a') as f:
+                f.write(json.dumps(log_entry2) + '\n')
+        except:
+            pass
+        # #endregion
         
         # Correct kernel size for padding math
         kernel_hw = (filter_dims['h'], filter_dims['w'])
@@ -544,49 +690,27 @@ class OpDepthwiseConv2D(OperationBase):
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
         
-        # Regenerate input data with a tighter range to avoid heavy saturation.
-        # Keep deterministic by using the same seed-backed RNG.
-        margin = 16  # keep away from int8 edges
-        low = (qmin + margin - int(input_zp)) * float(input_scale)
-        high = (qmax - margin - int(input_zp)) * float(input_scale)
-        if low >= high:
-            low = (qmin - int(input_zp)) * float(input_scale)
-            high = (qmax - int(input_zp)) * float(input_scale)
-        input_data = self.rng.uniform(low, high, size=input_shape).astype(np.float32)
-
         input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
         input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
         
-        # Run inference (dtype must match interpreter input)
-        # Use LiteRT interpreter for inference. For lowered graphs, fetch the
-        # DepthwiseConv2D op output tensor directly so we compare against
-        # the depthwise op (CMSIS) instead of later ops (e.g., ADD).
-        from helia_core_tester.generation.utils.litert_utils import run_inference_litert_tensor
+        # Run inference (dtype must match interpreter input).
+        # Compare against BatchToSpaceND output when present (dilated lowering),
+        # otherwise compare against the depthwise output tensor.
+        dw_out_tensor_idx = int(subgraph.operators[dw_op_index].outputs[0])
         if bts_op_index is not None:
             bts_outs = subgraph.operators[bts_op_index].outputs
             if bts_outs is not None and len(bts_outs) > 0:
                 out_tensor_idx = int(bts_outs[0])
             else:
-                out_tensor_idx = int(subgraph.operators[dw_op_index].outputs[0])
+                out_tensor_idx = dw_out_tensor_idx
         else:
-            out_tensor_idx = int(subgraph.operators[dw_op_index].outputs[0])
+            out_tensor_idx = dw_out_tensor_idx
         output_data = run_inference_litert_tensor(str(tflite_path), input_q, out_tensor_idx)
         
         # Bias handling
-        # Detect bias dtype from the LiteRT tensor and use it for CMSIS-NN.
         has_biases = biases is not None and getattr(biases, "size", 0) > 0
         bias_dtype = kernel_info["bias_c_type"]
         if has_biases:
-            if biases.dtype == np.int32:
-                bias_dtype = "int32_t"
-            elif biases.dtype == np.int64:
-                bias_dtype = "int64_t"
-            else:
-                if bias_dtype == "int64_t":
-                    biases = biases.astype(np.int64)
-                else:
-                    biases = biases.astype(np.int32)
-
             if bias_dtype == "int64_t" and biases.dtype != np.int64:
                 biases = biases.astype(np.int64)
             elif bias_dtype == "int32_t" and biases.dtype != np.int32:
@@ -644,6 +768,28 @@ class OpDepthwiseConv2D(OperationBase):
         input_data_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
         
+        # #region agent log
+        log_entry_before_buffer = {
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "YAML_PARSER",
+            "location": "dwconv.py:before_buffer_calc",
+            "message": "Dimensions before buffer size calculation",
+            "data": {
+                "name": name,
+                "input_dims": input_dims,
+                "filter_dims": filter_dims,
+                "output_dims": output_dims,
+                "activation_dtype": self.desc.get('activation_dtype', 'S8')
+            },
+            "timestamp": int(__import__('time').time() * 1000)
+        }
+        try:
+            with open(log_path, 'a') as f:
+                f.write(json.dumps(log_entry_before_buffer) + '\n')
+        except:
+            pass
+        # #endregion
         
         # Calculate buffer size max (conservative estimate for depthwise convolution)
         activation_dtype = self.desc.get('activation_dtype', 'S8')
@@ -652,6 +798,25 @@ class OpDepthwiseConv2D(OperationBase):
             output_dtype=activation_dtype
         )
         
+        # #region agent log
+        log_entry_after_buffer = {
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": "YAML_PARSER",
+            "location": "dwconv.py:after_buffer_calc",
+            "message": "Buffer size calculation result",
+            "data": {
+                "name": name,
+                "buffer_size_max": int(buffer_size_max)
+            },
+            "timestamp": int(__import__('time').time() * 1000)
+        }
+        try:
+            with open(log_path, 'a') as f:
+                f.write(json.dumps(log_entry_after_buffer) + '\n')
+        except:
+            pass
+        # #endregion
         
         # Build template context
         context = {
@@ -674,6 +839,7 @@ class OpDepthwiseConv2D(OperationBase):
             'bias_dtype': bias_dtype,
             'kernel_fn': kernel_info["kernel_fn"],
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+            'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
         }
         

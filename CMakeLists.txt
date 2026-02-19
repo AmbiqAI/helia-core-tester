@@ -9,6 +9,7 @@ set(CMSIS_PATH "artifacts/downloads/CMSIS_5" CACHE PATH "Path to CMSIS (CMSIS_5 
 set(CMSIS_NN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "ns-cmsis-nn repo root")
 set(FVP_CORSTONE_300_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Corstone-300" CACHE PATH "FVP startup/retarget files")
 set(GENERATED_TESTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/generated_tests" CACHE PATH "Path to generated tests")
+option(ENABLE_COVERAGE "Enable GCC freestanding coverage for ns-cmsis-nn" OFF)
 
 function(_strip_all_optimizations)
   foreach(lang C CXX ASM)
@@ -41,6 +42,9 @@ endif()
 if(NOT CMAKE_SYSTEM_PROCESSOR)
   message(FATAL_ERROR "CMAKE_SYSTEM_PROCESSOR not set (e.g. cortex-m55|cortex-m33|cortex-m4)")
 endif()
+if(ENABLE_COVERAGE AND NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
+  message(FATAL_ERROR "ENABLE_COVERAGE requires GCC (arm-none-eabi-gcc)")
+endif()
 
 # ---------- Global warnings ----------
 add_compile_options(-Wimplicit-function-declaration -Wunused-variable -Wunused-function -Wno-redundant-decls -Wvla)
@@ -72,6 +76,16 @@ else()
   message(FATAL_ERROR "cmsis-nn CMakeLists.txt not found at: ${CMSIS_NN_ROOT}")
 endif()
 
+if(ENABLE_COVERAGE)
+  if(NOT TARGET cmsis-nn)
+    message(FATAL_ERROR "ENABLE_COVERAGE requested but target cmsis-nn was not created")
+  endif()
+  # Instrument ns-cmsis-nn only; keep harness sources uninstrumented.
+  target_compile_options(cmsis-nn PRIVATE --coverage -fprofile-info-section -O0 -g)
+   # Avoid inline MVE asm paths that can fail register allocation under gcov instrumentation.
+   target_compile_definitions(cmsis-nn PRIVATE ARM_MATH_AUTOVECTORIZE)
+endif()
+
 # ---------- Unity (tiny static lib) ----------
 include(FetchContent)
 FetchContent_Declare(unity GIT_REPOSITORY https://github.com/ThrowTheSwitch/Unity.git GIT_TAG v2.6.0 GIT_SHALLOW TRUE)
@@ -80,9 +94,19 @@ add_library(unity_fetch STATIC ${unity_SOURCE_DIR}/src/unity.c)
  target_include_directories(unity_fetch PUBLIC ${unity_SOURCE_DIR}/src)
 
 # ---------- FVP retarget + startup ----------
-add_library(retarget STATIC ${FVP_CORSTONE_300_PATH}/retarget.c ${FVP_CORSTONE_300_PATH}/uart.c)
+set(RETARGET_SRCS
+  ${FVP_CORSTONE_300_PATH}/retarget.c
+  ${FVP_CORSTONE_300_PATH}/uart.c
+)
+if(ENABLE_COVERAGE)
+  list(APPEND RETARGET_SRCS ${FVP_CORSTONE_300_PATH}/gcov_stream.c)
+endif()
+add_library(retarget STATIC ${RETARGET_SRCS})
 target_compile_definitions(retarget PUBLIC USING_FVP_CORSTONE_300)
 target_compile_definitions(retarget PRIVATE ENABLE_RETARGET_SYSCALLS)
+if(ENABLE_COVERAGE)
+  target_compile_definitions(retarget PRIVATE ENABLE_GCOV_COVERAGE)
+endif()
 
 # Map cortex-m* to ARMCM* for CMSIS startup
 string(REGEX REPLACE "^cortex-m([0-9]+)$" "ARMCM\\1" ARM_CPU ${CMAKE_SYSTEM_PROCESSOR})
@@ -178,6 +202,10 @@ foreach(TEST_DIR_REL ${GENERATED_TEST_DIRS})
 
   # Linker script + libs
   target_link_options(${TGT_NAME} PRIVATE -T ${LINK_FILE})
+  if(ENABLE_COVERAGE)
+    # Pull in libgcov runtime symbols and emit gcov metadata in the final ELF.
+    target_link_options(${TGT_NAME} PRIVATE --coverage)
+  endif()
   target_link_libraries(${TGT_NAME} PRIVATE unity_fetch cmsis-nn retarget cmsis_startup)
 
   list(APPEND GENERATED_TEST_TARGETS ${TGT_NAME})
@@ -192,5 +220,5 @@ message(STATUS "  CMSIS_PATH             : ${CMSIS_PATH}")
 message(STATUS "  CMSIS_NN_ROOT          : ${CMSIS_NN_ROOT}")
 message(STATUS "  FVP_CORSTONE_300_PATH  : ${FVP_CORSTONE_300_PATH}")
 message(STATUS "  TARGET CPU             : ${CMAKE_SYSTEM_PROCESSOR}")
-# message(STATUS "  Coverage               : ${ENABLE_COVERAGE}")
+message(STATUS "  Coverage               : ${ENABLE_COVERAGE}")
 message(STATUS "  Tests dir              : ${CMAKE_BINARY_DIR}/tests")

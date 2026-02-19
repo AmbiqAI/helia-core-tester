@@ -3,7 +3,10 @@ Pytest configuration and fixtures for Helia-Core Tester.
 """
 
 import pytest
+import os
 import shutil
+import sys
+from pathlib import Path
 
 from helia_core_tester.core.discovery import find_generated_tests_dir
 
@@ -20,26 +23,28 @@ def pytest_addoption(parser):
                     help="Filter by exact test name")
     parser.addoption("--limit", action="store", type=int, default=None,
                     help="Limit number of tests to run")
-    parser.addoption("--seed", action="store", type=int, default=500,
-                    help="Random seed for test generation")
-    parser.addoption("--no-clean-generated", action="store_true", default=False,
-                    help="Do not clean generated_tests directory before generation")
+    parser.addoption("--seed", action="store", type=int, default=None,
+                    help="Random seed for test generation (default: hash of test name)")
+    parser.addoption("--cpu", action="store", default="cortex-m55",
+                    help="Target CPU for code generation")
+    parser.addoption("--generated-tests-dir", action="store", default=None,
+                    help="Override generated tests output directory")
 
 
 def pytest_configure(config):
     """Configure pytest with custom options."""
-    # Clean generated tests directory before running (unless disabled)
-    no_clean = config.getoption("--no-clean-generated")
-    generated_tests_dir = find_generated_tests_dir(create=False)
+    generated_override = config.getoption("--generated-tests-dir")
+    generated_tests_dir = Path(generated_override).resolve() if generated_override else find_generated_tests_dir(create=False)
 
-    if generated_tests_dir.exists() and not no_clean:
+    # Clean generated tests directory before running
+    if generated_tests_dir.exists():
         print(f"\nCleaning existing generated tests directory...")
         try:
             # Count existing files before deletion
             existing_count = sum(1 for _ in generated_tests_dir.rglob("*.tflite"))
             if existing_count > 0:
                 print(f"   Removing {existing_count} existing TFLite model(s)")
-
+            
             shutil.rmtree(generated_tests_dir)
             print(f"Directory cleaned")
         except OSError as e:
@@ -51,11 +56,10 @@ def pytest_configure(config):
                 elif item.is_dir():
                     shutil.rmtree(item)
             print(f"   Individual files removed")
-
-    # Ensure directory exists
-    generated_tests_dir.mkdir(exist_ok=True)
-    if not no_clean:
-        print(f"Created generated tests directory\n")
+    
+    # Create fresh directory
+    generated_tests_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Created generated tests directory\n")
 
 
 @pytest.fixture
@@ -67,5 +71,7 @@ def test_filters(request):
         'wtype': request.config.getoption("--wtype"),
         'name': request.config.getoption("--name"),
         'limit': request.config.getoption("--limit"),
-        'seed': request.config.getoption("--seed")
+        'seed': request.config.getoption("--seed"),
+        'cpu': request.config.getoption("--cpu"),
+        'generated_tests_dir': request.config.getoption("--generated-tests-dir"),
     }

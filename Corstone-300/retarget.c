@@ -31,12 +31,32 @@
 
 #include "uart.h"
 
+#if defined(ENABLE_GCOV_COVERAGE)
+extern void gcov_stream_dump(void);
+static int gcov_dump_emitted;
+static int gcov_dump_in_progress;
+
+static void gcov_dump_before_eot(void)
+{
+    if (gcov_dump_emitted || gcov_dump_in_progress)
+    {
+        return;
+    }
+    gcov_dump_in_progress = 1;
+    gcov_stream_dump();
+    gcov_dump_emitted = 1;
+    gcov_dump_in_progress = 0;
+}
+#endif
 unsigned char UartPutc(unsigned char ch) { return uart_putc(ch); }
 
 unsigned char UartGetc(void) { return uart_putc(uart_getc()); }
 
 __attribute__((noreturn)) void UartEndSimulation(int code)
 {
+#if defined(ENABLE_GCOV_COVERAGE)
+    gcov_dump_before_eot();
+#endif
     UartPutc((char)0x4);  // End of simulation
     UartPutc((char)code); // Exit code
     while (1)
@@ -291,7 +311,16 @@ int _write(int fd, char *ptr, int len)
     int i;
 
     for (i = 0; i < len; i++)
+    {
+#if defined(ENABLE_GCOV_COVERAGE)
+        if ((unsigned char)(*ptr) == 0x04U)
+        {
+            gcov_dump_before_eot();
+        }
+#endif
         SER_PutChar(*ptr++);
+    }
     return (i);
 }
 #endif
+
