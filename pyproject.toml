@@ -35,6 +35,7 @@ helia_core_tester = "helia_core_tester.cli:app"
 dev = [
     "black",
     "flake8",
+    "gcovr",
     "mypy",
 ]
 

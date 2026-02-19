@@ -27,37 +27,28 @@ app = typer.Typer(
     add_completion=False,
 )
 
-
-def _print_plan_item(plan_item) -> None:
-    typer.echo(f"1. {plan_item.name}: {'will run' if plan_item.will_run else 'skipped'} ({plan_item.reason})")
-    for cmd in plan_item.commands:
-        typer.echo(f"   cmd: {' '.join(cmd)}")
-    if plan_item.outputs:
-        outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
-        if outputs:
-            typer.echo(f"   outputs: {outputs}")
-    if plan_item.details:
-        details = ", ".join(f"{k}={v}" for k, v in plan_item.details.items() if v is not None)
-        if details:
-            typer.echo(f"   details: {details}")
-
 def get_config(
     cpu: str = "cortex-m55",
-    verbosity: int = 0,
+    verbosity: Optional[int] = None,
     dry_run: bool = False,
     project_root: Optional[Path] = None,
     **kwargs
 ) -> Config:
     """Create and configure Config object."""
-    config = Config()
+    init_kwargs = {
+        "cpu": cpu,
+        "dry_run": dry_run,
+    }
     if project_root:
-        config.project_root = project_root
-    config.cpu = cpu
-    config.verbosity = verbosity
-    config.dry_run = dry_run
+        init_kwargs["project_root"] = project_root
     for key, value in kwargs.items():
-        if hasattr(config, key) and value is not None:
-            setattr(config, key, value)
+        if key in Config.__dataclass_fields__ and value is not None:
+            init_kwargs[key] = value
+    config = Config(**init_kwargs)
+    if verbosity is not None:
+        if not 0 <= verbosity <= 3:
+            raise ValueError(f"verbosity must be between 0 and 3, got {verbosity}")
+        config.verbosity = verbosity
     return config
 
 
@@ -82,10 +73,9 @@ def generate(
     dtype: Optional[str] = typer.Option(None, help="Generate only specific dtype"),
     name: Optional[str] = typer.Option(None, help="Generate only specific test by name"),
     limit: Optional[int] = typer.Option(None, help="Limit number of models to generate"),
-    seed: Optional[int] = typer.Option(500, help="Random seed for test generation"),
-    no_clean_generated: bool = typer.Option(False, "--no-clean-generated", help="Keep existing generated tests"),
-    cpu: str = typer.Option("cortex-m55", help="Target CPU"),
-    verbosity: int = typer.Option(0, "--verbosity", "-v", help="Verbosity level (0-3)"),
+    seed: Optional[int] = typer.Option(None, help="Random seed for test generation"),
+    cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
@@ -94,11 +84,16 @@ def generate(
     config = get_config(
         cpu=cpu, verbosity=verbosity, dry_run=dry_run, plan=plan, project_root=project_root,
         op_filter=op, dtype_filter=dtype, name_filter=name, limit=limit, seed=seed,
-        clean_generated_tests=not no_clean_generated,
     )
     if config.plan:
         plan_item = GenerateStep(config).plan()
-        _print_plan_item(plan_item)
+        typer.echo(f"1. {plan_item.name}: {'will run' if plan_item.will_run else 'skipped'} ({plan_item.reason})")
+        for cmd in plan_item.commands:
+            typer.echo(f"   cmd: {' '.join(cmd)}")
+        if plan_item.outputs:
+            outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
+            if outputs:
+                typer.echo(f"   outputs: {outputs}")
         sys.exit(0)
     run_step_exit(
         GenerateStep(config), config,
@@ -107,15 +102,40 @@ def generate(
     )
 
 
+@app.command()
+def runners(
+    cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
+    plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
+    project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
+):
+    """Generate Unity test runners."""
+    config = get_config(cpu=cpu, verbosity=verbosity, dry_run=dry_run, plan=plan, project_root=project_root)
+    if config.plan:
+        plan_item = RunnersStep(config).plan()
+        typer.echo(f"1. {plan_item.name}: {'will run' if plan_item.will_run else 'skipped'} ({plan_item.reason})")
+        for cmd in plan_item.commands:
+            typer.echo(f"   cmd: {' '.join(cmd)}")
+        if plan_item.outputs:
+            outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
+            if outputs:
+                typer.echo(f"   outputs: {outputs}")
+        sys.exit(0)
+    run_step_exit(
+        RunnersStep(config), config,
+        "✓ Test runners generated successfully",
+        failure_prefix="Runner generation failed",
+    )
 
 
 @app.command()
 def build(
-    cpu: str = typer.Option("cortex-m55", help="Target CPU"),
+    cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     opt: str = typer.Option("-Ofast", help="Optimization level"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
-    no_clean_build: bool = typer.Option(False, "--no-clean-build", help="Keep existing build directory"),
-    verbosity: int = typer.Option(0, "--verbosity", "-v", help="Verbosity level (0-3)"),
+    coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn code coverage instrumentation"),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
@@ -123,11 +143,17 @@ def build(
     """Build test executables using CMake."""
     config = get_config(
         cpu=cpu, verbosity=verbosity, dry_run=dry_run, plan=plan, project_root=project_root,
-        optimization=opt, jobs=jobs, clean_build=not no_clean_build,
+        optimization=opt, jobs=jobs, coverage=coverage,
     )
     if config.plan:
         plan_item = BuildStep(config).plan()
-        _print_plan_item(plan_item)
+        typer.echo(f"1. {plan_item.name}: {'will run' if plan_item.will_run else 'skipped'} ({plan_item.reason})")
+        for cmd in plan_item.commands:
+            typer.echo(f"   cmd: {' '.join(cmd)}")
+        if plan_item.outputs:
+            outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
+            if outputs:
+                typer.echo(f"   outputs: {outputs}")
         sys.exit(0)
     run_step_exit(
         BuildStep(config), config,
@@ -138,13 +164,14 @@ def build(
 
 @app.command()
 def run(
-    cpu: str = typer.Option("cortex-m55", help="Target CPU"),
+    cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     timeout: float = typer.Option(0.0, help="Per-test timeout in seconds (0 = none)"),
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Don't stop on first failure"),
+    coverage: bool = typer.Option(False, "--coverage", help="Collect and merge ns-cmsis-nn gcov streams"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
     report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
     report_dir: Optional[Path] = typer.Option(None, help="Directory to save reports"),
-    verbosity: int = typer.Option(0, "--verbosity", "-v", help="Verbosity level (0-3)"),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
@@ -153,11 +180,17 @@ def run(
     config = get_config(
         cpu=cpu, verbosity=verbosity, dry_run=dry_run, plan=plan, project_root=project_root,
         timeout=timeout, fail_fast=not no_fail_fast, enable_reporting=not no_report,
-        report_formats=report_formats, report_dir=report_dir,
+        report_formats=report_formats, report_dir=report_dir, coverage=coverage,
     )
     if config.plan:
         plan_item = RunStep(config).plan()
-        _print_plan_item(plan_item)
+        typer.echo(f"1. {plan_item.name}: {'will run' if plan_item.will_run else 'skipped'} ({plan_item.reason})")
+        for cmd in plan_item.commands:
+            typer.echo(f"   cmd: {' '.join(cmd)}")
+        if plan_item.outputs:
+            outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
+            if outputs:
+                typer.echo(f"   outputs: {outputs}")
         sys.exit(0)
     run_step_exit(
         RunStep(config), config,
@@ -172,27 +205,27 @@ def full(
     dtype: Optional[str] = typer.Option(None, help="Generate only specific dtype"),
     name: Optional[str] = typer.Option(None, help="Generate only specific test by name"),
     limit: Optional[int] = typer.Option(None, help="Limit number of models to generate"),
-    seed: Optional[int] = typer.Option(500, help="Random seed for test generation"),
-    cpu: str = typer.Option("cortex-m55", help="Target CPU"),
+    seed: Optional[int] = typer.Option(None, help="Random seed for test generation"),
+    cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     opt: str = typer.Option("-Ofast", help="Optimization level"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
-    no_clean_generated: bool = typer.Option(False, "--no-clean-generated", help="Keep existing generated tests"),
-    no_clean_build: bool = typer.Option(False, "--no-clean-build", help="Keep existing build directory"),
     timeout: float = typer.Option(0.0, help="Per-test timeout in seconds (0 = none)"),
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Don't stop on first failure"),
+    coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn coverage collection/reporting"),
     skip_generation: bool = typer.Option(False, "--skip-generation", help="Skip TFLite generation"),
     skip_conversion: bool = typer.Option(False, "--skip-conversion", help="Skip TFLite to C conversion"),
+    skip_runners: bool = typer.Option(False, "--skip-runners", help="Skip test runner generation"),
     skip_build: bool = typer.Option(False, "--skip-build", help="Skip FVP build"),
     skip_run: bool = typer.Option(False, "--skip-run", help="Skip FVP test execution"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
     report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
     report_dir: Optional[Path] = typer.Option(None, help="Directory to save reports"),
-    verbosity: int = typer.Option(0, "--verbosity", "-v", help="Verbosity level (0-3)"),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
 ):
-    """Run the complete pipeline (generate → build → run)."""
+    """Run the complete pipeline (generate → runners → build → run)."""
     config = get_config(
         cpu=cpu,
         verbosity=verbosity,
@@ -206,18 +239,20 @@ def full(
         seed=seed,
         optimization=opt,
         jobs=jobs,
-        clean_generated_tests=not no_clean_generated,
-        clean_build=not no_clean_build,
         timeout=timeout,
         fail_fast=not no_fail_fast,
+        coverage=coverage,
         skip_generation=skip_generation,
         skip_conversion=skip_conversion,
+        skip_runners=skip_runners,
         skip_build=skip_build,
         skip_run=skip_run,
         enable_reporting=not no_report,
         report_formats=report_formats,
         report_dir=report_dir,
     )
+    
+    logger = setup_logger(verbosity=config.verbosity)
     
     pipeline = FullTestPipeline(config)
     if config.plan:
@@ -235,8 +270,8 @@ def full(
 
 @app.command()
 def clean(
-    cpu: str = typer.Option("cortex-m55", help="Target CPU"),
-    verbosity: int = typer.Option(0, "--verbosity", "-v", help="Verbosity level (0-3)"),
+    cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
@@ -245,14 +280,20 @@ def clean(
     config = get_config(cpu=cpu, verbosity=verbosity, dry_run=dry_run, plan=plan, project_root=project_root)
     if config.plan:
         plan_item = CleanStep(config).plan()
-        _print_plan_item(plan_item)
+        typer.echo(f"1. {plan_item.name}: {'will run' if plan_item.will_run else 'skipped'} ({plan_item.reason})")
+        for cmd in plan_item.commands:
+            typer.echo(f"   cmd: {' '.join(cmd)}")
+        if plan_item.outputs:
+            outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
+            if outputs:
+                typer.echo(f"   outputs: {outputs}")
         sys.exit(0)
     run_step_exit(CleanStep(config), config, "", failure_prefix="Clean failed")
 
 
 @app.command(name="clean-all")
 def clean_all(
-    verbosity: int = typer.Option(0, "--verbosity", "-v", help="Verbosity level (0-3)"),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
 ):
@@ -267,7 +308,7 @@ def clean_all(
         typer.echo(f"DRY RUN: Would remove {artifacts_root}")
         sys.exit(0)
 
-    if verbosity >= 1:
+    if config.verbosity >= 1:
         typer.echo(f"Removing artifacts directory: {artifacts_root}")
     shutil.rmtree(artifacts_root, ignore_errors=True)
     typer.echo("✓ Clean-all completed")

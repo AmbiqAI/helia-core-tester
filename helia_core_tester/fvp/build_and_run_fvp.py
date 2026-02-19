@@ -7,7 +7,7 @@ Examples:
   python3 python_scripts/build_and_run_fvp.py
 
   # multiple CPUs, less optimization, quiet logs
-  python3 python_scripts/build_and_run_fvp.py -c cortex-m3,cortex-m55 -o "-O2" -q
+  python3 python_scripts/build_and_run_fvp.py -c m0,m55 -o "-O2" -q
 
   # skip downloads/setup (assume paths present), override paths, pass extra CMake defs
   python3 python_scripts/build_and_run_fvp.py -e -u ./artifacts/downloads/ethos-u-core-platform -C ./artifacts/downloads/CMSIS_5 \
@@ -23,15 +23,17 @@ Notes:
 
 from __future__ import annotations
 import argparse
+from dataclasses import dataclass
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 # Import reporting and discovery (package imports only)
 from helia_core_tester.core.discovery import (
@@ -39,8 +41,8 @@ from helia_core_tester.core.discovery import (
     find_setup_dependencies_script,
     find_descriptors_dir,
     find_generated_tests_dir,
-    find_build_dir,
 )
+from helia_core_tester.core.cpu_targets import parse_cpu_list
 from helia_core_tester.reporting.models import TestResult, TestStatus
 from helia_core_tester.reporting.parser import TestResultParser
 
@@ -52,6 +54,238 @@ DEFAULT_SOURCE = repo_root
 FVP_EXE_NAME = "FVP_Corstone_SSE-300_Ethos-U55"
 FVP_DIR_X86 = "Linux64_GCC-9.3"
 FVP_DIR_AARCH64 = "Linux64_armv8l_GCC-9.3"
+GCOV_BEGIN_MARKER = "@@GCOV_BEGIN@@"
+GCOV_END_MARKER = "@@GCOV_END@@"
+GCOV_BLOCK_PATTERN = re.compile(
+    rf"{re.escape(GCOV_BEGIN_MARKER)}(?P<payload>.*?){re.escape(GCOV_END_MARKER)}",
+    re.DOTALL,
+)
+
+
+@dataclass
+class CoverageContext:
+    enabled: bool
+    build_dir: Path
+    streams_dir: Path
+    gcov_tool: Optional[str]
+    stream_index: int = 0
+    merged_streams: int = 0
+    merge_errors: int = 0
+
+
+def _which_in_env(name: str, env: dict) -> Optional[str]:
+    return shutil.which(name, path=env.get("PATH"))
+
+
+def _resolve_gcov_tool(env: dict) -> Optional[str]:
+    for tool in ("arm-none-eabi-gcov-tool", "gcov-tool"):
+        resolved = _which_in_env(tool, env)
+        if resolved:
+            return resolved
+    return None
+
+
+def _resolve_gcov_executable(env: dict) -> Optional[str]:
+    for exe in ("arm-none-eabi-gcov", "gcov"):
+        resolved = _which_in_env(exe, env)
+        if resolved:
+            return resolved
+    return None
+
+
+def _resolve_report_dir(args) -> Path:
+    report_dir = getattr(args, "report_dir", Path("reports"))
+    if report_dir == Path("reports"):
+        return ARTIFACTS_DIR / "reports"
+    return Path(report_dir)
+
+
+def _extract_coverage_blocks(output: str) -> Tuple[List[str], str]:
+    blocks: List[str] = []
+
+    def _replace(match: re.Match) -> str:
+        payload = match.group("payload")
+        hex_payload = re.sub(r"[^0-9A-Fa-f]", "", payload)
+        if hex_payload:
+            blocks.append(hex_payload)
+        return ""
+
+    cleaned_output = GCOV_BLOCK_PATTERN.sub(_replace, output)
+    return blocks, cleaned_output
+
+
+def _new_coverage_context(build_dir: Path, gcov_tool: Optional[str]) -> CoverageContext:
+    streams_dir = build_dir / "coverage" / "streams"
+    streams_dir.mkdir(parents=True, exist_ok=True)
+    return CoverageContext(
+        enabled=True,
+        build_dir=build_dir,
+        streams_dir=streams_dir,
+        gcov_tool=gcov_tool,
+    )
+
+
+def _merge_coverage_stream(ctx: CoverageContext, payload: bytes, env: dict, verbosity: int) -> bool:
+    if not ctx.gcov_tool:
+        return False
+    try:
+        subprocess.run(
+            [ctx.gcov_tool, "merge-stream"],
+            input=payload,
+            cwd=str(ctx.build_dir),
+            env=env,
+            check=True,
+            stdout=subprocess.DEVNULL if verbosity <= 2 else None,
+            stderr=subprocess.PIPE,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        if verbosity >= 1:
+            err = (e.stderr or b"").decode(errors="replace").strip()
+            print(f"Coverage merge failed: {ctx.gcov_tool} merge-stream ({err})", file=sys.stderr)
+        return False
+
+
+def _process_coverage_output(
+    output: str,
+    elf: Path,
+    ctx: Optional[CoverageContext],
+    env: dict,
+    verbosity: int,
+) -> str:
+    if not ctx or not ctx.enabled:
+        return output
+
+    blocks, cleaned_output = _extract_coverage_blocks(output)
+    if not blocks:
+        if verbosity >= 2:
+            print(f"Coverage: no stream block found in {elf.name}")
+        return cleaned_output
+
+    for block in blocks:
+        if len(block) % 2 != 0:
+            if verbosity >= 1:
+                print(f"WARNING: skipping malformed coverage payload from {elf}", file=sys.stderr)
+            ctx.merge_errors += 1
+            continue
+
+        payload = bytes.fromhex(block)
+        ctx.stream_index += 1
+        stream_path = ctx.streams_dir / f"{elf.stem}_{ctx.stream_index:04d}.gcovstream"
+        stream_path.write_bytes(payload)
+
+        if _merge_coverage_stream(ctx, payload, env, verbosity):
+            ctx.merged_streams += 1
+        else:
+            ctx.merge_errors += 1
+
+    if verbosity >= 2:
+        print(
+            f"Coverage: {elf.name} blocks={len(blocks)} merged={ctx.merged_streams} errors={ctx.merge_errors}"
+        )
+    return cleaned_output
+
+
+def _read_cmake_cache_path(build_dir: Path, key: str) -> Optional[Path]:
+    cache = build_dir / "CMakeCache.txt"
+    if not cache.exists():
+        return None
+    prefix = f"{key}:PATH="
+    for line in cache.read_text(errors="ignore").splitlines():
+        if line.startswith(prefix):
+            return Path(line[len(prefix):]).resolve()
+    return None
+
+
+def _generate_coverage_reports(
+    cpus: List[str],
+    args,
+    env: dict,
+    source_dir: Path,
+    compiler_tag: str,
+    verbosity: int,
+) -> None:
+    if not getattr(args, "coverage", False):
+        return
+
+    report_root = _resolve_report_dir(args) / "coverage"
+    report_root.mkdir(parents=True, exist_ok=True)
+
+    gcovr = _which_in_env("gcovr", env)
+    gcov_exe = _resolve_gcov_executable(env)
+
+    if not gcovr:
+        note = report_root / "README.txt"
+        note.write_text(
+            "gcovr is not installed; .gcda files were merged in build directories.\n"
+            "Install gcovr to generate HTML/JSON coverage summaries.\n"
+        )
+        if verbosity >= 1:
+            print(f"Coverage: gcovr not found; wrote {note}")
+        return
+
+    for cpu in cpus:
+        build_dir = ARTIFACTS_DIR / f"build-{cpu}-{compiler_tag}"
+        if not build_dir.exists():
+            continue
+
+        cpu_dir = report_root / cpu
+        cpu_dir.mkdir(parents=True, exist_ok=True)
+
+        default_cmsis_nn_root = (source_dir / ".." / "..").resolve()
+        cmsis_nn_root = _read_cmake_cache_path(build_dir, "CMSIS_NN_ROOT")
+        if cmsis_nn_root is None:
+            cmsis_nn_root = default_cmsis_nn_root
+        elif not cmsis_nn_root.exists():
+            if verbosity >= 2:
+                print(
+                    "Coverage: CMSIS_NN_ROOT from CMake cache does not exist "
+                    f"({cmsis_nn_root}); falling back to {default_cmsis_nn_root}"
+                )
+            cmsis_nn_root = default_cmsis_nn_root
+
+        # Keep this filter mount/path agnostic: gcov source paths may be absolute
+        # and differ from host mounts (e.g. /workspaces vs /Users).
+        source_filter = r"(^|.*/)Source/.*"
+
+        cmd = [
+            gcovr,
+            "--root",
+            str(cmsis_nn_root),
+            "--filter",
+            source_filter,
+            "--gcov-ignore-parse-errors",
+            "suspicious_hits.warn_once_per_file",
+            "--object-directory",
+            str(build_dir),
+            "--txt-summary",
+            "--json-summary",
+            str(cpu_dir / "summary.json"),
+            "--json-summary-pretty",
+            "--html-details",
+            str(cpu_dir / "index.html"),
+            "--lcov",
+            str(cpu_dir / "coverage.info"),
+        ]
+        if gcov_exe:
+            cmd.extend(["--gcov-executable", gcov_exe])
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(repo_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        (cpu_dir / "summary.txt").write_text((result.stdout or "") + (result.stderr or ""))
+        if result.returncode != 0 and verbosity >= 1:
+            print(
+                f"WARNING: coverage report generation failed for {cpu} (rc={result.returncode})",
+                file=sys.stderr,
+            )
+        elif verbosity >= 1:
+            print(f"Coverage report generated: {cpu_dir / 'index.html'}")
 
 
 def die(msg: str, code: int = 2):
@@ -129,12 +363,7 @@ def detect_paths(args) -> dict:
         die(f"Toolchain file missing: {toolchain_file}")
 
     # FVP
-    if arch == "x86_64":
-        fvp_dir = dl / "corstone300_download" / "models" / FVP_DIR_X86
-    elif arch == "aarch64":
-        fvp_dir = dl / "corstone300_download" / "models" / FVP_DIR_AARCH64
-    else:
-        die(f"Unsupported architecture for FVP: {arch}")
+    fvp_dir = dl / "corstone300_download" / "models" / "Linux64_armv8l_GCC-9.3"
     fvp_exe: Optional[Path] = None
     if not args.no_fvp_from_download:
         fvp_exe_candidate = fvp_dir / FVP_EXE_NAME
@@ -172,6 +401,7 @@ def _get_git_sha(root: Path) -> Optional[str]:
 
 def cmake_configure(source_dir: Path, build_dir: Path, toolchain_file: Path, cpu: str,
                     cmsis5: Path, optimization: str, extra_defs: List[str], generator: Optional[str],
+                    generated_tests_dir: Optional[Path], enable_coverage: bool,
                     verbosity: int, env: dict) -> None:
     build_dir.mkdir(parents=True, exist_ok=True)
     
@@ -188,6 +418,10 @@ def cmake_configure(source_dir: Path, build_dir: Path, toolchain_file: Path, cpu
         f"-DCMSIS_PATH={cmsis5}",
         f"-DCMSIS_OPTIMIZATION_LEVEL={optimization}",
     ] + [f"-D{d}" for d in extra_defs]
+    if generated_tests_dir is not None:
+        cmd.append(f"-DGENERATED_TESTS_DIR={generated_tests_dir}")
+    if enable_coverage:
+        cmd.append("-DENABLE_COVERAGE=ON")
     
     if generator:
         cmd += ["-G", generator]
@@ -221,7 +455,17 @@ def find_elves(build_dir: Path) -> List[Path]:
     return [p for p in build_dir.rglob("*.elf") if p.is_file()]
 
 
-def run_fvp_with_reporting(fvp_exe: Path, elf: Path, timeout: float, verbosity: int, extra_args: List[str], env: dict, cpu: str, descriptor_name: Optional[str] = None) -> TestResult:
+def run_fvp_with_reporting(
+    fvp_exe: Path,
+    elf: Path,
+    timeout: float,
+    verbosity: int,
+    extra_args: List[str],
+    env: dict,
+    cpu: str,
+    descriptor_name: Optional[str] = None,
+    coverage_ctx: Optional[CoverageContext] = None,
+) -> TestResult:
     """
     Run FVP with comprehensive result reporting.
     
@@ -255,6 +499,7 @@ def run_fvp_with_reporting(fvp_exe: Path, elf: Path, timeout: float, verbosity: 
         )
         exit_code = proc.returncode
         output = proc.stdout or ""
+        output = _process_coverage_output(output, elf, coverage_ctx, env, verbosity)
         
     except subprocess.TimeoutExpired:
         end_time = time.time()
@@ -358,8 +603,103 @@ def run_fvp_with_reporting(fvp_exe: Path, elf: Path, timeout: float, verbosity: 
     
     return result
 
+
+def run_fvp(
+    fvp_exe: Path,
+    elf: Path,
+    timeout: float,
+    verbosity: int,
+    extra_args: List[str],
+    env: dict,
+    coverage_ctx: Optional[CoverageContext] = None,
+) -> bool:
+    args = [
+        str(fvp_exe),
+        "-C", "mps3_board.uart0.shutdown_on_eot=1",
+        "-C", "mps3_board.visualisation.disable-visualisation=1",
+        "-C", "mps3_board.telnetterminal0.start_telnet=0",
+        "-C", "mps3_board.uart0.out_file=-",
+        "-C", "mps3_board.uart0.unbuffered_output=1",
+    ] + extra_args + [str(elf)]
+    if verbosity >= 2:
+        print(f"Run: {' '.join(args)}")
+    try:
+        proc = subprocess.run(
+            args,
+            cwd=str(repo_root),
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=None if timeout <= 0 else timeout,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"TIMEOUT running {elf}", file=sys.stderr)
+        return False
+
+    out = proc.stdout or ""
+    out = _process_coverage_output(out, elf, coverage_ctx, env, verbosity)
+    # Use regex for exact "0 Failures" match (not substring)
+    zero_failures_pattern = re.compile(r'^0\s+Failures\s*$', re.MULTILINE | re.IGNORECASE)
+    success = bool(zero_failures_pattern.search(out))
+    
+    if not success:
+        # Always show failures
+        print(f"FAIL: {elf}")
+        if verbosity >= 1:
+            print("=" * 60)
+            print("FAILURE DETAILS:")
+            print("=" * 60)
+        # Extract relevant failure information
+        lines = out.split('\n')
+        failure_lines = []
+        in_failure_section = False
+        
+        for line in lines:
+            if any(keyword in line.lower() for keyword in ['fail', 'error', 'assert', 'test']):
+                in_failure_section = True
+                failure_lines.append(line)
+            elif in_failure_section and line.strip():
+                failure_lines.append(line)
+            elif in_failure_section and not line.strip():
+                # Empty line might end failure section, but continue for a few more lines
+                failure_lines.append(line)
+            elif in_failure_section and len(failure_lines) > 20:
+                # Limit output to prevent spam
+                failure_lines.append("... (truncated)")
+                break
+        
+        if verbosity >= 1:
+            max_lines = 20 if verbosity < 3 else len(failure_lines)
+            if failure_lines:
+                for line in failure_lines[:max_lines]:
+                    print(line)
+                if len(failure_lines) > max_lines and verbosity < 3:
+                    print("... (truncated)")
+            else:
+                # If no specific failure lines found, show last 20 lines
+                if verbosity >= 2:
+                    print("Last 20 lines of output:")
+                    for line in lines[-20:]:
+                        print(line)
+            print("=" * 60)
+    elif verbosity >= 1:
+        sys.stdout.write(out)
+        sys.stdout.flush()
+    
+    return success
+
+
 def parse_cpus(cpu_str: str) -> List[str]:
-    return [c.strip() for c in cpu_str.split(",") if c.strip()]
+    return parse_cpu_list(cpu_str)
+
+
+def resolve_generated_tests_dir(source_dir: Path, cpu: str) -> Path:
+    base = source_dir / "artifacts" / "generated_tests"
+    cpu_specific = base / cpu
+    if cpu_specific.exists():
+        return cpu_specific
+    return base
 
 
 
@@ -370,8 +710,7 @@ def run_tests_with_reporting(cpus: List[str],
                            cmsis5: Path,
                            fvp_exe: Path,
                            args,
-                           env: dict,
-                           enable_reporting: bool) -> Tuple[List[TestResult], bool]:
+                           env: dict) -> Tuple[List[TestResult], bool]:
     """
     Run tests with comprehensive reporting.
     
@@ -390,13 +729,13 @@ def run_tests_with_reporting(cpus: List[str],
     verbosity = getattr(args, 'verbosity', 0)
     
     # Get report directory from args
-    report_dir = getattr(args, 'report_dir', ARTIFACTS_DIR / "reports")
+    report_dir = _resolve_report_dir(args)
     
     # Clean up previous build directories (only if we're going to build)
-    # If --no-build or --no-clean-build is set, keep the existing build directory
-    if not args.no_build and not args.no_clean_build:
+    # If --no-build is set, keep the existing build directory
+    if not args.no_build:
         for cpu in cpus:
-            build_dir = find_build_dir(cpu, source_dir)
+            build_dir = ARTIFACTS_DIR / f"build-{cpu}-gcc"
             if build_dir.exists():
                 if verbosity >= 1:
                     print(f"Removing previous build directory: {build_dir}")
@@ -408,7 +747,8 @@ def run_tests_with_reporting(cpus: List[str],
             print(f"Removing previous reports directory: {report_dir}")
         shutil.rmtree(report_dir, ignore_errors=True)
     
-    generator = ReportGenerator(output_dir=report_dir) if enable_reporting else None
+    # Initialize reporting (after cleanup, so directory will be recreated)
+    generator = ReportGenerator(output_dir=report_dir)
     
     # Initialize descriptor tracking
     descriptors_dir = find_descriptors_dir()
@@ -419,7 +759,9 @@ def run_tests_with_reporting(cpus: List[str],
     for cpu in cpus:
         if verbosity >= 1:
             print(f"\nTarget: {cpu} (gcc)")
-        build_dir = find_build_dir(cpu, source_dir)
+        build_dir = ARTIFACTS_DIR / f"build-{cpu}-gcc"
+        cpu_generated_tests_dir = resolve_generated_tests_dir(source_dir, cpu)
+        coverage_ctx = _new_coverage_context(build_dir, getattr(args, "_gcov_tool", None)) if args.coverage else None
         
         if not args.no_build:
             # Build first - use the env passed in
@@ -432,6 +774,8 @@ def run_tests_with_reporting(cpus: List[str],
                 optimization=args.opt,
                 extra_defs=args.cmake_def,
                 generator=args.generator,
+                generated_tests_dir=cpu_generated_tests_dir,
+                enable_coverage=args.coverage,
                 verbosity=verbosity,
                 env=env,
             )
@@ -462,7 +806,8 @@ def run_tests_with_reporting(cpus: List[str],
                 extra_args=args.fvp_arg, 
                 env=env,
                 cpu=cpu,
-                descriptor_name=descriptor_name
+                descriptor_name=descriptor_name,
+                coverage_ctx=coverage_ctx,
             )
             cpu_results.append(result)
             all_results.append(result)
@@ -505,7 +850,11 @@ def run_tests_with_reporting(cpus: List[str],
         active_descriptors.add(desc_name)
     
     # Add descriptors that have generated artifacts
-    primary_build_dir = find_build_dir(cpus[0], source_dir) if cpus else find_build_dir("cortex-m55", source_dir)
+    primary_build_dir = ARTIFACTS_DIR / f"build-{cpus[0]}-gcc" if cpus else ARTIFACTS_DIR / "build-cortex-m55-gcc"
+    if cpus:
+        cpu_specific_generated = source_dir / "artifacts" / "generated_tests" / cpus[0]
+        if cpu_specific_generated.exists():
+            generated_tests_dir = cpu_specific_generated
     for desc_name in all_descriptors_dict.keys():
         # Check for TFLite file (generation stage)
         tflite_file = generated_tests_dir / desc_name / f"{desc_name}.tflite"
@@ -562,7 +911,7 @@ def run_tests_with_reporting(cpus: List[str],
                 if desc_name not in descriptor_results:
                     # Add to active descriptors if not already there
                     active_descriptors.add(desc_name)
-                    primary_build_dir = find_build_dir(cpus[0], source_dir) if cpus else find_build_dir("cortex-m55", source_dir)
+                    primary_build_dir = ARTIFACTS_DIR / f"build-{cpus[0]}-gcc" if cpus else ARTIFACTS_DIR / "build-cortex-m55-gcc"
                     status, failure_stage, failure_reason = tracker.determine_descriptor_status(
                         descriptor_name=desc_name,
                         test_result=result,
@@ -605,9 +954,7 @@ def run_tests_with_reporting(cpus: List[str],
     
     # Generate reports in requested formats (defaults to JSON if none specified)
     report_formats = getattr(args, 'report_formats', None) or ["json"]
-    generated_files = {}
-    if enable_reporting and generator:
-        generated_files = generator.generate_reports(report, report_formats)
+    generated_files = generator.generate_reports(report, report_formats)
     verbosity = getattr(args, 'verbosity', 0)
     if not getattr(args, "quiet", False):
         print(
@@ -618,19 +965,20 @@ def run_tests_with_reporting(cpus: List[str],
     if verbosity >= 1:
         for format_type, file_path in generated_files.items():
             print(f"{format_type.upper()} report generated: {file_path}")
+
+    _generate_coverage_reports(cpus, args, env, source_dir, "gcc", verbosity)
     
     return all_results, not any_fail
 
 
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description="Build and run helia-core kernels unit tests on FVP Corstone-300 (Python).")
-    ap.add_argument("-c", "--cpu", default="cortex-m55", help="Comma-separated cores, e.g. cortex-m3,cortex-m55")
+    ap.add_argument("-c", "--cpu", default="cortex-m55", help="Comma-separated cores, e.g. m0,m4,m55")
     ap.add_argument("-o", "--opt", default="-Ofast", help="Optimization level passed via CMSIS_OPTIMIZATION_LEVEL")
     ap.add_argument("--verbosity", type=int, choices=[0, 1, 2, 3], default=0,
                    help="Output verbosity level (0=minimal, 1=progress, 2=commands, 3=debug)")
     ap.add_argument("-b", "--no-build", action="store_true", help="Skip build (only run)")
     ap.add_argument("-r", "--no-run", action="store_true", help="Skip run (only build)")
-    ap.add_argument("--no-clean-build", action="store_true", help="Do not delete existing build directories before build")
     ap.add_argument("-e", "--no-setup", action="store_true", help="Skip dependency setup")
     ap.add_argument("-a", "--use-arm-compiler", action="store_true", help="Use Arm Compiler (default: GCC)")
     ap.add_argument("-p", "--no-venv", action="store_true", help="(Kept for parity; no effect on CMake build)")
@@ -639,6 +987,7 @@ def main(argv: List[str]) -> int:
     ap.add_argument("-u", "--ethos-path", type=Path, help="Override ethos-u-core-platform path")
     ap.add_argument("-C", "--cmsis5-path", type=Path, help="Override CMSIS_5 path")
     ap.add_argument("-D", "--cmake-def", action="append", default=[], help="Extra -DVAR=VAL for CMake (repeatable)")
+    ap.add_argument("--coverage", action="store_true", help="Enable ns-cmsis-nn coverage instrumentation and gcda merge")
     ap.add_argument("--downloads-dir", type=Path, default=DEFAULT_DL, help="Downloads directory (default: ./artifacts/downloads)")
     ap.add_argument("--source-dir", type=Path, default=DEFAULT_SOURCE, help="CMake source dir (UnitTest root)")
     ap.add_argument("--generator", help="CMake generator (e.g. Ninja)")
@@ -650,7 +999,7 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--no-report", action="store_true", help="Disable comprehensive test reporting (enabled by default)")
     ap.add_argument("--report-formats", nargs="+", choices=["json", "html", "md", "junit"], default=["json"], 
                    help="Report formats to generate (default: json)")
-    ap.add_argument("--report-dir", type=Path, default=ARTIFACTS_DIR / "reports", help="Directory to save reports (default: ./artifacts/reports)")
+    ap.add_argument("--report-dir", type=Path, default=Path("reports"), help="Directory to save reports (default: ./artifacts/reports)")
     ap.add_argument("--quiet", action="store_true", help="Quiet mode (no output)")
     args = ap.parse_args(argv)
 
@@ -673,26 +1022,100 @@ def main(argv: List[str]) -> int:
     if not source_dir.exists():
         die(f"CMake source dir not found: {source_dir}")
 
-    cpus = parse_cpus(args.cpu)
+    try:
+        cpus = parse_cpus(args.cpu)
+    except ValueError as e:
+        die(str(e))
+
+    if args.coverage and args.use_arm_compiler:
+        die("--coverage is only supported with GCC builds")
+    if args.coverage:
+        gcov_tool = _resolve_gcov_tool(env)
+        if not gcov_tool:
+            die("Coverage requested but no gcov-tool found on PATH (expected arm-none-eabi-gcov-tool).")
+        setattr(args, "_gcov_tool", gcov_tool)
     
+    # Use reporting if enabled (default: enabled, unless --no-report is set)
     enable_reporting = not args.no_report
-    results, success = run_tests_with_reporting(
-        cpus=cpus,
-        source_dir=source_dir,
-        toolchain_file=toolchain_file,
-        cmsis5=cmsis5,
-        fvp_exe=fvp_exe,
-        args=args,
-        env=env,
-        enable_reporting=enable_reporting
-    )
+    if enable_reporting:
+        results, success = run_tests_with_reporting(
+            cpus=cpus,
+            source_dir=source_dir,
+            toolchain_file=toolchain_file,
+            cmsis5=cmsis5,
+            fvp_exe=fvp_exe,
+            args=args,
+            env=env
+        )
+        
+        verbosity = getattr(args, 'verbosity', 0)
+        if success:
+            if verbosity >= 1:
+                print("\nAll requested builds/runs completed successfully.")
+            return 0
+        else:
+            return 1
     
+    # Original logic for backward compatibility
+    any_fail = False
     verbosity = getattr(args, 'verbosity', 0)
-    if success:
+
+    for cpu in cpus:
         if verbosity >= 1:
-            print("\nAll requested builds/runs completed successfully.")
-        return 0
-    return 1
+            print(f"\nTarget: {cpu} ({compiler_tag})")
+        build_dir = ARTIFACTS_DIR / f"build-{cpu}-{compiler_tag}"
+        cpu_generated_tests_dir = resolve_generated_tests_dir(source_dir, cpu)
+        coverage_ctx = _new_coverage_context(build_dir, getattr(args, "_gcov_tool", None)) if args.coverage else None
+
+        if not args.no_build:
+            cmake_configure(
+                source_dir=source_dir,
+                build_dir=build_dir,
+                toolchain_file=toolchain_file,
+                cpu=cpu,
+                cmsis5=cmsis5,
+                optimization=args.opt,
+                extra_defs=args.cmake_def,
+                generator=args.generator,
+                generated_tests_dir=cpu_generated_tests_dir,
+                enable_coverage=args.coverage,
+                verbosity=verbosity,
+                env=env,
+            )
+            cmake_build(build_dir=build_dir, verbosity=verbosity, env=env, jobs=args.jobs)
+
+        if args.no_run:
+            continue
+
+        elves = find_elves(build_dir)
+        if not elves:
+            if verbosity >= 1:
+                print(f"(no .elf found under {build_dir}, nothing to run)")
+            continue
+
+        for elf in sorted(elves):
+            ok = run_fvp(fvp_exe=fvp_exe, elf=elf, timeout=args.timeout_run,
+                          verbosity=verbosity, extra_args=args.fvp_arg, env=env, coverage_ctx=coverage_ctx)
+            if not ok:
+                any_fail = True
+                if args.fail_fast:
+                    if verbosity >= 1:
+                        print("Stopping early due to failure (--fail-fast).")
+                    return 1
+            else:
+                print(f"PASS: {elf}")
+                if verbosity >= 1:
+                    print()
+
+    if any_fail:
+        return 1
+
+    _generate_coverage_reports(cpus, args, env, source_dir, compiler_tag, verbosity)
+
+    verbosity = getattr(args, 'verbosity', 0)
+    if verbosity >= 1:
+        print("\nAll requested builds/runs completed successfully.")
+    return 0
 
 
 if __name__ == "__main__":

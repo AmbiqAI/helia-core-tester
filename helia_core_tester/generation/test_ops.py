@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional
 
 from helia_core_tester.core.discovery import find_descriptors_dir, find_generated_tests_dir, find_repo_root
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
+from helia_core_tester.core.cpu_targets import normalize_cpu
 from helia_core_tester.generation.ops import OP_MAP
 
 
@@ -56,7 +57,7 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     return True
 
 
-def generate_test(desc: Dict[str, Any], out_dir: str, seed: Optional[int] = None) -> None:
+def generate_test(desc: Dict[str, Any], out_dir: str, seed: Optional[int] = None, cpu: str = "cortex-m55") -> None:
     """
     Generate TFLite model for a descriptor.
     
@@ -87,7 +88,7 @@ def generate_test(desc: Dict[str, Any], out_dir: str, seed: Optional[int] = None
     if seed is None:
         # Stable deterministic seed from name (independent of PYTHONHASHSEED)
         seed = int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:4], "little")
-    op = op_class(desc, seed)
+    op = op_class(desc, seed, target_cpu=cpu)
     
     # Build Keras model (skip for ops that generate LiteRT models directly)
     if operator in {"ArgMax", "ArgMin"}:
@@ -132,15 +133,20 @@ def test_generation(test_filters):
     # Apply limit
     if test_filters.get('limit'):
         filtered_descriptors = filtered_descriptors[:test_filters['limit']]
+
+    target_cpu = normalize_cpu(test_filters.get('cpu') or "cortex-m55")
         
-    # Generate TFLite models for each descriptor
-    # Place models in artifacts/generated_tests
+    # Generate TFLite models for each descriptor.
+    generated_override = test_filters.get("generated_tests_dir")
+    top_generated = Path(generated_override).resolve() if generated_override else find_generated_tests_dir(create=True)
+    top_generated.mkdir(parents=True, exist_ok=True)
+
+    # Place models in generated tests root
     generated_count = 0
     manifest_entries: List[Dict[str, Any]] = []
     for desc in filtered_descriptors:
         try:
-            top_generated = find_generated_tests_dir(create=True)
-            generate_test(desc, str(top_generated), seed=test_filters.get('seed'))
+            generate_test(desc, str(top_generated), seed=test_filters.get('seed'), cpu=target_cpu)
             test_dir = Path(top_generated) / desc["name"]
             tflite_path = test_dir / f"{desc['name']}.tflite"
             c_sources = sorted([str(p.name) for p in test_dir.glob("*.c")])
@@ -152,6 +158,7 @@ def test_generation(test_filters):
                 "path": str(test_dir),
                 "tflite": str(tflite_path),
                 "c_sources": c_sources,
+                "cpu": target_cpu,
             })
             generated_count += 1
         except Exception as e:
@@ -161,12 +168,16 @@ def test_generation(test_filters):
             
     print(f"Successfully generated {generated_count} TFLite models")
     if generated_count > 0:
-        _write_manifest_and_cmake(manifest_entries, test_filters)
+        _write_manifest_and_cmake(manifest_entries, test_filters, generated_tests_dir=top_generated, cpu=target_cpu)
     assert generated_count > 0, "No TFLite models were generated"
 
 
-def _write_manifest_and_cmake(entries: List[Dict[str, Any]], test_filters: Dict[str, Any]) -> None:
-    generated_tests_dir = find_generated_tests_dir(create=True)
+def _write_manifest_and_cmake(
+    entries: List[Dict[str, Any]],
+    test_filters: Dict[str, Any],
+    generated_tests_dir: Path,
+    cpu: str
+) -> None:
     repo_root = find_repo_root()
 
     manifest = {
@@ -178,6 +189,7 @@ def _write_manifest_and_cmake(entries: List[Dict[str, Any]], test_filters: Dict[
             "name": test_filters.get("name"),
             "limit": test_filters.get("limit"),
             "seed": test_filters.get("seed"),
+            "cpu": cpu,
         },
         "tests": entries,
     }
@@ -194,13 +206,14 @@ def _write_manifest_and_cmake(entries: List[Dict[str, Any]], test_filters: Dict[
     cmake_path.write_text("\n".join(cmake_lines) + "\n")
 
 
-def test_generated_files_exist():
+def test_generated_files_exist(test_filters):
     """
     Verify that generated TFLite files exist and are valid.
     This should run AFTER test_generation().
     """
     # Don't generate, just validate what test_generation() created
-    generated_tests_dir = find_generated_tests_dir(create=False)
+    generated_override = test_filters.get("generated_tests_dir")
+    generated_tests_dir = Path(generated_override).resolve() if generated_override else find_generated_tests_dir(create=False)
     if not generated_tests_dir.exists():
         pytest.skip("No generated tests found")
         

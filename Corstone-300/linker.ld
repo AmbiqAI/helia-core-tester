@@ -171,6 +171,15 @@ SECTIONS
     __copy_table_end__ = .;
   } > ITCM
 
+  .gcov_info :
+  {
+    . = ALIGN(4);
+    PROVIDE(__gcov_info_start = .);
+    KEEP(*(.gcov_info))
+    PROVIDE(__gcov_info_end = .);
+    . = ALIGN(4);
+  } > ITCM
+
   .zero.table :
   {
     . = ALIGN(4);

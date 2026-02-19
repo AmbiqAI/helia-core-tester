@@ -32,9 +32,16 @@ class GenerateStep(StepBase):
             return f"Generation directory not found: {self.config.generation_dir}"
         return None
 
-    def _build_cmd(self, include_seed: bool = True) -> list:
+    def _cpu_generated_tests_dir(self, cpu: str) -> Path:
+        if len(self.config.cpus) <= 1:
+            return self.config.generated_tests_dir
+        return self.config.generated_tests_dir / cpu
+
+    def _build_cmd(self, cpu: str, include_seed: bool = True) -> list:
         """Build pytest command list. include_seed=False for dry-run preview."""
         cmd = ["pytest", "test_ops.py::test_generation", "-v"]
+        cmd.extend(["--cpu", cpu])
+        cmd.extend(["--generated-tests-dir", str(self._cpu_generated_tests_dir(cpu))])
         if self.config.op_filter:
             cmd.extend(["--op", self.config.op_filter])
         if self.config.dtype_filter:
@@ -45,25 +52,26 @@ class GenerateStep(StepBase):
             cmd.extend(["--limit", str(self.config.limit)])
         if include_seed and self.config.seed is not None:
             cmd.extend(["--seed", str(self.config.seed)])
-        if not self.config.clean_generated_tests:
-            cmd.append("--no-clean-generated")
         return cmd
     
     def _do_execute(self) -> StepResult:
         """Execute TFLite model generation."""
         if self.config.verbosity >= 1:
             self.logger.info("Generating TensorFlow Lite models using pytest")
-        cmd = self._build_cmd(include_seed=True)
         try:
-            if self.config.verbosity >= 2:
-                self.logger.info(f"Running command: {' '.join(cmd)}")
-            run_command(
-                cmd,
-                cwd=self.config.generation_dir,
-                verbosity=self.config.verbosity
-            )
+            commands = []
+            for cpu in self.config.cpus:
+                cmd = self._build_cmd(cpu=cpu, include_seed=True)
+                commands.append(cmd)
+                if self.config.verbosity >= 2:
+                    self.logger.info(f"Running command: {' '.join(cmd)}")
+                run_command(
+                    cmd,
+                    cwd=self.config.generation_dir,
+                    verbosity=self.config.verbosity
+                )
             if self.config.verbosity >= 1:
-                self.logger.info("TFLite models generated successfully")
+                self.logger.info(f"TFLite models generated successfully for {', '.join(self.config.cpus)}")
             return StepResult(
                 name=self.name,
                 status=StepStatus.SUCCESS,
@@ -72,7 +80,7 @@ class GenerateStep(StepBase):
                     "generated_tests_dir": str(self.config.generated_tests_dir)
                 },
                 details={
-                    "command": cmd,
+                    "commands": commands,
                     "filters": {
                         "op": self.config.op_filter,
                         "dtype": self.config.dtype_filter,
@@ -95,29 +103,29 @@ class GenerateStep(StepBase):
                 outputs={
                     "generated_tests_dir": str(self.config.generated_tests_dir)
                 },
-                details={"command": cmd},
+                details={"cpus": self.config.cpus},
             )
     
     def dry_run(self) -> StepResult:
         """Dry run of generation step."""
-        cmd_preview = self._build_cmd(include_seed=False)
+        cmd_preview = [self._build_cmd(cpu=cpu, include_seed=False) for cpu in self.config.cpus]
         return StepResult(
             name=self.name,
             status=StepStatus.SKIPPED,
-            message=f"DRY RUN: Would run: {' '.join(cmd_preview)} in {self.config.generation_dir}",
+            message=f"DRY RUN: Would run {len(cmd_preview)} generation command(s) in {self.config.generation_dir}",
             outputs={
                 "generated_tests_dir": str(self.config.generated_tests_dir)
             },
-            details={"command": cmd_preview},
+            details={"commands": cmd_preview},
         )
 
     def _plan_details(self) -> StepPlan:
-        cmd_preview = self._build_cmd(include_seed=True)
+        cmd_preview = [self._build_cmd(cpu=cpu, include_seed=True) for cpu in self.config.cpus]
         return StepPlan(
             name=self.name,
             will_run=True,
             reason="ready",
-            commands=[cmd_preview],
+            commands=cmd_preview,
             outputs={"generated_tests_dir": str(self.config.generated_tests_dir)},
             details={"cwd": str(self.config.generation_dir)}
         )

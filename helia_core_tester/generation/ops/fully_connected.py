@@ -5,6 +5,7 @@ FullyConnected operation implementation with dtype-aware quantization.
 from typing import Dict, Any, Optional
 import numpy as np
 from helia_core_tester.generation.ops.base import OperationBase
+from helia_core_tester.generation.kernel_dispatch import resolve_fully_connected_kernel
 import keras
 from pathlib import Path
 
@@ -112,35 +113,28 @@ class OpFullyConnected(OperationBase):
             f.write(tflite_model)
     
     def _select_cmsis_fc_kernel(self) -> Dict[str, str]:
-        """
-        Select appropriate CMSIS-NN fully connected kernel function.
-        
-        Returns:
-            Dictionary with kernel function name, C types, and buffer size function
-        """
-        activation_dtype = self.desc.get('activation_dtype', 'S8').upper()
-        weight_dtype = self.desc.get('weight_dtype', 'S8').upper()
-        
-        if activation_dtype == 'S8' and weight_dtype == 'S8':
-            return {
-                'kernel_fn': 'arm_fully_connected_wrapper_s8',
-                'kernel_get_buffer_size_fn': 'arm_fully_connected_s8_get_buffer_size',
-                'input_c_type': 'int8_t',
-                'output_c_type': 'int8_t',
-                'weight_c_type': 'int8_t',
-                'bias_c_type': 'int32_t'
-            }
-        elif activation_dtype == 'S16' and weight_dtype == 'S8':
-            return {
-                'kernel_fn': 'arm_fully_connected_wrapper_s16',
-                'kernel_get_buffer_size_fn': 'arm_fully_connected_s16_get_buffer_size',
-                'input_c_type': 'int16_t',
-                'output_c_type': 'int16_t',
-                'weight_c_type': 'int8_t',
-                'bias_c_type': 'int64_t'
-            }
-        else:
-            raise NotImplementedError(f"Unsupported FullyConnected dtype combo: {activation_dtype} x {weight_dtype}")
+        return resolve_fully_connected_kernel(
+            activation_dtype=self.desc.get('activation_dtype', 'S8'),
+            weight_dtype=self.desc.get('weight_dtype', 'S8'),
+            cpu=self.target_cpu,
+        )
+
+    def _find_fully_connected_op_index(self, model: Any, subgraph: Any) -> int:
+        """Find the FULLY_CONNECTED operator index in the subgraph (fallback to 0)."""
+        if len(subgraph.operators) == 0:
+            raise ValueError("No operators found in model")
+
+        try:
+            from ai_edge_litert import schema_py_generated as litert
+
+            for op_idx, op in enumerate(subgraph.operators):
+                opcode = model.operatorCodes[op.opcodeIndex]
+                if opcode.builtinCode == litert.BuiltinOperator.FULLY_CONNECTED:
+                    return op_idx
+        except Exception:
+            pass
+
+        return 0
     
     def _get_zero_point(self, quant_dict: Dict[str, Any]) -> int:
         """Get zero point from quantization dictionary."""
@@ -233,36 +227,11 @@ class OpFullyConnected(OperationBase):
             effective_scales,
             reduce_to_q15=False  # Kernel handles reduction internally
         )
-        
+
         return [
             {'multiplier': int(m), 'shift': int(s)}
             for m, s in zip(multipliers, shifts)
         ]
-
-    def _find_fc_operator_index(self, model, subgraph, weights: Optional[np.ndarray]) -> int:
-        """
-        Find the operator index corresponding to the FullyConnected op.
-        Prefer an operator whose inputs include the exact weights tensor.
-        """
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-
-        if weights is not None:
-            for op_index in range(len(subgraph.operators)):
-                op_tensors = get_operator_tensors_from_litert(model, subgraph, op_index)
-                for tensor in op_tensors.get('inputs', []):
-                    data = tensor.get('data')
-                    if data is not None and data.shape == weights.shape and np.array_equal(data, weights):
-                        return op_index
-
-        # Fallback: pick the first operator that looks like FC (weights as second input)
-        for op_index in range(len(subgraph.operators)):
-            op_tensors = get_operator_tensors_from_litert(model, subgraph, op_index)
-            if len(op_tensors.get('inputs', [])) >= 2:
-                weight_candidate = op_tensors['inputs'][1].get('data')
-                if weight_candidate is not None and weight_candidate.ndim >= 2 and weight_candidate.size > 4:
-                    return op_index
-
-        return 0
     
     def generate_c_files(self, output_dir: Path) -> None:
         """
@@ -281,33 +250,20 @@ class OpFullyConnected(OperationBase):
         # Load LiteRT model for shape and quantization extraction
         from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
         model, subgraph = self.load_litert_model(str(tflite_path))
-        
-        # Extract weights and biases (initial pass)
-        weights_biases = self.extract_weights_biases(str(tflite_path))
-        weights = weights_biases.get('weights')
-        biases = weights_biases.get('biases')
-
-        # Find the FullyConnected operator index and fetch its tensors
-        fc_op_index = self._find_fc_operator_index(model, subgraph, weights)
+        fc_op_index = self._find_fully_connected_op_index(model, subgraph)
         op_tensors = get_operator_tensors_from_litert(model, subgraph, fc_op_index)
-
-        # Extract shapes from LiteRT (use FC op tensors)
+        
+        # Extract shapes from LiteRT
         input_shape = op_tensors['inputs'][0]['shape']
         output_shape = op_tensors['outputs'][0]['shape']
-
-        # Prefer weights/biases directly from the FC op inputs when available
-        if len(op_tensors.get('inputs', [])) > 1 and op_tensors['inputs'][1].get('data') is not None:
-            weights = op_tensors['inputs'][1]['data']
-        if len(op_tensors.get('inputs', [])) > 2 and op_tensors['inputs'][2].get('data') is not None:
-            biases = op_tensors['inputs'][2]['data']
-
+        
         # Ensure shapes are tuples
         if input_shape is not None:
             input_shape = tuple(input_shape)
         if output_shape is not None:
             output_shape = tuple(output_shape)
         
-        # Extract quantization parameters from LiteRT (use FC op tensors)
+        # Extract quantization parameters from LiteRT
         input_quant_litert = op_tensors['inputs'][0]['quantization']
         output_quant_litert = op_tensors['outputs'][0]['quantization']
         
@@ -322,6 +278,11 @@ class OpFullyConnected(OperationBase):
             'per_channel': output_quant_litert.get('per_channel', False)
         }
         
+        # Extract weights and biases for the actual FULLY_CONNECTED op.
+        # For 4D inputs, op[0] may be RESHAPE, so using operator index 0 can be wrong.
+        weights = op_tensors.get('weights')
+        biases = op_tensors.get('biases')
+        
         # Get weight quantization from LiteRT
         from helia_core_tester.generation.utils.litert_utils import (
             get_tensor_data_from_litert, get_tensor_quantization_from_litert,
@@ -330,11 +291,6 @@ class OpFullyConnected(OperationBase):
         
         weight_quant = None
         if weights is not None:
-            # Prefer weight quantization from FC op input[1] when available
-            if len(op_tensors.get('inputs', [])) > 1 and op_tensors['inputs'][1].get('data') is not None:
-                weight_quant = op_tensors['inputs'][1].get('quantization')
-
-        if weight_quant is None and weights is not None:
             # Search all tensors to find the one matching our weights
             input_indices = set(subgraph.inputs)
             output_indices = set(subgraph.outputs)
@@ -410,54 +366,13 @@ class OpFullyConnected(OperationBase):
                 'w': 1,
                 'c': int(fs[0])   # output_units
             }
-
-        # Fix up biases: ensure we have a 1D bias matching output units
-        output_units = int(filter_dims['c'])
-        if biases is not None:
-            if not hasattr(biases, "shape") or biases.ndim != 1 or biases.shape[0] != output_units:
-                biases = None
-
-        if biases is None:
-            # Try to read bias directly from FC op input[2]
-            op = subgraph.operators[fc_op_index]
-            if len(op.inputs) > 2:
-                bias_tensor_idx = op.inputs[2]
-                if 0 <= bias_tensor_idx < len(subgraph.tensors):
-                    bias_tensor = subgraph.tensors[bias_tensor_idx]
-                    bias_data = get_tensor_data_from_litert(bias_tensor, model)
-                    if bias_data is not None and bias_data.ndim == 1 and bias_data.shape[0] == output_units:
-                        biases = bias_data
-
-        if biases is None:
-            # Fallback: search all tensors for a matching 1D bias vector
-            input_indices = set(subgraph.inputs)
-            output_indices = set(subgraph.outputs)
-            for tensor_idx, tensor in enumerate(subgraph.tensors):
-                if tensor_idx in input_indices or tensor_idx in output_indices:
-                    continue
-                bias_data = get_tensor_data_from_litert(tensor, model)
-                tensor_shape = get_tensor_shape_from_litert(tensor)
-                if bias_data is not None and tensor_shape is not None:
-                    if len(tensor_shape) == 1 and tensor_shape[0] == output_units:
-                        biases = bias_data
-                        break
         
         builder = TemplateContextBuilder()
         
-        # Prefer descriptor batch size when model shapes report 1 for dynamic batch
-        desc_input_shape = self.desc.get('input_shape', None)
-        desc_batch = None
-        if isinstance(desc_input_shape, (list, tuple)) and len(desc_input_shape) > 0:
-            desc_batch = int(desc_input_shape[0])
-
-        batch_size = int(input_shape[0]) if input_shape is not None and len(input_shape) > 0 else None
-        if desc_batch is not None and desc_batch > 1 and batch_size != desc_batch:
-            batch_size = desc_batch
-
         # Compute input dimensions
         if len(input_shape) == 2:
             input_dims = {
-                'n': int(batch_size if batch_size is not None else input_shape[0]),
+                'n': int(input_shape[0]),
                 'h': 1,
                 'w': 1,
                 'c': int(input_shape[1])
@@ -465,7 +380,7 @@ class OpFullyConnected(OperationBase):
         elif len(input_shape) == 4:
             # Flatten: [batch, h, w, c] -> features = h * w * c
             input_dims = {
-                'n': int(batch_size if batch_size is not None else input_shape[0]),
+                'n': int(input_shape[0]),
                 'h': 1,
                 'w': 1,
                 'c': int(input_shape[1] * input_shape[2] * input_shape[3])
@@ -476,8 +391,7 @@ class OpFullyConnected(OperationBase):
         # Compute output dimensions - use weights shape to get correct output_units
         if weights is not None and len(weights.shape) == 2:
             correct_output_units = int(weights.shape[0])
-            if batch_size is None:
-                batch_size = int(output_shape[0]) if len(output_shape) >= 1 else int(input_shape[0])
+            batch_size = int(output_shape[0]) if len(output_shape) >= 1 else int(input_shape[0])
             
             output_dims = {
                 'n': batch_size,
@@ -555,7 +469,7 @@ class OpFullyConnected(OperationBase):
                 )
                 multiplier = int(mults[0])
                 shift = int(shfts[0])
-                
+
             quant_params_dict = {
                 'multiplier': multiplier,
                 'shift': shift,
@@ -701,6 +615,7 @@ class OpFullyConnected(OperationBase):
             'bias_dtype': kernel_info["bias_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+            'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
             'weight_sum_array': weight_sum_array_str,
             'has_weight_sum': has_weight_sum,

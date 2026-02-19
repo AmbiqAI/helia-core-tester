@@ -537,7 +537,26 @@ def run_inference_litert_tensor(tflite_path: str, input_data: np.ndarray, tensor
     except Exception:
         pass
 
-    # Reuse the same input handling logic
+    # Handle batch size mismatch when the model expects batch=1 but input has batch>1.
+    # We need to execute per-batch and concatenate the requested tensor.
+    input_details = interpreter.get_input_details()
+    input_index = input_details[0]['index']
+    expected_shape = input_details[0]['shape']
+    input_shape = input_data.shape
+
+    if len(input_shape) == len(expected_shape) and input_shape[0] != expected_shape[0]:
+        batch_size = input_shape[0]
+        expected_batch = expected_shape[0]
+        if expected_batch == 1 and batch_size > 1:
+            outputs = []
+            for i in range(batch_size):
+                batch_input = input_data[i:i+1]
+                interpreter.set_tensor(input_index, batch_input)
+                interpreter.invoke()
+                outputs.append(np.array(interpreter.get_tensor(int(tensor_index))))
+            return np.concatenate(outputs, axis=0)
+
+    # Reuse the same input handling logic for all other cases
     _ = run_inference_with_litert(interpreter, input_data, model=model, subgraph=subgraph, operator_index=0)
 
     # Fetch requested tensor by index

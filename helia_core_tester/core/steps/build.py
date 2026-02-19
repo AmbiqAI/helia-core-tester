@@ -9,7 +9,7 @@ from pathlib import Path
 from helia_core_tester.core.steps.base import StepBase, StepPlan, StepResult, StepStatus
 from helia_core_tester.core.errors import BuildError
 from helia_core_tester.core.logging import get_logger
-from helia_core_tester.core.discovery import find_fvp_script_path, find_build_dir
+from helia_core_tester.core.discovery import find_fvp_script_path
 from helia_core_tester.utils.command_runner import run_command
 
 
@@ -37,17 +37,18 @@ class BuildStep(StepBase):
 
     def _do_execute(self) -> StepResult:
         """Execute CMake build for FVP."""
+        cpu_csv = ",".join(self.config.cpus)
         if self.config.verbosity >= 1:
-            self.logger.info(f"Building for FVP ({self.config.cpu})")
+            self.logger.info(f"Building for FVP ({cpu_csv})")
         script_path = find_fvp_script_path(self.config.project_root)
         cmd = [
             sys.executable, "-m", "helia_core_tester.fvp.build_and_run_fvp",
-            "--cpu", self.config.cpu,
+            "--cpu", cpu_csv,
             "--cmake-def", f"CMSIS_OPTIMIZATION_LEVEL={self.config.optimization}",
             "--no-run",
         ]
-        if not self.config.clean_build:
-            cmd.append("--no-clean-build")
+        if getattr(self.config, "coverage", False):
+            cmd.append("--coverage")
         
         if self.config.jobs:
             cmd.extend(["--jobs", str(self.config.jobs)])
@@ -62,33 +63,44 @@ class BuildStep(StepBase):
             if self.config.verbosity >= 2:
                 self.logger.info(f"Running command: {' '.join(cmd)}")
             
-            run_command(
-                cmd,
-                cwd=self.config.project_root,
-                verbosity=self.config.verbosity,
-                capture_output=True
-            )
+            run_command(cmd, cwd=self.config.project_root, verbosity=self.config.verbosity)
             
             if self.config.verbosity >= 1:
-                self.logger.info(f"Successfully built for {self.config.cpu}")
+                self.logger.info(f"Successfully built for {cpu_csv}")
             
             return StepResult(
                 name=self.name,
                 status=StepStatus.SUCCESS,
-                message=f"Successfully built for {self.config.cpu}",
-                outputs={"build_dir": str(find_build_dir(self.config.cpu, self.config.project_root))},
+                message=f"Successfully built for {cpu_csv}",
+                outputs={"build_dir": str(self.config.project_root / "artifacts")},
                 details={"command": cmd},
             )
         except subprocess.CalledProcessError as e:
             error_msg = f"Failed to build for FVP (exit code {e.returncode})"
             self.logger.error(error_msg)
             
+            # Try to capture more error details
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=self.config.project_root,
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                if result.stdout:
+                    self.logger.error(f"stdout: {result.stdout}")
+                if result.stderr:
+                    self.logger.error(f"stderr: {result.stderr}")
+            except Exception:
+                pass
+            
             return StepResult(
                 name=self.name,
                 status=StepStatus.FAILED,
                 message=error_msg,
                 error=BuildError(error_msg),
-                outputs={"build_dir": str(find_build_dir(self.config.cpu, self.config.project_root))},
+                outputs={"build_dir": str(self.config.project_root / "artifacts")},
                 details={"command": cmd},
             )
         except FileNotFoundError as e:
@@ -101,20 +113,21 @@ class BuildStep(StepBase):
                 status=StepStatus.FAILED,
                 message=error_msg,
                 error=build_error,
-                outputs={"build_dir": str(find_build_dir(self.config.cpu, self.config.project_root))},
+                outputs={"build_dir": str(self.config.project_root / "artifacts")},
                 details={"command": cmd},
             )
 
     def dry_run(self) -> StepResult:
         """Dry run of build step."""
+        cpu_csv = ",".join(self.config.cpus)
         cmd_preview = [
             sys.executable, "-m", "helia_core_tester.fvp.build_and_run_fvp",
-            "--cpu", self.config.cpu,
+            "--cpu", cpu_csv,
             "--cmake-def", f"CMSIS_OPTIMIZATION_LEVEL={self.config.optimization}",
             "--no-run",
         ]
-        if not self.config.clean_build:
-            cmd_preview.append("--no-clean-build")
+        if getattr(self.config, "coverage", False):
+            cmd_preview.append("--coverage")
         if self.config.jobs:
             cmd_preview.extend(["--jobs", str(self.config.jobs)])
         
@@ -122,18 +135,19 @@ class BuildStep(StepBase):
             name=self.name,
             status=StepStatus.SKIPPED,
             message=f"DRY RUN: Would run: {' '.join(cmd_preview)}",
-            outputs={"build_dir": str(find_build_dir(self.config.cpu, self.config.project_root))},
+            outputs={"build_dir": str(self.config.project_root / "artifacts")},
         )
 
     def _plan_details(self) -> StepPlan:
+        cpu_csv = ",".join(self.config.cpus)
         cmd = [
             sys.executable, "-m", "helia_core_tester.fvp.build_and_run_fvp",
-            "--cpu", self.config.cpu,
+            "--cpu", cpu_csv,
             "--cmake-def", f"CMSIS_OPTIMIZATION_LEVEL={self.config.optimization}",
             "--no-run",
         ]
-        if not self.config.clean_build:
-            cmd.append("--no-clean-build")
+        if getattr(self.config, "coverage", False):
+            cmd.append("--coverage")
         if self.config.jobs:
             cmd.extend(["--jobs", str(self.config.jobs)])
         if self.config.verbosity <= 1:
@@ -145,5 +159,5 @@ class BuildStep(StepBase):
             will_run=True,
             reason="ready",
             commands=[cmd],
-            outputs={"build_dir": str(find_build_dir(self.config.cpu, self.config.project_root))}
+            outputs={"build_dir": str(self.config.project_root / "artifacts")}
         )

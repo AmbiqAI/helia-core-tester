@@ -9,7 +9,7 @@ from pathlib import Path
 from helia_core_tester.core.steps.base import StepBase, StepPlan, StepResult, StepStatus
 from helia_core_tester.core.errors import FVPRunError
 from helia_core_tester.core.logging import get_logger
-from helia_core_tester.core.discovery import find_fvp_script_path, find_build_dir
+from helia_core_tester.core.discovery import find_fvp_script_path
 from helia_core_tester.utils.command_runner import run_command
 
 
@@ -33,9 +33,13 @@ class RunStep(StepBase):
         script_path = find_fvp_script_path(self.config.project_root)
         if not script_path.exists():
             return f"FVP script not found: {script_path}"
-        build_dir = find_build_dir(self.config.cpu, self.config.project_root)
-        if not build_dir.exists():
-            return f"Build directory not found: {build_dir}. Run 'build' step first."
+        missing_builds = []
+        for cpu in self.config.cpus:
+            build_dir = self.config.project_root / "artifacts" / f"build-{cpu}-gcc"
+            if not build_dir.exists():
+                missing_builds.append(str(build_dir))
+        if missing_builds:
+            return f"Build directory not found: {', '.join(missing_builds)}. Run 'build' step first."
         return None
 
     def plan_validate(self) -> str | None:
@@ -47,13 +51,16 @@ class RunStep(StepBase):
 
     def _do_execute(self) -> StepResult:
         """Execute FVP test execution."""
+        cpu_csv = ",".join(self.config.cpus)
         if self.config.verbosity >= 1:
-            self.logger.info("Running tests on FVP")
+            self.logger.info(f"Running tests on FVP ({cpu_csv})")
         cmd = [
             sys.executable, "-m", "helia_core_tester.fvp.build_and_run_fvp",
-            "--cpu", self.config.cpu,
+            "--cpu", cpu_csv,
             "--no-build",
         ]
+        if getattr(self.config, "coverage", False):
+            cmd.append("--coverage")
         
         if self.config.timeout > 0:
             cmd.extend(["--timeout-run", str(self.config.timeout)])
@@ -77,11 +84,13 @@ class RunStep(StepBase):
                 self.logger.info(f"Running command: {' '.join(cmd)}")
                 self.logger.info("=" * 60)
             
-            run_command(
+            # Use subprocess.run directly for better output handling
+            result = subprocess.run(
                 cmd,
                 cwd=self.config.project_root,
-                verbosity=self.config.verbosity,
-                stream_output=True
+                check=True,
+                text=True,
+                bufsize=1,
             )
             
             if self.config.verbosity >= 2:
@@ -95,7 +104,7 @@ class RunStep(StepBase):
                 status=StepStatus.SUCCESS,
                 message="All tests completed successfully",
                 outputs={
-                    "build_dir": str(find_build_dir(self.config.cpu, self.config.project_root)),
+                    "build_dir": str(self.config.project_root / "artifacts"),
                     "report_dir": str(self.config.report_dir) if self.config.report_dir else "",
                 },
                 details={"command": cmd},
@@ -114,7 +123,7 @@ class RunStep(StepBase):
                 message=error_msg,
                 error=fvp_error,
                 outputs={
-                    "build_dir": str(find_build_dir(self.config.cpu, self.config.project_root)),
+                    "build_dir": str(self.config.project_root / "artifacts"),
                     "report_dir": str(self.config.report_dir) if self.config.report_dir else "",
                 },
                 details={"command": cmd},
@@ -130,7 +139,7 @@ class RunStep(StepBase):
                 message=error_msg,
                 error=fvp_error,
                 outputs={
-                    "build_dir": str(find_build_dir(self.config.cpu, self.config.project_root)),
+                    "build_dir": str(self.config.project_root / "artifacts"),
                     "report_dir": str(self.config.report_dir) if self.config.report_dir else "",
                 },
                 details={"command": cmd},
@@ -138,11 +147,14 @@ class RunStep(StepBase):
 
     def dry_run(self) -> StepResult:
         """Dry run of run step."""
+        cpu_csv = ",".join(self.config.cpus)
         cmd_preview = [
             sys.executable, "-m", "helia_core_tester.fvp.build_and_run_fvp",
-            "--cpu", self.config.cpu,   
+            "--cpu", cpu_csv,
             "--no-build",
         ]
+        if getattr(self.config, "coverage", False):
+            cmd_preview.append("--coverage")
         if self.config.timeout > 0:
             cmd_preview.extend(["--timeout-run", str(self.config.timeout)])
         if not self.config.fail_fast:
@@ -153,17 +165,20 @@ class RunStep(StepBase):
             status=StepStatus.SKIPPED,
             message=f"DRY RUN: Would run: {' '.join(cmd_preview)}",
             outputs={
-                "build_dir": str(find_build_dir(self.config.cpu, self.config.project_root)),
+                "build_dir": str(self.config.project_root / "artifacts"),
                 "report_dir": str(self.config.report_dir) if self.config.report_dir else "",
             },
         )
 
     def _plan_details(self) -> StepPlan:
+        cpu_csv = ",".join(self.config.cpus)
         cmd = [
             sys.executable, "-m", "helia_core_tester.fvp.build_and_run_fvp",
-            "--cpu", self.config.cpu,
+            "--cpu", cpu_csv,
             "--no-build",
         ]
+        if getattr(self.config, "coverage", False):
+            cmd.append("--coverage")
         if self.config.timeout > 0:
             cmd.extend(["--timeout-run", str(self.config.timeout)])
         if not self.config.fail_fast:
@@ -182,7 +197,7 @@ class RunStep(StepBase):
             reason="ready",
             commands=[cmd],
             outputs={
-                "build_dir": str(find_build_dir(self.config.cpu, self.config.project_root)),
+                "build_dir": str(self.config.project_root / "artifacts"),
                 "report_dir": str(self.config.report_dir) if self.config.report_dir else "",
             }
         )

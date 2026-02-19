@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 from helia_core_tester.core.discovery import find_repo_root
 from helia_core_tester.core.errors import ConfigurationError, PathNotFoundError
-
+from helia_core_tester.core.cpu_targets import parse_cpu_list
 PATH_KEYS = frozenset({
     "project_root", "downloads_dir", "generated_tests_dir",
     "generation_dir", "report_dir",
@@ -39,8 +39,10 @@ class Config:
     
     # Build configuration
     cpu: str = "cortex-m55"
+    cpus: list[str] = field(default_factory=list)
     optimization: str = "-Ofast"
     jobs: Optional[int] = None
+    coverage: bool = False
     
     # Test configuration
     timeout: float = 0.0
@@ -104,7 +106,12 @@ class Config:
             self.generation_dir = _discover_generation_dir(self.project_root)
         else:
             self.generation_dir = Path(self.generation_dir).resolve()
-        
+        try:
+            self.cpus = parse_cpu_list(self.cpu)
+            self.cpu = self.cpus[0]
+        except ValueError as e:
+            raise ConfigurationError(str(e)) from e
+
         # Convert report_dir to Path if needed
         if self.report_dir is None:
             # Default to build directory reports under artifacts
@@ -169,9 +176,10 @@ class Config:
             "downloads_dir": str(self.downloads_dir),
             "generated_tests_dir": str(self.generated_tests_dir),
             "generation_dir": str(self.generation_dir),
-            "cpu": self.cpu,
+            "cpus": self.cpus,
             "optimization": self.optimization,
             "jobs": self.jobs,
+            "coverage": self.coverage,
             "timeout": self.timeout,
             "fail_fast": self.fail_fast,
             "verbosity": self.verbosity,
