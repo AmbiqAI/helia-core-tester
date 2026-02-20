@@ -83,6 +83,7 @@ Note: `build` requires `artifacts/generated_tests/tests.cmake`, which is created
 - `uv run helia_core_tester clean` — Remove build artifacts
 - `uv run helia_core_tester clean-all` — Remove all artifacts
 - `uv run helia_core_tester doctor` — Preflight checks
+- `uv run helia_core_tester gap-check` — Gap gate between descriptors and generated tests
 
 ### Advanced Usage
 
@@ -116,6 +117,28 @@ Run options:
 - `--timeout SECONDS`
 - `--no-fail-fast`
 - `--report-formats`
+
+### Gap Check (Regression Gate)
+
+The gap check compares YAML descriptors against generated test artifacts and the manifest.
+It allows known gaps (hardcoded allowlist) and fails only on new/unexpected gaps.
+
+Example:
+
+```bash
+uv run helia_core_tester gap-check --cpu cortex-m55 --report-dir artifacts/reports
+```
+
+Outputs:
+
+- `artifacts/reports/gap_report_<cpu>.json`
+- `artifacts/reports/gap_report_<cpu>.md`
+
+Updating the allowlist:
+
+1. Remove entries from the allowlist as operators become fully supported.
+2. If a new known gap is intentionally introduced, add its descriptor name to the allowlist in
+   `helia_core_tester/reporting/gap_gate.py`.
 
 General options:
 - `--verbosity, -v`

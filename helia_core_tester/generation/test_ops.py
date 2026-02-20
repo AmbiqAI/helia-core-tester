@@ -96,11 +96,16 @@ def generate_test(desc: Dict[str, Any], out_dir: str, seed: Optional[int] = None
     else:
         model = op.build_keras_model()
     
-    # Convert to TFLite
+    # Convert to TFLite (some ops allow no-tflite fallback)
     tflite_path = test_dir / f"{name}.tflite"
-    op.convert_to_tflite(model, str(tflite_path), seed)
-    
-    print(f"Generated TFLite model: {name}")
+    try:
+        op.convert_to_tflite(model, str(tflite_path), seed)
+        print(f"Generated TFLite model: {name}")
+    except Exception as e:
+        if op.allow_no_tflite():
+            print(f"INFO: Skipping TFLite generation for {name}: {e}")
+        else:
+            raise
     
     # Generate C/H files from templates
     try:
@@ -221,12 +226,15 @@ def test_generated_files_exist(test_filters):
     test_dirs = [d for d in generated_tests_dir.iterdir() if d.is_dir()]
     assert len(test_dirs) > 0, "No test directories found"
     
-    # Check that each test has TFLite file
+    # Check that each test has TFLite file or generated headers
     for test_dir in test_dirs:
         name = test_dir.name
         tflite_file = test_dir / f"{name}.tflite"
-        
-        assert tflite_file.exists(), f"Missing {name}.tflite"
-        
-        # Check that file is not empty
-        assert tflite_file.stat().st_size > 0, f"{name}.tflite is empty"
+        if tflite_file.exists():
+            # Check that file is not empty
+            assert tflite_file.stat().st_size > 0, f"{name}.tflite is empty"
+            continue
+
+        includes_dir = test_dir / "includes"
+        headers = list(includes_dir.glob("*.h")) if includes_dir.exists() else []
+        assert headers, f"Missing {name}.tflite and no generated headers"

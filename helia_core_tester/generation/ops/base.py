@@ -52,6 +52,10 @@ class OperationBase(ABC):
             Keras model ready for TFLite conversion
         """
         pass
+
+    def allow_no_tflite(self) -> bool:
+        """Return True if this op can generate C/H without a .tflite."""
+        return False
     
     def _apply_activation_quantization(self, converter) -> None:
         """Set converter for activation-only quantization (S8 or S16) from descriptor."""
