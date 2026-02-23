@@ -13,6 +13,9 @@ class OpArgMax(OperationBase):
     """
     ArgMax operation.
     """
+
+    def needs_keras_model(self) -> bool:
+        return False
     
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for ArgMax operation."""

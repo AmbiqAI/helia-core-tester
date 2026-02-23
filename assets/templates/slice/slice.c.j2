@@ -1,0 +1,87 @@
+#include "{{ name }}_slice.h"
+#include "unity.h"
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#ifdef USING_FVP_CORSTONE_300
+extern void uart_init(void);
+#endif
+
+static inline void signal_eot(void)
+{
+    putchar(4);
+    fflush(stdout);
+}
+
+void HardFault_Handler(void)
+{
+    printf("HardFault\r\n");
+    signal_eot();
+    while (1) { }
+}
+
+#define {{ name|upper }}_OUTPUT_SIZE ({{ output_size }})
+static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+
+static void {{ name }}_slice_ref(void)
+{
+    const int rank = {{ rank }};
+    int32_t in_strides[{{ max_rank }}] = {0};
+    int32_t out_strides[{{ max_rank }}] = {0};
+
+    in_strides[rank - 1] = 1;
+    out_strides[rank - 1] = 1;
+    for (int i = rank - 2; i >= 0; --i) {
+        in_strides[i] = in_strides[i + 1] * {{ name }}_input_shape[i + 1];
+        out_strides[i] = out_strides[i + 1] * {{ name }}_size[i + 1];
+    }
+
+    for (int out_idx = 0; out_idx < {{ name|upper }}_OUTPUT_SIZE; ++out_idx) {
+        int rem = out_idx;
+        int in_index = 0;
+        for (int d = 0; d < rank; ++d) {
+            int coord = rem / out_strides[d];
+            rem = rem % out_strides[d];
+            in_index += (coord + {{ name }}_begin[d]) * in_strides[d];
+        }
+        {{ name }}_output[out_idx] = ({{ output_dtype }}){{ name }}_input[in_index];
+    }
+}
+
+void setUp(void)
+{
+#ifdef USING_FVP_CORSTONE_300
+    uart_init();
+    setvbuf(stdout, NULL, _IONBF, 0);
+#endif
+}
+
+void tearDown(void) {}
+
+void test_{{ prefix }}_{{ name }}(void)
+{
+    {{ name }}_slice_ref();
+
+    const int output_size = {{ name|upper }}_OUTPUT_SIZE;
+    const {{ output_dtype }} *act = {{ name }}_output;
+    const {{ output_dtype }} *exp = {{ name }}_expected_output;
+
+    for (int i = 0; i < output_size; i++) {
+        int act_val = (int)act[i];
+        int exp_val = (int)exp[i];
+        if (act_val != exp_val) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "Mismatch at index %d: expected %d, got %d", i, exp_val, act_val);
+            TEST_ASSERT_EQUAL_MESSAGE(exp_val, act_val, msg);
+        }
+    }
+}
+
+int main(void)
+{
+    setUp();
+    test_{{ prefix }}_{{ name }}();
+    signal_eot();
+    while (1) { }
+}

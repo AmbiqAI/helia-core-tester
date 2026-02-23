@@ -1,0 +1,36 @@
+#ifndef {{ prefix|upper }}_COMPARISON_H
+#define {{ prefix|upper }}_COMPARISON_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+static const cmsis_nn_dims {{ name }}_input_1_dims = {
+    .n = {{ input_1_dims.n }}, .h = {{ input_1_dims.h }},
+    .w = {{ input_1_dims.w }}, .c = {{ input_1_dims.c }}
+};
+
+static const cmsis_nn_dims {{ name }}_input_2_dims = {
+    .n = {{ input_2_dims.n }}, .h = {{ input_2_dims.h }},
+    .w = {{ input_2_dims.w }}, .c = {{ input_2_dims.c }}
+};
+
+static const cmsis_nn_dims {{ name }}_output_dims = {
+    .n = {{ output_dims.n }}, .h = {{ output_dims.h }},
+    .w = {{ output_dims.w }}, .c = {{ output_dims.c }}
+};
+
+static const {{ input_dtype }} {{ name }}_input_1[] = {
+{{ input_1_data_array }}
+};
+
+static const {{ input_dtype }} {{ name }}_input_2[] = {
+{{ input_2_data_array }}
+};
+
+static const bool {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

@@ -13,6 +13,9 @@ class OpArgMin(OperationBase):
     """
     ArgMin operation.
     """
+
+    def needs_keras_model(self) -> bool:
+        return False
     
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for ArgMin operation."""

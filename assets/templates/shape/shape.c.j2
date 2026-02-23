@@ -1,0 +1,68 @@
+#include "{{ name }}_shape.h"
+#include "unity.h"
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#ifdef USING_FVP_CORSTONE_300
+extern void uart_init(void);
+#endif
+
+static inline void signal_eot(void)
+{
+    putchar(4);
+    fflush(stdout);
+}
+
+void HardFault_Handler(void)
+{
+    printf("HardFault\r\n");
+    signal_eot();
+    while (1) { }
+}
+
+#define {{ name|upper }}_OUTPUT_SIZE ({{ output_size }})
+static int32_t {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+
+static void {{ name }}_shape_ref(void)
+{
+    const int32_t dims[] = { {{ shape_array }} };
+    for (int i = 0; i < {{ output_size }}; ++i) {
+        {{ name }}_output[i] = dims[i];
+    }
+}
+
+void setUp(void)
+{
+#ifdef USING_FVP_CORSTONE_300
+    uart_init();
+    setvbuf(stdout, NULL, _IONBF, 0);
+#endif
+}
+
+void tearDown(void) {}
+
+void test_{{ prefix }}_{{ name }}(void)
+{
+    {{ name }}_shape_ref();
+
+    const int output_size = {{ name|upper }}_OUTPUT_SIZE;
+    const int32_t *act = {{ name }}_output;
+    const int32_t *exp = {{ name }}_expected_output;
+
+    for (int i = 0; i < output_size; i++) {
+        if (act[i] != exp[i]) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "Mismatch at index %d: expected %ld, got %ld", i, exp[i], act[i]);
+            TEST_ASSERT_EQUAL_MESSAGE(exp[i], act[i], msg);
+        }
+    }
+}
+
+int main(void)
+{
+    setUp();
+    test_{{ prefix }}_{{ name }}();
+    signal_eot();
+    while (1) { }
+}

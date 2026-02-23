@@ -5,6 +5,7 @@ Shape operation implementation.
 from typing import Dict, Any
 import numpy as np
 import tensorflow as tf
+from pathlib import Path
 from helia_core_tester.generation.ops.base import OperationBase
 
 
@@ -51,6 +52,54 @@ class OpShape(OperationBase):
 
     def generate_c_files(self, output_dir) -> None:
         """
-        Generate C and H files - not yet implemented for Shape.
+        Generate C and H files from templates for Shape.
         """
-        pass
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        name = self.desc['name']
+        tflite_path = Path(output_dir) / f"{name}.tflite"
+        if not tflite_path.exists():
+            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
+
+        interpreter = self.load_litert_interpreter(str(tflite_path))
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
+
+        input_shape = tuple(input_details[0]['shape'])
+        output_shape = tuple(output_details[0]['shape'])
+
+        builder = TemplateContextBuilder()
+
+        rng_state = self.rng.__getstate__()
+        self.rng = np.random.default_rng(self.seed)
+        input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+        self.rng.__setstate__(rng_state)
+
+        interpreter.set_tensor(input_details[0]['index'], input_data)
+        interpreter.invoke()
+        output_data = interpreter.get_tensor(output_details[0]['index'])
+        output_data = np.array(output_data).astype(np.int32)
+
+        context = {
+            'name': name,
+            'prefix': name,
+            'input_data_array': builder.format_array_as_c_literal(input_data),
+            'expected_output_array': builder.format_array_as_c_literal(output_data),
+            'output_size': int(np.prod(output_shape)),
+            'shape_array': ", ".join(str(int(x)) for x in input_shape),
+        }
+
+        includes_api_dir = Path(output_dir) / "includes"
+        includes_api_dir.mkdir(parents=True, exist_ok=True)
+        h_content = self.render_template("shape/shape.h.j2", context)
+        (includes_api_dir / f"{name}_shape.h").write_text(h_content)
+        c_content = self.render_template("shape/shape.c.j2", context)
+        (Path(output_dir) / f"{name}_shape.c").write_text(c_content)
+
+        cmake_context = {
+            'name': name,
+            'operator': self.desc.get('operator', 'Shape'),
+            'operator_name': 'shape',
+        }
+        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
+        (Path(output_dir) / "CMakeLists.txt").write_text(cmake_content)

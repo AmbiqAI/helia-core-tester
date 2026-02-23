@@ -1,0 +1,95 @@
+#include "{{ name }}_unpack.h"
+#include "unity.h"
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#ifdef USING_FVP_CORSTONE_300
+extern void uart_init(void);
+#endif
+
+static inline void signal_eot(void)
+{
+    putchar(4);
+    fflush(stdout);
+}
+
+void HardFault_Handler(void)
+{
+    printf("HardFault\r\n");
+    signal_eot();
+    while (1) { }
+}
+
+{% for out in outputs %}
+#define {{ out.name|upper }}_OUTPUT_SIZE ({{ out.size }})
+static {{ output_dtype }} {{ out.name }}_output[{{ out.name|upper }}_OUTPUT_SIZE];
+{% endfor %}
+
+static void {{ name }}_unpack_ref(const {{ input_dtype }} *input)
+{
+    const int outer_size = {{ outer_size }};
+    const int inner_size = {{ inner_size }};
+    const int num_tensors = {{ num_tensors }};
+
+    for (int outer = 0; outer < outer_size; ++outer) {
+        for (int t = 0; t < num_tensors; ++t) {
+            const {{ input_dtype }} *src = input + (outer * num_tensors + t) * inner_size;
+            {{ output_dtype }} *dst = {{ outputs[0].name }}_output + t * 0; // placeholder
+            switch (t) {
+                {% for out in outputs %}
+                case {{ loop.index0 }}:
+                    dst = {{ out.name }}_output;
+                    break;
+                {% endfor %}
+                default:
+                    dst = {{ outputs[0].name }}_output;
+                    break;
+            }
+            dst += outer * inner_size;
+            for (int i = 0; i < inner_size; ++i) {
+                dst[i] = ({{ output_dtype }})src[i];
+            }
+        }
+    }
+}
+
+void setUp(void)
+{
+#ifdef USING_FVP_CORSTONE_300
+    uart_init();
+    setvbuf(stdout, NULL, _IONBF, 0);
+#endif
+}
+
+void tearDown(void) {}
+
+void test_{{ prefix }}_{{ name }}(void)
+{
+    {{ name }}_unpack_ref({{ name }}_input);
+
+    {% for out in outputs %}
+    {
+        const int output_size = {{ out.name|upper }}_OUTPUT_SIZE;
+        const {{ output_dtype }} *act = {{ out.name }}_output;
+        const {{ output_dtype }} *exp = {{ out.name }}_expected_output;
+        for (int i = 0; i < output_size; i++) {
+            int act_val = (int)act[i];
+            int exp_val = (int)exp[i];
+            if (act_val != exp_val) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Mismatch at index %d: expected %d, got %d", i, exp_val, act_val);
+                TEST_ASSERT_EQUAL_MESSAGE(exp_val, act_val, msg);
+            }
+        }
+    }
+    {% endfor %}
+}
+
+int main(void)
+{
+    setUp();
+    test_{{ prefix }}_{{ name }}();
+    signal_eot();
+    while (1) { }
+}

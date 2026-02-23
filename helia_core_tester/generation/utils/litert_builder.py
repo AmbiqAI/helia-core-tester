@@ -272,3 +272,65 @@ def build_arg_op(
         np.savez(golden_path, input_0=input_data, output_0=output_data)
 
     return model_bytes
+
+
+def build_space_to_depth_op(
+    *,
+    input_shape: Iterable[int] = (1, 4, 4, 3),
+    block_size: int = 2,
+    dtype: str = "int8",
+) -> bytes:
+    if not LITERT_AVAILABLE:
+        raise ImportError("ai_edge_litert is not available. Install it with: pip install ai-edge-litert")
+
+    tensor_type = _DTYPE_MAP.get(dtype.lower())
+    if tensor_type is None:
+        raise ValueError(f"Unsupported dtype '{dtype}'.")
+
+    input_shape = tuple(int(dim) for dim in input_shape)
+    if len(input_shape) != 4:
+        raise ValueError("SpaceToDepth expects a 4D NHWC input shape.")
+
+    if block_size <= 0:
+        raise ValueError("block_size must be > 0.")
+
+    n, h, w, c = input_shape
+    if h % block_size != 0 or w % block_size != 0:
+        raise ValueError("Input height and width must be divisible by block_size.")
+
+    output_shape = (n, h // block_size, w // block_size, c * block_size * block_size)
+
+    builder = LiteRtSingleOpBuilder(op_name="SPACE_TO_DEPTH")
+
+    input_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="input",
+            shape=input_shape,
+            tensor_type=tensor_type,
+            is_input=True,
+            quantization=_default_quant(tensor_type),
+        )
+    )
+
+    output_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="output",
+            shape=output_shape,
+            tensor_type=tensor_type,
+            is_output=True,
+            quantization=_default_quant(tensor_type),
+        )
+    )
+
+    options = litert.SpaceToDepthOptionsT()
+    options.blockSize = int(block_size)
+
+    builder.add_operator(
+        "SPACE_TO_DEPTH",
+        inputs=[input_tensor_idx],
+        outputs=[output_tensor_idx],
+        options=options,
+        options_type=litert.BuiltinOptions.SpaceToDepthOptions,
+    )
+
+    return builder.build()

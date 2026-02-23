@@ -57,7 +57,14 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     return True
 
 
-def generate_test(desc: Dict[str, Any], out_dir: str, seed: Optional[int] = None, cpu: str = "cortex-m55") -> None:
+def generate_test(
+    desc: Dict[str, Any],
+    out_dir: str,
+    seed: Optional[int] = None,
+    cpu: str = "cortex-m55",
+    conversion_failures: Optional[List[Dict[str, Any]]] = None,
+    generation_failures: Optional[List[Dict[str, Any]]] = None,
+) -> None:
     """
     Generate TFLite model for a descriptor.
     
@@ -68,6 +75,7 @@ def generate_test(desc: Dict[str, Any], out_dir: str, seed: Optional[int] = None
     """
     name = desc['name']
     operator = desc['operator']
+    print(f"Generating test: {name} ({operator})")
     
     # Create output directory
     test_dir = Path(out_dir) / name
@@ -91,10 +99,23 @@ def generate_test(desc: Dict[str, Any], out_dir: str, seed: Optional[int] = None
     op = op_class(desc, seed, target_cpu=cpu)
     
     # Build Keras model (skip for ops that generate LiteRT models directly)
-    if operator in {"ArgMax", "ArgMin"}:
-        model = None
+    if op.needs_keras_model():
+        try:
+            model = op.build_keras_model()
+        except Exception as e:
+            if generation_failures is not None:
+                import traceback
+                generation_failures.append({
+                    "name": name,
+                    "operator": operator,
+                    "stage": "build_model",
+                    "exception": repr(e),
+                    "traceback": traceback.format_exc(),
+                })
+            print(f"ERROR: Model build failed for {name} ({operator}): {e}")
+            raise
     else:
-        model = op.build_keras_model()
+        model = None
     
     # Convert to TFLite (some ops allow no-tflite fallback)
     tflite_path = test_dir / f"{name}.tflite"
@@ -105,6 +126,24 @@ def generate_test(desc: Dict[str, Any], out_dir: str, seed: Optional[int] = None
         if op.allow_no_tflite():
             print(f"INFO: Skipping TFLite generation for {name}: {e}")
         else:
+            if conversion_failures is not None:
+                import traceback
+                conversion_failures.append({
+                    "name": name,
+                    "operator": operator,
+                    "exception": repr(e),
+                    "traceback": traceback.format_exc(),
+                })
+            if generation_failures is not None:
+                import traceback
+                generation_failures.append({
+                    "name": name,
+                    "operator": operator,
+                    "stage": "conversion",
+                    "exception": repr(e),
+                    "traceback": traceback.format_exc(),
+                })
+            print(f"ERROR: TFLite conversion failed for {name} ({operator}): {e}")
             raise
     
     # Generate C/H files from templates
@@ -118,6 +157,14 @@ def generate_test(desc: Dict[str, Any], out_dir: str, seed: Optional[int] = None
         print(f"ERROR: Failed to generate C/H files for {name}: {e}")
         print(f"ERROR: Traceback:")
         traceback.print_exc()
+        if generation_failures is not None:
+            generation_failures.append({
+                "name": name,
+                "operator": operator,
+                "stage": "c_files",
+                "exception": repr(e),
+                "traceback": traceback.format_exc(),
+            })
         # Continue anyway - C generation is optional during transition
 
 
@@ -128,13 +175,13 @@ def test_generation(test_filters):
     # Load all descriptors using discovery
     descriptors_dir = find_descriptors_dir()
     descriptors = load_all_descriptors(str(descriptors_dir))
-    
+
     # Apply filters
     filtered_descriptors = []
     for desc in descriptors:
         if should_run_test(desc, test_filters):
             filtered_descriptors.append(desc)
-            
+
     # Apply limit
     if test_filters.get('limit'):
         filtered_descriptors = filtered_descriptors[:test_filters['limit']]
@@ -145,13 +192,23 @@ def test_generation(test_filters):
     generated_override = test_filters.get("generated_tests_dir")
     top_generated = Path(generated_override).resolve() if generated_override else find_generated_tests_dir(create=True)
     top_generated.mkdir(parents=True, exist_ok=True)
+    print(f"Generated tests output dir: {top_generated}")
 
     # Place models in generated tests root
     generated_count = 0
     manifest_entries: List[Dict[str, Any]] = []
+    conversion_failures: List[Dict[str, Any]] = []
+    generation_failures: List[Dict[str, Any]] = []
     for desc in filtered_descriptors:
         try:
-            generate_test(desc, str(top_generated), seed=test_filters.get('seed'), cpu=target_cpu)
+            generate_test(
+                desc,
+                str(top_generated),
+                seed=test_filters.get('seed'),
+                cpu=target_cpu,
+                conversion_failures=conversion_failures,
+                generation_failures=generation_failures,
+            )
             test_dir = Path(top_generated) / desc["name"]
             tflite_path = test_dir / f"{desc['name']}.tflite"
             c_sources = sorted([str(p.name) for p in test_dir.glob("*.c")])
@@ -172,6 +229,22 @@ def test_generation(test_filters):
             continue
             
     print(f"Successfully generated {generated_count} TFLite models")
+    report_dir = find_repo_root() / "artifacts" / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    failures_path = report_dir / "conversion_failures.json"
+    failures_path.write_text(json.dumps(conversion_failures, indent=2))
+    if conversion_failures:
+        failed_names = ", ".join(f["name"] for f in conversion_failures)
+        print(f"Conversion failures ({len(conversion_failures)}): {failed_names}")
+    else:
+        print("Conversion failures (0)")
+    failures_path = report_dir / "generation_failures.json"
+    failures_path.write_text(json.dumps(generation_failures, indent=2))
+    if generation_failures:
+        failed_names = ", ".join(f["name"] for f in generation_failures)
+        print(f"Generation failures ({len(generation_failures)}): {failed_names}")
+    else:
+        print("Generation failures (0)")
     if generated_count > 0:
         _write_manifest_and_cmake(manifest_entries, test_filters, generated_tests_dir=top_generated, cpu=target_cpu)
     assert generated_count > 0, "No TFLite models were generated"

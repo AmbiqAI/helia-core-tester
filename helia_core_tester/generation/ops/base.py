@@ -53,6 +53,10 @@ class OperationBase(ABC):
         """
         pass
 
+    def needs_keras_model(self) -> bool:
+        """Return True if build_keras_model should be called for conversion."""
+        return True
+
     def allow_no_tflite(self) -> bool:
         """Return True if this op can generate C/H without a .tflite."""
         return False

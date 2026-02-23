@@ -1,0 +1,35 @@
+#ifndef {{ prefix|upper }}_SPACE_TO_BATCH_ND_H
+#define {{ prefix|upper }}_SPACE_TO_BATCH_ND_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+static const cmsis_nn_dims {{ name }}_input_dims = {
+    .n = {{ input_dims.n }}, .h = {{ input_dims.h }},
+    .w = {{ input_dims.w }}, .c = {{ input_dims.c }}
+};
+
+static const cmsis_nn_dims {{ name }}_output_dims = {
+    .n = {{ output_dims.n }}, .h = {{ output_dims.h }},
+    .w = {{ output_dims.w }}, .c = {{ output_dims.c }}
+};
+
+static const cmsis_nn_tile {{ name }}_block_shape = {
+    .h = {{ block_shape[0] }}, .w = {{ block_shape[1] }}
+};
+
+static const cmsis_nn_dims {{ name }}_pad_dims = {
+    .n = {{ paddings[0] }}, .h = {{ paddings[1] }},
+    .w = {{ paddings[2] }}, .c = {{ paddings[3] }}
+};
+
+static const {{ input_dtype }} {{ name }}_input[] = {
+{{ input_data_array }}
+};
+
+static const {{ output_dtype }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif
