@@ -89,6 +89,8 @@ class OpAbs(OperationBase):
         effective_scale = float(input_scale) / float(output_scale)
         output_mult, output_shift = calculate_multiplier_shift(effective_scale)
         needs_rescale = 0 if abs(effective_scale - 1.0) < 1e-6 else 1
+        if bool(self.desc.get("hint", {}).get("force_rescale", False)):
+            needs_rescale = 1
 
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
