@@ -1,0 +1,32 @@
+operator: GatherND
+name: gather_nd_indices2_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 2
+- 3
+- 4
+indices_shape:
+- 2
+- 2
+batch_dims: 0
+---
+operator: GatherND
+name: gather_nd_indices1_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 3
+- 2
+- 2
+- 2
+indices_shape:
+- 2
+- 1
+batch_dims: 0

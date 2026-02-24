@@ -36,6 +36,24 @@ int32_t {{ prefix }}_{{ name }}_run(
 ) {
     // Call subtract kernel
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+{% if call_style and call_style|lower == 'elementwise' %}
+        input1,
+        input2,
+        {{ input1_offset }},      // input1_offset
+        {{ input1_mult }},       // input1_mult
+        {{ input1_shift }},      // input1_shift
+        {{ input2_offset }},     // input2_offset
+        {{ input2_mult }},       // input2_mult
+        {{ input2_shift }},      // input2_shift
+        {{ left_shift }},        // left_shift
+        output,
+        {{ out_offset }},        // out_offset
+        {{ out_mult }},          // out_mult
+        {{ out_shift }},         // out_shift
+        {{ out_activation_min }}, // out_activation_min
+        {{ out_activation_max }}, // out_activation_max
+        {{ block_size }}         // block_size
+{% else %}
         input1,
         &{{ name }}_input1_dims,
         input2,
@@ -54,6 +72,7 @@ int32_t {{ prefix }}_{{ name }}_run(
         {{ out_shift }},         // out_shift
         {{ out_activation_min }}, // out_activation_min
         {{ out_activation_max }}  // out_activation_max
+{% endif %}
     );
     
     return kernel_status;

@@ -7,4 +7,33 @@ hint:
   call_style: per_tensor
 input_1_shape: [1, 4, 4, 3]
 input_2_shape: [1, 4, 4, 3]
-
+---
+operator: Sub
+name: sub_elementwise_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: elementwise
+input_1_shape: [1, 2, 2, 8]
+input_2_shape: [1, 2, 2, 8]
+---
+operator: Sub
+name: sub_scalar_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 1]
+input_2_shape: [1]
+---
+operator: Sub
+name: sub_scalar_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 1]
+input_2_shape: [1]

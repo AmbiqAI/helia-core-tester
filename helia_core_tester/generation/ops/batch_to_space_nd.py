@@ -2,8 +2,7 @@
 BatchToSpaceND operation implementation.
 """
 
-from typing import Dict, Any
-import tensorflow as tf
+from typing import Dict
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops.base import OperationBase
@@ -13,54 +12,27 @@ class OpBatchToSpaceND(OperationBase):
     """
     BatchToSpaceND operation.
     """
-    
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for BatchToSpaceND operation."""
-        input_shape = self.desc['input_shape']
-        block_shape = self.desc.get('block_shape', [2, 2])
-        crops = self.desc.get('crops', [[0, 0], [0, 0]])
-        
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
-        # BatchToSpaceND operation (use raw op for compatibility)
-        def _b2s(x):
-            block_shape_const = tf.constant(block_shape, dtype=tf.int32)
-            crops_const = tf.constant(crops, dtype=tf.int32)
-            if hasattr(tf.raw_ops, "BatchToSpaceND"):
-                return tf.raw_ops.BatchToSpaceND(
-                    input=x,
-                    block_shape=block_shape_const,
-                    crops=crops_const,
-                )
-            if hasattr(tf.nn, "batch_to_space_nd"):
-                return tf.nn.batch_to_space_nd(
-                    x,
-                    block_shape=block_shape_const,
-                    crops=crops_const,
-                )
-            if hasattr(tf.compat.v1, "batch_to_space_nd"):
-                return tf.compat.v1.batch_to_space_nd(
-                    x,
-                    block_shape=block_shape_const,
-                    crops=crops_const,
-                )
-            raise AttributeError("BatchToSpaceND op not available in this TensorFlow build")
 
-        x = tf.keras.layers.Lambda(_b2s)(inputs)
-        
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
+    def needs_keras_model(self) -> bool:
+        return False
+
+    def build_keras_model(self):
+        raise NotImplementedError("BatchToSpaceND uses LiteRT-only model generation.")
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        super().convert_to_tflite(model, out_path, rep_seed)
+        from helia_core_tester.generation.utils.litert_builder import build_batch_to_space_nd_op
 
-    def _load_interpreter(self, tflite_path: Path):
-        """
-        Load LiteRT interpreter for running inference.
-        """
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        return interpreter, "litert"
+        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        dtype = 'int16' if activation_dtype == 'S16' else 'int8'
+
+        model_bytes = build_batch_to_space_nd_op(
+            input_shape=self.desc['input_shape'],
+            block_shape=self.desc.get('block_shape', [1, 1]),
+            crops=self.desc.get('crops', [[0, 0], [0, 0]]),
+            dtype=dtype,
+        )
+        with open(out_path, "wb") as f:
+            f.write(model_bytes)
 
     @staticmethod
     def _batch_to_space_nd_numpy(input_np: np.ndarray, block_shape: list, crops: list) -> np.ndarray:
@@ -120,40 +92,19 @@ class OpBatchToSpaceND(OperationBase):
         block_shape = self.desc.get('block_shape', [1, 1])
         input_shape = tuple(self.desc['input_shape'])
 
-        try:
-            interpreter, _ = self._load_interpreter(tflite_path)
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            input_shape = tuple(input_details[0]['shape'])
-            output_shape = tuple(output_details[0]['shape'])
-            builder = TemplateContextBuilder()
-            input_dims = builder.nhwc_to_cmsis_dims(input_shape)
-            output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-            input_scale, input_zp = self._extract_quantization(input_details[0])
-            rng_state = self.rng.__getstate__()
-            self.rng = np.random.default_rng(self.seed)
-            input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-            self.rng.__setstate__(rng_state)
-            input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-            input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-            interpreter.set_tensor(input_details[0]['index'], input_q)
-            interpreter.invoke()
-            output_data = interpreter.get_tensor(output_details[0]['index'])
-            output_data = np.array(output_data)
-        except Exception:
-            builder = TemplateContextBuilder()
-            b0, b1 = int(block_shape[0]), int(block_shape[1])
-            out_batch = input_shape[0] // (b0 * b1)
-            out_h = input_shape[1] * b0 - int(crops[0][0]) - int(crops[0][1])
-            out_w = input_shape[2] * b1 - int(crops[1][0]) - int(crops[1][1])
-            output_shape = (out_batch, out_h, out_w, input_shape[3])
-            input_dims = builder.nhwc_to_cmsis_dims(input_shape)
-            output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-            rng_state = self.rng.__getstate__()
-            self.rng = np.random.default_rng(self.seed)
-            input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
-            self.rng.__setstate__(rng_state)
-            output_data = self._batch_to_space_nd_numpy(input_q, block_shape, crops)
+        builder = TemplateContextBuilder()
+        b0, b1 = int(block_shape[0]), int(block_shape[1])
+        out_batch = input_shape[0] // (b0 * b1)
+        out_h = input_shape[1] * b0 - int(crops[0][0]) - int(crops[0][1])
+        out_w = input_shape[2] * b1 - int(crops[1][0]) - int(crops[1][1])
+        output_shape = (out_batch, out_h, out_w, input_shape[3])
+        input_dims = builder.nhwc_to_cmsis_dims(input_shape)
+        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
+        rng_state = self.rng.__getstate__()
+        self.rng = np.random.default_rng(self.seed)
+        input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
+        self.rng.__setstate__(rng_state)
+        output_data = self._batch_to_space_nd_numpy(input_q, block_shape, crops)
 
         crops_flat = [int(crops[0][0]), int(crops[1][0]), int(crops[0][1]), int(crops[1][1])]
 

@@ -2,9 +2,8 @@
 Pad operation implementation for Helia-Core Tester.
 """
 
-from typing import Dict, Any
+from typing import Dict
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops.base import OperationBase
 
@@ -13,56 +12,32 @@ class OpPad(OperationBase):
     """
     Pad operation.
     """
-    
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for Pad operation."""
-        input_shape = self.desc['input_shape']
-        
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
-        # Pad operation - add padding around the input
-        # For simplicity, we'll add 1 pixel padding on all sides
-        output = tf.keras.layers.ZeroPadding2D(padding=1)(inputs)
-        
-        model = tf.keras.Model(inputs=inputs, outputs=output)
-        return model
+
+    def needs_keras_model(self) -> bool:
+        return False
+
+    def build_keras_model(self):
+        raise NotImplementedError("Pad uses LiteRT-only model generation.")
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        # Create converter
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        
-        # Apply quantization based on activation_dtype
+        """Convert model to LiteRT (single-op)."""
+        from helia_core_tester.generation.utils.litert_builder import build_pad_op
+
         activation_dtype = self.desc.get('activation_dtype', 'S8')
-        
-        if activation_dtype == 'S8':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int8]
-            converter.inference_input_type = tf.int8
-            converter.inference_output_type = tf.int8
-        elif activation_dtype == 'S16':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int16]
-            # For int16 quantization, keep input/output as float32
-            # For int16 quantization, keep input/output as float32
-        
-        # Generate representative dataset
-        def representative_data_gen():
-            for _ in range(100):
-                if 'input_shape' in self.desc:
-                    inputs = self.rng.uniform(-1.0, 1.0, size=self.desc['input_shape']).astype(np.float32)
-                    yield [inputs]
-                elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
-                    inputs1 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_1_shape']).astype(np.float32)
-                    inputs2 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_2_shape']).astype(np.float32)
-                    yield [inputs1, inputs2]
-        
-        converter.representative_dataset = representative_data_gen
-        
-        # Convert and save
-        tflite_model = converter.convert()
-        with open(out_path, 'wb') as f:
-            f.write(tflite_model)
+        dtype = 'int16' if activation_dtype == 'S16' else 'int8'
+
+        input_shape = tuple(self.desc['input_shape'])
+        paddings = self.desc.get('paddings')
+        if paddings is None:
+            raise ValueError("Pad requires paddings")
+
+        model_bytes = build_pad_op(
+            input_shape=input_shape,
+            paddings=paddings,
+            dtype=dtype,
+        )
+        with open(out_path, "wb") as f:
+            f.write(model_bytes)
     
     def _select_cmsis_pad_kernel(self) -> Dict[str, str]:
         """
@@ -102,20 +77,15 @@ class OpPad(OperationBase):
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_pad_kernel()
         
-        # Load LiteRT model for shape extraction
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        # Extract shapes from LiteRT
-        input_shape = op_tensors['inputs'][0]['shape']
-        output_shape = op_tensors['outputs'][0]['shape']
-        
-        # Ensure shapes are tuples
-        if input_shape is not None:
-            input_shape = tuple(input_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
+        input_shape = tuple(self.desc['input_shape'])
+        paddings = self.desc.get('paddings')
+        if paddings is None:
+            raise ValueError("Pad requires paddings")
+        pre_pad = [int(p[0]) for p in paddings]
+        post_pad = [int(p[1]) for p in paddings]
+        output_shape = tuple(
+            int(input_shape[i] + pre_pad[i] + post_pad[i]) for i in range(4)
+        )
         
         builder = TemplateContextBuilder()
         
@@ -123,79 +93,38 @@ class OpPad(OperationBase):
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         
-        # Calculate padding from input and output shapes
-        # For NHWC format: [N, H, W, C]
-        # pre_pad and post_pad are also in NHWC format
-        pre_pad = [0, 0, 0, 0]
-        post_pad = [0, 0, 0, 0]
-        
-        if len(input_shape) == 4 and len(output_shape) == 4:
-            # Calculate padding for each dimension
-            for i in range(4):
-                diff = output_shape[i] - input_shape[i]
-                # For ZeroPadding2D, padding is symmetric
-                pre_pad[i] = diff // 2
-                post_pad[i] = diff - pre_pad[i]
-        
         pre_pad_dims = builder.nhwc_to_cmsis_dims(pre_pad)
         post_pad_dims = builder.nhwc_to_cmsis_dims(post_pad)
-        
-        # Pad value is typically 0 (zero padding)
-        # Extract quantization from LiteRT to get the quantized zero value
-        input_quant = op_tensors['inputs'][0]['quantization']
-        input_zp = input_quant.get('zero_point', 0)
-        
-        # Handle per-channel quantization (convert to scalar)
-        if isinstance(input_zp, (list, np.ndarray)):
-            input_zp = int(input_zp[0]) if len(input_zp) > 0 else 0
-        
-        pad_value = int(input_zp)  # Use zero point as pad value
-        
-        # Generate input data and quantize
+
+        pad_value = int(self.desc.get('pad_value', 0))
+
+        # Generate input data
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        
-        input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-        
-        self.rng.__setstate__(rng_state)
-        
-        # Extract quantization from LiteRT (already extracted earlier)
-        # input_quant and input_zp were already extracted from op_tensors
-        input_quant = op_tensors['inputs'][0]['quantization']
-        input_scale = input_quant.get('scale', 1.0)
-        input_zp = input_quant.get('zero_point', 0)
-        
-        # Handle per-channel quantization (convert to scalar)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = float(input_scale[0]) if len(input_scale) > 0 else 1.0
-        if isinstance(input_zp, (list, np.ndarray)):
-            input_zp = int(input_zp[0]) if len(input_zp) > 0 else 0
-        
-        input_scale = float(input_scale)
-        input_zp = int(input_zp)
-        
-        # Quantize inputs
+
+        # Generate input values
         if kernel_info["input_c_type"] == "int8_t":
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
+            input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
         elif kernel_info["input_c_type"] == "int16_t":
             np_in_dtype = np.int16
             qmin, qmax = -32768, 32767
+            input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        
-        input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-        input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-        
-        # Run inference using LiteRT interpreter
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        interpreter.set_tensor(input_details[0]['index'], input_q)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
+
+        output_data = np.pad(
+            input_q,
+            ((pre_pad[0], post_pad[0]),
+             (pre_pad[1], post_pad[1]),
+             (pre_pad[2], post_pad[2]),
+             (pre_pad[3], post_pad[3])),
+            mode="constant",
+            constant_values=pad_value,
+        )
+
+        self.rng.__setstate__(rng_state)
         
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)

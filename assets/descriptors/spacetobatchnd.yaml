@@ -81,3 +81,24 @@ paddings:
   - 0
 - - 0
   - 3
+---
+operator: SpaceToBatchND
+name: space_to_batch_nd_basic_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 2
+- 2
+- 1
+block_shape:
+- 2
+- 2
+paddings:
+- - 0
+  - 0
+- - 0
+  - 0

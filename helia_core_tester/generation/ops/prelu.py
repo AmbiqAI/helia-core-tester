@@ -4,7 +4,6 @@ PReLU operation implementation.
 
 from typing import Dict, Any, Iterable
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops.base import OperationBase
 
@@ -14,12 +13,15 @@ class OpPReLU(OperationBase):
     PReLU (Parametric ReLU) operation.
     """
     
-    def _prepare_alpha_values(self, input_shape: tuple, alpha_values: Iterable[float] | None = None) -> np.ndarray:
+    def _prepare_alpha_values(
+        self,
+        alpha_shape: tuple,
+        alpha_values: Iterable[float] | None = None
+    ) -> np.ndarray:
         """Prepare alpha values for PReLU layer."""
-        value_shape = input_shape[1:]  # Remove batch dimension
-        if not value_shape:
-            raise ValueError("Input shape must include at least one non-batch dimension for PReLU.")
-        num_values = int(np.prod(value_shape))
+        if not alpha_shape:
+            raise ValueError("alpha_shape must include at least one dimension for PReLU.")
+        num_values = int(np.prod(alpha_shape))
         
         if alpha_values is None:
             # Default: linear spacing from 0.05 to 0.25
@@ -32,99 +34,61 @@ class OpPReLU(OperationBase):
             elif data.size != num_values:
                 raise ValueError(
                     f"alpha_values has {data.size} entries, but expected {num_values} "
-                    f"to match input shape {value_shape}."
+                    f"to match alpha shape {alpha_shape}."
                 )
-        return data.reshape(value_shape)
+        return data.reshape(alpha_shape)
     
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for PReLU operation."""
-        input_shape = self.desc['input_shape']
-        
-        # Build model with float32 inputs (will be quantized later)
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
+    def needs_keras_model(self) -> bool:
+        return False
+
+    def build_keras_model(self):
+        raise NotImplementedError("PReLU uses LiteRT-only model generation.")
+
+    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
+        """Generate LiteRT model for PReLU."""
+        from helia_core_tester.generation.utils.litert_builder import build_prelu_op
+
+        activation_dtype = self.desc.get("activation_dtype", "S8")
+        if activation_dtype != "S8":
+            raise NotImplementedError(f"Unsupported PReLU dtype: {activation_dtype} (only S8 supported)")
+
+        input_shape = tuple(self.desc["input_shape"])
+        alpha_shape = self.desc.get("alpha_shape")
+        if alpha_shape is not None:
+            alpha_shape = tuple(alpha_shape)
+        else:
+            alpha_shape = input_shape[1:]
+
         # Get alpha values from descriptor
-        # Priority: 1) top-level 'alpha' field, 2) hint.extras.alpha_values, 3) default
         alpha_values = None
-        
-        # Check for top-level 'alpha' field (scalar value)
-        if 'alpha' in self.desc:
-            alpha_scalar = self.desc['alpha']
+        if "alpha" in self.desc:
+            alpha_scalar = self.desc["alpha"]
             if isinstance(alpha_scalar, (int, float)):
-                # Scalar alpha: use this value for all elements
-                # Will be expanded in _prepare_alpha_values
                 alpha_values = [float(alpha_scalar)]
             elif isinstance(alpha_scalar, list):
-                # List of alpha values
                 alpha_values = alpha_scalar
-        
-        # Fallback to hint.extras.alpha_values if not found at top level
-        if alpha_values is None and 'hint' in self.desc:
-            extras = self.desc.get('hint', {}).get('extras', {})
-            if 'alpha_values' in extras:
-                # Flatten the nested list if present
-                alpha_list = extras['alpha_values']
+
+        if alpha_values is None and "hint" in self.desc:
+            extras = self.desc.get("hint", {}).get("extras", {})
+            if "alpha_values" in extras:
+                alpha_list = extras["alpha_values"]
                 if isinstance(alpha_list, list) and len(alpha_list) > 0:
                     if isinstance(alpha_list[0], list):
-                        # Flatten nested list
                         alpha_values = [item for sublist in alpha_list for item in sublist]
                     else:
                         alpha_values = alpha_list
-        
-        # If alpha_values is None, _prepare_alpha_values will use default
-        alpha_array = self._prepare_alpha_values(tuple(input_shape), alpha_values)
-        
-        # PReLU operation with per-element alpha
-        prelu_layer = tf.keras.layers.PReLU(
-            alpha_initializer=tf.keras.initializers.Constant(alpha_array),
-            shared_axes=None,  # Per-element alpha
-            name='prelu'
+
+        # Ensure alpha values match alpha_shape
+        _ = self._prepare_alpha_values(tuple(alpha_shape), alpha_values)
+
+        model_bytes = build_prelu_op(
+            input_shape=input_shape,
+            alpha_shape=alpha_shape,
+            alpha_values=alpha_values,
+            dtype="int8",
         )
-        output = prelu_layer(inputs)
-            
-        model = tf.keras.Model(inputs=[inputs], outputs=output)
-        return model
-
-    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        # Create converter
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
-        
-        # Apply quantization based on activation_dtype
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        
-        if activation_dtype == 'S8':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_types = [tf.int8]
-            converter.inference_input_type = tf.int8
-            converter.inference_output_type = tf.int8
-        elif activation_dtype == 'S16':
-            converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.target_spec.supported_ops = [
-                tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8
-            ]
-            converter.inference_input_type = tf.int16
-            converter.inference_output_type = tf.int16
-
-        
-        # Generate representative dataset
-        def representative_data_gen():
-            rng = np.random.default_rng(rep_seed)
-            for _ in range(100):
-                if 'input_shape' in self.desc:
-                    inputs = rng.uniform(-8.0, 8.0, size=self.desc['input_shape']).astype(np.float32)
-                    yield [inputs]
-                elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
-                    inputs1 = rng.uniform(-8.0, 8.0, size=self.desc['input_1_shape']).astype(np.float32)
-                    inputs2 = rng.uniform(-8.0, 8.0, size=self.desc['input_2_shape']).astype(np.float32)
-                    yield [inputs1, inputs2]
-        
-        converter.representative_dataset = representative_data_gen
-        
-        # Convert and save
-        tflite_model = converter.convert()
-        with open(out_path, 'wb') as f:
-            f.write(tflite_model)
+        with open(out_path, "wb") as f:
+            f.write(model_bytes)
     
     def _select_cmsis_prelu_kernel(self) -> Dict[str, str]:
         """
@@ -372,4 +336,3 @@ class OpPReLU(OperationBase):
             f.write(cmake_content)
         
         print(f"Generated C/H files and CMakeLists.txt for {name}")
-

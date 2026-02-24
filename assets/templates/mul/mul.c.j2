@@ -34,19 +34,21 @@ int32_t {{ prefix }}_{{ name }}_run(
     const {{ input_dtype }}* __restrict input2,
     {{ output_dtype }}* __restrict output
 ) {
-    // Call elementwise mul kernel
+    // Call mul kernel (handles broadcast + scalar)
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         input1,
+        &{{ name }}_input1_dims,
         input2,
+        &{{ name }}_input2_dims,
         {{ input1_offset }},      // input_1_offset
         {{ input2_offset }},      // input_2_offset
         output,
+        &{{ name }}_output_dims,
         {{ out_offset }},          // out_offset
         {{ out_mult }},           // out_mult
         {{ out_shift }},          // out_shift
         {{ out_activation_min }}, // out_activation_min
-        {{ out_activation_max }}, // out_activation_max
-        {{ block_size }}          // block_size
+        {{ out_activation_max }}  // out_activation_max
     );
     
     return kernel_status;

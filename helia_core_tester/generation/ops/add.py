@@ -4,7 +4,6 @@ Add operation implementation.
 
 from typing import Dict, Any
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops.base import OperationBase
 
@@ -14,20 +13,33 @@ class OpAdd(OperationBase):
     Add operation.
     """
     
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for Add operation."""
-        input_1_shape = self.desc['input_1_shape']
-        input_2_shape = self.desc['input_2_shape']
-        
-        # Build model with float32 inputs (will be quantized later)
-        input1 = tf.keras.Input(shape=input_1_shape[1:], dtype=tf.float32, name='input1')
-        input2 = tf.keras.Input(shape=input_2_shape[1:], dtype=tf.float32, name='input2')
-        
-        # Add operation
-        x = tf.keras.layers.Add()([input1, input2])
-            
-        model = tf.keras.Model(inputs=[input1, input2], outputs=x)
-        return model
+    def needs_keras_model(self) -> bool:
+        return False
+
+    def build_keras_model(self):
+        raise NotImplementedError("Add uses LiteRT-only model generation.")
+
+    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
+        from helia_core_tester.generation.utils.litert_builder import build_add_op
+
+        activation_dtype = self.desc.get("activation_dtype", "S8")
+        if activation_dtype == "S8":
+            dtype = "int8"
+        elif activation_dtype == "S16":
+            dtype = "int16"
+        else:
+            raise NotImplementedError(f"Unsupported Add dtype: {activation_dtype}")
+
+        input_1_shape = tuple(self.desc["input_1_shape"])
+        input_2_shape = tuple(self.desc["input_2_shape"])
+
+        model_bytes = build_add_op(
+            input_1_shape=input_1_shape,
+            input_2_shape=input_2_shape,
+            dtype=dtype,
+        )
+        with open(out_path, "wb") as f:
+            f.write(model_bytes)
 
     def _select_cmsis_add_kernel(self) -> Dict[str, str]:
         """
@@ -40,13 +52,13 @@ class OpAdd(OperationBase):
         
         if activation_dtype == 'S8':
             return {
-                'kernel_fn': 'arm_elementwise_add_s8',
+                'kernel_fn': 'arm_add_s8',
                 'input_c_type': 'int8_t',
                 'output_c_type': 'int8_t'
             }
         elif activation_dtype == 'S16':
             return {
-                'kernel_fn': 'arm_elementwise_add_s16',
+                'kernel_fn': 'arm_add_s16',
                 'input_c_type': 'int16_t',
                 'output_c_type': 'int16_t'
             }
@@ -132,16 +144,37 @@ class OpAdd(OperationBase):
         input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
         input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
         
-        # Run inference using LiteRT interpreter
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        interpreter.set_tensor(input_details[0]['index'], input1_q)
-        interpreter.set_tensor(input_details[1]['index'], input2_q)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
+        # Run inference using LiteRT interpreter when shapes match (no broadcast).
+        # LiteRT broadcasting can abort in some runtimes, so fall back to a local
+        # quantized simulation for broadcasted shapes.
+        if input1_shape == input2_shape:
+            interpreter = self.load_litert_interpreter(str(tflite_path))
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+
+            interpreter.set_tensor(input_details[0]['index'], input1_q)
+            interpreter.set_tensor(input_details[1]['index'], input2_q)
+            interpreter.invoke()
+            output_data = interpreter.get_tensor(output_details[0]['index'])
+            output_data = np.array(output_data)
+        else:
+            output_data = self._simulate_add_quantized(
+                input1_q,
+                input2_q,
+                input1_offset=int(input1_zp),
+                input2_offset=int(input2_zp),
+                input1_mult=int(mult1),
+                input1_shift=int(shift1),
+                input2_mult=int(mult2),
+                input2_shift=int(shift2),
+                left_shift=int(left_shift),
+                out_offset=int(output_zp),
+                out_mult=int(output_mult),
+                out_shift=int(output_shift),
+                out_activation_min=int(activation_min),
+                out_activation_max=int(activation_max),
+                out_dtype=np_in_dtype,
+            )
         
         # Format arrays
         input1_array_str = builder.format_array_as_c_literal(input1_q)
@@ -186,3 +219,51 @@ class OpAdd(OperationBase):
         }
         self._write_op_outputs(output_dir, "add", "add/add.h.j2", "add/add.c.j2", context, cmake_context)
         print(f"Generated C/H files and CMakeLists.txt for {name}")
+
+    @staticmethod
+    def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
+        left_shift = shift if shift > 0 else 0
+        right_shift = -shift if shift < 0 else 0
+        prod = values.astype(np.int64) * (1 << left_shift)
+        # arm_nn_doubling_high_mult_no_sat
+        mult = (1 << 30) + (prod * int(multiplier))
+        res = (mult >> 31).astype(np.int64)
+        if right_shift == 0:
+            return res.astype(np.int32)
+        remainder_mask = (1 << right_shift) - 1
+        remainder = res & remainder_mask
+        result = res >> right_shift
+        threshold = remainder_mask >> 1
+        threshold = threshold + (result < 0)
+        result = result + (remainder > threshold)
+        return result.astype(np.int32)
+
+    @classmethod
+    def _simulate_add_quantized(
+        cls,
+        input1_q: np.ndarray,
+        input2_q: np.ndarray,
+        *,
+        input1_offset: int,
+        input2_offset: int,
+        input1_mult: int,
+        input1_shift: int,
+        input2_mult: int,
+        input2_shift: int,
+        left_shift: int,
+        out_offset: int,
+        out_mult: int,
+        out_shift: int,
+        out_activation_min: int,
+        out_activation_max: int,
+        out_dtype: np.dtype,
+    ) -> np.ndarray:
+        a = (input1_q.astype(np.int32) + int(input1_offset)) << int(left_shift)
+        b = (input2_q.astype(np.int32) + int(input2_offset)) << int(left_shift)
+        a = cls._requantize_np(a, int(input1_mult), int(input1_shift))
+        b = cls._requantize_np(b, int(input2_mult), int(input2_shift))
+        s = a + b
+        s = cls._requantize_np(s, int(out_mult), int(out_shift))
+        s = s + int(out_offset)
+        s = np.clip(s, int(out_activation_min), int(out_activation_max))
+        return s.astype(out_dtype)

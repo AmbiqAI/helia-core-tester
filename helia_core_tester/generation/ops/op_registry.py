@@ -6,6 +6,8 @@ from .dwconv import OpDepthwiseConv2D
 from .matmul_batch import OpMatMul
 from .elementwise import OpElementwise
 from .add import OpAdd
+from .abs import OpAbs
+from .comparison import OpComparison
 from .sub import OpSub
 from .mul import OpMul
 from .minmax import OpMinMax
@@ -19,6 +21,7 @@ from .hard_swish import OpHardSwish
 from .prelu import OpPReLU
 from .quantize import OpQuantize
 from .dequantize import OpDequantize
+from .requantize import OpRequantize
 from .pooling import OpPooling
 from .transpose import OpTranspose
 from .stridedslice import OpStridedSlice
@@ -42,6 +45,8 @@ from .split import OpSplit
 from .pack import OpPack
 from .unpack import OpUnpack
 from .concatenation import OpConcatenation
+from .gather import OpGather
+from .gather_nd import OpGatherND
 from .space_to_batch_nd import OpSpaceToBatchND
 from .batch_to_space_nd import OpBatchToSpaceND
 from .variable_update import OpVariableUpdate
@@ -52,6 +57,9 @@ from .greater import OpGreater
 from .greater_equal import OpGreaterEqual
 from .less import OpLess
 from .less_equal import OpLessEqual
+from .clamp import OpClamp
+from .nn_activation_s16 import OpNNActivationS16
+from .resize_nearest_neighbor import OpResizeNearestNeighbor
 
 OP_MAP = {
     "FullyConnected": OpFullyConnected,
@@ -60,6 +68,8 @@ OP_MAP = {
     "MatMul": OpMatMul,
     "Elementwise": OpElementwise,
     "Add": OpAdd,
+    "Abs": OpAbs,
+    "Comparison": OpComparison,
     "Sub": OpSub,
     "Mul": OpMul,
     "Maximum": OpMinMax,
@@ -74,6 +84,7 @@ OP_MAP = {
     "PReLU": OpPReLU,
     "Quantize": OpQuantize,
     "Dequantize": OpDequantize,
+    "Requantize": OpRequantize,
     "Pooling": OpPooling,
     "Transpose": OpTranspose,
     "StridedSlice": OpStridedSlice,
@@ -97,6 +108,8 @@ OP_MAP = {
     "Pack": OpPack,
     "Unpack": OpUnpack,
     "Concatenation": OpConcatenation,
+    "Gather": OpGather,
+    "GatherND": OpGatherND,
     "SpaceToBatchND": OpSpaceToBatchND,
     "BatchToSpaceND": OpBatchToSpaceND,
     "VariableUpdate": OpVariableUpdate,
@@ -107,4 +120,7 @@ OP_MAP = {
     "GreaterEqual": OpGreaterEqual,
     "Less": OpLess,
     "LessEqual": OpLessEqual,
+    "Clamp": OpClamp,
+    "NNActivationS16": OpNNActivationS16,
+    "ResizeNearestNeighbor": OpResizeNearestNeighbor,
 }

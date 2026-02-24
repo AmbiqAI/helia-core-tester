@@ -51,3 +51,23 @@ input_2_shape:
 - 3
 - 5
 - 7
+---
+operator: Add
+name: add_scalar_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 1]
+input_2_shape: [1]
+---
+operator: Add
+name: add_scalar_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 1]
+input_2_shape: [1]

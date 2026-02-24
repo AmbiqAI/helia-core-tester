@@ -38,8 +38,7 @@ static {{ output_dtype }}* {{ name }}_output_ptrs[] = {
 };
 
 int32_t {{ prefix }}_{{ name }}_run(
-    const {{ input_dtype }}* __restrict input,
-    {{ output_dtype }}* __restrict output
+    const {{ input_dtype }}* __restrict input
 ) {
     // Call Split kernel
     // Note: Split has multiple outputs, but we only handle the first one for now
@@ -75,7 +74,7 @@ void tearDown(void) {}
 void test_{{ prefix }}_{{ name }}(void)
 {
     const arm_cmsis_nn_status expected = ARM_CMSIS_NN_SUCCESS;
-    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
+    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input);
     
     // Assert that Split succeeded
     TEST_ASSERT_EQUAL(expected, status);
@@ -106,9 +105,9 @@ void test_{{ prefix }}_{{ name }}(void)
 int32_t {{ prefix }}_{{ name }}_test_case_run(void)
 {
     const arm_cmsis_nn_status expected = ARM_CMSIS_NN_SUCCESS;
-    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
+    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input);
     if (status != expected) {
-        printf("Split failed with status %d\r\n", status);
+        printf("Split failed with status %d\r\n", (int)status);
         printf("1 Failures\r\n");
         return 1;
     }
@@ -145,6 +144,7 @@ int main(void)
 
     // For standalone execution, use the legacy test function
     int32_t failures = {{ prefix }}_{{ name }}_test_case_run();
+    (void)failures;
 
     // Always terminate the FVP run cleanly
     signal_eot();

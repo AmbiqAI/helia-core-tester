@@ -4,7 +4,7 @@
   "properties": {
     "operator": {
       "type": "string",
-      "enum": ["FullyConnected", "Conv2D", "DepthwiseConv2D", "MatMul", "Elementwise", "Add", "Sub", "Mul", "Maximum", "Minimum", "Relu", "Relu6", "LeakyRelu", "Softmax", "Tanh", "Logistic", "HardSwish", "PReLU", "Quantize", "Dequantize", "Pooling", "Transpose", "StridedSlice", "Pad", "LSTM", "SVDF", "Mean", "ReduceMax", "ReduceMin", "ArgMax", "ArgMin", "TransposeConv", "Equal", "NotEqual", "Greater", "GreaterEqual", "Less", "LessEqual", "Fill", "ZerosLike", "Reshape", "Shape", "Slice", "Squeeze", "SpaceToDepth", "DepthToSpace", "Split", "Pack", "Unpack", "Concatenation", "SpaceToBatchND", "BatchToSpaceND", "VariableUpdate"]
+      "enum": ["FullyConnected", "Conv2D", "DepthwiseConv2D", "MatMul", "Elementwise", "Add", "Sub", "Mul", "Maximum", "Minimum", "Relu", "Relu6", "LeakyRelu", "Softmax", "Tanh", "Logistic", "HardSwish", "PReLU", "Abs", "Quantize", "Dequantize", "Requantize", "Pooling", "Transpose", "StridedSlice", "Pad", "LSTM", "SVDF", "Mean", "ReduceMax", "ReduceMin", "ArgMax", "ArgMin", "TransposeConv", "Equal", "NotEqual", "Greater", "GreaterEqual", "Less", "LessEqual", "Comparison", "Fill", "ZerosLike", "Reshape", "Shape", "Slice", "Squeeze", "SpaceToDepth", "DepthToSpace", "Split", "Pack", "Unpack", "Concatenation", "SpaceToBatchND", "BatchToSpaceND", "ResizeNearestNeighbor", "VariableUpdate", "Gather", "GatherND"]
     },
     "name": {
       "type": "string",
@@ -32,6 +32,12 @@
       "type": "array",
       "items": {"type": "integer", "minimum": 1},
       "minItems": 2,
+      "maxItems": 4
+    },
+    "indices_shape": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 1},
+      "minItems": 1,
       "maxItems": 4
     },
     "activation": {
@@ -83,6 +89,28 @@
     "axis": {
       "type": "integer",
       "minimum": 0
+    },
+    "batch_dims": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "effective_scale_multiplier": {
+      "type": "integer"
+    },
+    "effective_scale_shift": {
+      "type": "integer"
+    },
+    "input_zeropoint": {
+      "type": "integer"
+    },
+    "output_zeropoint": {
+      "type": "integer"
+    },
+    "align_corners": {
+      "type": "boolean"
+    },
+    "half_pixel_centers": {
+      "type": "boolean"
     },
     "keepdims": {
       "type": "boolean"

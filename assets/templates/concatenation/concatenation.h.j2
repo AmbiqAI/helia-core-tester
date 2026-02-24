@@ -21,6 +21,25 @@ static const int32_t {{ name }}_output_shape[] = {
 {{ output_shape_array }}
 };
 
+// Per-input dimensions (NHWC)
+static const int32_t {{ name }}_input_x[] = {  // width
+{{ input_x_array }}
+};
+static const int32_t {{ name }}_input_y[] = {  // height
+{{ input_y_array }}
+};
+static const int32_t {{ name }}_input_z[] = {  // channels
+{{ input_z_array }}
+};
+static const int32_t {{ name }}_input_w[] = {  // batch
+{{ input_w_array }}
+};
+
+// Per-input offsets along concat axis
+static const int32_t {{ name }}_offsets[] = {
+{{ offsets_array }}
+};
+
 {% for i in range(num_inputs) %}
 // Input {{ i + 1 }} data (for testing)
 static const {{ input_dtype }} {{ name }}_input{{ i + 1 }}[] = {

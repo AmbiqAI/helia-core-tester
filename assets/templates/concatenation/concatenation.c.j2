@@ -41,7 +41,60 @@ int32_t {{ prefix }}_{{ name }}_run(
     {{ output_dtype }}* __restrict output
 ) {
     // Call Concatenation kernel
-    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+    arm_cmsis_nn_status kernel_status = ARM_CMSIS_NN_SUCCESS;
+{% if call_style and call_style|lower == 'axis_x' %}
+    for (int i = 0; i < {{ num_inputs }}; i++) {
+        {{ kernel_fn }}(
+            input_ptrs[i],
+            (uint16_t){{ name }}_input_x[i],
+            (uint16_t){{ name }}_input_y[i],
+            (uint16_t){{ name }}_input_z[i],
+            (uint16_t){{ name }}_input_w[i],
+            output,
+            (uint16_t){{ output_x }},
+            (uint32_t){{ name }}_offsets[i]
+        );
+    }
+{% elif call_style and call_style|lower == 'axis_y' %}
+    for (int i = 0; i < {{ num_inputs }}; i++) {
+        {{ kernel_fn }}(
+            input_ptrs[i],
+            (uint16_t){{ name }}_input_x[i],
+            (uint16_t){{ name }}_input_y[i],
+            (uint16_t){{ name }}_input_z[i],
+            (uint16_t){{ name }}_input_w[i],
+            output,
+            (uint16_t){{ output_y }},
+            (uint32_t){{ name }}_offsets[i]
+        );
+    }
+{% elif call_style and call_style|lower == 'axis_z' %}
+    for (int i = 0; i < {{ num_inputs }}; i++) {
+        {{ kernel_fn }}(
+            input_ptrs[i],
+            (uint16_t){{ name }}_input_x[i],
+            (uint16_t){{ name }}_input_y[i],
+            (uint16_t){{ name }}_input_z[i],
+            (uint16_t){{ name }}_input_w[i],
+            output,
+            (uint16_t){{ output_z }},
+            (uint32_t){{ name }}_offsets[i]
+        );
+    }
+{% elif call_style and call_style|lower == 'axis_w' %}
+    for (int i = 0; i < {{ num_inputs }}; i++) {
+        {{ kernel_fn }}(
+            input_ptrs[i],
+            (uint16_t){{ name }}_input_x[i],
+            (uint16_t){{ name }}_input_y[i],
+            (uint16_t){{ name }}_input_z[i],
+            (uint16_t){{ name }}_input_w[i],
+            output,
+            (uint32_t){{ name }}_offsets[i]
+        );
+    }
+{% else %}
+    kernel_status = {{ kernel_fn }}(
         input_ptrs,
         {{ num_inputs }},                      // inputs_count
         {{ name }}_input_concat_dims,          // input_concat_dims
@@ -50,6 +103,7 @@ int32_t {{ prefix }}_{{ name }}_run(
         {{ output_rank }},  // output_dims (number of dimensions)
         {{ name }}_output_shape               // output_shape
     );
+{% endif %}
     
     return kernel_status;
 }

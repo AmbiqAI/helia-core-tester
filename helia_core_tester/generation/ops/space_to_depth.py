@@ -2,13 +2,10 @@
 SpaceToDepth operation implementation.
 """
 
-from typing import Dict, Any, TYPE_CHECKING
+from typing import Dict
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops.base import OperationBase
-
-if TYPE_CHECKING:
-    import tensorflow as tf
 
 
 class OpSpaceToDepth(OperationBase):
@@ -19,19 +16,8 @@ class OpSpaceToDepth(OperationBase):
     def needs_keras_model(self) -> bool:
         return False
     
-    def build_keras_model(self) -> "tf.keras.Model":
-        """Build Keras model for SpaceToDepth operation."""
-        import tensorflow as tf
-        input_shape = self.desc['input_shape']
-        block_size = self.desc.get('block_size', 2)
-        
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
-        # SpaceToDepth operation
-        x = tf.nn.space_to_depth(inputs, block_size)
-        
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
+    def build_keras_model(self):
+        raise NotImplementedError("SpaceToDepth uses LiteRT-only model generation.")
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert model to LiteRT (single-op) to avoid TF/TFLite dependency."""
@@ -71,39 +57,23 @@ class OpSpaceToDepth(OperationBase):
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
 
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-
-        input_shape = tuple(input_details[0]['shape'])
-        output_shape = tuple(output_details[0]['shape'])
+        input_shape = tuple(self.desc['input_shape'])
+        block_size = int(self.desc.get('block_size', 2))
+        n, h, w, c = input_shape
+        output_shape = (n, h // block_size, w // block_size, c * block_size * block_size)
 
         builder = TemplateContextBuilder()
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
 
-        input_qp = input_details[0].get('quantization_parameters', {})
-        input_scale = input_qp.get('scales', [1.0])
-        input_zp = input_qp.get('zero_points', [0])
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = input_scale[0] if len(input_scale) > 0 else 1.0
-        if isinstance(input_zp, (list, np.ndarray)):
-            input_zp = input_zp[0] if len(input_zp) > 0 else 0
-        input_scale = float(input_scale)
-        input_zp = int(input_zp)
-
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+        input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
         self.rng.__setstate__(rng_state)
 
-        input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-        input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-
-        interpreter.set_tensor(input_details[0]['index'], input_q)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
+        x = input_q.reshape(n, h // block_size, block_size, w // block_size, block_size, c)
+        x = np.transpose(x, (0, 1, 3, 2, 4, 5))
+        output_data = x.reshape(output_shape)
 
         context = {
             'name': name,
