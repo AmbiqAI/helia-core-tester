@@ -144,6 +144,9 @@ class OpLSTM(OperationBase):
             return
 
         from pathlib import Path
+        from helia_core_tester.generation.utils.lstm_data import generate_lstm_data, build_lstm_context
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+        from helia_core_tester.core.discovery import find_tester_templates_dir
 
         name = self.desc['name']
         dataset = self.desc.get("dataset")
@@ -151,26 +154,77 @@ class OpLSTM(OperationBase):
             raise ValueError("LSTM CMSIS test requires 'dataset' in descriptor.")
 
         activation_dtype = self.desc.get("activation_dtype", "S8").upper()
-        if activation_dtype == "S16":
-            dtype = "s16"
-            output_dtype = "int16_t"
-        else:
-            dtype = "s8"
-            output_dtype = "int8_t"
+        batch_size = int(self.desc.get("batch_size", 1))
+        time_steps = int(self.desc.get("time_steps", 1))
+        input_size = int(self.desc.get("feature_size", self.desc.get("input_size", 1)))
+        hidden_size = int(self.desc.get("units", self.desc.get("hidden_size", 1)))
+        time_major = bool(self.desc.get("time_major", False))
 
-        macro_prefix, data_prefix = self._dataset_prefixes(dataset)
-        dataset_include = f"../../../../UnitTest/TestCases/TestData/{dataset}/test_data.h"
+        templates_dir = Path(find_tester_templates_dir()) / "lstm_unidirectional" / "json"
+        schema_path = Path(__file__).resolve().parents[4] / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
+        work_dir = Path(output_dir) / "_lstm_tmp"
+        work_dir.mkdir(parents=True, exist_ok=True)
 
-        context = {
-            "name": name,
-            "prefix": name,
-            "dataset": dataset,
-            "dataset_include": dataset_include,
-            "macro_prefix": macro_prefix,
-            "data_prefix": data_prefix,
-            "dtype": dtype,
+        data = generate_lstm_data(
+            rng=self.rng,
+            activation_dtype=activation_dtype,
+            batch_size=batch_size,
+            time_steps=time_steps,
+            input_size=input_size,
+            hidden_size=hidden_size,
+            time_major=time_major,
+            templates_dir=templates_dir,
+            schema_path=schema_path,
+            work_dir=work_dir,
+            dataset=dataset,
+        )
+
+        context = build_lstm_context(
+            name=name,
+            dataset=dataset,
+            activation_dtype=activation_dtype,
+            batch_size=batch_size,
+            time_steps=time_steps,
+            input_size=input_size,
+            hidden_size=hidden_size,
+            time_major=time_major,
+            data=data,
+        )
+
+        builder = TemplateContextBuilder()
+
+        def fmt(arr, *, dtype=None):
+            if dtype is not None:
+                return builder.format_array_as_c_literal(np.asarray(arr, dtype=dtype))
+            return builder.format_array_as_c_literal(np.asarray(arr))
+
+        input_dtype = "int16_t" if activation_dtype == "S16" else "int8_t"
+        output_dtype = "int16_t" if activation_dtype == "S16" else "int8_t"
+        bias_dtype = "int64_t" if activation_dtype == "S16" else "int32_t"
+        weight_dtype = "int8_t"
+
+        bias_cast = np.int64 if activation_dtype == "S16" else None
+        context.update({
+            "time_major_literal": "true" if time_major else "false",
+            "input_dtype": input_dtype,
             "output_dtype": output_dtype,
-        }
+            "bias_dtype": bias_dtype,
+            "weight_dtype": weight_dtype,
+            "input_tensor_array": fmt(data.tensors["input_tensor"]),
+            "output_array": fmt(data.tensors["output"]),
+            "input_gate_input_weights_array": fmt(data.tensors["input_gate_input_weights"]),
+            "forget_gate_input_weights_array": fmt(data.tensors["forget_gate_input_weights"]),
+            "cell_gate_input_weights_array": fmt(data.tensors["cell_gate_input_weights"]),
+            "output_gate_input_weights_array": fmt(data.tensors["output_gate_input_weights"]),
+            "input_gate_hidden_weights_array": fmt(data.tensors["input_gate_hidden_weights"]),
+            "forget_gate_hidden_weights_array": fmt(data.tensors["forget_gate_hidden_weights"]),
+            "cell_gate_hidden_weights_array": fmt(data.tensors["cell_gate_hidden_weights"]),
+            "output_gate_hidden_weights_array": fmt(data.tensors["output_gate_hidden_weights"]),
+            "input_gate_bias_array": fmt(data.tensors["input_gate_bias"], dtype=bias_cast),
+            "forget_gate_bias_array": fmt(data.tensors["forget_gate_bias"], dtype=bias_cast),
+            "cell_gate_bias_array": fmt(data.tensors["cell_gate_bias"], dtype=bias_cast),
+            "output_gate_bias_array": fmt(data.tensors["output_gate_bias"], dtype=bias_cast),
+        })
 
         output_dir = Path(output_dir)
         includes_api_dir = output_dir / "includes"

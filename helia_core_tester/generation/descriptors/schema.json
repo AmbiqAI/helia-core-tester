@@ -74,6 +74,25 @@
       "minItems": 2,
       "maxItems": 4
     },
+    "batch_size": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "time_steps": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "feature_size": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "units": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "time_major": {
+      "type": "boolean"
+    },
     "filter_shape": {
       "type": "array",
       "items": {

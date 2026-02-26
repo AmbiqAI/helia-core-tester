@@ -1,6 +1,86 @@
 #ifndef {{ prefix|upper }}_LSTM_UNIDIRECTIONAL_H
 #define {{ prefix|upper }}_LSTM_UNIDIRECTIONAL_H
 
-// Placeholder header for LSTM unidirectional test.
+#include <stdint.h>
+
+#define {{ macro_prefix }}TIME_MAJOR {{ time_major_literal }}
+#define {{ macro_prefix }}BATCH_SIZE {{ batch_size }}
+#define {{ macro_prefix }}TIME_STEPS {{ time_steps }}
+#define {{ macro_prefix }}INPUT_SIZE {{ input_size }}
+#define {{ macro_prefix }}HIDDEN_SIZE {{ hidden_size }}
+#define {{ macro_prefix }}CELL_SCALE_POWER {{ cell_scale_power }}
+#define {{ macro_prefix }}INPUT_ZERO_POINT {{ input_zero_point }}
+#define {{ macro_prefix }}OUTPUT_ZERO_POINT {{ output_zero_point }}
+#define {{ macro_prefix }}CELL_CLIP {{ cell_clip }}
+
+#define {{ macro_prefix }}FORGET_TO_CELL_MULTIPLIER {{ mult_shift.forget_to_cell_multiplier }}
+#define {{ macro_prefix }}FORGET_TO_CELL_SHIFT {{ mult_shift.forget_to_cell_shift }}
+#define {{ macro_prefix }}INPUT_TO_CELL_MULTIPLIER {{ mult_shift.input_to_cell_multiplier }}
+#define {{ macro_prefix }}INPUT_TO_CELL_SHIFT {{ mult_shift.input_to_cell_shift }}
+#define {{ macro_prefix }}OUTPUT_MULTIPLIER {{ mult_shift.output_multiplier }}
+#define {{ macro_prefix }}OUTPUT_SHIFT {{ mult_shift.output_shift }}
+#define {{ macro_prefix }}OUTPUT_GATE_HIDDEN_MULTIPLIER {{ mult_shift.output_gate_hidden_multiplier }}
+#define {{ macro_prefix }}OUTPUT_GATE_HIDDEN_SHIFT {{ mult_shift.output_gate_hidden_shift }}
+#define {{ macro_prefix }}CELL_GATE_HIDDEN_MULTIPLIER {{ mult_shift.cell_gate_hidden_multiplier }}
+#define {{ macro_prefix }}CELL_GATE_HIDDEN_SHIFT {{ mult_shift.cell_gate_hidden_shift }}
+#define {{ macro_prefix }}FORGET_GATE_HIDDEN_MULTIPLIER {{ mult_shift.forget_gate_hidden_multiplier }}
+#define {{ macro_prefix }}FORGET_GATE_HIDDEN_SHIFT {{ mult_shift.forget_gate_hidden_shift }}
+#define {{ macro_prefix }}INPUT_GATE_HIDDEN_MULTIPLIER {{ mult_shift.input_gate_hidden_multiplier }}
+#define {{ macro_prefix }}INPUT_GATE_HIDDEN_SHIFT {{ mult_shift.input_gate_hidden_shift }}
+#define {{ macro_prefix }}OUTPUT_GATE_INPUT_MULTIPLIER {{ mult_shift.output_gate_input_multiplier }}
+#define {{ macro_prefix }}OUTPUT_GATE_INPUT_SHIFT {{ mult_shift.output_gate_input_shift }}
+#define {{ macro_prefix }}CELL_GATE_INPUT_MULTIPLIER {{ mult_shift.cell_gate_input_multiplier }}
+#define {{ macro_prefix }}CELL_GATE_INPUT_SHIFT {{ mult_shift.cell_gate_input_shift }}
+#define {{ macro_prefix }}FORGET_GATE_INPUT_MULTIPLIER {{ mult_shift.forget_gate_input_multiplier }}
+#define {{ macro_prefix }}FORGET_GATE_INPUT_SHIFT {{ mult_shift.forget_gate_input_shift }}
+#define {{ macro_prefix }}INPUT_GATE_INPUT_MULTIPLIER {{ mult_shift.input_gate_input_multiplier }}
+#define {{ macro_prefix }}INPUT_GATE_INPUT_SHIFT {{ mult_shift.input_gate_input_shift }}
+
+static const {{ input_dtype }} {{ data_prefix }}input_tensor[] = {
+{{ input_tensor_array }}
+};
+
+static const {{ weight_dtype }} {{ data_prefix }}input_gate_input_weights[] = {
+{{ input_gate_input_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}forget_gate_input_weights[] = {
+{{ forget_gate_input_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}cell_gate_input_weights[] = {
+{{ cell_gate_input_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}output_gate_input_weights[] = {
+{{ output_gate_input_weights_array }}
+};
+
+static const {{ weight_dtype }} {{ data_prefix }}input_gate_hidden_weights[] = {
+{{ input_gate_hidden_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}forget_gate_hidden_weights[] = {
+{{ forget_gate_hidden_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}cell_gate_hidden_weights[] = {
+{{ cell_gate_hidden_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}output_gate_hidden_weights[] = {
+{{ output_gate_hidden_weights_array }}
+};
+
+static const {{ bias_dtype }} {{ data_prefix }}input_gate_bias[] = {
+{{ input_gate_bias_array }}
+};
+static const {{ bias_dtype }} {{ data_prefix }}forget_gate_bias[] = {
+{{ forget_gate_bias_array }}
+};
+static const {{ bias_dtype }} {{ data_prefix }}cell_gate_bias[] = {
+{{ cell_gate_bias_array }}
+};
+static const {{ bias_dtype }} {{ data_prefix }}output_gate_bias[] = {
+{{ output_gate_bias_array }}
+};
+
+static const {{ output_dtype }} {{ data_prefix }}output[] = {
+{{ output_array }}
+};
 
 #endif

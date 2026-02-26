@@ -9,8 +9,6 @@
 extern void uart_init(void);
 #endif
 
-#include "{{ dataset_include }}"
-
 static inline void signal_eot(void)
 {
     putchar(4);
