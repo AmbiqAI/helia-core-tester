@@ -52,6 +52,9 @@ class OpDepthwiseConv2D(OperationBase):
     """
     DepthwiseConv2D operation.
     """
+
+    def needs_keras_model(self) -> bool:
+        return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
     
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for DepthwiseConv2D operation."""
@@ -116,6 +119,60 @@ class OpDepthwiseConv2D(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
+        if weight_dtype == "S4":
+            from helia_core_tester.generation.utils.litert_builder import build_depthwise_conv2d_s4_op
+
+            extras = self.desc.get("hint", {}).get("extras", {})
+            input_scale = float(extras.get("input_scale", 4.0))
+            input_zp = int(extras.get("input_zero_point", 3))
+            weight_scale = extras.get("weight_scale", 1.0)
+            output_scale = float(extras.get("output_scale", 4.0))
+            output_zp = int(extras.get("output_zero_point", 0))
+
+            input_shape = tuple(self.desc["input_shape"])
+            fs = tuple(self.desc["filter_shape"])  # H, W, I, M
+            filter_shape = fs
+            depth_multiplier = int(self.desc.get("depth_multiplier", 1))
+            out_ch = filter_shape[2] * filter_shape[3]
+            # Use per-channel scales for depthwise (match conv_settings reference).
+            per_channel = True
+            if isinstance(weight_scale, (list, tuple, np.ndarray)):
+                weight_scales = list(float(v) for v in weight_scale)
+            else:
+                weight_scales = [float(weight_scale)] * out_ch
+            weight_zps = [0] * len(weight_scales)
+
+            # Generate weights in HWIM then reorder to TFLite depthwise [1, H, W, C_out]
+            weights_hwim = self.rng.integers(-8, 8, size=filter_shape).astype(np.int8)
+            h, w, in_c, mult = filter_shape
+            weights_tflite = np.zeros((1, h, w, in_c * mult), dtype=np.int8)
+            for ic in range(in_c):
+                for m in range(mult):
+                    out_idx = ic * mult + m
+                    weights_tflite[0, :, :, out_idx] = weights_hwim[:, :, ic, m]
+            biases = None
+            if self.desc.get("use_bias", True):
+                biases = self.rng.integers(-128, 128, size=(out_ch,), dtype=np.int32)
+
+            tflite_model = build_depthwise_conv2d_s4_op(
+                input_shape=input_shape,
+                filter_shape=weights_tflite.shape,
+                strides=self.desc.get("strides", [1, 1]),
+                padding=self.desc.get("padding", "valid"),
+                dilation=self.desc.get("dilation", [1, 1]),
+                depth_multiplier=depth_multiplier,
+                use_bias=self.desc.get("use_bias", True),
+                input_quant=([input_scale], [input_zp]),
+                weight_quant=(weight_scales, weight_zps),
+                output_quant=([output_scale], [output_zp]),
+                weights_int4=weights_tflite,
+                biases=biases,
+            )
+            with open(out_path, "wb") as f:
+                f.write(tflite_model)
+            return
+
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
         activation_dtype = self.desc.get('activation_dtype', 'S8')
@@ -329,6 +386,17 @@ class OpDepthwiseConv2D(OperationBase):
         # Extract weights and biases from LiteRT
         weights = op_tensors['weights']
         biases = op_tensors['biases']
+        weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
+        if weight_dtype == "S4":
+            from helia_core_tester.generation.utils.litert_utils import get_tensor_data_packed_from_litert
+            packed_weights = None
+            for input_tensor_info in op_tensors['inputs']:
+                if input_tensor_info['data'] is not None and len(input_tensor_info['shape']) > 1:
+                    packed_weights = get_tensor_data_packed_from_litert(input_tensor_info['tensor'], model)
+                    break
+            if packed_weights is None:
+                raise ValueError("Packed S4 weights not found in LiteRT model")
+            weights = packed_weights.astype(np.int8)
         
         # Calculate expected output_channels to validate bias size
         depth_multiplier = self.desc.get('depth_multiplier', 1)
@@ -402,7 +470,9 @@ class OpDepthwiseConv2D(OperationBase):
         # CMSIS expects filter_dims: n=depth_multiplier, h=H, w=W, c=output_channels
         # Note: filter_dims.c must be output_channels (not input_channels) because CMSIS-NN
         # uses it as the first dimension in the transposed filter: {filter_dims->c, h, w, n}
-        if weights is not None:
+        if weight_dtype == "S4":
+            filter_shape = tuple(self.desc['filter_shape'])
+        elif weights is not None:
             filter_shape = tuple(weights.shape)
             # #region agent log
             log_entry_weight_shape = {
@@ -667,6 +737,14 @@ class OpDepthwiseConv2D(OperationBase):
             quant_params_dict['shift_raw'] = shift_raw
         
         quant_params_dict['per_channel'] = per_channel
+        # Depthwise S4 kernels require per-channel arrays; expand per-tensor if needed.
+        if weight_dtype == "S4" and not per_channel:
+            out_ch = int(output_channels)
+            quant_params_dict = {
+                'multiplier_array': builder.format_array_as_c_literal(np.array([int(quant_params_dict['multiplier'])] * out_ch, dtype=np.int32)),
+                'shift_array': builder.format_array_as_c_literal(np.array([int(quant_params_dict['shift'])] * out_ch, dtype=np.int32)),
+                'per_channel': True
+            }
         
         # Generate input data and quantize to the interpreter's real input dtype
         # IMPORTANT: Reset RNG to seed to ensure input data matches what was used
@@ -720,7 +798,7 @@ class OpDepthwiseConv2D(OperationBase):
         # Weight sum is only needed for S8 optimized kernels (arm_depthwise_conv_s8_opt, arm_depthwise_conv_wrapper_s8)
         weight_sum_array_str = ""
         has_weight_sum = False
-        if kernel_info["input_c_type"] == "int8_t" and weights is not None:
+        if weight_dtype != "S4" and kernel_info["input_c_type"] == "int8_t" and weights is not None:
             # Reshape weights: if 4D [1, H, W, C_OUT], transpose to [C_OUT, H, W, 1] then reshape to [C_OUT, H*W*1]
             # If 3D [H, W, I], transpose to [I, H, W] then reshape to [I, H*W]
             weights_data = weights

@@ -50,8 +50,7 @@ def _validate_and_normalize_descriptor(desc: Dict[str, Any]) -> Dict[str, Any]:
     operator = desc['operator']
 
     # Operator-specific dtype constraints (prevent runtime crashes/hardfaults)
-    if operator in ['Conv2D', 'DepthwiseConv2D', "FullyConnected"] and desc.get('weight_dtype') == 'S4':
-        raise ValueError(f"{operator} with S4 weights is not supported by the current generator")
+    # S4 is now supported for Conv2D/DepthwiseConv2D/FullyConnected via LiteRT-only generation.
 
     if 'variations' not in desc:
         if operator == 'FullyConnected':
@@ -174,7 +173,7 @@ def resolve_kernel(desc: Dict[str, Any]) -> str:
     kernel_map = {
         ('S8', 'S8'): 'arm_fully_connected_wrapper_s8',
         ('S16', 'S8'): 'arm_fully_connected_s16_wrapper',
-        ('S8', 'S4'): 'arm_fully_connected_s4_wrapper'
+        ('S8', 'S4'): 'arm_fully_connected_s4'
     }
     
     return kernel_map[key]

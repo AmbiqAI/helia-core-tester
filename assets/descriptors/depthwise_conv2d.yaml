@@ -586,3 +586,65 @@ strides:
 - 2
 padding: SAME
 use_bias: false
+---
+operator: DepthwiseConv2D
+name: s4_dw_opt
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 5
+- 5
+- 8
+filter_shape:
+- 3
+- 3
+- 8
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+---
+operator: DepthwiseConv2D
+name: s4_dw_generic
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 5
+- 5
+- 4
+filter_shape:
+- 3
+- 3
+- 4
+- 2
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: true
+depth_multiplier: 2

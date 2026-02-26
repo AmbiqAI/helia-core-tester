@@ -23,7 +23,16 @@ def resolve_conv2d_kernel(activation_dtype: str, weight_dtype: str, cpu: str) ->
     w = str(weight_dtype).upper()
 
     if w == "S4":
-        raise NotImplementedError("Conv2D with S4 weights is not supported by the current generator")
+        if act != "S8":
+            raise NotImplementedError(f"Unsupported Conv2D dtype combo: {act} x {w}")
+        return {
+            "kernel_fn": "arm_convolve_wrapper_s4",
+            "kernel_get_buffer_size_fn": _cpu_buffer_api("arm_convolve_wrapper_s4_get_buffer_size", cpu),
+            "input_c_type": "int8_t",
+            "output_c_type": "int8_t",
+            "bias_c_type": "int32_t",
+            "call_style": "m55" if get_cpu_profile(cpu).has_mve else "baseline",
+        }
 
     if act == "S8" and w == "S8":
         return {
@@ -52,6 +61,16 @@ def resolve_depthwise_conv2d_kernel(activation_dtype: str, weight_dtype: str, cp
     act = str(activation_dtype).upper()
     w = str(weight_dtype).upper()
 
+    if act == "S8" and w == "S4":
+        return {
+            "kernel_fn": "arm_depthwise_conv_wrapper_s4",
+            "kernel_get_buffer_size_fn": _cpu_buffer_api("arm_depthwise_conv_wrapper_s4_get_buffer_size", cpu),
+            "input_c_type": "int8_t",
+            "output_c_type": "int8_t",
+            "bias_c_type": "int32_t",
+            "call_style": "m55" if get_cpu_profile(cpu).has_mve else "baseline",
+        }
+
     if act == "S8" and w == "S8":
         return {
             "kernel_fn": "arm_depthwise_conv_wrapper_s8",
@@ -78,6 +97,17 @@ def resolve_depthwise_conv2d_kernel(activation_dtype: str, weight_dtype: str, cp
 def resolve_fully_connected_kernel(activation_dtype: str, weight_dtype: str, cpu: str) -> Dict[str, str]:
     act = str(activation_dtype).upper()
     w = str(weight_dtype).upper()
+
+    if act == "S8" and w == "S4":
+        return {
+            "kernel_fn": "arm_fully_connected_s4",
+            "kernel_get_buffer_size_fn": None,
+            "input_c_type": "int8_t",
+            "output_c_type": "int8_t",
+            "weight_c_type": "int8_t",
+            "bias_c_type": "int32_t",
+            "call_style": "baseline",
+        }
 
     if act == "S8" and w == "S8":
         return {
