@@ -93,6 +93,56 @@ input_1_shape: [1, 1, 1, 7]
 input_2_shape: [1, 1, 1, 1]
 ---
 operator: Mul
+name: mul_scalar_large_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 1, 1, 1]
+input_2_shape: [1, 1, 1, 17]
+---
+operator: Mul
+name: mul_height_broadcast_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 1, 2, 3]
+input_2_shape: [1, 3, 2, 3]
+---
+operator: Mul
+name: mul_channel_scalar_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 4]
+input_2_shape: [1, 2, 2, 1]
+---
+operator: Mul
+name: mul_row_scalar_input1_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 1, 1]
+input_2_shape: [1, 2, 1, 3]
+---
+operator: Mul
+name: mul_row_scalar_input2_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 1, 3]
+input_2_shape: [1, 2, 1, 1]
+---
+operator: Mul
 name: mul_channel_broadcast_s8
 activation_dtype: S8
 weight_dtype: S8
@@ -141,6 +191,56 @@ hint:
   call_style: per_tensor
 input_1_shape: [1, 1, 1, 7]
 input_2_shape: [1, 1, 1, 1]
+---
+operator: Mul
+name: mul_scalar_large_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 1, 1, 1]
+input_2_shape: [1, 1, 1, 17]
+---
+operator: Mul
+name: mul_height_broadcast_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 1, 2, 3]
+input_2_shape: [1, 3, 2, 3]
+---
+operator: Mul
+name: mul_channel_scalar_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 4]
+input_2_shape: [1, 2, 2, 1]
+---
+operator: Mul
+name: mul_row_scalar_input1_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 1, 1]
+input_2_shape: [1, 2, 1, 3]
+---
+operator: Mul
+name: mul_row_scalar_input2_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 1, 3]
+input_2_shape: [1, 2, 1, 1]
 ---
 operator: Mul
 name: mul_channel_broadcast_s16
