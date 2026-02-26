@@ -27,7 +27,7 @@ static const {{ output_dtype }} {{ name }}_expected_output[] = {
 {{ expected_output_array }}
 };
 
-{% if is_s16 %}
+{% if uses_lut %}
 // LUTs for s16 softmax (from CMSIS-NN TestCases/Common/Softmax/)
 // Lookup table for exp(x), where x uniform distributed between [-10.0 , 0.0].
 static const int16_t {{ name }}_exp_lut[513] = {

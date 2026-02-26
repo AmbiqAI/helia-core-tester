@@ -30,13 +30,32 @@ class OpEqual(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
-        self._convert_with_activation_quantization(model, out_path, output_type=tf.bool, rep_seed=rep_seed)
+        activation_dtype = self.desc.get("activation_dtype", "S8")
+        if activation_dtype == "S16":
+            from helia_core_tester.generation.utils.litert_builder import build_comparison_op
+            model_bytes = build_comparison_op(
+                input_1_shape=tuple(self.desc["input_1_shape"]),
+                input_2_shape=tuple(self.desc["input_2_shape"]),
+                op_name="EQUAL",
+                dtype="int16",
+            )
+            with open(out_path, "wb") as f:
+                f.write(model_bytes)
+            return
+        output_type = tf.int8
+        self._convert_with_activation_quantization(model, out_path, output_type=output_type, rep_seed=rep_seed)
 
     def generate_c_files(self, output_dir) -> None:
         """
         Generate C and H files from templates for Equal.
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+        from helia_core_tester.generation.utils.tflite_utils import (
+            comparison_quant_params,
+            default_input_scale,
+            qp_scalar,
+            simulate_compare,
+        )
 
         name = self.desc['name']
         tflite_path = Path(output_dir) / f"{name}.tflite"
@@ -78,6 +97,9 @@ class OpEqual(OperationBase):
         input_zp_1 = int(input_zp_1[0] if isinstance(input_zp_1, (list, np.ndarray)) else input_zp_1)
         input_scale_2 = float(input_scale_2[0] if isinstance(input_scale_2, (list, np.ndarray)) else input_scale_2)
         input_zp_2 = int(input_zp_2[0] if isinstance(input_zp_2, (list, np.ndarray)) else input_zp_2)
+        left_shift, input_1_mult, input_1_shift, input_2_mult, input_2_shift = comparison_quant_params(
+            input_scale_1, input_scale_2, activation_dtype
+        )
 
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
@@ -94,7 +116,13 @@ class OpEqual(OperationBase):
         interpreter.set_tensor(input_details[1]['index'], input_2_q)
         interpreter.invoke()
         output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data).astype(bool)
+        output_data = np.array(output_data)
+        output_qp = output_details[0].get('quantization_parameters', {})
+        output_zp = int(qp_scalar(output_qp, "zero_points", 0))
+        if output_data.dtype == np.bool_:
+            output_bool = output_data
+        else:
+            output_bool = output_data != output_zp
 
         context = {
             'name': name,
@@ -104,17 +132,17 @@ class OpEqual(OperationBase):
             'output_dims': output_dims,
             'input_1_data_array': builder.format_array_as_c_literal(input_1_q),
             'input_2_data_array': builder.format_array_as_c_literal(input_2_q),
-            'expected_output_array': builder.format_array_as_c_literal(output_data.astype(np.uint8)),
+            'expected_output_array': builder.format_array_as_c_literal(output_bool.astype(np.uint8)),
             'input_dtype': c_type,
             'kernel_fn': kernel_fn,
             'output_size': int(np.prod(output_shape)),
             'input_1_offset': int(-input_zp_1),
-            'input_1_mult': 1,
-            'input_1_shift': 0,
+            'input_1_mult': int(input_1_mult),
+            'input_1_shift': int(input_1_shift),
             'input_2_offset': int(-input_zp_2),
-            'input_2_mult': 1,
-            'input_2_shift': 0,
-            'left_shift': 0,
+            'input_2_mult': int(input_2_mult),
+            'input_2_shift': int(input_2_shift),
+            'left_shift': int(left_shift),
         }
 
         includes_api_dir = Path(output_dir) / "includes"

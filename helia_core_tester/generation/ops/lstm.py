@@ -56,6 +56,8 @@ class OpLSTM(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        if self.desc.get("hint", {}).get("force_cmsis", False):
+            raise RuntimeError("LSTM CMSIS-only test; skip TFLite generation.")
         # Create converter
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
@@ -122,8 +124,67 @@ class OpLSTM(OperationBase):
         with open(out_path, 'wb') as f:
             f.write(tflite_model)
 
+    def needs_keras_model(self) -> bool:
+        return not self.desc.get("hint", {}).get("force_cmsis", False)
+
+    def allow_no_tflite(self) -> bool:
+        return self.desc.get("hint", {}).get("force_cmsis", False)
+
+    @staticmethod
+    def _dataset_prefixes(dataset: str) -> tuple[str, str]:
+        macro_prefix = dataset.upper() + "_"
+        data_prefix = dataset.lower() + "_"
+        return macro_prefix, data_prefix
+
     def generate_c_files(self, output_dir) -> None:
         """
-        Generate C and H files - not yet implemented for LSTM.
+        Generate C and H files for CMSIS-only LSTM tests.
         """
-        pass
+        if not self.desc.get("hint", {}).get("force_cmsis", False):
+            return
+
+        from pathlib import Path
+
+        name = self.desc['name']
+        dataset = self.desc.get("dataset")
+        if not dataset:
+            raise ValueError("LSTM CMSIS test requires 'dataset' in descriptor.")
+
+        activation_dtype = self.desc.get("activation_dtype", "S8").upper()
+        if activation_dtype == "S16":
+            dtype = "s16"
+            output_dtype = "int16_t"
+        else:
+            dtype = "s8"
+            output_dtype = "int8_t"
+
+        macro_prefix, data_prefix = self._dataset_prefixes(dataset)
+        dataset_include = f"../../../../UnitTest/TestCases/TestData/{dataset}/test_data.h"
+
+        context = {
+            "name": name,
+            "prefix": name,
+            "dataset": dataset,
+            "dataset_include": dataset_include,
+            "macro_prefix": macro_prefix,
+            "data_prefix": data_prefix,
+            "dtype": dtype,
+            "output_dtype": output_dtype,
+        }
+
+        output_dir = Path(output_dir)
+        includes_api_dir = output_dir / "includes"
+        includes_api_dir.mkdir(parents=True, exist_ok=True)
+
+        h_content = self.render_template("lstm_unidirectional/lstm_unidirectional.h.j2", context)
+        (includes_api_dir / f"{name}_lstm_unidirectional.h").write_text(h_content)
+        c_content = self.render_template("lstm_unidirectional/lstm_unidirectional.c.j2", context)
+        (output_dir / f"{name}_lstm_unidirectional.c").write_text(c_content)
+
+        cmake_context = {
+            "name": name,
+            "operator": self.desc.get("operator", "LSTM"),
+            "operator_name": "lstm_unidirectional",
+        }
+        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
+        (output_dir / "CMakeLists.txt").write_text(cmake_content)

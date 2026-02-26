@@ -53,4 +53,28 @@ hint:
   extras:
     output_dtype: S16
 input_shape: [1, 32, 32, 3]
-
+---
+operator: Softmax
+name: softmax_s8_cmsis
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [2, 7]
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+  input_scale: 0.0078125
+  diff_min: 0
+---
+operator: Softmax
+name: softmax_s8_s16_cmsis
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+input_shape: [2, 7]
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+  output_dtype: S16
+  input_scale: 0.0078125
+  diff_min: 0

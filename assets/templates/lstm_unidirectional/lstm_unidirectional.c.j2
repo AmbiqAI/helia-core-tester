@@ -1,0 +1,289 @@
+#include "{{ name }}_lstm_unidirectional.h"
+#include "arm_nnfunctions.h"
+#include "unity.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#ifdef USING_FVP_CORSTONE_300
+extern void uart_init(void);
+#endif
+
+#include "{{ dataset_include }}"
+
+static inline void signal_eot(void)
+{
+    putchar(4);
+    fflush(stdout);
+}
+
+void HardFault_Handler(void)
+{
+    printf("HardFault\r\n");
+    signal_eot();
+    while (1) { }
+}
+
+static int compare_output(const {{ output_dtype }} *act, const {{ output_dtype }} *exp, int count)
+{
+    int failures = 0;
+    for (int i = 0; i < count; i++) {
+        if (act[i] != exp[i]) {
+            failures++;
+            if (failures <= 8) {
+                printf("Mismatch[%d]: exp=%d got=%d\r\n", i, (int)exp[i], (int)act[i]);
+            }
+        }
+    }
+    return failures;
+}
+
+#define LSTM_BUFFER_SIZE ({{ macro_prefix }}HIDDEN_SIZE * {{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS)
+
+static {{ output_dtype }} buffer1[LSTM_BUFFER_SIZE];
+static {{ output_dtype }} buffer2[LSTM_BUFFER_SIZE];
+static {{ output_dtype }} buffer3[LSTM_BUFFER_SIZE];
+
+static int run_lstm(void)
+{
+    {{ output_dtype }} output[{{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS * {{ macro_prefix }}HIDDEN_SIZE] = {0};
+    const {{ output_dtype }} *output_ref = &{{ data_prefix }}output[0];
+    const int32_t output_ref_size = {{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS * {{ macro_prefix }}HIDDEN_SIZE;
+
+{% if dtype == "s8" %}
+    int32_t input_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    int32_t forget_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    int32_t cell_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    int32_t output_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+
+    int32_t input_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    int32_t forget_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    int32_t cell_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    int32_t output_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+
+    arm_vector_sum_s8(&input_data_kernel_sum[0],
+                      {{ macro_prefix }}INPUT_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}input_gate_input_weights[0],
+                      {{ macro_prefix }}INPUT_ZERO_POINT,
+                      0,
+                      &{{ data_prefix }}input_gate_bias[0]);
+    arm_vector_sum_s8(&forget_data_kernel_sum[0],
+                      {{ macro_prefix }}INPUT_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}forget_gate_input_weights[0],
+                      {{ macro_prefix }}INPUT_ZERO_POINT,
+                      0,
+                      &{{ data_prefix }}forget_gate_bias[0]);
+    arm_vector_sum_s8(&cell_data_kernel_sum[0],
+                      {{ macro_prefix }}INPUT_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}cell_gate_input_weights[0],
+                      {{ macro_prefix }}INPUT_ZERO_POINT,
+                      0,
+                      &{{ data_prefix }}cell_gate_bias[0]);
+    arm_vector_sum_s8(&output_data_kernel_sum[0],
+                      {{ macro_prefix }}INPUT_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}output_gate_input_weights[0],
+                      {{ macro_prefix }}INPUT_ZERO_POINT,
+                      0,
+                      &{{ data_prefix }}output_gate_bias[0]);
+
+    arm_vector_sum_s8(&input_hidden_kernel_sum[0],
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}input_gate_hidden_weights[0],
+                      -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                      0,
+                      NULL);
+    arm_vector_sum_s8(&forget_hidden_kernel_sum[0],
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}forget_gate_hidden_weights[0],
+                      -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                      0,
+                      NULL);
+    arm_vector_sum_s8(&cell_hidden_kernel_sum[0],
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}cell_gate_hidden_weights[0],
+                      -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                      0,
+                      NULL);
+    arm_vector_sum_s8(&output_hidden_kernel_sum[0],
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      {{ macro_prefix }}HIDDEN_SIZE,
+                      &{{ data_prefix }}output_gate_hidden_weights[0],
+                      -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                      0,
+                      NULL);
+{% else %}
+    int64_t input_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    int64_t forget_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    int64_t cell_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    int64_t output_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+
+    int64_t input_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    int64_t forget_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    int64_t cell_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    int64_t output_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+
+    arm_vector_sum_s8_s64(&input_data_kernel_sum[0],
+                          {{ macro_prefix }}INPUT_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}input_gate_input_weights[0],
+                          {{ macro_prefix }}INPUT_ZERO_POINT,
+                          &{{ data_prefix }}input_gate_bias[0]);
+    arm_vector_sum_s8_s64(&forget_data_kernel_sum[0],
+                          {{ macro_prefix }}INPUT_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}forget_gate_input_weights[0],
+                          {{ macro_prefix }}INPUT_ZERO_POINT,
+                          &{{ data_prefix }}forget_gate_bias[0]);
+    arm_vector_sum_s8_s64(&cell_data_kernel_sum[0],
+                          {{ macro_prefix }}INPUT_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}cell_gate_input_weights[0],
+                          {{ macro_prefix }}INPUT_ZERO_POINT,
+                          &{{ data_prefix }}cell_gate_bias[0]);
+    arm_vector_sum_s8_s64(&output_data_kernel_sum[0],
+                          {{ macro_prefix }}INPUT_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}output_gate_input_weights[0],
+                          {{ macro_prefix }}INPUT_ZERO_POINT,
+                          &{{ data_prefix }}output_gate_bias[0]);
+
+    arm_vector_sum_s8_s64(&input_hidden_kernel_sum[0],
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}input_gate_hidden_weights[0],
+                          -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                          NULL);
+    arm_vector_sum_s8_s64(&forget_hidden_kernel_sum[0],
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}forget_gate_hidden_weights[0],
+                          -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                          NULL);
+    arm_vector_sum_s8_s64(&cell_hidden_kernel_sum[0],
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}cell_gate_hidden_weights[0],
+                          -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                          NULL);
+    arm_vector_sum_s8_s64(&output_hidden_kernel_sum[0],
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}output_gate_hidden_weights[0],
+                          -{{ macro_prefix }}OUTPUT_ZERO_POINT,
+                          NULL);
+{% endif %}
+
+    const cmsis_nn_lstm_gate gate_input = { {{ macro_prefix }}INPUT_GATE_INPUT_MULTIPLIER,
+                                            {{ macro_prefix }}INPUT_GATE_INPUT_SHIFT,
+                                            &{{ data_prefix }}input_gate_input_weights[0],
+                                            &input_data_kernel_sum[0],
+                                            {{ macro_prefix }}INPUT_GATE_HIDDEN_MULTIPLIER,
+                                            {{ macro_prefix }}INPUT_GATE_HIDDEN_SHIFT,
+                                            &{{ data_prefix }}input_gate_hidden_weights[0],
+                                            &input_hidden_kernel_sum[0],
+                                            &{{ data_prefix }}input_gate_bias[0],
+                                            ARM_SIGMOID };
+
+    const cmsis_nn_lstm_gate gate_forget = { {{ macro_prefix }}FORGET_GATE_INPUT_MULTIPLIER,
+                                             {{ macro_prefix }}FORGET_GATE_INPUT_SHIFT,
+                                             &{{ data_prefix }}forget_gate_input_weights[0],
+                                             &forget_data_kernel_sum[0],
+                                             {{ macro_prefix }}FORGET_GATE_HIDDEN_MULTIPLIER,
+                                             {{ macro_prefix }}FORGET_GATE_HIDDEN_SHIFT,
+                                             &{{ data_prefix }}forget_gate_hidden_weights[0],
+                                             &forget_hidden_kernel_sum[0],
+                                             &{{ data_prefix }}forget_gate_bias[0],
+                                             ARM_SIGMOID };
+
+    const cmsis_nn_lstm_gate gate_cell = { {{ macro_prefix }}CELL_GATE_INPUT_MULTIPLIER,
+                                           {{ macro_prefix }}CELL_GATE_INPUT_SHIFT,
+                                           &{{ data_prefix }}cell_gate_input_weights[0],
+                                           &cell_data_kernel_sum[0],
+                                           {{ macro_prefix }}CELL_GATE_HIDDEN_MULTIPLIER,
+                                           {{ macro_prefix }}CELL_GATE_HIDDEN_SHIFT,
+                                           &{{ data_prefix }}cell_gate_hidden_weights[0],
+                                           &cell_hidden_kernel_sum[0],
+                                           &{{ data_prefix }}cell_gate_bias[0],
+                                           ARM_TANH };
+
+    const cmsis_nn_lstm_gate gate_output = { {{ macro_prefix }}OUTPUT_GATE_INPUT_MULTIPLIER,
+                                             {{ macro_prefix }}OUTPUT_GATE_INPUT_SHIFT,
+                                             &{{ data_prefix }}output_gate_input_weights[0],
+                                             &output_data_kernel_sum[0],
+                                             {{ macro_prefix }}OUTPUT_GATE_HIDDEN_MULTIPLIER,
+                                             {{ macro_prefix }}OUTPUT_GATE_HIDDEN_SHIFT,
+                                             &{{ data_prefix }}output_gate_hidden_weights[0],
+                                             &output_hidden_kernel_sum[0],
+                                             &{{ data_prefix }}output_gate_bias[0],
+                                             ARM_SIGMOID };
+
+    const cmsis_nn_lstm_params params = { {{ macro_prefix }}TIME_MAJOR,
+                                          {{ macro_prefix }}BATCH_SIZE,
+                                          {{ macro_prefix }}TIME_STEPS,
+                                          {{ macro_prefix }}INPUT_SIZE,
+                                          {{ macro_prefix }}HIDDEN_SIZE,
+                                          {{ macro_prefix }}INPUT_ZERO_POINT,
+                                          {{ macro_prefix }}FORGET_TO_CELL_MULTIPLIER,
+                                          {{ macro_prefix }}FORGET_TO_CELL_SHIFT,
+                                          {{ macro_prefix }}INPUT_TO_CELL_MULTIPLIER,
+                                          {{ macro_prefix }}INPUT_TO_CELL_SHIFT,
+                                          {{ macro_prefix }}CELL_CLIP,
+                                          {{ macro_prefix }}CELL_SCALE_POWER,
+                                          {{ macro_prefix }}OUTPUT_MULTIPLIER,
+                                          {{ macro_prefix }}OUTPUT_SHIFT,
+                                          {{ macro_prefix }}OUTPUT_ZERO_POINT,
+                                          gate_forget,
+                                          gate_input,
+                                          gate_cell,
+                                          gate_output };
+
+    cmsis_nn_lstm_context buffers;
+    buffers.temp1 = buffer1;
+    buffers.temp2 = buffer2;
+    buffers.cell_state = buffer3;
+
+{% if dtype == "s8" %}
+    arm_cmsis_nn_status result = arm_lstm_unidirectional_s8({{ data_prefix }}input_tensor, output, &params, &buffers);
+{% else %}
+    arm_cmsis_nn_status result = arm_lstm_unidirectional_s16({{ data_prefix }}input_tensor, output, &params, &buffers);
+{% endif %}
+
+    TEST_ASSERT_EQUAL(ARM_CMSIS_NN_SUCCESS, result);
+    return compare_output(output, output_ref, output_ref_size);
+}
+
+void setUp(void)
+{
+#ifdef USING_FVP_CORSTONE_300
+    uart_init();
+    setvbuf(stdout, NULL, _IONBF, 0);
+#endif
+}
+
+void tearDown(void) {}
+
+void test_{{ prefix }}_{{ name }}(void)
+{
+    int failures = run_lstm();
+    TEST_ASSERT_EQUAL(0, failures);
+}
+
+int main(void)
+{
+    setUp();
+    int failures = run_lstm();
+    if (failures != 0) {
+        printf("%d Failures\r\n", failures);
+    } else {
+        printf("0 Failures\r\n");
+    }
+    signal_eot();
+    while (1) { }
+}

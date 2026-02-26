@@ -59,10 +59,32 @@ void test_{{ prefix }}_{{ name }}(void)
     }
 }
 
+int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+{
+    {{ name }}_shape_ref();
+
+    int failures = 0;
+    const int output_size = {{ name|upper }}_OUTPUT_SIZE;
+    const int32_t *act = {{ name }}_output;
+    const int32_t *exp = {{ name }}_expected_output;
+
+    for (int i = 0; i < output_size; i++) {
+        if (act[i] != exp[i]) {
+            failures++;
+            if (failures <= 20) {
+                printf("Mismatch[%d]: exp=%ld got=%ld\r\n", i, exp[i], act[i]);
+            }
+        }
+    }
+
+    printf("%d Failures\r\n", failures);
+    return failures;
+}
+
 int main(void)
 {
     setUp();
-    test_{{ prefix }}_{{ name }}();
+    int32_t failures = {{ prefix }}_{{ name }}_test_case_run();
     signal_eot();
-    while (1) { }
+    return failures;
 }

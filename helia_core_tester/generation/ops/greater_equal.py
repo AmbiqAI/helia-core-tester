@@ -30,19 +30,29 @@ class OpGreaterEqual(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
-        self._convert_with_activation_quantization(model, out_path, output_type=tf.bool, rep_seed=rep_seed)
+        activation_dtype = self.desc.get("activation_dtype", "S8")
+        if activation_dtype == "S16":
+            raise RuntimeError("GreaterEqual S16 uses CMSIS-only generation; skip TFLite.")
+        output_type = tf.int8
+        self._convert_with_activation_quantization(model, out_path, output_type=output_type, rep_seed=rep_seed)
+
+    def allow_no_tflite(self) -> bool:
+        return self.desc.get("activation_dtype", "S8") == "S16"
 
     def generate_c_files(self, output_dir) -> None:
         """
         Generate C and H files from templates for GreaterEqual.
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+        from helia_core_tester.generation.utils.tflite_utils import (
+            comparison_quant_params,
+            default_input_scale,
+            qp_scalar,
+            simulate_compare,
+        )
 
         name = self.desc['name']
         tflite_path = Path(output_dir) / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         if activation_dtype == 'S16':
             kernel_fn = 'arm_greater_equal_s16'
@@ -54,6 +64,79 @@ class OpGreaterEqual(OperationBase):
             c_type = 'int8_t'
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
+
+        if not tflite_path.exists():
+            if activation_dtype != "S16":
+                raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
+            # CMSIS-only path for S16 comparisons
+            input_shape_1 = tuple(self.desc['input_1_shape'])
+            input_shape_2 = tuple(self.desc['input_2_shape'])
+            output_shape = np.broadcast(np.empty(input_shape_1), np.empty(input_shape_2)).shape
+
+            builder = TemplateContextBuilder()
+            input_1_dims = builder.nhwc_to_cmsis_dims(input_shape_1)
+            input_2_dims = builder.nhwc_to_cmsis_dims(input_shape_2)
+            output_dims = builder.nhwc_to_cmsis_dims(output_shape)
+
+            rng_state = self.rng.__getstate__()
+            self.rng = np.random.default_rng(self.seed)
+            input_1_q = self.rng.integers(qmin, qmax + 1, size=input_shape_1, dtype=np_in_dtype)
+            input_2_q = self.rng.integers(qmin, qmax + 1, size=input_shape_2, dtype=np_in_dtype)
+            self.rng.__setstate__(rng_state)
+
+            lhs_scale = default_input_scale(activation_dtype)
+            rhs_scale = default_input_scale(activation_dtype)
+            left_shift, input_1_mult, input_1_shift, input_2_mult, input_2_shift = comparison_quant_params(
+                lhs_scale, rhs_scale, activation_dtype
+            )
+            expected = simulate_compare(
+                input_1_q,
+                input_2_q,
+                operation="ARM_COMPARE_GREATER_EQUAL",
+                input_1_offset=0,
+                input_1_mult=input_1_mult,
+                input_1_shift=input_1_shift,
+                input_2_offset=0,
+                input_2_mult=input_2_mult,
+                input_2_shift=input_2_shift,
+                left_shift=left_shift,
+            )
+
+            context = {
+                'name': name,
+                'prefix': name,
+                'input_1_dims': input_1_dims,
+                'input_2_dims': input_2_dims,
+                'output_dims': output_dims,
+                'input_1_data_array': builder.format_array_as_c_literal(input_1_q),
+                'input_2_data_array': builder.format_array_as_c_literal(input_2_q),
+                'expected_output_array': builder.format_array_as_c_literal(expected.astype(np.uint8)),
+                'input_dtype': c_type,
+                'kernel_fn': kernel_fn,
+                'output_size': int(np.prod(output_shape)),
+                'input_1_offset': 0,
+                'input_1_mult': int(input_1_mult),
+                'input_1_shift': int(input_1_shift),
+                'input_2_offset': 0,
+                'input_2_mult': int(input_2_mult),
+                'input_2_shift': int(input_2_shift),
+                'left_shift': int(left_shift),
+            }
+
+            includes_api_dir = Path(output_dir) / "includes"
+            includes_api_dir.mkdir(parents=True, exist_ok=True)
+            h_content = self.render_template("comparison/comparison.h.j2", context)
+            (includes_api_dir / f"{name}_comparison.h").write_text(h_content)
+            c_content = self.render_template("comparison/comparison.c.j2", context)
+            (Path(output_dir) / f"{name}_comparison.c").write_text(c_content)
+            cmake_context = {
+                'name': name,
+                'operator': self.desc.get('operator', 'GreaterEqual'),
+                'operator_name': 'comparison',
+            }
+            cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
+            (Path(output_dir) / "CMakeLists.txt").write_text(cmake_content)
+            return
 
         interpreter = self.load_litert_interpreter(str(tflite_path))
         input_details = interpreter.get_input_details()
@@ -78,6 +161,9 @@ class OpGreaterEqual(OperationBase):
         input_zp_1 = int(input_zp_1[0] if isinstance(input_zp_1, (list, np.ndarray)) else input_zp_1)
         input_scale_2 = float(input_scale_2[0] if isinstance(input_scale_2, (list, np.ndarray)) else input_scale_2)
         input_zp_2 = int(input_zp_2[0] if isinstance(input_zp_2, (list, np.ndarray)) else input_zp_2)
+        left_shift, input_1_mult, input_1_shift, input_2_mult, input_2_shift = comparison_quant_params(
+            input_scale_1, input_scale_2, activation_dtype
+        )
 
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
@@ -94,7 +180,13 @@ class OpGreaterEqual(OperationBase):
         interpreter.set_tensor(input_details[1]['index'], input_2_q)
         interpreter.invoke()
         output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data).astype(bool)
+        output_data = np.array(output_data)
+        output_qp = output_details[0].get('quantization_parameters', {})
+        output_zp = int(qp_scalar(output_qp, "zero_points", 0))
+        if output_data.dtype == np.bool_:
+            output_bool = output_data
+        else:
+            output_bool = output_data != output_zp
 
         context = {
             'name': name,
@@ -104,17 +196,17 @@ class OpGreaterEqual(OperationBase):
             'output_dims': output_dims,
             'input_1_data_array': builder.format_array_as_c_literal(input_1_q),
             'input_2_data_array': builder.format_array_as_c_literal(input_2_q),
-            'expected_output_array': builder.format_array_as_c_literal(output_data.astype(np.uint8)),
+            'expected_output_array': builder.format_array_as_c_literal(output_bool.astype(np.uint8)),
             'input_dtype': c_type,
             'kernel_fn': kernel_fn,
             'output_size': int(np.prod(output_shape)),
             'input_1_offset': int(-input_zp_1),
-            'input_1_mult': 1,
-            'input_1_shift': 0,
+            'input_1_mult': int(input_1_mult),
+            'input_1_shift': int(input_1_shift),
             'input_2_offset': int(-input_zp_2),
-            'input_2_mult': 1,
-            'input_2_shift': 0,
-            'left_shift': 0,
+            'input_2_mult': int(input_2_mult),
+            'input_2_shift': int(input_2_shift),
+            'left_shift': int(left_shift),
         }
 
         includes_api_dir = Path(output_dir) / "includes"

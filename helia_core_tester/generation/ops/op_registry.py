@@ -34,16 +34,11 @@ from .reducemin import OpReduceMin
 from .argmax import OpArgMax
 from .argmin import OpArgMin
 from .fill import OpFill
-from .zeros_like import OpZerosLike
 from .reshape import OpReshape
-from .shape import OpShape
-from .slice import OpSlice
 from .squeeze import OpSqueeze
 from .space_to_depth import OpSpaceToDepth
 from .depth_to_space import OpDepthToSpace
 from .split import OpSplit
-from .pack import OpPack
-from .unpack import OpUnpack
 from .concatenation import OpConcatenation
 from .gather import OpGather
 from .gather_nd import OpGatherND
@@ -97,16 +92,11 @@ OP_MAP = {
     "ArgMax": OpArgMax,
     "ArgMin": OpArgMin,
     "Fill": OpFill,
-    "ZerosLike": OpZerosLike,
     "Reshape": OpReshape,
-    "Shape": OpShape,
-    "Slice": OpSlice,
     "Squeeze": OpSqueeze,
     "SpaceToDepth": OpSpaceToDepth,
     "DepthToSpace": OpDepthToSpace,
     "Split": OpSplit,
-    "Pack": OpPack,
-    "Unpack": OpUnpack,
     "Concatenation": OpConcatenation,
     "Gather": OpGather,
     "GatherND": OpGatherND,

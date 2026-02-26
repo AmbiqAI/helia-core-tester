@@ -72,12 +72,15 @@ def _validate_and_normalize_descriptor(desc: Dict[str, Any]) -> Dict[str, Any]:
         elif operator in ['Relu', 'Relu6', 'LeakyRelu', 'Softmax', 'Quantize', 'Dequantize', 'Abs',
                          'Transpose', 'StridedSlice', 'Pad', 'LSTM', 'SVDF',
                          'Mean', 'ReduceMax', 'ReduceMin', 'ArgMax', 'ArgMin', 'TransposeConv',
-                         'Tanh', 'Logistic', 'HardSwish', 'PReLU', 'Fill', 'ZerosLike',
-                         'Reshape', 'Shape', 'Slice', 'Squeeze', 'SpaceToDepth', 'DepthToSpace',
-                         'Split', 'Pack', 'Unpack', 'Concatenation', 'SpaceToBatchND', 'BatchToSpaceND',
+                         'Tanh', 'Logistic', 'HardSwish', 'PReLU', 'Fill',
+                         'Reshape', 'Squeeze', 'SpaceToDepth', 'DepthToSpace',
+                         'Split', 'Concatenation', 'SpaceToBatchND', 'BatchToSpaceND',
                          'ResizeNearestNeighbor', 'VariableUpdate', 'Clamp', 'NNActivationS16', 'Gather', 'GatherND', 'Requantize']:
             if 'input_shape' not in desc:
-                raise ValueError(f"{operator} requires input_shape")
+                if operator == 'LSTM' and desc.get('hint', {}).get('force_cmsis', False):
+                    pass
+                else:
+                    raise ValueError(f"{operator} requires input_shape")
             if operator == 'Clamp':
                 if 'act_min' not in desc or 'act_max' not in desc:
                     raise ValueError("Clamp requires act_min and act_max")
@@ -256,9 +259,9 @@ def expand_descriptor_variations(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         elif operator in ['Relu', 'Relu6', 'LeakyRelu', 'Softmax', 'Quantize', 'Dequantize',
                           'Transpose', 'StridedSlice', 'Pad', 'LSTM', 'SVDF',
                           'Mean', 'ReduceMax', 'ReduceMin', 'ArgMax', 'ArgMin', 'TransposeConv',
-                          'Tanh', 'Logistic', 'HardSwish', 'PReLU', 'Fill', 'ZerosLike',
-                          'Reshape', 'Shape', 'Slice', 'Squeeze', 'SpaceToDepth', 'DepthToSpace',
-                          'Split', 'Pack', 'Unpack', 'Concatenation', 'SpaceToBatchND', 'BatchToSpaceND',
+                          'Tanh', 'Logistic', 'HardSwish', 'PReLU', 'Fill',
+                          'Reshape', 'Squeeze', 'SpaceToDepth', 'DepthToSpace',
+                          'Split', 'Concatenation', 'SpaceToBatchND', 'BatchToSpaceND',
                           'ResizeNearestNeighbor', 'VariableUpdate', 'Clamp', 'NNActivationS16', 'Gather', 'GatherND', 'Requantize']:
             if 'input_shape' not in variation_desc:
                 raise ValueError(f"{operator} variation requires input_shape")

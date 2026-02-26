@@ -63,11 +63,15 @@ void tearDown(void) {}
 
 void test_{{ prefix }}_{{ name }}(void)
 {
-    const arm_cmsis_nn_status expected = ARM_CMSIS_NN_SUCCESS;
+    const arm_cmsis_nn_status expected = {{ expected_status }};
     int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
     
     // Assert that Transpose succeeded
     TEST_ASSERT_EQUAL(expected, status);
+
+    if (expected != ARM_CMSIS_NN_SUCCESS) {
+        return;
+    }
 
     // Verify outputs element by element (allow 1-bit tolerance)
     const int output_size = {{ name|upper }}_OUTPUT_SIZE;
@@ -90,12 +94,17 @@ void test_{{ prefix }}_{{ name }}(void)
 // Legacy function for non-Unity builds (if needed)
 int32_t {{ prefix }}_{{ name }}_test_case_run(void)
 {
-    const arm_cmsis_nn_status expected = ARM_CMSIS_NN_SUCCESS;
+    const arm_cmsis_nn_status expected = {{ expected_status }};
     int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
     if (status != expected) {
         printf("Transpose failed with status %d\r\n", status);
         printf("1 Failures\r\n");
         return 1;
+    }
+
+    if (expected != ARM_CMSIS_NN_SUCCESS) {
+        printf("0 Failures\r\n");
+        return 0;
     }
 
     // Verify outputs (allow 1-bit tolerance)

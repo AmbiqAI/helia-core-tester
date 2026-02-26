@@ -1,0 +1,202 @@
+#include "{{ name }}_svdf.h"
+#include "arm_nnfunctions.h"
+#include "unity.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef USING_FVP_CORSTONE_300
+extern void uart_init(void);
+#endif
+
+static inline void signal_eot(void)
+{
+    putchar(4);
+    fflush(stdout);
+}
+
+void HardFault_Handler(void)
+{
+    printf("HardFault\r\n");
+    signal_eot();
+    while (1) { }
+}
+
+static int compare_output(const {{ output_dtype }} *act, const {{ output_dtype }} *exp, int count)
+{
+    int failures = 0;
+    for (int i = 0; i < count; i++) {
+        if (act[i] != exp[i]) {
+            failures++;
+            if (failures <= 8) {
+                printf("Mismatch[%d]: exp=%d got=%d\r\n", i, (int)exp[i], (int)act[i]);
+            }
+        }
+    }
+    return failures;
+}
+
+static int run_svdf(void)
+{
+    cmsis_nn_svdf_params svdf_params;
+    cmsis_nn_per_tensor_quant_params input_quant_params;
+    cmsis_nn_per_tensor_quant_params output_quant_params;
+    cmsis_nn_context input_ctx;
+    cmsis_nn_context output_ctx;
+{% if has_ctx %}
+    cmsis_nn_context ctx;
+{% endif %}
+
+    const int32_t scratch_size = {{ prefix|upper }}_INPUT_BATCHES * {{ prefix|upper }}_FEATURE_BATCHES * sizeof(int32_t);
+    const int32_t scratch_size_out = {{ prefix|upper }}_INPUT_BATCHES * {{ prefix|upper }}_UNIT_COUNT * sizeof(int32_t);
+
+    input_ctx.buf = malloc(scratch_size);
+    input_ctx.size = scratch_size;
+    output_ctx.buf = malloc(scratch_size_out);
+    output_ctx.size = scratch_size_out;
+
+{% if has_ctx %}
+    const int32_t buf_size = arm_svdf_s8_get_buffer_size(&{{ name }}_weights_feature_dims);
+    ctx.buf = buf_size > 0 ? malloc(buf_size) : NULL;
+    ctx.size = buf_size;
+
+    int32_t buf_dsp = arm_svdf_s8_get_buffer_size_dsp(&{{ name }}_weights_feature_dims);
+    int32_t buf_mve = arm_svdf_s8_get_buffer_size_mve(&{{ name }}_weights_feature_dims);
+    int32_t buf_any = arm_svdf_s8_get_buffer_size(&{{ name }}_weights_feature_dims);
+#if defined(ARM_MATH_MVEI)
+    TEST_ASSERT_EQUAL(buf_mve, buf_any);
+#else
+    TEST_ASSERT_EQUAL(buf_dsp, buf_any);
+#endif
+#if defined(ARM_MATH_MVEI)
+    if (ctx.buf != NULL) {
+        arm_vector_sum_s8((int32_t *)ctx.buf,
+                          {{ prefix|upper }}_INPUT_HEIGHT,
+                          {{ prefix|upper }}_FEATURE_BATCHES,
+                          {{ name }}_weights_feature,
+                          -{{ prefix|upper }}_INPUT_OFFSET,
+                          0,
+                          NULL);
+    }
+#endif
+{% endif %}
+
+    svdf_params.input_activation.min = {{ prefix|upper }}_INPUT_ACTIVATION_MIN;
+    svdf_params.input_activation.max = {{ prefix|upper }}_INPUT_ACTIVATION_MAX;
+    svdf_params.output_activation.min = {{ prefix|upper }}_OUTPUT_ACTIVATION_MIN;
+    svdf_params.output_activation.max = {{ prefix|upper }}_OUTPUT_ACTIVATION_MAX;
+    svdf_params.input_offset = {{ prefix|upper }}_INPUT_OFFSET;
+    svdf_params.output_offset = {{ prefix|upper }}_OUTPUT_OFFSET;
+    svdf_params.rank = {{ prefix|upper }}_RANK;
+
+    input_quant_params.multiplier = {{ prefix|upper }}_INPUT_MULTIPLIER;
+    input_quant_params.shift = {{ prefix|upper }}_INPUT_SHIFT;
+    output_quant_params.multiplier = {{ prefix|upper }}_OUTPUT_MULTIPLIER;
+    output_quant_params.shift = {{ prefix|upper }}_OUTPUT_SHIFT;
+
+    {{ state_dtype }} state_data[{{ prefix|upper }}_INPUT_BATCHES * {{ prefix|upper }}_FEATURE_BATCHES * {{ prefix|upper }}_TIME_BATCHES];
+    memcpy(state_data, {{ name }}_state_init, sizeof({{ name }}_state_init));
+
+    {{ output_dtype }} output_data[{{ prefix|upper }}_INPUT_BATCHES * {{ prefix|upper }}_UNIT_COUNT] = {0};
+
+{% if has_ctx %}
+    arm_cmsis_nn_status result = {{ kernel_fn }}(&ctx,
+                                                 &input_ctx,
+                                                 &output_ctx,
+                                                 &svdf_params,
+                                                 &input_quant_params,
+                                                 &output_quant_params,
+                                                 &{{ name }}_input_dims,
+                                                 {{ name }}_input_data,
+                                                 &{{ name }}_state_dims,
+                                                 state_data,
+                                                 &{{ name }}_weights_feature_dims,
+                                                 {{ name }}_weights_feature,
+                                                 &{{ name }}_weights_time_dims,
+                                                 {{ name }}_weights_time,
+                                                 &{{ name }}_bias_dims,
+{% if use_bias %}
+                                                 {{ name }}_bias,
+{% else %}
+                                                 NULL,
+{% endif %}
+                                                 &{{ name }}_output_dims,
+                                                 output_data);
+{% else %}
+    arm_cmsis_nn_status result = {{ kernel_fn }}(&input_ctx,
+                                                 &output_ctx,
+                                                 &svdf_params,
+                                                 &input_quant_params,
+                                                 &output_quant_params,
+                                                 &{{ name }}_input_dims,
+                                                 {{ name }}_input_data,
+                                                 &{{ name }}_state_dims,
+                                                 state_data,
+                                                 &{{ name }}_weights_feature_dims,
+                                                 {{ name }}_weights_feature,
+                                                 &{{ name }}_weights_time_dims,
+                                                 {{ name }}_weights_time,
+                                                 &{{ name }}_bias_dims,
+{% if use_bias %}
+                                                 {{ name }}_bias,
+{% else %}
+                                                 NULL,
+{% endif %}
+                                                 &{{ name }}_output_dims,
+                                                 output_data);
+{% endif %}
+
+    int failures = 0;
+    if (result != ARM_CMSIS_NN_SUCCESS) {
+        printf("SVDF failed with status %d\r\n", (int)result);
+        failures = 1;
+    } else {
+        failures = compare_output(output_data, {{ name }}_output_ref, {{ prefix|upper }}_INPUT_BATCHES * {{ prefix|upper }}_UNIT_COUNT);
+    }
+
+    if (input_ctx.buf) {
+        free(input_ctx.buf);
+    }
+    if (output_ctx.buf) {
+        free(output_ctx.buf);
+    }
+{% if has_ctx %}
+    if (ctx.buf) {
+        free(ctx.buf);
+    }
+{% endif %}
+
+    return failures;
+}
+
+void setUp(void)
+{
+#ifdef USING_FVP_CORSTONE_300
+    uart_init();
+    setvbuf(stdout, NULL, _IONBF, 0);
+#endif
+}
+
+void tearDown(void) {}
+
+void test_{{ prefix }}_{{ name }}(void)
+{
+    int failures = run_svdf();
+    TEST_ASSERT_EQUAL(0, failures);
+}
+
+int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+{
+    int failures = run_svdf();
+    printf("%d Failures\r\n", failures);
+    return failures;
+}
+
+int main(void)
+{
+    setUp();
+    (void){{ prefix }}_{{ name }}_test_case_run();
+    signal_eot();
+    while (1) { }
+}

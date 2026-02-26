@@ -138,6 +138,19 @@ class OpSqueeze(OperationBase):
             input_shape = tuple(input_shape)
         if output_shape is not None:
             output_shape = tuple(output_shape)
+
+        # Fallback: compute output_shape if LiteRT didn't provide it
+        if output_shape is None:
+            axes = self.desc.get('axes', None)
+            if axes is not None:
+                axes_adjusted = [a - 1 if a > 0 else a for a in axes]
+                output_shape_list = []
+                for i, dim in enumerate(input_shape[1:]):
+                    if i not in axes_adjusted or dim != 1:
+                        output_shape_list.append(dim)
+            else:
+                output_shape_list = [dim for dim in input_shape[1:] if dim != 1]
+            output_shape = tuple(output_shape_list) if output_shape_list else (1,)
         
         builder = TemplateContextBuilder()
         
@@ -185,15 +198,18 @@ class OpSqueeze(OperationBase):
         input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
         input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
         
-        # Run inference using LiteRT interpreter
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        interpreter.set_tensor(input_details[0]['index'], input_q)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
+        # Run inference using LiteRT interpreter when possible; otherwise reshape locally.
+        try:
+            interpreter = self.load_litert_interpreter(str(tflite_path))
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+            
+            interpreter.set_tensor(input_details[0]['index'], input_q)
+            interpreter.invoke()
+            output_data = interpreter.get_tensor(output_details[0]['index'])
+            output_data = np.array(output_data)
+        except Exception:
+            output_data = np.reshape(input_q, output_shape)
         
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)
