@@ -20,11 +20,14 @@ except ImportError:  # pragma: no cover - runtime dependency
     LITERT_AVAILABLE = False
 
 
+_INT4_TENSOR_TYPE = getattr(litert.TensorType, "INT4", None) if LITERT_AVAILABLE else None
+
 _DTYPE_MAP = {
     "int8": litert.TensorType.INT8 if LITERT_AVAILABLE else None,
     "int16": litert.TensorType.INT16 if LITERT_AVAILABLE else None,
     "bool": litert.TensorType.BOOL if LITERT_AVAILABLE else None,
     "int32": litert.TensorType.INT32 if LITERT_AVAILABLE else None,
+    "int4": _INT4_TENSOR_TYPE,
 }
 
 
@@ -46,10 +49,39 @@ _TENSOR_TYPE_TO_NP = (
         litert.TensorType.UINT8: np.uint8,
         litert.TensorType.INT64: np.int64,
         litert.TensorType.FLOAT32: np.float32,
+        **({litert.TensorType.INT4: np.int8} if _INT4_TENSOR_TYPE is not None else {}),
     }
     if LITERT_AVAILABLE
     else {}
 )
+
+
+def pack_s4(values: np.ndarray) -> np.ndarray:
+    """Pack int4 values into int8 bytes (low nibble first), matching op_conv.py."""
+    vals = np.asarray(values, dtype=np.int8).flatten()
+    if np.any(vals < -8) or np.any(vals > 7):
+        raise ValueError("int4 values must be in [-8, 7]")
+    # op_conv.py packs raw 4-bit nibbles into uint8, low nibble first.
+    # Use two's complement by masking with 0x0F and packing pairs.
+    vals_u4 = (vals.astype(np.int16) & 0x0F).astype(np.uint8)
+    if vals_u4.size % 2 != 0:
+        vals_u4 = np.append(vals_u4, np.uint8(0))
+    temp = np.reshape(vals_u4, (vals_u4.size // 2, 2)).astype(np.uint8)
+    packed = 0xFF & ((0xF0 & (temp[:, 1] << 4)) | (temp[:, 0] & 0x0F))
+    return packed.astype(np.uint8).view(np.int8)
+
+
+def unpack_s4(packed: np.ndarray, num_elems: int) -> np.ndarray:
+    """Unpack int4 values from int8 bytes (low nibble first, two's complement)."""
+    p = np.asarray(packed, dtype=np.int8).view(np.uint8).flatten()
+    low = p & 0x0F
+    high = (p >> 4) & 0x0F
+    vals = np.empty(p.size * 2, dtype=np.int8)
+    vals[0::2] = low.astype(np.int8)
+    vals[1::2] = high.astype(np.int8)
+    # Convert from unsigned 4-bit to signed int4
+    vals = ((vals + 8) & 0x0F) - 8
+    return vals[:num_elems]
 
 
 @dataclass
@@ -60,6 +92,7 @@ class TensorSpec:
     is_input: bool = False
     is_output: bool = False
     quantization: Optional[Tuple[Sequence[float], Sequence[int]]] = None
+    quantized_dimension: Optional[int] = None
     data: Optional[Sequence[int] | np.ndarray] = None
 
 
@@ -118,7 +151,10 @@ class LiteRtSingleOpBuilder:
                 q = litert.QuantizationParametersT()
                 q.scale = list(float(v) for v in scales)
                 q.zeroPoint = list(int(v) for v in zero_points)
-                q.quantizedDimension = 0
+                if spec.quantized_dimension is not None:
+                    q.quantizedDimension = int(spec.quantized_dimension)
+                else:
+                    q.quantizedDimension = 0
                 tensor.quantization = q
 
             if spec.data is not None:
@@ -1526,6 +1562,303 @@ def build_prelu_op(
         outputs=[output_tensor_idx],
         options=None,
         options_type=litert.BuiltinOptions.NONE,
+    )
+
+    return builder.build()
+
+
+def _require_int4() -> int:
+    if _INT4_TENSOR_TYPE is None:
+        raise RuntimeError("LiteRT INT4 tensor type is not available in this environment.")
+    return _INT4_TENSOR_TYPE
+
+
+def build_conv2d_s4_op(
+    *,
+    input_shape: Iterable[int],
+    filter_shape: Iterable[int],
+    strides: Iterable[int],
+    padding: str,
+    dilation: Iterable[int],
+    use_bias: bool,
+    input_quant: Tuple[Sequence[float], Sequence[int]],
+    weight_quant: Tuple[Sequence[float], Sequence[int]],
+    output_quant: Tuple[Sequence[float], Sequence[int]],
+    weights_int4: np.ndarray,
+    biases: Optional[np.ndarray],
+) -> bytes:
+    if not LITERT_AVAILABLE:
+        raise ImportError("ai_edge_litert is not available. Install it with: pip install ai-edge-litert")
+
+    int4_type = _require_int4()
+    input_shape = tuple(int(v) for v in input_shape)
+    filter_shape = tuple(int(v) for v in filter_shape)  # OHWI
+    strides = tuple(int(v) for v in strides)
+    dilation = tuple(int(v) for v in dilation)
+
+    builder = LiteRtSingleOpBuilder(op_name="CONV_2D")
+
+    input_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="input",
+            shape=input_shape,
+            tensor_type=litert.TensorType.INT8,
+            is_input=True,
+            quantization=input_quant,
+        )
+    )
+
+    packed_weights = pack_s4(weights_int4)
+    weight_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="weights",
+            shape=filter_shape,
+            tensor_type=int4_type,
+            quantization=weight_quant,
+            quantized_dimension=0,  # output channel
+            data=packed_weights,
+        )
+    )
+
+    bias_tensor_idx = -1
+    if use_bias and biases is not None:
+        bias_tensor_idx = builder.add_tensor(
+            TensorSpec(
+                name="bias",
+                shape=(filter_shape[0],),
+                tensor_type=litert.TensorType.INT32,
+                data=biases.astype(np.int32),
+            )
+        )
+
+    in_h, in_w = input_shape[1], input_shape[2]
+    kh, kw = filter_shape[1], filter_shape[2]
+    eff_kh = (kh - 1) * dilation[0] + 1
+    eff_kw = (kw - 1) * dilation[1] + 1
+    if str(padding).lower() == "same":
+        out_h = int(np.ceil(in_h / strides[0]))
+        out_w = int(np.ceil(in_w / strides[1]))
+    else:
+        out_h = int(np.floor((in_h - eff_kh) / strides[0]) + 1)
+        out_w = int(np.floor((in_w - eff_kw) / strides[1]) + 1)
+    output_shape = (input_shape[0], out_h, out_w, filter_shape[0])
+    output_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="output",
+            shape=output_shape,
+            tensor_type=litert.TensorType.INT8,
+            is_output=True,
+            quantization=output_quant,
+        )
+    )
+
+    options = litert.Conv2DOptionsT()
+    options.padding = litert.Padding.SAME if str(padding).lower() == "same" else litert.Padding.VALID
+    options.strideH = int(strides[0])
+    options.strideW = int(strides[1])
+    options.dilationHFactor = int(dilation[0])
+    options.dilationWFactor = int(dilation[1])
+    options.fusedActivationFunction = litert.ActivationFunctionType.NONE
+
+    op_inputs = [input_tensor_idx, weight_tensor_idx]
+    if use_bias and bias_tensor_idx >= 0:
+        op_inputs.append(bias_tensor_idx)
+
+    builder.add_operator(
+        "CONV_2D",
+        inputs=op_inputs,
+        outputs=[output_tensor_idx],
+        options=options,
+        options_type=litert.BuiltinOptions.Conv2DOptions,
+    )
+
+    return builder.build()
+
+
+def build_depthwise_conv2d_s4_op(
+    *,
+    input_shape: Iterable[int],
+    filter_shape: Iterable[int],
+    strides: Iterable[int],
+    padding: str,
+    dilation: Iterable[int],
+    depth_multiplier: int,
+    use_bias: bool,
+    input_quant: Tuple[Sequence[float], Sequence[int]],
+    weight_quant: Tuple[Sequence[float], Sequence[int]],
+    output_quant: Tuple[Sequence[float], Sequence[int]],
+    weights_int4: np.ndarray,
+    biases: Optional[np.ndarray],
+) -> bytes:
+    if not LITERT_AVAILABLE:
+        raise ImportError("ai_edge_litert is not available. Install it with: pip install ai-edge-litert")
+
+    int4_type = _require_int4()
+    input_shape = tuple(int(v) for v in input_shape)
+    filter_shape = tuple(int(v) for v in filter_shape)  # TFLite depthwise: [1, H, W, C_out]
+    strides = tuple(int(v) for v in strides)
+    dilation = tuple(int(v) for v in dilation)
+
+    builder = LiteRtSingleOpBuilder(op_name="DEPTHWISE_CONV_2D")
+
+    input_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="input",
+            shape=input_shape,
+            tensor_type=litert.TensorType.INT8,
+            is_input=True,
+            quantization=input_quant,
+        )
+    )
+
+    packed_weights = pack_s4(weights_int4)
+    weight_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="weights",
+            shape=filter_shape,
+            tensor_type=int4_type,
+            quantization=weight_quant,
+            quantized_dimension=3,
+            data=packed_weights,
+        )
+    )
+
+    bias_tensor_idx = -1
+    if use_bias and biases is not None:
+        out_ch = filter_shape[3]
+        bias_tensor_idx = builder.add_tensor(
+            TensorSpec(
+                name="bias",
+                shape=(out_ch,),
+                tensor_type=litert.TensorType.INT32,
+                data=biases.astype(np.int32),
+            )
+        )
+
+    in_h, in_w = input_shape[1], input_shape[2]
+    kh, kw = filter_shape[1], filter_shape[2]
+    eff_kh = (kh - 1) * dilation[0] + 1
+    eff_kw = (kw - 1) * dilation[1] + 1
+    if str(padding).lower() == "same":
+        out_h = int(np.ceil(in_h / strides[0]))
+        out_w = int(np.ceil(in_w / strides[1]))
+    else:
+        out_h = int(np.floor((in_h - eff_kh) / strides[0]) + 1)
+        out_w = int(np.floor((in_w - eff_kw) / strides[1]) + 1)
+    out_ch = filter_shape[3]
+    output_shape = (input_shape[0], out_h, out_w, out_ch)
+    output_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="output",
+            shape=output_shape,
+            tensor_type=litert.TensorType.INT8,
+            is_output=True,
+            quantization=output_quant,
+        )
+    )
+
+    options = litert.DepthwiseConv2DOptionsT()
+    options.padding = litert.Padding.SAME if str(padding).lower() == "same" else litert.Padding.VALID
+    options.strideH = int(strides[0])
+    options.strideW = int(strides[1])
+    options.dilationHFactor = int(dilation[0])
+    options.dilationWFactor = int(dilation[1])
+    options.depthMultiplier = int(depth_multiplier)
+    options.fusedActivationFunction = litert.ActivationFunctionType.NONE
+
+    op_inputs = [input_tensor_idx, weight_tensor_idx]
+    if use_bias and bias_tensor_idx >= 0:
+        op_inputs.append(bias_tensor_idx)
+
+    builder.add_operator(
+        "DEPTHWISE_CONV_2D",
+        inputs=op_inputs,
+        outputs=[output_tensor_idx],
+        options=options,
+        options_type=litert.BuiltinOptions.DepthwiseConv2DOptions,
+    )
+
+    return builder.build()
+
+
+def build_fully_connected_s4_op(
+    *,
+    input_shape: Iterable[int],
+    filter_shape: Iterable[int],
+    use_bias: bool,
+    input_quant: Tuple[Sequence[float], Sequence[int]],
+    weight_quant: Tuple[Sequence[float], Sequence[int]],
+    output_quant: Tuple[Sequence[float], Sequence[int]],
+    weights_int4: np.ndarray,
+    biases: Optional[np.ndarray],
+) -> bytes:
+    if not LITERT_AVAILABLE:
+        raise ImportError("ai_edge_litert is not available. Install it with: pip install ai-edge-litert")
+
+    int4_type = _require_int4()
+    input_shape = tuple(int(v) for v in input_shape)
+    filter_shape = tuple(int(v) for v in filter_shape)  # O, I
+
+    builder = LiteRtSingleOpBuilder(op_name="FULLY_CONNECTED")
+
+    input_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="input",
+            shape=input_shape,
+            tensor_type=litert.TensorType.INT8,
+            is_input=True,
+            quantization=input_quant,
+        )
+    )
+
+    packed_weights = pack_s4(weights_int4)
+    weight_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="weights",
+            shape=filter_shape,
+            tensor_type=int4_type,
+            quantization=weight_quant,
+            quantized_dimension=0,
+            data=packed_weights,
+        )
+    )
+
+    bias_tensor_idx = -1
+    if use_bias and biases is not None:
+        bias_tensor_idx = builder.add_tensor(
+            TensorSpec(
+                name="bias",
+                shape=(filter_shape[0],),
+                tensor_type=litert.TensorType.INT32,
+                data=biases.astype(np.int32),
+            )
+        )
+
+    output_shape = (input_shape[0], filter_shape[0])
+    output_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="output",
+            shape=output_shape,
+            tensor_type=litert.TensorType.INT8,
+            is_output=True,
+            quantization=output_quant,
+        )
+    )
+
+    options = litert.FullyConnectedOptionsT()
+    options.fusedActivationFunction = litert.ActivationFunctionType.NONE
+    options.weightsFormat = litert.FullyConnectedOptionsWeightsFormat.DEFAULT
+
+    op_inputs = [input_tensor_idx, weight_tensor_idx]
+    if use_bias and bias_tensor_idx >= 0:
+        op_inputs.append(bias_tensor_idx)
+
+    builder.add_operator(
+        "FULLY_CONNECTED",
+        inputs=op_inputs,
+        outputs=[output_tensor_idx],
+        options=options,
+        options_type=litert.BuiltinOptions.FullyConnectedOptions,
     )
 
     return builder.build()

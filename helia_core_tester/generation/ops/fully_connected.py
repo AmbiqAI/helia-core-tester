@@ -14,6 +14,9 @@ class OpFullyConnected(OperationBase):
     """
     FullyConnected operation.
     """
+
+    def needs_keras_model(self) -> bool:
+        return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
     
     def build_keras_model(self):
         """Build Keras model for FullyConnected operation."""
@@ -74,8 +77,47 @@ class OpFullyConnected(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
+        if weight_dtype == "S4":
+            from helia_core_tester.generation.utils.litert_builder import build_fully_connected_s4_op
+
+            extras = self.desc.get("hint", {}).get("extras", {})
+            input_scale = float(extras.get("input_scale", 4.0))
+            input_zp = int(extras.get("input_zero_point", 3))
+            weight_scale = float(extras.get("weight_scale", 1.0))
+            output_scale = float(extras.get("output_scale", 4.0))
+            output_zp = int(extras.get("output_zero_point", 0))
+
+            input_shape = tuple(self.desc["input_shape"])
+            fs = tuple(self.desc["filter_shape"])  # O, I
+            filter_shape = fs
+            out_ch = filter_shape[0]
+
+            weights_int4 = self.rng.integers(-8, 8, size=filter_shape).astype(np.int8)
+            biases = None
+            if self.desc.get("use_bias", True):
+                biases = self.rng.integers(-128, 128, size=(out_ch,), dtype=np.int32)
+
+            # Ensure output_scale is compatible with input_scale * weight_scale to satisfy TFLite checks.
+            effective_scale = input_scale * weight_scale
+            if effective_scale > 0:
+                output_scale = float(effective_scale)
+
+            tflite_model = build_fully_connected_s4_op(
+                input_shape=input_shape,
+                filter_shape=filter_shape,
+                use_bias=self.desc.get("use_bias", True),
+                input_quant=([input_scale], [input_zp]),
+                weight_quant=([weight_scale], [0]),
+                output_quant=([output_scale], [output_zp]),
+                weights_int4=weights_int4,
+                biases=biases,
+            )
+            with open(out_path, "wb") as f:
+                f.write(tflite_model)
+            return
+
         import tensorflow as tf
-        import numpy as np
         
         # Create converter
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
@@ -330,8 +372,20 @@ class OpFullyConnected(OperationBase):
             'per_channel': weight_quant.get('per_channel', False)
         }
         
+        weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
+
         # Validate weights shape
-        if weights is not None:
+        if weight_dtype == "S4":
+            fs = tuple(self.desc['filter_shape'])
+            if len(fs) != 2:
+                raise ValueError(f"Unsupported filter_shape in descriptor: {fs}")
+            filter_dims = {
+                'n': int(fs[1]),  # input_features
+                'h': 1,
+                'w': 1,
+                'c': int(fs[0])   # output_units
+            }
+        elif weights is not None:
             filter_shape = tuple(weights.shape)
             if len(filter_shape) == 1:
                 # Try to infer 2D shape
@@ -394,7 +448,16 @@ class OpFullyConnected(OperationBase):
             input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         
         # Compute output dimensions - use weights shape to get correct output_units
-        if weights is not None and len(weights.shape) == 2:
+        if weight_dtype == "S4":
+            fs = tuple(self.desc['filter_shape'])
+            batch_size = int(output_shape[0]) if len(output_shape) >= 1 else int(input_shape[0])
+            output_dims = {
+                'n': batch_size,
+                'h': 1,
+                'w': 1,
+                'c': int(fs[0])
+            }
+        elif weights is not None and len(weights.shape) == 2:
             correct_output_units = int(weights.shape[0])
             batch_size = int(output_shape[0]) if len(output_shape) >= 1 else int(input_shape[0])
             
@@ -492,12 +555,21 @@ class OpFullyConnected(OperationBase):
         output_zp = self._get_zero_point(output_quant)
         
         activation_dtype = self.desc.get('activation_dtype', 'S8')
+        weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
         if activation_dtype == 'S16':
             # S16 uses symmetric quantization (zero points are 0)
             fc_params = {
                 'input_offset': 0,
                 'filter_offset': 0,
                 'output_offset': 0,
+                'activation_min': activation_min,
+                'activation_max': activation_max,
+            }
+        elif weight_dtype == "S4":
+            fc_params = {
+                'input_offset': int(-input_zp),
+                'filter_offset': 0,
+                'output_offset': int(output_zp),
                 'activation_min': activation_min,
                 'activation_max': activation_max,
             }
@@ -514,7 +586,7 @@ class OpFullyConnected(OperationBase):
         # Compute weight sum if needed
         weight_sum = None
         has_weight_sum = False
-        if self._should_precompute_weight_sum(weights, output_dtype):
+        if weight_dtype != "S4" and self._should_precompute_weight_sum(weights, output_dtype):
             from .dwconv import vector_sum_s8
             
             vector_rows = weights.shape[0]  # output_units
@@ -546,11 +618,21 @@ class OpFullyConnected(OperationBase):
                 biases = None
         
         # Format arrays
+        if weight_dtype == "S4":
+            from helia_core_tester.generation.utils.litert_utils import get_tensor_data_packed_from_litert
+            packed_weights = None
+            for input_tensor_info in op_tensors['inputs']:
+                if input_tensor_info['data'] is not None and len(input_tensor_info['shape']) > 1:
+                    packed_weights = get_tensor_data_packed_from_litert(input_tensor_info['tensor'], model)
+                    break
+            if packed_weights is None:
+                raise ValueError("Packed S4 weights not found in LiteRT model")
+            weights = packed_weights.astype(np.int8)
         weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
         
         has_biases = False
         biases_array_str = ""
-        if not has_weight_sum:
+        if not has_weight_sum and weight_dtype != "S4":
             has_biases = biases is not None and biases.size > 0
             if has_biases:
                 # Convert biases to appropriate type
@@ -560,6 +642,12 @@ class OpFullyConnected(OperationBase):
                 else:  # int32_t
                     if biases.dtype != np.int32:
                         biases = biases.astype(np.int32)
+                biases_array_str = builder.format_array_as_c_literal(biases)
+        elif weight_dtype == "S4":
+            has_biases = biases is not None and biases.size > 0
+            if has_biases and biases.dtype != np.int32:
+                biases = biases.astype(np.int32)
+            if has_biases:
                 biases_array_str = builder.format_array_as_c_literal(biases)
         
         weight_sum_array_str = builder.format_array_as_c_literal(weight_sum) if weight_sum is not None else ""
@@ -577,10 +665,48 @@ class OpFullyConnected(OperationBase):
         else:  # int16_t
             input_q = np.clip(input_q, -32768, 32767).astype(np.int16)
         
-        # Run inference using pure LiteRT (no TFLite dependency)
-        # Pass input in original shape - model's Flatten layer will handle flattening
+        # Run inference using LiteRT; fall back to numpy for S4 if LiteRT rejects scales.
         from helia_core_tester.generation.utils.litert_utils import run_inference_litert
-        output_data = run_inference_litert(str(tflite_path), input_q, subgraph_index=0)
+        output_data = None
+        if weight_dtype == "S4":
+            try:
+                output_data = run_inference_litert(str(tflite_path), input_q, subgraph_index=0)
+            except Exception:
+                output_data = None
+        else:
+            output_data = run_inference_litert(str(tflite_path), input_q, subgraph_index=0)
+
+        if output_data is None and weight_dtype == "S4":
+            from helia_core_tester.generation.utils.tflite_utils import requantize_np
+            # Use unpacked weights from LiteRT extraction
+            weights_unpacked = op_tensors['weights']
+            if weights_unpacked is None:
+                raise ValueError("Unpacked S4 weights not found for fallback inference")
+            if weights_unpacked.dtype != np.int8:
+                weights_unpacked = weights_unpacked.astype(np.int8)
+            if biases is None:
+                biases = np.zeros((weights_unpacked.shape[0],), dtype=np.int32)
+            if biases.dtype != np.int32:
+                biases = biases.astype(np.int32)
+            multiplier = int(quant_params_dict['multiplier'])
+            shift = int(quant_params_dict['shift'])
+            input_offset = int(fc_params['input_offset'])
+            output_offset = int(fc_params['output_offset'])
+            batch = input_q.shape[0]
+            out_ch = weights_unpacked.shape[0]
+            in_feat = weights_unpacked.shape[1]
+            inp_flat = input_q.reshape(batch, in_feat).astype(np.int32)
+            out = np.zeros((batch, out_ch), dtype=np.int32)
+            for b in range(batch):
+                acc = (inp_flat[b] + input_offset).astype(np.int32)
+                # (out_ch, in_feat) dot (in_feat,)
+                prod = weights_unpacked.astype(np.int32) @ acc
+                prod = prod + biases
+                requant = requantize_np(prod, multiplier, shift)
+                requant = requant + output_offset
+                requant = np.clip(requant, -128, 127).astype(np.int8)
+                out[b, :] = requant.astype(np.int32)
+            output_data = out.astype(np.int8)
         
         # Format arrays - format_array_as_c_literal automatically flattens
         input_data_array_str = builder.format_array_as_c_literal(input_q.flatten())
@@ -597,10 +723,13 @@ class OpFullyConnected(OperationBase):
         if is_s16 and quant_params_dict.get('per_channel', False):
             buffer_size_max = output_dims['c'] * 4  # sizeof(int32_t) = 4
         else:
-            buffer_size_max = builder.calculate_fc_buffer_size_max(
-                filter_dims,
-                output_dtype=activation_dtype
-            )
+            if weight_dtype == "S4":
+                buffer_size_max = 0
+            else:
+                buffer_size_max = builder.calculate_fc_buffer_size_max(
+                    filter_dims,
+                    output_dtype=activation_dtype
+                )
         
         # Build template context
         context = {

@@ -65,6 +65,17 @@ def get_tensor_shape_from_litert(tensor: Any) -> Optional[Tuple[int, ...]]:
     return None
 
 
+def _unpack_int4_buffer(buffer: bytes, num_elems: int) -> np.ndarray:
+    data = np.frombuffer(buffer, dtype=np.uint8)
+    low = data & 0x0F
+    high = (data >> 4) & 0x0F
+    vals = np.empty(data.size * 2, dtype=np.int8)
+    vals[0::2] = low.astype(np.int8)
+    vals[1::2] = high.astype(np.int8)
+    vals = ((vals + 8) & 0x0F) - 8
+    return vals[:num_elems]
+
+
 def get_tensor_data_from_litert(tensor: Any, model: Any) -> Optional[np.ndarray]:
     """
     Extract tensor data from LiteRT model.
@@ -94,9 +105,16 @@ def get_tensor_data_from_litert(tensor: Any, model: Any) -> Optional[np.ndarray]
         litert.TensorType.INT8: np.int8,
         litert.TensorType.BOOL: bool,
     }
-    
+
+    if hasattr(litert.TensorType, "INT4") and tensor.type == litert.TensorType.INT4:
+        num_elems = int(np.prod(tensor.shape)) if tensor.shape is not None else 0
+        data = _unpack_int4_buffer(buffer.data, num_elems)
+        if tensor.shape is not None and len(tensor.shape) != 0:
+            data = data.reshape(tensor.shape)
+        return data
+
     dtype = tensor_dtype_map.get(tensor.type, np.int8)
-    
+
     # Convert buffer data to numpy array
     data = buffer.data.view(dtype)
     
@@ -105,6 +123,16 @@ def get_tensor_data_from_litert(tensor: Any, model: Any) -> Optional[np.ndarray]
         data = data.reshape(tensor.shape)
     
     return data
+
+
+def get_tensor_data_packed_from_litert(tensor: Any, model: Any) -> Optional[np.ndarray]:
+    """Return packed buffer bytes as int8 (useful for INT4 weights)."""
+    if tensor.buffer < 0:
+        return None
+    buffer = model.buffers[tensor.buffer]
+    if buffer.data is None or len(buffer.data) == 0:
+        return None
+    return np.frombuffer(buffer.data, dtype=np.int8)
 
 
 def get_tensor_quantization_from_litert(tensor: Any) -> Dict[str, Any]:

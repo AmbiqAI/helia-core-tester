@@ -14,6 +14,9 @@ class OpConv2D(OperationBase):
     """
     Conv2D operation.
     """
+
+    def needs_keras_model(self) -> bool:
+        return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
     
     def build_keras_model(self) -> tf.keras.Model:
         input_shape = self.desc['input_shape']
@@ -66,6 +69,55 @@ class OpConv2D(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
+        if weight_dtype == "S4":
+            from helia_core_tester.generation.utils.litert_builder import build_conv2d_s4_op
+
+            extras = self.desc.get("hint", {}).get("extras", {})
+            input_scale = float(extras.get("input_scale", 4.0))
+            input_zp = int(extras.get("input_zero_point", 3))
+            weight_scale = extras.get("weight_scale", 1.0)
+            output_scale = float(extras.get("output_scale", 4.0))
+            output_zp = int(extras.get("output_zero_point", 0))
+
+            input_shape = tuple(self.desc["input_shape"])
+            fs = tuple(self.desc["filter_shape"])  # H, W, I, O
+            filter_shape = (fs[3], fs[0], fs[1], fs[2])  # O, H, W, I
+
+            out_ch = filter_shape[0]
+            per_channel = bool(extras.get("per_channel", True))
+            if per_channel:
+                if isinstance(weight_scale, (list, tuple, np.ndarray)):
+                    weight_scales = list(float(v) for v in weight_scale)
+                else:
+                    weight_scales = [float(weight_scale)] * out_ch
+            else:
+                weight_scales = [float(weight_scale)]
+
+            weight_zps = [0] * len(weight_scales)
+
+            weights_int4 = self.rng.integers(-8, 8, size=filter_shape).astype(np.int8)
+            biases = None
+            if self.desc.get("use_bias", True):
+                biases = self.rng.integers(-128, 128, size=(out_ch,), dtype=np.int32)
+
+            tflite_model = build_conv2d_s4_op(
+                input_shape=input_shape,
+                filter_shape=filter_shape,
+                strides=self.desc.get("strides", [1, 1]),
+                padding=self.desc.get("padding", "valid"),
+                dilation=self.desc.get("dilation", [1, 1]),
+                use_bias=self.desc.get("use_bias", True),
+                input_quant=([input_scale], [input_zp]),
+                weight_quant=(weight_scales, weight_zps),
+                output_quant=([output_scale], [output_zp]),
+                weights_int4=weights_int4,
+                biases=biases,
+            )
+            with open(out_path, "wb") as f:
+                f.write(tflite_model)
+            return
+
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
         activation_dtype = self.desc.get('activation_dtype', 'S8')
@@ -163,9 +215,23 @@ class OpConv2D(OperationBase):
         # Extract weights and biases from LiteRT
         weights = op_tensors['weights']
         biases = op_tensors['biases']
+        weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
+        if weight_dtype == "S4":
+            from helia_core_tester.generation.utils.litert_utils import get_tensor_data_packed_from_litert
+            packed_weights = None
+            for input_tensor_info in op_tensors['inputs']:
+                if input_tensor_info['data'] is not None and len(input_tensor_info['shape']) > 1:
+                    packed_weights = get_tensor_data_packed_from_litert(input_tensor_info['tensor'], model)
+                    break
+            if packed_weights is None:
+                raise ValueError("Packed S4 weights not found in LiteRT model")
+            weights = packed_weights.astype(np.int8)
 
         # Weight tensor for TFLite Conv2D is OHWI in practice; shape will be (O, H, W, I)
-        if weights is not None:
+        if weight_dtype == "S4":
+            fs = tuple(self.desc['filter_shape'])
+            filter_shape = (fs[3], fs[0], fs[1], fs[2])  # OHWI
+        elif weights is not None:
             filter_shape = tuple(weights.shape)
             # Ensure weights are int8 in generated C
             if weights.dtype != np.int8:

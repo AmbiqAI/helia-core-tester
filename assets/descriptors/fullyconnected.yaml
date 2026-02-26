@@ -162,3 +162,49 @@ filter_shape:
 - 3
 - 4
 use_bias: true
+---
+operator: FullyConnected
+name: s4_fc_bias
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+input_shape:
+- 1
+- 1
+- 1
+- 8
+filter_shape:
+- 4
+- 8
+use_bias: true
+---
+operator: FullyConnected
+name: s4_fc_nobias
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+input_shape:
+- 1
+- 1
+- 1
+- 8
+filter_shape:
+- 4
+- 8
+use_bias: false

@@ -43,7 +43,9 @@ int32_t {{ prefix }}_{{ name }}_run(
     {{ output_dtype }}* __restrict output
 ) {
     // Calculate required buffer size
-    {% if quant_params.per_channel and output_dtype == 'int16_t' %}
+    {% if kernel_fn == 'arm_fully_connected_s4' %}
+    int32_t required_buffer_size = 0;
+    {% elif quant_params.per_channel and output_dtype == 'int16_t' %}
     // For per-channel S16, use per_channel buffer size function
     int32_t required_buffer_size = arm_fully_connected_per_channel_s16_get_buffer_size(
         &{{ name }}_filter_dims
@@ -60,7 +62,10 @@ int32_t {{ prefix }}_{{ name }}_run(
     }
 
     // Initialize context buffer
-    {% if has_weight_sum %}
+    {% if kernel_fn == 'arm_fully_connected_s4' %}
+    {{ name }}_ctx.buf = NULL;
+    {{ name }}_ctx.size = 0;
+    {% elif has_weight_sum %}
     // For S8 fully connected with weight_sum, the ctx buffer should point to precomputed weight_sum
     // Weight sum is precomputed at code generation time and embedded in header
     // ctx.size must be in bytes: filter_dims.c * sizeof(int32_t)
@@ -72,6 +77,25 @@ int32_t {{ prefix }}_{{ name }}_run(
     {% endif %}
 
     // Call fully connected kernel via wrapper (handles per-channel/per-tensor)
+    {% if kernel_fn == 'arm_fully_connected_s4' %}
+    arm_cmsis_nn_status kernel_status = arm_fully_connected_s4(
+        &{{ name }}_ctx,
+        &{{ name }}_fc_params,
+        &{{ name }}_quant_params,
+        &{{ name }}_input_dims,
+        input,
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        &{{ name }}_bias_dims,
+        {% if has_biases %}
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        output
+    );
+    {% else %}
     cmsis_nn_quant_params quant_params_wrapper = {
         {% if quant_params.per_channel %}
         .multiplier = (int32_t*){{ name }}_multiplier,
@@ -100,6 +124,7 @@ int32_t {{ prefix }}_{{ name }}_run(
         &{{ name }}_output_dims,
         output
     );
+    {% endif %}
     
     return kernel_status;
 }
