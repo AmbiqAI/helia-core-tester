@@ -126,3 +126,39 @@ filter_shape:
 - 7
 use_bias: true
 
+---
+operator: FullyConnected
+name: fully_connected_s8_per_tensor
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  force_per_tensor: true
+input_shape:
+- 1
+- 1
+- 1
+- 8
+filter_shape:
+- 4
+- 8
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_s16_per_tensor
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  force_per_tensor: true
+input_shape:
+- 1
+- 2
+- 2
+- 4
+filter_shape:
+- 3
+- 4
+use_bias: true

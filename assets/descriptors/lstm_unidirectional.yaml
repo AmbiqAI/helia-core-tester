@@ -1,0 +1,59 @@
+operator: LSTM
+name: lstm_1_s8_cmsis
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+dataset: lstm_1
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+---
+operator: LSTM
+name: lstm_2_s8_cmsis
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+dataset: lstm_2
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+---
+# operator: LSTM
+# name: lstm_one_time_step_s8_cmsis
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# dataset: lstm_one_time_step
+# hint:
+#   call_style: per_tensor
+#   force_cmsis: true
+# ---
+operator: LSTM
+name: lstm_1_s16_cmsis
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+dataset: lstm_1_s16
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+---
+operator: LSTM
+name: lstm_2_s16_cmsis
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+dataset: lstm_2_s16
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+---
+operator: LSTM
+name: lstm_one_time_step_s16_cmsis
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+dataset: lstm_one_time_step_s16
+hint:
+  call_style: per_tensor
+  force_cmsis: true

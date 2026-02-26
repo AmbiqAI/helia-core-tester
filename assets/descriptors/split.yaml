@@ -96,3 +96,51 @@ input_shape:
 - 3
 axis: 2
 num_splits: 4
+---
+operator: Split
+name: split_channels_pairs_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 2
+- 2
+- 4
+axis: -1
+num_splits: 2
+---
+operator: Split
+name: split_height_triple_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 6
+- 4
+- 2
+axis: 1
+num_splits: 3
+---
+operator: Split
+name: split_v_width_mixed_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 2
+- 5
+- 2
+axis: 2
+size_splits:
+- 1
+- 2
+- 2

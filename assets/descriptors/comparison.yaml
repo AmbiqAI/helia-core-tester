@@ -1,0 +1,21 @@
+operator: Comparison
+name: comparison_equal_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+operation: equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 3]
+---
+operator: Comparison
+name: comparison_greater_s16_scalar
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+operation: greater
+hint:
+  call_style: per_tensor
+input_1_shape: [1]
+input_2_shape: [1, 2, 2, 2]

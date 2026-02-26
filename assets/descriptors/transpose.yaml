@@ -23,14 +23,162 @@ input_shape:
 - 3
 - 2
 - 4
+# ---
+# operator: Transpose
+# name: transpose_time_batch_s8
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# hint:
+#   call_style: per_tensor
+# input_shape:
+# - 2
+# - 4
+# - 3
 ---
 operator: Transpose
-name: transpose_time_batch_s8
+name: transpose_vector_s8
 activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_SUCCESS
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+input_shape:
+- 8
+---
+operator: Transpose
+name: transpose_matrix_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_SUCCESS
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+input_shape:
+- 2
+- 5
+---
+operator: Transpose
+name: transpose_3d_perm_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_SUCCESS
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+  force_permutation: [2, 0, 1]
+input_shape:
+- 2
+- 3
+- 4
+---
+operator: Transpose
+name: transpose_time_batch_invalid_perm_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+  force_permutation: [0, 1, 3]
+input_shape:
+- 2
+- 4
+- 3
+---
+operator: Transpose
+name: transpose_hwcn_s16
+activation_dtype: S16
 weight_dtype: S8
 activation: NONE
 hint:
   call_style: per_tensor
+input_shape:
+- 1
+- 2
+- 3
+- 4
+---
+operator: Transpose
+name: transpose_nchw_to_nhwc_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 3
+- 2
+- 4
+---
+operator: Transpose
+name: transpose_time_batch_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 2
+- 4
+- 3
+---
+operator: Transpose
+name: transpose_vector_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_SUCCESS
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+input_shape:
+- 8
+---
+operator: Transpose
+name: transpose_matrix_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_SUCCESS
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+input_shape:
+- 2
+- 5
+---
+operator: Transpose
+name: transpose_3d_perm_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_SUCCESS
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+  force_permutation: [2, 0, 1]
+input_shape:
+- 2
+- 3
+- 4
+---
+operator: Transpose
+name: transpose_time_batch_invalid_perm_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  force_cmsis: true
+  force_permutation: [0, 1, 3]
 input_shape:
 - 2
 - 4

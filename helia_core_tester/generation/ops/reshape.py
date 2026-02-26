@@ -2,9 +2,8 @@
 Reshape operation implementation.
 """
 
-from typing import Dict, Any
+from typing import Dict
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops.base import OperationBase
 
@@ -13,26 +12,32 @@ class OpReshape(OperationBase):
     """
     Reshape operation.
     """
-    
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for Reshape operation."""
-        input_shape = self.desc['input_shape']
-        target_shape = self.desc.get('target_shape')
-        
-        if target_shape is None:
-            raise ValueError("Reshape operation requires 'target_shape' in descriptor")
-        
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
-        # Reshape operation
-        x = tf.keras.layers.Reshape(target_shape[1:])(inputs)
-        
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
+
+    def needs_keras_model(self) -> bool:
+        return False
+
+    def build_keras_model(self):
+        raise NotImplementedError("Reshape uses LiteRT-only model generation.")
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        super().convert_to_tflite(model, out_path, rep_seed)
+        from helia_core_tester.generation.utils.litert_builder import build_reshape_op
+
+        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        if activation_dtype != 'S8':
+            raise NotImplementedError(f"Unsupported Reshape dtype: {activation_dtype} (only S8 supported)")
+
+        input_shape = tuple(self.desc['input_shape'])
+        target_shape = tuple(self.desc.get('target_shape'))
+        if target_shape is None:
+            raise ValueError("Reshape operation requires 'target_shape' in descriptor")
+
+        model_bytes = build_reshape_op(
+            input_shape=input_shape,
+            target_shape=target_shape,
+            dtype="int8",
+        )
+        with open(out_path, "wb") as f:
+            f.write(model_bytes)
     
     def _select_cmsis_reshape_kernel(self) -> Dict[str, str]:
         """
@@ -66,20 +71,10 @@ class OpReshape(OperationBase):
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_reshape_kernel()
         
-        # Load LiteRT model for shape extraction
-        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
-        model, subgraph = self.load_litert_model(str(tflite_path))
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
-        
-        # Extract shapes from LiteRT
-        input_shape = op_tensors['inputs'][0]['shape']
-        output_shape = op_tensors['outputs'][0]['shape']
-        
-        # Ensure shapes are tuples
-        if input_shape is not None:
-            input_shape = tuple(input_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
+        input_shape = tuple(self.desc['input_shape'])
+        output_shape = tuple(self.desc.get('target_shape'))
+        if output_shape is None:
+            raise ValueError("Reshape operation requires 'target_shape' in descriptor")
         
         builder = TemplateContextBuilder()
         
@@ -90,47 +85,13 @@ class OpReshape(OperationBase):
         # Calculate total size (should be same for input and output)
         total_size = int(np.prod(input_shape))
         
-        # Generate input data and quantize
+        # Generate input data
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        
-        input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-        
+        input_q = self.rng.integers(-128, 128, size=input_shape, dtype=np.int8)
         self.rng.__setstate__(rng_state)
-        
-        # Extract quantization from LiteRT
-        input_quant = op_tensors['inputs'][0]['quantization']
-        input_scale = input_quant.get('scale', 1.0)
-        input_zp = input_quant.get('zero_point', 0)
-        
-        # Handle per-channel quantization (convert to scalar)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = float(input_scale[0])
-        if isinstance(input_zp, (list, np.ndarray)):
-            input_zp = int(input_zp[0])
-        
-        input_scale = float(input_scale)
-        input_zp = int(input_zp)
-        
-        # Quantize inputs
-        if kernel_info["input_c_type"] == "int8_t":
-            np_in_dtype = np.int8
-            qmin, qmax = -128, 127
-        else:
-            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        
-        input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-        input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-        
-        # Run inference using LiteRT interpreter
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        interpreter.set_tensor(input_details[0]['index'], input_q)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
+
+        output_data = input_q.reshape(output_shape)
         
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)

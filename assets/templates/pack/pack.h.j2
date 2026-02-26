@@ -1,0 +1,19 @@
+#ifndef {{ prefix|upper }}_PACK_H
+#define {{ prefix|upper }}_PACK_H
+
+#include <stdint.h>
+
+static const {{ input_dtype }} {{ name }}_input_1[] = {
+{{ input_1_data_array }}
+};
+{% for idx in range(2, num_tensors + 1) %}
+static const {{ input_dtype }} {{ name }}_input_{{ idx }}[] = {
+{{ input_data_arrays[idx-1] }}
+};
+{% endfor %}
+
+static const {{ output_dtype }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

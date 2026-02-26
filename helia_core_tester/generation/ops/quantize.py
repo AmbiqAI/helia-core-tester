@@ -15,6 +15,9 @@ class OpQuantize(OperationBase):
     """
     Quantize operation.
     """
+
+    def allow_no_tflite(self) -> bool:
+        return True
     
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for Quantize operation.
@@ -85,44 +88,76 @@ class OpQuantize(OperationBase):
         
         name = self.desc['name']
         tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_quantize_kernel()
-        
-        # Load interpreter
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        
-        # Get input and output details
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        input_shape = tuple(input_details[0]['shape'])
-        output_shape = tuple(output_details[0]['shape'])
-        
+
         builder = TemplateContextBuilder()
-        
-        # Extract quantization from output (quantized tensor)
-        output_qp = output_details[0].get('quantization_parameters', {})
-        output_scale = output_qp.get('scales', [1.0])
-        output_zp = output_qp.get('zero_points', [0])
-        output_scale = float(output_scale[0] if isinstance(output_scale, list) else output_scale)
-        output_zp = int(output_zp[0] if isinstance(output_zp, list) else output_zp)
-        
-        # Generate input data (float32)
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-        
-        input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-        
-        self.rng.__setstate__(rng_state)
-        
-        # Run inference (input is float32, output is quantized)
-        interpreter.set_tensor(input_details[0]['index'], input_data)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
+
+        # Check for activation in descriptor
+        activation_str = self.desc.get('activation', 'NONE')
+        has_activation = activation_str in ['RELU', 'RELU6']
+
+        if tflite_path.exists():
+            # Load interpreter
+            interpreter = self.load_litert_interpreter(str(tflite_path))
+            
+            # Get input and output details
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+            
+            input_shape = tuple(input_details[0]['shape'])
+            output_shape = tuple(output_details[0]['shape'])
+            
+            # Extract quantization from output (quantized tensor)
+            output_qp = output_details[0].get('quantization_parameters', {})
+            output_scale = output_qp.get('scales', [1.0])
+            output_zp = output_qp.get('zero_points', [0])
+            output_scale = float(output_scale[0] if isinstance(output_scale, list) else output_scale)
+            output_zp = int(output_zp[0] if isinstance(output_zp, list) else output_zp)
+            
+            # Generate input data (float32)
+            rng_state = self.rng.__getstate__()
+            self.rng = np.random.default_rng(self.seed)
+            
+            input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+            
+            self.rng.__setstate__(rng_state)
+            
+            # Run inference (input is float32, output is quantized)
+            interpreter.set_tensor(input_details[0]['index'], input_data)
+            interpreter.invoke()
+            output_data = interpreter.get_tensor(output_details[0]['index'])
+            output_data = np.array(output_data)
+        else:
+            input_shape = tuple(self.desc['input_shape'])
+            output_shape = input_shape
+
+            if kernel_info["output_c_type"] == "int8_t":
+                output_scale = 1.0 / 128.0
+                output_zp = 0
+                qmin, qmax = -128, 127
+                out_dtype = np.int8
+            else:
+                output_scale = 1.0 / 32768.0
+                output_zp = 0
+                qmin, qmax = -32768, 32767
+                out_dtype = np.int16
+
+            rng_state = self.rng.__getstate__()
+            self.rng = np.random.default_rng(self.seed)
+            input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+            self.rng.__setstate__(rng_state)
+
+            if has_activation:
+                if activation_str == 'RELU':
+                    activated = np.maximum(input_data, 0.0)
+                else:
+                    activated = np.clip(input_data, 0.0, 6.0)
+            else:
+                activated = input_data
+
+            output_q = np.rint(activated / float(output_scale) + float(output_zp)).astype(np.int32)
+            output_data = np.clip(output_q, qmin, qmax).astype(out_dtype)
         
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_data)
@@ -130,10 +165,6 @@ class OpQuantize(OperationBase):
         
         # Calculate size
         input_size = int(np.prod(input_shape))
-        
-        # Check for activation in descriptor
-        activation_str = self.desc.get('activation', 'NONE')
-        has_activation = activation_str in ['RELU', 'RELU6']
         
         # Select activation kernel function if needed
         activation_kernel_fn = None

@@ -13,6 +13,9 @@ class OpDequantize(OperationBase):
     """
     Dequantize operation.
     """
+
+    def allow_no_tflite(self) -> bool:
+        return True
     
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for Dequantize operation."""
@@ -81,140 +84,178 @@ class OpDequantize(OperationBase):
         
         name = self.desc['name']
         tflite_path = output_dir / f"{name}.tflite"
-        if not tflite_path.exists():
-            raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
-        
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_dequantize_kernel()
         
-        # Load interpreter
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        
-        # Get input and output details
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        input_shape = tuple(input_details[0]['shape'])
-        output_shape = tuple(output_details[0]['shape'])
-        
         builder = TemplateContextBuilder()
-        
-        # Extract quantization from input (quantized tensor)
-        input_qp = input_details[0].get('quantization_parameters', {})
-        input_scale = input_qp.get('scales', [1.0])
-        input_zp = input_qp.get('zero_points', [0])
-        
-        # Handle array/list scales (take first element for per-tensor assumption)
-        if isinstance(input_scale, (list, np.ndarray)):
-            if len(input_scale) > 1:
-                print(f"Warning: Input has per-channel quantization with {len(input_scale)} scales. Using first scale.")
-                input_scale = input_scale[0]
-            elif len(input_scale) == 1:
-                input_scale = input_scale[0]
+
+        # Check for activation (from descriptor or infer from name)
+        # The CMSIS-NN arm_dequantize_* only does dequantization, so we apply
+        # activation in C to match TFLite behavior when present.
+        activation_str = self.desc.get('activation', 'NONE')
+        if activation_str == 'NONE' and 'relu' in name.lower():
+            if 'relu6' in name.lower():
+                activation_str = 'RELU6'
             else:
-                # Empty array, use default
-                input_scale = 1.0
+                activation_str = 'RELU'
+        has_activation = activation_str in ['RELU', 'RELU6']
+
+        if tflite_path.exists():
+            # Load interpreter
+            interpreter = self.load_litert_interpreter(str(tflite_path))
             
-        if isinstance(input_zp, (list, np.ndarray)):
-            if len(input_zp) > 1:
-                print(f"Warning: Input has per-channel quantization with {len(input_zp)} zero points. Using first zero point.")
-                input_zp = input_zp[0]
-            elif len(input_zp) == 1:
-                input_zp = input_zp[0]
-            else:
-                input_zp = 0
+            # Get input and output details
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
             
-        input_scale = float(input_scale)
-        input_zp = int(input_zp)
-        
-        # Generate input data and quantize
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-        
-        # For S16, generate input data that better utilizes the quantization range
-        # Calculate the effective float range based on scale and zero_point
-        if kernel_info["input_c_type"] == "int8_t":
-            np_in_dtype = np.int8
-            qmin, qmax = -128, 127
-            # For S8, use standard range
-            input_data_float = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-        elif kernel_info["input_c_type"] == "int16_t":
-            np_in_dtype = np.int16
-            qmin, qmax = -32768, 32767
-            # For S16, generate data that will quantize to a good range of int16 values
-            # Calculate float range that maps to a reasonable subset of int16 range
-            # Use approximately 80% of the int16 range to avoid edge cases
-            range_fraction = 0.8
-            effective_qmin = int(qmin + (1.0 - range_fraction) * (qmax - qmin) / 2)
-            effective_qmax = int(qmax - (1.0 - range_fraction) * (qmax - qmin) / 2)
-            float_min = (effective_qmin - input_zp) * input_scale
-            float_max = (effective_qmax - input_zp) * input_scale
-            # Ensure we have a valid range
-            if float_max > float_min:
-                input_data_float = self.rng.uniform(float_min, float_max, size=input_shape).astype(np.float32)
-            else:
-                # Fallback to standard range if calculated range is invalid
+            input_shape = tuple(input_details[0]['shape'])
+            output_shape = tuple(output_details[0]['shape'])
+            
+            # Extract quantization from input (quantized tensor)
+            input_qp = input_details[0].get('quantization_parameters', {})
+            input_scale = input_qp.get('scales', [1.0])
+            input_zp = input_qp.get('zero_points', [0])
+            
+            # Handle array/list scales (take first element for per-tensor assumption)
+            if isinstance(input_scale, (list, np.ndarray)):
+                if len(input_scale) > 1:
+                    print(f"Warning: Input has per-channel quantization with {len(input_scale)} scales. Using first scale.")
+                    input_scale = input_scale[0]
+                elif len(input_scale) == 1:
+                    input_scale = input_scale[0]
+                else:
+                    # Empty array, use default
+                    input_scale = 1.0
+                
+            if isinstance(input_zp, (list, np.ndarray)):
+                if len(input_zp) > 1:
+                    print(f"Warning: Input has per-channel quantization with {len(input_zp)} zero points. Using first zero point.")
+                    input_zp = input_zp[0]
+                elif len(input_zp) == 1:
+                    input_zp = input_zp[0]
+                else:
+                    input_zp = 0
+                
+            input_scale = float(input_scale)
+            input_zp = int(input_zp)
+            
+            # Generate input data and quantize
+            rng_state = self.rng.__getstate__()
+            self.rng = np.random.default_rng(self.seed)
+            
+            # For S16, generate input data that better utilizes the quantization range
+            # Calculate the effective float range based on scale and zero_point
+            if kernel_info["input_c_type"] == "int8_t":
+                np_in_dtype = np.int8
+                qmin, qmax = -128, 127
+                # For S8, use standard range
                 input_data_float = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-        else:
-            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        
-        self.rng.__setstate__(rng_state)
-        
-        # Quantize inputs: quantized = round(float_value / scale + zero_point)
-        input_q = np.round(input_data_float / float(input_scale) + float(input_zp)).astype(np.int32)
-        input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-        
-        # Check actual input dtype from TFLite model
-        input_dtype = input_details[0]['dtype']
-        # If model expects float32 input, we need to use float32 (some dequantize models are built this way)
-        if input_dtype == np.float32:
-            # Use float32 input directly
-            input_tensor = input_data_float
-        else:
-            # Use quantized input
-            input_tensor = input_q
-        
-        # Run inference (input type depends on model, output should be float32)
-        interpreter.set_tensor(input_details[0]['index'], input_tensor)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
-        
-        # Check output dtype - if it's quantized, we need to dequantize it
-        output_dtype = output_details[0]['dtype']
-        if output_dtype != np.float32:
-            # Output is still quantized, need to dequantize manually
-            output_qp = output_details[0].get('quantization_parameters', {})
-            output_scale = output_qp.get('scales', [1.0])
-            output_zp = output_qp.get('zero_points', [0])
-            
-            # Handle array/list scales
-            if isinstance(output_scale, (list, np.ndarray)):
-                if len(output_scale) > 1:
-                    print(f"Warning: Output has per-channel quantization with {len(output_scale)} scales. Using first scale.")
-                    output_scale = output_scale[0]
-                elif len(output_scale) == 1:
-                    output_scale = output_scale[0]
+            elif kernel_info["input_c_type"] == "int16_t":
+                np_in_dtype = np.int16
+                qmin, qmax = -32768, 32767
+                # For S16, generate data that will quantize to a good range of int16 values
+                # Calculate float range that maps to a reasonable subset of int16 range
+                # Use approximately 80% of the int16 range to avoid edge cases
+                range_fraction = 0.8
+                effective_qmin = int(qmin + (1.0 - range_fraction) * (qmax - qmin) / 2)
+                effective_qmax = int(qmax - (1.0 - range_fraction) * (qmax - qmin) / 2)
+                float_min = (effective_qmin - input_zp) * input_scale
+                float_max = (effective_qmax - input_zp) * input_scale
+                # Ensure we have a valid range
+                if float_max > float_min:
+                    input_data_float = self.rng.uniform(float_min, float_max, size=input_shape).astype(np.float32)
                 else:
-                    output_scale = 1.0
+                    # Fallback to standard range if calculated range is invalid
+                    input_data_float = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+            else:
+                raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
             
-            if isinstance(output_zp, (list, np.ndarray)):
-                if len(output_zp) > 1:
-                    print(f"Warning: Output has per-channel quantization with {len(output_zp)} zero points. Using first zero point.")
-                    output_zp = output_zp[0]
-                elif len(output_zp) == 1:
-                    output_zp = output_zp[0]
-                else:
-                    output_zp = 0
+            self.rng.__setstate__(rng_state)
             
-            output_scale = float(output_scale)
-            output_zp = int(output_zp)
+            # Quantize inputs: quantized = round(float_value / scale + zero_point)
+            input_q = np.round(input_data_float / float(input_scale) + float(input_zp)).astype(np.int32)
+            input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
             
-            # Dequantize: output = (quantized_value - zero_point) * scale
-            output_data = (output_data.astype(np.float32) - float(output_zp)) * output_scale
+            # Check actual input dtype from TFLite model
+            input_dtype = input_details[0]['dtype']
+            # If model expects float32 input, we need to use float32 (some dequantize models are built this way)
+            if input_dtype == np.float32:
+                # Use float32 input directly
+                input_tensor = input_data_float
+            else:
+                # Use quantized input
+                input_tensor = input_q
+            
+            # Run inference (input type depends on model, output should be float32)
+            interpreter.set_tensor(input_details[0]['index'], input_tensor)
+            interpreter.invoke()
+            output_data = interpreter.get_tensor(output_details[0]['index'])
+            output_data = np.array(output_data)
+            
+            # Check output dtype - if it's quantized, we need to dequantize it
+            output_dtype = output_details[0]['dtype']
+            if output_dtype != np.float32:
+                # Output is still quantized, need to dequantize manually
+                output_qp = output_details[0].get('quantization_parameters', {})
+                output_scale = output_qp.get('scales', [1.0])
+                output_zp = output_qp.get('zero_points', [0])
+                
+                # Handle array/list scales
+                if isinstance(output_scale, (list, np.ndarray)):
+                    if len(output_scale) > 1:
+                        print(f"Warning: Output has per-channel quantization with {len(output_scale)} scales. Using first scale.")
+                        output_scale = output_scale[0]
+                    elif len(output_scale) == 1:
+                        output_scale = output_scale[0]
+                    else:
+                        output_scale = 1.0
+                
+                if isinstance(output_zp, (list, np.ndarray)):
+                    if len(output_zp) > 1:
+                        print(f"Warning: Output has per-channel quantization with {len(output_zp)} zero points. Using first zero point.")
+                        output_zp = output_zp[0]
+                    elif len(output_zp) == 1:
+                        output_zp = output_zp[0]
+                    else:
+                        output_zp = 0
+                
+                output_scale = float(output_scale)
+                output_zp = int(output_zp)
+                
+                # Dequantize: output = (quantized_value - zero_point) * scale
+                output_data = (output_data.astype(np.float32) - float(output_zp)) * output_scale
+            else:
+                # Already float32, just ensure it's the right type
+                output_data = output_data.astype(np.float32)
         else:
-            # Already float32, just ensure it's the right type
-            output_data = output_data.astype(np.float32)
+            input_shape = tuple(self.desc['input_shape'])
+            if kernel_info["input_c_type"] == "int8_t":
+                np_in_dtype = np.int8
+                qmin, qmax = -128, 127
+                input_scale = 1.0 / 128.0
+                input_zp = 0
+            elif kernel_info["input_c_type"] == "int16_t":
+                np_in_dtype = np.int16
+                qmin, qmax = -32768, 32767
+                input_scale = 1.0 / 32768.0
+                input_zp = 0
+            else:
+                raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
+
+            rng_state = self.rng.__getstate__()
+            self.rng = np.random.default_rng(self.seed)
+            input_data_float = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+            self.rng.__setstate__(rng_state)
+
+            input_q = np.round(input_data_float / float(input_scale) + float(input_zp)).astype(np.int32)
+            input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+
+            output_data = (input_q.astype(np.float32) - float(input_zp)) * float(input_scale)
+            if has_activation:
+                if activation_str == 'RELU':
+                    output_data = np.maximum(output_data, 0.0)
+                else:
+                    output_data = np.clip(output_data, 0.0, 6.0)
         
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)
@@ -222,19 +263,6 @@ class OpDequantize(OperationBase):
         
         # Calculate size
         input_size = int(np.prod(input_shape))
-        
-        # Check for activation (from descriptor or infer from name)
-        # The TFLite model includes any activation op we added during build.
-        # The CMSIS-NN arm_dequantize_s16_f32 only does dequantization, so we need to
-        # apply ReLU in C code to match TFLite output if the model has activation.
-        activation_str = self.desc.get('activation', 'NONE')
-        if activation_str == 'NONE' and 'relu' in name.lower():
-            if 'relu6' in name.lower():
-                activation_str = 'RELU6'
-            else:
-                activation_str = 'RELU'
-        
-        has_activation = activation_str in ['RELU', 'RELU6']
         
         # Build template context
         context = {

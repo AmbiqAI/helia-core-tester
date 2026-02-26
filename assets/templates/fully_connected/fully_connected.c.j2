@@ -71,37 +71,17 @@ int32_t {{ prefix }}_{{ name }}_run(
     {{ name }}_ctx.size = required_buffer_size;
     {% endif %}
 
-    // Call fully connected kernel
-    {% if quant_params.per_channel %}
-    // Per-channel quantization - use per-channel function directly
-    {% if output_dtype == 'int8_t' %}
-    arm_cmsis_nn_status kernel_status = arm_fully_connected_per_channel_s8(
-    {% else %}
-    arm_cmsis_nn_status kernel_status = arm_fully_connected_per_channel_s16(
-    {% endif %}
-        &{{ name }}_ctx,
-        &{{ name }}_fc_params,
-        &{{ name }}_quant_params,
-        &{{ name }}_input_dims,
-        input,
-        &{{ name }}_filter_dims,
-        {{ name }}_weights,
-        &{{ name }}_bias_dims,
-        {% if has_biases %}
-        {{ name }}_biases,
-        {% else %}
-        NULL,
-        {% endif %}
-        &{{ name }}_output_dims,
-        output
-    );
-    {% else %}
-    // Per-tensor quantization - use wrapper function
-    // For per-tensor, we need to create cmsis_nn_quant_params from per_tensor
+    // Call fully connected kernel via wrapper (handles per-channel/per-tensor)
     cmsis_nn_quant_params quant_params_wrapper = {
+        {% if quant_params.per_channel %}
+        .multiplier = (int32_t*){{ name }}_multiplier,
+        .shift = (int32_t*){{ name }}_shift,
+        .is_per_channel = 1
+        {% else %}
         .multiplier = (int32_t*)&{{ name }}_multiplier_val,
         .shift = (int32_t*)&{{ name }}_shift_val,
         .is_per_channel = 0
+        {% endif %}
     };
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         &{{ name }}_ctx,
@@ -120,7 +100,6 @@ int32_t {{ prefix }}_{{ name }}_run(
         &{{ name }}_output_dims,
         output
     );
-    {% endif %}
     
     return kernel_status;
 }

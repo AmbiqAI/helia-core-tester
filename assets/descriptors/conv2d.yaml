@@ -1124,3 +1124,73 @@ dilation:
 - 3
 - 3
 groups: 3
+---
+operator: Conv2D
+name: kernel_support_s8_groups1
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 4
+- 4
+- 4
+filter_shape:
+- 3
+- 3
+- 4
+- 4
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+---
+operator: Conv2D
+name: kernel_support_s8_groups2
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 4
+- 4
+- 4
+filter_shape:
+- 3
+- 3
+- 2
+- 4
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+groups: 2
+---
+operator: Conv2D
+name: kernel_support_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 4
+- 4
+- 4
+filter_shape:
+- 3
+- 3
+- 4
+- 4
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true

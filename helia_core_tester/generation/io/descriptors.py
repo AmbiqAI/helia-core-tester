@@ -12,7 +12,8 @@ from pathlib import Path
 ALLOWED_DTYPE_COMBOS = {
     ('S8', 'S8'): 's8',
     ('S16', 'S8'): 's16', 
-    ('S8', 'S4'): 's4'
+    ('S8', 'S4'): 's4',
+    ('S32', 'S8'): 's32',
 }
 
 
@@ -60,24 +61,52 @@ def _validate_and_normalize_descriptor(desc: Dict[str, Any]) -> Dict[str, Any]:
             if 'input_shape' not in desc or 'filter_shape' not in desc:
                 raise ValueError(f"{operator} requires input_shape and filter_shape")
         elif operator in ['MatMul', 'Elementwise', 'Add', 'Sub', 'Mul', 'Maximum', 'Minimum',
-                          'Equal', 'NotEqual', 'Greater', 'GreaterEqual', 'Less', 'LessEqual']:
+                          'Equal', 'NotEqual', 'Greater', 'GreaterEqual', 'Less', 'LessEqual', 'Comparison']:
             if 'input_1_shape' not in desc or 'input_2_shape' not in desc:
                 raise ValueError(f"{operator} requires input_1_shape and input_2_shape")
+            if operator == 'Comparison' and 'operation' not in desc:
+                raise ValueError("Comparison requires operation")
         elif operator == 'Pooling':
             if 'input_shape' not in desc or ('pool_size' not in desc and 'filter_shape' not in desc):
                 raise ValueError(f"{operator} requires input_shape and pool_size (or filter_shape)")
-        elif operator in ['Relu', 'Relu6', 'LeakyRelu', 'Softmax', 'Quantize', 'Dequantize',
+        elif operator in ['Relu', 'Relu6', 'LeakyRelu', 'Softmax', 'Quantize', 'Dequantize', 'Abs',
                          'Transpose', 'StridedSlice', 'Pad', 'LSTM', 'SVDF',
                          'Mean', 'ReduceMax', 'ReduceMin', 'ArgMax', 'ArgMin', 'TransposeConv',
-                         'Tanh', 'Logistic', 'HardSwish', 'PReLU', 'Fill', 'ZerosLike',
-                         'Reshape', 'Shape', 'Slice', 'Squeeze', 'SpaceToDepth', 'DepthToSpace',
-                         'Split', 'Pack', 'Unpack', 'Concatenation', 'SpaceToBatchND', 'BatchToSpaceND', 'VariableUpdate']:
+                         'Tanh', 'Logistic', 'HardSwish', 'PReLU', 'Fill',
+                         'Reshape', 'Squeeze', 'SpaceToDepth', 'DepthToSpace',
+                         'Split', 'Concatenation', 'SpaceToBatchND', 'BatchToSpaceND',
+                         'ResizeNearestNeighbor', 'VariableUpdate', 'Clamp', 'NNActivationS16', 'Gather', 'GatherND', 'Requantize']:
             if 'input_shape' not in desc:
-                raise ValueError(f"{operator} requires input_shape")
+                if operator == 'LSTM' and desc.get('hint', {}).get('force_cmsis', False):
+                    pass
+                else:
+                    raise ValueError(f"{operator} requires input_shape")
+            if operator == 'Clamp':
+                if 'act_min' not in desc or 'act_max' not in desc:
+                    raise ValueError("Clamp requires act_min and act_max")
+            if operator == 'NNActivationS16':
+                if 'activation_type' not in desc:
+                    raise ValueError("NNActivationS16 requires activation_type")
+            if operator in ['Gather', 'GatherND']:
+                if 'indices_shape' not in desc:
+                    raise ValueError(f"{operator} requires indices_shape")
+            if operator == 'Requantize':
+                required = [
+                    'effective_scale_multiplier',
+                    'effective_scale_shift',
+                    'input_zeropoint',
+                    'output_zeropoint',
+                ]
+                for field in required:
+                    if field not in desc:
+                        raise ValueError(f"Requantize requires {field}")
+            if operator == 'ResizeNearestNeighbor':
+                if 'size' not in desc:
+                    raise ValueError("ResizeNearestNeighbor requires size")
         else:
             raise ValueError(f"Unsupported operator: {operator}")
 
-    for shape_key in ['input_shape', 'filter_shape', 'input_1_shape', 'input_2_shape', 'pool_size']:
+    for shape_key in ['input_shape', 'filter_shape', 'input_1_shape', 'input_2_shape', 'pool_size', 'indices_shape']:
         if shape_key in desc:
             desc[shape_key] = list(desc[shape_key])
 
@@ -228,13 +257,36 @@ def expand_descriptor_variations(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
             if 'input_shape' not in variation_desc or ('pool_size' not in variation_desc and 'filter_shape' not in variation_desc):
                 raise ValueError(f"{operator} variation requires input_shape and pool_size (or filter_shape)")
         elif operator in ['Relu', 'Relu6', 'LeakyRelu', 'Softmax', 'Quantize', 'Dequantize',
-                         'Transpose', 'StridedSlice', 'Pad', 'LSTM', 'SVDF',
-                         'Mean', 'ReduceMax', 'ReduceMin', 'ArgMax', 'ArgMin', 'TransposeConv',
-                         'Tanh', 'Logistic', 'HardSwish', 'PReLU', 'Fill', 'ZerosLike',
-                         'Reshape', 'Shape', 'Slice', 'Squeeze', 'SpaceToDepth', 'DepthToSpace',
-                         'Split', 'Pack', 'Unpack', 'Concatenation', 'SpaceToBatchND', 'BatchToSpaceND', 'VariableUpdate']:
+                          'Transpose', 'StridedSlice', 'Pad', 'LSTM', 'SVDF',
+                          'Mean', 'ReduceMax', 'ReduceMin', 'ArgMax', 'ArgMin', 'TransposeConv',
+                          'Tanh', 'Logistic', 'HardSwish', 'PReLU', 'Fill',
+                          'Reshape', 'Squeeze', 'SpaceToDepth', 'DepthToSpace',
+                          'Split', 'Concatenation', 'SpaceToBatchND', 'BatchToSpaceND',
+                          'ResizeNearestNeighbor', 'VariableUpdate', 'Clamp', 'NNActivationS16', 'Gather', 'GatherND', 'Requantize']:
             if 'input_shape' not in variation_desc:
                 raise ValueError(f"{operator} variation requires input_shape")
+            if operator == 'Clamp':
+                if 'act_min' not in variation_desc or 'act_max' not in variation_desc:
+                    raise ValueError("Clamp variation requires act_min and act_max")
+            if operator == 'NNActivationS16':
+                if 'activation_type' not in variation_desc:
+                    raise ValueError("NNActivationS16 variation requires activation_type")
+            if operator in ['Gather', 'GatherND']:
+                if 'indices_shape' not in variation_desc:
+                    raise ValueError(f"{operator} variation requires indices_shape")
+            if operator == 'Requantize':
+                required = [
+                    'effective_scale_multiplier',
+                    'effective_scale_shift',
+                    'input_zeropoint',
+                    'output_zeropoint',
+                ]
+                for field in required:
+                    if field not in variation_desc:
+                        raise ValueError(f"Requantize variation requires {field}")
+            if operator == 'ResizeNearestNeighbor':
+                if 'size' not in variation_desc:
+                    raise ValueError("ResizeNearestNeighbor variation requires size")
         
         # Normalize shapes (ensure they are lists)
         for shape_key in ['input_shape', 'filter_shape', 'input_1_shape', 'input_2_shape', 'pool_size']:

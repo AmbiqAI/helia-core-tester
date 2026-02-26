@@ -26,17 +26,19 @@ void HardFault_Handler(void)
     while (1) { }
 }
 
-#define {{ name|upper }}_OUTPUT_SIZE ({{ output_dims.n }} * {{ output_dims.h }} * {{ output_dims.w }} * {{ output_dims.c }})
-static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+{% for out in outputs %}
+#define {{ out.name|upper }}_OUTPUT_SIZE ({{ out.size }})
+static {{ output_dtype }} {{ out.name }}_output[{{ out.name|upper }}_OUTPUT_SIZE];
+{% endfor %}
 
-// Array of output pointers (only first output for now)
 static {{ output_dtype }}* {{ name }}_output_ptrs[] = {
-    {{ name }}_output
+    {% for out in outputs %}
+    {{ out.name }}_output,
+    {% endfor %}
 };
 
 int32_t {{ prefix }}_{{ name }}_run(
-    const {{ input_dtype }}* __restrict input,
-    {{ output_dtype }}* __restrict output
+    const {{ input_dtype }}* __restrict input
 ) {
     // Call Split kernel
     // Note: Split has multiple outputs, but we only handle the first one for now
@@ -72,59 +74,64 @@ void tearDown(void) {}
 void test_{{ prefix }}_{{ name }}(void)
 {
     const arm_cmsis_nn_status expected = ARM_CMSIS_NN_SUCCESS;
-    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
+    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input);
     
     // Assert that Split succeeded
     TEST_ASSERT_EQUAL(expected, status);
 
     // Verify outputs element by element (allow 1-bit tolerance)
-    const int output_size = {{ name|upper }}_OUTPUT_SIZE;
-    const {{ output_dtype }} *act = {{ name }}_output;
-    const {{ output_dtype }} *exp = {{ name }}_expected_output;
+    {% for out in outputs %}
+    {
+        const int output_size = {{ out.name|upper }}_OUTPUT_SIZE;
+        const {{ output_dtype }} *act = {{ out.name }}_output;
+        const {{ output_dtype }} *exp = {{ out.name }}_expected_output;
 
-    for (int i = 0; i < output_size; i++) {
-        int act_val = (int)act[i];
-        int exp_val = (int)exp[i];
-        int diff = act_val - exp_val;
-        if (diff < 0) diff = -diff;  // absolute difference
-        if (diff > 1) {  // Allow tolerance of 1 bit difference
-            char msg[128];
-            snprintf(msg, sizeof(msg), "Mismatch at index %d: expected %d, got %d (diff: %d)", i, exp_val, act_val, diff);
-            TEST_ASSERT_EQUAL_MESSAGE(exp_val, act_val, msg);
+        for (int i = 0; i < output_size; i++) {
+            int act_val = (int)act[i];
+            int exp_val = (int)exp[i];
+            int diff = act_val - exp_val;
+            if (diff < 0) diff = -diff;  // absolute difference
+            if (diff > 1) {  // Allow tolerance of 1 bit difference
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Mismatch at index %d: expected %d, got %d (diff: %d)", i, exp_val, act_val, diff);
+                TEST_ASSERT_EQUAL_MESSAGE(exp_val, act_val, msg);
+            }
         }
     }
+    {% endfor %}
 }
 
 // Legacy function for non-Unity builds (if needed)
 int32_t {{ prefix }}_{{ name }}_test_case_run(void)
 {
     const arm_cmsis_nn_status expected = ARM_CMSIS_NN_SUCCESS;
-    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
+    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input);
     if (status != expected) {
-        printf("Split failed with status %d\r\n", status);
+        printf("Split failed with status %d\r\n", (int)status);
         printf("1 Failures\r\n");
         return 1;
     }
 
-    // Verify outputs (allow 1-bit tolerance)
     int failures = 0;
-    const int output_size = {{ name|upper }}_OUTPUT_SIZE;
-
-    const {{ output_dtype }} *act = {{ name }}_output;
-    const {{ output_dtype }} *exp = {{ name }}_expected_output;
-
-    for (int i = 0; i < output_size; i++) {
-        int act_val = (int)act[i];
-        int exp_val = (int)exp[i];
-        int diff = act_val - exp_val;
-        if (diff < 0) diff = -diff;  // absolute difference
-        if (diff > 1) {  // Allow tolerance of 1 bit difference
-            failures++;
-            if (failures <= 20) {
-                printf("Mismatch[%d]: exp=%d got=%d (diff=%d)\r\n", i, exp_val, act_val, diff);
+    {% for out in outputs %}
+    {
+        const int output_size = {{ out.name|upper }}_OUTPUT_SIZE;
+        const {{ output_dtype }} *act = {{ out.name }}_output;
+        const {{ output_dtype }} *exp = {{ out.name }}_expected_output;
+        for (int i = 0; i < output_size; i++) {
+            int act_val = (int)act[i];
+            int exp_val = (int)exp[i];
+            int diff = act_val - exp_val;
+            if (diff < 0) diff = -diff;  // absolute difference
+            if (diff > 1) {  // Allow tolerance of 1 bit difference
+                failures++;
+                if (failures <= 20) {
+                    printf("Mismatch[%d]: exp=%d got=%d (diff=%d)\r\n", i, exp_val, act_val, diff);
+                }
             }
         }
     }
+    {% endfor %}
 
     printf("%d Failures\r\n", failures);
     return failures;
@@ -137,6 +144,7 @@ int main(void)
 
     // For standalone execution, use the legacy test function
     int32_t failures = {{ prefix }}_{{ name }}_test_case_run();
+    (void)failures;
 
     // Always terminate the FVP run cleanly
     signal_eot();

@@ -93,6 +93,30 @@ padding: SAME
 use_bias: false
 ---
 operator: DepthwiseConv2D
+name: depthwise_kernel_support_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 4
+- 4
+- 2
+filter_shape:
+- 3
+- 3
+- 2
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+---
+operator: DepthwiseConv2D
 name: depthwise_eq_in_out_ch_s8
 activation_dtype: S8
 weight_dtype: S8

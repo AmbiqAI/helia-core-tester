@@ -1,0 +1,47 @@
+#ifndef {{ prefix|upper }}_GATHER_ND_H
+#define {{ prefix|upper }}_GATHER_ND_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+static const cmsis_nn_dims {{ name }}_params_dims = {
+    .n = {{ params_dims.n }}, .h = {{ params_dims.h }},
+    .w = {{ params_dims.w }}, .c = {{ params_dims.c }}
+};
+
+static const cmsis_nn_dims {{ name }}_indices_dims = {
+    .n = {{ indices_dims.n }}, .h = {{ indices_dims.h }},
+    .w = {{ indices_dims.w }}, .c = {{ indices_dims.c }}
+};
+
+static const cmsis_nn_dims {{ name }}_output_dims = {
+    .n = {{ output_dims.n }}, .h = {{ output_dims.h }},
+    .w = {{ output_dims.w }}, .c = {{ output_dims.c }}
+};
+
+static const int32_t {{ name }}_params_shape[] = {
+{{ params_shape_array }}
+};
+
+static const int32_t {{ name }}_indices_shape[] = {
+{{ indices_shape_array }}
+};
+
+static const int32_t {{ name }}_output_shape[] = {
+{{ output_shape_array }}
+};
+
+static const {{ input_dtype }} {{ name }}_params_data[] = {
+{{ params_data_array }}
+};
+
+static const int32_t {{ name }}_indices[] = {
+{{ indices_data_array }}
+};
+
+static const {{ output_dtype }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

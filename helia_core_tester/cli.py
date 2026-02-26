@@ -20,6 +20,7 @@ from helia_core_tester.core.steps import (
     RunStep,
     CleanStep,
 )
+from helia_core_tester.reporting.gap_gate import run_gap_check
 
 app = typer.Typer(
     name="helia_core_tester",
@@ -99,33 +100,6 @@ def generate(
         GenerateStep(config), config,
         "✓ Generation completed successfully",
         failure_prefix="Generation failed",
-    )
-
-
-@app.command()
-def runners(
-    cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
-    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
-    plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
-    project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
-):
-    """Generate Unity test runners."""
-    config = get_config(cpu=cpu, verbosity=verbosity, dry_run=dry_run, plan=plan, project_root=project_root)
-    if config.plan:
-        plan_item = RunnersStep(config).plan()
-        typer.echo(f"1. {plan_item.name}: {'will run' if plan_item.will_run else 'skipped'} ({plan_item.reason})")
-        for cmd in plan_item.commands:
-            typer.echo(f"   cmd: {' '.join(cmd)}")
-        if plan_item.outputs:
-            outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
-            if outputs:
-                typer.echo(f"   outputs: {outputs}")
-        sys.exit(0)
-    run_step_exit(
-        RunnersStep(config), config,
-        "✓ Test runners generated successfully",
-        failure_prefix="Runner generation failed",
     )
 
 
@@ -370,6 +344,34 @@ def doctor(
     else:
         typer.echo("\n✗ Some preflight checks failed", err=True)
         sys.exit(1)
+
+
+@app.command(name="gap-check")
+def gap_check(
+    cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
+    report_dir: Optional[Path] = typer.Option(None, help="Directory to save gap reports"),
+    generated_tests_dir: Optional[Path] = typer.Option(None, help="Override generated tests directory"),
+    project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
+):
+    """Check for new gaps between descriptors and generated tests."""
+    config = get_config(cpu=cpu, project_root=project_root)
+    gen_dir = Path(generated_tests_dir).resolve() if generated_tests_dir else None
+    out_dir = Path(report_dir).resolve() if report_dir else None
+
+    exit_code, report, (json_path, md_path) = run_gap_check(
+        project_root=config.project_root,
+        cpu=config.cpu,
+        report_dir=out_dir,
+        generated_tests_dir=gen_dir,
+    )
+
+    typer.echo(f"Gap report JSON: {json_path}")
+    typer.echo(f"Gap report MD:   {md_path}")
+    if exit_code != 0:
+        typer.echo("✗ Gap check failed: unexpected gaps detected", err=True)
+    else:
+        typer.echo("✓ Gap check passed (no unexpected gaps)")
+    sys.exit(exit_code)
 
 
 def main():

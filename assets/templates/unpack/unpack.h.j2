@@ -1,0 +1,16 @@
+#ifndef {{ prefix|upper }}_UNPACK_H
+#define {{ prefix|upper }}_UNPACK_H
+
+#include <stdint.h>
+
+static const {{ input_dtype }} {{ name }}_input[] = {
+{{ input_data_array }}
+};
+
+{% for out in outputs %}
+static const {{ output_dtype }} {{ out.name }}_expected_output[] = {
+{{ out.expected_output_array }}
+};
+{% endfor %}
+
+#endif

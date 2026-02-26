@@ -21,6 +21,15 @@ def scalar_scale_zp(quant_dict: Dict[str, Any]) -> Tuple[float, int]:
     return float(scale), int(zp)
 
 
+def qp_scalar(quant_dict: Dict[str, Any], key: str, default: Any) -> Any:
+    value = quant_dict.get(key, default)
+    if isinstance(value, (list, np.ndarray)):
+        if len(value) == 0:
+            return default
+        return value[0]
+    return value
+
+
 def activation_bounds(activation_dtype: str) -> Tuple[int, int]:
     """Return (min, max) int bounds for activation_dtype (e.g. S8, S16)."""
     activation_dtype = str(activation_dtype).upper()
@@ -115,3 +124,76 @@ def calculate_per_channel_multiplier_shift(scales: np.ndarray, reduce_to_q15: bo
     
     return np.array(multipliers, dtype=np.int32), np.array(shifts, dtype=np.int32)
 
+
+def default_input_scale(activation_dtype: str) -> float:
+    activation_dtype = str(activation_dtype).upper()
+    if activation_dtype == "S16":
+        return 1.0 / 32768.0
+    return 0.125
+
+
+def comparison_quant_params(
+    lhs_scale: float,
+    rhs_scale: float,
+    activation_dtype: str,
+) -> Tuple[int, int, int, int, int]:
+    activation_dtype = str(activation_dtype).upper()
+    left_shift = 15 if activation_dtype == "S16" else 20
+    twice_max_input_scale = 2.0 * max(lhs_scale, rhs_scale)
+    lhs_multiplier = lhs_scale / twice_max_input_scale
+    rhs_multiplier = rhs_scale / twice_max_input_scale
+    lhs_mult, lhs_shift = calculate_multiplier_shift(lhs_multiplier)
+    rhs_mult, rhs_shift = calculate_multiplier_shift(rhs_multiplier)
+    return left_shift, lhs_mult, lhs_shift, rhs_mult, rhs_shift
+
+
+def requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
+    left_shift = shift if shift > 0 else 0
+    right_shift = -shift if shift < 0 else 0
+    prod = values.astype(np.int64) * (1 << left_shift)
+    mult = (1 << 30) + (prod * int(multiplier))
+    res = (mult >> 31).astype(np.int64)
+    if right_shift == 0:
+        return res.astype(np.int32)
+    remainder_mask = (1 << right_shift) - 1
+    remainder = res & remainder_mask
+    result = res >> right_shift
+    threshold = remainder_mask >> 1
+    threshold = threshold + (result < 0)
+    result = result + (remainder > threshold)
+    return result.astype(np.int32)
+
+
+def simulate_compare(
+    input1_q: np.ndarray,
+    input2_q: np.ndarray,
+    *,
+    operation: str,
+    input_1_offset: int,
+    input_1_mult: int,
+    input_1_shift: int,
+    input_2_offset: int,
+    input_2_mult: int,
+    input_2_shift: int,
+    left_shift: int,
+) -> np.ndarray:
+    a = (input1_q.astype(np.int32) + int(input_1_offset)) << int(left_shift)
+    b = (input2_q.astype(np.int32) + int(input_2_offset)) << int(left_shift)
+    a = requantize_np(a, input_1_mult, input_1_shift)
+    b = requantize_np(b, input_2_mult, input_2_shift)
+
+    if operation == "ARM_COMPARE_EQUAL":
+        out = a == b
+    elif operation == "ARM_COMPARE_NOT_EQUAL":
+        out = a != b
+    elif operation == "ARM_COMPARE_GREATER":
+        out = a > b
+    elif operation == "ARM_COMPARE_GREATER_EQUAL":
+        out = a >= b
+    elif operation == "ARM_COMPARE_LESS":
+        out = a < b
+    elif operation == "ARM_COMPARE_LESS_EQUAL":
+        out = a <= b
+    else:
+        raise ValueError(f"Unsupported operation: {operation}")
+    return out.astype(np.uint8)

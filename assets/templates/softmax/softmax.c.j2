@@ -33,7 +33,7 @@ int32_t {{ prefix }}_{{ name }}_run(
     const {{ input_dtype }}* __restrict input,
     {{ output_dtype }}* __restrict output
 ) {
-    {% if is_s16 %}
+    {% if returns_status %}
     // Call Softmax s16 kernel (requires LUTs)
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         input,
@@ -79,7 +79,7 @@ void tearDown(void) {}
 
 void test_{{ prefix }}_{{ name }}(void)
 {
-    {% if is_s16 %}
+    {% if returns_status %}
     const arm_cmsis_nn_status expected = ARM_CMSIS_NN_SUCCESS;
     int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
     
@@ -108,7 +108,7 @@ void test_{{ prefix }}_{{ name }}(void)
 // Legacy function for non-Unity builds (if needed)
 int32_t {{ prefix }}_{{ name }}_test_case_run(void)
 {
-    {% if is_s16 %}
+    {% if returns_status %}
     const arm_cmsis_nn_status expected = ARM_CMSIS_NN_SUCCESS;
     int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
     if (status != expected) {

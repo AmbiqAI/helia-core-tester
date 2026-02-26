@@ -94,6 +94,11 @@ class OpFullyConnected(OperationBase):
             converter.inference_input_type = tf.int16
             converter.inference_output_type = tf.int16
         
+        # Force per-tensor quantization when requested
+        force_per_tensor = bool(self.desc.get("hint", {}).get("force_per_tensor", False))
+        if force_per_tensor and hasattr(converter, "_experimental_disable_per_channel"):
+            converter._experimental_disable_per_channel = True
+
         # Generate representative dataset
         def representative_data_gen():
             for _ in range(100):
@@ -420,7 +425,8 @@ class OpFullyConnected(OperationBase):
         
         weight_scale = weight_quant_dict['scale']
         output_scale = output_quant['scale']
-        per_channel = bool(weight_quant_dict.get('per_channel', False))
+        force_per_tensor = bool(self.desc.get("hint", {}).get("force_per_tensor", False))
+        per_channel = bool(weight_quant_dict.get('per_channel', False)) and not force_per_tensor
         
         # Convert scales to numpy arrays for per-channel computation
         if per_channel and isinstance(weight_scale, (list, np.ndarray)):

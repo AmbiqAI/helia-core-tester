@@ -52,6 +52,14 @@ class OperationBase(ABC):
             Keras model ready for TFLite conversion
         """
         pass
+
+    def needs_keras_model(self) -> bool:
+        """Return True if build_keras_model should be called for conversion."""
+        return True
+
+    def allow_no_tflite(self) -> bool:
+        """Return True if this op can generate C/H without a .tflite."""
+        return False
     
     def _apply_activation_quantization(self, converter) -> None:
         """Set converter for activation-only quantization (S8 or S16) from descriptor."""
@@ -103,6 +111,63 @@ class OperationBase(ABC):
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         self._apply_activation_quantization(converter)
         converter.representative_dataset = self._representative_dataset_gen
+        tflite_model = converter.convert()
+        with open(out_path, "wb") as f:
+            f.write(tflite_model)
+
+    def _convert_with_activation_quantization(
+        self,
+        model,
+        out_path: str,
+        *,
+        input_type=None,
+        output_type=None,
+        rep_seed: int,
+    ) -> None:
+        """
+        Convert Keras model to TFLite with activation quantization for S8/S16.
+        Allows overriding inference input/output types (e.g., float input or bool output).
+        """
+        if tf is None:
+            raise ImportError("tensorflow is required for TFLite conversion")
+        converter = tf.lite.TFLiteConverter.from_keras_model(model)
+
+        activation_dtype = self.desc.get("activation_dtype", "S8")
+        if activation_dtype == "S8":
+            converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            converter.target_spec.supported_types = [tf.int8]
+            converter.inference_input_type = input_type or tf.int8
+            converter.inference_output_type = output_type or tf.int8
+        elif activation_dtype == "S16":
+            converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            converter.target_spec.supported_ops = [
+                tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8,
+            ]
+            converter.inference_input_type = input_type or tf.int16
+            converter.inference_output_type = output_type or tf.int16
+        else:
+            # Fallback: no quantization, keep float32 I/O unless overridden
+            converter.optimizations = []
+            if input_type is not None:
+                converter.inference_input_type = input_type
+            if output_type is not None:
+                converter.inference_output_type = output_type
+
+        def representative_data_gen():
+            for _ in range(100):
+                if "input_shape" in self.desc:
+                    inputs = self.rng.uniform(-1.0, 1.0, size=self.desc["input_shape"]).astype(np.float32)
+                    yield [inputs]
+                elif "input_1_shape" in self.desc and "input_2_shape" in self.desc:
+                    inputs1 = self.rng.uniform(-1.0, 1.0, size=self.desc["input_1_shape"]).astype(np.float32)
+                    inputs2 = self.rng.uniform(-1.0, 1.0, size=self.desc["input_2_shape"]).astype(np.float32)
+                    yield [inputs1, inputs2]
+                else:
+                    shape = self.desc.get("input_shape", [1, 1, 1, 1])
+                    yield [self.rng.uniform(-1.0, 1.0, size=shape).astype(np.float32)]
+
+        converter.representative_dataset = representative_data_gen
+
         tflite_model = converter.convert()
         with open(out_path, "wb") as f:
             f.write(tflite_model)

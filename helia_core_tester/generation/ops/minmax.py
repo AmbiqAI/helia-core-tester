@@ -346,16 +346,39 @@ class OpMinMax(OperationBase):
         input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
         input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
         
-        # Run inference using LiteRT interpreter
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        interpreter.set_tensor(input_details[0]['index'], input1_q)
-        interpreter.set_tensor(input_details[1]['index'], input2_q)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
+        # Run inference using LiteRT interpreter when shapes match and no broadcast requested.
+        # LiteRT broadcasting can fail for some shapes, so fallback to numpy.
+        desc_input1_shape = tuple(self.desc.get("input_1_shape", input1_shape))
+        desc_input2_shape = tuple(self.desc.get("input_2_shape", input2_shape))
+        if input1_shape == input2_shape and desc_input1_shape == desc_input2_shape:
+            interpreter = self.load_litert_interpreter(str(tflite_path))
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+            in0_shape = tuple(input_details[0].get('shape', input1_q.shape))
+            in1_shape = tuple(input_details[1].get('shape', input2_q.shape))
+
+            if in0_shape == input1_q.shape and in1_shape == input2_q.shape:
+                try:
+                    interpreter.set_tensor(input_details[0]['index'], input1_q)
+                    interpreter.set_tensor(input_details[1]['index'], input2_q)
+                    interpreter.invoke()
+                    output_data = interpreter.get_tensor(output_details[0]['index'])
+                    output_data = np.array(output_data)
+                except (ValueError, RuntimeError):
+                    if op_name == "Maximum":
+                        output_data = np.maximum(input1_q, input2_q)
+                    else:
+                        output_data = np.minimum(input1_q, input2_q)
+            else:
+                if op_name == "Maximum":
+                    output_data = np.maximum(input1_q, input2_q)
+                else:
+                    output_data = np.minimum(input1_q, input2_q)
+        else:
+            if op_name == "Maximum":
+                output_data = np.maximum(input1_q, input2_q)
+            else:
+                output_data = np.minimum(input1_q, input2_q)
         
         # Format arrays
         input1_array_str = builder.format_array_as_c_literal(input1_q)

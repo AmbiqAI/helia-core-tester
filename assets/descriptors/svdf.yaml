@@ -1,0 +1,89 @@
+operator: SVDF
+name: svdf_s8_bias_rank1
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [2, 4]
+hint:
+  force_cmsis: true
+  state_dtype: S8
+  input_batches: 2
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  use_bias: true
+---
+operator: SVDF
+name: svdf_s8_bias_rank2
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [2, 4]
+hint:
+  force_cmsis: true
+  state_dtype: S8
+  input_batches: 2
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 2
+  use_bias: true
+---
+operator: SVDF
+name: svdf_s8_nobias_rank2
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [2, 4]
+hint:
+  force_cmsis: true
+  state_dtype: S8
+  input_batches: 2
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 2
+  use_bias: false
+---
+operator: SVDF
+name: svdf_state_s16_bias_rank1
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [2, 4]
+hint:
+  force_cmsis: true
+  state_dtype: S16
+  input_batches: 2
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  use_bias: true
+---
+operator: SVDF
+name: svdf_state_s16_bias_rank2
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [2, 4]
+hint:
+  force_cmsis: true
+  state_dtype: S16
+  input_batches: 2
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 2
+  use_bias: true
+---
+operator: SVDF
+name: svdf_state_s16_nobias_rank2
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [2, 4]
+hint:
+  force_cmsis: true
+  state_dtype: S16
+  input_batches: 2
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 2
+  use_bias: false

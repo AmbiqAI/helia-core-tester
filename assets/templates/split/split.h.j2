@@ -11,12 +11,6 @@ static const cmsis_nn_dims {{ name }}_input_dims = {
     .w = {{ input_dims.w }}, .c = {{ input_dims.c }}
 };
 
-// Output dimensions (first output)
-static const cmsis_nn_dims {{ name }}_output_dims = {
-    .n = {{ output_dims.n }}, .h = {{ output_dims.h }},
-    .w = {{ output_dims.w }}, .c = {{ output_dims.c }}
-};
-
 // Input shape
 static const int32_t {{ name }}_input_shape[] = {
 {{ input_shape_array }}
@@ -32,9 +26,11 @@ static const {{ input_dtype }} {{ name }}_input[] = {
 {{ input_data_array }}
 };
 
-// Expected output (golden - first output)
-static const {{ output_dtype }} {{ name }}_expected_output[] = {
-{{ expected_output_array }}
+{% for out in outputs %}
+// Expected output {{ loop.index0 }}
+static const {{ output_dtype }} {{ out.name }}_expected_output[] = {
+{{ out.expected_output_array }}
 };
+{% endfor %}
 
 #endif

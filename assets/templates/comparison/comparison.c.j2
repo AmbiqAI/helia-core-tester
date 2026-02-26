@@ -1,0 +1,122 @@
+#include "{{ name }}_comparison.h"
+#include "arm_nnfunctions.h"
+#include "unity.h"
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#ifdef USING_FVP_CORSTONE_300
+extern void uart_init(void);
+#endif
+
+static inline void signal_eot(void)
+{
+    putchar(4);
+    fflush(stdout);
+}
+
+void HardFault_Handler(void)
+{
+    printf("HardFault\r\n");
+    signal_eot();
+    while (1) { }
+}
+
+#define {{ name|upper }}_OUTPUT_SIZE ({{ output_size }})
+static bool {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+
+int32_t {{ prefix }}_{{ name }}_run(
+    const {{ input_dtype }}* __restrict input_1,
+    const {{ input_dtype }}* __restrict input_2,
+    bool* __restrict output
+) {
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        NULL,
+        input_1,
+        &{{ name }}_input_1_dims,
+        input_2,
+        &{{ name }}_input_2_dims,
+        output,
+        &{{ name }}_output_dims,
+        {{ input_1_offset }},
+        {{ input_1_mult }},
+        {{ input_1_shift }},
+        {{ input_2_offset }},
+        {{ input_2_mult }},
+        {{ input_2_shift }},
+        {{ left_shift }}{% if operation is defined %},
+        {{ operation }}{% endif %}
+    );
+    return kernel_status;
+}
+
+void setUp(void)
+{
+#ifdef USING_FVP_CORSTONE_300
+    uart_init();
+    setvbuf(stdout, NULL, _IONBF, 0);
+#endif
+}
+
+void tearDown(void) {}
+
+void test_{{ prefix }}_{{ name }}(void)
+{
+    const arm_cmsis_nn_status expected = ARM_CMSIS_NN_SUCCESS;
+    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input_1, {{ name }}_input_2, {{ name }}_output);
+    TEST_ASSERT_EQUAL(expected, status);
+
+    const int output_size = {{ name|upper }}_OUTPUT_SIZE;
+    const bool *act = {{ name }}_output;
+    const bool *exp = {{ name }}_expected_output;
+
+    for (int i = 0; i < output_size; i++) {
+        int act_val = act[i] ? 1 : 0;
+        int exp_val = exp[i] ? 1 : 0;
+        if (act_val != exp_val) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "Mismatch at index %d: expected %d, got %d", i, exp_val, act_val);
+            TEST_ASSERT_EQUAL_MESSAGE(exp_val, act_val, msg);
+        }
+    }
+}
+
+// Legacy function for non-Unity builds (if needed)
+int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+{
+    const arm_cmsis_nn_status expected = ARM_CMSIS_NN_SUCCESS;
+    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input_1, {{ name }}_input_2, {{ name }}_output);
+    if (status != expected) {
+        printf("Comparison failed with status %d\r\n", status);
+        printf("1 Failures\r\n");
+        return 1;
+    }
+
+    int failures = 0;
+    const int output_size = {{ name|upper }}_OUTPUT_SIZE;
+    const bool *act = {{ name }}_output;
+    const bool *exp = {{ name }}_expected_output;
+
+    for (int i = 0; i < output_size; i++) {
+        int act_val = act[i] ? 1 : 0;
+        int exp_val = exp[i] ? 1 : 0;
+        if (act_val != exp_val) {
+            failures++;
+            if (failures <= 20) {
+                printf("Mismatch[%d]: exp=%d got=%d\r\n", i, exp_val, act_val);
+            }
+        }
+    }
+
+    printf("%d Failures\r\n", failures);
+    return failures;
+}
+
+int main(void)
+{
+    setUp();
+    // For standalone execution, use the legacy test function
+    (void){{ prefix }}_{{ name }}_test_case_run();
+    signal_eot();
+    while (1) { }
+}

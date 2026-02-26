@@ -4,7 +4,62 @@
   "properties": {
     "operator": {
       "type": "string",
-      "enum": ["FullyConnected", "Conv2D", "DepthwiseConv2D", "MatMul", "Elementwise", "Add", "Sub", "Mul", "Maximum", "Minimum", "Relu", "Relu6", "LeakyRelu", "Softmax", "Tanh", "Logistic", "HardSwish", "PReLU", "Quantize", "Dequantize", "Pooling", "Transpose", "StridedSlice", "Pad", "LSTM", "SVDF", "Mean", "ReduceMax", "ReduceMin", "ArgMax", "ArgMin", "TransposeConv", "Equal", "NotEqual", "Greater", "GreaterEqual", "Less", "LessEqual", "Fill", "ZerosLike", "Reshape", "Shape", "Slice", "Squeeze", "SpaceToDepth", "DepthToSpace", "Split", "Pack", "Unpack", "Concatenation", "SpaceToBatchND", "BatchToSpaceND", "VariableUpdate"]
+      "enum": [
+        "FullyConnected",
+        "Conv2D",
+        "DepthwiseConv2D",
+        "MatMul",
+        "Elementwise",
+        "Add",
+        "Sub",
+        "Mul",
+        "Maximum",
+        "Minimum",
+        "Relu",
+        "Relu6",
+        "LeakyRelu",
+        "Softmax",
+        "Tanh",
+        "Logistic",
+        "HardSwish",
+        "PReLU",
+        "Abs",
+        "Quantize",
+        "Dequantize",
+        "Requantize",
+        "Pooling",
+        "Transpose",
+        "StridedSlice",
+        "Pad",
+        "LSTM",
+        "SVDF",
+        "Mean",
+        "ReduceMax",
+        "ReduceMin",
+        "ArgMax",
+        "ArgMin",
+        "TransposeConv",
+        "Equal",
+        "NotEqual",
+        "Greater",
+        "GreaterEqual",
+        "Less",
+        "LessEqual",
+        "Comparison",
+        "Fill",
+        "Reshape",
+        "Squeeze",
+        "SpaceToDepth",
+        "DepthToSpace",
+        "Split",
+        "Concatenation",
+        "SpaceToBatchND",
+        "BatchToSpaceND",
+        "ResizeNearestNeighbor",
+        "VariableUpdate",
+        "Gather",
+        "GatherND"
+      ]
     },
     "name": {
       "type": "string",
@@ -12,39 +67,72 @@
     },
     "input_shape": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "minItems": 2,
       "maxItems": 4
     },
     "filter_shape": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "minItems": 2,
       "maxItems": 4
     },
     "input_1_shape": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "minItems": 2,
       "maxItems": 4
     },
     "input_2_shape": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "minItems": 2,
+      "maxItems": 4
+    },
+    "indices_shape": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "minItems": 1,
       "maxItems": 4
     },
     "activation": {
       "type": "string",
-      "enum": ["NONE", "RELU", "RELU6", "TANH", "SIGMOID"]
+      "enum": [
+        "NONE",
+        "RELU",
+        "RELU6",
+        "TANH",
+        "SIGMOID"
+      ]
     },
     "activation_dtype": {
       "type": "string",
-      "enum": ["S8", "S16"]
+      "enum": [
+        "S8",
+        "S16"
+      ]
     },
     "weight_dtype": {
       "type": "string",
-      "enum": ["S8", "S4"]
+      "enum": [
+        "S8",
+        "S4"
+      ]
     },
     "use_bias": {
       "type": "boolean"
@@ -57,39 +145,85 @@
     },
     "pooling_type": {
       "type": "string",
-      "enum": ["AVERAGE", "MAX"]
+      "enum": [
+        "AVERAGE",
+        "MAX"
+      ]
     },
     "pool_size": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "minItems": 2,
       "maxItems": 2
     },
     "strides": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "minItems": 2,
       "maxItems": 2
     },
     "padding": {
       "type": "string",
-      "enum": ["valid", "same", "VALID", "SAME"]
+      "enum": [
+        "valid",
+        "same",
+        "VALID",
+        "SAME"
+      ]
+    },
+    "groups": {
+      "type": "integer",
+      "minimum": 1
     },
     "axes": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 0},
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      },
       "minItems": 1
     },
     "axis": {
       "type": "integer",
       "minimum": 0
     },
+    "batch_dims": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "effective_scale_multiplier": {
+      "type": "integer"
+    },
+    "effective_scale_shift": {
+      "type": "integer"
+    },
+    "input_zeropoint": {
+      "type": "integer"
+    },
+    "output_zeropoint": {
+      "type": "integer"
+    },
+    "align_corners": {
+      "type": "boolean"
+    },
+    "half_pixel_centers": {
+      "type": "boolean"
+    },
     "keepdims": {
       "type": "boolean"
     },
     "output_shape": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "minItems": 1
     },
     "value": {
@@ -97,17 +231,24 @@
     },
     "target_shape": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "minItems": 1
     },
     "begin": {
       "type": "array",
-      "items": {"type": "integer"},
+      "items": {
+        "type": "integer"
+      },
       "minItems": 1
     },
     "end": {
       "type": "array",
-      "items": {"type": "integer"},
+      "items": {
+        "type": "integer"
+      },
       "minItems": 1
     },
     "shrink_axis_mask": {
@@ -116,7 +257,10 @@
     },
     "size": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "minItems": 1
     },
     "block_size": {
@@ -125,14 +269,20 @@
     },
     "block_shape": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "minItems": 1
     },
     "paddings": {
       "type": "array",
       "items": {
         "type": "array",
-        "items": {"type": "integer", "minimum": 0},
+        "items": {
+          "type": "integer",
+          "minimum": 0
+        },
         "minItems": 2,
         "maxItems": 2
       }
@@ -141,7 +291,10 @@
       "type": "array",
       "items": {
         "type": "array",
-        "items": {"type": "integer", "minimum": 0},
+        "items": {
+          "type": "integer",
+          "minimum": 0
+        },
         "minItems": 2,
         "maxItems": 2
       }
@@ -152,7 +305,10 @@
     },
     "size_splits": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "minItems": 1
     },
     "num_tensors": {
@@ -161,7 +317,10 @@
     },
     "value_shape": {
       "type": "array",
-      "items": {"type": "integer", "minimum": 1},
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
       "minItems": 1
     },
     "hint": {
@@ -172,7 +331,10 @@
         },
         "call_style": {
           "type": "string",
-          "enum": ["per_channel", "per_tensor"]
+          "enum": [
+            "per_channel",
+            "per_tensor"
+          ]
         },
         "transpose_weights": {
           "type": "boolean"
@@ -185,420 +347,695 @@
       "additionalProperties": true
     }
   },
-  "required": ["operator", "name", "activation_dtype", "weight_dtype"],
+  "required": [
+    "operator",
+    "name",
+    "activation_dtype",
+    "weight_dtype"
+  ],
   "additionalProperties": false,
   "allOf": [
     {
       "if": {
-        "properties": {"operator": {"const": "FullyConnected"}}
+        "properties": {
+          "operator": {
+            "const": "FullyConnected"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape", "filter_shape"]
+        "required": [
+          "input_shape",
+          "filter_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Conv2D"}}
+        "properties": {
+          "operator": {
+            "const": "Conv2D"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape", "filter_shape"]
+        "required": [
+          "input_shape",
+          "filter_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "DepthwiseConv2D"}}
+        "properties": {
+          "operator": {
+            "const": "DepthwiseConv2D"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape", "filter_shape"]
+        "required": [
+          "input_shape",
+          "filter_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "MatMul"}}
+        "properties": {
+          "operator": {
+            "const": "MatMul"
+          }
+        }
       },
       "then": {
-        "required": ["input_1_shape", "input_2_shape"]
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Elementwise"}}
+        "properties": {
+          "operator": {
+            "const": "Elementwise"
+          }
+        }
       },
       "then": {
-        "required": ["input_1_shape", "input_2_shape"]
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Add"}}
+        "properties": {
+          "operator": {
+            "const": "Add"
+          }
+        }
       },
       "then": {
-        "required": ["input_1_shape", "input_2_shape"]
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Sub"}}
+        "properties": {
+          "operator": {
+            "const": "Sub"
+          }
+        }
       },
       "then": {
-        "required": ["input_1_shape", "input_2_shape"]
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Mul"}}
+        "properties": {
+          "operator": {
+            "const": "Mul"
+          }
+        }
       },
       "then": {
-        "required": ["input_1_shape", "input_2_shape"]
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Maximum"}}
+        "properties": {
+          "operator": {
+            "const": "Maximum"
+          }
+        }
       },
       "then": {
-        "required": ["input_1_shape", "input_2_shape"]
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Minimum"}}
+        "properties": {
+          "operator": {
+            "const": "Minimum"
+          }
+        }
       },
       "then": {
-        "required": ["input_1_shape", "input_2_shape"]
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Relu"}}
+        "properties": {
+          "operator": {
+            "const": "Relu"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Relu6"}}
+        "properties": {
+          "operator": {
+            "const": "Relu6"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "LeakyRelu"}}
+        "properties": {
+          "operator": {
+            "const": "LeakyRelu"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Softmax"}}
+        "properties": {
+          "operator": {
+            "const": "Softmax"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Quantize"}}
+        "properties": {
+          "operator": {
+            "const": "Quantize"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Dequantize"}}
+        "properties": {
+          "operator": {
+            "const": "Dequantize"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Pooling"}}
+        "properties": {
+          "operator": {
+            "const": "Pooling"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape", "pooling_type", "pool_size"]
+        "required": [
+          "input_shape",
+          "pooling_type",
+          "pool_size"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Transpose"}}
+        "properties": {
+          "operator": {
+            "const": "Transpose"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "StridedSlice"}}
+        "properties": {
+          "operator": {
+            "const": "StridedSlice"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Pad"}}
+        "properties": {
+          "operator": {
+            "const": "Pad"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "LSTM"}}
+        "properties": {
+          "operator": {
+            "const": "LSTM"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "SVDF"}}
+        "properties": {
+          "operator": {
+            "const": "SVDF"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Tanh"}}
+        "properties": {
+          "operator": {
+            "const": "Tanh"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Logistic"}}
+        "properties": {
+          "operator": {
+            "const": "Logistic"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "HardSwish"}}
+        "properties": {
+          "operator": {
+            "const": "HardSwish"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "PReLU"}}
+        "properties": {
+          "operator": {
+            "const": "PReLU"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Equal"}}
+        "properties": {
+          "operator": {
+            "const": "Equal"
+          }
+        }
       },
       "then": {
-        "required": ["input_1_shape", "input_2_shape"]
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "NotEqual"}}
+        "properties": {
+          "operator": {
+            "const": "NotEqual"
+          }
+        }
       },
       "then": {
-        "required": ["input_1_shape", "input_2_shape"]
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Greater"}}
+        "properties": {
+          "operator": {
+            "const": "Greater"
+          }
+        }
       },
       "then": {
-        "required": ["input_1_shape", "input_2_shape"]
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "GreaterEqual"}}
+        "properties": {
+          "operator": {
+            "const": "GreaterEqual"
+          }
+        }
       },
       "then": {
-        "required": ["input_1_shape", "input_2_shape"]
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Less"}}
+        "properties": {
+          "operator": {
+            "const": "Less"
+          }
+        }
       },
       "then": {
-        "required": ["input_1_shape", "input_2_shape"]
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "LessEqual"}}
+        "properties": {
+          "operator": {
+            "const": "LessEqual"
+          }
+        }
       },
       "then": {
-        "required": ["input_1_shape", "input_2_shape"]
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Mean"}}
+        "properties": {
+          "operator": {
+            "const": "Mean"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "ReduceMax"}}
+        "properties": {
+          "operator": {
+            "const": "ReduceMax"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "ReduceMin"}}
+        "properties": {
+          "operator": {
+            "const": "ReduceMin"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "ArgMax"}}
+        "properties": {
+          "operator": {
+            "const": "ArgMax"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape", "axis"]
+        "required": [
+          "input_shape",
+          "axis"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "ArgMin"}}
+        "properties": {
+          "operator": {
+            "const": "ArgMin"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape", "axis"]
+        "required": [
+          "input_shape",
+          "axis"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Fill"}}
+        "properties": {
+          "operator": {
+            "const": "Fill"
+          }
+        }
       },
       "then": {
-        "required": ["output_shape"]
+        "required": [
+          "output_shape"
+        ]
+      }
+    },
+    {
+    {
+      "if": {
+        "properties": {
+          "operator": {
+            "const": "Reshape"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "input_shape",
+          "target_shape"
+        ]
+      }
+    },
+    {
+    {
+    {
+      "if": {
+        "properties": {
+          "operator": {
+            "const": "Squeeze"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "ZerosLike"}}
+        "properties": {
+          "operator": {
+            "const": "SpaceToDepth"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape",
+          "block_size"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Reshape"}}
+        "properties": {
+          "operator": {
+            "const": "DepthToSpace"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape", "target_shape"]
+        "required": [
+          "input_shape",
+          "block_size"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Shape"}}
+        "properties": {
+          "operator": {
+            "const": "Split"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Slice"}}
+        "properties": {
+          "operator": {
+            "const": "Concatenation"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape", "begin", "size"]
+        "required": [
+          "axis"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "Squeeze"}}
+        "properties": {
+          "operator": {
+            "const": "SpaceToBatchND"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape"]
+        "required": [
+          "input_shape",
+          "block_shape",
+          "paddings"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "SpaceToDepth"}}
+        "properties": {
+          "operator": {
+            "const": "BatchToSpaceND"
+          }
+        }
       },
       "then": {
-        "required": ["input_shape", "block_size"]
+        "required": [
+          "input_shape",
+          "block_shape",
+          "crops"
+        ]
       }
     },
     {
       "if": {
-        "properties": {"operator": {"const": "DepthToSpace"}}
-      },
-      "then": {
-        "required": ["input_shape", "block_size"]
-      }
-    },
-    {
-      "if": {
-        "properties": {"operator": {"const": "Split"}}
-      },
-      "then": {
-        "required": ["input_shape"]
-      }
-    },
-    {
-      "if": {
-        "properties": {"operator": {"const": "Pack"}}
-      },
-      "then": {
-        "required": ["num_tensors"]
-      }
-    },
-    {
-      "if": {
-        "properties": {"operator": {"const": "Unpack"}}
-      },
-      "then": {
-        "required": ["input_shape", "axis", "num_tensors"]
-      }
-    },
-    {
-      "if": {
-        "properties": {"operator": {"const": "Concatenation"}}
-      },
-      "then": {
-        "required": ["axis"]
-      }
-    },
-    {
-      "if": {
-        "properties": {"operator": {"const": "SpaceToBatchND"}}
-      },
-      "then": {
-        "required": ["input_shape", "block_shape", "paddings"]
-      }
-    },
-    {
-      "if": {
-        "properties": {"operator": {"const": "BatchToSpaceND"}}
-      },
-      "then": {
-        "required": ["input_shape", "block_shape", "crops"]
-      }
-    },
-    {
-      "if": {
-        "properties": {"operator": {"const": "VariableUpdate"}}
+        "properties": {
+          "operator": {
+            "const": "VariableUpdate"
+          }
+        }
       },
       "then": {
         "required": []
