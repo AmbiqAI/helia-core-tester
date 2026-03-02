@@ -10,7 +10,12 @@ import yaml
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-from helia_core_tester.core.discovery import find_descriptors_dir, find_generated_tests_dir, find_repo_root
+from helia_core_tester.core.discovery import (
+    find_build_dir,
+    find_descriptors_dir,
+    find_generated_tests_dir,
+    find_repo_root,
+)
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.core.cpu_targets import normalize_cpu
 from helia_core_tester.generation.ops import OP_MAP
@@ -190,7 +195,11 @@ def test_generation(test_filters):
         
     # Generate TFLite models for each descriptor.
     generated_override = test_filters.get("generated_tests_dir")
-    top_generated = Path(generated_override).resolve() if generated_override else find_generated_tests_dir(create=True)
+    top_generated = (
+        Path(generated_override).resolve()
+        if generated_override
+        else find_generated_tests_dir(create=True, cpu=target_cpu)
+    )
     top_generated.mkdir(parents=True, exist_ok=True)
     print(f"Generated tests output dir: {top_generated}")
 
@@ -229,7 +238,7 @@ def test_generation(test_filters):
             continue
             
     print(f"Successfully generated {generated_count} TFLite models")
-    report_dir = find_repo_root() / "artifacts" / "reports"
+    report_dir = find_build_dir(target_cpu) / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     failures_path = report_dir / "conversion_failures.json"
     failures_path.write_text(json.dumps(conversion_failures, indent=2))
@@ -291,7 +300,12 @@ def test_generated_files_exist(test_filters):
     """
     # Don't generate, just validate what test_generation() created
     generated_override = test_filters.get("generated_tests_dir")
-    generated_tests_dir = Path(generated_override).resolve() if generated_override else find_generated_tests_dir(create=False)
+    target_cpu = normalize_cpu(test_filters.get("cpu") or "cortex-m55")
+    generated_tests_dir = (
+        Path(generated_override).resolve()
+        if generated_override
+        else find_generated_tests_dir(create=False, cpu=target_cpu)
+    )
     if not generated_tests_dir.exists():
         pytest.skip("No generated tests found")
         

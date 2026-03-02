@@ -138,22 +138,30 @@ def find_descriptors_dir(repo_root: Optional[Path] = None) -> Path:
     return descriptors_dir
 
 
-def find_generated_tests_dir(repo_root: Optional[Path] = None, create: bool = True) -> Path:
+def find_generated_tests_dir(
+    repo_root: Optional[Path] = None,
+    create: bool = True,
+    cpu: Optional[str] = None,
+) -> Path:
     """
     Find or create the generated tests directory.
     
     Args:
         repo_root: Repository root (auto-discovered if None)
         create: Create directory if it doesn't exist
+        cpu: Optional CPU name to resolve under build-<cpu>-gcc
         
     Returns:
-        Path to artifacts/generated_tests/ directory at repo root
+        Path to generated tests directory under artifacts/
         
     Raises:
         RepoRootNotFoundError: If repo root cannot be found
     """
     repo_root = _resolve_repo_root(repo_root)
-    generated_tests_dir = repo_root / "artifacts" / "generated_tests"
+    if cpu:
+        generated_tests_dir = repo_root / "artifacts" / f"build-{cpu}-gcc" / "generated_tests"
+    else:
+        generated_tests_dir = repo_root / "artifacts" / "generated_tests"
     
     if create and not generated_tests_dir.exists():
         generated_tests_dir.mkdir(parents=True, exist_ok=True)

@@ -254,9 +254,22 @@ class OpPReLU(OperationBase):
         # Generate input data and quantize
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        
-        input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-        
+
+        extras = self.desc.get("hint", {}).get("extras", {})
+        if "input_values" in extras:
+            values = np.asarray(extras["input_values"], dtype=np.float32).flatten()
+            num = int(np.prod(input_shape))
+            if values.size == 1:
+                input_data = np.full(num, values[0], dtype=np.float32).reshape(input_shape)
+            elif values.size == num:
+                input_data = values.reshape(input_shape)
+            else:
+                raise ValueError(
+                    f"input_values has {values.size} entries, expected {num} to match input shape {input_shape}."
+                )
+        else:
+            input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+
         self.rng.__setstate__(rng_state)
         
         # Quantize inputs

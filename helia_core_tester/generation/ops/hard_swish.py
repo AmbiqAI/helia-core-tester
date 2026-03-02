@@ -349,6 +349,17 @@ class OpHardSwish(OperationBase):
             input_zp = int(input_zp)
             output_scale = float(output_scale)
             output_zp = int(output_zp)
+
+            extras = self.desc.get("hint", {}).get("extras", {})
+            if variant == "compat" and extras:
+                if "input_scale" in extras:
+                    input_scale = float(extras["input_scale"])
+                if "output_scale" in extras:
+                    output_scale = float(extras["output_scale"])
+                if "input_zero_point" in extras:
+                    input_zp = int(extras["input_zero_point"])
+                if "output_zero_point" in extras:
+                    output_zp = int(extras["output_zero_point"])
         else:
             extras = self.desc.get("hint", {}).get("extras", {})
             input_scale = float(extras.get("input_scale", 1.0))

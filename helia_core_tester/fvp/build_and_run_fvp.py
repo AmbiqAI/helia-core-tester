@@ -40,7 +40,6 @@ from helia_core_tester.core.discovery import (
     find_repo_root,
     find_setup_dependencies_script,
     find_descriptors_dir,
-    find_generated_tests_dir,
 )
 from helia_core_tester.core.cpu_targets import parse_cpu_list
 from helia_core_tester.reporting.models import TestResult, TestStatus
@@ -93,11 +92,40 @@ def _resolve_gcov_executable(env: dict) -> Optional[str]:
     return None
 
 
-def _resolve_report_dir(args) -> Path:
+def _resolve_report_dir(args, cpu: Optional[str] = None) -> Path:
     report_dir = getattr(args, "report_dir", Path("reports"))
     if report_dir == Path("reports"):
+        if cpu:
+            return ARTIFACTS_DIR / f"build-{cpu}-gcc" / "reports"
         return ARTIFACTS_DIR / "reports"
     return Path(report_dir)
+
+
+def _is_subpath(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _clean_build_dir(build_dir: Path, preserve_dir: Optional[Path], verbosity: int) -> None:
+    if not build_dir.exists():
+        return
+    if preserve_dir and preserve_dir.exists() and _is_subpath(preserve_dir, build_dir):
+        if verbosity >= 1:
+            print(f"Cleaning build directory (preserving {preserve_dir}): {build_dir}")
+        for entry in build_dir.iterdir():
+            if entry == preserve_dir:
+                continue
+            if entry.is_dir():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink()
+        return
+    if verbosity >= 1:
+        print(f"Removing previous build directory: {build_dir}")
+    shutil.rmtree(build_dir, ignore_errors=True)
 
 
 def _extract_coverage_blocks(output: str) -> Tuple[List[str], str]:
@@ -208,7 +236,8 @@ def _generate_coverage_reports(
     if not getattr(args, "coverage", False):
         return
 
-    report_root = _resolve_report_dir(args) / "coverage"
+    primary_cpu = cpus[0] if cpus else "cortex-m55"
+    report_root = _resolve_report_dir(args, primary_cpu) / "coverage"
     report_root.mkdir(parents=True, exist_ok=True)
 
     gcovr = _which_in_env("gcovr", env)
@@ -224,12 +253,13 @@ def _generate_coverage_reports(
             print(f"Coverage: gcovr not found; wrote {note}")
         return
 
+    single_cpu = len(cpus) <= 1
     for cpu in cpus:
         build_dir = ARTIFACTS_DIR / f"build-{cpu}-{compiler_tag}"
         if not build_dir.exists():
             continue
 
-        cpu_dir = report_root / cpu
+        cpu_dir = report_root if single_cpu else (report_root / cpu)
         cpu_dir.mkdir(parents=True, exist_ok=True)
 
         default_cmsis_nn_root = (source_dir / ".." / "..").resolve()
@@ -695,6 +725,9 @@ def parse_cpus(cpu_str: str) -> List[str]:
 
 
 def resolve_generated_tests_dir(source_dir: Path, cpu: str) -> Path:
+    build_generated = source_dir / "artifacts" / f"build-{cpu}-gcc" / "generated_tests"
+    if build_generated.exists():
+        return build_generated
     base = source_dir / "artifacts" / "generated_tests"
     cpu_specific = base / cpu
     if cpu_specific.exists():
@@ -729,17 +762,16 @@ def run_tests_with_reporting(cpus: List[str],
     verbosity = getattr(args, 'verbosity', 0)
     
     # Get report directory from args
-    report_dir = _resolve_report_dir(args)
+    primary_cpu = cpus[0] if cpus else "cortex-m55"
+    report_dir = _resolve_report_dir(args, primary_cpu)
     
     # Clean up previous build directories (only if we're going to build)
     # If --no-build is set, keep the existing build directory
     if not args.no_build:
         for cpu in cpus:
             build_dir = ARTIFACTS_DIR / f"build-{cpu}-gcc"
-            if build_dir.exists():
-                if verbosity >= 1:
-                    print(f"Removing previous build directory: {build_dir}")
-                shutil.rmtree(build_dir, ignore_errors=True)
+            preserve_dir = resolve_generated_tests_dir(source_dir, cpu)
+            _clean_build_dir(build_dir, preserve_dir, verbosity)
     
     # Clean up previous reports directory
     if report_dir.exists():
@@ -752,7 +784,7 @@ def run_tests_with_reporting(cpus: List[str],
     
     # Initialize descriptor tracking
     descriptors_dir = find_descriptors_dir()
-    generated_tests_dir = find_generated_tests_dir(create=False)
+    generated_tests_dir = resolve_generated_tests_dir(source_dir, primary_cpu)
     tracker = DescriptorTracker(descriptors_dir)
     all_descriptors_dict = tracker.load_all_descriptors()
     
@@ -850,11 +882,7 @@ def run_tests_with_reporting(cpus: List[str],
         active_descriptors.add(desc_name)
     
     # Add descriptors that have generated artifacts
-    primary_build_dir = ARTIFACTS_DIR / f"build-{cpus[0]}-gcc" if cpus else ARTIFACTS_DIR / "build-cortex-m55-gcc"
-    if cpus:
-        cpu_specific_generated = source_dir / "artifacts" / "generated_tests" / cpus[0]
-        if cpu_specific_generated.exists():
-            generated_tests_dir = cpu_specific_generated
+    primary_build_dir = ARTIFACTS_DIR / f"build-{primary_cpu}-gcc"
     for desc_name in all_descriptors_dict.keys():
         # Check for TFLite file (generation stage)
         tflite_file = generated_tests_dir / desc_name / f"{desc_name}.tflite"
@@ -999,7 +1027,12 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--no-report", action="store_true", help="Disable comprehensive test reporting (enabled by default)")
     ap.add_argument("--report-formats", nargs="+", choices=["json", "html", "md", "junit"], default=["json"], 
                    help="Report formats to generate (default: json)")
-    ap.add_argument("--report-dir", type=Path, default=Path("reports"), help="Directory to save reports (default: ./artifacts/reports)")
+    ap.add_argument(
+        "--report-dir",
+        type=Path,
+        default=Path("reports"),
+        help="Directory to save reports (default: ./artifacts/build-<cpu>-gcc/reports)",
+    )
     ap.add_argument("--quiet", action="store_true", help="Quiet mode (no output)")
     args = ap.parse_args(argv)
 

@@ -91,32 +91,37 @@ class Config:
         # Load defaults from config file (if present)
         self._load_config_file()
         
-        # Set derived paths if not provided
-        if self.downloads_dir is None:
-            self.downloads_dir = self.project_root / "artifacts" / "downloads"
-        else:
-            self.downloads_dir = Path(self.downloads_dir).resolve()
-        
-        if self.generated_tests_dir is None:
-            self.generated_tests_dir = self.project_root / "artifacts" / "generated_tests"
-        else:
-            self.generated_tests_dir = Path(self.generated_tests_dir).resolve()
-        
-        if self.generation_dir is None:
-            self.generation_dir = _discover_generation_dir(self.project_root)
-        else:
-            self.generation_dir = Path(self.generation_dir).resolve()
         try:
             self.cpus = parse_cpu_list(self.cpu)
             self.cpu = self.cpus[0]
         except ValueError as e:
             raise ConfigurationError(str(e)) from e
 
+        # Set derived paths if not provided
+        if self.downloads_dir is None:
+            self.downloads_dir = self.project_root / "artifacts" / "downloads"
+        else:
+            self.downloads_dir = Path(self.downloads_dir).resolve()
+
+        if self.generated_tests_dir is None:
+            build_dir = self.project_root / "artifacts" / f"build-{self.cpu}-gcc"
+            self.generated_tests_dir = build_dir / "generated_tests"
+        else:
+            self.generated_tests_dir = Path(self.generated_tests_dir).resolve()
+
+        if self.generation_dir is None:
+            self.generation_dir = _discover_generation_dir(self.project_root)
+        else:
+            self.generation_dir = Path(self.generation_dir).resolve()
+
         # Convert report_dir to Path if needed
         if self.report_dir is None:
-            # Default to build directory reports under artifacts
-            build_dir = self.project_root / "artifacts" / f"build-{self.cpu}-gcc"
-            self.report_dir = build_dir / "reports"
+            # Default to build directory reports under artifacts for single CPU
+            if len(self.cpus) <= 1:
+                build_dir = self.project_root / "artifacts" / f"build-{self.cpu}-gcc"
+                self.report_dir = build_dir / "reports"
+            else:
+                self.report_dir = self.project_root / "artifacts" / "reports"
         elif isinstance(self.report_dir, str):
             self.report_dir = Path(self.report_dir)
         else:
