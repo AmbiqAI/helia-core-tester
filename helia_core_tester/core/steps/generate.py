@@ -35,7 +35,7 @@ class GenerateStep(StepBase):
     def _cpu_generated_tests_dir(self, cpu: str) -> Path:
         if len(self.config.cpus) <= 1:
             return self.config.generated_tests_dir
-        return self.config.project_root / "artifacts" / f"build-{cpu}-gcc" / "generated_tests"
+        return self.config.generated_tests_dir / cpu
 
     def _build_cmd(self, cpu: str, include_seed: bool = True) -> list:
         """Build pytest command list. include_seed=False for dry-run preview."""

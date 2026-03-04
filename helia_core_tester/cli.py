@@ -327,13 +327,13 @@ def doctor(
     # Check key directories
     key_dirs = {
         "assets/descriptors": "Test descriptors",
-        "artifacts/build-cortex-m55-gcc/generated_tests": "Generated tests (will be created)",
+        "artifacts/generated_tests": "Generated tests (will be created)",
         "artifacts/downloads": "Downloads (will be created)",
     }
     
     for dir_name, description in key_dirs.items():
         dir_path = repo_root / dir_name
-        if dir_path.exists() or dir_name in ["artifacts/build-cortex-m55-gcc/generated_tests", "artifacts/downloads"]:
+        if dir_path.exists() or dir_name in ["artifacts/generated_tests", "artifacts/downloads"]:
             typer.echo(f"✓ {dir_name}/ exists or will be created ({description})")
         else:
             typer.echo(f"⚠ {dir_name}/ not found ({description})", err=True)

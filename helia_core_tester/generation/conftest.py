@@ -34,12 +34,7 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     """Configure pytest with custom options."""
     generated_override = config.getoption("--generated-tests-dir")
-    cpu = config.getoption("--cpu")
-    generated_tests_dir = (
-        Path(generated_override).resolve()
-        if generated_override
-        else find_generated_tests_dir(create=False, cpu=cpu)
-    )
+    generated_tests_dir = Path(generated_override).resolve() if generated_override else find_generated_tests_dir(create=False)
 
     # Clean generated tests directory before running
     if generated_tests_dir.exists():
