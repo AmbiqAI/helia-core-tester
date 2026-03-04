@@ -105,6 +105,32 @@ alpha_shape: [1, 2, 1, 1]
 alpha: 0.2
 ---
 operator: PReLU
+name: prelu_scalar_input_pos_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_values: [0.5]
+input_shape: [1, 1, 1, 1]
+alpha_shape: [1]
+alpha: 0.2
+---
+operator: PReLU
+name: prelu_scalar_input_neg_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_values: [-0.5]
+input_shape: [1, 1, 1, 1]
+alpha_shape: [1]
+alpha: 0.2
+---
+operator: PReLU
 name: prelu_pixel_input_c1_s8
 activation_dtype: S8
 weight_dtype: S8

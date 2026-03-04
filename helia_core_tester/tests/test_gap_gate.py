@@ -51,7 +51,7 @@ def _write_descriptor_yaml(descriptors_dir: Path, name: str, operator: str) -> N
 
 def test_gap_check_passes_with_no_gaps(tmp_path: Path) -> None:
     project_root = tmp_path
-    gen_dir = project_root / "artifacts" / "generated_tests"
+    gen_dir = project_root / "artifacts" / "build-cortex-m55-gcc" / "generated_tests"
     gen_dir.mkdir(parents=True)
     desc_dir = project_root / "assets" / "descriptors"
     desc_dir.mkdir(parents=True)
@@ -67,7 +67,7 @@ def test_gap_check_passes_with_no_gaps(tmp_path: Path) -> None:
 
 def test_gap_check_allows_allowlisted_descriptor_gaps(tmp_path: Path) -> None:
     project_root = tmp_path
-    gen_dir = project_root / "artifacts" / "generated_tests"
+    gen_dir = project_root / "artifacts" / "build-cortex-m55-gcc" / "generated_tests"
     gen_dir.mkdir(parents=True)
     desc_dir = project_root / "assets" / "descriptors"
     desc_dir.mkdir(parents=True)
@@ -84,7 +84,7 @@ def test_gap_check_allows_allowlisted_descriptor_gaps(tmp_path: Path) -> None:
 
 def test_gap_check_fails_on_unexpected_descriptor_gap(tmp_path: Path) -> None:
     project_root = tmp_path
-    gen_dir = project_root / "artifacts" / "generated_tests"
+    gen_dir = project_root / "artifacts" / "build-cortex-m55-gcc" / "generated_tests"
     gen_dir.mkdir(parents=True)
     desc_dir = project_root / "assets" / "descriptors"
     desc_dir.mkdir(parents=True)
@@ -100,7 +100,7 @@ def test_gap_check_fails_on_unexpected_descriptor_gap(tmp_path: Path) -> None:
 
 def test_gap_check_allows_missing_tflite_with_headers(tmp_path: Path) -> None:
     project_root = tmp_path
-    gen_dir = project_root / "artifacts" / "generated_tests"
+    gen_dir = project_root / "artifacts" / "build-cortex-m55-gcc" / "generated_tests"
     gen_dir.mkdir(parents=True)
     desc_dir = project_root / "assets" / "descriptors"
     desc_dir.mkdir(parents=True)
@@ -116,7 +116,7 @@ def test_gap_check_allows_missing_tflite_with_headers(tmp_path: Path) -> None:
 
 def test_gap_check_fails_on_unexpected_zero_manifest_operator(tmp_path: Path) -> None:
     project_root = tmp_path
-    gen_dir = project_root / "artifacts" / "generated_tests"
+    gen_dir = project_root / "artifacts" / "build-cortex-m55-gcc" / "generated_tests"
     gen_dir.mkdir(parents=True)
     desc_dir = project_root / "assets" / "descriptors"
     desc_dir.mkdir(parents=True)
@@ -133,7 +133,7 @@ def test_gap_check_fails_on_unexpected_zero_manifest_operator(tmp_path: Path) ->
 
 def test_gap_check_fails_on_manifest_missing_descriptor(tmp_path: Path) -> None:
     project_root = tmp_path
-    gen_dir = project_root / "artifacts" / "generated_tests"
+    gen_dir = project_root / "artifacts" / "build-cortex-m55-gcc" / "generated_tests"
     gen_dir.mkdir(parents=True)
     desc_dir = project_root / "assets" / "descriptors"
     desc_dir.mkdir(parents=True)
@@ -148,11 +148,11 @@ def test_gap_check_fails_on_manifest_missing_descriptor(tmp_path: Path) -> None:
 
 def test_reports_are_written(tmp_path: Path) -> None:
     project_root = tmp_path
-    gen_dir = project_root / "artifacts" / "generated_tests"
+    gen_dir = project_root / "artifacts" / "build-cortex-m55-gcc" / "generated_tests"
     gen_dir.mkdir(parents=True)
     desc_dir = project_root / "assets" / "descriptors"
     desc_dir.mkdir(parents=True)
-    report_dir = project_root / "artifacts" / "reports"
+    report_dir = project_root / "artifacts" / "build-cortex-m55-gcc" / "reports"
 
     _mk_desc_dir(gen_dir, "ok_one", with_tflite=True)
     _write_manifest(gen_dir, [{"name": "ok_one", "operator": "Relu"}])
@@ -168,7 +168,7 @@ def test_reports_are_written(tmp_path: Path) -> None:
 
 def test_cpu_specific_dir_preferred(tmp_path: Path) -> None:
     project_root = tmp_path
-    cpu_dir = project_root / "artifacts" / "generated_tests" / "cortex-m55"
+    cpu_dir = project_root / "artifacts" / "build-cortex-m55-gcc" / "generated_tests"
     cpu_dir.mkdir(parents=True)
     desc_dir = project_root / "assets" / "descriptors"
     desc_dir.mkdir(parents=True)

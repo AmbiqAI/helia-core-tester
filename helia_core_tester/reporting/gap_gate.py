@@ -71,6 +71,9 @@ class GapReport:
 
 
 def resolve_generated_tests_dir(project_root: Path, cpu: str) -> Path:
+    build_generated = project_root / "artifacts" / f"build-{cpu}-gcc" / "generated_tests"
+    if build_generated.exists():
+        return build_generated
     base = project_root / "artifacts" / "generated_tests"
     cpu_specific = base / cpu
     if cpu_specific.exists():
@@ -205,7 +208,7 @@ def compute_gaps(project_root: Path, cpu: str, generated_tests_dir: Optional[Pat
         op for op in operators_zero_in_manifest if op not in ALLOWLIST_OPERATORS
     )
 
-    report_dir = project_root / "artifacts" / "reports"
+    report_dir = project_root / "artifacts" / f"build-{cpu}-gcc" / "reports"
     return GapReport(
         cpu=cpu,
         generated_tests_dir=gen_dir,

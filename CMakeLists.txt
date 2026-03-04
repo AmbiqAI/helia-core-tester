@@ -135,7 +135,7 @@ set(LINK_FILE ${FVP_CORSTONE_300_PATH}/linker.ld)
 
 # ---------- Helpers ----------
 function(_normalize_target_name out_var in_path)
-  string(REGEX REPLACE "^artifacts/generated_tests/([^/]+).*" "\\1" _tgt "${in_path}")
+  get_filename_component(_tgt "${in_path}" NAME)
   set(${out_var} "${_tgt}" PARENT_SCOPE)
 endfunction()
 
