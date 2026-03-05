@@ -543,34 +543,7 @@ class OpDepthwiseConv2D(OperationBase):
         # Validate against LiteRT output shape if available (for debugging)
         if output_shape[3] != output_channels:
             print(f"Warning: LiteRT output_channels ({output_shape[3]}) != calculated ({output_channels}). Using calculated value.")
-        
-        # #region agent log
-        import json
-        import os
-        log_path = "/workspaces/cmsis-aot-tester/.cursor/debug.log"
-        log_entry = {
-            "sessionId": "debug-session",
-            "runId": "run1",
-            "hypothesisId": "A",
-            "location": "dwconv.py:filter_dims",
-            "message": "Filter dimensions calculation",
-            "data": {
-                "name": name,
-                "filter_shape": list(filter_shape) if hasattr(filter_shape, '__iter__') else str(filter_shape),
-                "input_shape": list(input_shape),
-                "output_shape": list(output_shape),
-                "input_channels": int(input_channels),
-                "output_channels": int(output_channels),
-                "depth_multiplier": int(depth_multiplier)
-            },
-            "timestamp": int(__import__('time').time() * 1000)
-        }
-        try:
-            with open(log_path, 'a') as f:
-                f.write(json.dumps(log_entry) + '\n')
-        except:
-            pass
-        # #endregion
+    
         
         if len(filter_shape) == 4:
             # Check if TFLite format [1, H, W, C_OUT] or descriptor format [H, W, I, M]

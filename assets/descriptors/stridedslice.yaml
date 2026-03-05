@@ -112,6 +112,90 @@ strides:
 - 1
 ---
 operator: StridedSlice
+name: strided_slice_case1_whole_slab_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 2
+- 3
+- 4
+- 2
+begin:
+- 1
+- 0
+- 0
+- 0
+end:
+- 2
+- 3
+- 4
+- 2
+strides:
+- 1
+- 1
+- 1
+- 1
+---
+operator: StridedSlice
+name: strided_slice_case2_batch_slice_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 3
+- 4
+- 3
+- 2
+begin:
+- 0
+- 1
+- 0
+- 0
+end:
+- 3
+- 3
+- 3
+- 2
+strides:
+- 2
+- 1
+- 1
+- 1
+---
+operator: StridedSlice
+name: strided_slice_general_neg_stride_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 3
+- 4
+- 4
+begin:
+- 0
+- 2
+- 3
+- 3
+end:
+- 1
+- 0
+- 0
+- 0
+strides:
+- 1
+- -1
+- -1
+- -2
+---
+operator: StridedSlice
 name: strided_slice_crs16
 activation_dtype: S16
 weight_dtype: S8
@@ -166,3 +250,87 @@ strides:
 - 1
 - 2
 - 1
+---
+operator: StridedSlice
+name: strided_slice_case1_whole_slab_s16
+activation_dtype: S16  
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 2
+- 3
+- 4
+- 2
+begin:
+- 1
+- 0
+- 0
+- 0
+end:
+- 2
+- 3
+- 4
+- 2
+strides:
+- 1
+- 1
+- 1
+- 1
+---
+operator: StridedSlice
+name: strided_slice_case2_batch_slice_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 3
+- 4
+- 3
+- 2
+begin:
+- 0
+- 1
+- 0
+- 0
+end:
+- 3
+- 3
+- 3
+- 2
+strides:
+- 2
+- 1
+- 1
+- 1
+---
+operator: StridedSlice
+name: strided_slice_general_neg_stride_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 3
+- 4
+- 4
+begin:
+- 0
+- 2
+- 3
+- 3
+end:
+- 1
+- 0
+- 0
+- 0
+strides:
+- 1
+- -1
+- -1
+- -2
