@@ -77,7 +77,11 @@ class OpSub(OperationBase):
         Generate C and H files from templates for Sub operation.
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-        from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
+        from helia_core_tester.generation.utils.tflite_utils import (
+            scalar_scale_zp,
+            activation_bounds,
+            elementwise_addsub_quant_params,
+        )
         
         name = self.desc['name']
         tflite_path = output_dir / f"{name}.tflite"
@@ -110,33 +114,9 @@ class OpSub(OperationBase):
         input2_quant = op_tensors['inputs'][1]['quantization'] if len(op_tensors['inputs']) > 1 else input1_quant
         output_quant = op_tensors['outputs'][0]['quantization']
         
-        input1_scale = input1_quant.get('scale', 1.0)
-        input1_zp = input1_quant.get('zero_point', 0)
-        input2_scale = input2_quant.get('scale', 1.0)
-        input2_zp = input2_quant.get('zero_point', 0)
-        output_scale = output_quant.get('scale', 1.0)
-        output_zp = output_quant.get('zero_point', 0)
-        
-        # Handle per-channel quantization (convert to scalar)
-        if isinstance(input1_scale, (list, np.ndarray)):
-            input1_scale = float(input1_scale[0])
-        if isinstance(input1_zp, (list, np.ndarray)):
-            input1_zp = int(input1_zp[0])
-        if isinstance(input2_scale, (list, np.ndarray)):
-            input2_scale = float(input2_scale[0])
-        if isinstance(input2_zp, (list, np.ndarray)):
-            input2_zp = int(input2_zp[0])
-        if isinstance(output_scale, (list, np.ndarray)):
-            output_scale = float(output_scale[0])
-        if isinstance(output_zp, (list, np.ndarray)):
-            output_zp = int(output_zp[0])
-        
-        input1_scale = float(input1_scale)
-        input1_zp = int(input1_zp)
-        input2_scale = float(input2_scale)
-        input2_zp = int(input2_zp)
-        output_scale = float(output_scale)
-        output_zp = int(output_zp)
+        input1_scale, input1_zp = scalar_scale_zp(input1_quant)
+        input2_scale, input2_zp = scalar_scale_zp(input2_quant)
+        output_scale, output_zp = scalar_scale_zp(output_quant)
         
         builder = TemplateContextBuilder()
         
@@ -145,31 +125,21 @@ class OpSub(OperationBase):
         input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         
-        # For elementwise sub, effective scale for each input is: input_scale / output_scale
-        effective_scale1 = float(input1_scale) / float(output_scale)
-        effective_scale2 = float(input2_scale) / float(output_scale)
-        
-        # Calculate multipliers and shifts for each input
-        mult1, shift1 = calculate_multiplier_shift(effective_scale1)
-        mult2, shift2 = calculate_multiplier_shift(effective_scale2)
-        
-        # Output multiplier and shift
-        output_mult, output_shift = calculate_multiplier_shift(1.0)
-        
-        # Left shift: typically 0 for sub operations
-        left_shift = 0
-        
-        # Activation min/max based on dtype
         activation_dtype = self.desc.get('activation_dtype', 'S8')
-        if activation_dtype == 'S8':
-            activation_min = -128
-            activation_max = 127
-        elif activation_dtype == 'S16':
-            activation_min = -32768
-            activation_max = 32767
-        else:
-            activation_min = -128
-            activation_max = 127
+        activation_min, activation_max = activation_bounds(activation_dtype)
+        addsub_qparams = elementwise_addsub_quant_params(
+            input1_scale=float(input1_scale),
+            input2_scale=float(input2_scale),
+            output_scale=float(output_scale),
+            activation_dtype=activation_dtype,
+        )
+        mult1 = addsub_qparams["input1_mult"]
+        shift1 = addsub_qparams["input1_shift"]
+        mult2 = addsub_qparams["input2_mult"]
+        shift2 = addsub_qparams["input2_shift"]
+        output_mult = addsub_qparams["out_mult"]
+        output_shift = addsub_qparams["out_shift"]
+        left_shift = addsub_qparams["left_shift"]
         
         # Generate input data and quantize
         rng_state = self.rng.__getstate__()
@@ -213,8 +183,8 @@ class OpSub(OperationBase):
             output_data = self._simulate_sub_quantized(
                 input1_q,
                 input2_q,
-                input1_offset=int(input1_zp),
-                input2_offset=int(input2_zp),
+                input1_offset=-int(input1_zp),
+                input2_offset=-int(input2_zp),
                 input1_mult=int(mult1),
                 input1_shift=int(shift1),
                 input2_mult=int(mult2),
@@ -240,10 +210,10 @@ class OpSub(OperationBase):
             'input1_dims': input1_dims,
             'input2_dims': input2_dims,
             'output_dims': output_dims,
-            'input1_offset': int(input1_zp),
+            'input1_offset': -int(input1_zp),
             'input1_mult': int(mult1),
             'input1_shift': int(shift1),
-            'input2_offset': int(input2_zp),
+            'input2_offset': -int(input2_zp),
             'input2_mult': int(mult2),
             'input2_shift': int(shift2),
             'left_shift': int(left_shift),

@@ -229,7 +229,8 @@ def test_generation(test_filters):
             continue
             
     print(f"Successfully generated {generated_count} TFLite models")
-    report_dir = find_repo_root() / "artifacts" / "reports"
+    # Keep generation failure reports alongside build reports for this CPU.
+    report_dir = top_generated.parent / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     failures_path = report_dir / "conversion_failures.json"
     failures_path.write_text(json.dumps(conversion_failures, indent=2))

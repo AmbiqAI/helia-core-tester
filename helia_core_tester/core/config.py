@@ -68,6 +68,7 @@ class Config:
     # Cleanup options
     clean_generated_tests: bool = True
     clean_build: bool = True
+    regenerate_generated_tests_after_cleanup: bool = False
     
     # Reporting configuration
     enable_reporting: bool = True
@@ -97,9 +98,7 @@ class Config:
         else:
             self.downloads_dir = Path(self.downloads_dir).resolve()
         
-        if self.generated_tests_dir is None:
-            self.generated_tests_dir = self.project_root / "artifacts" / "generated_tests"
-        else:
+        if self.generated_tests_dir is not None:
             self.generated_tests_dir = Path(self.generated_tests_dir).resolve()
         
         if self.generation_dir is None:
@@ -121,6 +120,8 @@ class Config:
             self.report_dir = Path(self.report_dir)
         else:
             self.report_dir = Path(self.report_dir).resolve()
+        if self.generated_tests_dir is None:
+            self.generated_tests_dir = self.project_root / "artifacts" / f"build-{self.cpu}-gcc" / "generated_tests"
         
         # Validate verbosity level
         if not 0 <= self.verbosity <= 3:
@@ -197,6 +198,7 @@ class Config:
             "skip_run": self.skip_run,
             "clean_generated_tests": self.clean_generated_tests,
             "clean_build": self.clean_build,
+            "regenerate_generated_tests_after_cleanup": self.regenerate_generated_tests_after_cleanup,
             "enable_reporting": self.enable_reporting,
             "report_formats": self.report_formats,
             "report_dir": str(self.report_dir),

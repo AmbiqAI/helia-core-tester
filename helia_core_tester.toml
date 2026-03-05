@@ -1,8 +1,8 @@
 [helia_core_tester]
 # Default CLI settings (override in CLI args)
-cpu = "cortex-m55"
+# cpu = "cortex-m55"
 optimization = "-Ofast"
-verbosity = 1
+verbosity = 0
 fail_fast = true
 
 # Output directories (relative to repo root)

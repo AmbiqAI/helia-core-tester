@@ -147,7 +147,7 @@ if(EXISTS "${GENERATED_TESTS_CMAKE}")
   include("${GENERATED_TESTS_CMAKE}")
   list(REMOVE_DUPLICATES GENERATED_TEST_DIRS)
 else()
-  message(FATAL_ERROR "Missing generated tests list: ${GENERATED_TESTS_CMAKE}. Run the generator.")
+  message(FATAL_ERROR "Missing generated tests list: ${GENERATED_TESTS_CMAKE}. Run `uv run helia_core_tester generate` first.")
 endif()
 
 set(GENERATED_TESTS_MANIFEST "${GENERATED_TESTS_DIR}/manifest.json")

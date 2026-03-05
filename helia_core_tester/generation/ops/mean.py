@@ -83,42 +83,30 @@ class OpMean(OperationBase):
         
         # Extract shapes from LiteRT
         input_shape = op_tensors['inputs'][0]['shape']
-        output_shape = op_tensors['outputs'][0]['shape']
         
         # Ensure shapes are tuples
         if input_shape is not None:
             input_shape = tuple(input_shape)
-        if output_shape is not None:
-            output_shape = tuple(output_shape)
         
         builder = TemplateContextBuilder()
         
-        # Convert shapes to CMSIS dims
+        # Convert input shape to CMSIS dims
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
-        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         
         # Extract axes from descriptor (default to [1, 2] for spatial dimensions)
         axes = self.desc.get('axes', [1, 2])
         if not isinstance(axes, list):
             axes = [axes]
         
-        # Normalize axes (handle negative indices)
-        normalized_axes = []
-        for axis in axes:
-            if axis < 0:
-                axis = len(input_shape) + axis
-            if 0 <= axis < len(input_shape):
-                normalized_axes.append(axis)
-        
-        # Calculate axis_dims: bitmap where 1 indicates a reduced dimension
-        # For NHWC: 0=N, 1=H, 2=W, 3=C
-        # axis_dims should be [n, h, w, c] where 1 means reduced, 0 means not reduced
-        axis_dims = [0, 0, 0, 0]  # Initialize: no reduction
-        for axis in normalized_axes:
-            if 0 <= axis < 4:
-                axis_dims[axis] = 1  # Mark as reduced
-        
-        axis_dims_cmsis = builder.nhwc_to_cmsis_dims(axis_dims)
+        # Build CMSIS reduction dims from input + axis semantics.
+        # Keep CMSIS output dims 4D even when TFLite output rank is reduced (keepdims=false).
+        normalized_axes = builder.normalize_reduction_axes(len(input_shape), axes)
+        axis_dims_cmsis = builder.build_reduce_axis_dims(len(input_shape), normalized_axes)
+        output_dims = builder.build_reduce_output_dims(
+            input_shape=input_shape,
+            axes=normalized_axes,
+            keepdims=bool(self.desc.get('keepdims', True))
+        )
         
         # Extract quantization from LiteRT
         input_quant = op_tensors['inputs'][0]['quantization']

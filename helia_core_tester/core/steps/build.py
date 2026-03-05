@@ -52,6 +52,19 @@ class BuildStep(StepBase):
         
         if self.config.jobs:
             cmd.extend(["--jobs", str(self.config.jobs)])
+
+        if self.config.op_filter:
+            cmd.extend(["--gen-op", self.config.op_filter])
+        if self.config.dtype_filter:
+            cmd.extend(["--gen-dtype", self.config.dtype_filter])
+        if self.config.name_filter:
+            cmd.extend(["--gen-name", self.config.name_filter])
+        if self.config.limit is not None:
+            cmd.extend(["--gen-limit", str(self.config.limit)])
+        if self.config.seed is not None:
+            cmd.extend(["--gen-seed", str(self.config.seed)])
+        if getattr(self.config, "regenerate_generated_tests_after_cleanup", False):
+            cmd.append("--regen-generated-tests-after-cleanup")
         
         # Map verbosity: 0-1 = quiet, 2-3 = verbose
         if self.config.verbosity <= 1:
@@ -130,6 +143,18 @@ class BuildStep(StepBase):
             cmd_preview.append("--coverage")
         if self.config.jobs:
             cmd_preview.extend(["--jobs", str(self.config.jobs)])
+        if self.config.op_filter:
+            cmd_preview.extend(["--gen-op", self.config.op_filter])
+        if self.config.dtype_filter:
+            cmd_preview.extend(["--gen-dtype", self.config.dtype_filter])
+        if self.config.name_filter:
+            cmd_preview.extend(["--gen-name", self.config.name_filter])
+        if self.config.limit is not None:
+            cmd_preview.extend(["--gen-limit", str(self.config.limit)])
+        if self.config.seed is not None:
+            cmd_preview.extend(["--gen-seed", str(self.config.seed)])
+        if getattr(self.config, "regenerate_generated_tests_after_cleanup", False):
+            cmd_preview.append("--regen-generated-tests-after-cleanup")
         
         return StepResult(
             name=self.name,
@@ -150,6 +175,18 @@ class BuildStep(StepBase):
             cmd.append("--coverage")
         if self.config.jobs:
             cmd.extend(["--jobs", str(self.config.jobs)])
+        if self.config.op_filter:
+            cmd.extend(["--gen-op", self.config.op_filter])
+        if self.config.dtype_filter:
+            cmd.extend(["--gen-dtype", self.config.dtype_filter])
+        if self.config.name_filter:
+            cmd.extend(["--gen-name", self.config.name_filter])
+        if self.config.limit is not None:
+            cmd.extend(["--gen-limit", str(self.config.limit)])
+        if self.config.seed is not None:
+            cmd.extend(["--gen-seed", str(self.config.seed)])
+        if getattr(self.config, "regenerate_generated_tests_after_cleanup", False):
+            cmd.append("--regen-generated-tests-after-cleanup")
         if self.config.verbosity <= 1:
             cmd.append("--quiet")
         else:

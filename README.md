@@ -72,7 +72,13 @@ uv run helia_core_tester full
 uv run helia_core_tester full --cpu cortex-m4
 ```
 
-Note: `build` requires `artifacts/generated_tests/tests.cmake`, which is created by `generate`.
+Note: `build` requires `artifacts/build-<cpu>-gcc/generated_tests/tests.cmake`, which is created by `generate`.
+`full` may regenerate generated tests in the build phase after build-directory cleanup; `build` does not auto-generate and will fail with a hint if files are missing.
+Default report output is under `artifacts/build-<cpu>-gcc/reports`.
+With `--coverage`, HTML coverage is generated at `artifacts/build-<cpu>-gcc/reports/coverage/index.html`.
+Generation failure logs are written to:
+- `artifacts/build-<cpu>-gcc/reports/conversion_failures.json`
+- `artifacts/build-<cpu>-gcc/reports/generation_failures.json`
 
 ### Subcommands
 
@@ -175,8 +181,8 @@ Generation:
 - `helia_core_tester/generation/ops/`: Operators
 - `helia_core_tester/generation/io/`: I/O utilities
 - `helia_core_tester/generation/assets/descriptors/`: Descriptor schemas/examples
-- `artifacts/generated_tests/manifest.json`: Generated test manifest
-- `artifacts/generated_tests/tests.cmake`: CMake test list
+- `artifacts/build-<cpu>-gcc/generated_tests/manifest.json`: Generated test manifest
+- `artifacts/build-<cpu>-gcc/generated_tests/tests.cmake`: CMake test list
 
 Utilities and reporting:
 - `helia_core_tester/utils/`: Command helpers
