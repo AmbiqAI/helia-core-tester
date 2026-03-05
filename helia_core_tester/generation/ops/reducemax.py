@@ -82,34 +82,25 @@ class OpReduceMax(OperationBase):
         output_details = interpreter.get_output_details()
         
         input_shape = tuple(input_details[0]['shape'])
-        output_shape = tuple(output_details[0]['shape'])
         
         builder = TemplateContextBuilder()
         
-        # Convert shapes to CMSIS dims
+        # Convert input shape to CMSIS dims
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
-        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         
         # Extract axes from descriptor (default to [1, 2] for spatial dimensions)
         axes = self.desc.get('axes', [1, 2])
         if not isinstance(axes, list):
             axes = [axes]
         
-        # Calculate axis_dims from axes
-        # axis_dims represents which dimensions are being reduced - it's a bitmap/mask
-        # For NHWC: 0=N, 1=H, 2=W, 3=C
-        # CMSIS-NN expects: axis_dims has 1 in positions being reduced, 0 otherwise
-        # Based on CMSIS-NN test: {1, 0, 0, 0} means reduce axis 0 (N dimension)
-        axis_dims = [0, 0, 0, 0]  # Default: no reduction
-        for axis in axes:
-            norm_axis = axis
-            if norm_axis < 0:
-                norm_axis = len(input_shape) + norm_axis
-            if 0 <= norm_axis < 4:
-                axis_dims[norm_axis] = 1  # Mark this dimension for reduction
-        
-        # CMSIS dims are NHWC, so just wrap in dict (no reorder needed for axis mask)
-        axis_dims_cmsis = {'n': axis_dims[0], 'h': axis_dims[1], 'w': axis_dims[2], 'c': axis_dims[3]}
+        # Build CMSIS reduction dims from input + axis semantics.
+        # Keep CMSIS output dims 4D even when TFLite output rank is reduced (keepdims=false).
+        axis_dims_cmsis = builder.build_reduce_axis_dims(len(input_shape), axes)
+        output_dims = builder.build_reduce_output_dims(
+            input_shape=input_shape,
+            axes=axes,
+            keepdims=bool(self.desc.get('keepdims', True))
+        )
         
         # Generate input data and quantize
         rng_state = self.rng.__getstate__()

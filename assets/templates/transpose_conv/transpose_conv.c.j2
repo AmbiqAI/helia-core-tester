@@ -83,7 +83,7 @@ int32_t {{ prefix }}_{{ name }}_run(
     
     // Compute weight_sum using arm_convolve_weight_sum (matches CMSIS-NN test_arm_transpose_conv_s8.c)
     int32_t lhs_offset = {{ name }}_transpose_conv_params.input_offset;
-    arm_cmsis_nn_status weight_sum_status = arm_convolve_weight_sum(
+    arm_convolve_weight_sum(
         (int32_t *){{ name }}_weight_sum_ctx.buf,
         {{ name }}_weights,
         &{{ name }}_input_dims,
@@ -96,11 +96,6 @@ int32_t {{ prefix }}_{{ name }}_run(
         NULL
         {% endif %}
     );
-    
-    if (weight_sum_status != ARM_CMSIS_NN_SUCCESS) {
-        printf("Weight sum computation failed with status %d\r\n", weight_sum_status);
-        return weight_sum_status;
-    }
     {% endif %}
 
     // Call transpose convolution kernel

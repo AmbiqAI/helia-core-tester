@@ -57,6 +57,50 @@ class TemplateContextBuilder:
             }
         else:
             raise ValueError(f"Unsupported shape length: {len(shape)}")
+
+    @staticmethod
+    def normalize_reduction_axes(input_rank: int, axes: List[int]) -> List[int]:
+        """
+        Normalize reduction axes to unique, in-range positive indices.
+        """
+        normalized: List[int] = []
+        for axis in axes:
+            norm_axis = int(axis)
+            if norm_axis < 0:
+                norm_axis += input_rank
+            if 0 <= norm_axis < input_rank and norm_axis not in normalized:
+                normalized.append(norm_axis)
+        return normalized
+
+    @staticmethod
+    def build_reduce_axis_dims(input_rank: int, axes: List[int]) -> Dict[str, int]:
+        """
+        Build CMSIS axis mask dims (n,h,w,c) for reduction ops.
+        """
+        if input_rank != 4:
+            raise ValueError(f"Reduction ops require 4D NHWC input, got rank {input_rank}")
+
+        axis_mask = [0, 0, 0, 0]
+        for axis in TemplateContextBuilder.normalize_reduction_axes(input_rank, axes):
+            axis_mask[axis] = 1
+        return {'n': axis_mask[0], 'h': axis_mask[1], 'w': axis_mask[2], 'c': axis_mask[3]}
+
+    @staticmethod
+    def build_reduce_output_dims(input_shape: Tuple[int, ...], axes: List[int], keepdims: bool = False) -> Dict[str, int]:
+        """
+        Build CMSIS output dims for reduction ops using 4D reduction semantics.
+        Reduced axes always become size 1 in CMSIS output dims.
+        """
+        if len(input_shape) != 4:
+            raise ValueError(f"Reduction ops require 4D NHWC input, got shape {input_shape}")
+
+        out = [int(input_shape[0]), int(input_shape[1]), int(input_shape[2]), int(input_shape[3])]
+        for axis in TemplateContextBuilder.normalize_reduction_axes(4, axes):
+            out[axis] = 1
+
+        # keepdims is accepted for API clarity; CMSIS reduction output dims are always 4D.
+        _ = keepdims
+        return {'n': out[0], 'h': out[1], 'w': out[2], 'c': out[3]}
     
     @staticmethod
     def format_array_as_c_literal(arr: np.ndarray, indent: int = 4, max_per_line: int = 16) -> str:

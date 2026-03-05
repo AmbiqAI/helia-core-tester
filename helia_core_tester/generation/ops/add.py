@@ -71,9 +71,9 @@ class OpAdd(OperationBase):
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         from helia_core_tester.generation.utils.tflite_utils import (
-            calculate_multiplier_shift,
             scalar_scale_zp,
             activation_bounds,
+            elementwise_addsub_quant_params,
         )
         
         name = self.desc['name']
@@ -111,21 +111,19 @@ class OpAdd(OperationBase):
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         activation_min, activation_max = activation_bounds(activation_dtype)
         
-        # For elementwise add, effective scale for each input is: input_scale / output_scale
-        # This converts the input to the output scale before adding
-        effective_scale1 = float(input1_scale) / float(output_scale)
-        effective_scale2 = float(input2_scale) / float(output_scale)
-        
-        # Calculate multipliers and shifts for each input
-        mult1, shift1 = calculate_multiplier_shift(effective_scale1)
-        mult2, shift2 = calculate_multiplier_shift(effective_scale2)
-        
-        # Output multiplier and shift (for requantization after addition)
-        # For add, output scale is typically the same as the common scale used for inputs
-        # So output_mult and output_shift are usually 1 and 0, but we calculate them properly
-        output_mult, output_shift = calculate_multiplier_shift(1.0)  # output_scale / output_scale = 1.0
-        
-        left_shift = 0
+        addsub_qparams = elementwise_addsub_quant_params(
+            input1_scale=float(input1_scale),
+            input2_scale=float(input2_scale),
+            output_scale=float(output_scale),
+            activation_dtype=activation_dtype,
+        )
+        mult1 = addsub_qparams["input1_mult"]
+        shift1 = addsub_qparams["input1_shift"]
+        mult2 = addsub_qparams["input2_mult"]
+        shift2 = addsub_qparams["input2_shift"]
+        output_mult = addsub_qparams["out_mult"]
+        output_shift = addsub_qparams["out_shift"]
+        left_shift = addsub_qparams["left_shift"]
         
         # Generate input data and quantize
         rng_state = self.rng.__getstate__()
@@ -161,8 +159,8 @@ class OpAdd(OperationBase):
             output_data = self._simulate_add_quantized(
                 input1_q,
                 input2_q,
-                input1_offset=int(input1_zp),
-                input2_offset=int(input2_zp),
+                input1_offset=-int(input1_zp),
+                input2_offset=-int(input2_zp),
                 input1_mult=int(mult1),
                 input1_shift=int(shift1),
                 input2_mult=int(mult2),
@@ -191,10 +189,10 @@ class OpAdd(OperationBase):
             'input1_dims': input1_dims,
             'input2_dims': input2_dims,
             'output_dims': output_dims,
-            'input1_offset': int(input1_zp),
+            'input1_offset': -int(input1_zp),
             'input1_mult': int(mult1),
             'input1_shift': int(shift1),
-            'input2_offset': int(input2_zp),
+            'input2_offset': -int(input2_zp),
             'input2_mult': int(mult2),
             'input2_shift': int(shift2),
             'left_shift': int(left_shift),

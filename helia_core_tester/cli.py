@@ -221,6 +221,7 @@ def full(
         skip_runners=skip_runners,
         skip_build=skip_build,
         skip_run=skip_run,
+        regenerate_generated_tests_after_cleanup=True,
         enable_reporting=not no_report,
         report_formats=report_formats,
         report_dir=report_dir,

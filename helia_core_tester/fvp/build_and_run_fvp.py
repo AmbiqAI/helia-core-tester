@@ -93,11 +93,13 @@ def _resolve_gcov_executable(env: dict) -> Optional[str]:
     return None
 
 
-def _resolve_report_dir(args) -> Path:
-    report_dir = getattr(args, "report_dir", Path("reports"))
-    if report_dir == Path("reports"):
+def _resolve_report_dir(args, cpu: Optional[str] = None, compiler_tag: str = "gcc") -> Path:
+    report_dir = getattr(args, "report_dir", None)
+    if report_dir is not None:
+        return Path(report_dir)
+    if cpu is None:
         return ARTIFACTS_DIR / "reports"
-    return Path(report_dir)
+    return ARTIFACTS_DIR / f"build-{cpu}-{compiler_tag}" / "reports"
 
 
 def _extract_coverage_blocks(output: str) -> Tuple[List[str], str]:
@@ -208,14 +210,11 @@ def _generate_coverage_reports(
     if not getattr(args, "coverage", False):
         return
 
-    report_root = _resolve_report_dir(args) / "coverage"
-    report_root.mkdir(parents=True, exist_ok=True)
-
     gcovr = _which_in_env("gcovr", env)
     gcov_exe = _resolve_gcov_executable(env)
 
     if not gcovr:
-        note = report_root / "README.txt"
+        note = ARTIFACTS_DIR / "README.txt"
         note.write_text(
             "gcovr is not installed; .gcda files were merged in build directories.\n"
             "Install gcovr to generate HTML/JSON coverage summaries.\n"
@@ -229,7 +228,10 @@ def _generate_coverage_reports(
         if not build_dir.exists():
             continue
 
-        cpu_dir = report_root / cpu
+        if getattr(args, "report_dir", None) is None:
+            cpu_dir = _resolve_report_dir(args, cpu=cpu, compiler_tag=compiler_tag) / "coverage"
+        else:
+            cpu_dir = _resolve_report_dir(args, cpu=cpu, compiler_tag=compiler_tag) / "coverage" / cpu
         cpu_dir.mkdir(parents=True, exist_ok=True)
 
         default_cmsis_nn_root = (source_dir / ".." / "..").resolve()
@@ -266,13 +268,14 @@ def _generate_coverage_reports(
             str(cpu_dir / "index.html"),
             "--lcov",
             str(cpu_dir / "coverage.info"),
+            str(build_dir),
         ]
         if gcov_exe:
             cmd.extend(["--gcov-executable", gcov_exe])
 
         result = subprocess.run(
             cmd,
-            cwd=str(repo_root),
+            cwd=str(build_dir),
             env=env,
             capture_output=True,
             text=True,
@@ -694,12 +697,63 @@ def parse_cpus(cpu_str: str) -> List[str]:
     return parse_cpu_list(cpu_str)
 
 
+def regenerate_generated_tests(cpu: str, generated_tests_dir: Path, args, env: dict, verbosity: int) -> None:
+    generation_dir = repo_root / "helia_core_tester" / "generation"
+    if not generation_dir.exists():
+        die(f"Generation directory not found: {generation_dir}")
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "test_ops.py::test_generation",
+        "-v",
+        "--cpu",
+        cpu,
+        "--generated-tests-dir",
+        str(generated_tests_dir),
+    ]
+    if args.gen_op:
+        cmd.extend(["--op", args.gen_op])
+    if args.gen_dtype:
+        cmd.extend(["--dtype", args.gen_dtype])
+    if args.gen_name:
+        cmd.extend(["--name", args.gen_name])
+    if args.gen_limit is not None:
+        cmd.extend(["--limit", str(args.gen_limit)])
+    if args.gen_seed is not None:
+        cmd.extend(["--seed", str(args.gen_seed)])
+
+    if verbosity >= 1:
+        print(f"Regenerating tests for {cpu} into {generated_tests_dir}")
+    if verbosity >= 2:
+        print(f"Generate: {' '.join(cmd)}")
+
+    rc = subprocess.call(
+        cmd,
+        cwd=str(generation_dir),
+        env=env,
+        stdout=subprocess.DEVNULL if verbosity <= 1 else None,
+        stderr=None,
+    )
+    if rc != 0:
+        die(f"Generated tests regeneration failed for {cpu} (rc={rc})")
+
+
 def resolve_generated_tests_dir(source_dir: Path, cpu: str) -> Path:
-    base = source_dir / "artifacts" / "generated_tests"
-    cpu_specific = base / cpu
-    if cpu_specific.exists():
-        return cpu_specific
-    return base
+    # Prefer per-build generated tests (new default), but fall back to legacy layout
+    # if it already exists to preserve backward compatibility.
+    build_generated = source_dir / "artifacts" / f"build-{cpu}-gcc" / "generated_tests"
+    legacy_base = source_dir / "artifacts" / "generated_tests"
+    legacy_cpu = legacy_base / cpu
+    if build_generated.exists():
+        return build_generated
+    if legacy_cpu.exists():
+        return legacy_cpu
+    if legacy_base.exists():
+        return legacy_base
+    # If nothing exists yet (e.g., before generation), return the new default
+    return build_generated
 
 
 
@@ -729,7 +783,7 @@ def run_tests_with_reporting(cpus: List[str],
     verbosity = getattr(args, 'verbosity', 0)
     
     # Get report directory from args
-    report_dir = _resolve_report_dir(args)
+    report_dir = _resolve_report_dir(args, cpu=cpus[0] if cpus else "cortex-m55", compiler_tag="gcc")
     
     # Clean up previous build directories (only if we're going to build)
     # If --no-build is set, keep the existing build directory
@@ -752,7 +806,7 @@ def run_tests_with_reporting(cpus: List[str],
     
     # Initialize descriptor tracking
     descriptors_dir = find_descriptors_dir()
-    generated_tests_dir = find_generated_tests_dir(create=False)
+    generated_tests_dir = resolve_generated_tests_dir(source_dir, cpus[0]) if cpus else find_generated_tests_dir(create=False)
     tracker = DescriptorTracker(descriptors_dir)
     all_descriptors_dict = tracker.load_all_descriptors()
     
@@ -764,6 +818,14 @@ def run_tests_with_reporting(cpus: List[str],
         coverage_ctx = _new_coverage_context(build_dir, getattr(args, "_gcov_tool", None)) if args.coverage else None
         
         if not args.no_build:
+            if args.regen_generated_tests_after_cleanup:
+                regenerate_generated_tests(
+                    cpu=cpu,
+                    generated_tests_dir=cpu_generated_tests_dir,
+                    args=args,
+                    env=env,
+                    verbosity=verbosity,
+                )
             # Build first - use the env passed in
             cmake_configure(
                 source_dir=source_dir,
@@ -851,10 +913,6 @@ def run_tests_with_reporting(cpus: List[str],
     
     # Add descriptors that have generated artifacts
     primary_build_dir = ARTIFACTS_DIR / f"build-{cpus[0]}-gcc" if cpus else ARTIFACTS_DIR / "build-cortex-m55-gcc"
-    if cpus:
-        cpu_specific_generated = source_dir / "artifacts" / "generated_tests" / cpus[0]
-        if cpu_specific_generated.exists():
-            generated_tests_dir = cpu_specific_generated
     for desc_name in all_descriptors_dict.keys():
         # Check for TFLite file (generation stage)
         tflite_file = generated_tests_dir / desc_name / f"{desc_name}.tflite"
@@ -995,11 +1053,18 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--timeout-run", type=float, default=0.0, help="Per-test timeout in seconds (0 = none)")
     ap.add_argument("--fail-fast", action=argparse.BooleanOptionalAction, default=False, help="Stop on first failure")
     ap.add_argument("--fvp-arg", action="append", default=[], help="Extra args to pass to the FVP (repeatable)")
+    ap.add_argument("--gen-op", help="Regeneration filter for operator name")
+    ap.add_argument("--gen-dtype", help="Regeneration filter for activation dtype")
+    ap.add_argument("--gen-name", help="Regeneration filter for exact test name")
+    ap.add_argument("--gen-limit", type=int, help="Regeneration limit for number of tests")
+    ap.add_argument("--gen-seed", type=int, help="Regeneration random seed")
+    ap.add_argument("--regen-generated-tests-after-cleanup", action="store_true",
+                   help="Regenerate tests into the build directory after cleanup and before configure")
     # Reporting options
     ap.add_argument("--no-report", action="store_true", help="Disable comprehensive test reporting (enabled by default)")
     ap.add_argument("--report-formats", nargs="+", choices=["json", "html", "md", "junit"], default=["json"], 
                    help="Report formats to generate (default: json)")
-    ap.add_argument("--report-dir", type=Path, default=Path("reports"), help="Directory to save reports (default: ./artifacts/reports)")
+    ap.add_argument("--report-dir", type=Path, default=None, help="Directory to save reports (default: ./artifacts/build-<cpu>-gcc/reports)")
     ap.add_argument("--quiet", action="store_true", help="Quiet mode (no output)")
     args = ap.parse_args(argv)
 
