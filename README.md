@@ -6,7 +6,6 @@ Toolkit for CMSIS-NN testing: generate TFLite models, convert to C, build for FV
 
 - End-to-end pipeline: generate → convert → build → run
 - TFLite model generation via pytest
-- AOT conversion to C via helia-aot
 - FVP Corstone-300 build and execution
 - Reports for test results
 
@@ -208,7 +207,6 @@ mypy helia_core_tester/
 - Python 3.8+
 - pytest
 - TensorFlow Lite
-- helia-aot
 - CMake
 - ARM GCC toolchain
 - FVP Corstone-300

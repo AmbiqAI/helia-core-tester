@@ -1,5 +1,5 @@
 #!/bin/bash
-# CI Setup Script for CMSIS-AOT-Tester
+# CI Setup Script for Helia-Core-Tester
 # This script sets up the environment for CI builds using uv for Python dependencies
 
 set -euo pipefail
@@ -46,7 +46,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-echo -e "${GREEN}=== CMSIS-AOT-Tester CI Setup ===${NC}"
+echo -e "${GREEN}=== Helia-Core-Tester CI Setup ===${NC}"
 echo "Repository root: ${REPO_ROOT}"
 echo "Downloads directory: ${DOWNLOADS_DIR}"
 echo ""

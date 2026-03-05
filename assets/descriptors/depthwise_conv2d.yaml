@@ -648,3 +648,139 @@ strides:
 padding: SAME
 use_bias: true
 depth_multiplier: 2
+---
+operator: DepthwiseConv2D
+name: s4_dw_generic_chmult1_dilated
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 5
+- 5
+- 4
+filter_shape:
+- 3
+- 3
+- 4
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 2
+- 2
+---
+operator: DepthwiseConv2D
+name: s4_dw_generic_odd_chmult_dilated
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 5
+- 5
+- 4
+filter_shape:
+- 3
+- 3
+- 4
+- 2
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 2
+dilation:
+- 2
+- 2
+---
+operator: DepthwiseConv2D
+name: s4_dw_generic_even_chmult_dilated
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 5
+- 5
+- 4
+filter_shape:
+- 3
+- 3
+- 4
+- 2
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 2
+dilation:
+- 2
+- 2
+---
+operator: DepthwiseConv2D
+name: s4_dw_generic_odd_input_ch_dilated
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 5
+- 5
+- 6
+filter_shape:
+- 3
+- 3
+- 6
+- 2
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 2 # odd multiplier is failing kernel_index_offset = input_ch >> 1
+dilation:
+- 2
+- 2
