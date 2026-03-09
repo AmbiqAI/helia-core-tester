@@ -117,3 +117,83 @@ hint:
   call_style: per_tensor
 input_1_shape: [1, 2, 2, 3]
 input_2_shape: [2, 2, 2, 3]
+---
+operator: Sub
+name: sub_broadcast_height_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 1, 2, 3]
+input_2_shape: [1, 3, 2, 3]
+---
+operator: Sub
+name: sub_row_scalar_input1_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [2, 1, 1, 1]
+input_2_shape: [2, 1, 2, 2]
+---
+operator: Sub
+name: sub_row_scalar_input2_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [2, 1, 2, 2]
+input_2_shape: [2, 1, 1, 1]
+---
+operator: Sub
+name: sub_broadcast_channel_reverse_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 1]
+---
+operator: Sub
+name: sub_broadcast_height_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 1, 2, 3]
+input_2_shape: [1, 3, 2, 3]
+---
+operator: Sub
+name: sub_row_scalar_input1_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [2, 1, 1, 1]
+input_2_shape: [2, 1, 2, 2]
+---
+operator: Sub
+name: sub_row_scalar_input2_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [2, 1, 2, 2]
+input_2_shape: [2, 1, 1, 1]
+---
+operator: Sub
+name: sub_broadcast_channel_reverse_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 1]
