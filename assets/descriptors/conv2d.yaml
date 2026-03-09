@@ -1344,3 +1344,153 @@ strides:
 - 1
 padding: VALID
 use_bias: true
+---
+operator: Conv2D
+name: s4_even_rhs50_lhs4_bias
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 2
+- 8
+- 5
+filter_shape:
+- 2
+- 5
+- 5
+- 5
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+---
+operator: Conv2D
+name: s4_even_rhs50_lhs3_bias
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 2
+- 7
+- 5
+filter_shape:
+- 2
+- 5
+- 5
+- 5
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+---
+operator: Conv2D
+name: s4_even_rhs50_lhs2_bias
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 2
+- 6
+- 5
+filter_shape:
+- 2
+- 5
+- 5
+- 5
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+---
+operator: Conv2D
+name: s4_even_rhs50_lhs1_bias
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 2
+- 5
+- 5
+filter_shape:
+- 2
+- 5
+- 5
+- 5
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+---
+operator: Conv2D
+name: s4_even_rhs50_lhs4_nobias
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 2
+- 8
+- 5
+filter_shape:
+- 2
+- 5
+- 5
+- 5
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: false

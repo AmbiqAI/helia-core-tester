@@ -21,6 +21,7 @@ class OpConv2D(OperationBase):
     def build_keras_model(self) -> tf.keras.Model:
         input_shape = self.desc['input_shape']
         filter_shape = self.desc['filter_shape']
+        groups = int(self.desc.get('groups', 1))
         
         tf.keras.utils.set_random_seed(17)
         
@@ -43,6 +44,24 @@ class OpConv2D(OperationBase):
         
         if any(d <= 0 for d in dilation):
             raise ValueError(f"Invalid dilation values: {dilation}. Must be positive integers")
+
+        if len(input_shape) != 4:
+            raise ValueError(f"Conv2D input_shape must be NHWC rank-4, got: {input_shape}")
+        if len(filter_shape) != 4:
+            raise ValueError(f"Conv2D filter_shape must be HWIO rank-4, got: {filter_shape}")
+        if groups <= 0:
+            raise ValueError(f"Conv2D groups must be > 0, got: {groups}")
+
+        input_channels = int(input_shape[3])
+        output_filters = int(filter_shape[3])
+        if input_channels % groups != 0:
+            raise ValueError(
+                f"Conv2D input channels ({input_channels}) must be divisible by groups ({groups})"
+            )
+        if output_filters % groups != 0:
+            raise ValueError(
+                f"Conv2D output filters ({output_filters}) must be divisible by groups ({groups})"
+            )
         
         x = tf.keras.Input(
             shape=input_shape[1:],
@@ -52,11 +71,12 @@ class OpConv2D(OperationBase):
         )
         
         conv = tf.keras.layers.Conv2D(
-            filters=filter_shape[3],
+            filters=output_filters,
             kernel_size=tuple(filter_shape[0:2]),
             strides=tuple(self.desc.get('strides', [1, 1])),
             dilation_rate=tuple(dilation),
             padding=padding,
+            groups=groups,
             use_bias=self.desc.get('use_bias', True),
             activation=act,
             kernel_initializer=tf.keras.initializers.GlorotUniform(seed=1234),

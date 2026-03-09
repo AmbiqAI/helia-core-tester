@@ -21,6 +21,7 @@ from helia_core_tester.core.steps import (
     CleanStep,
 )
 from helia_core_tester.reporting.gap_gate import run_gap_check
+from helia_core_tester.reporting.coverage_merge import run_coverage_merge
 
 app = typer.Typer(
     name="helia_core_tester",
@@ -372,6 +373,50 @@ def gap_check(
         typer.echo("✗ Gap check failed: unexpected gaps detected", err=True)
     else:
         typer.echo("✓ Gap check passed (no unexpected gaps)")
+    sys.exit(exit_code)
+
+
+@app.command(name="coverage-merge")
+def coverage_merge(
+    cpu: str = typer.Option("cortex-m0,cortex-m4,cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
+    report_dir: Optional[Path] = typer.Option(None, help="Directory to save merged coverage reports"),
+    expected_zero_config: Optional[Path] = typer.Option(
+        None, help="Path to expected-zero JSON config (default: assets/coverage_expected_zero.json)"
+    ),
+    project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
+):
+    """Merge per-CPU coverage.info files and classify zero-hit files."""
+    config = get_config(cpu=cpu, project_root=project_root)
+    out_dir = Path(report_dir).resolve() if report_dir else None
+    expected_zero_path = Path(expected_zero_config).resolve() if expected_zero_config else None
+
+    exit_code, report = run_coverage_merge(
+        project_root=config.project_root,
+        cpus=config.cpus,
+        report_dir=out_dir,
+        expected_zero_config=expected_zero_path,
+    )
+
+    typer.echo(f"Merged LCOV: {report.merged_lcov_path}")
+    typer.echo(f"Summary JSON: {report.summary_json_path}")
+    typer.echo(f"Summary MD:   {report.summary_md_path}")
+    typer.echo(f"Summary HTML: {report.summary_html_path}")
+    typer.echo(f"HTML generator: {report.html_generator}")
+    if report.html_generation_note:
+        typer.echo(f"HTML note: {report.html_generation_note}")
+    typer.echo(f"Overall line coverage: {report.total_lh}/{report.total_lf} ({report.overall_line_rate:.2f}%)")
+    typer.echo(
+        "Counts: "
+        f"covered={len(report.covered_files)}, "
+        f"zero_reachable={len(report.zero_reachable_files)}, "
+        f"expected_zero={len(report.expected_zero_files)}, "
+        f"expected_zero_but_covered={len(report.expected_zero_but_covered_files)}"
+    )
+
+    if exit_code != 0:
+        typer.echo("✗ Coverage merge failed: no coverage.info inputs found", err=True)
+    else:
+        typer.echo("✓ Coverage merge completed")
     sys.exit(exit_code)
 
 

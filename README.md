@@ -89,6 +89,7 @@ Generation failure logs are written to:
 - `uv run helia_core_tester clean-all` — Remove all artifacts
 - `uv run helia_core_tester doctor` — Preflight checks
 - `uv run helia_core_tester gap-check` — Gap gate between descriptors and generated tests
+- `uv run helia_core_tester coverage-merge` — Merge per-CPU LCOV and classify zero-hit files
 
 ### Advanced Usage
 
@@ -144,6 +145,30 @@ Updating the allowlist:
 1. Remove entries from the allowlist as operators become fully supported.
 2. If a new known gap is intentionally introduced, add its descriptor name to the allowlist in
    `helia_core_tester/reporting/gap_gate.py`.
+
+### Merged Coverage Triage
+
+Merge per-CPU coverage reports and classify files as covered, zero-hit reachable, or expected-zero.
+
+Example:
+
+```bash
+uv run helia_core_tester coverage-merge --cpu cortex-m0,cortex-m4,cortex-m55
+```
+
+Outputs (default):
+
+- `artifacts/reports/coverage-merged/coverage_merged.info`
+- `artifacts/reports/coverage-merged/coverage_merged_summary.json`
+- `artifacts/reports/coverage-merged/coverage_merged_summary.md`
+- `artifacts/reports/coverage-merged/index.html`
+
+The merged `index.html` uses classic `gcovr` HTML (red/yellow/green coverage bands) when `gcovr` is available.
+If `gcovr` is unavailable, the tool falls back to a built-in HTML renderer.
+
+Expected-zero configuration defaults to:
+
+- `assets/coverage_expected_zero.json`
 
 General options:
 - `--verbosity, -v`

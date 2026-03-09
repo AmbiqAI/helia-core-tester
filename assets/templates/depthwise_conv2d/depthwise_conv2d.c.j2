@@ -35,8 +35,9 @@ static cmsis_nn_context {{ name }}_ctx;
 static uint8_t {{ name }}_buffer[{{ name|upper }}_BUFFER_SIZE_MAX];
 
 {% if kernel_fn == 'arm_depthwise_conv_wrapper_s8' and has_weight_sum %}
-// Weight sum context (weight_sum array is defined in header file)
+// Weight sum context for s8 depthwise wrappers
 static cmsis_nn_context {{ name }}_weight_sum_ctx;
+static int32_t {{ name }}_weight_sum_runtime[{{ output_dims.c }}];
 {% endif %}
 
 #define {{ name|upper }}_OUTPUT_SIZE ({{ output_dims.n }} * {{ output_dims.h }} * {{ output_dims.w }} * {{ output_dims.c }})
@@ -70,9 +71,27 @@ int32_t {{ prefix }}_{{ name }}_run(
     {{ name }}_ctx.size = required_buffer_size;
 
     {% if kernel_fn == 'arm_depthwise_conv_wrapper_s8' and has_weight_sum %}
-    // Initialize weight sum context with precomputed weight_sum array
-    // Weight sum is precomputed at code generation time using vector_sum_s8 equivalent
-    {{ name }}_weight_sum_ctx.buf = (uint8_t *){{ name }}_weight_sum;
+    // Compute weight sums at runtime when supported; fallback to precomputed values.
+    arm_cmsis_nn_status weight_sum_status = arm_depthwise_convolve_weight_sum(
+        {{ name }}_weight_sum_runtime,
+        NULL,
+        {{ name }}_weights,
+        &{{ name }}_dw_conv_params,
+        &{{ name }}_input_dims,
+        &{{ name }}_filter_dims,
+        &{{ name }}_output_dims,
+        {{ name }}_dw_conv_params.input_offset,
+        {% if has_biases %}
+        {{ name }}_biases
+        {% else %}
+        NULL
+        {% endif %}
+    );
+    if (weight_sum_status == ARM_CMSIS_NN_SUCCESS) {
+        {{ name }}_weight_sum_ctx.buf = (uint8_t *){{ name }}_weight_sum_runtime;
+    } else {
+        {{ name }}_weight_sum_ctx.buf = (uint8_t *){{ name }}_weight_sum;
+    }
     {{ name }}_weight_sum_ctx.size = {{ output_dims.c }} * sizeof(int32_t);
     {% endif %}
 
