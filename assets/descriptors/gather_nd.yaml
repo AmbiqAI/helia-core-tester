@@ -30,3 +30,167 @@ indices_shape:
 - 2
 - 1
 batch_dims: 0
+---
+operator: GatherND
+name: gather_nd_indices_nd3_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 2
+- 3
+- 4
+- 5
+indices_shape:
+- 2
+- 2
+- 3
+batch_dims: 0
+---
+operator: GatherND
+name: gather_nd_indices_nd4_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 2
+- 3
+- 4
+- 5
+indices_shape:
+- 3
+- 4
+batch_dims: 0
+---
+operator: GatherND
+name: gather_nd_indices_nd1_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 4
+- 5
+- 6
+indices_shape:
+- 3
+- 1
+batch_dims: 0
+---
+operator: GatherND
+name: gather_nd_indices_nd2_wide_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 3
+- 4
+- 5
+- 2
+indices_shape:
+- 2
+- 3
+- 2
+batch_dims: 0
+---
+operator: GatherND
+name: gather_nd_indices_nd3_s16_extra
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 2
+- 3
+- 4
+- 5
+indices_shape:
+- 3
+- 2
+- 3
+batch_dims: 0
+---
+operator: GatherND
+name: gather_nd_oob_index_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    force_oob_index: true
+input_shape:
+- 2
+- 3
+- 4
+indices_shape:
+- 2
+- 2
+batch_dims: 0
+---
+operator: GatherND
+name: gather_nd_negative_index_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    force_negative_index: true
+input_shape:
+- 3
+- 2
+- 2
+- 2
+indices_shape:
+- 2
+- 1
+batch_dims: 0
+---
+operator: GatherND
+name: gather_nd_invalid_batch_dims_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    test_batch_dims: 2
+input_shape:
+- 2
+- 3
+- 4
+indices_shape:
+- 2
+- 2
+batch_dims: 0
+---
+operator: GatherND
+name: gather_nd_invalid_params_rank_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    test_params_rank: 5
+input_shape:
+- 2
+- 3
+- 4
+indices_shape:
+- 2
+- 2
+batch_dims: 0

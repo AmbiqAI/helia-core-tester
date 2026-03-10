@@ -279,6 +279,62 @@ class OpFullyConnected(OperationBase):
             {'multiplier': int(m), 'shift': int(s)}
             for m, s in zip(multipliers, shifts)
         ]
+
+    def _compute_fc_reference_output_s8(
+        self,
+        input_q: np.ndarray,
+        weights: np.ndarray,
+        biases: Optional[np.ndarray],
+        quant_params: Dict[str, Any],
+        fc_params: Dict[str, Any],
+    ) -> np.ndarray:
+        """
+        Compute an s8 fully-connected reference output using CMSIS-style arithmetic.
+
+        This is used when descriptor overrides (e.g. force_filter_offset) intentionally
+        diverge from the TFLite model quantization, so LiteRT inference can no longer
+        be used as the expected output source.
+        """
+        from helia_core_tester.generation.utils.tflite_utils import requantize_np
+
+        if weights is None:
+            raise ValueError("Weights are required to compute fully connected reference output")
+
+        # Flatten input to [batch, features] to match FC kernel expectations.
+        in_features = int(weights.shape[1])
+        input_2d = input_q.reshape(input_q.shape[0], in_features).astype(np.int32)
+        weights_2d = weights.astype(np.int32)
+
+        input_offset = int(fc_params["input_offset"])
+        filter_offset = int(fc_params["filter_offset"])
+        output_offset = int(fc_params["output_offset"])
+        activation_min = int(fc_params["activation_min"])
+        activation_max = int(fc_params["activation_max"])
+
+        # Accumulate: sum((input + input_offset) * (weight + filter_offset))
+        accum = (input_2d + input_offset) @ (weights_2d + filter_offset).T
+
+        if biases is not None and biases.size > 0:
+            accum = accum + np.asarray(biases, dtype=np.int32).reshape(1, -1)
+
+        if quant_params.get("per_channel", False):
+            multipliers = np.asarray(quant_params["multiplier"], dtype=np.int32)
+            shifts = np.asarray(quant_params["shift"], dtype=np.int32)
+            requantized = np.empty_like(accum, dtype=np.int32)
+            for ch in range(accum.shape[1]):
+                requantized[:, ch] = requantize_np(
+                    accum[:, ch], int(multipliers[ch]), int(shifts[ch])
+                )
+        else:
+            requantized = requantize_np(
+                accum,
+                int(quant_params["multiplier"]),
+                int(quant_params["shift"]),
+            )
+
+        requantized = requantized + output_offset
+        requantized = np.clip(requantized, activation_min, activation_max)
+        return requantized.astype(np.int8)
     
     def generate_c_files(self, output_dir: Path) -> None:
         """
@@ -329,6 +385,11 @@ class OpFullyConnected(OperationBase):
         # For 4D inputs, op[0] may be RESHAPE, so using operator index 0 can be wrong.
         weights = op_tensors.get('weights')
         biases = op_tensors.get('biases')
+        biases_for_reference = (
+            np.asarray(biases, dtype=np.int32).copy()
+            if biases is not None and biases.size > 0
+            else None
+        )
         
         # Get weight quantization from LiteRT
         from helia_core_tester.generation.utils.litert_utils import (
@@ -679,6 +740,21 @@ class OpFullyConnected(OperationBase):
                 output_data = None
         else:
             output_data = run_inference_litert(str(tflite_path), input_q, subgraph_index=0)
+
+        # LiteRT golden output does not include descriptor-side filter offset overrides.
+        # Recompute expected output with CMSIS arithmetic when forced RHS offset is used.
+        if (
+            weight_dtype != "S4"
+            and kernel_info["output_c_type"] == "int8_t"
+            and filter_offset_override is not None
+        ):
+            output_data = self._compute_fc_reference_output_s8(
+                input_q=input_q,
+                weights=weights,
+                biases=biases_for_reference,
+                quant_params=quant_params_dict,
+                fc_params=fc_params,
+            )
 
         if output_data is None and weight_dtype == "S4":
             from helia_core_tester.generation.utils.tflite_utils import requantize_np

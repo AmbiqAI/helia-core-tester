@@ -176,6 +176,25 @@ static int run_lstm(void)
                           &{{ data_prefix }}output_gate_hidden_weights[0],
                           -{{ macro_prefix }}OUTPUT_ZERO_POINT,
                           NULL);
+
+    // Branch-coverage probes for arm_vector_sum_s8_s64 (do not affect LSTM outputs).
+    int64_t coverage_probe_sum_no_bias[{{ macro_prefix }}HIDDEN_SIZE];
+    int64_t coverage_probe_sum_bias[{{ macro_prefix }}HIDDEN_SIZE];
+    const int32_t coverage_probe_lhs_offset =
+        ({{ macro_prefix }}INPUT_ZERO_POINT == 0) ? 1 : {{ macro_prefix }}INPUT_ZERO_POINT;
+
+    arm_vector_sum_s8_s64(&coverage_probe_sum_no_bias[0],
+                          {{ macro_prefix }}INPUT_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}input_gate_input_weights[0],
+                          0,
+                          NULL);
+    arm_vector_sum_s8_s64(&coverage_probe_sum_bias[0],
+                          {{ macro_prefix }}INPUT_SIZE,
+                          {{ macro_prefix }}HIDDEN_SIZE,
+                          &{{ data_prefix }}input_gate_input_weights[0],
+                          coverage_probe_lhs_offset,
+                          &{{ data_prefix }}input_gate_bias[0]);
 {% endif %}
 
     const cmsis_nn_lstm_gate gate_input = { {{ macro_prefix }}INPUT_GATE_INPUT_MULTIPLIER,

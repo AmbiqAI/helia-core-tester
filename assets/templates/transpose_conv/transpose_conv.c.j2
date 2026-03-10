@@ -62,9 +62,20 @@ int32_t {{ prefix }}_{{ name }}_run(
         &{{ name }}_filter_dims,
         &{{ name }}_output_dims
     );
+    int32_t reverse_required_buffer_size = arm_transpose_conv_s8_get_reverse_conv_buffer_size(
+        &{{ name }}_transpose_conv_params,
+        &{{ name }}_input_dims,
+        &{{ name }}_filter_dims
+    );
 
     if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
         printf("Buffer size error: required=%d > max=%d\r\n", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    if (reverse_required_buffer_size > {{ name|upper }}_REVERSE_CONV_CTX_SIZE) {
+        printf("Reverse buffer size error: required=%d > max=%d\r\n",
+               reverse_required_buffer_size,
+               {{ name|upper }}_REVERSE_CONV_CTX_SIZE);
         return ARM_CMSIS_NN_ARG_ERROR;
     }
 

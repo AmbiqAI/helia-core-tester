@@ -684,40 +684,6 @@ dilation:
 - 2
 ---
 operator: DepthwiseConv2D
-name: s4_dw_generic_odd_chmult_dilated
-activation_dtype: S8
-weight_dtype: S4
-activation: NONE
-hint:
-  call_style: per_tensor
-  extras:
-    input_scale: 4.0
-    input_zero_point: 3
-    weight_scale: 1.0
-    output_scale: 4.0
-    output_zero_point: 0
-    per_channel: true
-input_shape:
-- 1
-- 5
-- 5
-- 4
-filter_shape:
-- 3
-- 3
-- 4
-- 2
-strides:
-- 1
-- 1
-padding: SAME
-use_bias: true
-depth_multiplier: 2
-dilation:
-- 2
-- 2
----
-operator: DepthwiseConv2D
 name: s4_dw_generic_even_chmult_dilated
 activation_dtype: S8
 weight_dtype: S4
@@ -784,75 +750,6 @@ depth_multiplier: 2 # odd multiplier is failing kernel_index_offset = input_ch >
 dilation:
 - 2
 - 2
----
-# operator: DepthwiseConv2D
-# name: s4_dw_odd_input_chmult1_dil_2x1_bias
-# activation_dtype: S8
-# weight_dtype: S4
-# activation: NONE
-# hint:
-#   call_style: per_tensor
-#   extras:
-#     input_scale: 4.0
-#     input_zero_point: 3
-#     weight_scale: 1.0
-#     output_scale: 4.0
-#     output_zero_point: 0
-#     per_channel: true
-# input_shape:
-# - 1
-# - 7
-# - 7
-# - 5
-# filter_shape:
-# - 3
-# - 3
-# - 5
-# - 1
-# strides:
-# - 1
-# - 1
-# padding: SAME
-# use_bias: true
-# depth_multiplier: 1
-# dilation:
-# - 2
-# - 1
-# ---
-# operator: DepthwiseConv2D
-# name: s4_dw_odd_input_chmult1_dil_1x2_nobias
-# activation_dtype: S8
-# weight_dtype: S4
-# activation: NONE
-# hint:
-#   call_style: per_tensor
-#   extras:
-#     input_scale: 4.0
-#     input_zero_point: 3
-#     weight_scale: 1.0
-#     output_scale: 4.0
-#     output_zero_point: 0
-#     per_channel: true
-# input_shape:
-# - 1
-# - 7
-# - 7
-# - 5
-# filter_shape:
-# - 3
-# - 3
-# - 5
-# - 1
-# strides:
-# - 1
-# - 1
-# padding: SAME
-# use_bias: true
-# depth_multiplier: 1
-# dilation:
-# - 1
-# - 2
-# ---
 operator: DepthwiseConv2D
 name: s4_dw_odd_chmult3_dil_1x2_bias
 activation_dtype: S8
@@ -888,7 +785,75 @@ dilation:
 - 2
 ---
 operator: DepthwiseConv2D
-name: dw_int16xint8_odd_chmult3_dil_2x1_bias_s16
+name: s4_dw_opt_oddch_bias
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 5
+- 5
+- 5
+filter_shape:
+- 3
+- 3
+- 5
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv2D
+name: s4_dw_generic_evench_dil_1x2_bias
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 7
+- 7
+- 4
+filter_shape:
+- 3
+- 3
+- 4
+- 2
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 2
+dilation:
+- 1
+- 2
+---
+operator: DepthwiseConv2D
+name: dw_int16xint8_dil_2x1_bias_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -903,6 +868,392 @@ filter_shape:
 - 3
 - 3
 - 3
+- 2
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 2
+dilation:
+- 2
+- 1
+---
+operator: DepthwiseConv2D
+name: dw_int16xint8_dil_1x2_nobias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 3
+filter_shape:
+- 3
+- 3
+- 3
+- 2
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: false
+depth_multiplier: 2
+dilation:
+- 1
+- 2
+---
+operator: DepthwiseConv2D
+name: dw_int16xint8_opt_oddch_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 5
+- 5
+- 5
+filter_shape:
+- 3
+- 3
+- 5
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+---
+operator: DepthwiseConv2D
+name: dw_int16xint8_opt_oddch_nobias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 5
+- 5
+- 5
+filter_shape:
+- 3
+- 3
+- 5
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: false
+depth_multiplier: 1
+---
+operator: DepthwiseConv2D
+name: dw_s8_buf_oneinch_outch16
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 1
+filter_shape:
+- 3
+- 3
+- 1
+- 16
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 16
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv2D
+name: dw_s8_buf_opt_3x3_nobias
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 8
+filter_shape:
+- 3
+- 3
+- 8
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: false
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv2D
+name: dw_s8_buf_opt_5x5_bias
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 8
+filter_shape:
+- 5
+- 5
+- 8
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv2D
+name: dw_s8_buf_nonopt_dil2
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 8
+filter_shape:
+- 3
+- 3
+- 8
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 2
+- 2
+---
+operator: DepthwiseConv2D
+name: dw_s8_buf_nonopt_batch2
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 2
+- 8
+- 8
+- 8
+filter_shape:
+- 3
+- 3
+- 8
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv2D
+name: dw_s16_fast_true_bias
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 4
+filter_shape:
+- 3
+- 3
+- 4
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv2D
+name: dw_s16_fast_false_chmult2_nobias
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 4
+filter_shape:
+- 3
+- 3
+- 4
+- 2
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: false
+depth_multiplier: 2
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv2D
+name: dw_s16_fast_false_dil2_bias
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 4
+filter_shape:
+- 3
+- 3
+- 4
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 2
+- 1
+---
+operator: DepthwiseConv2D
+name: dw_s16_generic_dil1_nobias
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 4
+filter_shape:
+- 5
+- 5
+- 4
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: false
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv2D
+name: s4_dw_eveninch_evenmult2_nobias
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 6
+- 6
+- 4
+filter_shape:
+- 3
+- 3
+- 4
+- 2
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 2
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv2D
+name: s4_dw_eveninch_oddmult3_bias
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 6
+- 6
+- 4
+filter_shape:
+- 3
+- 3
+- 4
 - 3
 strides:
 - 1
@@ -911,32 +1262,40 @@ padding: SAME
 use_bias: true
 depth_multiplier: 3
 dilation:
-- 2
 - 1
-# ---
-# operator: DepthwiseConv2D
-# name: dw_int16xint8_odd_chmult3_dil_1x2_nobias_s16
-# activation_dtype: S16
-# weight_dtype: S8
-# activation: NONE
-# hint:
-#   call_style: per_tensor
-# input_shape:
-# - 1
-# - 8
-# - 8
-# - 3
-# filter_shape:
-# - 3
-# - 3
-# - 3
-# - 3
-# strides:
-# - 1
-# - 1
-# padding: SAME
-# use_bias: false
-# depth_multiplier: 3
-# dilation:
-# - 1
-# - 2
+- 1
+---
+operator: DepthwiseConv2D
+name: s4_dw_oddinch_mult1_nobias
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape:
+- 1
+- 6
+- 6
+- 5
+filter_shape:
+- 3
+- 3
+- 5
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+

@@ -177,6 +177,17 @@ General options:
 - `--log-file PATH`
 - `--plan`
 
+### Branch Coverage Descriptor Knobs
+
+Use these descriptor hints to target specific kernel branches without changing CMSIS source:
+
+- `hint.extras.force_filter_offset` in `assets/descriptors/fullyconnected.yaml`:
+  forces a non-default filter offset for targeted `arm_nn_vec_mat_mult_t_per_ch_s8` paths.
+- `hint.extras.input_values` and `hint.extras.alpha_values` in `assets/descriptors/prelu.yaml`:
+  drives deterministic scalar-input/scalar-alpha branch behavior.
+- `feature_batches`, `rank`, `input_height`, and `use_bias` in `assets/descriptors/svdf.yaml`:
+  tunes SVDF row/tail and bias/no-bias branch coverage.
+
 ## Configuration
 
 Defaults live in `helia_core_tester.toml` at the repo root. CLI flags override these values.

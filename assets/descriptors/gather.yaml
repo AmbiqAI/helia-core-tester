@@ -28,3 +28,52 @@ indices_shape:
 - 2
 axis: 0
 batch_dims: 0
+---
+operator: Gather
+name: gather_axis_neg1_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 2
+- 3
+- 4
+indices_shape:
+- 3
+axis: -1
+batch_dims: 0
+---
+operator: Gather
+name: gather_axis2_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 2
+- 3
+- 4
+indices_shape:
+- 2
+- 2
+axis: 2
+batch_dims: 0
+---
+operator: Gather
+name: gather_axis0_rank3_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 3
+- 2
+- 2
+indices_shape:
+- 2
+axis: 0
+batch_dims: 0

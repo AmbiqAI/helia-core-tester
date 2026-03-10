@@ -129,3 +129,91 @@ hint:
   call_style: per_tensor
 input_1_shape: [1, 2, 3, 3]
 input_2_shape: [1, 2, 3, 3]
+---
+operator: Comparison
+name: comparison_equal_s8_row_scalar_lhs
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+operation: equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 1, 1]
+input_2_shape: [1, 2, 3, 4]
+---
+operator: Comparison
+name: comparison_not_equal_s8_row_scalar_rhs
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+operation: not_equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 2, 1, 1]
+---
+operator: Comparison
+name: comparison_greater_s8_pixel_scalar_lhs
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+operation: greater
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 1]
+input_2_shape: [1, 2, 2, 3]
+---
+operator: Comparison
+name: comparison_less_equal_s8_pixel_scalar_rhs
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+operation: less_equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 1]
+---
+operator: Comparison
+name: comparison_equal_s16_row_scalar_lhs
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+operation: equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 1, 1]
+input_2_shape: [1, 2, 3, 4]
+---
+operator: Comparison
+name: comparison_not_equal_s16_row_scalar_rhs
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+operation: not_equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 2, 1, 1]
+---
+operator: Comparison
+name: comparison_greater_s16_pixel_scalar_lhs
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+operation: greater
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 1]
+input_2_shape: [1, 2, 2, 3]
+---
+operator: Comparison
+name: comparison_less_equal_s16_pixel_scalar_rhs
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+operation: less_equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 1]

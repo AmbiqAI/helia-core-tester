@@ -67,3 +67,17 @@ input_shape:
 - 4
 - 2
 block_size: 2
+---
+operator: SpaceToDepth
+name: space_to_depth_block3_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 6
+- 6
+- 2
+block_size: 3

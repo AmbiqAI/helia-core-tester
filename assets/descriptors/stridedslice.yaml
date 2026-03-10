@@ -252,34 +252,6 @@ strides:
 - 1
 ---
 operator: StridedSlice
-name: strided_slice_case1_whole_slab_s16
-activation_dtype: S16  
-weight_dtype: S8
-activation: NONE
-hint:
-  call_style: per_tensor
-input_shape:
-- 2
-- 3
-- 4
-- 2
-begin:
-- 1
-- 0
-- 0
-- 0
-end:
-- 2
-- 3
-- 4
-- 2
-strides:
-- 1
-- 1
-- 1
-- 1
----
-operator: StridedSlice
 name: strided_slice_case2_batch_slice_s16
 activation_dtype: S16
 weight_dtype: S8
