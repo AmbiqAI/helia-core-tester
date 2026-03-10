@@ -553,7 +553,11 @@ class OpFullyConnected(OperationBase):
         input_zp = self._get_zero_point(input_quant)
         weight_zp = self._get_zero_point(weight_quant_dict)
         output_zp = self._get_zero_point(output_quant)
-        
+        extras = self.desc.get("hint", {}).get("extras", {})
+        filter_offset_override = extras.get("force_filter_offset")
+        if filter_offset_override is not None:
+            filter_offset_override = int(filter_offset_override)
+
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
         if activation_dtype == 'S16':
@@ -577,7 +581,7 @@ class OpFullyConnected(OperationBase):
             # S8 uses zero points as offsets
             fc_params = {
                 'input_offset': int(-input_zp),
-                'filter_offset': int(-weight_zp),
+                'filter_offset': int(filter_offset_override) if filter_offset_override is not None else int(-weight_zp),
                 'output_offset': int(output_zp),
                 'activation_min': activation_min,
                 'activation_max': activation_max,
@@ -591,9 +595,9 @@ class OpFullyConnected(OperationBase):
             
             vector_rows = weights.shape[0]  # output_units
             vector_cols = weights.shape[1]  # input_features
-            
+
             lhs_offset = -input_zp
-            rhs_offset = -weight_zp
+            rhs_offset = int(filter_offset_override) if filter_offset_override is not None else -weight_zp
             
             bias_data = None
             if biases is not None and biases.size > 0:
