@@ -6,7 +6,12 @@ import pytest
 
 from helia_core_tester.core.config import Config
 from helia_core_tester.core.steps.run import RunStep
-from helia_core_tester.fvp.build_and_run_fvp import ProcessRecord, ProcessSupervisor, _resolve_run_jobs
+from helia_core_tester.fvp.build_and_run_fvp import (
+    ProcessRecord,
+    ProcessSupervisor,
+    _resolve_downloaded_fvp_executable,
+    _resolve_run_jobs,
+)
 
 
 def test_config_run_jobs_default_and_auto(tmp_path: Path, monkeypatch) -> None:
@@ -76,3 +81,26 @@ def test_process_supervisor_terminates_registered_process() -> None:
 
     assert proc.poll() is not None
     assert supervisor.active_count() == 0
+
+
+def test_resolve_downloaded_fvp_executable_prefers_matching_arch(tmp_path: Path) -> None:
+    x86 = tmp_path / "corstone300_download" / "models" / "Linux64_GCC-9.3" / "FVP_Corstone_SSE-300_Ethos-U55"
+    arm = tmp_path / "corstone300_download" / "models" / "Linux64_armv8l_GCC-9.3" / "FVP_Corstone_SSE-300_Ethos-U55"
+    x86.parent.mkdir(parents=True, exist_ok=True)
+    arm.parent.mkdir(parents=True, exist_ok=True)
+    x86.write_text("")
+    arm.write_text("")
+
+    exe, checked = _resolve_downloaded_fvp_executable(tmp_path, "x86_64")
+    assert exe == x86
+    assert checked[0] == x86
+
+
+def test_resolve_downloaded_fvp_executable_falls_back_to_other_dir(tmp_path: Path) -> None:
+    arm = tmp_path / "corstone300_download" / "models" / "Linux64_armv8l_GCC-9.3" / "FVP_Corstone_SSE-300_Ethos-U55"
+    arm.parent.mkdir(parents=True, exist_ok=True)
+    arm.write_text("")
+
+    exe, checked = _resolve_downloaded_fvp_executable(tmp_path, "x86_64")
+    assert exe == arm
+    assert len(checked) == 2

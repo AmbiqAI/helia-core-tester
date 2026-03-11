@@ -521,6 +521,25 @@ def prepend_path(p: Path, env: dict) -> None:
     env["PATH"] = str(p) + os.pathsep + env.get("PATH", "")
 
 
+def _fvp_model_dirs_for_arch(arch: str) -> list[str]:
+    if arch == "x86_64":
+        return [FVP_DIR_X86, FVP_DIR_AARCH64]
+    if arch == "aarch64":
+        return [FVP_DIR_AARCH64, FVP_DIR_X86]
+    return [FVP_DIR_X86, FVP_DIR_AARCH64]
+
+
+def _resolve_downloaded_fvp_executable(downloads_dir: Path, arch: str) -> tuple[Optional[Path], list[Path]]:
+    models_root = downloads_dir / "corstone300_download" / "models"
+    checked: list[Path] = []
+    for model_dir in _fvp_model_dirs_for_arch(arch):
+        candidate = models_root / model_dir / FVP_EXE_NAME
+        checked.append(candidate)
+        if candidate.exists():
+            return candidate, checked
+    return None, checked
+
+
 def detect_paths(args) -> dict:
     # base
     env = os.environ.copy()
@@ -556,13 +575,16 @@ def detect_paths(args) -> dict:
         die(f"Toolchain file missing: {toolchain_file}")
 
     # FVP
-    fvp_dir = dl / "corstone300_download" / "models" / "Linux64_armv8l_GCC-9.3"
     fvp_exe: Optional[Path] = None
     if not args.no_fvp_from_download:
-        fvp_exe_candidate = fvp_dir / FVP_EXE_NAME
-        if not fvp_exe_candidate.exists():
-            die(f"FVP not found at {fvp_exe_candidate}. Run with -f to use a system FVP on PATH.")
-        prepend_path(fvp_dir, env)
+        fvp_exe_candidate, checked_paths = _resolve_downloaded_fvp_executable(dl, arch)
+        if fvp_exe_candidate is None:
+            checked = ", ".join(str(p) for p in checked_paths)
+            die(
+                f"FVP not found in downloads (checked: {checked}). "
+                "Run with -f to use a system FVP on PATH."
+            )
+        prepend_path(fvp_exe_candidate.parent, env)
         fvp_exe = fvp_exe_candidate
     else:
         from_path = ensure_exe_on_path(FVP_EXE_NAME)
