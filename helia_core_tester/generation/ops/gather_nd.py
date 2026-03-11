@@ -83,6 +83,17 @@ class OpGatherND(OperationBase):
         params_shape = tuple(self.desc["input_shape"])
         indices_shape = tuple(self.desc["indices_shape"])
         batch_dims = int(self.desc.get("batch_dims", 0))
+        expected_status = str(self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
+        if expected_status not in {"ARM_CMSIS_NN_SUCCESS", "ARM_CMSIS_NN_ARG_ERROR"}:
+            raise ValueError(
+                f"Unsupported expected_status for GatherND: {expected_status}. "
+                "Use ARM_CMSIS_NN_SUCCESS or ARM_CMSIS_NN_ARG_ERROR."
+            )
+
+        extras = self.desc.get("hint", {}).get("extras", {})
+        test_params_rank = int(extras.get("test_params_rank", len(params_shape)))
+        test_indices_rank = int(extras.get("test_indices_rank", len(indices_shape)))
+        test_batch_dims = int(extras.get("test_batch_dims", batch_dims))
 
         params_rank = len(params_shape)
         indices_rank = len(indices_shape)
@@ -111,12 +122,43 @@ class OpGatherND(OperationBase):
             dim_size = int(params_shape[i])
             rand_vals = self.rng.integers(0, dim_size, size=indices_shape[:-1], dtype=np.int32)
             indices_q[..., i] = rand_vals
+        # Keep an unmodified copy for golden output generation.
+        indices_q_for_output = indices_q.copy()
+
+        force_oob_index = bool(extras.get("force_oob_index", False))
+        force_negative_index = bool(extras.get("force_negative_index", False))
+        if force_oob_index and force_negative_index:
+            raise ValueError("GatherND descriptor cannot set both force_oob_index and force_negative_index.")
+
+        if force_oob_index or force_negative_index:
+            if expected_status != "ARM_CMSIS_NN_ARG_ERROR":
+                raise ValueError(
+                    "GatherND descriptors using force_oob_index/force_negative_index "
+                    "must set expected_status: ARM_CMSIS_NN_ARG_ERROR."
+                )
+
+            oob_dim = int(extras.get("oob_dim", 0))
+            if oob_dim < 0 or oob_dim >= indices_nd:
+                raise ValueError(f"GatherND oob_dim={oob_dim} is out of range for indices_nd={indices_nd}.")
+
+            target_dim = batch_dims + oob_dim
+            if target_dim < 0 or target_dim >= len(params_shape):
+                raise ValueError(
+                    f"GatherND oob target dim {target_dim} out of range for params_rank={len(params_shape)}."
+                )
+
+            flat_indices = indices_q.reshape(-1, indices_nd)
+            if force_negative_index:
+                flat_indices[0, oob_dim] = -1
+            else:
+                flat_indices[0, oob_dim] = int(params_shape[target_dim])
+            indices_q = flat_indices.reshape(indices_shape)
 
         self.rng.__setstate__(rng_state)
 
         # Compute expected output
         output_q = np.zeros(output_shape, dtype=np_in_dtype)
-        flat_indices = indices_q.reshape(-1, indices_nd)
+        flat_indices = indices_q_for_output.reshape(-1, indices_nd)
         flat_output = output_q.reshape(-1, *params_shape[indices_nd:])
 
         for out_idx, idx_tuple in enumerate(flat_indices):
@@ -141,6 +183,10 @@ class OpGatherND(OperationBase):
             "params_rank": params_rank,
             "indices_rank": indices_rank,
             "batch_dims": batch_dims,
+            "params_rank_test": test_params_rank,
+            "indices_rank_test": test_indices_rank,
+            "batch_dims_test": test_batch_dims,
+            "expected_status": expected_status,
             "params_shape_array": builder.format_array_as_c_literal(np.array(params_shape, dtype=np.int32)),
             "indices_shape_array": builder.format_array_as_c_literal(np.array(indices_shape, dtype=np.int32)),
             "output_shape_array": builder.format_array_as_c_literal(np.array(output_shape, dtype=np.int32)),

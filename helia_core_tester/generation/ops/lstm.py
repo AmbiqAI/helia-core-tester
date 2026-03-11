@@ -159,6 +159,13 @@ class OpLSTM(OperationBase):
         input_size = int(self.desc.get("feature_size", self.desc.get("input_size", 1)))
         hidden_size = int(self.desc.get("units", self.desc.get("hidden_size", 1)))
         time_major = bool(self.desc.get("time_major", False))
+        extras = self.desc.get("hint", {}).get("extras", {})
+        input_zero_point_override = extras.get("input_zero_point")
+        output_zero_point_override = extras.get("output_zero_point")
+        if input_zero_point_override is not None:
+            input_zero_point_override = int(input_zero_point_override)
+        if output_zero_point_override is not None:
+            output_zero_point_override = int(output_zero_point_override)
 
         templates_dir = Path(find_tester_templates_dir()) / "lstm_unidirectional" / "json"
         schema_path = Path(__file__).resolve().parents[4] / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
@@ -177,6 +184,8 @@ class OpLSTM(OperationBase):
             schema_path=schema_path,
             work_dir=work_dir,
             dataset=dataset,
+            input_zero_point_override=input_zero_point_override,
+            output_zero_point_override=output_zero_point_override,
         )
 
         context = build_lstm_context(

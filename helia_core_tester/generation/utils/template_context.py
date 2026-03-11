@@ -568,7 +568,10 @@ class TemplateContextBuilder:
     def calculate_transpose_conv_buffer_size_max(input_dims: Dict[str, int], 
                                                  filter_dims: Dict[str, int],
                                                  output_dims: Dict[str, int],
-                                                 output_dtype: str = 'S8') -> int:
+                                                 output_dtype: str = 'S8',
+                                                 stride_h: int = 1,
+                                                 stride_w: int = 1,
+                                                 reverse_tcol_threshold: int = 16) -> int:
         """
         Calculate a conservative upper bound for transpose convolution buffer size.
         
@@ -578,37 +581,40 @@ class TemplateContextBuilder:
         
         Returns the maximum of both buffers.
         """
-        # For transpose conv, we use a conservative estimate
-        # The actual buffer size depends on the transpose_conv_params which we don't have here
-        # So we use a conservative upper bound based on output dimensions
-        output_h = output_dims['h']
-        output_w = output_dims['w']
-        output_c = output_dims['c']
-        
-        # output_ctx buffer size: output width * output height * output channel * 4
-        output_ctx_size = output_w * output_h * output_c * 4
-        
-        # ctx buffer size: similar to regular conv but for transpose
         input_c = input_dims['c']
         filter_w = filter_dims['w']
         filter_h = filter_dims['h']
+        output_c = output_dims['c']
+
+        reverse_conv_possible = (stride_w <= 2) and (stride_h <= 2)
+        reverse_conv_efficient = (input_c > reverse_tcol_threshold)
         
         if output_dtype == 'S16':
             # S16 buffer size (conservative estimate)
             buffer_size_mve = 4 * 8 * filter_w * filter_h * 2  # sizeof(int16_t) = 2
             buffer_size_dsp = 2 * input_c * filter_w * filter_h * 2
             ctx_size = max(buffer_size_mve, buffer_size_dsp)
+            output_ctx_size = output_dims['w'] * output_dims['h'] * output_c * 4
         else:
-            # S8 buffer size (default)
-            col_length_mve = input_c * filter_w * filter_h
-            col_length_mve = (col_length_mve + 15) // 16
-            buffer_size_mve = 4 * col_length_mve * 16
-            
-            rhs_cols = filter_w * filter_h * input_c
-            remainder = rhs_cols % 4
-            aligned_rhs_cols = rhs_cols + (4 - remainder) if remainder != 0 else rhs_cols
-            buffer_size_dsp = 2 * aligned_rhs_cols * 2
-            ctx_size = max(buffer_size_mve, buffer_size_dsp)
+            if reverse_conv_possible and reverse_conv_efficient:
+                reverse_conv_input_dims = {
+                    'n': input_dims['n'],
+                    'h': input_dims['h'] * stride_h,
+                    'w': input_dims['w'] * stride_w,
+                    'c': input_c,
+                }
+                ctx_size = TemplateContextBuilder.calculate_buffer_size_max(
+                    reverse_conv_input_dims,
+                    filter_dims,
+                    output_dims,
+                    output_dtype='S8',
+                )
+                output_ctx_size = input_c * filter_w * filter_h * filter_dims['n']
+            else:
+                buf_x = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_w)) * output_c
+                buf_y = max(filter_h, stride_h)
+                ctx_size = buf_x * buf_y * 4  # int32 scratch
+                output_ctx_size = 0
         
         # Return maximum of ctx and output_ctx
         return max(ctx_size, output_ctx_size)

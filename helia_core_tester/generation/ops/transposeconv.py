@@ -434,18 +434,22 @@ class OpTransposeConv(OperationBase):
         # Format input and output arrays
         input_data_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data.astype(np.int8))
-        
-        # Calculate buffer size max
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        buffer_size_max = builder.calculate_transpose_conv_buffer_size_max(
-            input_dims, filter_dims, output_dims,
-            output_dtype=activation_dtype
-        )
-        
 
         strides = self.desc.get('strides', [1, 1])
         stride_w = strides[1] if len(strides) > 1 else strides[0]
         stride_h = strides[0] if len(strides) > 0 else 1
+
+        # Calculate buffer size max
+        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        buffer_size_max = builder.calculate_transpose_conv_buffer_size_max(
+            input_dims,
+            filter_dims,
+            output_dims,
+            output_dtype=activation_dtype,
+            stride_h=int(stride_h),
+            stride_w=int(stride_w),
+        )
+
         input_c = input_dims['c']
         filter_w = filter_dims['w']
         filter_h = filter_dims['h']

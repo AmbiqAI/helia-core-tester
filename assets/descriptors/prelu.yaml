@@ -151,3 +151,81 @@ hint:
 input_shape: [1, 1, 2, 3]
 alpha_shape: [1, 1, 2, 1]
 alpha: 0.1
+---
+operator: PReLU
+name: prelu_scalar_alpha_mixed_sign_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_values: [-0.75, -0.25, 0.25, 0.75]
+input_shape: [1, 1, 1, 4]
+alpha_shape: [1]
+alpha: 0.2
+---
+operator: PReLU
+name: prelu_scalar_alpha_all_negative_input_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_values: [-0.7, -0.6, -0.5, -0.4]
+input_shape: [1, 1, 1, 4]
+alpha_shape: [1]
+alpha: 0.2
+---
+operator: PReLU
+name: prelu_scalar_alpha_all_positive_input_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_values: [0.3, 0.4, 0.5, 0.6]
+input_shape: [1, 1, 1, 4]
+alpha_shape: [1]
+alpha: 0.2
+---
+operator: PReLU
+name: prelu_scalar_input_pos_vector_alpha_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_values: [0.6]
+input_shape: [1, 1, 1, 1]
+alpha_shape: [1]
+alpha: 0.2
+---
+operator: PReLU
+name: prelu_scalar_input_neg_vector_alpha_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_values: [-0.6]
+input_shape: [1, 1, 1, 1]
+alpha_shape: [1]
+alpha: 0.2
+---
+operator: PReLU
+name: prelu_scalar_alpha_mixed_input8_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_values: [-0.8, -0.4, -0.1, 0.0, 0.1, 0.3, 0.6, 0.9]
+input_shape: [1, 1, 1, 8]
+alpha_shape: [1]
+alpha: 0.2

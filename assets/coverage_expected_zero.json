@@ -1,0 +1,11 @@
+{
+  "description": "Known zero-hit files for wrapper-driven LiteRT coverage flows.",
+  "expected_zero_files": [
+    "Source/ConvolutionFunctions/arm_nn_depthwise_conv_s8_core.c",
+    "Source/ConvolutionFunctions/arm_nn_mat_mult_s8.c",
+    "Source/NNSupportFunctions/arm_nn_depthwise_conv_nt_t_padded_s8.c",
+    "Source/NNSupportFunctions/arm_nn_mat_mul_core_1x_s8.c",
+    "Source/NNSupportFunctions/arm_nn_mat_mul_core_4x_s8.c",
+    "Source/NNSupportFunctions/arm_nn_mat_mult_nt_t_s8_s32.c"
+  ]
+}

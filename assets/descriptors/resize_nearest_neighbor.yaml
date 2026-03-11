@@ -33,3 +33,75 @@ size:
 - 6
 align_corners: false
 half_pixel_centers: false
+---
+operator: ResizeNearestNeighbor
+name: resize_nn_s16_align_corners_true
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 5
+- 7
+- 2
+size:
+- 3
+- 4
+align_corners: true
+half_pixel_centers: false
+---
+operator: ResizeNearestNeighbor
+name: resize_nn_s16_half_pixel_true
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 3
+- 5
+- 1
+size:
+- 7
+- 9
+align_corners: false
+half_pixel_centers: true
+---
+operator: ResizeNearestNeighbor
+name: resize_nn_s8_downscale_align_true
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 9
+- 7
+- 2
+size:
+- 3
+- 2
+align_corners: true
+half_pixel_centers: false
+---
+operator: ResizeNearestNeighbor
+name: resize_nn_s8_half_pixel_upscale
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 4
+- 4
+- 3
+size:
+- 7
+- 7
+align_corners: false
+half_pixel_centers: true

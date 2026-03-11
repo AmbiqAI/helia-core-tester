@@ -218,6 +218,8 @@ def _generate_data_json(
     input_size: int,
     hidden_size: int,
     time_major: bool,
+    input_zero_point_override: int | None = None,
+    output_zero_point_override: int | None = None,
 ) -> LstmGeneratedData:
     shapes = _get_shapes(batch_size, time_steps, input_size, hidden_size, time_major)
     tensors = {}
@@ -271,8 +273,8 @@ def _generate_data_json(
     tensors["cell_gate_bias"] = np.zeros(shapes["bias"], dtype=bias_dtype)
     tensors["output_gate_bias"] = np.zeros(shapes["bias"], dtype=bias_dtype)
 
-    params["output_zero_point"] = 0
-    params["input_zero_point"] = 0
+    params["output_zero_point"] = int(output_zero_point_override) if output_zero_point_override is not None else 0
+    params["input_zero_point"] = int(input_zero_point_override) if input_zero_point_override is not None else 0
     params["cell_clip"] = 32767
 
     return LstmGeneratedData(params=params, tensors=tensors, scales=scales, effective_scales=effective_scales)
@@ -443,6 +445,8 @@ def generate_lstm_data(
     schema_path: Path,
     work_dir: Path,
     dataset: str,
+    input_zero_point_override: int | None = None,
+    output_zero_point_override: int | None = None,
 ) -> LstmGeneratedData:
     shapes = _get_shapes(batch_size, time_steps, input_size, hidden_size, time_major)
     expected_sizes = {
@@ -526,6 +530,8 @@ def generate_lstm_data(
             input_size,
             hidden_size,
             time_major,
+            input_zero_point_override=input_zero_point_override,
+            output_zero_point_override=output_zero_point_override,
         )
 
         json_template = "lstm_s16_tm.json" if time_major else "lstm_s16.json"

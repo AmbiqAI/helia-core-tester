@@ -87,3 +87,63 @@ hint:
   time_batches: 3
   rank: 2
   use_bias: false
+---
+operator: SVDF
+name: svdf_s8_bias_rank1_rows3_cols17
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [2, 17]
+hint:
+  force_cmsis: true
+  state_dtype: S8
+  input_batches: 2
+  input_height: 17
+  feature_batches: 3
+  time_batches: 3
+  rank: 1
+  use_bias: true
+---
+operator: SVDF
+name: svdf_s8_nobias_rank2_rows6_cols17
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [2, 17]
+hint:
+  force_cmsis: true
+  state_dtype: S8
+  input_batches: 2
+  input_height: 17
+  feature_batches: 6
+  time_batches: 3
+  rank: 2
+  use_bias: false
+---
+operator: SVDF
+name: svdf_state_s16_bias_rank1_rows5_cols17
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [2, 17]
+hint:
+  force_cmsis: true
+  state_dtype: S16
+  input_batches: 2
+  input_height: 17
+  feature_batches: 5
+  time_batches: 3
+  rank: 1
+  use_bias: true
+---
+operator: SVDF
+name: svdf_state_s16_nobias_rank2_rows6_cols33
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [2, 33]
+hint:
+  force_cmsis: true
+  state_dtype: S16
+  input_batches: 2
+  input_height: 33
+  feature_batches: 6
+  time_batches: 3
+  rank: 2
+  use_bias: false

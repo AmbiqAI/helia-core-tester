@@ -181,3 +181,49 @@ strides:
 - 2
 padding: VALID
 use_bias: false
+---
+operator: TransposeConv
+name: reverse_transpose_conv_eq16_stride1_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 4
+- 4
+- 16
+filter_shape:
+- 3
+- 3
+- 16
+- 8
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+---
+operator: TransposeConv
+name: transpose_conv_gt16_stride3_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 3
+- 3
+- 32
+filter_shape:
+- 2
+- 2
+- 32
+- 8
+strides:
+- 3
+- 1
+padding: VALID
+use_bias: false
