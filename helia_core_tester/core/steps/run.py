@@ -4,13 +4,11 @@ FVP test execution step.
 
 import subprocess
 import sys
-from pathlib import Path
 
 from helia_core_tester.core.steps.base import StepBase, StepPlan, StepResult, StepStatus
 from helia_core_tester.core.errors import FVPRunError
 from helia_core_tester.core.logging import get_logger
 from helia_core_tester.core.discovery import find_fvp_script_path
-from helia_core_tester.utils.command_runner import run_command
 
 
 class RunStep(StepBase):
@@ -64,8 +62,11 @@ class RunStep(StepBase):
         
         if self.config.timeout > 0:
             cmd.extend(["--timeout-run", str(self.config.timeout)])
-        if not self.config.fail_fast:
+        if self.config.fail_fast:
+            cmd.append("--fail-fast")
+        else:
             cmd.append("--no-fail-fast")
+        cmd.extend(["--run-jobs", str(self.config.run_jobs)])
         
         # Pass verbosity
         cmd.extend(["--verbosity", str(self.config.verbosity)])
@@ -157,8 +158,11 @@ class RunStep(StepBase):
             cmd_preview.append("--coverage")
         if self.config.timeout > 0:
             cmd_preview.extend(["--timeout-run", str(self.config.timeout)])
-        if not self.config.fail_fast:
+        if self.config.fail_fast:
+            cmd_preview.append("--fail-fast")
+        else:
             cmd_preview.append("--no-fail-fast")
+        cmd_preview.extend(["--run-jobs", str(self.config.run_jobs)])
         
         return StepResult(
             name=self.name,
@@ -181,8 +185,11 @@ class RunStep(StepBase):
             cmd.append("--coverage")
         if self.config.timeout > 0:
             cmd.extend(["--timeout-run", str(self.config.timeout)])
-        if not self.config.fail_fast:
+        if self.config.fail_fast:
+            cmd.append("--fail-fast")
+        else:
             cmd.append("--no-fail-fast")
+        cmd.extend(["--run-jobs", str(self.config.run_jobs)])
         cmd.extend(["--verbosity", str(self.config.verbosity)])
         if hasattr(self.config, 'enable_reporting'):
             if not self.config.enable_reporting:

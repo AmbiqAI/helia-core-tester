@@ -47,6 +47,7 @@ class Config:
     # Test configuration
     timeout: float = 0.0
     fail_fast: bool = True
+    run_jobs: int = 1  # Parallel FVP test jobs (0 = auto: host CPU count)
     verbosity: int = 0  # 0=minimal, 1=progress, 2=commands, 3=debug
     dry_run: bool = False
     plan: bool = False
@@ -130,6 +131,14 @@ class Config:
         # Set default jobs to CPU count
         if self.jobs is None:
             self.jobs = os.cpu_count() or 4
+
+        # Validate run_jobs and resolve auto mode
+        if self.run_jobs is None:
+            self.run_jobs = 1
+        if self.run_jobs < 0:
+            raise ValueError(f"run_jobs must be >= 0, got {self.run_jobs}")
+        if self.run_jobs == 0:
+            self.run_jobs = os.cpu_count() or 4
         
         # Validate paths exist (warn but don't fail for generated directories)
         if not self.project_root.exists():
@@ -183,6 +192,7 @@ class Config:
             "coverage": self.coverage,
             "timeout": self.timeout,
             "fail_fast": self.fail_fast,
+            "run_jobs": self.run_jobs,
             "verbosity": self.verbosity,
             "dry_run": self.dry_run,
             "plan": self.plan,
