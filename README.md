@@ -99,6 +99,7 @@ uv run helia_core_tester full --skip-generation --skip-conversion
 uv run helia_core_tester full --dry-run
 uv run helia_core_tester full --cpu cortex-m3 -v 2
 uv run helia_core_tester build --opt "-O2" --jobs 8
+uv run helia_core_tester full --cpu cortex-m0,cortex-m4,cortex-m55 --run-jobs 0 --coverage
 ```
 
 ### Command Line Options
@@ -121,6 +122,7 @@ Build options:
 
 Run options:
 - `--timeout SECONDS`
+- `--run-jobs N` (`0` = auto/use all host cores)
 - `--no-fail-fast`
 - `--report-formats`
 

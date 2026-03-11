@@ -141,6 +141,7 @@ def build(
 def run(
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     timeout: float = typer.Option(0.0, help="Per-test timeout in seconds (0 = none)"),
+    run_jobs: int = typer.Option(1, "--run-jobs", help="Parallel FVP run jobs (0 = auto/use all host cores)"),
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Don't stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Collect and merge ns-cmsis-nn gcov streams"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
@@ -155,7 +156,7 @@ def run(
     config = get_config(
         cpu=cpu, verbosity=verbosity, dry_run=dry_run, plan=plan, project_root=project_root,
         timeout=timeout, fail_fast=not no_fail_fast, enable_reporting=not no_report,
-        report_formats=report_formats, report_dir=report_dir, coverage=coverage,
+        report_formats=report_formats, report_dir=report_dir, coverage=coverage, run_jobs=run_jobs,
     )
     if config.plan:
         plan_item = RunStep(config).plan()
@@ -185,6 +186,7 @@ def full(
     opt: str = typer.Option("-Ofast", help="Optimization level"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     timeout: float = typer.Option(0.0, help="Per-test timeout in seconds (0 = none)"),
+    run_jobs: int = typer.Option(1, "--run-jobs", help="Parallel FVP run jobs (0 = auto/use all host cores)"),
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Don't stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn coverage collection/reporting"),
     skip_generation: bool = typer.Option(False, "--skip-generation", help="Skip TFLite generation"),
@@ -215,6 +217,7 @@ def full(
         optimization=opt,
         jobs=jobs,
         timeout=timeout,
+        run_jobs=run_jobs,
         fail_fast=not no_fail_fast,
         coverage=coverage,
         skip_generation=skip_generation,

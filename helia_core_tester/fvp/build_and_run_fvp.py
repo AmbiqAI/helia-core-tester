@@ -23,13 +23,16 @@ Notes:
 
 from __future__ import annotations
 import argparse
-from dataclasses import dataclass
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 import os
 import platform
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -71,6 +74,82 @@ class CoverageContext:
     stream_index: int = 0
     merged_streams: int = 0
     merge_errors: int = 0
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+
+@dataclass
+class ProcessRecord:
+    elf: Path
+    cpu: str
+    descriptor_name: str
+    popen: subprocess.Popen
+    start_time: float
+    state: str = "running"
+
+
+class ProcessSupervisor:
+    def __init__(self, grace_seconds: float = 2.0, verbosity: int = 0):
+        self.grace_seconds = grace_seconds
+        self.verbosity = verbosity
+        self._active: dict[int, ProcessRecord] = {}
+        self._lock = threading.Lock()
+
+    def register(self, record: ProcessRecord) -> None:
+        with self._lock:
+            self._active[record.popen.pid] = record
+
+    def unregister(self, pid: int) -> None:
+        with self._lock:
+            self._active.pop(pid, None)
+
+    def snapshot_active(self) -> list[ProcessRecord]:
+        with self._lock:
+            return list(self._active.values())
+
+    def active_count(self) -> int:
+        with self._lock:
+            return len(self._active)
+
+    def terminate_all(self, reason: str) -> None:
+        records = self.snapshot_active()
+        if not records:
+            return
+
+        if self.verbosity >= 1:
+            print(f"Fail-fast cleanup: terminating {len(records)} active process(es) ({reason})")
+
+        for rec in records:
+            rec.state = f"terminating:{reason}"
+            _signal_process_group(rec.popen, signal.SIGTERM)
+
+        deadline = time.time() + self.grace_seconds
+        while time.time() < deadline:
+            remaining = [rec for rec in records if rec.popen.poll() is None]
+            if not remaining:
+                break
+            time.sleep(0.05)
+
+        remaining = [rec for rec in records if rec.popen.poll() is None]
+        for rec in remaining:
+            rec.state = f"killing:{reason}"
+            _signal_process_group(rec.popen, signal.SIGKILL)
+
+        for rec in records:
+            try:
+                rec.popen.communicate(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                pass
+            except Exception:
+                pass
+
+
+@dataclass
+class FvpProcessResult:
+    exit_code: int
+    output: str
+    duration: float
+    timed_out: bool = False
+    launch_error: Optional[str] = None
 
 
 def _which_in_env(name: str, env: dict) -> Optional[str]:
@@ -100,6 +179,116 @@ def _resolve_report_dir(args, cpu: Optional[str] = None, compiler_tag: str = "gc
     if cpu is None:
         return ARTIFACTS_DIR / "reports"
     return ARTIFACTS_DIR / f"build-{cpu}-{compiler_tag}" / "reports"
+
+
+def _signal_process_group(proc: subprocess.Popen, sig: int) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, sig)
+    except ProcessLookupError:
+        pass
+    except Exception:
+        pass
+
+
+def _terminate_process(proc: subprocess.Popen, grace_seconds: float = 1.0) -> None:
+    _signal_process_group(proc, signal.SIGTERM)
+    try:
+        proc.wait(timeout=grace_seconds)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    _signal_process_group(proc, signal.SIGKILL)
+    try:
+        proc.wait(timeout=0.2)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _build_fvp_cmd(fvp_exe: Path, elf: Path, extra_args: List[str]) -> List[str]:
+    return [
+        str(fvp_exe),
+        "-C", "mps3_board.uart0.shutdown_on_eot=1",
+        "-C", "mps3_board.visualisation.disable-visualisation=1",
+        "-C", "mps3_board.telnetterminal0.start_telnet=0",
+        "-C", "mps3_board.uart0.out_file=-",
+        "-C", "mps3_board.uart0.unbuffered_output=1",
+    ] + extra_args + [str(elf)]
+
+
+def _run_fvp_process(
+    fvp_exe: Path,
+    elf: Path,
+    timeout: float,
+    verbosity: int,
+    extra_args: List[str],
+    env: dict,
+    cpu: str,
+    descriptor_name: Optional[str],
+    supervisor: Optional[ProcessSupervisor] = None,
+    stop_event: Optional[threading.Event] = None,
+) -> FvpProcessResult:
+    if stop_event is not None and stop_event.is_set():
+        return FvpProcessResult(exit_code=-1, output="", duration=0.0, launch_error="cancelled")
+
+    cmd = _build_fvp_cmd(fvp_exe=fvp_exe, elf=elf, extra_args=extra_args)
+    if verbosity >= 2:
+        print(f"Run: {' '.join(cmd)}")
+
+    start_time = time.time()
+    proc: Optional[subprocess.Popen] = None
+    pid: Optional[int] = None
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(repo_root),
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            bufsize=1,
+        )
+        pid = proc.pid
+        if supervisor is not None:
+            supervisor.register(
+                ProcessRecord(
+                    elf=elf,
+                    cpu=cpu,
+                    descriptor_name=descriptor_name or elf.stem,
+                    popen=proc,
+                    start_time=start_time,
+                )
+            )
+
+        try:
+            stdout, _ = proc.communicate(timeout=None if timeout <= 0 else timeout)
+        except subprocess.TimeoutExpired:
+            _terminate_process(proc)
+            stdout, _ = proc.communicate()
+            return FvpProcessResult(
+                exit_code=124,
+                output=stdout or "",
+                duration=time.time() - start_time,
+                timed_out=True,
+            )
+
+        return FvpProcessResult(
+            exit_code=proc.returncode if proc.returncode is not None else -1,
+            output=stdout or "",
+            duration=time.time() - start_time,
+        )
+    except Exception as e:
+        return FvpProcessResult(
+            exit_code=-1,
+            output="",
+            duration=time.time() - start_time,
+            launch_error=str(e),
+        )
+    finally:
+        if supervisor is not None and pid is not None:
+            supervisor.unregister(pid)
 
 
 def _extract_coverage_blocks(output: str) -> Tuple[List[str], str]:
@@ -164,22 +353,23 @@ def _process_coverage_output(
             print(f"Coverage: no stream block found in {elf.name}")
         return cleaned_output
 
-    for block in blocks:
-        if len(block) % 2 != 0:
-            if verbosity >= 1:
-                print(f"WARNING: skipping malformed coverage payload from {elf}", file=sys.stderr)
-            ctx.merge_errors += 1
-            continue
+    with ctx.lock:
+        for block in blocks:
+            if len(block) % 2 != 0:
+                if verbosity >= 1:
+                    print(f"WARNING: skipping malformed coverage payload from {elf}", file=sys.stderr)
+                ctx.merge_errors += 1
+                continue
 
-        payload = bytes.fromhex(block)
-        ctx.stream_index += 1
-        stream_path = ctx.streams_dir / f"{elf.stem}_{ctx.stream_index:04d}.gcovstream"
-        stream_path.write_bytes(payload)
+            payload = bytes.fromhex(block)
+            ctx.stream_index += 1
+            stream_path = ctx.streams_dir / f"{elf.stem}_{ctx.stream_index:04d}.gcovstream"
+            stream_path.write_bytes(payload)
 
-        if _merge_coverage_stream(ctx, payload, env, verbosity):
-            ctx.merged_streams += 1
-        else:
-            ctx.merge_errors += 1
+            if _merge_coverage_stream(ctx, payload, env, verbosity):
+                ctx.merged_streams += 1
+            else:
+                ctx.merge_errors += 1
 
     if verbosity >= 2:
         print(
@@ -468,6 +658,9 @@ def run_fvp_with_reporting(
     cpu: str,
     descriptor_name: Optional[str] = None,
     coverage_ctx: Optional[CoverageContext] = None,
+    supervisor: Optional[ProcessSupervisor] = None,
+    stop_event: Optional[threading.Event] = None,
+    emit_output: bool = True,
 ) -> TestResult:
     """
     Run FVP with comprehensive result reporting.
@@ -475,45 +668,40 @@ def run_fvp_with_reporting(
     Returns:
         TestResult object with detailed test information
     """
-    start_time = time.time()
     parser = TestResultParser()
-    
-    args = [
-        str(fvp_exe),
-        "-C", "mps3_board.uart0.shutdown_on_eot=1",
-        "-C", "mps3_board.visualisation.disable-visualisation=1",
-        "-C", "mps3_board.telnetterminal0.start_telnet=0",
-        "-C", "mps3_board.uart0.out_file=-",
-        "-C", "mps3_board.uart0.unbuffered_output=1",
-    ] + extra_args + [str(elf)]
-    
-    if verbosity >= 2:
-        print(f"Run: {' '.join(args)}")
-    
-    try:
-        proc = subprocess.run(
-            args,
-            cwd=str(repo_root),
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=None if timeout <= 0 else timeout,
+
+    process_result = _run_fvp_process(
+        fvp_exe=fvp_exe,
+        elf=elf,
+        timeout=timeout,
+        verbosity=verbosity,
+        extra_args=extra_args,
+        env=env,
+        cpu=cpu,
+        descriptor_name=descriptor_name,
+        supervisor=supervisor,
+        stop_event=stop_event,
+    )
+
+    if process_result.launch_error == "cancelled":
+        return TestResult(
+            test_name=elf.stem,
+            status=TestStatus.SKIP,
+            duration=0.0,
+            cpu=cpu,
+            elf_path=elf,
+            skip_reason="skipped due to fail-fast cancellation",
+            timestamp=datetime.now(),
+            descriptor_name=descriptor_name or elf.stem,
         )
-        exit_code = proc.returncode
-        output = proc.stdout or ""
-        output = _process_coverage_output(output, elf, coverage_ctx, env, verbosity)
-        
-    except subprocess.TimeoutExpired:
-        end_time = time.time()
-        duration = end_time - start_time
-        print(f"TIMEOUT running {elf}", file=sys.stderr)
-        
-        # Create timeout result
+
+    if process_result.timed_out:
+        if emit_output:
+            print(f"TIMEOUT running {elf}", file=sys.stderr)
         return TestResult(
             test_name=elf.stem,
             status=TestStatus.TIMEOUT,
-            duration=duration,
+            duration=process_result.duration,
             cpu=cpu,
             elf_path=elf,
             failure_reason="Test execution timed out",
@@ -522,89 +710,85 @@ def run_fvp_with_reporting(
             error_type="timeout",
             descriptor_name=descriptor_name or elf.stem
         )
-    
-    except Exception as e:
-        end_time = time.time()
-        duration = end_time - start_time
-        print(f"ERROR running {elf}: {e}", file=sys.stderr)
-        
-        # Create error result
+
+    if process_result.launch_error is not None:
+        if emit_output:
+            print(f"ERROR running {elf}: {process_result.launch_error}", file=sys.stderr)
         return TestResult(
             test_name=elf.stem,
             status=TestStatus.ERROR,
-            duration=duration,
+            duration=process_result.duration,
             cpu=cpu,
             elf_path=elf,
-            failure_reason=f"Execution error: {str(e)}",
+            failure_reason=f"Execution error: {process_result.launch_error}",
             timestamp=datetime.now(),
             exit_code=-1,
             error_type="crash",
             descriptor_name=descriptor_name or elf.stem
         )
-    
-    end_time = time.time()
-    duration = end_time - start_time
-    
-    # Parse the output to create TestResult
-    result = parser.parse_fvp_output(output, elf, cpu, duration, exit_code, descriptor_name=descriptor_name)
-    
-    # Display results based on verbosity
+
+    output = _process_coverage_output(process_result.output, elf, coverage_ctx, env, verbosity)
+    result = parser.parse_fvp_output(
+        output,
+        elf,
+        cpu,
+        process_result.duration,
+        process_result.exit_code,
+        descriptor_name=descriptor_name,
+    )
+    if emit_output:
+        _emit_reporting_result_output(result=result, elf=elf, verbosity=verbosity, raw_output=output)
+    return result
+
+
+def _emit_reporting_result_output(result: TestResult, elf: Path, verbosity: int, raw_output: str) -> None:
     if result.status == TestStatus.PASS:
-        # Level 0: Only test name and pass/fail
         print(f"PASS: {elf}")
         if verbosity >= 3:
-            sys.stdout.write(output)
+            sys.stdout.write(raw_output)
             sys.stdout.flush()
-        elif verbosity >= 1:
-            # Level 1: Add summary
-            pass  # Already printed PASS
-    else:
-        # Always show failures
-        print(f"FAIL: {elf}")
-        if verbosity >= 1:
-            print("=" * 60)
-            print("FAILURE DETAILS:")
-            print("=" * 60)
-            
-            if result.failure_reason:
-                print(f"Reason: {result.failure_reason}")
-                print()
-            
-            # Show output differences based on verbosity
-            if verbosity >= 2:
-                # Level 2+: Show expected vs actual output
-                if result.expected_output or result.actual_output:
-                    print("OUTPUT COMPARISON:")
-                    if result.expected_output:
-                        print(f"  Expected (Golden): {result.expected_output}")
-                    if result.actual_output:
-                        print(f"  Actual (Got):     {result.actual_output}")
-                    print()
-                
-                # Show detailed differences
-                if result.output_differences:
-                    print("DETAILED DIFFERENCES:")
-                    max_diffs = 20 if verbosity < 3 else len(result.output_differences)
-                    for diff in result.output_differences[:max_diffs]:
-                        print(f"  {diff}")
-                    if len(result.output_differences) > max_diffs:
-                        print(f"  ... ({len(result.output_differences) - max_diffs} more differences)")
-                    print()
-            
-            # Show relevant output lines
-            max_lines = 20 if verbosity < 3 else len(result.output_lines)
-            if result.output_lines:
-                print("TEST OUTPUT:")
-                for line in result.output_lines[:max_lines]:
-                    print(f"  {line}")
-                if len(result.output_lines) > max_lines and verbosity < 3:
-                    print("  ... (truncated)")
-                print()
-            
-            if verbosity >= 1:
-                print("=" * 60)
-    
-    return result
+        return
+
+    print(f"FAIL: {elf}")
+    if verbosity < 1:
+        return
+
+    print("=" * 60)
+    print("FAILURE DETAILS:")
+    print("=" * 60)
+
+    if result.failure_reason:
+        print(f"Reason: {result.failure_reason}")
+        print()
+
+    if verbosity >= 2:
+        if result.expected_output or result.actual_output:
+            print("OUTPUT COMPARISON:")
+            if result.expected_output:
+                print(f"  Expected (Golden): {result.expected_output}")
+            if result.actual_output:
+                print(f"  Actual (Got):     {result.actual_output}")
+            print()
+
+        if result.output_differences:
+            print("DETAILED DIFFERENCES:")
+            max_diffs = 20 if verbosity < 3 else len(result.output_differences)
+            for diff in result.output_differences[:max_diffs]:
+                print(f"  {diff}")
+            if len(result.output_differences) > max_diffs:
+                print(f"  ... ({len(result.output_differences) - max_diffs} more differences)")
+            print()
+
+    max_lines = 20 if verbosity < 3 else len(result.output_lines)
+    if result.output_lines:
+        print("TEST OUTPUT:")
+        for line in result.output_lines[:max_lines]:
+            print(f"  {line}")
+        if len(result.output_lines) > max_lines and verbosity < 3:
+            print("  ... (truncated)")
+        print()
+
+    print("=" * 60)
 
 
 def run_fvp(
@@ -615,49 +799,52 @@ def run_fvp(
     extra_args: List[str],
     env: dict,
     coverage_ctx: Optional[CoverageContext] = None,
+    supervisor: Optional[ProcessSupervisor] = None,
+    stop_event: Optional[threading.Event] = None,
+    emit_output: bool = True,
 ) -> bool:
-    args = [
-        str(fvp_exe),
-        "-C", "mps3_board.uart0.shutdown_on_eot=1",
-        "-C", "mps3_board.visualisation.disable-visualisation=1",
-        "-C", "mps3_board.telnetterminal0.start_telnet=0",
-        "-C", "mps3_board.uart0.out_file=-",
-        "-C", "mps3_board.uart0.unbuffered_output=1",
-    ] + extra_args + [str(elf)]
-    if verbosity >= 2:
-        print(f"Run: {' '.join(args)}")
-    try:
-        proc = subprocess.run(
-            args,
-            cwd=str(repo_root),
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=None if timeout <= 0 else timeout,
-        )
-    except subprocess.TimeoutExpired:
-        print(f"TIMEOUT running {elf}", file=sys.stderr)
+    process_result = _run_fvp_process(
+        fvp_exe=fvp_exe,
+        elf=elf,
+        timeout=timeout,
+        verbosity=verbosity,
+        extra_args=extra_args,
+        env=env,
+        cpu="unknown",
+        descriptor_name=elf.stem,
+        supervisor=supervisor,
+        stop_event=stop_event,
+    )
+    if process_result.launch_error == "cancelled":
         return False
 
-    out = proc.stdout or ""
-    out = _process_coverage_output(out, elf, coverage_ctx, env, verbosity)
-    # Use regex for exact "0 Failures" match (not substring)
+    if process_result.timed_out:
+        if emit_output:
+            print(f"TIMEOUT running {elf}", file=sys.stderr)
+        return False
+
+    if process_result.launch_error is not None:
+        if emit_output:
+            print(f"ERROR running {elf}: {process_result.launch_error}", file=sys.stderr)
+        return False
+
+    out = _process_coverage_output(process_result.output, elf, coverage_ctx, env, verbosity)
     zero_failures_pattern = re.compile(r'^0\s+Failures\s*$', re.MULTILINE | re.IGNORECASE)
     success = bool(zero_failures_pattern.search(out))
-    
+
+    if not emit_output:
+        return success
+
     if not success:
-        # Always show failures
         print(f"FAIL: {elf}")
         if verbosity >= 1:
             print("=" * 60)
             print("FAILURE DETAILS:")
             print("=" * 60)
-        # Extract relevant failure information
         lines = out.split('\n')
         failure_lines = []
         in_failure_section = False
-        
+
         for line in lines:
             if any(keyword in line.lower() for keyword in ['fail', 'error', 'assert', 'test']):
                 in_failure_section = True
@@ -665,13 +852,11 @@ def run_fvp(
             elif in_failure_section and line.strip():
                 failure_lines.append(line)
             elif in_failure_section and not line.strip():
-                # Empty line might end failure section, but continue for a few more lines
                 failure_lines.append(line)
             elif in_failure_section and len(failure_lines) > 20:
-                # Limit output to prevent spam
                 failure_lines.append("... (truncated)")
                 break
-        
+
         if verbosity >= 1:
             max_lines = 20 if verbosity < 3 else len(failure_lines)
             if failure_lines:
@@ -680,7 +865,6 @@ def run_fvp(
                 if len(failure_lines) > max_lines and verbosity < 3:
                     print("... (truncated)")
             else:
-                # If no specific failure lines found, show last 20 lines
                 if verbosity >= 2:
                     print("Last 20 lines of output:")
                     for line in lines[-20:]:
@@ -689,12 +873,132 @@ def run_fvp(
     elif verbosity >= 1:
         sys.stdout.write(out)
         sys.stdout.flush()
-    
+
     return success
 
 
 def parse_cpus(cpu_str: str) -> List[str]:
     return parse_cpu_list(cpu_str)
+
+
+def _resolve_run_jobs(run_jobs: int, total_elves: int) -> int:
+    if total_elves <= 1:
+        return 1
+    if run_jobs == 0:
+        run_jobs = os.cpu_count() or 4
+    return max(1, min(run_jobs, total_elves))
+
+
+def _run_elf_jobs_with_reporting(
+    elf_entries: List[Tuple[Path, str]],
+    fvp_exe: Path,
+    timeout: float,
+    verbosity: int,
+    extra_args: List[str],
+    env: dict,
+    cpu: str,
+    coverage_ctx: Optional[CoverageContext],
+    run_jobs: int,
+    fail_fast: bool,
+    supervisor: Optional[ProcessSupervisor],
+) -> Tuple[List[TestResult], bool]:
+    ordered_entries = sorted(elf_entries, key=lambda item: item[0].name)
+    resolved_jobs = _resolve_run_jobs(run_jobs, len(ordered_entries))
+    any_fail = False
+
+    if resolved_jobs <= 1:
+        results: List[TestResult] = []
+        for elf, descriptor_name in ordered_entries:
+            result = run_fvp_with_reporting(
+                fvp_exe=fvp_exe,
+                elf=elf,
+                timeout=timeout,
+                verbosity=verbosity,
+                extra_args=extra_args,
+                env=env,
+                cpu=cpu,
+                descriptor_name=descriptor_name,
+                coverage_ctx=coverage_ctx,
+                supervisor=supervisor,
+                stop_event=None,
+                emit_output=True,
+            )
+            results.append(result)
+            if result.status not in (TestStatus.PASS, TestStatus.SKIP):
+                any_fail = True
+                if fail_fast:
+                    break
+        return results, any_fail
+
+    stop_event = threading.Event()
+    results_by_index: dict[int, TestResult] = {}
+
+    with ThreadPoolExecutor(max_workers=resolved_jobs) as executor:
+        future_to_index = {
+            executor.submit(
+                run_fvp_with_reporting,
+                fvp_exe,
+                elf,
+                timeout,
+                verbosity,
+                extra_args,
+                env,
+                cpu,
+                descriptor_name,
+                coverage_ctx,
+                supervisor,
+                stop_event,
+                False,
+            ): idx
+            for idx, (elf, descriptor_name) in enumerate(ordered_entries)
+        }
+
+        for future in as_completed(future_to_index):
+            idx = future_to_index[future]
+            elf, descriptor_name = ordered_entries[idx]
+            try:
+                result = future.result()
+            except CancelledError:
+                continue
+            except Exception as e:
+                result = TestResult(
+                    test_name=elf.stem,
+                    status=TestStatus.ERROR,
+                    duration=0.0,
+                    cpu=cpu,
+                    elf_path=elf,
+                    failure_reason=f"Execution error: {e}",
+                    timestamp=datetime.now(),
+                    exit_code=-1,
+                    error_type="crash",
+                    descriptor_name=descriptor_name,
+                )
+
+            results_by_index[idx] = result
+            if result.status not in (TestStatus.PASS, TestStatus.SKIP):
+                any_fail = True
+                if fail_fast and not stop_event.is_set():
+                    stop_event.set()
+                    if supervisor is not None:
+                        supervisor.terminate_all("fail_fast")
+                    for pending in future_to_index:
+                        if pending is not future:
+                            pending.cancel()
+
+    ordered_results: List[TestResult] = []
+    for idx, (elf, _) in enumerate(ordered_entries):
+        result = results_by_index.get(idx)
+        if result is None:
+            continue
+        _emit_reporting_result_output(
+            result=result,
+            elf=elf,
+            verbosity=verbosity,
+            raw_output="\n".join(result.output_lines),
+        )
+        ordered_results.append(result)
+
+    return ordered_results, any_fail
 
 
 def regenerate_generated_tests(cpu: str, generated_tests_dir: Path, args, env: dict, verbosity: int) -> None:
@@ -764,7 +1068,8 @@ def run_tests_with_reporting(cpus: List[str],
                            cmsis5: Path,
                            fvp_exe: Path,
                            args,
-                           env: dict) -> Tuple[List[TestResult], bool]:
+                           env: dict,
+                           supervisor: Optional[ProcessSupervisor] = None) -> Tuple[List[TestResult], bool]:
     """
     Run tests with comprehensive reporting.
     
@@ -852,34 +1157,30 @@ def run_tests_with_reporting(cpus: List[str],
                 print(f"(no .elf found under {build_dir}, nothing to run)")
             continue
         
-        # Run tests for this CPU
-        cpu_results = []
-        for elf in sorted(elves):
-            # Try to map test name to descriptor
+        elf_entries: List[Tuple[Path, str]] = []
+        for elf in elves:
             test_name = elf.stem
             descriptor = tracker.map_test_to_descriptor(test_name, all_descriptors_dict)
             descriptor_name = descriptor.get('name') if descriptor else test_name
-            
-            result = run_fvp_with_reporting(
-                fvp_exe=fvp_exe, 
-                elf=elf, 
-                timeout=args.timeout_run,
-                verbosity=verbosity, 
-                extra_args=args.fvp_arg, 
-                env=env,
-                cpu=cpu,
-                descriptor_name=descriptor_name,
-                coverage_ctx=coverage_ctx,
-            )
-            cpu_results.append(result)
-            all_results.append(result)
-            
-            if result.status != TestStatus.PASS:
-                any_fail = True
-                if args.fail_fast:
-                    if verbosity >= 1:
-                        print("Stopping early due to failure (--fail-fast).")
-                    break
+            elf_entries.append((elf, descriptor_name))
+
+        cpu_results, cpu_failed = _run_elf_jobs_with_reporting(
+            elf_entries=elf_entries,
+            fvp_exe=fvp_exe,
+            timeout=args.timeout_run,
+            verbosity=verbosity,
+            extra_args=args.fvp_arg,
+            env=env,
+            cpu=cpu,
+            coverage_ctx=coverage_ctx,
+            run_jobs=getattr(args, "run_jobs", 1),
+            fail_fast=args.fail_fast,
+            supervisor=supervisor,
+        )
+        all_results.extend(cpu_results)
+        any_fail = any_fail or cpu_failed
+        if cpu_failed and args.fail_fast and verbosity >= 1:
+            print("Stopping early due to failure (--fail-fast).")
         
         if any_fail and args.fail_fast:
             break
@@ -887,6 +1188,8 @@ def run_tests_with_reporting(cpus: List[str],
     # Generate report
     end_time = datetime.now()
     
+    all_results = sorted(all_results, key=lambda r: (r.cpu, r.test_name))
+
     # Build descriptor_results: map each descriptor to its status and test result
     descriptor_results = {}
     
@@ -1050,6 +1353,7 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--source-dir", type=Path, default=DEFAULT_SOURCE, help="CMake source dir (UnitTest root)")
     ap.add_argument("--generator", help="CMake generator (e.g. Ninja)")
     ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4, help="Parallel build jobs")
+    ap.add_argument("--run-jobs", type=int, default=1, help="Parallel FVP test jobs (0 = auto/use all host cores)")
     ap.add_argument("--timeout-run", type=float, default=0.0, help="Per-test timeout in seconds (0 = none)")
     ap.add_argument("--fail-fast", action=argparse.BooleanOptionalAction, default=False, help="Stop on first failure")
     ap.add_argument("--fvp-arg", action="append", default=[], help="Extra args to pass to the FVP (repeatable)")
@@ -1092,6 +1396,9 @@ def main(argv: List[str]) -> int:
     except ValueError as e:
         die(str(e))
 
+    if args.run_jobs < 0:
+        die(f"--run-jobs must be >= 0, got {args.run_jobs}")
+
     if args.coverage and args.use_arm_compiler:
         die("--coverage is only supported with GCC builds")
     if args.coverage:
@@ -1102,85 +1409,90 @@ def main(argv: List[str]) -> int:
     
     # Use reporting if enabled (default: enabled, unless --no-report is set)
     enable_reporting = not args.no_report
-    if enable_reporting:
-        results, success = run_tests_with_reporting(
-            cpus=cpus,
-            source_dir=source_dir,
-            toolchain_file=toolchain_file,
-            cmsis5=cmsis5,
-            fvp_exe=fvp_exe,
-            args=args,
-            env=env
-        )
-        
-        verbosity = getattr(args, 'verbosity', 0)
-        if success:
-            if verbosity >= 1:
-                print("\nAll requested builds/runs completed successfully.")
-            return 0
-        else:
-            return 1
-    
-    # Original logic for backward compatibility
-    any_fail = False
     verbosity = getattr(args, 'verbosity', 0)
-
-    for cpu in cpus:
-        if verbosity >= 1:
-            print(f"\nTarget: {cpu} ({compiler_tag})")
-        build_dir = ARTIFACTS_DIR / f"build-{cpu}-{compiler_tag}"
-        cpu_generated_tests_dir = resolve_generated_tests_dir(source_dir, cpu)
-        coverage_ctx = _new_coverage_context(build_dir, getattr(args, "_gcov_tool", None)) if args.coverage else None
-
-        if not args.no_build:
-            cmake_configure(
+    supervisor = ProcessSupervisor(verbosity=verbosity)
+    try:
+        if enable_reporting:
+            _, success = run_tests_with_reporting(
+                cpus=cpus,
                 source_dir=source_dir,
-                build_dir=build_dir,
                 toolchain_file=toolchain_file,
-                cpu=cpu,
                 cmsis5=cmsis5,
-                optimization=args.opt,
-                extra_defs=args.cmake_def,
-                generator=args.generator,
-                generated_tests_dir=cpu_generated_tests_dir,
-                enable_coverage=args.coverage,
-                verbosity=verbosity,
+                fvp_exe=fvp_exe,
+                args=args,
                 env=env,
+                supervisor=supervisor,
             )
-            cmake_build(build_dir=build_dir, verbosity=verbosity, env=env, jobs=args.jobs)
-
-        if args.no_run:
-            continue
-
-        elves = find_elves(build_dir)
-        if not elves:
-            if verbosity >= 1:
-                print(f"(no .elf found under {build_dir}, nothing to run)")
-            continue
-
-        for elf in sorted(elves):
-            ok = run_fvp(fvp_exe=fvp_exe, elf=elf, timeout=args.timeout_run,
-                          verbosity=verbosity, extra_args=args.fvp_arg, env=env, coverage_ctx=coverage_ctx)
-            if not ok:
-                any_fail = True
-                if args.fail_fast:
-                    if verbosity >= 1:
-                        print("Stopping early due to failure (--fail-fast).")
-                    return 1
-            else:
-                print(f"PASS: {elf}")
+            if success:
                 if verbosity >= 1:
-                    print()
+                    print("\nAll requested builds/runs completed successfully.")
+                return 0
+            return 1
 
-    if any_fail:
-        return 1
+        any_fail = False
+        for cpu in cpus:
+            if verbosity >= 1:
+                print(f"\nTarget: {cpu} ({compiler_tag})")
+            build_dir = ARTIFACTS_DIR / f"build-{cpu}-{compiler_tag}"
+            cpu_generated_tests_dir = resolve_generated_tests_dir(source_dir, cpu)
+            coverage_ctx = _new_coverage_context(build_dir, getattr(args, "_gcov_tool", None)) if args.coverage else None
 
-    _generate_coverage_reports(cpus, args, env, source_dir, compiler_tag, verbosity)
+            if not args.no_build:
+                cmake_configure(
+                    source_dir=source_dir,
+                    build_dir=build_dir,
+                    toolchain_file=toolchain_file,
+                    cpu=cpu,
+                    cmsis5=cmsis5,
+                    optimization=args.opt,
+                    extra_defs=args.cmake_def,
+                    generator=args.generator,
+                    generated_tests_dir=cpu_generated_tests_dir,
+                    enable_coverage=args.coverage,
+                    verbosity=verbosity,
+                    env=env,
+                )
+                cmake_build(build_dir=build_dir, verbosity=verbosity, env=env, jobs=args.jobs)
 
-    verbosity = getattr(args, 'verbosity', 0)
-    if verbosity >= 1:
-        print("\nAll requested builds/runs completed successfully.")
-    return 0
+            if args.no_run:
+                continue
+
+            elves = find_elves(build_dir)
+            if not elves:
+                if verbosity >= 1:
+                    print(f"(no .elf found under {build_dir}, nothing to run)")
+                continue
+
+            elf_entries = [(elf, elf.stem) for elf in elves]
+            cpu_results, cpu_failed = _run_elf_jobs_with_reporting(
+                elf_entries=elf_entries,
+                fvp_exe=fvp_exe,
+                timeout=args.timeout_run,
+                verbosity=verbosity,
+                extra_args=args.fvp_arg,
+                env=env,
+                cpu=cpu,
+                coverage_ctx=coverage_ctx,
+                run_jobs=args.run_jobs,
+                fail_fast=args.fail_fast,
+                supervisor=supervisor,
+            )
+            any_fail = any_fail or cpu_failed
+            if cpu_failed and args.fail_fast:
+                if verbosity >= 1:
+                    print("Stopping early due to failure (--fail-fast).")
+                break
+
+        if any_fail:
+            return 1
+
+        _generate_coverage_reports(cpus, args, env, source_dir, compiler_tag, verbosity)
+
+        if verbosity >= 1:
+            print("\nAll requested builds/runs completed successfully.")
+        return 0
+    finally:
+        supervisor.terminate_all("shutdown")
 
 
 if __name__ == "__main__":
