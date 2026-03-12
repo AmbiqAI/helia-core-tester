@@ -3,17 +3,20 @@ Main TFLite model generation for Helia-Core Tester.
 Thin generator that discovers YAML descriptors and generates TFLite models.
 """
 
-import json
 import hashlib
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 import pytest
 import yaml
-from pathlib import Path
-from typing import Dict, Any, List, Optional
 
 from helia_core_tester.core.discovery import find_descriptors_dir, find_generated_tests_dir, find_repo_root
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.core.cpu_targets import normalize_cpu
-from helia_core_tester.generation.ops import OP_MAP
+from helia_core_tester.core.path_layout import generation_report_dir
+from helia_core_tester.generation.ops import get_op_map
 
 
 def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
@@ -87,10 +90,11 @@ def generate_test(
         yaml.dump(desc, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
     
     # Get operation class
-    if operator not in OP_MAP:
+    op_map = get_op_map()
+    if operator not in op_map:
         raise ValueError(f"Unsupported operator: {operator}")
         
-    op_class = OP_MAP[operator]
+    op_class = op_map[operator]
     
     # Initialize operation with deterministic seed
     if seed is None:
@@ -186,13 +190,21 @@ def test_generation(test_filters):
     if test_filters.get('limit'):
         filtered_descriptors = filtered_descriptors[:test_filters['limit']]
 
+    start_time = datetime.now(timezone.utc)
     target_cpu = normalize_cpu(test_filters.get('cpu') or "cortex-m55")
         
     # Generate TFLite models for each descriptor.
     generated_override = test_filters.get("generated_tests_dir")
-    top_generated = Path(generated_override).resolve() if generated_override else find_generated_tests_dir(create=True)
+    top_generated = (
+        Path(generated_override).resolve()
+        if generated_override
+        else find_generated_tests_dir(cpu=target_cpu, create=True)
+    )
     top_generated.mkdir(parents=True, exist_ok=True)
     print(f"Generated tests output dir: {top_generated}")
+    repo_root = find_repo_root()
+    report_dir = generation_report_dir(repo_root, target_cpu)
+    report_dir.mkdir(parents=True, exist_ok=True)
 
     # Place models in generated tests root
     generated_count = 0
@@ -228,26 +240,96 @@ def test_generation(test_filters):
             # Continue with other models
             continue
             
+    conversion_failures = sorted(
+        conversion_failures,
+        key=lambda item: (str(item.get("name", "")), str(item.get("operator", "")), str(item.get("exception", ""))),
+    )
+    generation_failures = sorted(
+        generation_failures,
+        key=lambda item: (
+            str(item.get("name", "")),
+            str(item.get("operator", "")),
+            str(item.get("stage", "")),
+            str(item.get("exception", "")),
+        ),
+    )
+
     print(f"Successfully generated {generated_count} TFLite models")
-    # Keep generation failure reports alongside build reports for this CPU.
-    report_dir = top_generated.parent / "reports"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    failures_path = report_dir / "conversion_failures.json"
-    failures_path.write_text(json.dumps(conversion_failures, indent=2))
+    conversion_failures_path = report_dir / "conversion_failures.json"
+    conversion_failures_path.write_text(json.dumps(conversion_failures, indent=2))
     if conversion_failures:
         failed_names = ", ".join(f["name"] for f in conversion_failures)
         print(f"Conversion failures ({len(conversion_failures)}): {failed_names}")
     else:
         print("Conversion failures (0)")
-    failures_path = report_dir / "generation_failures.json"
-    failures_path.write_text(json.dumps(generation_failures, indent=2))
+    generation_failures_path = report_dir / "generation_failures.json"
+    generation_failures_path.write_text(json.dumps(generation_failures, indent=2))
     if generation_failures:
         failed_names = ", ".join(f["name"] for f in generation_failures)
         print(f"Generation failures ({len(generation_failures)}): {failed_names}")
     else:
         print("Generation failures (0)")
+
+    manifest_path: Optional[Path] = None
     if generated_count > 0:
-        _write_manifest_and_cmake(manifest_entries, test_filters, generated_tests_dir=top_generated, cpu=target_cpu)
+        manifest_path = _write_manifest_and_cmake(
+            manifest_entries,
+            test_filters,
+            generated_tests_dir=top_generated,
+            cpu=target_cpu,
+        )
+
+    manifest_pointer_path = report_dir / "manifest_pointer.json"
+    manifest_pointer = {
+        "cpu": target_cpu,
+        "generated_tests_dir": str(top_generated),
+        "manifest_path": str(manifest_path) if manifest_path else None,
+    }
+    if manifest_path:
+        try:
+            manifest_pointer["manifest_relative_path"] = str(manifest_path.relative_to(repo_root))
+        except ValueError:
+            manifest_pointer["manifest_relative_path"] = str(manifest_path)
+    manifest_pointer_path.write_text(json.dumps(manifest_pointer, indent=2))
+
+    end_time = datetime.now(timezone.utc)
+    status = "success"
+    if generated_count == 0:
+        status = "failed_no_generated_tests"
+    elif conversion_failures or generation_failures:
+        status = "partial_failure"
+
+    summary = {
+        "status": status,
+        "cpu": target_cpu,
+        "timestamps": {
+            "started_utc": start_time.isoformat(),
+            "ended_utc": end_time.isoformat(),
+            "duration_seconds": round((end_time - start_time).total_seconds(), 3),
+        },
+        "filters": {
+            "op": test_filters.get("op"),
+            "dtype": test_filters.get("dtype"),
+            "wtype": test_filters.get("wtype"),
+            "name": test_filters.get("name"),
+            "limit": test_filters.get("limit"),
+            "seed": test_filters.get("seed"),
+        },
+        "counts": {
+            "descriptors_total": len(descriptors),
+            "descriptors_after_filters": len(filtered_descriptors),
+            "generated": generated_count,
+            "conversion_failures": len(conversion_failures),
+            "generation_failures": len(generation_failures),
+        },
+        "outputs": {
+            "generated_tests_dir": str(top_generated),
+            "conversion_failures": str(conversion_failures_path),
+            "generation_failures": str(generation_failures_path),
+            "manifest_pointer": str(manifest_pointer_path),
+        },
+    }
+    (report_dir / "generation_summary.json").write_text(json.dumps(summary, indent=2))
     assert generated_count > 0, "No TFLite models were generated"
 
 
@@ -256,7 +338,7 @@ def _write_manifest_and_cmake(
     test_filters: Dict[str, Any],
     generated_tests_dir: Path,
     cpu: str
-) -> None:
+) -> Path:
     repo_root = find_repo_root()
 
     manifest = {
@@ -275,7 +357,10 @@ def _write_manifest_and_cmake(
     manifest_path = generated_tests_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2))
 
-    rel_root = generated_tests_dir.relative_to(repo_root)
+    try:
+        rel_root = generated_tests_dir.relative_to(repo_root)
+    except ValueError:
+        rel_root = generated_tests_dir
     test_dirs = sorted({str(Path(rel_root) / Path(e["name"])) for e in entries})
     cmake_lines = ["set(GENERATED_TEST_DIRS"]
     for d in test_dirs:
@@ -283,6 +368,7 @@ def _write_manifest_and_cmake(
     cmake_lines.append(")")
     cmake_path = generated_tests_dir / "tests.cmake"
     cmake_path.write_text("\n".join(cmake_lines) + "\n")
+    return manifest_path
 
 
 def test_generated_files_exist(test_filters):
@@ -292,7 +378,12 @@ def test_generated_files_exist(test_filters):
     """
     # Don't generate, just validate what test_generation() created
     generated_override = test_filters.get("generated_tests_dir")
-    generated_tests_dir = Path(generated_override).resolve() if generated_override else find_generated_tests_dir(create=False)
+    target_cpu = normalize_cpu(test_filters.get('cpu') or "cortex-m55")
+    generated_tests_dir = (
+        Path(generated_override).resolve()
+        if generated_override
+        else find_generated_tests_dir(cpu=target_cpu, create=False)
+    )
     if not generated_tests_dir.exists():
         pytest.skip("No generated tests found")
         

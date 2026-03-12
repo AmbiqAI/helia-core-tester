@@ -1,73 +1,74 @@
 """
-Cleanup step for removing build artifacts.
+Cleanup step for removing generated tests, reports, and build artifacts.
 """
 
+from __future__ import annotations
+
 import shutil
-from pathlib import Path
 
 from helia_core_tester.core.steps.base import StepBase, StepPlan, StepResult, StepStatus
 from helia_core_tester.core.errors import StepExecutionError
 from helia_core_tester.core.logging import get_logger
+from helia_core_tester.core.path_layout import artifacts_root, coverage_report_dir, generation_report_dir, tests_report_dir
 
 
 class CleanStep(StepBase):
-    """Step for cleaning up build artifacts and reports."""
-    
+    """Step for cleaning CPU-scoped generated artifacts."""
+
     def __init__(self, config):
         super().__init__(config)
         self.logger = get_logger(__name__)
-    
+
     @property
     def name(self) -> str:
         return "clean"
-    
+
     def should_skip(self) -> bool:
-        """Clean step is never skipped by default."""
         return False
-    
+
     def validate(self) -> str | None:
-        """No validation needed for clean step."""
         return None
-    
+
+    def _targets(self) -> list:
+        targets = []
+        art_root = artifacts_root(self.config.project_root)
+        for cpu in self.config.cpus:
+            targets.append(self.config.generated_tests_dir_for(cpu))
+            targets.append(generation_report_dir(self.config.project_root, cpu))
+            targets.append(tests_report_dir(self.config.project_root, cpu))
+            targets.append(coverage_report_dir(self.config.project_root, cpu))
+            targets.extend(sorted(p for p in art_root.glob(f"build-{cpu}-*") if p.is_dir()))
+        return targets
+
     def _do_execute(self) -> StepResult:
-        """Execute cleanup of build artifacts."""
         if self.config.verbosity >= 1:
-            self.logger.info("Cleaning up build artifacts and reports")
-        
+            self.logger.info("Cleaning generated tests, reports, and build directories")
+
         cleaned_items = []
-        
+
         try:
-            # Clean up build directories
-            artifacts_root = self.config.project_root / "artifacts"
-            build_pattern = "build-*-gcc"
-            
-            for build_dir in artifacts_root.glob(build_pattern):
-                if build_dir.is_dir():
-                    if self.config.verbosity >= 1:
-                        self.logger.info(f"Removing build directory: {build_dir}")
-                    shutil.rmtree(build_dir, ignore_errors=True)
-                    cleaned_items.append(str(build_dir))
-            
-            # Clean up reports directory
-            if self.config.report_dir.exists():
+            for path in self._targets():
+                if not path.exists():
+                    continue
                 if self.config.verbosity >= 1:
-                    self.logger.info(f"Removing reports directory: {self.config.report_dir}")
-                shutil.rmtree(self.config.report_dir, ignore_errors=True)
-                cleaned_items.append(str(self.config.report_dir))
-            
-            if cleaned_items:
-                message = f"Cleaned {len(cleaned_items)} item(s): {', '.join(cleaned_items)}"
-            else:
-                message = "No artifacts to clean"
-            
+                    self.logger.info(f"Removing: {path}")
+                shutil.rmtree(path, ignore_errors=True)
+                cleaned_items.append(str(path))
+
+            message = (
+                f"Cleaned {len(cleaned_items)} item(s): {', '.join(cleaned_items)}"
+                if cleaned_items
+                else "No artifacts to clean"
+            )
+
             if self.config.verbosity >= 1:
                 self.logger.info(message)
-            
+
             return StepResult(
                 name=self.name,
                 status=StepStatus.SUCCESS,
                 message=message,
-                outputs={"artifacts_root": str(artifacts_root)},
+                outputs={"reports_root": str(self.config.reports_root)},
             )
         except Exception as e:
             error_msg = f"Failed to clean artifacts: {e}"
@@ -79,42 +80,28 @@ class CleanStep(StepBase):
                 status=StepStatus.FAILED,
                 message=error_msg,
                 error=exec_error,
-                outputs={"artifacts_root": str(self.config.project_root / "artifacts")},
+                outputs={"reports_root": str(self.config.reports_root)},
             )
-    
+
     def dry_run(self) -> StepResult:
-        """Dry run of clean step."""
-        cleaned_items = []
-        
-        # Check what would be cleaned
-        artifacts_root = self.config.project_root / "artifacts"
-        build_pattern = "build-*-gcc"
-        
-        for build_dir in artifacts_root.glob(build_pattern):
-            if build_dir.is_dir():
-                cleaned_items.append(str(build_dir))
-        
-        if self.config.report_dir.exists():
-            cleaned_items.append(str(self.config.report_dir))
-        
-        if cleaned_items:
-            message = f"DRY RUN: Would clean {len(cleaned_items)} item(s): {', '.join(cleaned_items)}"
-        else:
-            message = "DRY RUN: No artifacts to clean"
-        
+        cleaned_items = [str(path) for path in self._targets() if path.exists()]
+        message = (
+            f"DRY RUN: Would clean {len(cleaned_items)} item(s): {', '.join(cleaned_items)}"
+            if cleaned_items
+            else "DRY RUN: No artifacts to clean"
+        )
         return StepResult(
             name=self.name,
             status=StepStatus.SKIPPED,
             message=message,
-            outputs={"artifacts_root": str(artifacts_root)},
+            outputs={"reports_root": str(self.config.reports_root)},
         )
 
     def _plan_details(self) -> StepPlan:
-        artifacts_root = self.config.project_root / "artifacts"
         return StepPlan(
             name=self.name,
             will_run=True,
             reason="ready",
             commands=[],
-            outputs={"artifacts_root": str(artifacts_root)},
+            outputs={"reports_root": str(self.config.reports_root)},
         )

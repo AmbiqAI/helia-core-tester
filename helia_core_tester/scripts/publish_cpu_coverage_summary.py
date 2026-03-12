@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 from helia_core_tester.core.cpu_targets import parse_cpu_list
+from helia_core_tester.core.path_layout import coverage_report_dir, tests_report_dir
 
 
 def _to_int(value: object) -> int:
@@ -31,14 +32,6 @@ def _normalize_source_path(path: str) -> str:
         if idx != -1:
             return normalized[idx + 1 :].lstrip("./")
     return normalized.lstrip("./")
-
-
-def _resolve_report_dir(artifacts_root: Path, cpu: str) -> Path:
-    report_dir = artifacts_root / f"build-{cpu}-gcc" / "reports"
-    nested = report_dir / "reports"
-    if not (report_dir / "coverage").exists() and nested.exists():
-        return nested
-    return report_dir
 
 
 def _parse_lcov(path: Path) -> Tuple[Dict[str, int], Dict[Tuple[str, int], int], Dict[Tuple[str, str], int], Dict[Tuple[str, int, str, str], int]]:
@@ -125,13 +118,13 @@ def _parse_lcov(path: Path) -> Tuple[Dict[str, int], Dict[Tuple[str, int], int],
     return totals, line_hits, function_hits, branch_hits
 
 
-def _parse_test_report(report_dir: Path, cpu: str) -> Dict[str, int]:
+def _parse_test_report(tests_report_dir: Path, cpu: str) -> Dict[str, int]:
     pattern = f"test_report_{cpu}_*.json"
-    candidates = sorted(report_dir.glob(pattern), key=lambda p: p.stat().st_mtime)
+    candidates = sorted(tests_report_dir.glob(pattern), key=lambda p: p.stat().st_mtime)
     if not candidates:
-        candidates = sorted(report_dir.glob("test_report_*.json"), key=lambda p: p.stat().st_mtime)
+        candidates = sorted(tests_report_dir.glob("test_report_*.json"), key=lambda p: p.stat().st_mtime)
     if not candidates:
-        raise FileNotFoundError(f"No test report JSON found for {cpu} in {report_dir}")
+        raise FileNotFoundError(f"No test report JSON found for {cpu} in {tests_report_dir}")
 
     data = json.loads(candidates[-1].read_text())
     failed = (
@@ -159,6 +152,7 @@ def _format_ratio(covered: int, total: int) -> str:
 def build_rows(artifacts_root: Path, cpus: Iterable[str]) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
     cpu_list = list(cpus)
     rows: List[Dict[str, object]] = []
+    project_root = artifacts_root.parent
     union_lines: Dict[Tuple[str, int], bool] = {}
     union_functions: Dict[Tuple[str, str], bool] = {}
     union_branches: Dict[Tuple[str, int, str, str], bool] = {}
@@ -166,10 +160,10 @@ def build_rows(artifacts_root: Path, cpus: Iterable[str]) -> Tuple[List[Dict[str
     total_tests = {"number_of_tests": 0, "passed": 0, "failed": 0, "skipped": 0}
 
     for cpu in cpu_list:
-        report_dir = _resolve_report_dir(artifacts_root, cpu)
-        coverage_path = report_dir / "coverage" / cpu / "coverage.info"
+        coverage_path = coverage_report_dir(project_root, cpu) / "coverage.info"
+        cpu_tests_report_dir = tests_report_dir(project_root, cpu)
         coverage_totals, line_hits, function_hits, branch_hits = _parse_lcov(coverage_path)
-        test_totals = _parse_test_report(report_dir, cpu)
+        test_totals = _parse_test_report(cpu_tests_report_dir, cpu)
 
         for key, hits in line_hits.items():
             union_lines[key] = union_lines.get(key, False) or (hits > 0)

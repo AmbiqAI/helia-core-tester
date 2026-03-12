@@ -14,18 +14,25 @@ from helia_core_tester.fvp.build_and_run_fvp import (
 )
 
 
+def _make_config_root(tmp_path: Path) -> Path:
+    (tmp_path / "helia_core_tester" / "generation").mkdir(parents=True, exist_ok=True)
+    return tmp_path
+
+
 def test_config_run_jobs_default_and_auto(tmp_path: Path, monkeypatch) -> None:
-    cfg_default = Config(project_root=tmp_path, run_jobs=1)
+    root = _make_config_root(tmp_path)
+    cfg_default = Config(project_root=root, run_jobs=1)
     assert cfg_default.run_jobs == 1
 
     monkeypatch.setattr("helia_core_tester.core.config.os.cpu_count", lambda: 12)
-    cfg_auto = Config(project_root=tmp_path, run_jobs=0)
+    cfg_auto = Config(project_root=root, run_jobs=0)
     assert cfg_auto.run_jobs == 12
 
 
 def test_config_run_jobs_negative_rejected(tmp_path: Path) -> None:
+    root = _make_config_root(tmp_path)
     with pytest.raises(ValueError, match="run_jobs must be >= 0"):
-        Config(project_root=tmp_path, run_jobs=-1)
+        Config(project_root=root, run_jobs=-1)
 
 
 def test_run_step_passes_fail_fast_and_run_jobs(tmp_path: Path, monkeypatch) -> None:
@@ -37,8 +44,8 @@ def test_run_step_passes_fail_fast_and_run_jobs(tmp_path: Path, monkeypatch) -> 
 
     monkeypatch.setattr("helia_core_tester.core.steps.run.subprocess.run", fake_run)
 
-    cfg = Config(project_root=tmp_path, run_jobs=4, fail_fast=True)
-    cfg.enable_reporting = False
+    root = _make_config_root(tmp_path)
+    cfg = Config(project_root=root, run_jobs=4, fail_fast=True, enable_reporting=False)
     result = RunStep(cfg)._do_execute()
 
     assert result.success

@@ -85,12 +85,6 @@ class FullTestPipeline:
                 if stop:
                     return False
 
-            if self.config.verbosity >= 1:
-                if not self.config.skip_conversion and overall_success:
-                    self.logger.info("Conversion step: C files are generated via templates during generation")
-                else:
-                    self.logger.info("Skipping TFLite to C conversion")
-
             if self.config.skip_build:
                 if self.config.verbosity >= 1:
                     self.logger.info("Skipping FVP build")
@@ -136,19 +130,6 @@ class FullTestPipeline:
             plans.append(StepPlan(name="generate", will_run=False, reason="skipped by config"))
         else:
             plans.append(GenerateStep(self.config).plan())
-
-        if self.config.skip_conversion:
-            plans.append(StepPlan(name="conversion", will_run=False, reason="skipped by config"))
-        else:
-            plans.append(
-                StepPlan(
-                    name="conversion",
-                    will_run=True,
-                    reason="handled during generation (templates)",
-                    commands=[],
-                    outputs={"generated_tests_dir": str(self.config.generated_tests_dir)},
-                )
-            )
 
         if self.config.skip_build:
             plans.append(StepPlan(name="build", will_run=False, reason="skipped by config"))
