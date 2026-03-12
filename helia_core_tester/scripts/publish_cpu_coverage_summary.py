@@ -8,7 +8,6 @@ import argparse
 import json
 import os
 import sys
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
@@ -157,16 +156,6 @@ def _format_ratio(covered: int, total: int) -> str:
     return f"{covered}/{total} ({pct:.1f}%)"
 
 
-def _cpu_label(cpu: str) -> str:
-    label_map = {
-        "cortex-m0": "m0",
-        "cortex-m4": "m4",
-        "cortex-m55": "m55",
-        "total": "total",
-    }
-    return label_map.get(cpu, cpu)
-
-
 def build_rows(artifacts_root: Path, cpus: Iterable[str]) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
     cpu_list = list(cpus)
     rows: List[Dict[str, object]] = []
@@ -219,6 +208,11 @@ def build_rows(artifacts_root: Path, cpus: Iterable[str]) -> Tuple[List[Dict[str
 
 
 def render_markdown_table(rows: List[Dict[str, object]], total_row: Dict[str, object]) -> str:
+    label_map = {
+        "cortex-m0": "m0",
+        "cortex-m4": "m4",
+        "cortex-m55": "m55",
+    }
     lines = [
         "| cpu | lines | functions | branches | number of tests | passed | failed | skipped (not generated) |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -229,7 +223,7 @@ def render_markdown_table(rows: List[Dict[str, object]], total_row: Dict[str, ob
         coverage = dict(row["coverage"])
         tests = dict(row["tests"])
         lines.append(
-            f"| {_cpu_label(cpu)} | "
+            f"| {label_map.get(cpu, cpu)} | "
             f"{_format_ratio(int(coverage['lh']), int(coverage['lf']))} | "
             f"{_format_ratio(int(coverage['fnh']), int(coverage['fnf']))} | "
             f"{_format_ratio(int(coverage['brh']), int(coverage['brf']))} | "
@@ -246,51 +240,6 @@ def render_markdown_table(rows: List[Dict[str, object]], total_row: Dict[str, ob
         f"{int(tests_total['number_of_tests'])} | {int(tests_total['passed'])} | {int(tests_total['failed'])} | {int(tests_total['skipped'])} |"
     )
     return "\n".join(lines)
-
-
-def _row_metrics_text(row: Dict[str, object]) -> str:
-    coverage = dict(row["coverage"])
-    tests = dict(row["tests"])
-    return (
-        f"lines={_format_ratio(int(coverage['lh']), int(coverage['lf']))}; "
-        f"functions={_format_ratio(int(coverage['fnh']), int(coverage['fnf']))}; "
-        f"branches={_format_ratio(int(coverage['brh']), int(coverage['brf']))}; "
-        f"number_of_tests={int(tests['number_of_tests'])}; "
-        f"passed={int(tests['passed'])}; "
-        f"failed={int(tests['failed'])}; "
-        f"skipped_not_generated={int(tests['skipped'])}"
-    )
-
-
-def publish_junit(rows: List[Dict[str, object]], total_row: Dict[str, object], junit_file: Path) -> None:
-    all_rows = list(rows) + [total_row]
-    testsuite = ET.Element(
-        "testsuite",
-        {
-            "name": "cpu-coverage-summary",
-            "tests": str(len(all_rows)),
-            "failures": "0",
-            "errors": "0",
-            "skipped": "0",
-            "time": "0",
-        },
-    )
-
-    for row in all_rows:
-        cpu = str(row["cpu"])
-        testcase = ET.SubElement(
-            testsuite,
-            "testcase",
-            {
-                "classname": "helia_core_tester.cpu_coverage_summary",
-                "name": _cpu_label(cpu),
-                "time": "0",
-            },
-        )
-        ET.SubElement(testcase, "system-out").text = _row_metrics_text(row)
-
-    junit_file.parent.mkdir(parents=True, exist_ok=True)
-    ET.ElementTree(testsuite).write(junit_file, encoding="utf-8", xml_declaration=True)
 
 
 def publish_table(table: str, summary_file: Path | None, heading: str) -> None:
@@ -318,7 +267,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Markdown summary output path (defaults to $GITHUB_STEP_SUMMARY if set)",
     )
     parser.add_argument("--heading", default="Multi-CPU Coverage/Test Summary", help="Heading above markdown table")
-    parser.add_argument("--junit-file", type=Path, default=None, help="Optional JUnit XML output path")
     return parser
 
 
@@ -331,8 +279,6 @@ def main(argv: List[str] | None = None) -> int:
         rows, total = build_rows(args.artifacts_root, cpus)
         table = render_markdown_table(rows, total)
         publish_table(table, args.summary_file, args.heading)
-        if args.junit_file:
-            publish_junit(rows, total, args.junit_file)
         return 0
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
