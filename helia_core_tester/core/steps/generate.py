@@ -33,9 +33,7 @@ class GenerateStep(StepBase):
         return None
 
     def _cpu_generated_tests_dir(self, cpu: str) -> Path:
-        if len(self.config.cpus) <= 1:
-            return self.config.generated_tests_dir
-        return self.config.generated_tests_dir / cpu
+        return self.config.generated_tests_dir_for(cpu)
 
     def _build_cmd(self, cpu: str, include_seed: bool = True) -> list:
         """Build pytest command list. include_seed=False for dry-run preview."""
@@ -77,7 +75,7 @@ class GenerateStep(StepBase):
                 status=StepStatus.SUCCESS,
                 message="TFLite models generated successfully",
                 outputs={
-                    "generated_tests_dir": str(self.config.generated_tests_dir)
+                    "generated_tests_root": str(self.config.generated_tests_root)
                 },
                 details={
                     "commands": commands,
@@ -101,7 +99,7 @@ class GenerateStep(StepBase):
                 message=error_msg,
                 error=gen_error,
                 outputs={
-                    "generated_tests_dir": str(self.config.generated_tests_dir)
+                    "generated_tests_root": str(self.config.generated_tests_root)
                 },
                 details={"cpus": self.config.cpus},
             )
@@ -114,7 +112,7 @@ class GenerateStep(StepBase):
             status=StepStatus.SKIPPED,
             message=f"DRY RUN: Would run {len(cmd_preview)} generation command(s) in {self.config.generation_dir}",
             outputs={
-                "generated_tests_dir": str(self.config.generated_tests_dir)
+                "generated_tests_root": str(self.config.generated_tests_root)
             },
             details={"commands": cmd_preview},
         )
@@ -126,6 +124,6 @@ class GenerateStep(StepBase):
             will_run=True,
             reason="ready",
             commands=cmd_preview,
-            outputs={"generated_tests_dir": str(self.config.generated_tests_dir)},
+            outputs={"generated_tests_root": str(self.config.generated_tests_root)},
             details={"cwd": str(self.config.generation_dir)}
         )

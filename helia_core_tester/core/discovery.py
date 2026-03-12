@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from helia_core_tester.core.errors import RepoRootNotFoundError
+from helia_core_tester.core.path_layout import generated_tests_dir as canonical_generated_tests_dir
 
 
 # Marker files/directories that indicate the repository root
@@ -138,22 +139,22 @@ def find_descriptors_dir(repo_root: Optional[Path] = None) -> Path:
     return descriptors_dir
 
 
-def find_generated_tests_dir(repo_root: Optional[Path] = None, create: bool = True) -> Path:
+def find_generated_tests_dir(repo_root: Optional[Path] = None, cpu: str = "cortex-m55", create: bool = True) -> Path:
     """
-    Find or create the generated tests directory.
+    Find or create the generated tests directory for a CPU.
     
     Args:
         repo_root: Repository root (auto-discovered if None)
         create: Create directory if it doesn't exist
         
     Returns:
-        Path to artifacts/generated_tests/ directory at repo root
+        Path to artifacts/generated_tests/<cpu>/ directory at repo root
         
     Raises:
         RepoRootNotFoundError: If repo root cannot be found
     """
     repo_root = _resolve_repo_root(repo_root)
-    generated_tests_dir = repo_root / "artifacts" / "generated_tests"
+    generated_tests_dir = canonical_generated_tests_dir(repo_root, cpu)
     
     if create and not generated_tests_dir.exists():
         generated_tests_dir.mkdir(parents=True, exist_ok=True)

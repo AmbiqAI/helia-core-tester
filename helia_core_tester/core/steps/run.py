@@ -33,7 +33,7 @@ class RunStep(StepBase):
             return f"FVP script not found: {script_path}"
         missing_builds = []
         for cpu in self.config.cpus:
-            build_dir = self.config.project_root / "artifacts" / f"build-{cpu}-gcc"
+            build_dir = self.config.build_dir_for(cpu)
             if not build_dir.exists():
                 missing_builds.append(str(build_dir))
         if missing_builds:
@@ -72,13 +72,10 @@ class RunStep(StepBase):
         cmd.extend(["--verbosity", str(self.config.verbosity)])
         
         # Reporting options
-        if hasattr(self.config, 'enable_reporting'):
-            if not self.config.enable_reporting:
-                cmd.append("--no-report")
-            if hasattr(self.config, 'report_formats') and self.config.report_formats:
-                cmd.extend(["--report-formats"] + self.config.report_formats)
-            if hasattr(self.config, 'report_dir') and self.config.report_dir:
-                cmd.extend(["--report-dir", str(self.config.report_dir)])
+        if not self.config.enable_reporting:
+            cmd.append("--no-report")
+        if self.config.report_formats:
+            cmd.extend(["--report-formats"] + self.config.report_formats)
         
         try:
             if self.config.verbosity >= 2:
@@ -106,7 +103,7 @@ class RunStep(StepBase):
                 message="All tests completed successfully",
                 outputs={
                     "build_dir": str(self.config.project_root / "artifacts"),
-                    "report_dir": str(self.config.report_dir) if self.config.report_dir else "",
+                    "reports_root": str(self.config.reports_root),
                 },
                 details={"command": cmd},
             )
@@ -125,7 +122,7 @@ class RunStep(StepBase):
                 error=fvp_error,
                 outputs={
                     "build_dir": str(self.config.project_root / "artifacts"),
-                    "report_dir": str(self.config.report_dir) if self.config.report_dir else "",
+                    "reports_root": str(self.config.reports_root),
                 },
                 details={"command": cmd},
             )
@@ -141,7 +138,7 @@ class RunStep(StepBase):
                 error=fvp_error,
                 outputs={
                     "build_dir": str(self.config.project_root / "artifacts"),
-                    "report_dir": str(self.config.report_dir) if self.config.report_dir else "",
+                    "reports_root": str(self.config.reports_root),
                 },
                 details={"command": cmd},
             )
@@ -170,7 +167,7 @@ class RunStep(StepBase):
             message=f"DRY RUN: Would run: {' '.join(cmd_preview)}",
             outputs={
                 "build_dir": str(self.config.project_root / "artifacts"),
-                "report_dir": str(self.config.report_dir) if self.config.report_dir else "",
+                "reports_root": str(self.config.reports_root),
             },
         )
 
@@ -191,13 +188,10 @@ class RunStep(StepBase):
             cmd.append("--no-fail-fast")
         cmd.extend(["--run-jobs", str(self.config.run_jobs)])
         cmd.extend(["--verbosity", str(self.config.verbosity)])
-        if hasattr(self.config, 'enable_reporting'):
-            if not self.config.enable_reporting:
-                cmd.append("--no-report")
-            if hasattr(self.config, 'report_formats') and self.config.report_formats:
-                cmd.extend(["--report-formats"] + self.config.report_formats)
-            if hasattr(self.config, 'report_dir') and self.config.report_dir:
-                cmd.extend(["--report-dir", str(self.config.report_dir)])
+        if not self.config.enable_reporting:
+            cmd.append("--no-report")
+        if self.config.report_formats:
+            cmd.extend(["--report-formats"] + self.config.report_formats)
         return StepPlan(
             name=self.name,
             will_run=True,
@@ -205,6 +199,6 @@ class RunStep(StepBase):
             commands=[cmd],
             outputs={
                 "build_dir": str(self.config.project_root / "artifacts"),
-                "report_dir": str(self.config.report_dir) if self.config.report_dir else "",
+                "reports_root": str(self.config.reports_root),
             }
         )

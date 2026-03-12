@@ -1,11 +1,12 @@
 """
-Command-line interface for CMSIS-NN Tools.
-
-This module provides a subcommand-based CLI using Typer.
+Command-line interface for helia-core-tester.
 """
 
-import sys
+from __future__ import annotations
+
 import shutil
+import sys
+from dataclasses import MISSING
 from pathlib import Path
 from typing import Optional
 
@@ -13,45 +14,79 @@ import typer
 
 from helia_core_tester.core.config import Config
 from helia_core_tester.core.logging import setup_logger
+from helia_core_tester.core.path_layout import artifacts_root
 from helia_core_tester.core.pipeline import FullTestPipeline
-from helia_core_tester.core.steps import (
-    GenerateStep,
-    BuildStep,
-    RunStep,
-    CleanStep,
-)
-from helia_core_tester.reporting.gap_gate import run_gap_check
+from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, RunStep
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
 
 app = typer.Typer(
     name="helia_core_tester",
-    help="CMSIS-NN testing toolkit - Generate, build, and run tests for CMSIS-NN kernels",
+    help="CMSIS-NN testing toolkit - generate, build, and run tests for CMSIS-NN kernels",
     add_completion=False,
 )
 
+
+def _print_plan_item(plan_item) -> None:
+    typer.echo(f"1. {plan_item.name}: {'will run' if plan_item.will_run else 'skipped'} ({plan_item.reason})")
+    for cmd in plan_item.commands:
+        typer.echo(f"   cmd: {' '.join(cmd)}")
+    if plan_item.outputs:
+        outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
+        if outputs:
+            typer.echo(f"   outputs: {outputs}")
+
+
 def get_config(
-    cpu: str = "cortex-m55",
+    cpu: Optional[str] = None,
     verbosity: Optional[int] = None,
     dry_run: bool = False,
     project_root: Optional[Path] = None,
-    **kwargs
+    **kwargs,
 ) -> Config:
-    """Create and configure Config object."""
-    init_kwargs = {
-        "cpu": cpu,
-        "dry_run": dry_run,
-    }
-    if project_root:
-        init_kwargs["project_root"] = project_root
-    for key, value in kwargs.items():
-        if key in Config.__dataclass_fields__ and value is not None:
-            init_kwargs[key] = value
-    config = Config(**init_kwargs)
+    """Create Config with explicit CLI precedence over TOML defaults."""
+    def _default_for(field_name: str):
+        field_def = Config.__dataclass_fields__[field_name]
+        if field_def.default is not MISSING:
+            return field_def.default
+        if field_def.default_factory is not MISSING:  # type: ignore[attr-defined]
+            return field_def.default_factory()  # type: ignore[misc]
+        return MISSING
+
+    init_kwargs = {}
+    explicit: set[str] = set()
+
+    cpu_default = _default_for("cpu")
+    if cpu is not None and cpu != cpu_default:
+        init_kwargs["cpu"] = cpu
+        explicit.add("cpu")
+
+    dry_run_default = _default_for("dry_run")
+    if dry_run != dry_run_default:
+        init_kwargs["dry_run"] = dry_run
+        explicit.add("dry_run")
+
     if verbosity is not None:
         if not 0 <= verbosity <= 3:
             raise ValueError(f"verbosity must be between 0 and 3, got {verbosity}")
-        config.verbosity = verbosity
-    return config
+        verbosity_default = _default_for("verbosity")
+        if verbosity != verbosity_default:
+            init_kwargs["verbosity"] = verbosity
+            explicit.add("verbosity")
+
+    if project_root is not None:
+        init_kwargs["project_root"] = project_root
+        explicit.add("project_root")
+
+    for key, value in kwargs.items():
+        if key not in Config.__dataclass_fields__ or value is None:
+            continue
+        default_value = _default_for(key)
+        if value != default_value:
+            init_kwargs[key] = value
+            explicit.add(key)
+
+    init_kwargs["_explicit_overrides"] = explicit
+    return Config(**init_kwargs)
 
 
 def run_step_exit(step, config: Config, success_msg: str, failure_prefix: Optional[str] = None) -> None:
@@ -84,21 +119,23 @@ def generate(
 ):
     """Generate TFLite models and template C/H files."""
     config = get_config(
-        cpu=cpu, verbosity=verbosity, dry_run=dry_run, plan=plan, project_root=project_root,
-        op_filter=op, dtype_filter=dtype, name_filter=name, limit=limit, seed=seed,
+        cpu=cpu,
+        verbosity=verbosity,
+        dry_run=dry_run,
+        plan=plan,
+        project_root=project_root,
+        op_filter=op,
+        dtype_filter=dtype,
+        name_filter=name,
+        limit=limit,
+        seed=seed,
     )
     if config.plan:
-        plan_item = GenerateStep(config).plan()
-        typer.echo(f"1. {plan_item.name}: {'will run' if plan_item.will_run else 'skipped'} ({plan_item.reason})")
-        for cmd in plan_item.commands:
-            typer.echo(f"   cmd: {' '.join(cmd)}")
-        if plan_item.outputs:
-            outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
-            if outputs:
-                typer.echo(f"   outputs: {outputs}")
+        _print_plan_item(GenerateStep(config).plan())
         sys.exit(0)
     run_step_exit(
-        GenerateStep(config), config,
+        GenerateStep(config),
+        config,
         "✓ Generation completed successfully",
         failure_prefix="Generation failed",
     )
@@ -117,21 +154,21 @@ def build(
 ):
     """Build test executables using CMake."""
     config = get_config(
-        cpu=cpu, verbosity=verbosity, dry_run=dry_run, plan=plan, project_root=project_root,
-        optimization=opt, jobs=jobs, coverage=coverage,
+        cpu=cpu,
+        verbosity=verbosity,
+        dry_run=dry_run,
+        plan=plan,
+        project_root=project_root,
+        optimization=opt,
+        jobs=jobs,
+        coverage=coverage,
     )
     if config.plan:
-        plan_item = BuildStep(config).plan()
-        typer.echo(f"1. {plan_item.name}: {'will run' if plan_item.will_run else 'skipped'} ({plan_item.reason})")
-        for cmd in plan_item.commands:
-            typer.echo(f"   cmd: {' '.join(cmd)}")
-        if plan_item.outputs:
-            outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
-            if outputs:
-                typer.echo(f"   outputs: {outputs}")
+        _print_plan_item(BuildStep(config).plan())
         sys.exit(0)
     run_step_exit(
-        BuildStep(config), config,
+        BuildStep(config),
+        config,
         f"✓ Build completed successfully for {cpu}",
         failure_prefix="Build failed",
     )
@@ -142,11 +179,10 @@ def run(
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     timeout: float = typer.Option(0.0, help="Per-test timeout in seconds (0 = none)"),
     run_jobs: int = typer.Option(1, "--run-jobs", help="Parallel FVP run jobs (0 = auto/use all host cores)"),
-    no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Don't stop on first failure"),
+    no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Do not stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Collect and merge ns-cmsis-nn gcov streams"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
     report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
-    report_dir: Optional[Path] = typer.Option(None, help="Directory to save reports"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -154,22 +190,24 @@ def run(
 ):
     """Run tests on FVP simulator."""
     config = get_config(
-        cpu=cpu, verbosity=verbosity, dry_run=dry_run, plan=plan, project_root=project_root,
-        timeout=timeout, fail_fast=not no_fail_fast, enable_reporting=not no_report,
-        report_formats=report_formats, report_dir=report_dir, coverage=coverage, run_jobs=run_jobs,
+        cpu=cpu,
+        verbosity=verbosity,
+        dry_run=dry_run,
+        plan=plan,
+        project_root=project_root,
+        timeout=timeout,
+        fail_fast=not no_fail_fast,
+        enable_reporting=not no_report,
+        report_formats=report_formats,
+        coverage=coverage,
+        run_jobs=run_jobs,
     )
     if config.plan:
-        plan_item = RunStep(config).plan()
-        typer.echo(f"1. {plan_item.name}: {'will run' if plan_item.will_run else 'skipped'} ({plan_item.reason})")
-        for cmd in plan_item.commands:
-            typer.echo(f"   cmd: {' '.join(cmd)}")
-        if plan_item.outputs:
-            outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
-            if outputs:
-                typer.echo(f"   outputs: {outputs}")
+        _print_plan_item(RunStep(config).plan())
         sys.exit(0)
     run_step_exit(
-        RunStep(config), config,
+        RunStep(config),
+        config,
         "✓ All tests completed successfully",
         failure_prefix="Test execution failed",
     )
@@ -187,22 +225,19 @@ def full(
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     timeout: float = typer.Option(0.0, help="Per-test timeout in seconds (0 = none)"),
     run_jobs: int = typer.Option(1, "--run-jobs", help="Parallel FVP run jobs (0 = auto/use all host cores)"),
-    no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Don't stop on first failure"),
+    no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Do not stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn coverage collection/reporting"),
     skip_generation: bool = typer.Option(False, "--skip-generation", help="Skip TFLite generation"),
-    skip_conversion: bool = typer.Option(False, "--skip-conversion", help="Skip TFLite to C conversion"),
-    skip_runners: bool = typer.Option(False, "--skip-runners", help="Skip test runner generation"),
     skip_build: bool = typer.Option(False, "--skip-build", help="Skip FVP build"),
     skip_run: bool = typer.Option(False, "--skip-run", help="Skip FVP test execution"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
     report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
-    report_dir: Optional[Path] = typer.Option(None, help="Directory to save reports"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
 ):
-    """Run the complete pipeline (generate → runners → build → run)."""
+    """Run the complete pipeline (generate -> build -> run)."""
     config = get_config(
         cpu=cpu,
         verbosity=verbosity,
@@ -221,30 +256,24 @@ def full(
         fail_fast=not no_fail_fast,
         coverage=coverage,
         skip_generation=skip_generation,
-        skip_conversion=skip_conversion,
-        skip_runners=skip_runners,
         skip_build=skip_build,
         skip_run=skip_run,
-        regenerate_generated_tests_after_cleanup=True,
         enable_reporting=not no_report,
         report_formats=report_formats,
-        report_dir=report_dir,
     )
-    
-    logger = setup_logger(verbosity=config.verbosity)
-    
+
+    setup_logger(verbosity=config.verbosity)
     pipeline = FullTestPipeline(config)
     if config.plan:
         pipeline.print_plan()
         sys.exit(0)
+
     success = pipeline.run()
-    
     if success:
         typer.echo("✓ Pipeline completed successfully")
         sys.exit(0)
-    else:
-        typer.echo("✗ Pipeline failed", err=True)
-        sys.exit(1)
+    typer.echo("✗ Pipeline failed", err=True)
+    sys.exit(1)
 
 
 @app.command()
@@ -255,19 +284,12 @@ def clean(
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
 ):
-    """Clean build artifacts and reports."""
+    """Remove generated tests + reports + build outputs for selected CPU(s)."""
     config = get_config(cpu=cpu, verbosity=verbosity, dry_run=dry_run, plan=plan, project_root=project_root)
     if config.plan:
-        plan_item = CleanStep(config).plan()
-        typer.echo(f"1. {plan_item.name}: {'will run' if plan_item.will_run else 'skipped'} ({plan_item.reason})")
-        for cmd in plan_item.commands:
-            typer.echo(f"   cmd: {' '.join(cmd)}")
-        if plan_item.outputs:
-            outputs = ", ".join(f"{k}={v}" for k, v in plan_item.outputs.items() if v)
-            if outputs:
-                typer.echo(f"   outputs: {outputs}")
+        _print_plan_item(CleanStep(config).plan())
         sys.exit(0)
-    run_step_exit(CleanStep(config), config, "", failure_prefix="Clean failed")
+    run_step_exit(CleanStep(config), config, "✓ Clean completed", failure_prefix="Clean failed")
 
 
 @app.command(name="clean-all")
@@ -276,20 +298,31 @@ def clean_all(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
 ):
-    """Remove all artifacts (generated tests, downloads, reports, builds)."""
+    """Remove all generated tests, reports, and build outputs."""
     config = get_config(verbosity=verbosity, dry_run=dry_run, project_root=project_root)
-    artifacts_root = config.project_root / "artifacts"
-    if not artifacts_root.exists():
-        typer.echo("No artifacts directory to clean.")
+    art_root = artifacts_root(config.project_root)
+    targets = [
+        config.generated_tests_root,
+        config.reports_root,
+    ]
+    targets.extend([p for p in art_root.glob("build-*") if p.is_dir()])
+
+    existing = [p for p in targets if p.exists()]
+    if not existing:
+        typer.echo("No generated-tests/reports/build outputs to clean.")
         sys.exit(0)
 
     if dry_run:
-        typer.echo(f"DRY RUN: Would remove {artifacts_root}")
+        typer.echo("DRY RUN: Would remove:")
+        for p in existing:
+            typer.echo(f"  - {p}")
         sys.exit(0)
 
+    for p in existing:
+        shutil.rmtree(p, ignore_errors=True)
+
     if config.verbosity >= 1:
-        typer.echo(f"Removing artifacts directory: {artifacts_root}")
-    shutil.rmtree(artifacts_root, ignore_errors=True)
+        typer.echo(f"Removed {len(existing)} path(s)")
     typer.echo("✓ Clean-all completed")
 
 
@@ -299,28 +332,22 @@ def doctor(
 ):
     """Run preflight checks (verify tools, paths, permissions)."""
     typer.echo("Running preflight checks...")
-    
-    # Check repository root
+
     try:
         from .core.discovery import find_repo_root
-        if project_root:
-            repo_root = Path(project_root).resolve()
-        else:
-            repo_root = find_repo_root()
+
+        repo_root = Path(project_root).resolve() if project_root else find_repo_root()
         typer.echo(f"✓ Repository root: {repo_root}")
     except Exception as e:
         typer.echo(f"✗ Repository root not found: {e}", err=True)
         sys.exit(1)
-    
-    # Check required tools
-    import shutil
-    
+
     tools = {
         "python3": "Python interpreter",
         "pytest": "pytest (for test generation)",
         "cmake": "CMake (for building)",
     }
-    
+
     all_ok = True
     for tool, description in tools.items():
         if shutil.which(tool):
@@ -328,75 +355,43 @@ def doctor(
         else:
             typer.echo(f"✗ {tool} not found ({description})", err=True)
             all_ok = False
-    
-    # Check key directories
+
     key_dirs = {
         "assets/descriptors": "Test descriptors",
         "artifacts/generated_tests": "Generated tests (will be created)",
-        "artifacts/downloads": "Downloads (will be created)",
+        "artifacts/reports": "Canonical reports root",
     }
-    
     for dir_name, description in key_dirs.items():
         dir_path = repo_root / dir_name
-        if dir_path.exists() or dir_name in ["artifacts/generated_tests", "artifacts/downloads"]:
+        if dir_path.exists() or dir_name in ["artifacts/generated_tests", "artifacts/reports"]:
             typer.echo(f"✓ {dir_name}/ exists or will be created ({description})")
         else:
             typer.echo(f"⚠ {dir_name}/ not found ({description})", err=True)
-    
+
     if all_ok:
         typer.echo("\n✓ All preflight checks passed")
         sys.exit(0)
-    else:
-        typer.echo("\n✗ Some preflight checks failed", err=True)
-        sys.exit(1)
-
-
-@app.command(name="gap-check")
-def gap_check(
-    cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
-    report_dir: Optional[Path] = typer.Option(None, help="Directory to save gap reports"),
-    generated_tests_dir: Optional[Path] = typer.Option(None, help="Override generated tests directory"),
-    project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
-):
-    """Check for new gaps between descriptors and generated tests."""
-    config = get_config(cpu=cpu, project_root=project_root)
-    gen_dir = Path(generated_tests_dir).resolve() if generated_tests_dir else None
-    out_dir = Path(report_dir).resolve() if report_dir else None
-
-    exit_code, report, (json_path, md_path) = run_gap_check(
-        project_root=config.project_root,
-        cpu=config.cpu,
-        report_dir=out_dir,
-        generated_tests_dir=gen_dir,
-    )
-
-    typer.echo(f"Gap report JSON: {json_path}")
-    typer.echo(f"Gap report MD:   {md_path}")
-    if exit_code != 0:
-        typer.echo("✗ Gap check failed: unexpected gaps detected", err=True)
-    else:
-        typer.echo("✓ Gap check passed (no unexpected gaps)")
-    sys.exit(exit_code)
+    typer.echo("\n✗ Some preflight checks failed", err=True)
+    sys.exit(1)
 
 
 @app.command(name="coverage-merge")
 def coverage_merge(
     cpu: str = typer.Option("cortex-m0,cortex-m4,cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
-    report_dir: Optional[Path] = typer.Option(None, help="Directory to save merged coverage reports"),
     expected_zero_config: Optional[Path] = typer.Option(
-        None, help="Path to expected-zero JSON config (default: assets/coverage_expected_zero.json)"
+        None,
+        help="Path to expected-zero JSON config (default: assets/coverage_expected_zero.json)",
     ),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
 ):
     """Merge per-CPU coverage.info files and classify zero-hit files."""
     config = get_config(cpu=cpu, project_root=project_root)
-    out_dir = Path(report_dir).resolve() if report_dir else None
     expected_zero_path = Path(expected_zero_config).resolve() if expected_zero_config else None
 
     exit_code, report = run_coverage_merge(
         project_root=config.project_root,
         cpus=config.cpus,
-        report_dir=out_dir,
+        report_dir=config.coverage_merged_report_dir(),
         expected_zero_config=expected_zero_path,
     )
 
@@ -417,13 +412,13 @@ def coverage_merge(
     )
 
     if exit_code != 0:
-        typer.echo("✗ Coverage merge failed: no coverage.info inputs found", err=True)
+        typer.echo("✗ Coverage merge failed: missing required coverage.info inputs", err=True)
     else:
         typer.echo("✓ Coverage merge completed")
     sys.exit(exit_code)
 
 
-def main():
+def main() -> None:
     """Main entry point for the CLI."""
     app()
 

@@ -31,20 +31,20 @@ def test_coverage_merge_merges_and_classifies(tmp_path: Path) -> None:
     file_c.write_text("// c\n")
 
     _write_lcov(
-        project_root / "artifacts" / "build-cortex-m0-gcc" / "reports" / "coverage" / "cortex-m0" / "coverage.info",
+        project_root / "artifacts" / "reports" / "coverage" / "cortex-m0" / "coverage.info",
         [
             (str(file_a), [(10, 1), (11, 0)]),
             (str(file_c), [(5, 0)]),
         ],
     )
     _write_lcov(
-        project_root / "artifacts" / "build-cortex-m4-gcc" / "reports" / "coverage" / "cortex-m4" / "coverage.info",
+        project_root / "artifacts" / "reports" / "coverage" / "cortex-m4" / "coverage.info",
         [
             (str(file_b), [(20, 3)]),
         ],
     )
     _write_lcov(
-        project_root / "artifacts" / "build-cortex-m55-gcc" / "reports" / "coverage" / "cortex-m55" / "coverage.info",
+        project_root / "artifacts" / "reports" / "coverage" / "cortex-m55" / "coverage.info",
         [
             (str(file_a), [(10, 0), (11, 0)]),
         ],
@@ -67,7 +67,7 @@ def test_coverage_merge_merges_and_classifies(tmp_path: Path) -> None:
     exit_code, report = run_coverage_merge(
         project_root=project_root,
         cpus="cortex-m0,cortex-m4,cortex-m55",
-        report_dir=project_root / "artifacts" / "reports" / "coverage-merged",
+        report_dir=project_root / "artifacts" / "reports" / "coverage" / "merged",
         expected_zero_config=expected_zero_config,
     )
 
@@ -89,9 +89,31 @@ def test_coverage_merge_fails_when_no_inputs(tmp_path: Path) -> None:
     exit_code, report = run_coverage_merge(
         project_root=project_root,
         cpus="cortex-m55",
-        report_dir=project_root / "artifacts" / "reports" / "coverage-merged",
+        report_dir=project_root / "artifacts" / "reports" / "coverage" / "merged",
         expected_zero_config=project_root / "assets" / "coverage_expected_zero.json",
     )
 
     assert exit_code == 1
     assert report.coverage_inputs == {}
+
+
+def test_coverage_merge_fails_when_any_requested_input_missing(tmp_path: Path) -> None:
+    project_root = tmp_path
+    source = project_root / "Source" / "NNSupportFunctions" / "a.c"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("// a\n")
+    _write_lcov(
+        project_root / "artifacts" / "reports" / "coverage" / "cortex-m55" / "coverage.info",
+        [(str(source), [(1, 1)])],
+    )
+
+    exit_code, report = run_coverage_merge(
+        project_root=project_root,
+        cpus="cortex-m0,cortex-m55",
+        report_dir=project_root / "artifacts" / "reports" / "coverage" / "merged",
+        expected_zero_config=project_root / "assets" / "coverage_expected_zero.json",
+    )
+
+    assert exit_code == 1
+    assert "cortex-m55" in report.coverage_inputs
+    assert "cortex-m0" in report.missing_coverage_inputs

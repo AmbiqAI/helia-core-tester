@@ -8,7 +8,6 @@ import pytest
 from helia_core_tester.scripts.publish_cpu_coverage_summary import (
     _parse_lcov,
     _parse_test_report,
-    _resolve_report_dir,
     build_rows,
     main,
     render_markdown_table,
@@ -56,8 +55,9 @@ def _write_test_report(path: Path, *, cpu: str, total: int, passed: int, failed:
 
 
 def _setup_cpu_artifacts(root: Path, cpu: str, sf_suffix: str, counts: dict) -> None:
-    reports_dir = root / "artifacts" / f"build-{cpu}-gcc" / "reports"
+    reports_dir = root / "artifacts" / "reports"
     coverage_info = reports_dir / "coverage" / cpu / "coverage.info"
+    tests_dir = reports_dir / "tests" / cpu
     sf = str(root / "Source" / sf_suffix)
     _write_lcov(
         coverage_info,
@@ -67,7 +67,7 @@ def _setup_cpu_artifacts(root: Path, cpu: str, sf_suffix: str, counts: dict) -> 
         branches=counts["branches"],
     )
     _write_test_report(
-        reports_dir / f"test_report_{cpu}_20260311_120000.json",
+        tests_dir / f"test_report_{cpu}_20260311_120000.json",
         cpu=cpu,
         total=counts["total_tests"],
         passed=counts["passed"],
@@ -183,20 +183,19 @@ def test_build_rows_and_table_with_union_totals_and_status_formulas(tmp_path: Pa
     assert total["coverage"]["brf"] >= 5
 
 
-def test_nested_reports_fallback_and_generic_test_report_name(tmp_path: Path) -> None:
+def test_generic_test_report_name_fallback(tmp_path: Path) -> None:
     cpu = "cortex-m0"
-    base = tmp_path / "artifacts" / f"build-{cpu}-gcc" / "reports"
-    nested = base / "reports"
+    tests_dir = tmp_path / "artifacts" / "reports" / "tests" / cpu
 
     _write_lcov(
-        nested / "coverage" / cpu / "coverage.info",
+        tmp_path / "artifacts" / "reports" / "coverage" / cpu / "coverage.info",
         sf=str(tmp_path / "Source" / "Nested" / "n.c"),
         da=[(1, 1)],
         fns=[(1, "nested_fn", 1)],
         branches=[(1, "0", "0", "1")],
     )
     _write_test_report(
-        nested / "test_report_20260311_120000.json",
+        tests_dir / "test_report_20260311_120000.json",
         cpu=cpu,
         total=1,
         passed=1,
@@ -204,10 +203,7 @@ def test_nested_reports_fallback_and_generic_test_report_name(tmp_path: Path) ->
         skipped=0,
     )
 
-    resolved = _resolve_report_dir(tmp_path / "artifacts", cpu)
-    assert resolved == nested
-
-    totals = _parse_test_report(resolved, cpu)
+    totals = _parse_test_report(tests_dir, cpu)
     assert totals["number_of_tests"] == 1
     assert totals["passed"] == 1
 

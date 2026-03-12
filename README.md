@@ -1,267 +1,76 @@
 # Helia-Core Tester
 
-Toolkit for CMSIS-NN testing: generate TFLite models, convert to C, build for FVP, and run the tests.
+Toolkit for CMSIS-NN testing: generate test assets, build for FVP, run tests, and publish coverage.
 
-## Features
+## Quick Start
 
-- End-to-end pipeline: generate → convert → build → run
-- TFLite model generation via pytest
-- FVP Corstone-300 build and execution
-- Reports for test results
-
-## Getting Started
-
-### Prerequisites
-
-You need `uv` for Python dependencies:
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-You also need `git` for submodules (uv does not handle submodules).
-
-### Setup
-
-1. Initialize submodules:
-```bash
-git submodule update --init --recursive --depth 1
-```
-
-2. Install Python dependencies:
-```bash
-uv sync
-```
-
-3. Run the tool:
-```bash
-uv run helia_core_tester --help
-```
-
-### CI Setup
-
-Use the CI helper script:
-```bash
-./scripts/setup_ci.sh
-```
-
-Options:
-```bash
-./scripts/setup_ci.sh --downloads-dir /custom/path
-./scripts/setup_ci.sh --skip-build-deps
-```
-
-### Using uv for Dependency Management
-
-Standard workflow:
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-git submodule update --init --recursive --depth 1
 uv sync
 uv run helia_core_tester --help
 ```
 
-Note: submodules must be handled by git.
+## Commands
 
-## Usage
+- `uv run helia_core_tester generate`
+- `uv run helia_core_tester build`
+- `uv run helia_core_tester run`
+- `uv run helia_core_tester full`
+- `uv run helia_core_tester clean`
+- `uv run helia_core_tester clean-all`
+- `uv run helia_core_tester doctor`
+- `uv run helia_core_tester coverage-merge`
 
-### Basic Usage
-
-```bash
-uv run helia_core_tester full
-uv run helia_core_tester full --cpu cortex-m4
-```
-
-Note: `build` requires `artifacts/build-<cpu>-gcc/generated_tests/tests.cmake`, which is created by `generate`.
-`full` may regenerate generated tests in the build phase after build-directory cleanup; `build` does not auto-generate and will fail with a hint if files are missing.
-Default report output is under `artifacts/build-<cpu>-gcc/reports`.
-With `--coverage`, HTML coverage is generated at `artifacts/build-<cpu>-gcc/reports/coverage/index.html`.
-Generation failure logs are written to:
-- `artifacts/build-<cpu>-gcc/reports/conversion_failures.json`
-- `artifacts/build-<cpu>-gcc/reports/generation_failures.json`
-
-### Subcommands
-
-- `uv run helia_core_tester generate` — Generate TFLite models and C/H templates
-- `uv run helia_core_tester build` — Build for FVP
-- `uv run helia_core_tester run` — Run on FVP
-- `uv run helia_core_tester full` — Full pipeline
-- `uv run helia_core_tester clean` — Remove build artifacts
-- `uv run helia_core_tester clean-all` — Remove all artifacts
-- `uv run helia_core_tester doctor` — Preflight checks
-- `uv run helia_core_tester gap-check` — Gap gate between descriptors and generated tests
-- `uv run helia_core_tester coverage-merge` — Merge per-CPU LCOV and classify zero-hit files
-
-### Advanced Usage
-
-```bash
-uv run helia_core_tester full --op conv2D --dtype S8 --limit 5
-uv run helia_core_tester full --skip-generation --skip-conversion
-uv run helia_core_tester full --dry-run
-uv run helia_core_tester full --cpu cortex-m3 -v 2
-uv run helia_core_tester build --opt "-O2" --jobs 8
-uv run helia_core_tester full --cpu cortex-m0,cortex-m4,cortex-m55 --run-jobs 0 --coverage
-```
-
-### Command Line Options
-
-Pipeline control:
-- `--skip-generation`
+Removed interfaces:
+- `gap-check` subcommand
 - `--skip-conversion`
-- `--skip-build`
-- `--skip-run`
+- `--skip-runners`
+- `--regen-generated-tests-after-cleanup`
+- report-dir override flags
 
-Generation filters:
-- `--op OPERATOR`
-- `--dtype DTYPE`
-- `--limit N`
+## Canonical Artifacts
 
-Build options:
-- `--cpu CPU`
-- `--opt LEVEL`
-- `--jobs N`
+Generated tests:
+- `artifacts/generated_tests/<cpu>/manifest.json`
+- `artifacts/generated_tests/<cpu>/tests.cmake`
 
-Run options:
-- `--timeout SECONDS`
-- `--run-jobs N` (`0` = auto/use all host cores)
-- `--no-fail-fast`
-- `--report-formats`
+Reports:
+- generation: `artifacts/reports/generation/<cpu>/`
+- test execution: `artifacts/reports/tests/<cpu>/`
+- per-CPU coverage: `artifacts/reports/coverage/<cpu>/`
+- merged coverage: `artifacts/reports/coverage/merged/`
 
-### Gap Check (Regression Gate)
+Generation report files (always emitted):
+- `generation_summary.json`
+- `generation_failures.json`
+- `conversion_failures.json`
+- `manifest_pointer.json`
 
-The gap check compares YAML descriptors against generated test artifacts and the manifest.
-It allows known gaps (hardcoded allowlist) and fails only on new/unexpected gaps.
-
-Example:
-
-```bash
-uv run helia_core_tester gap-check --cpu cortex-m55 --report-dir artifacts/reports
-```
-
-Outputs:
-
-- `artifacts/reports/gap_report_<cpu>.json`
-- `artifacts/reports/gap_report_<cpu>.md`
-
-Updating the allowlist:
-
-1. Remove entries from the allowlist as operators become fully supported.
-2. If a new known gap is intentionally introduced, add its descriptor name to the allowlist in
-   `helia_core_tester/reporting/gap_gate.py`.
-
-### Merged Coverage Triage
-
-Merge per-CPU coverage reports and classify files as covered, zero-hit reachable, or expected-zero.
-
-Example:
+## Coverage Merge
 
 ```bash
 uv run helia_core_tester coverage-merge --cpu cortex-m0,cortex-m4,cortex-m55
 ```
 
-Outputs (default):
+Outputs:
+- `artifacts/reports/coverage/merged/coverage_merged.info`
+- `artifacts/reports/coverage/merged/coverage_merged_summary.json`
+- `artifacts/reports/coverage/merged/coverage_merged_summary.md`
+- `artifacts/reports/coverage/merged/index.html`
 
-- `artifacts/reports/coverage-merged/coverage_merged.info`
-- `artifacts/reports/coverage-merged/coverage_merged_summary.json`
-- `artifacts/reports/coverage-merged/coverage_merged_summary.md`
-- `artifacts/reports/coverage-merged/index.html`
+Behavior:
+- merge is strict and fails if any requested CPU `coverage.info` input is missing.
 
-The merged `index.html` uses classic `gcovr` HTML (red/yellow/green coverage bands) when `gcovr` is available.
-If `gcovr` is unavailable, the tool falls back to a built-in HTML renderer.
+## Clean Contract
 
-Expected-zero configuration defaults to:
+- `clean`: removes selected CPU artifacts for generated tests, reports (generation/tests/coverage), and matching build dirs.
+- `clean-all`: removes all `artifacts/generated_tests`, all `artifacts/reports`, and all `artifacts/build-*` directories.
 
-- `assets/coverage_expected_zero.json`
+## Config Precedence
 
-General options:
-- `--verbosity, -v`
-- `--dry-run`
-- `--quiet, -q`
-- `--log-file PATH`
-- `--plan`
+Resolved config order:
+- code defaults
+- `helia_core_tester.toml`
+- environment (`HELIA_CORE_TESTER_*`)
+- CLI options
 
-### Branch Coverage Descriptor Knobs
-
-Use these descriptor hints to target specific kernel branches without changing CMSIS source:
-
-- `hint.extras.force_filter_offset` in `assets/descriptors/fullyconnected.yaml`:
-  forces a non-default filter offset for targeted `arm_nn_vec_mat_mult_t_per_ch_s8` paths.
-- `hint.extras.input_values` and `hint.extras.alpha_values` in `assets/descriptors/prelu.yaml`:
-  drives deterministic scalar-input/scalar-alpha branch behavior.
-- `feature_batches`, `rank`, `input_height`, and `use_bias` in `assets/descriptors/svdf.yaml`:
-  tunes SVDF row/tail and bias/no-bias branch coverage.
-
-## Configuration
-
-Defaults live in `helia_core_tester.toml` at the repo root. CLI flags override these values.
-
-## Architecture
-
-Python source: `helia_core_tester/`.
-
-Core modules:
-- `helia_core_tester.core.pipeline`: Pipeline orchestration
-- `helia_core_tester.core.config`: Configuration and repo-root discovery
-- `helia_core_tester.core.discovery`: Path discovery
-- `helia_core_tester.core.steps`: Pipeline steps
-
-CLI:
-- `helia_core_tester.cli`: CLI entry point
-
-FVP:
-- `helia_core_tester.fvp.build_and_run_fvp`: Build and run
-
-Scripts:
-- `helia_core_tester/scripts/setup_dependencies.py`: Build dependency download
-
-Generation:
-- `helia_core_tester/generation/`: TFLite generation via pytest
-- `helia_core_tester/generation/ops/`: Operators
-- `helia_core_tester/generation/io/`: I/O utilities
-- `helia_core_tester/generation/assets/descriptors/`: Descriptor schemas/examples
-- `artifacts/build-<cpu>-gcc/generated_tests/manifest.json`: Generated test manifest
-- `artifacts/build-<cpu>-gcc/generated_tests/tests.cmake`: CMake test list
-
-Utilities and reporting:
-- `helia_core_tester/utils/`: Command helpers
-- `helia_core_tester/reporting/`: Result parsing and report generation
-
-## Development
-
-Generate TFLite models directly:
-```bash
-uv run pytest helia_core_tester/generation/test_ops.py::test_generation -v --op mean_int16
-```
-
-Code quality (optional):
-```bash
-black helia_core_tester/
-flake8 helia_core_tester/
-mypy helia_core_tester/
-```
-
-## Requirements
-
-- `uv` (required)
-- Python 3.8+
-- pytest
-- TensorFlow Lite
-- CMake
-- ARM GCC toolchain
-- FVP Corstone-300
-
-## CI Reporting
-
-See `CI_REPORTING.md`.
-
-## CI/CD Integration
-
-GitHub Actions in `.github/workflows/ci.yml`:
-- checks out submodules
-- runs `./scripts/setup_ci.sh`
-- verifies dependencies and build tools
-- tests the CLI
-
-For other CI systems:
-```bash
-./scripts/setup_ci.sh
-```
+After validation, resolved config is immutable.

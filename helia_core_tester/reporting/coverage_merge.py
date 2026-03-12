@@ -13,6 +13,7 @@ import shutil
 import subprocess
 
 from helia_core_tester.core.cpu_targets import parse_cpu_list
+from helia_core_tester.core.path_layout import coverage_merged_dir, coverage_report_dir
 
 
 @dataclass
@@ -466,7 +467,7 @@ def run_coverage_merge(
         expected_zero_config = root / "assets" / "coverage_expected_zero.json"
     expected_zero_set, expected_zero_path = _load_expected_zero(expected_zero_config)
 
-    out_dir = (Path(report_dir).resolve() if report_dir else root / "artifacts" / "reports" / "coverage-merged")
+    out_dir = (Path(report_dir).resolve() if report_dir else coverage_merged_dir(root))
     out_dir.mkdir(parents=True, exist_ok=True)
 
     merged_lines: Dict[str, Dict[int, int]] = {}
@@ -476,7 +477,7 @@ def run_coverage_merge(
     missing_inputs: Dict[str, str] = {}
 
     for cpu in cpu_list:
-        lcov_path = root / "artifacts" / f"build-{cpu}-gcc" / "reports" / "coverage" / cpu / "coverage.info"
+        lcov_path = coverage_report_dir(root, cpu) / "coverage.info"
         if not lcov_path.exists():
             missing_inputs[cpu] = str(lcov_path)
             continue
@@ -587,5 +588,5 @@ def run_coverage_merge(
     _write_markdown(report, report.summary_md_path)
     report.summary_json_path.write_text(json.dumps(report.to_dict(), indent=2))
 
-    exit_code = 0 if coverage_inputs else 1
+    exit_code = 0 if coverage_inputs and not missing_inputs else 1
     return exit_code, report

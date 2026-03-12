@@ -11,7 +11,6 @@ from helia_core_tester.reporting.models import TestResult, TestReport, Descripto
 from helia_core_tester.reporting.parser import TestResultParser
 from helia_core_tester.reporting.generator import ReportGenerator
 from helia_core_tester.reporting.descriptor_tracker import DescriptorTracker
-from helia_core_tester.reporting.gap_gate import GapReport, run_gap_check
 from helia_core_tester.reporting.coverage_merge import CoverageMergeReport, run_coverage_merge
 
 __all__ = [
@@ -22,8 +21,6 @@ __all__ = [
     "TestResultParser",
     "ReportGenerator",
     "DescriptorTracker",
-    "GapReport",
-    "run_gap_check",
     "CoverageMergeReport",
     "run_coverage_merge",
 ]

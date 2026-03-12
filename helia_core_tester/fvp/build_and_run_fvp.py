@@ -43,7 +43,12 @@ from helia_core_tester.core.discovery import (
     find_repo_root,
     find_setup_dependencies_script,
     find_descriptors_dir,
-    find_generated_tests_dir,
+)
+from helia_core_tester.core.path_layout import (
+    build_dir as canonical_build_dir,
+    coverage_report_dir as canonical_coverage_report_dir,
+    generated_tests_dir as canonical_generated_tests_dir,
+    tests_report_dir as canonical_tests_report_dir,
 )
 from helia_core_tester.core.cpu_targets import parse_cpu_list
 from helia_core_tester.reporting.models import TestResult, TestStatus
@@ -152,6 +157,12 @@ class FvpProcessResult:
     launch_error: Optional[str] = None
 
 
+class FvpScriptError(RuntimeError):
+    def __init__(self, message: str, exit_code: int = 2):
+        super().__init__(message)
+        self.exit_code = exit_code
+
+
 def _which_in_env(name: str, env: dict) -> Optional[str]:
     return shutil.which(name, path=env.get("PATH"))
 
@@ -172,13 +183,12 @@ def _resolve_gcov_executable(env: dict) -> Optional[str]:
     return None
 
 
-def _resolve_report_dir(args, cpu: Optional[str] = None, compiler_tag: str = "gcc") -> Path:
-    report_dir = getattr(args, "report_dir", None)
-    if report_dir is not None:
-        return Path(report_dir)
-    if cpu is None:
-        return ARTIFACTS_DIR / "reports"
-    return ARTIFACTS_DIR / f"build-{cpu}-{compiler_tag}" / "reports"
+def _tests_report_dir(cpu: str) -> Path:
+    return canonical_tests_report_dir(repo_root, cpu)
+
+
+def _coverage_report_dir(cpu: str) -> Path:
+    return canonical_coverage_report_dir(repo_root, cpu)
 
 
 def _signal_process_group(proc: subprocess.Popen, sig: int) -> None:
@@ -414,14 +424,11 @@ def _generate_coverage_reports(
         return
 
     for cpu in cpus:
-        build_dir = ARTIFACTS_DIR / f"build-{cpu}-{compiler_tag}"
+        build_dir = canonical_build_dir(repo_root, cpu, compiler_tag)
         if not build_dir.exists():
             continue
 
-        if getattr(args, "report_dir", None) is None:
-            cpu_dir = _resolve_report_dir(args, cpu=cpu, compiler_tag=compiler_tag) / "coverage"
-        else:
-            cpu_dir = _resolve_report_dir(args, cpu=cpu, compiler_tag=compiler_tag) / "coverage" / cpu
+        cpu_dir = _coverage_report_dir(cpu)
         cpu_dir.mkdir(parents=True, exist_ok=True)
 
         default_cmsis_nn_root = (source_dir / ".." / "..").resolve()
@@ -482,8 +489,7 @@ def _generate_coverage_reports(
 
 
 def die(msg: str, code: int = 2):
-    print(f"ERROR: {msg}", file=sys.stderr)
-    sys.exit(code)
+    raise FvpScriptError(msg, exit_code=code)
 
 
 def is_linux() -> bool:
@@ -1023,63 +1029,8 @@ def _run_elf_jobs_with_reporting(
     return ordered_results, any_fail
 
 
-def regenerate_generated_tests(cpu: str, generated_tests_dir: Path, args, env: dict, verbosity: int) -> None:
-    generation_dir = repo_root / "helia_core_tester" / "generation"
-    if not generation_dir.exists():
-        die(f"Generation directory not found: {generation_dir}")
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "pytest",
-        "test_ops.py::test_generation",
-        "-v",
-        "--cpu",
-        cpu,
-        "--generated-tests-dir",
-        str(generated_tests_dir),
-    ]
-    if args.gen_op:
-        cmd.extend(["--op", args.gen_op])
-    if args.gen_dtype:
-        cmd.extend(["--dtype", args.gen_dtype])
-    if args.gen_name:
-        cmd.extend(["--name", args.gen_name])
-    if args.gen_limit is not None:
-        cmd.extend(["--limit", str(args.gen_limit)])
-    if args.gen_seed is not None:
-        cmd.extend(["--seed", str(args.gen_seed)])
-
-    if verbosity >= 1:
-        print(f"Regenerating tests for {cpu} into {generated_tests_dir}")
-    if verbosity >= 2:
-        print(f"Generate: {' '.join(cmd)}")
-
-    rc = subprocess.call(
-        cmd,
-        cwd=str(generation_dir),
-        env=env,
-        stdout=subprocess.DEVNULL if verbosity <= 1 else None,
-        stderr=None,
-    )
-    if rc != 0:
-        die(f"Generated tests regeneration failed for {cpu} (rc={rc})")
-
-
 def resolve_generated_tests_dir(source_dir: Path, cpu: str) -> Path:
-    # Prefer per-build generated tests (new default), but fall back to legacy layout
-    # if it already exists to preserve backward compatibility.
-    build_generated = source_dir / "artifacts" / f"build-{cpu}-gcc" / "generated_tests"
-    legacy_base = source_dir / "artifacts" / "generated_tests"
-    legacy_cpu = legacy_base / cpu
-    if build_generated.exists():
-        return build_generated
-    if legacy_cpu.exists():
-        return legacy_cpu
-    if legacy_base.exists():
-        return legacy_base
-    # If nothing exists yet (e.g., before generation), return the new default
-    return build_generated
+    return canonical_generated_tests_dir(source_dir, cpu)
 
 
 
@@ -1089,6 +1040,7 @@ def run_tests_with_reporting(cpus: List[str],
                            toolchain_file: Path,
                            cmsis5: Path,
                            fvp_exe: Path,
+                           compiler_tag: str,
                            args,
                            env: dict,
                            supervisor: Optional[ProcessSupervisor] = None) -> Tuple[List[TestResult], bool]:
@@ -1102,57 +1054,33 @@ def run_tests_with_reporting(cpus: List[str],
     from helia_core_tester.reporting.models import TestReport, TestStatus, DescriptorResult
     from helia_core_tester.reporting.descriptor_tracker import DescriptorTracker
     
-    all_results = []
+    all_results: List[TestResult] = []
     any_fail = False
-    start_time = datetime.now()
-    
-    # Get verbosity from args (default to 0 if not provided)
     verbosity = getattr(args, 'verbosity', 0)
-    
-    # Get report directory from args
-    report_dir = _resolve_report_dir(args, cpu=cpus[0] if cpus else "cortex-m55", compiler_tag="gcc")
-    
-    # Clean up previous build directories (only if we're going to build)
-    # If --no-build is set, keep the existing build directory
-    if not args.no_build:
-        for cpu in cpus:
-            build_dir = ARTIFACTS_DIR / f"build-{cpu}-gcc"
+    descriptors_dir = find_descriptors_dir()
+    tracker = DescriptorTracker(descriptors_dir)
+    all_descriptors_dict = tracker.load_all_descriptors()
+
+    for cpu in cpus:
+        cpu_start_time = datetime.now()
+        if verbosity >= 1:
+            print(f"\nTarget: {cpu} (gcc)")
+        build_dir = canonical_build_dir(repo_root, cpu, compiler_tag)
+        cpu_generated_tests_dir = resolve_generated_tests_dir(source_dir, cpu)
+        cpu_tests_report_dir = _tests_report_dir(cpu)
+        coverage_ctx = _new_coverage_context(build_dir, getattr(args, "_gcov_tool", None)) if args.coverage else None
+
+        if cpu_tests_report_dir.exists():
+            if verbosity >= 1:
+                print(f"Removing previous tests report directory: {cpu_tests_report_dir}")
+            shutil.rmtree(cpu_tests_report_dir, ignore_errors=True)
+        cpu_tests_report_dir.mkdir(parents=True, exist_ok=True)
+
+        if not args.no_build:
             if build_dir.exists():
                 if verbosity >= 1:
                     print(f"Removing previous build directory: {build_dir}")
                 shutil.rmtree(build_dir, ignore_errors=True)
-    
-    # Clean up previous reports directory
-    if report_dir.exists():
-        if verbosity >= 1:
-            print(f"Removing previous reports directory: {report_dir}")
-        shutil.rmtree(report_dir, ignore_errors=True)
-    
-    # Initialize reporting (after cleanup, so directory will be recreated)
-    generator = ReportGenerator(output_dir=report_dir)
-    
-    # Initialize descriptor tracking
-    descriptors_dir = find_descriptors_dir()
-    generated_tests_dir = resolve_generated_tests_dir(source_dir, cpus[0]) if cpus else find_generated_tests_dir(create=False)
-    tracker = DescriptorTracker(descriptors_dir)
-    all_descriptors_dict = tracker.load_all_descriptors()
-    
-    for cpu in cpus:
-        if verbosity >= 1:
-            print(f"\nTarget: {cpu} (gcc)")
-        build_dir = ARTIFACTS_DIR / f"build-{cpu}-gcc"
-        cpu_generated_tests_dir = resolve_generated_tests_dir(source_dir, cpu)
-        coverage_ctx = _new_coverage_context(build_dir, getattr(args, "_gcov_tool", None)) if args.coverage else None
-        
-        if not args.no_build:
-            if args.regen_generated_tests_after_cleanup:
-                regenerate_generated_tests(
-                    cpu=cpu,
-                    generated_tests_dir=cpu_generated_tests_dir,
-                    args=args,
-                    env=env,
-                    verbosity=verbosity,
-                )
             # Build first - use the env passed in
             cmake_configure(
                 source_dir=source_dir,
@@ -1169,16 +1097,16 @@ def run_tests_with_reporting(cpus: List[str],
                 env=env,
             )
             cmake_build(build_dir=build_dir, verbosity=verbosity, env=env, jobs=args.jobs)
-        
+
         if args.no_run:
             continue
-        
+
         elves = find_elves(build_dir)
         if not elves:
             if verbosity >= 1:
                 print(f"(no .elf found under {build_dir}, nothing to run)")
             continue
-        
+
         elf_entries: List[Tuple[Path, str]] = []
         for elf in elves:
             test_name = elf.stem
@@ -1201,160 +1129,123 @@ def run_tests_with_reporting(cpus: List[str],
         )
         all_results.extend(cpu_results)
         any_fail = any_fail or cpu_failed
+
+        cpu_end_time = datetime.now()
+        generator = ReportGenerator(output_dir=cpu_tests_report_dir)
+
+        test_result_map: dict[str, TestResult] = {}
+        for result in cpu_results:
+            desc_name = result.descriptor_name or result.test_name
+            if desc_name not in test_result_map or result.status == TestStatus.PASS:
+                test_result_map[desc_name] = result
+
+        active_descriptors: set[str] = set(test_result_map.keys())
+        for desc_name in all_descriptors_dict.keys():
+            tflite_file = cpu_generated_tests_dir / desc_name / f"{desc_name}.tflite"
+            includes_dir = cpu_generated_tests_dir / desc_name / "includes"
+            model_headers = list(includes_dir.glob(f"{desc_name}_*.h")) if includes_dir.exists() else []
+            model_header_old = cpu_generated_tests_dir / desc_name / "includes" / f"{desc_name}_model.h"
+            has_model_header = len(model_headers) > 0 or model_header_old.exists()
+            elf_path = build_dir / "tests" / f"{desc_name}.elf"
+            if tflite_file.exists() or has_model_header or elf_path.exists():
+                active_descriptors.add(desc_name)
+
+        descriptor_results: dict[str, DescriptorResult] = {}
+        for desc_name in sorted(active_descriptors):
+            desc_content = all_descriptors_dict.get(desc_name)
+            if not desc_content:
+                continue
+            test_result = test_result_map.get(desc_name)
+            status, failure_stage, failure_reason = tracker.determine_descriptor_status(
+                descriptor_name=desc_name,
+                test_result=test_result,
+                build_dir=build_dir,
+                generated_tests_dir=cpu_generated_tests_dir,
+            )
+            desc_path = tracker.get_descriptor_path(desc_name)
+            descriptor_results[desc_name] = DescriptorResult(
+                descriptor_name=desc_name,
+                descriptor_path=desc_path,
+                descriptor_content=desc_content,
+                status=status,
+                test_result=test_result,
+                failure_stage=failure_stage,
+                failure_reason=failure_reason,
+            )
+
+        for result in cpu_results:
+            if not result.descriptor_name or result.descriptor_name in descriptor_results:
+                continue
+            desc = tracker.map_test_to_descriptor(result.test_name, all_descriptors_dict)
+            if not desc:
+                continue
+            desc_name = desc.get("name", result.descriptor_name)
+            if desc_name in descriptor_results:
+                continue
+            status, failure_stage, failure_reason = tracker.determine_descriptor_status(
+                descriptor_name=desc_name,
+                test_result=result,
+                build_dir=build_dir,
+                generated_tests_dir=cpu_generated_tests_dir,
+            )
+            desc_path = tracker.get_descriptor_path(desc_name)
+            descriptor_results[desc_name] = DescriptorResult(
+                descriptor_name=desc_name,
+                descriptor_path=desc_path,
+                descriptor_content=desc,
+                status=status,
+                test_result=result,
+                failure_stage=failure_stage,
+                failure_reason=failure_reason,
+            )
+
+        metadata = {
+            "cpu": cpu,
+            "optimization": args.opt,
+            "compiler": "arm-compiler" if args.use_arm_compiler else "gcc",
+            "toolchain_file": str(toolchain_file),
+            "cmsis5_path": str(cmsis5),
+            "fvp_exe": str(fvp_exe),
+            "downloads_dir": str(args.downloads_dir),
+            "source_dir": str(source_dir),
+            "generated_tests_dir": str(cpu_generated_tests_dir),
+            "tests_report_dir": str(cpu_tests_report_dir),
+            "git_sha": _get_git_sha(source_dir),
+        }
+        report = TestReport(
+            run_id=f"run_{cpu}_{cpu_start_time.strftime('%Y%m%d_%H%M%S')}",
+            start_time=cpu_start_time,
+            end_time=cpu_end_time,
+            cpu=cpu,
+            descriptor_results=descriptor_results,
+            all_descriptors=list(all_descriptors_dict.values()),
+            project_root=source_dir,
+            metadata=metadata,
+        )
+        report_formats = getattr(args, "report_formats", None) or ["json"]
+        generated_files = generator.generate_reports(report, report_formats)
+        if not getattr(args, "quiet", False):
+            print(
+                f"Summary ({cpu}): total={report.total_tests} "
+                f"passed={report.passed} failed={report.failed} skipped={report.skipped} "
+                f"duration={report.duration:.2f}s"
+            )
+        if verbosity >= 1:
+            for format_type, file_path in generated_files.items():
+                print(f"{cpu} {format_type.upper()} report: {file_path}")
+
         if cpu_failed and args.fail_fast and verbosity >= 1:
             print("Stopping early due to failure (--fail-fast).")
-        
+
         if any_fail and args.fail_fast:
             break
-    
-    # Generate report
-    end_time = datetime.now()
-    
+
+    _generate_coverage_reports(cpus, args, env, source_dir, compiler_tag, verbosity)
     all_results = sorted(all_results, key=lambda r: (r.cpu, r.test_name))
-
-    # Build descriptor_results: map each descriptor to its status and test result
-    descriptor_results = {}
-    
-    # First, map test results to descriptors by descriptor_name
-    test_result_map = {}
-    for result in all_results:
-        desc_name = result.descriptor_name or result.test_name
-        # If we already have a result for this descriptor, keep the one with better status
-        if desc_name not in test_result_map or result.status == TestStatus.PASS:
-            test_result_map[desc_name] = result
-    
-    # Get set of descriptors that were actually generated/run
-    # This includes descriptors that have:
-    # 1. A test result (were run)
-    # 2. A generated TFLite file (were generated)
-    # 3. A build artifact (ELF file)
-    # This ensures total_tests reflects only the filtered descriptors
-    active_descriptors = set()
-    
-    # Add descriptors from test results
-    for result in all_results:
-        desc_name = result.descriptor_name or result.test_name
-        active_descriptors.add(desc_name)
-    
-    # Add descriptors that have generated artifacts
-    primary_build_dir = ARTIFACTS_DIR / f"build-{cpus[0]}-gcc" if cpus else ARTIFACTS_DIR / "build-cortex-m55-gcc"
-    for desc_name in all_descriptors_dict.keys():
-        # Check for TFLite file (generation stage)
-        tflite_file = generated_tests_dir / desc_name / f"{desc_name}.tflite"
-        # Check for model header (conversion stage) - new template system uses operator-specific names
-        includes_dir = generated_tests_dir / desc_name / "includes"
-        model_headers = list(includes_dir.glob(f"{desc_name}_*.h")) if includes_dir.exists() else []
-        model_header_old = generated_tests_dir / desc_name / "includes" / f"{desc_name}_model.h"
-        has_model_header = len(model_headers) > 0 or model_header_old.exists()
-        # Check for ELF file (build stage)
-        elf_path = primary_build_dir / "tests" / f"{desc_name}.elf"
-        
-        if tflite_file.exists() or has_model_header or elf_path.exists():
-            active_descriptors.add(desc_name)
-    
-    # Process only active descriptors (those that were actually generated/run)
-    for desc_name in active_descriptors:
-        desc_content = all_descriptors_dict.get(desc_name)
-        if not desc_content:
-            # Descriptor not in loaded descriptors - skip
-            continue
-        
-        test_result = test_result_map.get(desc_name)
-        
-        # Determine status
-        status, failure_stage, failure_reason = tracker.determine_descriptor_status(
-            descriptor_name=desc_name,
-            test_result=test_result,
-            build_dir=primary_build_dir,
-            generated_tests_dir=generated_tests_dir
-        )
-        
-        # Get descriptor path
-        desc_path = tracker.get_descriptor_path(desc_name)
-        
-        # Create DescriptorResult
-        descriptor_results[desc_name] = DescriptorResult(
-            descriptor_name=desc_name,
-            descriptor_path=desc_path,
-            descriptor_content=desc_content,
-            status=status,
-            test_result=test_result,
-            failure_stage=failure_stage,
-            failure_reason=failure_reason
-        )
-    
-    # Handle descriptors that might have been in test results but not in loaded descriptors
-    # (edge case: test name doesn't match descriptor name exactly)
-    for result in all_results:
-        if result.descriptor_name and result.descriptor_name not in descriptor_results:
-            # Try to find matching descriptor
-            desc = tracker.map_test_to_descriptor(result.test_name, all_descriptors_dict)
-            if desc:
-                desc_name = desc.get('name', result.descriptor_name)
-                if desc_name not in descriptor_results:
-                    # Add to active descriptors if not already there
-                    active_descriptors.add(desc_name)
-                    primary_build_dir = ARTIFACTS_DIR / f"build-{cpus[0]}-gcc" if cpus else ARTIFACTS_DIR / "build-cortex-m55-gcc"
-                    status, failure_stage, failure_reason = tracker.determine_descriptor_status(
-                        descriptor_name=desc_name,
-                        test_result=result,
-                        build_dir=primary_build_dir,
-                        generated_tests_dir=generated_tests_dir
-                    )
-                    desc_path = tracker.get_descriptor_path(desc_name)
-                    descriptor_results[desc_name] = DescriptorResult(
-                        descriptor_name=desc_name,
-                        descriptor_path=desc_path,
-                        descriptor_content=desc,
-                        status=status,
-                        test_result=result,
-                        failure_stage=failure_stage,
-                        failure_reason=failure_reason
-                    )
-    
-    # Create test report with descriptor_results
-    metadata = {
-        "cpu": ",".join(cpus),
-        "optimization": args.opt,
-        "compiler": "arm-compiler" if args.use_arm_compiler else "gcc",
-        "toolchain_file": str(toolchain_file),
-        "cmsis5_path": str(cmsis5),
-        "fvp_exe": str(fvp_exe),
-        "downloads_dir": str(args.downloads_dir),
-        "source_dir": str(source_dir),
-        "git_sha": _get_git_sha(source_dir),
-    }
-    report = TestReport(
-        run_id=f"run_{start_time.strftime('%Y%m%d_%H%M%S')}",
-        start_time=start_time,
-        end_time=end_time,
-        cpu=",".join(cpus),
-        descriptor_results=descriptor_results,
-        all_descriptors=list(all_descriptors_dict.values()),
-        project_root=source_dir,  # For making paths relative in JSON output
-        metadata=metadata,
-    )
-    
-    # Generate reports in requested formats (defaults to JSON if none specified)
-    report_formats = getattr(args, 'report_formats', None) or ["json"]
-    generated_files = generator.generate_reports(report, report_formats)
-    verbosity = getattr(args, 'verbosity', 0)
-    if not getattr(args, "quiet", False):
-        print(
-            f"Summary: total={report.total_tests} "
-            f"passed={report.passed} failed={report.failed} skipped={report.skipped} "
-            f"duration={report.duration:.2f}s"
-        )
-    if verbosity >= 1:
-        for format_type, file_path in generated_files.items():
-            print(f"{format_type.upper()} report generated: {file_path}")
-
-    _generate_coverage_reports(cpus, args, env, source_dir, "gcc", verbosity)
-    
     return all_results, not any_fail
 
 
-def main(argv: List[str]) -> int:
+def _main_impl(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description="Build and run helia-core kernels unit tests on FVP Corstone-300 (Python).")
     ap.add_argument("-c", "--cpu", default="cortex-m55", help="Comma-separated cores, e.g. m0,m4,m55")
     ap.add_argument("-o", "--opt", default="-Ofast", help="Optimization level passed via CMSIS_OPTIMIZATION_LEVEL")
@@ -1379,18 +1270,10 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--timeout-run", type=float, default=0.0, help="Per-test timeout in seconds (0 = none)")
     ap.add_argument("--fail-fast", action=argparse.BooleanOptionalAction, default=False, help="Stop on first failure")
     ap.add_argument("--fvp-arg", action="append", default=[], help="Extra args to pass to the FVP (repeatable)")
-    ap.add_argument("--gen-op", help="Regeneration filter for operator name")
-    ap.add_argument("--gen-dtype", help="Regeneration filter for activation dtype")
-    ap.add_argument("--gen-name", help="Regeneration filter for exact test name")
-    ap.add_argument("--gen-limit", type=int, help="Regeneration limit for number of tests")
-    ap.add_argument("--gen-seed", type=int, help="Regeneration random seed")
-    ap.add_argument("--regen-generated-tests-after-cleanup", action="store_true",
-                   help="Regenerate tests into the build directory after cleanup and before configure")
     # Reporting options
     ap.add_argument("--no-report", action="store_true", help="Disable comprehensive test reporting (enabled by default)")
     ap.add_argument("--report-formats", nargs="+", choices=["json", "html", "md", "junit"], default=["json"], 
                    help="Report formats to generate (default: json)")
-    ap.add_argument("--report-dir", type=Path, default=None, help="Directory to save reports (default: ./artifacts/build-<cpu>-gcc/reports)")
     ap.add_argument("--quiet", action="store_true", help="Quiet mode (no output)")
     args = ap.parse_args(argv)
 
@@ -1441,6 +1324,7 @@ def main(argv: List[str]) -> int:
                 toolchain_file=toolchain_file,
                 cmsis5=cmsis5,
                 fvp_exe=fvp_exe,
+                compiler_tag=compiler_tag,
                 args=args,
                 env=env,
                 supervisor=supervisor,
@@ -1455,7 +1339,7 @@ def main(argv: List[str]) -> int:
         for cpu in cpus:
             if verbosity >= 1:
                 print(f"\nTarget: {cpu} ({compiler_tag})")
-            build_dir = ARTIFACTS_DIR / f"build-{cpu}-{compiler_tag}"
+            build_dir = canonical_build_dir(repo_root, cpu, compiler_tag)
             cpu_generated_tests_dir = resolve_generated_tests_dir(source_dir, cpu)
             coverage_ctx = _new_coverage_context(build_dir, getattr(args, "_gcov_tool", None)) if args.coverage else None
 
@@ -1515,6 +1399,14 @@ def main(argv: List[str]) -> int:
         return 0
     finally:
         supervisor.terminate_all("shutdown")
+
+
+def main(argv: List[str]) -> int:
+    try:
+        return _main_impl(argv)
+    except FvpScriptError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return exc.exit_code
 
 
 if __name__ == "__main__":
