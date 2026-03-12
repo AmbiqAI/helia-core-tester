@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -181,6 +182,90 @@ def test_build_rows_and_table_with_union_totals_and_status_formulas(tmp_path: Pa
     assert total["coverage"]["lf"] >= 5
     assert total["coverage"]["fnf"] >= 5
     assert total["coverage"]["brf"] >= 5
+
+
+def test_main_writes_junit_with_expected_rows_and_metrics(tmp_path: Path) -> None:
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m0",
+        "ActivationFunctions/a0.c",
+        {
+            "da": [(1, 1), (2, 0)],
+            "fns": [(1, "f0", 1)],
+            "branches": [(1, "0", "0", "1")],
+            "total_tests": 3,
+            "passed": 2,
+            "failed": 0,
+            "skipped": 0,
+            "not_run": 1,
+        },
+    )
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m4",
+        "ActivationFunctions/a4.c",
+        {
+            "da": [(1, 1)],
+            "fns": [(1, "f4", 1)],
+            "branches": [(1, "0", "0", "1")],
+            "total_tests": 4,
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+        },
+    )
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m55",
+        "ActivationFunctions/a55.c",
+        {
+            "da": [(1, 0), (2, 0)],
+            "fns": [(1, "f55", 0)],
+            "branches": [(1, "0", "0", "0")],
+            "total_tests": 5,
+            "passed": 3,
+            "failed": 0,
+            "skipped": 1,
+            "errors": 1,
+        },
+    )
+
+    summary_file = tmp_path / "summary.md"
+    junit_file = tmp_path / "cpu_coverage_summary.junit.xml"
+    rc = main(
+        [
+            "--artifacts-root",
+            str(tmp_path / "artifacts"),
+            "--cpus",
+            "cortex-m0,cortex-m4,cortex-m55",
+            "--summary-file",
+            str(summary_file),
+            "--junit-file",
+            str(junit_file),
+        ]
+    )
+    assert rc == 0
+    assert junit_file.exists()
+
+    root = ET.parse(junit_file).getroot()
+    assert root.tag == "testsuite"
+    testcases = root.findall("testcase")
+    assert [t.attrib.get("name") for t in testcases] == ["m0", "m4", "m55", "total"]
+
+    for testcase in testcases:
+        out_text = testcase.findtext("system-out") or ""
+        assert "lines=" in out_text
+        assert "functions=" in out_text
+        assert "branches=" in out_text
+        assert "number_of_tests=" in out_text
+        assert "passed=" in out_text
+        assert "failed=" in out_text
+        assert "skipped_not_generated=" in out_text
+
+    assert "number_of_tests=3" in (testcases[0].findtext("system-out") or "")
+    assert "skipped_not_generated=1" in (testcases[0].findtext("system-out") or "")
+    assert "failed=1" in (testcases[2].findtext("system-out") or "")
+    assert "number_of_tests=12" in (testcases[3].findtext("system-out") or "")
 
 
 def test_nested_reports_fallback_and_generic_test_report_name(tmp_path: Path) -> None:
