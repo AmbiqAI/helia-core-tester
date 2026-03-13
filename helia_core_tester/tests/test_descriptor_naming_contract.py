@@ -58,18 +58,20 @@ def test_descriptor_names_follow_canonical_contract() -> None:
 
     for desc in descriptors:
         name = desc["name"]
-        source_file = desc["_source_file"]
+        source_stem = desc["_source_stem"]
+        source_relpath = desc["_source_relpath"]
+        source_family = desc["_source_family"]
+        family = desc["_family"]
 
         assert _NAME_PATTERN.match(name), name
         assert not re.search(r"_(s8|s16|s4|s32)_case_", name), name
         assert not re.search(r"(?<!per)_tensor_(s8|s16|s4|s32)$", name), name
         assert not re.search(r"_basic_(s8|s16|s4|s32)$", name), name
         assert not any(pattern.search(name) for pattern in _BANNED_NAME_PATTERNS), name
+        assert "/" in source_relpath, source_relpath
+        assert source_family == family
 
-        if source_file == "maximum_minimum":
-            assert name.startswith(("maximum_", "minimum_")), name
-        else:
-            assert name.startswith(f"{source_file}_"), (source_file, name)
+        assert name.startswith(f"{source_stem}_"), (source_stem, name)
 
 
 def test_schema_is_valid_and_excludes_old_operator_names() -> None:
@@ -91,7 +93,7 @@ def test_dead_old_op_modules_removed_from_registry_and_tree() -> None:
 
     ops_dir = _repo_root() / "helia_core_tester" / "generation" / "ops"
     for basename in ("equal.py", "not_equal.py", "greater.py", "greater_equal.py", "less.py", "less_equal.py", "elementwise.py"):
-        assert not (ops_dir / basename).exists()
+        assert not any(ops_dir.rglob(basename))
 
 
 def test_generation_name_filter_uses_renamed_descriptor_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,7 +106,11 @@ def test_generation_name_filter_uses_renamed_descriptor_names(tmp_path: Path, mo
             "operator": "AvgPool",
             "activation_dtype": "S8",
             "weight_dtype": "S8",
-            "_source_file": "avg_pool",
+            "_source_stem": "avg_pool",
+            "_source_family": "PoolingFunctions",
+            "_source_relpath": "PoolingFunctions/avg_pool.yaml",
+            "_family": "PoolingFunctions",
+            "_parity_kind": "cmsis",
         }
     ]
     generated: list[str] = []
@@ -115,7 +121,7 @@ def test_generation_name_filter_uses_renamed_descriptor_names(tmp_path: Path, mo
 
     def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None):
         generated.append(desc["name"])
-        test_dir = Path(out_dir) / desc["name"]
+        test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
         (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
 
@@ -135,6 +141,9 @@ def test_generation_name_filter_uses_renamed_descriptor_names(tmp_path: Path, mo
     )
 
     assert generated == [renamed_name]
+    manifest = json.loads((generated_tests_dir / "manifest.json").read_text())
+    assert manifest["tests"][0]["family"] == "PoolingFunctions"
+    assert manifest["tests"][0]["relative_test_dir"] == "PoolingFunctions/avg_pool_same_pool5x6_stride5x9_s8"
 
     generated.clear()
     with pytest.raises(AssertionError, match="No TFLite models were generated"):

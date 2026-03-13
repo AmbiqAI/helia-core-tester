@@ -16,7 +16,19 @@ from helia_core_tester.core.discovery import find_descriptors_dir, find_generate
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.core.cpu_targets import normalize_cpu
 from helia_core_tester.core.path_layout import generation_report_dir
-from helia_core_tester.generation.ops import get_op_map
+from helia_core_tester.generation.ops import get_op_map, get_operator_spec
+
+
+def _descriptor_family(desc: Dict[str, Any]) -> str:
+    return str(desc.get("_family") or get_operator_spec(str(desc["operator"])).artifact_family_dir)
+
+
+def _descriptor_parity_kind(desc: Dict[str, Any]) -> str:
+    return str(desc.get("_parity_kind") or get_operator_spec(str(desc["operator"])).parity_kind)
+
+
+def _descriptor_test_dir(root_dir: Path, desc: Dict[str, Any]) -> Path:
+    return root_dir / _descriptor_family(desc) / str(desc["name"])
 
 
 def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
@@ -38,15 +50,17 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
         filter_op = filters['op']
         desc_name = desc['name']
         base_name = desc.get('_base_name', None)
-        source_file = desc.get('_source_file', None)
+        source_stem = desc.get('_source_stem', None)
+        source_relpath = desc.get('_source_relpath', None)
         desc_operator = desc.get('operator', None)
         
         name_matches = desc_name == filter_op or desc_name.startswith(filter_op + '_')
         base_matches = base_name == filter_op if base_name else False
-        file_matches = source_file == filter_op if source_file else False
+        stem_matches = source_stem == filter_op if source_stem else False
+        relpath_matches = source_relpath == filter_op if source_relpath else False
         operator_matches = desc_operator == filter_op if desc_operator else False
         
-        if not name_matches and not base_matches and not file_matches and not operator_matches:
+        if not name_matches and not base_matches and not stem_matches and not relpath_matches and not operator_matches:
             return False
         
     # Filter by activation dtype
@@ -81,7 +95,7 @@ def generate_test(
     print(f"Generating test: {name} ({operator})")
     
     # Create output directory
-    test_dir = Path(out_dir) / name
+    test_dir = _descriptor_test_dir(Path(out_dir), desc)
     test_dir.mkdir(parents=True, exist_ok=True)
     
     # Save the complete descriptor as YAML in the test directory
@@ -112,6 +126,8 @@ def generate_test(
                 generation_failures.append({
                     "name": name,
                     "operator": operator,
+                    "family": _descriptor_family(desc),
+                    "parity_kind": _descriptor_parity_kind(desc),
                     "stage": "build_model",
                     "exception": repr(e),
                     "traceback": traceback.format_exc(),
@@ -135,6 +151,8 @@ def generate_test(
                 conversion_failures.append({
                     "name": name,
                     "operator": operator,
+                    "family": _descriptor_family(desc),
+                    "parity_kind": _descriptor_parity_kind(desc),
                     "exception": repr(e),
                     "traceback": traceback.format_exc(),
                 })
@@ -143,6 +161,8 @@ def generate_test(
                 generation_failures.append({
                     "name": name,
                     "operator": operator,
+                    "family": _descriptor_family(desc),
+                    "parity_kind": _descriptor_parity_kind(desc),
                     "stage": "conversion",
                     "exception": repr(e),
                     "traceback": traceback.format_exc(),
@@ -165,6 +185,8 @@ def generate_test(
             generation_failures.append({
                 "name": name,
                 "operator": operator,
+                "family": _descriptor_family(desc),
+                "parity_kind": _descriptor_parity_kind(desc),
                 "stage": "c_files",
                 "exception": repr(e),
                 "traceback": traceback.format_exc(),
@@ -221,15 +243,20 @@ def test_generation(test_filters):
                 conversion_failures=conversion_failures,
                 generation_failures=generation_failures,
             )
-            test_dir = Path(top_generated) / desc["name"]
+            test_dir = _descriptor_test_dir(Path(top_generated), desc)
             tflite_path = test_dir / f"{desc['name']}.tflite"
             c_sources = sorted([str(p.name) for p in test_dir.glob("*.c")])
+            relative_test_dir = str(test_dir.relative_to(top_generated))
             manifest_entries.append({
                 "name": desc.get("name"),
                 "operator": desc.get("operator"),
+                "family": _descriptor_family(desc),
+                "parity_kind": _descriptor_parity_kind(desc),
                 "activation_dtype": desc.get("activation_dtype"),
                 "weight_dtype": desc.get("weight_dtype"),
+                "descriptor_relpath": desc.get("_source_relpath"),
                 "path": str(test_dir),
+                "relative_test_dir": relative_test_dir,
                 "tflite": str(tflite_path),
                 "c_sources": c_sources,
                 "cpu": target_cpu,
@@ -302,6 +329,11 @@ def test_generation(test_filters):
     summary = {
         "status": status,
         "cpu": target_cpu,
+        "families": sorted({entry["family"] for entry in manifest_entries}),
+        "parity_kind_counts": {
+            parity_kind: sum(1 for entry in manifest_entries if entry["parity_kind"] == parity_kind)
+            for parity_kind in sorted({entry["parity_kind"] for entry in manifest_entries})
+        },
         "timestamps": {
             "started_utc": start_time.isoformat(),
             "ended_utc": end_time.isoformat(),
@@ -343,6 +375,8 @@ def _write_manifest_and_cmake(
 
     manifest = {
         "generated_count": len(entries),
+        "families": sorted({str(entry["family"]) for entry in entries}),
+        "parity_kinds": sorted({str(entry["parity_kind"]) for entry in entries}),
         "filters": {
             "op": test_filters.get("op"),
             "dtype": test_filters.get("dtype"),
@@ -361,7 +395,7 @@ def _write_manifest_and_cmake(
         rel_root = generated_tests_dir.relative_to(repo_root)
     except ValueError:
         rel_root = generated_tests_dir
-    test_dirs = sorted({str(Path(rel_root) / Path(e["name"])) for e in entries})
+    test_dirs = sorted({str(Path(rel_root) / Path(str(e["relative_test_dir"]))) for e in entries})
     cmake_lines = ["set(GENERATED_TEST_DIRS"]
     for d in test_dirs:
         cmake_lines.append(f"  \"{d}\"")
@@ -388,7 +422,7 @@ def test_generated_files_exist(test_filters):
         pytest.skip("No generated tests found")
         
     # Check that we have some generated tests
-    test_dirs = [d for d in generated_tests_dir.iterdir() if d.is_dir()]
+    test_dirs = sorted(descriptor_file.parent for descriptor_file in generated_tests_dir.rglob("descriptor.yaml"))
     assert len(test_dirs) > 0, "No test directories found"
     
     # Check that each test has TFLite file or generated headers

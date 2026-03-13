@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from helia_core_tester.generation.ops.quantize import OpQuantize
-from helia_core_tester.generation.ops.dequantize import OpDequantize
+from helia_core_tester.generation.ops.QuantizationFunctions.quantize import OpQuantize
+from helia_core_tester.generation.ops.QuantizationFunctions.dequantize import OpDequantize
 
 
 def _quantize_desc(name: str, activation: str, dtype: str) -> dict:

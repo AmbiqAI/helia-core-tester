@@ -7,6 +7,8 @@ import os
 from typing import Dict, Any, List
 from pathlib import Path
 
+from helia_core_tester.generation.ops.catalog import get_operator_spec
+
 
 # Allowed dtype combinations
 ALLOWED_DTYPE_COMBOS = {
@@ -28,6 +30,33 @@ SINGLE_INPUT_OPERATORS = {
     'Split', 'Concatenation', 'SpaceToBatchND', 'BatchToSpaceND',
     'ResizeNearestNeighbor', 'VariableUpdate', 'Clamp', 'NNActivationS16', 'Gather', 'GatherND', 'Requantize'
 }
+
+
+def _annotate_descriptor_source(
+    desc: Dict[str, Any],
+    desc_path: str,
+    descriptors_root: str,
+) -> Dict[str, Any]:
+    """Attach canonical grouped source/catalog metadata to a descriptor."""
+    annotated = desc.copy()
+    source_path = Path(desc_path).resolve()
+    descriptors_root_path = Path(descriptors_root).resolve()
+    source_relpath = source_path.relative_to(descriptors_root_path).as_posix()
+    source_rel = Path(source_relpath)
+    spec = get_operator_spec(str(annotated["operator"]))
+
+    if spec.descriptor_relpath is not None and source_relpath != spec.descriptor_relpath:
+        raise ValueError(
+            f"Descriptor path mismatch for {annotated['operator']}: "
+            f"expected {spec.descriptor_relpath}, found {source_relpath}"
+        )
+
+    annotated["_source_family"] = source_rel.parts[0] if len(source_rel.parts) > 1 else ""
+    annotated["_source_stem"] = source_rel.stem
+    annotated["_source_relpath"] = source_relpath
+    annotated["_family"] = spec.family
+    annotated["_parity_kind"] = spec.parity_kind
+    return annotated
 
 
 def validate_dtype_combo(activation_dtype: str, weight_dtype: str) -> bool:
@@ -335,8 +364,7 @@ def load_all_descriptors(descriptors_dir: str) -> List[Dict[str, Any]]:
                 # Expand variations into individual descriptors for each descriptor
                 for idx, desc in enumerate(descs, start=1):
                     # Create a copy
-                    desc_copy = desc.copy()
-                    desc_copy['_source_file'] = file_base
+                    desc_copy = _annotate_descriptor_source(desc, desc_path, descriptors_dir)
                     
                     # Preserve original name if it exists, otherwise use numbered name
                     if 'name' not in desc_copy or not desc_copy['name']:
@@ -349,7 +377,7 @@ def load_all_descriptors(descriptors_dir: str) -> List[Dict[str, Any]]:
             else:
                 # Single descriptor - preserve original name if present
                 for desc in descs:
-                    desc['_source_file'] = file_base
+                    desc = _annotate_descriptor_source(desc, desc_path, descriptors_dir)
                     # If no name specified, use file-based name as fallback
                     if 'name' not in desc or not desc['name']:
                         desc['name'] = file_base

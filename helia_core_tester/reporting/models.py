@@ -148,6 +148,13 @@ class DescriptorResult:
             "descriptor_path": self._make_path_relative(self.descriptor_path),
             "descriptor_content": descriptor_content,
         }
+
+        family = self.descriptor_content.get("_family")
+        if family is not None:
+            result["family"] = family
+        parity_kind = self.descriptor_content.get("_parity_kind")
+        if parity_kind is not None:
+            result["parity_kind"] = parity_kind
         
         # Only include descriptor_name if explicitly requested (it\'s redundant with the key)
         if include_descriptor_name:
