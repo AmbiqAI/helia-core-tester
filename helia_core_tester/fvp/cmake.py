@@ -1,0 +1,86 @@
+"""CMake configure/build helpers for FVP orchestration."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from typing import List, Optional
+
+from .env import REPO_ROOT
+from .errors import FvpScriptError
+
+
+def read_cmake_cache_path(build_dir: Path, key: str) -> Optional[Path]:
+    cache = build_dir / "CMakeCache.txt"
+    if not cache.exists():
+        return None
+    prefix = f"{key}:PATH="
+    for line in cache.read_text(errors="ignore").splitlines():
+        if line.startswith(prefix):
+            value = line[len(prefix):].strip()
+            if value:
+                return Path(value).resolve()
+    return None
+
+
+def cmake_configure(
+    source_dir: Path,
+    build_dir: Path,
+    toolchain_file: Path,
+    cpu: str,
+    cmsis5: Path,
+    optimization: str,
+    extra_defs: List[str],
+    generator: Optional[str],
+    generated_tests_dir: Optional[Path],
+    enable_coverage: bool,
+    verbosity: int,
+    env: dict,
+) -> None:
+    build_dir.mkdir(parents=True, exist_ok=True)
+
+    cmake_cache = build_dir / "CMakeCache.txt"
+    if cmake_cache.exists():
+        cmake_cache.unlink()
+
+    cmd = [
+        "cmake",
+        "-S", str(source_dir),
+        "-B", str(build_dir),
+        f"-DCMAKE_TOOLCHAIN_FILE={toolchain_file}",
+        f"-DTARGET_CPU={cpu}",
+        f"-DCMSIS_PATH={cmsis5}",
+        f"-DCMSIS_OPTIMIZATION_LEVEL={optimization}",
+    ] + [f"-D{item}" for item in extra_defs]
+    if generated_tests_dir is not None:
+        cmd.append(f"-DGENERATED_TESTS_DIR={generated_tests_dir}")
+    if enable_coverage:
+        cmd.append("-DENABLE_COVERAGE=ON")
+
+    if generator:
+        cmd += ["-G", generator]
+    if verbosity >= 2:
+        print(f"Configure: {' '.join(cmd)}")
+    stdout = subprocess.DEVNULL if verbosity <= 1 else None
+    rc = subprocess.call(cmd, cwd=str(REPO_ROOT), env=env, stdout=stdout, stderr=None)
+    if rc != 0:
+        raise FvpScriptError(f"CMake configure failed for {cpu} (rc={rc})")
+
+
+def cmake_build(build_dir: Path, verbosity: int, env: dict, jobs: Optional[int]) -> None:
+    cmd = ["cmake", "--build", str(build_dir)]
+    if jobs and jobs > 0:
+        cmd += ["--", f"-j{jobs}"]
+    if verbosity >= 2:
+        print(f"Build: {' '.join(cmd)}")
+    stdout = subprocess.DEVNULL if verbosity <= 1 else None
+    rc = subprocess.call(cmd, cwd=str(REPO_ROOT), env=env, stdout=stdout, stderr=None)
+    if rc != 0:
+        raise FvpScriptError(f"CMake build failed (rc={rc})")
+
+
+def find_elves(build_dir: Path) -> List[Path]:
+    tests_dir = build_dir / "tests"
+    if tests_dir.exists():
+        return [path for path in tests_dir.rglob("*.elf") if path.is_file()]
+    return [path for path in build_dir.rglob("*.elf") if path.is_file()]
