@@ -1,27 +1,7 @@
 #include "{{ name }}_svdf.h"
 #include "arm_nnfunctions.h"
-#include "unity.h"
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-#ifdef USING_FVP_CORSTONE_300
-extern void uart_init(void);
-#endif
-
-static inline void signal_eot(void)
-{
-    putchar(4);
-    fflush(stdout);
-}
-
-void HardFault_Handler(void)
-{
-    printf("HardFault\r\n");
-    signal_eot();
-    while (1) { }
-}
+{% include "common/standalone/runtime_common.j2" %}
 
 static int compare_output(const {{ output_dtype }} *act, const {{ output_dtype }} *exp, int count)
 {
@@ -65,9 +45,15 @@ static int run_svdf(void)
     int32_t buf_mve = arm_svdf_s8_get_buffer_size_mve(&{{ name }}_weights_feature_dims);
     int32_t buf_any = arm_svdf_s8_get_buffer_size(&{{ name }}_weights_feature_dims);
 #if defined(ARM_MATH_MVEI)
-    TEST_ASSERT_EQUAL(buf_mve, buf_any);
+    if (buf_mve != buf_any) {
+        printf("SVDF buffer size mismatch: expected %d got %d\r\n", (int)buf_any, (int)buf_mve);
+        return 1;
+    }
 #else
-    TEST_ASSERT_EQUAL(buf_dsp, buf_any);
+    if (buf_dsp != buf_any) {
+        printf("SVDF buffer size mismatch: expected %d got %d\r\n", (int)buf_any, (int)buf_dsp);
+        return 1;
+    }
 #endif
 #if defined(ARM_MATH_MVEI)
     if (ctx.buf != NULL) {
@@ -170,33 +156,11 @@ static int run_svdf(void)
     return failures;
 }
 
-void setUp(void)
-{
-#ifdef USING_FVP_CORSTONE_300
-    uart_init();
-    setvbuf(stdout, NULL, _IONBF, 0);
-#endif
-}
-
-void tearDown(void) {}
-
-void test_{{ prefix }}_{{ name }}(void)
-{
-    int failures = run_svdf();
-    TEST_ASSERT_EQUAL(0, failures);
-}
-
 int32_t {{ prefix }}_{{ name }}_test_case_run(void)
 {
     int failures = run_svdf();
-    printf("%d Failures\r\n", failures);
+    helia_test_print_failure_count(failures);
     return failures;
 }
 
-int main(void)
-{
-    setUp();
-    (void){{ prefix }}_{{ name }}_test_case_run();
-    signal_eot();
-    while (1) { }
-}
+{% include "common/standalone/main.j2" %}

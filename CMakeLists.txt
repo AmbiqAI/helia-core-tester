@@ -86,13 +86,6 @@ if(ENABLE_COVERAGE)
    target_compile_definitions(cmsis-nn PRIVATE ARM_MATH_AUTOVECTORIZE)
 endif()
 
-# ---------- Unity (tiny static lib) ----------
-include(FetchContent)
-FetchContent_Declare(unity GIT_REPOSITORY https://github.com/ThrowTheSwitch/Unity.git GIT_TAG v2.6.0 GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(unity)
-add_library(unity_fetch STATIC ${unity_SOURCE_DIR}/src/unity.c)
- target_include_directories(unity_fetch PUBLIC ${unity_SOURCE_DIR}/src)
-
 # ---------- FVP retarget + startup ----------
 set(RETARGET_SRCS
   ${FVP_CORSTONE_300_PATH}/retarget.c
@@ -206,7 +199,7 @@ foreach(TEST_DIR_REL ${GENERATED_TEST_DIRS})
     # Pull in libgcov runtime symbols and emit gcov metadata in the final ELF.
     target_link_options(${TGT_NAME} PRIVATE --coverage)
   endif()
-  target_link_libraries(${TGT_NAME} PRIVATE unity_fetch cmsis-nn retarget cmsis_startup)
+  target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn retarget cmsis_startup)
 
   list(APPEND GENERATED_TEST_TARGETS ${TGT_NAME})
 endforeach()
