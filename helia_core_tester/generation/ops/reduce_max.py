@@ -171,7 +171,7 @@ class OpReduceMax(OperationBase):
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'ReduceMax'),
-            'operator_name': 'reducemax'
+            'operator_name': 'reduce_max'
         }
         cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
         cmake_path = output_dir / "CMakeLists.txt"

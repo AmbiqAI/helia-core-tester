@@ -336,6 +336,7 @@ def load_all_descriptors(descriptors_dir: str) -> List[Dict[str, Any]]:
                 for idx, desc in enumerate(descs, start=1):
                     # Create a copy
                     desc_copy = desc.copy()
+                    desc_copy['_source_file'] = file_base
                     
                     # Preserve original name if it exists, otherwise use numbered name
                     if 'name' not in desc_copy or not desc_copy['name']:
@@ -348,6 +349,7 @@ def load_all_descriptors(descriptors_dir: str) -> List[Dict[str, Any]]:
             else:
                 # Single descriptor - preserve original name if present
                 for desc in descs:
+                    desc['_source_file'] = file_base
                     # If no name specified, use file-based name as fallback
                     if 'name' not in desc or not desc['name']:
                         desc['name'] = file_base

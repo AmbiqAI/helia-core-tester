@@ -35,7 +35,7 @@ hint:
 input_shape: [1, 2, 2, 3]
 ---
 operator: Softmax
-name: softmax_int8
+name: softmax_default_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -44,7 +44,7 @@ hint:
 input_shape: [1, 32, 32, 3]
 ---
 operator: Softmax
-name: softmax_int8_s16
+name: softmax_default_case_02_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -55,7 +55,7 @@ hint:
 input_shape: [1, 32, 32, 3]
 ---
 operator: Softmax
-name: softmax_s8_cmsis
+name: softmax_cmsis_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -67,7 +67,7 @@ hint:
   diff_min: 0
 ---
 operator: Softmax
-name: softmax_s8_s16_cmsis
+name: softmax_s16_cmsis_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE

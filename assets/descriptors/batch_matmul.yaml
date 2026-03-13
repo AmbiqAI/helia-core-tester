@@ -1,5 +1,5 @@
 operator: BatchMatMul
-name: batch_matmul_basic_s8
+name: batch_matmul_default_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -53,7 +53,7 @@ adj_x: false
 adj_y: false
 ---
 operator: BatchMatMul
-name: batch_matmul_transpose_lhs_s16
+name: batch_matmul_lhs_transposed_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -71,7 +71,7 @@ adj_x: true
 adj_y: false
 ---
 operator: BatchMatMul
-name: batch_matmul_transpose_rhs_s8
+name: batch_matmul_rhs_transposed_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -89,7 +89,7 @@ adj_x: false
 adj_y: true
 ---
 operator: BatchMatMul
-name: batch_matmul_basic_s16
+name: batch_matmul_default_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

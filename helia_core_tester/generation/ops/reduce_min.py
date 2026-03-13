@@ -171,7 +171,7 @@ class OpReduceMin(OperationBase):
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'ReduceMin'),
-            'operator_name': 'reducemin'
+            'operator_name': 'reduce_min'
         }
         cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
         cmake_path = output_dir / "CMakeLists.txt"

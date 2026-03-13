@@ -1,5 +1,5 @@
 operator: FullyConnected
-name: fully_connected_s8
+name: fully_connected_default_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -16,7 +16,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fully_connected_w_zp_s8
+name: fully_connected_weight_offset_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -33,7 +33,7 @@ filter_shape:
 use_bias: false
 ---
 operator: FullyConnected
-name: fully_connected_mve_0_s8
+name: fully_connected_mve_case_02_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -48,7 +48,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fully_connected_mve_1_s8
+name: fully_connected_mve_case_01_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -63,7 +63,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fully_connected_null_bias_0_s8
+name: fully_connected_no_bias_case_01_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -78,7 +78,7 @@ filter_shape:
 use_bias: false
 ---
 operator: FullyConnected
-name: fully_connected_out_activation_s8
+name: fully_connected_output_activation_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -93,7 +93,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fully_connected_int16_s16
+name: fully_connected_default_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -110,7 +110,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fc_int16_slow_s16
+name: fully_connected_slow_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -128,7 +128,7 @@ use_bias: true
 
 ---
 operator: FullyConnected
-name: fully_connected_s8_per_tensor
+name: fully_connected_per_tensor_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -146,7 +146,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fully_connected_s16_per_tensor
+name: fully_connected_per_tensor_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -164,7 +164,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: s4_fc_bias
+name: fully_connected_bias_s4
 activation_dtype: S8
 weight_dtype: S4
 activation: NONE
@@ -187,7 +187,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: s4_fc_nobias
+name: fully_connected_no_bias_s4
 activation_dtype: S8
 weight_dtype: S4
 activation: NONE
@@ -210,7 +210,7 @@ filter_shape:
 use_bias: false
 ---
 operator: FullyConnected
-name: fully_connected_tail_per_ch_rows5_cols13_s8
+name: fully_connected_tail_per_channel_rows5_cols13_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -225,7 +225,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fully_connected_tail_per_ch_rows7_cols17_nobias_s8
+name: fully_connected_tail_per_channel_rows7_cols17_no_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -256,7 +256,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fully_connected_tail_per_tensor_rows6_cols29_nobias_s8
+name: fully_connected_tail_per_tensor_rows6_cols29_no_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -287,7 +287,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fully_connected_tail_rows7_cols17_nobias_s16
+name: fully_connected_tail_rows7_cols17_no_bias_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -302,7 +302,7 @@ filter_shape:
 use_bias: false
 ---
 operator: FullyConnected
-name: s4_fc_tail_rows5_cols13_bias
+name: fully_connected_tail_rows5_cols13_bias_s4
 activation_dtype: S8
 weight_dtype: S4
 activation: NONE
@@ -325,7 +325,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: s4_fc_tail_rows7_cols29_nobias
+name: fully_connected_tail_rows7_cols29_no_bias_s4
 activation_dtype: S8
 weight_dtype: S4
 activation: NONE
@@ -348,7 +348,7 @@ filter_shape:
 use_bias: false
 ---
 operator: FullyConnected
-name: fully_connected_per_ch_rhs_offset_pos_rows5_cols13_bias_s8
+name: fully_connected_per_channel_rhs_offset_pos_rows5_cols13_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -365,7 +365,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fully_connected_per_ch_rhs_offset_neg_rows7_cols29_nobias_s8
+name: fully_connected_per_channel_rhs_offset_neg_rows7_cols29_no_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -382,7 +382,7 @@ filter_shape:
 use_bias: false
 ---
 operator: FullyConnected
-name: fully_connected_per_ch_rows3_cols9_bias_s8
+name: fully_connected_per_channel_rows3_cols9_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -397,7 +397,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fully_connected_per_ch_rows4_cols16_nobias_s8
+name: fully_connected_per_channel_rows4_cols16_no_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -412,7 +412,7 @@ filter_shape:
 use_bias: false
 ---
 operator: FullyConnected
-name: fully_connected_s16_cols520_rows5_bias
+name: fully_connected_cols520_rows5_bias_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -427,7 +427,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fully_connected_s16_cols517_rows7_nobias
+name: fully_connected_cols517_rows7_no_bias_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -442,7 +442,7 @@ filter_shape:
 use_bias: false
 ---
 operator: FullyConnected
-name: fully_connected_s16_rows5_cols127_bias_batch3
+name: fully_connected_rows5_cols127_bias_batch3_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -457,7 +457,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fully_connected_s16_rows6_cols511_nobias_batch2
+name: fully_connected_rows6_cols511_no_bias_batch2_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -472,7 +472,7 @@ filter_shape:
 use_bias: false
 ---
 operator: FullyConnected
-name: fully_connected_s16_rows5_cols513_bias_batch2
+name: fully_connected_rows5_cols513_bias_batch2_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -487,7 +487,7 @@ filter_shape:
 use_bias: true
 ---
 operator: FullyConnected
-name: fully_connected_s16_rows7_cols769_nobias_batch1
+name: fully_connected_rows7_cols769_no_bias_batch1_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

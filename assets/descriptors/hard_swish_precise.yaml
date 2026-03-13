@@ -1,5 +1,5 @@
 operator: HardSwishPrecise
-name: hard_swish_tensor_s8
+name: hard_swish_precise_nhwc_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -12,7 +12,7 @@ input_shape:
 - 3
 ---
 operator: HardSwishPrecise
-name: hard_swish_vector_s8
+name: hard_swish_precise_vector_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -23,7 +23,7 @@ input_shape:
 - 8
 ---
 operator: HardSwishPrecise
-name: hard_swish_tensor_s16
+name: hard_swish_precise_nhwc_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -41,7 +41,7 @@ input_shape:
 - 3
 ---
 operator: HardSwishPrecise
-name: hard_swish_vector_s16
+name: hard_swish_precise_vector_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

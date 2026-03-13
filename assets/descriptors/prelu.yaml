@@ -1,5 +1,5 @@
 operator: PReLU
-name: prelu_tensor_s8
+name: prelu_nhwc_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE

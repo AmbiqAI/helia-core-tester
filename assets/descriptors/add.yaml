@@ -1,5 +1,5 @@
 operator: Add
-name: add_s8
+name: add_default_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -17,7 +17,7 @@ input_2_shape:
 - 8
 ---
 operator: Add
-name: add_s16_s16
+name: add_default_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -35,7 +35,7 @@ input_2_shape:
 - 8
 ---
 operator: Add
-name: add_s16_spill_s16
+name: add_spill_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -103,7 +103,7 @@ input_2_shape: [1, 2, 3, 2]
 # input_2_shape: [1, 1, 4, 3]
 ---
 operator: Add
-name: add_row_scalar2_s8
+name: add_row_scalar_right_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -123,7 +123,7 @@ input_1_shape: [1, 1, 2, 3]
 input_2_shape: [1, 1, 1, 3]
 ---
 operator: Add
-name: add_pixel_scalar1_s8
+name: add_pixel_scalar_left_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -133,7 +133,7 @@ input_1_shape: [1, 1, 2, 1]
 input_2_shape: [1, 1, 1, 3]
 ---
 operator: Add
-name: add_pixel_scalar2_s8
+name: add_pixel_scalar_right_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -193,7 +193,7 @@ input_1_shape: [1, 1, 2, 3]
 input_2_shape: [1, 1, 1, 3]
 ---
 operator: Add
-name: add_pixel_scalar1_s16
+name: add_pixel_scalar_left_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -203,7 +203,7 @@ input_1_shape: [1, 1, 2, 1]
 input_2_shape: [1, 1, 1, 3]
 ---
 operator: Add
-name: add_pixel_scalar2_s16
+name: add_pixel_scalar_right_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

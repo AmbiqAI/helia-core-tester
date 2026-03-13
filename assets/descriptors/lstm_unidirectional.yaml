@@ -1,5 +1,5 @@
 operator: LSTMUnidirectional
-name: lstm_1_s8_cmsis
+name: lstm_unidirectional_dataset_1_time_major_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -18,7 +18,7 @@ hint:
   force_cmsis: true
 ---
 operator: LSTMUnidirectional
-name: lstm_2_s8_cmsis
+name: lstm_unidirectional_dataset_2_batch_major_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -37,7 +37,7 @@ hint:
   force_cmsis: true
 ---
 operator: LSTMUnidirectional
-name: lstm_1_s16_cmsis
+name: lstm_unidirectional_dataset_1_s16_time_major_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -56,7 +56,7 @@ hint:
   force_cmsis: true
 ---
 operator: LSTMUnidirectional
-name: lstm_2_s16_cmsis
+name: lstm_unidirectional_dataset_2_s16_batch_major_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -75,7 +75,7 @@ hint:
   force_cmsis: true
 ---
 operator: LSTMUnidirectional
-name: lstm_one_time_step_s16_cmsis
+name: lstm_unidirectional_dataset_one_time_step_s16_batch_major_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -94,7 +94,7 @@ hint:
   force_cmsis: true
 ---
 operator: LSTMUnidirectional
-name: lstm_1_s16_cmsis_nonzero_zp_a
+name: lstm_unidirectional_dataset_1_s16_time_major_nonzero_zp_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -116,7 +116,7 @@ hint:
     output_zero_point: -5
 ---
 operator: LSTMUnidirectional
-name: lstm_2_s16_cmsis_nonzero_zp_b
+name: lstm_unidirectional_dataset_2_s16_batch_major_nonzero_zp_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

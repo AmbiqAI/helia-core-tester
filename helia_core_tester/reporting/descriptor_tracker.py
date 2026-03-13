@@ -43,7 +43,11 @@ class DescriptorTracker:
                 name = desc.get('name')
                 if name:
                     self._descriptors[name] = desc
-                    self._descriptor_paths[name] = self._find_descriptor_file(name)
+                    source_file = desc.get("_source_file")
+                    if source_file:
+                        self._descriptor_paths[name] = self.descriptors_dir / f"{source_file}.yaml"
+                    else:
+                        self._descriptor_paths[name] = self._find_descriptor_file(name)
             
             return self._descriptors
         except Exception as e:
@@ -53,7 +57,12 @@ class DescriptorTracker:
     def _find_descriptor_file(self, descriptor_name: str) -> Path:
         """Find the YAML file containing this descriptor."""
         for yaml_file in self.descriptors_dir.rglob("*.yaml"):
-            if yaml_file.stem in descriptor_name or descriptor_name in yaml_file.stem:
+            stem = yaml_file.stem
+            if descriptor_name == stem or descriptor_name.startswith(f"{stem}_"):
+                return yaml_file
+            if stem == "maximum_minimum" and (
+                descriptor_name.startswith("maximum_") or descriptor_name.startswith("minimum_")
+            ):
                 return yaml_file
         return self.descriptors_dir / f"{descriptor_name}.yaml"
     
@@ -75,7 +84,7 @@ class DescriptorTracker:
             return descriptors[test_name]
         
         for desc_name, desc in descriptors.items():
-            if test_name.startswith(desc_name) or desc_name.startswith(test_name):
+            if test_name.startswith(f"{desc_name}_") or desc_name.startswith(f"{test_name}_"):
                 return desc
         
         return None
@@ -97,7 +106,11 @@ class DescriptorTracker:
         for desc_name in descriptors.keys():
             found = False
             for test_name in test_names:
-                if desc_name == test_name or desc_name.startswith(test_name) or test_name.startswith(desc_name):
+                if (
+                    desc_name == test_name
+                    or desc_name.startswith(f"{test_name}_")
+                    or test_name.startswith(f"{desc_name}_")
+                ):
                     found = True
                     break
             if not found:
@@ -161,4 +174,3 @@ class DescriptorTracker:
         """Get the file path for a descriptor."""
         return self._descriptor_paths.get(descriptor_name, 
                                           self.descriptors_dir / f"{descriptor_name}.yaml")
-

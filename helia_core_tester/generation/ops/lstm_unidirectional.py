@@ -242,7 +242,7 @@ class OpLSTMUnidirectional(OperationBase):
 
         cmake_context = {
             "name": name,
-            "operator": self.desc.get("operator", "LSTM"),
+            "operator": self.desc.get("operator", "LSTMUnidirectional"),
             "operator_name": "lstm_unidirectional",
         }
         cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)

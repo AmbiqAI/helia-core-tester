@@ -1,5 +1,5 @@
 operator: Logistic
-name: logistic_tensor_s8
+name: logistic_nhwc_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -17,7 +17,7 @@ hint:
 input_shape: [1, 8]
 ---
 operator: Logistic
-name: logistic_tensor_s16
+name: logistic_nhwc_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

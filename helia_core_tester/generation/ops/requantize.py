@@ -5,10 +5,10 @@ Requantize operation implementation.
 from typing import Dict
 import numpy as np
 from pathlib import Path
-from helia_core_tester.generation.ops.base import OperationBase
+from helia_core_tester.generation.ops._quantization_base import QuantizationFamilyBase
 
 
-class OpRequantize(OperationBase):
+class OpRequantize(QuantizationFamilyBase):
     """
     Requantize operation (int8->int8, int16->int16).
     """
@@ -41,24 +41,6 @@ class OpRequantize(OperationBase):
             }
         raise NotImplementedError(f"Unsupported Requantize dtype: {activation_dtype}")
 
-    @staticmethod
-    def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
-        left_shift = shift if shift > 0 else 0
-        right_shift = -shift if shift < 0 else 0
-        prod = values.astype(np.int64) * (1 << left_shift)
-        # arm_nn_doubling_high_mult_no_sat
-        mult = (1 << 30) + (prod * int(multiplier))
-        res = (mult >> 31).astype(np.int64)
-        if right_shift == 0:
-            return res.astype(np.int32)
-        remainder_mask = (1 << right_shift) - 1
-        remainder = res & remainder_mask
-        result = res >> right_shift
-        threshold = remainder_mask >> 1
-        threshold = threshold + (result < 0)
-        result = result + (remainder > threshold)
-        return result.astype(np.int32)
-
     def generate_c_files(self, output_dir: Path) -> None:
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -74,23 +56,20 @@ class OpRequantize(OperationBase):
         input_zp = int(self.desc.get("input_zeropoint", 0))
         output_zp = int(self.desc.get("output_zeropoint", 0))
 
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
+        rng = self._seeded_rng()
 
         if kernel_info["input_c_type"] == "int8_t":
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
-            input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
+            input_q = rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
             out_dtype = np.int8
         elif kernel_info["input_c_type"] == "int16_t":
             np_in_dtype = np.int16
             qmin, qmax = -32768, 32767
-            input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
+            input_q = rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
             out_dtype = np.int16
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-
-        self.rng.__setstate__(rng_state)
 
         centered = input_q.astype(np.int32) - int(input_zp)
         requant = self._requantize_np(centered, multiplier, shift)
@@ -113,26 +92,9 @@ class OpRequantize(OperationBase):
             "output_zeropoint": output_zp,
         }
 
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-
-        h_content = self.render_template("requantize/requantize.h.j2", context)
-        h_path = includes_api_dir / f"{name}_requantize.h"
-        with open(h_path, "w") as f:
-            f.write(h_content)
-
-        c_content = self.render_template("requantize/requantize.c.j2", context)
-        c_path = output_dir / f"{name}_requantize.c"
-        with open(c_path, "w") as f:
-            f.write(c_content)
-
         cmake_context = {
             "name": name,
             "operator": self.desc.get("operator", "Requantize"),
             "operator_name": "requantize",
         }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, "w") as f:
-            f.write(cmake_content)
-
+        self._write_op_outputs(output_dir, "requantize", "requantize/requantize.h.j2", "requantize/requantize.c.j2", context, cmake_context)

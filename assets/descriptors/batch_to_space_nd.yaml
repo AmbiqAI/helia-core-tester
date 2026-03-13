@@ -1,5 +1,5 @@
 operator: BatchToSpaceND
-name: batch_to_space_nd_basic_s8
+name: batch_to_space_nd_default_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -62,7 +62,7 @@ crops:
   - 1
 ---
 operator: BatchToSpaceND
-name: batch_to_space_nd_int16
+name: batch_to_space_nd_default_case_02_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -83,7 +83,7 @@ crops:
   - 0
 ---
 operator: BatchToSpaceND
-name: batch_to_space_nd_basic_s16
+name: batch_to_space_nd_default_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -104,7 +104,7 @@ crops:
   - 0
 ---
 operator: BatchToSpaceND
-name: batch_to_space_nd_crops_s16_extra
+name: batch_to_space_nd_crops_extra_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

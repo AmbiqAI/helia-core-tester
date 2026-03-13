@@ -150,7 +150,7 @@ def run_fvp_process(
 
     cmd = _build_fvp_cmd(fvp_exe=fvp_exe, elf=elf, extra_args=extra_args)
     if verbosity >= 2:
-        print(f"Run: {' '.join(cmd)}")
+        print(f"Run: {' '.join(cmd)}\n")
 
     start_time = time.time()
     proc: Optional[subprocess.Popen] = None

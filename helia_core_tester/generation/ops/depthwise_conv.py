@@ -227,7 +227,7 @@ class OpDepthwiseConv(OperationBase):
             "sessionId": "debug-session",
             "runId": "run1",
             "hypothesisId": "YAML_PARSER",
-            "location": "dwconv.py:generate_c_files_yaml",
+            "location": "depthwise_conv.py:generate_c_files_yaml",
             "message": "YAML descriptor dimensions",
             "data": {
                 "name": name,
@@ -442,7 +442,7 @@ class OpDepthwiseConv(OperationBase):
             "sessionId": "debug-session",
             "runId": "run1",
             "hypothesisId": "YAML_PARSER",
-            "location": "dwconv.py:generate_c_files_tflite",
+            "location": "depthwise_conv.py:generate_c_files_tflite",
             "message": "TFLite interpreter dimensions",
             "data": {
                 "name": name,
@@ -475,7 +475,7 @@ class OpDepthwiseConv(OperationBase):
                 "sessionId": "debug-session",
                 "runId": "run1",
                 "hypothesisId": "YAML_PARSER",
-                "location": "dwconv.py:weight_shape_from_tflite",
+                "location": "depthwise_conv.py:weight_shape_from_tflite",
                 "message": "Weight tensor shape from TFLite",
                 "data": {
                     "name": name,
@@ -503,7 +503,7 @@ class OpDepthwiseConv(OperationBase):
                 "sessionId": "debug-session",
                 "runId": "run1",
                 "hypothesisId": "YAML_PARSER",
-                "location": "dwconv.py:weight_shape_from_desc",
+                "location": "depthwise_conv.py:weight_shape_from_desc",
                 "message": "Weight tensor shape from descriptor (fallback)",
                 "data": {
                     "name": name,
@@ -549,7 +549,7 @@ class OpDepthwiseConv(OperationBase):
                 "sessionId": "debug-session",
                 "runId": "run1",
                 "hypothesisId": "YAML_PARSER",
-                "location": "dwconv.py:format_decision",
+                "location": "depthwise_conv.py:format_decision",
                 "message": "Filter format decision",
                 "data": {
                     "name": name,
@@ -620,7 +620,7 @@ class OpDepthwiseConv(OperationBase):
             "sessionId": "debug-session",
             "runId": "run1",
             "hypothesisId": "A",
-            "location": "dwconv.py:filter_dims_result",
+            "location": "depthwise_conv.py:filter_dims_result",
             "message": "Filter dimensions result",
             "data": {
                 "name": name,
@@ -820,7 +820,7 @@ class OpDepthwiseConv(OperationBase):
             "sessionId": "debug-session",
             "runId": "run1",
             "hypothesisId": "YAML_PARSER",
-            "location": "dwconv.py:before_buffer_calc",
+            "location": "depthwise_conv.py:before_buffer_calc",
             "message": "Dimensions before buffer size calculation",
             "data": {
                 "name": name,
@@ -850,7 +850,7 @@ class OpDepthwiseConv(OperationBase):
             "sessionId": "debug-session",
             "runId": "run1",
             "hypothesisId": "YAML_PARSER",
-            "location": "dwconv.py:after_buffer_calc",
+            "location": "depthwise_conv.py:after_buffer_calc",
             "message": "Buffer size calculation result",
             "data": {
                 "name": name,

@@ -5,10 +5,10 @@ Multiply (elementwise) operation implementation for Helia-Core Tester.
 from typing import Dict, Any
 import numpy as np
 from pathlib import Path
-from helia_core_tester.generation.ops.base import OperationBase 
+from helia_core_tester.generation.ops._binary_basic_math_base import BinaryBasicMathBase 
 
 
-class OpMul(OperationBase):
+class OpMul(BinaryBasicMathBase):
     """
     Mul operation.
     """
@@ -38,8 +38,7 @@ class OpMul(OperationBase):
             input_2_shape=input_2_shape,
             dtype=dtype,
         )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
+        self._write_tflite_bytes(out_path, model_bytes)
 
     def _select_cmsis_mul_kernel(self) -> Dict[str, str]:
         """
@@ -197,23 +196,6 @@ class OpMul(OperationBase):
             'operator_name': 'mul',
         }
         self._write_op_outputs(output_dir, "mul", "mul/mul.h.j2", "mul/mul.c.j2", context, cmake_context)
-
-    @staticmethod
-    def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
-        left_shift = shift if shift > 0 else 0
-        right_shift = -shift if shift < 0 else 0
-        prod = values.astype(np.int64) * (1 << left_shift)
-        mult = (1 << 30) + (prod * int(multiplier))
-        res = (mult >> 31).astype(np.int64)
-        if right_shift == 0:
-            return res.astype(np.int32)
-        remainder_mask = (1 << right_shift) - 1
-        remainder = res & remainder_mask
-        result = res >> right_shift
-        threshold = remainder_mask >> 1
-        threshold = threshold + (result < 0)
-        result = result + (remainder > threshold)
-        return result.astype(np.int32)
 
     @classmethod
     def _simulate_mul_quantized(

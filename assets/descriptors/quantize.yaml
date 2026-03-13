@@ -26,7 +26,7 @@ hint:
 input_shape: [1, 8]
 ---
 operator: Quantize
-name: quantize_relu_tail_s8_vec17
+name: quantize_relu_tail_vec17_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: RELU
@@ -35,7 +35,7 @@ hint:
 input_shape: [1, 17]
 ---
 operator: Quantize
-name: quantize_relu_tail_s8_vec31
+name: quantize_relu_tail_vec31_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: RELU
@@ -44,7 +44,7 @@ hint:
 input_shape: [1, 31]
 ---
 operator: Quantize
-name: quantize_relu_tail_s16_vec33
+name: quantize_relu_tail_vec33_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: RELU
@@ -53,7 +53,7 @@ hint:
 input_shape: [1, 33]
 ---
 operator: Quantize
-name: quantize_relu_tail_s16_tensor105
+name: quantize_relu_tail_tensor105_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: RELU
@@ -62,7 +62,7 @@ hint:
 input_shape: [1, 3, 5, 7]
 ---
 operator: Quantize
-name: quantize_relu6_tail_s8_vec31
+name: quantize_relu6_tail_vec31_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: RELU6

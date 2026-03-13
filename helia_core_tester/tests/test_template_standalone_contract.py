@@ -72,22 +72,22 @@ def test_rendered_templates_keep_helper_and_main_shape() -> None:
                 "left_shift": 0,
             },
         ),
-        "reducemax": _render(
+        "reduce_max": _render(
             "reduce_max/reduce_max.c.j2",
             {
-                "name": "reducemax_smoke",
-                "prefix": "reducemax",
+                "name": "reduce_max_smoke",
+                "prefix": "reduce_max",
                 "input_dtype": "int8_t",
                 "output_dtype": "int8_t",
                 "kernel_fn": "arm_reduce_max_s8",
                 "output_dims": {"n": 1, "h": 1, "w": 1, "c": 1},
             },
         ),
-        "conv2d": _render(
+        "convolve": _render(
             "convolve/convolve.c.j2",
             {
-                "name": "conv_smoke",
-                "prefix": "conv",
+                "name": "convolve_smoke",
+                "prefix": "convolve",
                 "input_dtype": "int8_t",
                 "output_dtype": "int8_t",
                 "buffer_size_max": 128,

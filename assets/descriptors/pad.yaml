@@ -21,7 +21,7 @@ paddings:
   - 0
 ---
 operator: Pad
-name: pad_basic_s8
+name: pad_default_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -65,7 +65,7 @@ paddings:
   - 2
 ---
 operator: Pad
-name: padv2_constant_s8
+name: pad_v2_constant_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -87,7 +87,7 @@ paddings:
   - 0
 ---
 operator: Pad
-name: pad_basic_s16
+name: pad_default_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

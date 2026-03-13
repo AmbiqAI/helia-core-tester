@@ -1,5 +1,5 @@
 operator: Clamp
-name: clamp_basic_s8
+name: clamp_default_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -10,7 +10,7 @@ act_min: -64
 act_max: 63
 ---
 operator: Clamp
-name: clamp_basic_s16
+name: clamp_default_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

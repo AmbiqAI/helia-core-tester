@@ -196,7 +196,7 @@ class OpLeakyRelu(OperationBase):
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'LeakyRelu'),
-            'operator_name': 'leakyrelu'
+            'operator_name': 'leaky_relu'
         }
         cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
         cmake_path = output_dir / "CMakeLists.txt"

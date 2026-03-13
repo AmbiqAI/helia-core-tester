@@ -38,8 +38,7 @@ class OpAdd(BinaryBasicMathBase):
             input_2_shape=input_2_shape,
             dtype=dtype,
         )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
+        self._write_tflite_bytes(out_path, model_bytes)
 
     def _select_cmsis_add_kernel(self) -> Dict[str, str]:
         """
@@ -216,24 +215,6 @@ class OpAdd(BinaryBasicMathBase):
             'operator_name': 'add',
         }
         self._write_op_outputs(output_dir, "add", "add/add.h.j2", "add/add.c.j2", context, cmake_context)
-
-    @staticmethod
-    def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
-        left_shift = shift if shift > 0 else 0
-        right_shift = -shift if shift < 0 else 0
-        prod = values.astype(np.int64) * (1 << left_shift)
-        # arm_nn_doubling_high_mult_no_sat
-        mult = (1 << 30) + (prod * int(multiplier))
-        res = (mult >> 31).astype(np.int64)
-        if right_shift == 0:
-            return res.astype(np.int32)
-        remainder_mask = (1 << right_shift) - 1
-        remainder = res & remainder_mask
-        result = res >> right_shift
-        threshold = remainder_mask >> 1
-        threshold = threshold + (result < 0)
-        result = result + (remainder > threshold)
-        return result.astype(np.int32)
 
     @classmethod
     def _simulate_add_quantized(

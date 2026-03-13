@@ -1,5 +1,5 @@
 operator: StridedSlice
-name: strided_slice_crs8
+name: strided_slice_crop_width_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -196,7 +196,7 @@ strides:
 - -2
 ---
 operator: StridedSlice
-name: strided_slice_crs16
+name: strided_slice_crop_width_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

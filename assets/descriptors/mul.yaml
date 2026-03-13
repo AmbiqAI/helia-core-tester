@@ -1,5 +1,5 @@
 operator: Mul
-name: mul_s8
+name: mul_default_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -17,7 +17,7 @@ input_2_shape:
 - 8
 ---
 operator: Mul
-name: mul_s16_s16
+name: mul_default_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -35,7 +35,7 @@ input_2_shape:
 - 8
 ---
 operator: Mul
-name: mul_s16_spill_s16
+name: mul_spill_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -73,7 +73,7 @@ input_1_shape: [1, 2, 2, 1]
 input_2_shape: [1]
 ---
 operator: Mul
-name: mul_scalar1_s8
+name: mul_scalar_left_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -83,7 +83,7 @@ input_1_shape: [1, 1, 1, 1]
 input_2_shape: [1, 1, 1, 7]
 ---
 operator: Mul
-name: mul_scalar2_s8
+name: mul_scalar_right_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -173,7 +173,7 @@ input_1_shape: [1, 2, 2, 3]
 input_2_shape: [2, 2, 2, 3]
 ---
 operator: Mul
-name: mul_scalar1_s16
+name: mul_scalar_left_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -183,7 +183,7 @@ input_1_shape: [1, 1, 1, 1]
 input_2_shape: [1, 1, 1, 7]
 ---
 operator: Mul
-name: mul_scalar2_s16
+name: mul_scalar_right_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

@@ -1,5 +1,5 @@
 operator: AvgPool
-name: avgpooling_s8
+name: avg_pool_same_pool5x6_stride5x9_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -19,7 +19,7 @@ strides:
 padding: SAME
 ---
 operator: AvgPool
-name: avgpooling_1_s8
+name: avg_pool_valid_pool5x9_stride2x1_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -39,7 +39,7 @@ strides:
 padding: VALID
 ---
 operator: AvgPool
-name: avgpooling_2_s8
+name: avg_pool_same_pool1x3_stride2x1_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -59,7 +59,7 @@ strides:
 padding: SAME
 ---
 operator: AvgPool
-name: avgpooling_3_s8
+name: avg_pool_valid_pool1x1_stride1x2_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -79,7 +79,7 @@ strides:
 padding: VALID
 ---
 operator: AvgPool
-name: avgpooling_4_s8
+name: avg_pool_same_pool3x1_stride3x1_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -99,7 +99,7 @@ strides:
 padding: SAME
 ---
 operator: AvgPool
-name: avgpooling_5_s8
+name: avg_pool_same_pool3x1_stride1x1_relu6_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: RELU6
@@ -119,7 +119,7 @@ strides:
 padding: SAME
 ---
 operator: AvgPool
-name: avgpooling_int16_s16
+name: avg_pool_same_pool3x2_stride1x2_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -139,7 +139,7 @@ strides:
 padding: SAME
 ---
 operator: AvgPool
-name: avgpooling_int16_1_s16
+name: avg_pool_valid_pool1x1_stride1x2_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -159,7 +159,7 @@ strides:
 padding: VALID
 ---
 operator: AvgPool
-name: avgpooling_int16_2_s16
+name: avg_pool_valid_pool1x1_stride1x2_case_02_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -179,7 +179,7 @@ strides:
 padding: VALID
 ---
 operator: AvgPool
-name: avgpooling_int16_3_s16
+name: avg_pool_same_pool3x1_stride3x1_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
