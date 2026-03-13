@@ -15,7 +15,7 @@ _JINJA2_ENV_CACHE: Dict[str, jinja2.Environment] = {}
 
 try:
     import tensorflow as tf
-except ImportError:
+except Exception:
     tf = None
 
 
@@ -60,6 +60,53 @@ class OperationBase(ABC):
     def allow_no_tflite(self) -> bool:
         """Return True if this op can generate C/H without a .tflite."""
         return False
+
+    def activation_name(self) -> str:
+        """Return the normalized descriptor activation name."""
+        return str(self.desc.get("activation", "NONE")).upper()
+
+    def _write_tflite_bytes(self, out_path: str | Path, model_bytes: bytes) -> None:
+        """Write converted LiteRT bytes to disk."""
+        Path(out_path).write_bytes(model_bytes)
+
+    def _seeded_rng(self) -> np.random.Generator:
+        """Return a temporary deterministic RNG seeded from the op seed."""
+        return np.random.default_rng(self.seed)
+
+    def _sample_uniform(
+        self,
+        shape: Tuple[int, ...] | list[int],
+        *,
+        low: float = -1.0,
+        high: float = 1.0,
+        dtype=np.float32,
+    ) -> np.ndarray:
+        """Sample reproducible uniform input data without mutating self.rng state."""
+        return self._seeded_rng().uniform(low, high, size=tuple(shape)).astype(dtype)
+
+    def _sample_dual_uniform_inputs(
+        self,
+        shape_1: Tuple[int, ...] | list[int],
+        shape_2: Tuple[int, ...] | list[int],
+        *,
+        low: float = -1.0,
+        high: float = 1.0,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Sample two reproducible uniform input tensors without mutating self.rng state."""
+        rng = self._seeded_rng()
+        input_1 = rng.uniform(low, high, size=tuple(shape_1)).astype(np.float32)
+        input_2 = rng.uniform(low, high, size=tuple(shape_2)).astype(np.float32)
+        return input_1, input_2
+
+    @staticmethod
+    def _quant_param_scalar(quant_params: Optional[Dict[str, Any]], key: str, default: float | int) -> float | int:
+        """Extract a scalar quantization value from LiteRT quantization metadata."""
+        if not quant_params:
+            return default
+        value = quant_params.get(key, default)
+        if isinstance(value, (list, tuple, np.ndarray)):
+            return default if len(value) == 0 else value[0]
+        return value
     
     def _apply_activation_quantization(self, converter) -> None:
         """Set converter for activation-only quantization (S8 or S16) from descriptor."""
@@ -112,8 +159,7 @@ class OperationBase(ABC):
         self._apply_activation_quantization(converter)
         converter.representative_dataset = self._representative_dataset_gen
         tflite_model = converter.convert()
-        with open(out_path, "wb") as f:
-            f.write(tflite_model)
+        self._write_tflite_bytes(out_path, tflite_model)
 
     def _convert_with_activation_quantization(
         self,
@@ -169,8 +215,7 @@ class OperationBase(ABC):
         converter.representative_dataset = representative_data_gen
 
         tflite_model = converter.convert()
-        with open(out_path, "wb") as f:
-            f.write(tflite_model)
+        self._write_tflite_bytes(out_path, tflite_model)
     
     def load_litert_interpreter(self, tflite_path: str):
         """
@@ -275,6 +320,15 @@ class OperationBase(ABC):
         
         model, subgraph = load_litert_model(tflite_path)
         return extract_weights_biases_from_litert(model, subgraph, 0)
+
+    def load_primary_operator_tensors(self, tflite_path: str) -> Dict[str, Any]:
+        """Load the first operator tensors from a LiteRT model."""
+        from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
+
+        model, subgraph = self.load_litert_model(tflite_path)
+        if len(subgraph.operators) == 0:
+            raise ValueError("No operators found in model")
+        return get_operator_tensors_from_litert(model, subgraph, 0)
     
     def run_inference(self, tflite_path: str, input_data: np.ndarray) -> np.ndarray:
         """
@@ -326,9 +380,7 @@ class OperationBase(ABC):
             Input data as numpy array
         """
         input_shape = self.desc.get('input_shape', [1, 1, 1, 1])
-        # Generate random input data in appropriate range
-        input_data = self.rng.integers(-32, 32, size=input_shape).astype(np.float32)
-        return input_data
+        return self._seeded_rng().integers(-32, 32, size=input_shape).astype(np.float32)
     
     def render_template(self, template_path: str, context: Dict[str, Any]) -> str:
         """

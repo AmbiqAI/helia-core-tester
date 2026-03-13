@@ -16,6 +16,19 @@ ALLOWED_DTYPE_COMBOS = {
     ('S32', 'S8'): 's32',
 }
 
+CONV_OPERATORS = {'Convolve', 'DepthwiseConv'}
+DUAL_INPUT_OPERATORS = {'BatchMatMul', 'Add', 'Sub', 'Mul', 'Maximum', 'Minimum', 'Comparison'}
+POOL_OPERATORS = {'AvgPool', 'MaxPool'}
+SINGLE_INPUT_OPERATORS = {
+    'Relu', 'Relu6', 'LeakyRelu', 'Softmax', 'Quantize', 'Dequantize', 'Abs',
+    'Transpose', 'StridedSlice', 'Pad', 'LSTMUnidirectional', 'SVDF',
+    'Mean', 'ReduceMax', 'ReduceMin', 'ArgMax', 'ArgMin', 'TransposeConv',
+    'Tanh', 'Logistic', 'HardSwishPrecise', 'HardSwishCompat', 'PReLU', 'Fill',
+    'Reshape', 'Squeeze', 'SpaceToDepth', 'DepthToSpace',
+    'Split', 'Concatenation', 'SpaceToBatchND', 'BatchToSpaceND',
+    'ResizeNearestNeighbor', 'VariableUpdate', 'Clamp', 'NNActivationS16', 'Gather', 'GatherND', 'Requantize'
+}
+
 
 def validate_dtype_combo(activation_dtype: str, weight_dtype: str) -> bool:
     """
@@ -50,33 +63,26 @@ def _validate_and_normalize_descriptor(desc: Dict[str, Any]) -> Dict[str, Any]:
     operator = desc['operator']
 
     # Operator-specific dtype constraints (prevent runtime crashes/hardfaults)
-    # S4 is now supported for Conv2D/DepthwiseConv2D/FullyConnected via LiteRT-only generation.
+    # S4 is supported for Convolve/DepthwiseConv/FullyConnected via LiteRT-only generation.
 
     if 'variations' not in desc:
         if operator == 'FullyConnected':
             if 'input_shape' not in desc or 'filter_shape' not in desc:
                 raise ValueError("FullyConnected requires input_shape and filter_shape")
-        elif operator in ['Conv2D', 'DepthwiseConv2D']:
+        elif operator in CONV_OPERATORS:
             if 'input_shape' not in desc or 'filter_shape' not in desc:
                 raise ValueError(f"{operator} requires input_shape and filter_shape")
-        elif operator in ['MatMul', 'Elementwise', 'Add', 'Sub', 'Mul', 'Maximum', 'Minimum',
-                          'Equal', 'NotEqual', 'Greater', 'GreaterEqual', 'Less', 'LessEqual', 'Comparison']:
+        elif operator in DUAL_INPUT_OPERATORS:
             if 'input_1_shape' not in desc or 'input_2_shape' not in desc:
                 raise ValueError(f"{operator} requires input_1_shape and input_2_shape")
             if operator == 'Comparison' and 'operation' not in desc:
                 raise ValueError("Comparison requires operation")
-        elif operator == 'Pooling':
+        elif operator in POOL_OPERATORS:
             if 'input_shape' not in desc or ('pool_size' not in desc and 'filter_shape' not in desc):
                 raise ValueError(f"{operator} requires input_shape and pool_size (or filter_shape)")
-        elif operator in ['Relu', 'Relu6', 'LeakyRelu', 'Softmax', 'Quantize', 'Dequantize', 'Abs',
-                         'Transpose', 'StridedSlice', 'Pad', 'LSTM', 'SVDF',
-                         'Mean', 'ReduceMax', 'ReduceMin', 'ArgMax', 'ArgMin', 'TransposeConv',
-                         'Tanh', 'Logistic', 'HardSwish', 'PReLU', 'Fill',
-                         'Reshape', 'Squeeze', 'SpaceToDepth', 'DepthToSpace',
-                         'Split', 'Concatenation', 'SpaceToBatchND', 'BatchToSpaceND',
-                         'ResizeNearestNeighbor', 'VariableUpdate', 'Clamp', 'NNActivationS16', 'Gather', 'GatherND', 'Requantize']:
+        elif operator in SINGLE_INPUT_OPERATORS:
             if 'input_shape' not in desc:
-                if operator == 'LSTM' and desc.get('hint', {}).get('force_cmsis', False):
+                if operator == 'LSTMUnidirectional' and desc.get('hint', {}).get('force_cmsis', False):
                     pass
                 else:
                     raise ValueError(f"{operator} requires input_shape")
@@ -102,6 +108,8 @@ def _validate_and_normalize_descriptor(desc: Dict[str, Any]) -> Dict[str, Any]:
             if operator == 'ResizeNearestNeighbor':
                 if 'size' not in desc:
                     raise ValueError("ResizeNearestNeighbor requires size")
+            if operator == 'HardSwishCompat' and desc['activation_dtype'] != 'S8':
+                raise ValueError("HardSwishCompat only supports S8 activations")
         else:
             raise ValueError(f"Unsupported operator: {operator}")
 
@@ -245,25 +253,23 @@ def expand_descriptor_variations(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         if operator == 'FullyConnected':
             if 'input_shape' not in variation_desc or 'filter_shape' not in variation_desc:
                 raise ValueError("FullyConnected variation requires input_shape and filter_shape")
-        elif operator in ['Conv2D', 'DepthwiseConv2D']:
+        elif operator in CONV_OPERATORS:
             if 'input_shape' not in variation_desc or 'filter_shape' not in variation_desc:
                 raise ValueError(f"{operator} variation requires input_shape and filter_shape")
-        elif operator in ['MatMul', 'Elementwise', 'Add', 'Sub', 'Mul', 'Maximum', 'Minimum',
-                          'Equal', 'NotEqual', 'Greater', 'GreaterEqual', 'Less', 'LessEqual']:
+        elif operator in DUAL_INPUT_OPERATORS:
             if 'input_1_shape' not in variation_desc or 'input_2_shape' not in variation_desc:
                 raise ValueError(f"{operator} variation requires input_1_shape and input_2_shape")
-        elif operator == 'Pooling':
+            if operator == 'Comparison' and 'operation' not in variation_desc:
+                raise ValueError("Comparison variation requires operation")
+        elif operator in POOL_OPERATORS:
             if 'input_shape' not in variation_desc or ('pool_size' not in variation_desc and 'filter_shape' not in variation_desc):
                 raise ValueError(f"{operator} variation requires input_shape and pool_size (or filter_shape)")
-        elif operator in ['Relu', 'Relu6', 'LeakyRelu', 'Softmax', 'Quantize', 'Dequantize',
-                          'Transpose', 'StridedSlice', 'Pad', 'LSTM', 'SVDF',
-                          'Mean', 'ReduceMax', 'ReduceMin', 'ArgMax', 'ArgMin', 'TransposeConv',
-                          'Tanh', 'Logistic', 'HardSwish', 'PReLU', 'Fill',
-                          'Reshape', 'Squeeze', 'SpaceToDepth', 'DepthToSpace',
-                          'Split', 'Concatenation', 'SpaceToBatchND', 'BatchToSpaceND',
-                          'ResizeNearestNeighbor', 'VariableUpdate', 'Clamp', 'NNActivationS16', 'Gather', 'GatherND', 'Requantize']:
+        elif operator in SINGLE_INPUT_OPERATORS:
             if 'input_shape' not in variation_desc:
-                raise ValueError(f"{operator} variation requires input_shape")
+                if operator == 'LSTMUnidirectional' and variation_desc.get('hint', {}).get('force_cmsis', False):
+                    pass
+                else:
+                    raise ValueError(f"{operator} variation requires input_shape")
             if operator == 'Clamp':
                 if 'act_min' not in variation_desc or 'act_max' not in variation_desc:
                     raise ValueError("Clamp variation requires act_min and act_max")
@@ -286,6 +292,8 @@ def expand_descriptor_variations(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
             if operator == 'ResizeNearestNeighbor':
                 if 'size' not in variation_desc:
                     raise ValueError("ResizeNearestNeighbor variation requires size")
+            if operator == 'HardSwishCompat' and variation_desc['activation_dtype'] != 'S8':
+                raise ValueError("HardSwishCompat variation only supports S8 activations")
         
         # Normalize shapes (ensure they are lists)
         for shape_key in ['input_shape', 'filter_shape', 'input_1_shape', 'input_2_shape', 'pool_size']:

@@ -1,4 +1,4 @@
-operator: LSTM
+operator: LSTMUnidirectional
 name: lstm_1_s8_cmsis
 activation_dtype: S8
 weight_dtype: S8
@@ -9,12 +9,15 @@ time_steps: 10
 feature_size: 22
 units: 11
 time_major: true
-input_shape: [1, 10, 22]
+input_shape:
+- 1
+- 10
+- 22
 hint:
   call_style: per_tensor
   force_cmsis: true
 ---
-operator: LSTM
+operator: LSTMUnidirectional
 name: lstm_2_s8_cmsis
 activation_dtype: S8
 weight_dtype: S8
@@ -25,28 +28,15 @@ time_steps: 9
 feature_size: 6
 units: 7
 time_major: false
-input_shape: [1, 9, 6]
+input_shape:
+- 1
+- 9
+- 6
 hint:
   call_style: per_tensor
   force_cmsis: true
-# ---
-# operator: LSTM
-# name: lstm_one_time_step_s8_cmsis
-# activation_dtype: S8
-# weight_dtype: S8
-# activation: NONE
-# dataset: lstm_one_time_step
-# batch_size: 3
-# time_steps: 1
-# feature_size: 22
-# units: 3
-# time_major: false
-# input_shape: [3, 1, 22]
-# hint:
-#   call_style: per_tensor
-#   force_cmsis: true
 ---
-operator: LSTM
+operator: LSTMUnidirectional
 name: lstm_1_s16_cmsis
 activation_dtype: S16
 weight_dtype: S8
@@ -57,12 +47,15 @@ time_steps: 10
 feature_size: 22
 units: 11
 time_major: true
-input_shape: [1, 10, 22]
+input_shape:
+- 1
+- 10
+- 22
 hint:
   call_style: per_tensor
   force_cmsis: true
 ---
-operator: LSTM
+operator: LSTMUnidirectional
 name: lstm_2_s16_cmsis
 activation_dtype: S16
 weight_dtype: S8
@@ -73,12 +66,15 @@ time_steps: 9
 feature_size: 6
 units: 7
 time_major: false
-input_shape: [1, 9, 6]
+input_shape:
+- 1
+- 9
+- 6
 hint:
   call_style: per_tensor
   force_cmsis: true
 ---
-operator: LSTM
+operator: LSTMUnidirectional
 name: lstm_one_time_step_s16_cmsis
 activation_dtype: S16
 weight_dtype: S8
@@ -89,12 +85,15 @@ time_steps: 1
 feature_size: 22
 units: 3
 time_major: false
-input_shape: [3, 1, 22]
+input_shape:
+- 3
+- 1
+- 22
 hint:
   call_style: per_tensor
   force_cmsis: true
 ---
-operator: LSTM
+operator: LSTMUnidirectional
 name: lstm_1_s16_cmsis_nonzero_zp_a
 activation_dtype: S16
 weight_dtype: S8
@@ -105,7 +104,10 @@ time_steps: 10
 feature_size: 22
 units: 11
 time_major: true
-input_shape: [1, 10, 22]
+input_shape:
+- 1
+- 10
+- 22
 hint:
   call_style: per_tensor
   force_cmsis: true
@@ -113,7 +115,7 @@ hint:
     input_zero_point: 7
     output_zero_point: -5
 ---
-operator: LSTM
+operator: LSTMUnidirectional
 name: lstm_2_s16_cmsis_nonzero_zp_b
 activation_dtype: S16
 weight_dtype: S8
@@ -124,7 +126,10 @@ time_steps: 9
 feature_size: 6
 units: 7
 time_major: false
-input_shape: [1, 9, 6]
+input_shape:
+- 1
+- 9
+- 6
 hint:
   call_style: per_tensor
   force_cmsis: true

@@ -296,7 +296,7 @@ def run_fvp_with_reporting(
 
 def _emit_reporting_result_output(result: TestResult, elf: Path, verbosity: int, raw_output: str) -> None:
     if result.status == TestStatus.PASS:
-        print(f"PASS: {elf}")
+        print(f"\n\nPASS: {elf}")
         if verbosity >= 3:
             sys.stdout.write(raw_output)
             sys.stdout.flush()

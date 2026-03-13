@@ -197,7 +197,6 @@ class OpMul(OperationBase):
             'operator_name': 'mul',
         }
         self._write_op_outputs(output_dir, "mul", "mul/mul.h.j2", "mul/mul.c.j2", context, cmake_context)
-        print(f"Generated C/H files and CMakeLists.txt for {name}")
 
     @staticmethod
     def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:

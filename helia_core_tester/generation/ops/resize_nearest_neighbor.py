@@ -155,4 +155,3 @@ class OpResizeNearestNeighbor(OperationBase):
         cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
         (output_dir / "CMakeLists.txt").write_text(cmake_content)
 
-        print(f"Generated C/H files and CMakeLists.txt for {name}")

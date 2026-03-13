@@ -18,13 +18,13 @@ def _cpu_buffer_api(base: str, cpu: str) -> str:
     return base
 
 
-def resolve_conv2d_kernel(activation_dtype: str, weight_dtype: str, cpu: str) -> Dict[str, str]:
+def resolve_convolve_kernel(activation_dtype: str, weight_dtype: str, cpu: str) -> Dict[str, str]:
     act = str(activation_dtype).upper()
     w = str(weight_dtype).upper()
 
     if w == "S4":
         if act != "S8":
-            raise NotImplementedError(f"Unsupported Conv2D dtype combo: {act} x {w}")
+            raise NotImplementedError(f"Unsupported Convolve dtype combo: {act} x {w}")
         return {
             "kernel_fn": "arm_convolve_wrapper_s4",
             "kernel_get_buffer_size_fn": _cpu_buffer_api("arm_convolve_wrapper_s4_get_buffer_size", cpu),
@@ -54,10 +54,10 @@ def resolve_conv2d_kernel(activation_dtype: str, weight_dtype: str, cpu: str) ->
             "call_style": "m55" if get_cpu_profile(cpu).has_mve else "baseline",
         }
 
-    raise NotImplementedError(f"Unsupported Conv2D dtype combo: {act} x {w}")
+    raise NotImplementedError(f"Unsupported Convolve dtype combo: {act} x {w}")
 
 
-def resolve_depthwise_conv2d_kernel(activation_dtype: str, weight_dtype: str, cpu: str) -> Dict[str, str]:
+def resolve_depthwise_conv_kernel(activation_dtype: str, weight_dtype: str, cpu: str) -> Dict[str, str]:
     act = str(activation_dtype).upper()
     w = str(weight_dtype).upper()
 
@@ -91,7 +91,7 @@ def resolve_depthwise_conv2d_kernel(activation_dtype: str, weight_dtype: str, cp
             "call_style": "m55" if get_cpu_profile(cpu).has_mve else "baseline",
         }
 
-    raise NotImplementedError(f"Unsupported DepthwiseConv2D dtype combo: {act} x {w}")
+    raise NotImplementedError(f"Unsupported DepthwiseConv dtype combo: {act} x {w}")
 
 
 def resolve_fully_connected_kernel(activation_dtype: str, weight_dtype: str, cpu: str) -> Dict[str, str]:

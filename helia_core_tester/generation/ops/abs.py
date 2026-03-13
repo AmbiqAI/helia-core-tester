@@ -142,4 +142,3 @@ class OpAbs(OperationBase):
             "operator_name": "abs",
         }
         self._write_op_outputs(output_dir, "abs", "abs/abs.h.j2", "abs/abs.c.j2", context, cmake_context)
-        print(f"Generated C/H files and CMakeLists.txt for {name}")

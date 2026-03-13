@@ -73,7 +73,7 @@ def test_rendered_templates_keep_helper_and_main_shape() -> None:
             },
         ),
         "reducemax": _render(
-            "reducemax/reducemax.c.j2",
+            "reduce_max/reduce_max.c.j2",
             {
                 "name": "reducemax_smoke",
                 "prefix": "reducemax",
@@ -84,7 +84,7 @@ def test_rendered_templates_keep_helper_and_main_shape() -> None:
             },
         ),
         "conv2d": _render(
-            "conv2d/conv2d.c.j2",
+            "convolve/convolve.c.j2",
             {
                 "name": "conv_smoke",
                 "prefix": "conv",

@@ -5,10 +5,10 @@ Add operation implementation.
 from typing import Dict, Any
 import numpy as np
 from pathlib import Path
-from helia_core_tester.generation.ops.base import OperationBase
+from helia_core_tester.generation.ops._binary_basic_math_base import BinaryBasicMathBase
 
 
-class OpAdd(OperationBase):
+class OpAdd(BinaryBasicMathBase):
     """
     Add operation.
     """
@@ -216,7 +216,6 @@ class OpAdd(OperationBase):
             'operator_name': 'add',
         }
         self._write_op_outputs(output_dir, "add", "add/add.h.j2", "add/add.c.j2", context, cmake_context)
-        print(f"Generated C/H files and CMakeLists.txt for {name}")
 
     @staticmethod
     def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:

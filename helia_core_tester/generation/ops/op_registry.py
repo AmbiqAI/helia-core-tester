@@ -1,116 +1,59 @@
-"""Operation registry: operator name -> op class for TFLite generation."""
+"""Lazy operation registry keyed by canonical CMSIS-NN operator names."""
 
-from .fully_connected import OpFullyConnected
-from .conv2d import OpConv2D
-from .dwconv import OpDepthwiseConv2D
-from .matmul_batch import OpMatMul
-from .elementwise import OpElementwise
-from .add import OpAdd
-from .abs import OpAbs
-from .comparison import OpComparison
-from .sub import OpSub
-from .mul import OpMul
-from .minmax import OpMinMax
-from .relu import OpRelu
-from .relu6 import OpRelu6
-from .leakyrelu import OpLeakyRelu
-from .softmax import OpSoftmax
-from .tanh import OpTanh
-from .logistic import OpLogistic
-from .hard_swish import OpHardSwish
-from .prelu import OpPReLU
-from .quantize import OpQuantize
-from .dequantize import OpDequantize
-from .requantize import OpRequantize
-from .pooling import OpPooling
-from .transpose import OpTranspose
-from .stridedslice import OpStridedSlice
-from .pad import OpPad
-from .lstm import OpLSTM
-from .svdf import OpSVDF
-from .mean import OpMean
-from .reducemax import OpReduceMax
-from .reducemin import OpReduceMin
-from .argmax import OpArgMax
-from .argmin import OpArgMin
-from .fill import OpFill
-from .reshape import OpReshape
-from .squeeze import OpSqueeze
-from .space_to_depth import OpSpaceToDepth
-from .depth_to_space import OpDepthToSpace
-from .split import OpSplit
-from .concatenation import OpConcatenation
-from .gather import OpGather
-from .gather_nd import OpGatherND
-from .space_to_batch_nd import OpSpaceToBatchND
-from .batch_to_space_nd import OpBatchToSpaceND
-from .variable_update import OpVariableUpdate
-from .transposeconv import OpTransposeConv
-from .equal import OpEqual
-from .not_equal import OpNotEqual
-from .greater import OpGreater
-from .greater_equal import OpGreaterEqual
-from .less import OpLess
-from .less_equal import OpLessEqual
-from .clamp import OpClamp
-from .nn_activation_s16 import OpNNActivationS16
-from .resize_nearest_neighbor import OpResizeNearestNeighbor
-
-OP_MAP = {
-    "FullyConnected": OpFullyConnected,
-    "Conv2D": OpConv2D,
-    "DepthwiseConv2D": OpDepthwiseConv2D,
-    "MatMul": OpMatMul,
-    "Elementwise": OpElementwise,
-    "Add": OpAdd,
-    "Abs": OpAbs,
-    "Comparison": OpComparison,
-    "Sub": OpSub,
-    "Mul": OpMul,
-    "Maximum": OpMinMax,
-    "Minimum": OpMinMax,
-    "Relu": OpRelu,
-    "Relu6": OpRelu6,
-    "LeakyRelu": OpLeakyRelu,
-    "Softmax": OpSoftmax,
-    "Tanh": OpTanh,
-    "Logistic": OpLogistic,
-    "HardSwish": OpHardSwish,
-    "PReLU": OpPReLU,
-    "Quantize": OpQuantize,
-    "Dequantize": OpDequantize,
-    "Requantize": OpRequantize,
-    "Pooling": OpPooling,
-    "Transpose": OpTranspose,
-    "StridedSlice": OpStridedSlice,
-    "Pad": OpPad,
-    "LSTM": OpLSTM,
-    "SVDF": OpSVDF,
-    "Mean": OpMean,
-    "ReduceMax": OpReduceMax,
-    "ReduceMin": OpReduceMin,
-    "ArgMax": OpArgMax,
-    "ArgMin": OpArgMin,
-    "Fill": OpFill,
-    "Reshape": OpReshape,
-    "Squeeze": OpSqueeze,
-    "SpaceToDepth": OpSpaceToDepth,
-    "DepthToSpace": OpDepthToSpace,
-    "Split": OpSplit,
-    "Concatenation": OpConcatenation,
-    "Gather": OpGather,
-    "GatherND": OpGatherND,
-    "SpaceToBatchND": OpSpaceToBatchND,
-    "BatchToSpaceND": OpBatchToSpaceND,
-    "VariableUpdate": OpVariableUpdate,
-    "TransposeConv": OpTransposeConv,
-    "Equal": OpEqual,
-    "NotEqual": OpNotEqual,
-    "Greater": OpGreater,
-    "GreaterEqual": OpGreaterEqual,
-    "Less": OpLess,
-    "LessEqual": OpLessEqual,
-    "Clamp": OpClamp,
-    "NNActivationS16": OpNNActivationS16,
-    "ResizeNearestNeighbor": OpResizeNearestNeighbor,
+OP_CLASS_SPECS = {
+    "FullyConnected": ("helia_core_tester.generation.ops.fully_connected", "OpFullyConnected"),
+    "Convolve": ("helia_core_tester.generation.ops.convolve", "OpConvolve"),
+    "DepthwiseConv": ("helia_core_tester.generation.ops.depthwise_conv", "OpDepthwiseConv"),
+    "BatchMatMul": ("helia_core_tester.generation.ops.batch_matmul", "OpBatchMatMul"),
+    "Add": ("helia_core_tester.generation.ops.add", "OpAdd"),
+    "Abs": ("helia_core_tester.generation.ops.abs", "OpAbs"),
+    "Comparison": ("helia_core_tester.generation.ops.comparison", "OpComparison"),
+    "Sub": ("helia_core_tester.generation.ops.sub", "OpSub"),
+    "Mul": ("helia_core_tester.generation.ops.mul", "OpMul"),
+    "Maximum": ("helia_core_tester.generation.ops.minmax", "OpMinMax"),
+    "Minimum": ("helia_core_tester.generation.ops.minmax", "OpMinMax"),
+    "Relu": ("helia_core_tester.generation.ops.relu", "OpRelu"),
+    "Relu6": ("helia_core_tester.generation.ops.relu6", "OpRelu6"),
+    "LeakyRelu": ("helia_core_tester.generation.ops.leaky_relu", "OpLeakyRelu"),
+    "Softmax": ("helia_core_tester.generation.ops.softmax", "OpSoftmax"),
+    "Tanh": ("helia_core_tester.generation.ops.tanh", "OpTanh"),
+    "Logistic": ("helia_core_tester.generation.ops.logistic", "OpLogistic"),
+    "HardSwishPrecise": ("helia_core_tester.generation.ops.hard_swish_precise", "OpHardSwishPrecise"),
+    "HardSwishCompat": ("helia_core_tester.generation.ops.hard_swish_compat", "OpHardSwishCompat"),
+    "PReLU": ("helia_core_tester.generation.ops.prelu", "OpPReLU"),
+    "Quantize": ("helia_core_tester.generation.ops.quantize", "OpQuantize"),
+    "Dequantize": ("helia_core_tester.generation.ops.dequantize", "OpDequantize"),
+    "Requantize": ("helia_core_tester.generation.ops.requantize", "OpRequantize"),
+    "AvgPool": ("helia_core_tester.generation.ops.avg_pool", "OpAvgPool"),
+    "MaxPool": ("helia_core_tester.generation.ops.max_pool", "OpMaxPool"),
+    "Transpose": ("helia_core_tester.generation.ops.transpose", "OpTranspose"),
+    "StridedSlice": ("helia_core_tester.generation.ops.strided_slice", "OpStridedSlice"),
+    "Pad": ("helia_core_tester.generation.ops.pad", "OpPad"),
+    "LSTMUnidirectional": ("helia_core_tester.generation.ops.lstm_unidirectional", "OpLSTMUnidirectional"),
+    "SVDF": ("helia_core_tester.generation.ops.svdf", "OpSVDF"),
+    "Mean": ("helia_core_tester.generation.ops.mean", "OpMean"),
+    "ReduceMax": ("helia_core_tester.generation.ops.reduce_max", "OpReduceMax"),
+    "ReduceMin": ("helia_core_tester.generation.ops.reduce_min", "OpReduceMin"),
+    "ArgMax": ("helia_core_tester.generation.ops.argmax", "OpArgMax"),
+    "ArgMin": ("helia_core_tester.generation.ops.argmin", "OpArgMin"),
+    "Fill": ("helia_core_tester.generation.ops.fill", "OpFill"),
+    "Reshape": ("helia_core_tester.generation.ops.reshape", "OpReshape"),
+    "Squeeze": ("helia_core_tester.generation.ops.squeeze", "OpSqueeze"),
+    "SpaceToDepth": ("helia_core_tester.generation.ops.space_to_depth", "OpSpaceToDepth"),
+    "DepthToSpace": ("helia_core_tester.generation.ops.depth_to_space", "OpDepthToSpace"),
+    "Split": ("helia_core_tester.generation.ops.split", "OpSplit"),
+    "Concatenation": ("helia_core_tester.generation.ops.concatenation", "OpConcatenation"),
+    "Gather": ("helia_core_tester.generation.ops.gather", "OpGather"),
+    "GatherND": ("helia_core_tester.generation.ops.gather_nd", "OpGatherND"),
+    "SpaceToBatchND": ("helia_core_tester.generation.ops.space_to_batch_nd", "OpSpaceToBatchND"),
+    "BatchToSpaceND": ("helia_core_tester.generation.ops.batch_to_space_nd", "OpBatchToSpaceND"),
+    "VariableUpdate": ("helia_core_tester.generation.ops.variable_update", "OpVariableUpdate"),
+    "TransposeConv": ("helia_core_tester.generation.ops.transpose_conv", "OpTransposeConv"),
+    "Clamp": ("helia_core_tester.generation.ops.clamp", "OpClamp"),
+    "NNActivationS16": ("helia_core_tester.generation.ops.nn_activation_s16", "OpNNActivationS16"),
+    "ResizeNearestNeighbor": (
+        "helia_core_tester.generation.ops.resize_nearest_neighbor",
+        "OpResizeNearestNeighbor",
+    ),
 }
+

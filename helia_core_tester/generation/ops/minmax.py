@@ -425,4 +425,3 @@ class OpMinMax(OperationBase):
         with open(cmake_path, 'w') as f:
             f.write(cmake_content)
         
-        print(f"Generated C/H files and CMakeLists.txt for {name}")
