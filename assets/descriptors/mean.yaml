@@ -1,5 +1,5 @@
 operator: Mean
-name: reduce_mean_basic_s8
+name: mean_default_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -10,7 +10,7 @@ axes: [1, 2]
 keepdims: true
 ---
 operator: Mean
-name: reduce_mean_batch_s8
+name: mean_batch_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -21,7 +21,7 @@ axes: [0, 3]
 keepdims: false
 ---
 operator: Mean
-name: reduce_mean_channels_s8
+name: mean_channels_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -32,7 +32,7 @@ axes: [3]
 keepdims: false
 ---
 operator: Mean
-name: reduce_mean_basic_s16
+name: mean_default_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -43,7 +43,7 @@ axes: [1, 2]
 keepdims: true
 ---
 operator: Mean
-name: reduce_mean_batch_s16
+name: mean_batch_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -54,7 +54,7 @@ axes: [0, 3]
 keepdims: false
 ---
 operator: Mean
-name: reduce_mean_channels_s16
+name: mean_channels_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -65,7 +65,7 @@ axes: [3]
 keepdims: false
 ---
 operator: Mean
-name: reduce_mean_tail_channels_s8
+name: mean_tail_channels_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -76,7 +76,7 @@ axes: [3]
 keepdims: false
 ---
 operator: Mean
-name: reduce_mean_vec_channels_s8
+name: mean_vec_channels_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -87,7 +87,7 @@ axes: [3]
 keepdims: false
 ---
 operator: Mean
-name: reduce_mean_spatial_vec_s8
+name: mean_spatial_vec_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -98,7 +98,7 @@ axes: [1, 2]
 keepdims: false
 ---
 operator: Mean
-name: reduce_mean_channels_s16
+name: mean_channels_case_02_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -109,7 +109,7 @@ axes: [3]
 keepdims: false
 ---
 operator: Mean
-name: reduce_mean_spatial_vec_s16
+name: mean_spatial_vec_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

@@ -1,5 +1,5 @@
 operator: SVDF
-name: svdf_s8_bias_rank1
+name: svdf_bias_rank1_s8
 activation_dtype: S8
 weight_dtype: S8
 input_shape: [2, 4]
@@ -14,7 +14,7 @@ hint:
   use_bias: true
 ---
 operator: SVDF
-name: svdf_s8_bias_rank2
+name: svdf_bias_rank2_s8
 activation_dtype: S8
 weight_dtype: S8
 input_shape: [2, 4]
@@ -29,7 +29,7 @@ hint:
   use_bias: true
 ---
 operator: SVDF
-name: svdf_s8_nobias_rank2
+name: svdf_no_bias_rank2_s8
 activation_dtype: S8
 weight_dtype: S8
 input_shape: [2, 4]
@@ -44,7 +44,7 @@ hint:
   use_bias: false
 ---
 operator: SVDF
-name: svdf_state_s16_bias_rank1
+name: svdf_state_s16_bias_rank1_s8
 activation_dtype: S8
 weight_dtype: S8
 input_shape: [2, 4]
@@ -59,7 +59,7 @@ hint:
   use_bias: true
 ---
 operator: SVDF
-name: svdf_state_s16_bias_rank2
+name: svdf_state_s16_bias_rank2_s8
 activation_dtype: S8
 weight_dtype: S8
 input_shape: [2, 4]
@@ -74,7 +74,7 @@ hint:
   use_bias: true
 ---
 operator: SVDF
-name: svdf_state_s16_nobias_rank2
+name: svdf_state_s16_no_bias_rank2_s8
 activation_dtype: S8
 weight_dtype: S8
 input_shape: [2, 4]
@@ -89,7 +89,7 @@ hint:
   use_bias: false
 ---
 operator: SVDF
-name: svdf_s8_bias_rank1_rows3_cols17
+name: svdf_bias_rank1_rows3_cols17_s8
 activation_dtype: S8
 weight_dtype: S8
 input_shape: [2, 17]
@@ -104,7 +104,7 @@ hint:
   use_bias: true
 ---
 operator: SVDF
-name: svdf_s8_nobias_rank2_rows6_cols17
+name: svdf_no_bias_rank2_rows6_cols17_s8
 activation_dtype: S8
 weight_dtype: S8
 input_shape: [2, 17]
@@ -119,7 +119,7 @@ hint:
   use_bias: false
 ---
 operator: SVDF
-name: svdf_state_s16_bias_rank1_rows5_cols17
+name: svdf_state_s16_bias_rank1_rows5_cols17_s8
 activation_dtype: S8
 weight_dtype: S8
 input_shape: [2, 17]
@@ -134,7 +134,7 @@ hint:
   use_bias: true
 ---
 operator: SVDF
-name: svdf_state_s16_nobias_rank2_rows6_cols33
+name: svdf_state_s16_no_bias_rank2_rows6_cols33_s8
 activation_dtype: S8
 weight_dtype: S8
 input_shape: [2, 33]

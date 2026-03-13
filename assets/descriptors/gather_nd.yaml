@@ -101,7 +101,7 @@ indices_shape:
 batch_dims: 0
 ---
 operator: GatherND
-name: gather_nd_indices_nd3_s16_extra
+name: gather_nd_indices_nd3_extra_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

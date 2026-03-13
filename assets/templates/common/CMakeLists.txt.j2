@@ -22,8 +22,8 @@ set(TEST_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/includes
 )
 
-# Note: The main project CMakeLists.txt will discover test_runner.c files
-# and use the sources from this directory when building tests.
+# Note: The main project CMakeLists.txt discovers generated test sources
+# and uses the sources from this directory when building standalone tests.
 # For standalone builds, you would need to:
 # 1. Set up CMSIS-NN paths and dependencies
 # 2. Create an executable target

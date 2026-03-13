@@ -1,5 +1,5 @@
 operator: Requantize
-name: requantize_s8_basic
+name: requantize_default_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -20,7 +20,7 @@ input_zeropoint: 3
 output_zeropoint: -2
 ---
 operator: Requantize
-name: requantize_s16_basic
+name: requantize_default_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

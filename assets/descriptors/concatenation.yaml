@@ -123,7 +123,7 @@ input_1_shape: [1, 2, 2, 2]
 input_2_shape: [2, 2, 2, 2]
 ---
 operator: Concatenation
-name: concatenation_s16
+name: concatenation_default_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -135,7 +135,7 @@ input_1_shape: [1, 2, 2, 2]
 input_2_shape: [1, 2, 2, 1]
 ---
 operator: Concatenation
-name: concatenation_s32
+name: concatenation_default_s32
 activation_dtype: S32
 weight_dtype: S8
 activation: NONE

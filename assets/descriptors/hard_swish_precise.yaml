@@ -1,0 +1,57 @@
+operator: HardSwishPrecise
+name: hard_swish_precise_nhwc_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 2
+- 2
+- 3
+---
+operator: HardSwishPrecise
+name: hard_swish_precise_vector_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+---
+operator: HardSwishPrecise
+name: hard_swish_precise_nhwc_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 0.0078125
+    output_scale: 0.0078125
+    input_zero_point: 0
+    output_zero_point: 0
+input_shape:
+- 1
+- 2
+- 2
+- 3
+---
+operator: HardSwishPrecise
+name: hard_swish_precise_vector_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 0.0078125
+    output_scale: 0.0078125
+    input_zero_point: 0
+    output_zero_point: 0
+input_shape:
+- 1
+- 8

@@ -1,0 +1,55 @@
+operator: HardSwishCompat
+name: hard_swish_compat_nhwc_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 2
+- 2
+- 3
+---
+operator: HardSwishCompat
+name: hard_swish_compat_vector_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+---
+operator: HardSwishCompat
+name: hard_swish_compat_vector_exp0_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 0.0078125
+    output_scale: 0.0078125
+    input_zero_point: 0
+    output_zero_point: 0
+input_shape:
+- 1
+- 8
+---
+operator: HardSwishCompat
+name: hard_swish_compat_vector_expneg_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 0.00390625
+    output_scale: 0.00390625
+    input_zero_point: 0
+    output_zero_point: 0
+input_shape:
+- 1
+- 8

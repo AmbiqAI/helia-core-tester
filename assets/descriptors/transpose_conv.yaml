@@ -1,5 +1,5 @@
 operator: TransposeConv
-name: transpose_conv_1_s8
+name: transpose_conv_same_kernel6x6_stride2x2_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -22,7 +22,7 @@ padding: SAME
 use_bias: true
 ---
 operator: TransposeConv
-name: transpose_conv_2_s8
+name: transpose_conv_valid_kernel3x3_stride1x3_no_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -45,7 +45,7 @@ padding: VALID
 use_bias: false
 ---
 operator: TransposeConv
-name: transpose_conv_3_s8
+name: transpose_conv_same_kernel1x5_stride5x2_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -68,7 +68,7 @@ padding: SAME
 use_bias: true
 ---
 operator: TransposeConv
-name: transpose_conv_4_s8
+name: transpose_conv_valid_kernel3x3_stride1x3_no_bias_case_02_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -91,7 +91,7 @@ padding: VALID
 use_bias: false
 ---
 operator: TransposeConv
-name: reverse_transpose_conv_1_s8
+name: transpose_conv_reverse_same_kernel2x2_stride1x1_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -114,7 +114,7 @@ padding: SAME
 use_bias: true
 ---
 operator: TransposeConv
-name: reverse_transpose_conv_2_s8
+name: transpose_conv_reverse_valid_kernel1x1_stride2x2_no_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -137,7 +137,7 @@ padding: VALID
 use_bias: false
 ---
 operator: TransposeConv
-name: reverse_transpose_conv_3_s8
+name: transpose_conv_reverse_same_kernel2x2_stride2x1_no_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -160,7 +160,7 @@ padding: SAME
 use_bias: false
 ---
 operator: TransposeConv
-name: reverse_transpose_conv_4_s8
+name: transpose_conv_reverse_valid_kernel3x3_stride1x2_no_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -183,7 +183,7 @@ padding: VALID
 use_bias: false
 ---
 operator: TransposeConv
-name: reverse_transpose_conv_eq16_stride1_s8
+name: transpose_conv_reverse_same_kernel3x3_stride1x1_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -206,7 +206,7 @@ padding: SAME
 use_bias: true
 ---
 operator: TransposeConv
-name: transpose_conv_gt16_stride3_s8
+name: transpose_conv_valid_kernel2x2_stride3x1_no_bias_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE

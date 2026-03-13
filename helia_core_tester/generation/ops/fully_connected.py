@@ -652,7 +652,7 @@ class OpFullyConnected(OperationBase):
         weight_sum = None
         has_weight_sum = False
         if weight_dtype != "S4" and self._should_precompute_weight_sum(weights, output_dtype):
-            from .dwconv import vector_sum_s8
+            from .depthwise_conv import vector_sum_s8
             
             vector_rows = weights.shape[0]  # output_units
             vector_cols = weights.shape[1]  # input_features
@@ -860,4 +860,3 @@ class OpFullyConnected(OperationBase):
         with open(cmake_path, 'w') as f:
             f.write(cmake_content)
         
-        print(f"Generated C/H files and CMakeLists.txt for {name}")

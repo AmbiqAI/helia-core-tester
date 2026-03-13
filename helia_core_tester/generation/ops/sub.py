@@ -5,10 +5,10 @@ Subtract operation implementation.
 from typing import Dict, Any
 import numpy as np
 from pathlib import Path
-from helia_core_tester.generation.ops.base import OperationBase
+from helia_core_tester.generation.ops._binary_basic_math_base import BinaryBasicMathBase
 
 
-class OpSub(OperationBase):
+class OpSub(BinaryBasicMathBase):
     """
     Subtract operation.
     """
@@ -38,8 +38,7 @@ class OpSub(OperationBase):
             input_2_shape=input_2_shape,
             dtype=dtype,
         )
-        with open(out_path, "wb") as f:
-            f.write(model_bytes)
+        self._write_tflite_bytes(out_path, model_bytes)
 
     def _select_cmsis_sub_kernel(self) -> Dict[str, str]:
         """
@@ -232,48 +231,12 @@ class OpSub(OperationBase):
             'kernel_fn': kernel_info["kernel_fn"],
         }
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("sub/sub.h.j2", context)
-        h_path = includes_api_dir / f"{name}_sub.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("sub/sub.c.j2", context)
-        c_path = output_dir / f"{name}_sub.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'Sub'),
             'operator_name': 'sub'
         }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
-        
-        print(f"Generated C/H files and CMakeLists.txt for {name}")
-
-    @staticmethod
-    def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
-        left_shift = shift if shift > 0 else 0
-        right_shift = -shift if shift < 0 else 0
-        prod = values.astype(np.int64) * (1 << left_shift)
-        mult = (1 << 30) + (prod * int(multiplier))
-        res = (mult >> 31).astype(np.int64)
-        if right_shift == 0:
-            return res.astype(np.int32)
-        remainder_mask = (1 << right_shift) - 1
-        remainder = res & remainder_mask
-        result = res >> right_shift
-        threshold = remainder_mask >> 1
-        threshold = threshold + (result < 0)
-        result = result + (remainder > threshold)
-        return result.astype(np.int32)
+        self._write_op_outputs(output_dir, "sub", "sub/sub.h.j2", "sub/sub.c.j2", context, cmake_context)
 
     @classmethod
     def _simulate_sub_quantized(

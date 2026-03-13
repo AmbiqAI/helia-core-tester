@@ -8,10 +8,10 @@ from typing import Dict, Any
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
-from helia_core_tester.generation.ops.base import OperationBase
+from helia_core_tester.generation.ops._quantization_base import QuantizationFamilyBase
 
 
-class OpQuantize(OperationBase):
+class OpQuantize(QuantizationFamilyBase):
     """
     Quantize operation.
     """
@@ -116,12 +116,7 @@ class OpQuantize(OperationBase):
             output_zp = int(output_zp[0] if isinstance(output_zp, list) else output_zp)
             
             # Generate input data (float32)
-            rng_state = self.rng.__getstate__()
-            self.rng = np.random.default_rng(self.seed)
-            
-            input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-            
-            self.rng.__setstate__(rng_state)
+            input_data = self._sample_uniform(input_shape)
             
             # Run inference (input is float32, output is quantized)
             interpreter.set_tensor(input_details[0]['index'], input_data)
@@ -143,10 +138,7 @@ class OpQuantize(OperationBase):
                 qmin, qmax = -32768, 32767
                 out_dtype = np.int16
 
-            rng_state = self.rng.__getstate__()
-            self.rng = np.random.default_rng(self.seed)
-            input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-            self.rng.__setstate__(rng_state)
+            input_data = self._sample_uniform(input_shape)
 
             if has_activation:
                 if activation_str == 'RELU':
@@ -199,28 +191,10 @@ class OpQuantize(OperationBase):
             'activation_type': activation_str if has_activation else 'NONE',
         }
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("quantize/quantize.h.j2", context)
-        h_path = includes_api_dir / f"{name}_quantize.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("quantize/quantize.c.j2", context)
-        c_path = output_dir / f"{name}_quantize.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'Quantize'),
             'operator_name': 'quantize'
         }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self._write_op_outputs(output_dir, "quantize", "quantize/quantize.h.j2", "quantize/quantize.c.j2", context, cmake_context)
         
-        print(f"Generated C/H files and CMakeLists.txt for {name}")

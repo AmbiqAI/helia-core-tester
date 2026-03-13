@@ -45,3 +45,12 @@ def test_dequantize_generates_without_tflite(tmp_path: Path) -> None:
     op = OpDequantize(desc, seed=1, target_cpu="cortex-m55")
     op.generate_c_files(tmp_path)
     _assert_generated(tmp_path, desc["name"], "dequantize")
+
+
+def test_dequantize_name_does_not_drive_activation() -> None:
+    desc = _dequantize_desc("dequantize_relu_name_only_s8", "NONE", "S8")
+    op = OpDequantize(desc, seed=1, target_cpu="cortex-m55")
+
+    model = op.build_keras_model()
+
+    assert all(layer.__class__.__name__ != "ReLU" for layer in model.layers)

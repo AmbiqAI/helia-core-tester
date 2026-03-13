@@ -1,5 +1,5 @@
 operator: ResizeNearestNeighbor
-name: resize_nearest_neighbor_s8
+name: resize_nearest_neighbor_default_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -17,7 +17,7 @@ align_corners: false
 half_pixel_centers: false
 ---
 operator: ResizeNearestNeighbor
-name: resize_nearest_neighbor_s16
+name: resize_nearest_neighbor_default_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -35,7 +35,7 @@ align_corners: false
 half_pixel_centers: false
 ---
 operator: ResizeNearestNeighbor
-name: resize_nn_s16_align_corners_true
+name: resize_nearest_neighbor_resize_nn_align_corners_true_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -53,7 +53,7 @@ align_corners: true
 half_pixel_centers: false
 ---
 operator: ResizeNearestNeighbor
-name: resize_nn_s16_half_pixel_true
+name: resize_nearest_neighbor_resize_nn_half_pixel_true_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -71,7 +71,7 @@ align_corners: false
 half_pixel_centers: true
 ---
 operator: ResizeNearestNeighbor
-name: resize_nn_s8_downscale_align_true
+name: resize_nearest_neighbor_resize_nn_downscale_align_true_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -89,7 +89,7 @@ align_corners: true
 half_pixel_centers: false
 ---
 operator: ResizeNearestNeighbor
-name: resize_nn_s8_half_pixel_upscale
+name: resize_nearest_neighbor_resize_nn_half_pixel_upscale_s8
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE

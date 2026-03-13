@@ -3,7 +3,7 @@ Test reporting module for Helia-Core Tester.
 
 This module provides comprehensive test reporting functionality including:
 - Test result data structures
-- Output parsing from Unity test framework
+- Output parsing from standalone generated test output
 - Multiple report format generation (JSON, HTML, Markdown)
 """
 

@@ -1,85 +1,86 @@
-// Validation function (from CMSIS-NN test utils)
-#include <stdio.h>
+#ifndef HELIA_CORE_TEMPLATE_VALIDATE_H
+#define HELIA_CORE_TEMPLATE_VALIDATE_H
+
+#include <math.h>
 #include <stdbool.h>
 
-{% if output_dtype == 'int8_t' %}
-static inline int validate(int8_t *act, const int8_t *ref, int size)
+static inline void helia_test_print_failure_count(int failures)
 {
-    int test_passed = true;
-    int count = 0;
-    int total = 0;
-
-    for (int i = 0; i < size; ++i)
-    {
-        total++;
-        int diff = (int)act[i] - (int)ref[i];
-        if (diff < 0) diff = -diff;  // absolute difference
-        if (diff > 1)  // Allow tolerance of 1 bit difference
-        {
-            count++;
-            printf("ERROR at pos %d: Act: %d Ref: %d (diff: %d)\r\n", i, act[i], ref[i], diff);
-            test_passed = false;
-        }
-    }
-
-    if (!test_passed)
-    {
-        printf("%d of %d failed\r\n", count, total);
-    }
-
-    return test_passed;
+    printf("%d Failures\r\n", failures);
 }
-{% elif output_dtype == 'int16_t' %}
-static inline int validate_s16(int16_t *act, const int16_t *ref, int size)
-{
-    int test_passed = true;
-    int count = 0;
-    int total = 0;
 
-    for (int i = 0; i < size; ++i)
-    {
-        total++;
-        int diff = (int)act[i] - (int)ref[i];
-        if (diff < 0) diff = -diff;  // absolute difference
-        if (diff > 1)  // Allow tolerance of 1 bit difference
-        {
-            count++;
-            printf("ERROR at pos %d: Act: %d Ref: %d (diff: %d)\r\n", i, act[i], ref[i], diff);
-            test_passed = false;
-        }
-    }
+#define HELIA_VALIDATE_EXACT_INTS(actual, expected, size, failures) \
+    do { \
+        for (int helia_i = 0; helia_i < (size); ++helia_i) { \
+            long long helia_act_val = (long long)((actual)[helia_i]); \
+            long long helia_exp_val = (long long)((expected)[helia_i]); \
+            if (helia_act_val != helia_exp_val) { \
+                ++(failures); \
+                if ((failures) <= 20) { \
+                    printf("Mismatch[%d]: exp=%lld got=%lld\r\n", helia_i, helia_exp_val, helia_act_val); \
+                } \
+            } \
+        } \
+    } while (0)
 
-    if (!test_passed)
-    {
-        printf("%d of %d failed\r\n", count, total);
-    }
+#define HELIA_VALIDATE_TOLERANT_INTS(actual, expected, size, tolerance, failures) \
+    do { \
+        for (int helia_i = 0; helia_i < (size); ++helia_i) { \
+            long long helia_act_val = (long long)((actual)[helia_i]); \
+            long long helia_exp_val = (long long)((expected)[helia_i]); \
+            long long helia_diff = helia_act_val - helia_exp_val; \
+            if (helia_diff < 0) { \
+                helia_diff = -helia_diff; \
+            } \
+            if (helia_diff > (long long)(tolerance)) { \
+                ++(failures); \
+                if ((failures) <= 20) { \
+                    printf( \
+                        "Mismatch[%d]: exp=%lld got=%lld (diff=%lld)\r\n", \
+                        helia_i, \
+                        helia_exp_val, \
+                        helia_act_val, \
+                        helia_diff \
+                    ); \
+                } \
+            } \
+        } \
+    } while (0)
 
-    return test_passed;
-}
-{% elif output_dtype == 'bool' %}
-static inline int validate_bool(const bool *act, const bool *ref, int size)
-{
-    int test_passed = true;
-    int count = 0;
+#define HELIA_VALIDATE_FLOATS(actual, expected, size, tolerance, failures) \
+    do { \
+        for (int helia_i = 0; helia_i < (size); ++helia_i) { \
+            double helia_act_val = (double)((actual)[helia_i]); \
+            double helia_exp_val = (double)((expected)[helia_i]); \
+            double helia_diff = fabs(helia_act_val - helia_exp_val); \
+            if (helia_diff > (double)(tolerance)) { \
+                ++(failures); \
+                if ((failures) <= 20) { \
+                    printf( \
+                        "Mismatch[%d]: exp=%.6f got=%.6f (diff=%.6f, tol=%.6f)\r\n", \
+                        helia_i, \
+                        helia_exp_val, \
+                        helia_act_val, \
+                        helia_diff, \
+                        (double)(tolerance) \
+                    ); \
+                } \
+            } \
+        } \
+    } while (0)
 
-    for (int i = 0; i < size; ++i)
-    {
-        int actual = act[i] ? 1 : 0;
-        int expected = ref[i] ? 1 : 0;
+#define HELIA_VALIDATE_BOOLEANS(actual, expected, size, failures) \
+    do { \
+        for (int helia_i = 0; helia_i < (size); ++helia_i) { \
+            int helia_act_val = ((actual)[helia_i]) ? 1 : 0; \
+            int helia_exp_val = ((expected)[helia_i]) ? 1 : 0; \
+            if (helia_act_val != helia_exp_val) { \
+                ++(failures); \
+                if ((failures) <= 20) { \
+                    printf("Mismatch[%d]: exp=%d got=%d\r\n", helia_i, helia_exp_val, helia_act_val); \
+                } \
+            } \
+        } \
+    } while (0)
 
-        if (actual != expected)
-        {
-            count++;
-            printf("ERROR at pos %d: Act(bool): %d Ref(bool): %d\r\n", i, actual, expected);
-            test_passed = false;
-        }
-    }
-
-    if (!test_passed)
-    {
-        printf("%d of %d failed\r\n", count, size);
-    }
-
-    return test_passed;
-}
-{% endif %}
+#endif

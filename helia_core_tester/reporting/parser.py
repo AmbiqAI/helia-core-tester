@@ -1,6 +1,4 @@
-"""
-Test result parser for Unity framework output.
-"""
+"""Test result parser for standalone harness output with legacy Unity fallback."""
 
 import re
 import time
@@ -12,7 +10,7 @@ from helia_core_tester.reporting.models import TestResult, TestStatus
 
 
 class TestResultParser:
-    """Parser for Unity test framework output."""
+    """Parser for standalone failure-count output with legacy Unity fallback."""
     
     def __init__(self):
         self.test_start_pattern = re.compile(r'Running test: (.+)')
@@ -35,7 +33,10 @@ class TestResultParser:
         # Pattern for "X Failures" where X > 0
         self.nonzero_failures_pattern = re.compile(r'^(\d+)\s+Failures\s*$', re.MULTILINE | re.IGNORECASE)
         # Pattern for "Convolution failed" or API errors
-        self.api_error_pattern = re.compile(r'Convolution failed with status\s+(-?\d+)', re.IGNORECASE)
+        self.api_error_pattern = re.compile(
+            r'(?P<label>[A-Za-z][A-Za-z0-9 _-]*)\s+failed with status\s+(?P<status>-?\d+)',
+            re.IGNORECASE,
+        )
         
     def parse_fvp_output(self, 
                         output: str, 
@@ -113,39 +114,37 @@ class TestResultParser:
         if exit_code == 124 or "TIMEOUT" in output:
             return TestStatus.TIMEOUT, "Test execution timed out", None, "timeout"
         
-        pass_matches = self.test_pass_pattern.findall(output)
+        api_error_match = self.api_error_pattern.search(output)
+        if api_error_match:
+            label = api_error_match.group("label").strip()
+            status_code = api_error_match.group("status")
+            return TestStatus.FAIL, f"{label} API error (status {status_code})", None, "api_error"
+
+        if self.zero_failures_pattern.search(output):
+            return TestStatus.PASS, None, None, None
+
+        nonzero_match = self.nonzero_failures_pattern.search(output)
+        if nonzero_match:
+            failure_count = int(nonzero_match.group(1))
+            return TestStatus.FAIL, f"Output mismatch: {failure_count} element(s) differ from expected", None, "output_mismatch"
+
         fail_matches = self.test_fail_pattern.findall(output)
-        
         if fail_matches:
             failure_reason = self._extract_failure_reason(output, lines)
             return TestStatus.FAIL, failure_reason, None, "assertion"
-        elif pass_matches:
+
+        pass_matches = self.test_pass_pattern.findall(output)
+        if pass_matches:
             return TestStatus.PASS, None, None, None
-        elif exit_code and exit_code != 0:
+
+        if exit_code and exit_code != 0:
             error_msg = f"Process exited with code {exit_code}"
             return TestStatus.ERROR, error_msg, None, "crash"
-        else:
-            # Check for API errors first (e.g., "Convolution failed with status -1")
-            api_error_match = self.api_error_pattern.search(output)
-            if api_error_match:
-                status_code = api_error_match.group(1)
-                return TestStatus.FAIL, f"Convolution API error (status {status_code})", None, "api_error"
-            
-            # Check for exact "0 Failures" match (not substring)
-            if self.zero_failures_pattern.search(output):
-                return TestStatus.PASS, None, None, None
-            
-            # Check for "X Failures" where X > 0 (output mismatch)
-            nonzero_match = self.nonzero_failures_pattern.search(output)
-            if nonzero_match:
-                failure_count = int(nonzero_match.group(1))
-                return TestStatus.FAIL, f"Output mismatch: {failure_count} element(s) differ from expected", None, "output_mismatch"
-            
-            # If no recognizable pattern, mark as error
-            return TestStatus.ERROR, "Unknown test status", None, "unknown"
+
+        return TestStatus.ERROR, "Unknown test status", None, "unknown"
     
     def _extract_failure_reason(self, output: str, lines: List[str]) -> str:
-        """Extract detailed failure reason from Unity output."""
+        """Extract detailed failure reason from legacy assertion-style output."""
         assertion_matches = self.assertion_pattern.findall(output)
         if assertion_matches:
             return assertion_matches[-1]  # Get the last assertion message

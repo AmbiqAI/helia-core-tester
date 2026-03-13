@@ -6,10 +6,10 @@ from typing import Dict, Any
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
-from helia_core_tester.generation.ops.base import OperationBase
+from helia_core_tester.generation.ops._quantization_base import QuantizationFamilyBase
 
 
-class OpDequantize(OperationBase):
+class OpDequantize(QuantizationFamilyBase):
     """
     Dequantize operation.
     """
@@ -23,14 +23,8 @@ class OpDequantize(OperationBase):
         inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
         x = tf.keras.layers.Lambda(lambda x: tf.cast(x, tf.float32))(inputs)
         
-        # Apply activation if specified (check descriptor or infer from name)
-        activation_str = self.desc.get('activation', 'NONE')
-        # Also check if name suggests activation (for backward compatibility)
-        if activation_str == 'NONE' and 'relu' in self.desc.get('name', '').lower():
-            if 'relu6' in self.desc.get('name', '').lower():
-                activation_str = 'RELU6'
-            else:
-                activation_str = 'RELU'
+        # Apply activation only from descriptor fields.
+        activation_str = self.activation_name()
         
         if activation_str == 'RELU':
             x = tf.keras.layers.ReLU()(x)
@@ -89,15 +83,9 @@ class OpDequantize(OperationBase):
         
         builder = TemplateContextBuilder()
 
-        # Check for activation (from descriptor or infer from name)
-        # The CMSIS-NN arm_dequantize_* only does dequantization, so we apply
-        # activation in C to match TFLite behavior when present.
-        activation_str = self.desc.get('activation', 'NONE')
-        if activation_str == 'NONE' and 'relu' in name.lower():
-            if 'relu6' in name.lower():
-                activation_str = 'RELU6'
-            else:
-                activation_str = 'RELU'
+        # The CMSIS-NN arm_dequantize_* kernels only dequantize, so apply any
+        # descriptor activation in C to match TFLite behavior.
+        activation_str = self.activation_name()
         has_activation = activation_str in ['RELU', 'RELU6']
 
         if tflite_path.exists():
@@ -139,17 +127,13 @@ class OpDequantize(OperationBase):
             input_scale = float(input_scale)
             input_zp = int(input_zp)
             
-            # Generate input data and quantize
-            rng_state = self.rng.__getstate__()
-            self.rng = np.random.default_rng(self.seed)
-            
             # For S16, generate input data that better utilizes the quantization range
             # Calculate the effective float range based on scale and zero_point
             if kernel_info["input_c_type"] == "int8_t":
                 np_in_dtype = np.int8
                 qmin, qmax = -128, 127
                 # For S8, use standard range
-                input_data_float = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+                input_data_float = self._sample_uniform(input_shape)
             elif kernel_info["input_c_type"] == "int16_t":
                 np_in_dtype = np.int16
                 qmin, qmax = -32768, 32767
@@ -163,14 +147,12 @@ class OpDequantize(OperationBase):
                 float_max = (effective_qmax - input_zp) * input_scale
                 # Ensure we have a valid range
                 if float_max > float_min:
-                    input_data_float = self.rng.uniform(float_min, float_max, size=input_shape).astype(np.float32)
+                    input_data_float = self._sample_uniform(input_shape, low=float_min, high=float_max)
                 else:
                     # Fallback to standard range if calculated range is invalid
-                    input_data_float = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+                    input_data_float = self._sample_uniform(input_shape)
             else:
                 raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-            
-            self.rng.__setstate__(rng_state)
             
             # Quantize inputs: quantized = round(float_value / scale + zero_point)
             input_q = np.round(input_data_float / float(input_scale) + float(input_zp)).astype(np.int32)
@@ -242,10 +224,7 @@ class OpDequantize(OperationBase):
             else:
                 raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
 
-            rng_state = self.rng.__getstate__()
-            self.rng = np.random.default_rng(self.seed)
-            input_data_float = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-            self.rng.__setstate__(rng_state)
+            input_data_float = self._sample_uniform(input_shape)
 
             input_q = np.round(input_data_float / float(input_scale) + float(input_zp)).astype(np.int32)
             input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
@@ -280,28 +259,10 @@ class OpDequantize(OperationBase):
             'activation_type': activation_str if has_activation else 'NONE',
         }
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("dequantize/dequantize.h.j2", context)
-        h_path = includes_api_dir / f"{name}_dequantize.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("dequantize/dequantize.c.j2", context)
-        c_path = output_dir / f"{name}_dequantize.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'Dequantize'),
             'operator_name': 'dequantize'
         }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self._write_op_outputs(output_dir, "dequantize", "dequantize/dequantize.h.j2", "dequantize/dequantize.c.j2", context, cmake_context)
         
-        print(f"Generated C/H files and CMakeLists.txt for {name}")

@@ -6,7 +6,7 @@ from typing import Callable, Iterable, List, Optional, Tuple, Dict, Any
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
-from helia_core_tester.generation.ops.base import OperationBase
+from helia_core_tester.generation.ops._binary_basic_math_base import BinaryBasicMathBase
 
 
 # ----------------------------
@@ -87,7 +87,7 @@ def _broadcast_axes(shape_ref: Tuple[int, ...], shape_other: Tuple[int, ...]) ->
     return tuple(axes)
 
 
-class OpMinMax(OperationBase):
+class OpMinMax(BinaryBasicMathBase):
     """
     Maximum and Minimum operation implementation with optional forced shared scale.
 
@@ -217,8 +217,7 @@ class OpMinMax(OperationBase):
 
         # Convert & save
         tflite_model = converter.convert()
-        with open(out_path, 'wb') as f:
-            f.write(tflite_model)
+        self._write_tflite_bytes(out_path, tflite_model)
     
     def _select_cmsis_minmax_kernel(self) -> Dict[str, str]:
         """
@@ -401,28 +400,10 @@ class OpMinMax(OperationBase):
             'operator': op_name,
         }
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("minmax/minmax.h.j2", context)
-        h_path = includes_api_dir / f"{name}_minmax.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("minmax/minmax.c.j2", context)
-        c_path = output_dir / f"{name}_minmax.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'MinMax'),
             'operator_name': 'minmax'
         }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self._write_op_outputs(output_dir, "minmax", "minmax/minmax.h.j2", "minmax/minmax.c.j2", context, cmake_context)
         
-        print(f"Generated C/H files and CMakeLists.txt for {name}")
