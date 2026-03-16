@@ -609,3 +609,136 @@ input_2_shape:
 - 2
 - 3
 operation: less_equal
+---
+operator: Comparison
+name: comparison_equal_batch_broadcast_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape:
+- 1
+- 2
+- 2
+- 3
+input_2_shape:
+- 2
+- 2
+- 2
+- 3
+operation: equal
+---
+operator: Comparison
+name: comparison_less_batch_scalar_left_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape:
+- 2
+- 1
+- 1
+- 1
+input_2_shape:
+- 1
+- 2
+- 2
+- 3
+operation: less
+---
+operator: Comparison
+name: comparison_less_equal_batch_scalar_right_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape:
+- 1
+- 2
+- 2
+- 3
+input_2_shape:
+- 2
+- 1
+- 1
+- 1
+operation: less_equal
+---
+operator: Comparison
+name: comparison_equal_batch_broadcast_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape:
+- 1
+- 2
+- 2
+- 3
+input_2_shape:
+- 2
+- 2
+- 2
+- 3
+operation: equal
+---
+operator: Comparison
+name: comparison_less_batch_scalar_left_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape:
+- 2
+- 1
+- 1
+- 1
+input_2_shape:
+- 1
+- 2
+- 2
+- 3
+operation: less
+---
+operator: Comparison
+name: comparison_less_equal_batch_scalar_right_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape:
+- 1
+- 2
+- 2
+- 3
+input_2_shape:
+- 2
+- 1
+- 1
+- 1
+operation: less_equal
+---
+operator: Comparison
+name: comparison_less_broadcast_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape:
+- 1
+- 2
+- 2
+- 3
+input_2_shape:
+- 1
+- 1
+- 1
+- 3
+operation: less

@@ -7,12 +7,17 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 
 
 _OP_MAP = {
-    "equal": ("EQUAL", "ARM_COMPARE_EQUAL"),
-    "not_equal": ("NOT_EQUAL", "ARM_COMPARE_NOT_EQUAL"),
-    "greater": ("GREATER", "ARM_COMPARE_GREATER"),
-    "greater_equal": ("GREATER_EQUAL", "ARM_COMPARE_GREATER_EQUAL"),
-    "less": ("LESS", "ARM_COMPARE_LESS"),
-    "less_equal": ("LESS_EQUAL", "ARM_COMPARE_LESS_EQUAL"),
+    "equal": ("EQUAL", "ARM_COMPARE_EQUAL", "arm_equal"),
+    "not_equal": ("NOT_EQUAL", "ARM_COMPARE_NOT_EQUAL", "arm_not_equal"),
+    "greater": ("GREATER", "ARM_COMPARE_GREATER", "arm_greater"),
+    "greater_equal": ("GREATER_EQUAL", "ARM_COMPARE_GREATER_EQUAL", "arm_greater_equal"),
+    "less": ("LESS", "ARM_COMPARE_LESS", "arm_less"),
+    "less_equal": ("LESS_EQUAL", "ARM_COMPARE_LESS_EQUAL", "arm_less_equal"),
+}
+
+_DTYPE_INFO = {
+    "S8": ("int8", "int8_t", np.int8, -128, 127, "s8"),
+    "S16": ("int16", "int16_t", np.int16, -32768, 32767, "s16"),
 }
 
 
@@ -29,17 +34,15 @@ class ComparisonFamilyBase(OperationBase):
         from helia_core_tester.generation.utils.litert_builder import build_comparison_op
 
         activation_dtype = self.desc.get("activation_dtype", "S8")
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        else:
+        dtype_info = _DTYPE_INFO.get(activation_dtype)
+        if dtype_info is None:
             raise NotImplementedError(f"Unsupported Comparison dtype: {activation_dtype}")
+        dtype, _, _, _, _, _ = dtype_info
 
         op = str(self.desc.get("operation", "equal")).lower()
         if op not in _OP_MAP:
             raise ValueError(f"Unsupported comparison operation: {op}")
-        litert_op, _ = _OP_MAP[op]
+        litert_op, _, _ = _OP_MAP[op]
 
         input_1_shape = tuple(self.desc["input_1_shape"])
         input_2_shape = tuple(self.desc["input_2_shape"])
@@ -109,21 +112,16 @@ class ComparisonFamilyBase(OperationBase):
             raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         activation_dtype = self.desc.get("activation_dtype", "S8")
-        if activation_dtype == "S16":
-            kernel_fn = "arm_comparison_s16"
-            c_type = "int16_t"
-            np_in_dtype = np.int16
-            qmin, qmax = -32768, 32767
-        else:
-            kernel_fn = "arm_comparison_s8"
-            c_type = "int8_t"
-            np_in_dtype = np.int8
-            qmin, qmax = -128, 127
+        dtype_info = _DTYPE_INFO.get(activation_dtype)
+        if dtype_info is None:
+            raise NotImplementedError(f"Unsupported Comparison dtype: {activation_dtype}")
+        _, c_type, np_in_dtype, qmin, qmax, kernel_suffix = dtype_info
 
         op = str(self.desc.get("operation", "equal")).lower()
         if op not in _OP_MAP:
             raise ValueError(f"Unsupported comparison operation: {op}")
-        _, op_enum = _OP_MAP[op]
+        _, op_enum, wrapper_prefix = _OP_MAP[op]
+        kernel_fn = f"{wrapper_prefix}_{kernel_suffix}"
 
         input_shape_1 = tuple(self.desc["input_1_shape"])
         input_shape_2 = tuple(self.desc["input_2_shape"])
@@ -166,7 +164,6 @@ class ComparisonFamilyBase(OperationBase):
             "input_2_mult": 1,
             "input_2_shift": 0,
             "left_shift": 0,
-            "operation": op_enum,
         }
 
         cmake_context = {
