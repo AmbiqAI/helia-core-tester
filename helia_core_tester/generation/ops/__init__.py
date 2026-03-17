@@ -6,6 +6,7 @@ from collections.abc import Iterator, Mapping
 from importlib import import_module
 from typing import Dict, Type
 
+from .catalog import get_operator_spec, iter_operator_specs
 from .op_registry import OP_CLASS_SPECS
 
 
@@ -37,4 +38,4 @@ def get_op_map() -> Mapping[str, Type]:
     return _OP_MAP
 
 
-__all__ = ["get_op_map"]
+__all__ = ["get_op_map", "get_operator_spec", "iter_operator_specs"]

@@ -1,59 +1,9 @@
-"""Lazy operation registry keyed by canonical CMSIS-NN operator names."""
+"""Lazy operation registry keyed by canonical operator names."""
+
+from helia_core_tester.generation.ops.catalog import OPERATOR_SPECS
+
 
 OP_CLASS_SPECS = {
-    "FullyConnected": ("helia_core_tester.generation.ops.fully_connected", "OpFullyConnected"),
-    "Convolve": ("helia_core_tester.generation.ops.convolve", "OpConvolve"),
-    "DepthwiseConv": ("helia_core_tester.generation.ops.depthwise_conv", "OpDepthwiseConv"),
-    "BatchMatMul": ("helia_core_tester.generation.ops.batch_matmul", "OpBatchMatMul"),
-    "Add": ("helia_core_tester.generation.ops.add", "OpAdd"),
-    "Abs": ("helia_core_tester.generation.ops.abs", "OpAbs"),
-    "Comparison": ("helia_core_tester.generation.ops.comparison", "OpComparison"),
-    "Sub": ("helia_core_tester.generation.ops.sub", "OpSub"),
-    "Mul": ("helia_core_tester.generation.ops.mul", "OpMul"),
-    "Maximum": ("helia_core_tester.generation.ops.minmax", "OpMinMax"),
-    "Minimum": ("helia_core_tester.generation.ops.minmax", "OpMinMax"),
-    "Relu": ("helia_core_tester.generation.ops.relu", "OpRelu"),
-    "Relu6": ("helia_core_tester.generation.ops.relu6", "OpRelu6"),
-    "LeakyRelu": ("helia_core_tester.generation.ops.leaky_relu", "OpLeakyRelu"),
-    "Softmax": ("helia_core_tester.generation.ops.softmax", "OpSoftmax"),
-    "Tanh": ("helia_core_tester.generation.ops.tanh", "OpTanh"),
-    "Logistic": ("helia_core_tester.generation.ops.logistic", "OpLogistic"),
-    "HardSwishPrecise": ("helia_core_tester.generation.ops.hard_swish_precise", "OpHardSwishPrecise"),
-    "HardSwishCompat": ("helia_core_tester.generation.ops.hard_swish_compat", "OpHardSwishCompat"),
-    "PReLU": ("helia_core_tester.generation.ops.prelu", "OpPReLU"),
-    "Quantize": ("helia_core_tester.generation.ops.quantize", "OpQuantize"),
-    "Dequantize": ("helia_core_tester.generation.ops.dequantize", "OpDequantize"),
-    "Requantize": ("helia_core_tester.generation.ops.requantize", "OpRequantize"),
-    "AvgPool": ("helia_core_tester.generation.ops.avg_pool", "OpAvgPool"),
-    "MaxPool": ("helia_core_tester.generation.ops.max_pool", "OpMaxPool"),
-    "Transpose": ("helia_core_tester.generation.ops.transpose", "OpTranspose"),
-    "StridedSlice": ("helia_core_tester.generation.ops.strided_slice", "OpStridedSlice"),
-    "Pad": ("helia_core_tester.generation.ops.pad", "OpPad"),
-    "LSTMUnidirectional": ("helia_core_tester.generation.ops.lstm_unidirectional", "OpLSTMUnidirectional"),
-    "SVDF": ("helia_core_tester.generation.ops.svdf", "OpSVDF"),
-    "Mean": ("helia_core_tester.generation.ops.mean", "OpMean"),
-    "ReduceMax": ("helia_core_tester.generation.ops.reduce_max", "OpReduceMax"),
-    "ReduceMin": ("helia_core_tester.generation.ops.reduce_min", "OpReduceMin"),
-    "ArgMax": ("helia_core_tester.generation.ops.argmax", "OpArgMax"),
-    "ArgMin": ("helia_core_tester.generation.ops.argmin", "OpArgMin"),
-    "Fill": ("helia_core_tester.generation.ops.fill", "OpFill"),
-    "Reshape": ("helia_core_tester.generation.ops.reshape", "OpReshape"),
-    "Squeeze": ("helia_core_tester.generation.ops.squeeze", "OpSqueeze"),
-    "SpaceToDepth": ("helia_core_tester.generation.ops.space_to_depth", "OpSpaceToDepth"),
-    "DepthToSpace": ("helia_core_tester.generation.ops.depth_to_space", "OpDepthToSpace"),
-    "Split": ("helia_core_tester.generation.ops.split", "OpSplit"),
-    "Concatenation": ("helia_core_tester.generation.ops.concatenation", "OpConcatenation"),
-    "Gather": ("helia_core_tester.generation.ops.gather", "OpGather"),
-    "GatherND": ("helia_core_tester.generation.ops.gather_nd", "OpGatherND"),
-    "SpaceToBatchND": ("helia_core_tester.generation.ops.space_to_batch_nd", "OpSpaceToBatchND"),
-    "BatchToSpaceND": ("helia_core_tester.generation.ops.batch_to_space_nd", "OpBatchToSpaceND"),
-    "VariableUpdate": ("helia_core_tester.generation.ops.variable_update", "OpVariableUpdate"),
-    "TransposeConv": ("helia_core_tester.generation.ops.transpose_conv", "OpTransposeConv"),
-    "Clamp": ("helia_core_tester.generation.ops.clamp", "OpClamp"),
-    "NNActivationS16": ("helia_core_tester.generation.ops.nn_activation_s16", "OpNNActivationS16"),
-    "ResizeNearestNeighbor": (
-        "helia_core_tester.generation.ops.resize_nearest_neighbor",
-        "OpResizeNearestNeighbor",
-    ),
+    operator: (spec.module_path, spec.class_name)
+    for operator, spec in OPERATOR_SPECS.items()
 }
-

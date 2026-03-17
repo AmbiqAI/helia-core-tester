@@ -43,9 +43,9 @@ class DescriptorTracker:
                 name = desc.get('name')
                 if name:
                     self._descriptors[name] = desc
-                    source_file = desc.get("_source_file")
-                    if source_file:
-                        self._descriptor_paths[name] = self.descriptors_dir / f"{source_file}.yaml"
+                    source_relpath = desc.get("_source_relpath")
+                    if source_relpath:
+                        self._descriptor_paths[name] = self.descriptors_dir / str(source_relpath)
                     else:
                         self._descriptor_paths[name] = self._find_descriptor_file(name)
             
@@ -60,11 +60,33 @@ class DescriptorTracker:
             stem = yaml_file.stem
             if descriptor_name == stem or descriptor_name.startswith(f"{stem}_"):
                 return yaml_file
-            if stem == "maximum_minimum" and (
-                descriptor_name.startswith("maximum_") or descriptor_name.startswith("minimum_")
-            ):
-                return yaml_file
         return self.descriptors_dir / f"{descriptor_name}.yaml"
+
+    def _descriptor_family(self, descriptor_name: str) -> Optional[str]:
+        descriptor = self._descriptors.get(descriptor_name)
+        if not descriptor:
+            return None
+        family = descriptor.get("_family")
+        return str(family) if family else None
+
+    def generated_test_dir_for(self, descriptor_name: str, generated_tests_dir: Path) -> Path:
+        family = self._descriptor_family(descriptor_name)
+        if family:
+            return generated_tests_dir / family / descriptor_name
+        matches = list(generated_tests_dir.rglob(descriptor_name))
+        for match in matches:
+            if match.is_dir():
+                return match
+        return generated_tests_dir / descriptor_name
+
+    def elf_path_for(self, descriptor_name: str, build_dir: Path) -> Path:
+        family = self._descriptor_family(descriptor_name)
+        if family:
+            return build_dir / "tests" / family / f"{descriptor_name}.elf"
+        matches = list((build_dir / "tests").rglob(f"{descriptor_name}.elf"))
+        if matches:
+            return matches[0]
+        return build_dir / "tests" / f"{descriptor_name}.elf"
     
     def map_test_to_descriptor(self, test_name: str, descriptors: Optional[Dict[str, Dict]] = None) -> Optional[Dict]:
         """
@@ -151,16 +173,17 @@ class DescriptorTracker:
             else:
                 return test_result.status, "execution", test_result.failure_reason
         
-        elf_path = build_dir / "tests" / f"{descriptor_name}.elf"
+        elf_path = self.elf_path_for(descriptor_name, build_dir)
         if not elf_path.exists():
             # Check for generated header files (new template system uses operator-specific names)
             # Look for any header file matching the pattern: {descriptor_name}_*.h
-            includes_api_dir = generated_tests_dir / descriptor_name / "includes"
+            generated_test_dir = self.generated_test_dir_for(descriptor_name, generated_tests_dir)
+            includes_api_dir = generated_test_dir / "includes"
             model_headers = list(includes_api_dir.glob(f"{descriptor_name}_*.h")) if includes_api_dir.exists() else []
-            model_header_old = generated_tests_dir / descriptor_name / "includes" / f"{descriptor_name}_model.h"
+            model_header_old = generated_test_dir / "includes" / f"{descriptor_name}_model.h"
             
             if not model_headers and not model_header_old.exists():
-                tflite_file = generated_tests_dir / descriptor_name / f"{descriptor_name}.tflite"
+                tflite_file = generated_test_dir / f"{descriptor_name}.tflite"
                 if not tflite_file.exists():
                     return TestStatus.GENERATION_FAILED, "generation", "TFLite model not generated"
                 else:

@@ -32,6 +32,10 @@ Removed interfaces:
 Generated tests:
 - `artifacts/generated_tests/<cpu>/manifest.json`
 - `artifacts/generated_tests/<cpu>/tests.cmake`
+- `artifacts/generated_tests/<cpu>/<Family>/<descriptor_name>/...`
+
+Build outputs:
+- `artifacts/build-<cpu>-<compiler>/tests/<Family>/<descriptor_name>.elf`
 
 Reports:
 - generation: `artifacts/reports/generation/<cpu>/`

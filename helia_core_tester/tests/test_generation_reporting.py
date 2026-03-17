@@ -36,12 +36,17 @@ def test_generation_emits_canonical_report_files(tmp_path: Path, monkeypatch: py
                 "operator": "FullyConnected",
                 "activation_dtype": "S8",
                 "weight_dtype": "S8",
+                "_family": "FullyConnectedFunctions",
+                "_parity_kind": "cmsis",
+                "_source_family": "FullyConnectedFunctions",
+                "_source_stem": "fully_connected",
+                "_source_relpath": "FullyConnectedFunctions/fully_connected.yaml",
             }
         ],
     )
 
     def _fake_generate_test(desc, out_dir, seed=None, cpu="cortex-m55", conversion_failures=None, generation_failures=None):
-        test_dir = Path(out_dir) / desc["name"]
+        test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
         (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
 
@@ -56,8 +61,13 @@ def test_generation_emits_canonical_report_files(tmp_path: Path, monkeypatch: py
     generation_failures = json.loads((report_dir / "generation_failures.json").read_text())
 
     assert summary["status"] == "success"
+    assert summary["families"] == ["FullyConnectedFunctions"]
+    assert summary["parity_kind_counts"] == {"cmsis": 1}
     assert summary["counts"]["generated"] == 1
     assert manifest_pointer["manifest_path"] == str(generated_tests_dir / "manifest.json")
+    manifest = json.loads((generated_tests_dir / "manifest.json").read_text())
+    assert manifest["tests"][0]["relative_test_dir"] == "FullyConnectedFunctions/fc_smoke"
+    assert '"artifacts/generated_tests/cortex-m55/FullyConnectedFunctions/fc_smoke"' in (generated_tests_dir / "tests.cmake").read_text()
     assert conversion_failures == []
     assert generation_failures == []
 
@@ -77,6 +87,11 @@ def test_generation_writes_reports_even_when_no_outputs(tmp_path: Path, monkeypa
                 "operator": "FullyConnected",
                 "activation_dtype": "S8",
                 "weight_dtype": "S8",
+                "_family": "FullyConnectedFunctions",
+                "_parity_kind": "cmsis",
+                "_source_family": "FullyConnectedFunctions",
+                "_source_stem": "fully_connected",
+                "_source_relpath": "FullyConnectedFunctions/fully_connected.yaml",
             }
         ],
     )

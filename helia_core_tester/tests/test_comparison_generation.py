@@ -1,6 +1,6 @@
 import pytest
 
-from helia_core_tester.generation.ops.comparison import OpComparison
+from helia_core_tester.generation.ops.ComparisonFunctions.comparison import OpComparison
 from helia_core_tester.generation.utils.litert_builder import LITERT_AVAILABLE
 
 
