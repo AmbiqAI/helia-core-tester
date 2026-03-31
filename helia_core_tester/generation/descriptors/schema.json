@@ -4,7 +4,12 @@
   "title": "Helia-Core Tester Descriptor Schema",
   "type": "object",
   "additionalProperties": true,
-  "required": ["name", "operator", "activation_dtype", "weight_dtype"],
+  "required": [
+    "name",
+    "operator",
+    "activation_dtype",
+    "weight_dtype"
+  ],
   "properties": {
     "name": {
       "type": "string",
@@ -33,11 +38,11 @@
         "GatherND",
         "HardSwishCompat",
         "HardSwishPrecise",
+        "LSTMUnidirectional",
         "LeakyRelu",
         "Logistic",
-        "LSTMUnidirectional",
-        "Maximum",
         "MaxPool",
+        "Maximum",
         "Mean",
         "Minimum",
         "Mul",
@@ -47,9 +52,9 @@
         "Quantize",
         "ReduceMax",
         "ReduceMin",
-        "Requantize",
         "Relu",
         "Relu6",
+        "Requantize",
         "Reshape",
         "ResizeNearestNeighbor",
         "SVDF",
@@ -57,6 +62,8 @@
         "SpaceToBatchND",
         "SpaceToDepth",
         "Split",
+        "Sqrt",
+        "SquaredDifference",
         "Squeeze",
         "StridedSlice",
         "Sub",
@@ -68,74 +75,184 @@
     },
     "activation_dtype": {
       "type": "string",
-      "enum": ["S8", "S16", "S32"]
+      "enum": [
+        "S8",
+        "S16",
+        "S32"
+      ]
     },
     "weight_dtype": {
       "type": "string",
-      "enum": ["S4", "S8"]
+      "enum": [
+        "S4",
+        "S8"
+      ]
     },
     "activation": {
       "type": "string",
-      "enum": ["NONE", "RELU", "RELU6"]
+      "enum": [
+        "NONE",
+        "RELU",
+        "RELU6"
+      ]
     },
     "operation": {
       "type": "string",
-      "enum": ["equal", "not_equal", "greater", "greater_equal", "less", "less_equal"]
+      "enum": [
+        "equal",
+        "not_equal",
+        "greater",
+        "greater_equal",
+        "less",
+        "less_equal"
+      ]
     },
     "padding": {
       "type": "string",
-      "enum": ["SAME", "VALID", "same", "valid"]
+      "enum": [
+        "SAME",
+        "VALID",
+        "same",
+        "valid"
+      ]
     },
-    "name_hint": { "type": "string" },
-    "input_shape": { "$ref": "#/$defs/intArray" },
-    "filter_shape": { "$ref": "#/$defs/intArray" },
-    "input_1_shape": { "$ref": "#/$defs/intArray" },
-    "input_2_shape": { "$ref": "#/$defs/intArray" },
-    "pool_size": { "$ref": "#/$defs/intArray" },
-    "indices_shape": { "$ref": "#/$defs/intArray" },
-    "size": { "$ref": "#/$defs/intArray" },
-    "strides": { "$ref": "#/$defs/intArray" },
-    "begin": { "$ref": "#/$defs/intArray" },
-    "end": { "$ref": "#/$defs/intArray" },
-    "block_size": { "$ref": "#/$defs/intArray" },
-    "block_shape": { "$ref": "#/$defs/intArray" },
-    "crops": { "$ref": "#/$defs/intArray" },
-    "pads": { "$ref": "#/$defs/intArray" },
-    "use_bias": { "type": "boolean" },
-    "axis": { "type": "integer" },
-    "value": { "type": ["integer", "number"] },
-    "act_min": { "type": "integer" },
-    "act_max": { "type": "integer" },
-    "activation_type": { "type": "string" },
-    "dataset": { "type": "string" },
-    "batch_size": { "type": "integer" },
-    "time_steps": { "type": "integer" },
-    "feature_size": { "type": "integer" },
-    "units": { "type": "integer" },
-    "time_major": { "type": "boolean" },
-    "force_shared_scale": { "type": "boolean" },
-    "shared_fq_range": { "$ref": "#/$defs/numberArray" },
-    "rep_samples": { "type": "integer" },
-    "effective_scale_multiplier": { "type": "integer" },
-    "effective_scale_shift": { "type": "integer" },
-    "input_zeropoint": { "type": "integer" },
-    "output_zeropoint": { "type": "integer" },
+    "name_hint": {
+      "type": "string"
+    },
+    "input_shape": {
+      "$ref": "#/$defs/intArray"
+    },
+    "filter_shape": {
+      "$ref": "#/$defs/intArray"
+    },
+    "input_1_shape": {
+      "$ref": "#/$defs/intArray"
+    },
+    "input_2_shape": {
+      "$ref": "#/$defs/intArray"
+    },
+    "pool_size": {
+      "$ref": "#/$defs/intArray"
+    },
+    "indices_shape": {
+      "$ref": "#/$defs/intArray"
+    },
+    "size": {
+      "$ref": "#/$defs/intArray"
+    },
+    "strides": {
+      "$ref": "#/$defs/intArray"
+    },
+    "begin": {
+      "$ref": "#/$defs/intArray"
+    },
+    "end": {
+      "$ref": "#/$defs/intArray"
+    },
+    "block_size": {
+      "$ref": "#/$defs/intArray"
+    },
+    "block_shape": {
+      "$ref": "#/$defs/intArray"
+    },
+    "crops": {
+      "$ref": "#/$defs/intArray"
+    },
+    "pads": {
+      "$ref": "#/$defs/intArray"
+    },
+    "use_bias": {
+      "type": "boolean"
+    },
+    "axis": {
+      "type": "integer"
+    },
+    "value": {
+      "type": [
+        "integer",
+        "number"
+      ]
+    },
+    "act_min": {
+      "type": "integer"
+    },
+    "act_max": {
+      "type": "integer"
+    },
+    "activation_type": {
+      "type": "string"
+    },
+    "dataset": {
+      "type": "string"
+    },
+    "batch_size": {
+      "type": "integer"
+    },
+    "time_steps": {
+      "type": "integer"
+    },
+    "feature_size": {
+      "type": "integer"
+    },
+    "units": {
+      "type": "integer"
+    },
+    "time_major": {
+      "type": "boolean"
+    },
+    "force_shared_scale": {
+      "type": "boolean"
+    },
+    "shared_fq_range": {
+      "$ref": "#/$defs/numberArray"
+    },
+    "rep_samples": {
+      "type": "integer"
+    },
+    "effective_scale_multiplier": {
+      "type": "integer"
+    },
+    "effective_scale_shift": {
+      "type": "integer"
+    },
+    "input_zeropoint": {
+      "type": "integer"
+    },
+    "output_zeropoint": {
+      "type": "integer"
+    },
     "hint": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "call_style": { "type": "string" },
-        "force_cmsis": { "type": "boolean" },
-        "kernel": { "type": "string" },
+        "call_style": {
+          "type": "string"
+        },
+        "force_cmsis": {
+          "type": "boolean"
+        },
+        "kernel": {
+          "type": "string"
+        },
         "extras": {
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "input_zero_point": { "type": "integer" },
-            "output_zero_point": { "type": "integer" },
-            "input_scale": { "type": "number" },
-            "weight_scale": { "type": "number" },
-            "output_scale": { "type": "number" }
+            "input_zero_point": {
+              "type": "integer"
+            },
+            "output_zero_point": {
+              "type": "integer"
+            },
+            "input_scale": {
+              "type": "number"
+            },
+            "weight_scale": {
+              "type": "number"
+            },
+            "output_scale": {
+              "type": "number"
+            }
           }
         }
       }
@@ -144,58 +261,237 @@
   "$defs": {
     "intArray": {
       "type": "array",
-      "items": { "type": "integer" }
+      "items": {
+        "type": "integer"
+      }
     },
     "numberArray": {
       "type": "array",
-      "items": { "type": "number" }
+      "items": {
+        "type": "number"
+      }
     }
   },
   "allOf": [
     {
-      "if": { "properties": { "operator": { "const": "FullyConnected" } } },
-      "then": { "required": ["input_shape", "filter_shape"] }
-    },
-    {
-      "if": { "properties": { "operator": { "enum": ["Convolve", "DepthwiseConv"] } } },
-      "then": { "required": ["input_shape", "filter_shape"] }
-    },
-    {
-      "if": { "properties": { "operator": { "enum": ["BatchMatMul", "Add", "Sub", "Mul", "Maximum", "Minimum", "Comparison"] } } },
-      "then": { "required": ["input_1_shape", "input_2_shape"] }
-    },
-    {
-      "if": { "properties": { "operator": { "const": "Comparison" } } },
-      "then": { "required": ["operation"] }
-    },
-    {
-      "if": { "properties": { "operator": { "enum": ["AvgPool", "MaxPool"] } } },
+      "$comment": "descriptor_profile:fully_connected",
+      "if": {
+        "properties": {
+          "operator": {
+            "const": "FullyConnected"
+          }
+        }
+      },
       "then": {
-        "required": ["input_shape"],
-        "anyOf": [
-          { "required": ["pool_size"] },
-          { "required": ["filter_shape"] }
+        "required": [
+          "input_shape",
+          "filter_shape"
         ]
       }
     },
     {
-      "if": { "properties": { "operator": { "enum": ["Relu", "Relu6", "LeakyRelu", "Softmax", "Quantize", "Dequantize", "Abs", "Transpose", "StridedSlice", "Pad", "LSTMUnidirectional", "SVDF", "Mean", "ReduceMax", "ReduceMin", "ArgMax", "ArgMin", "TransposeConv", "Tanh", "Logistic", "HardSwishPrecise", "HardSwishCompat", "PReLU", "Fill", "Reshape", "Squeeze", "SpaceToDepth", "DepthToSpace", "Split", "Concatenation", "SpaceToBatchND", "BatchToSpaceND", "ResizeNearestNeighbor", "VariableUpdate", "Clamp", "NNActivationS16", "Gather", "GatherND", "Requantize"] } } },
-      "then": { "required": ["input_shape"] }
+      "$comment": "descriptor_profile:conv",
+      "if": {
+        "properties": {
+          "operator": {
+            "enum": [
+              "Convolve",
+              "DepthwiseConv"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "input_shape",
+          "filter_shape"
+        ]
+      }
     },
     {
-      "if": { "properties": { "operator": { "const": "Clamp" } } },
-      "then": { "required": ["act_min", "act_max"] }
+      "$comment": "descriptor_profile:dual_input_elementwise",
+      "if": {
+        "properties": {
+          "operator": {
+            "enum": [
+              "Add",
+              "BatchMatMul",
+              "Comparison",
+              "Maximum",
+              "Minimum",
+              "Mul",
+              "SquaredDifference",
+              "Sub"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "input_1_shape",
+          "input_2_shape"
+        ]
+      }
     },
     {
-      "if": { "properties": { "operator": { "const": "NNActivationS16" } } },
-      "then": { "required": ["activation_type"] }
+      "$comment": "operator_required_fields:Comparison",
+      "if": {
+        "properties": {
+          "operator": {
+            "const": "Comparison"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "operation"
+        ]
+      }
     },
     {
-      "if": { "properties": { "operator": { "enum": ["Gather", "GatherND"] } } },
-      "then": { "required": ["indices_shape"] }
+      "$comment": "descriptor_profile:pool",
+      "if": {
+        "properties": {
+          "operator": {
+            "enum": [
+              "AvgPool",
+              "MaxPool"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "input_shape"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "pool_size"
+            ]
+          },
+          {
+            "required": [
+              "filter_shape"
+            ]
+          }
+        ]
+      }
     },
     {
-      "if": { "properties": { "operator": { "const": "Requantize" } } },
+      "$comment": "descriptor_profile:single_input_unary",
+      "if": {
+        "properties": {
+          "operator": {
+            "enum": [
+              "Relu",
+              "Relu6",
+              "LeakyRelu",
+              "Softmax",
+              "Quantize",
+              "Dequantize",
+              "Abs",
+              "Transpose",
+              "StridedSlice",
+              "Pad",
+              "LSTMUnidirectional",
+              "SVDF",
+              "Mean",
+              "ReduceMax",
+              "ReduceMin",
+              "ArgMax",
+              "ArgMin",
+              "Sqrt",
+              "TransposeConv",
+              "Tanh",
+              "Logistic",
+              "HardSwishPrecise",
+              "HardSwishCompat",
+              "PReLU",
+              "Fill",
+              "Reshape",
+              "Squeeze",
+              "SpaceToDepth",
+              "DepthToSpace",
+              "Split",
+              "Concatenation",
+              "SpaceToBatchND",
+              "BatchToSpaceND",
+              "ResizeNearestNeighbor",
+              "VariableUpdate",
+              "Clamp",
+              "NNActivationS16",
+              "Gather",
+              "GatherND",
+              "Requantize"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "input_shape"
+        ]
+      }
+    },
+    {
+      "$comment": "operator_required_fields:Clamp",
+      "if": {
+        "properties": {
+          "operator": {
+            "const": "Clamp"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "act_min",
+          "act_max"
+        ]
+      }
+    },
+    {
+      "$comment": "operator_required_fields:NNActivationS16",
+      "if": {
+        "properties": {
+          "operator": {
+            "const": "NNActivationS16"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "activation_type"
+        ]
+      }
+    },
+    {
+      "$comment": "operator_required_fields:Gather",
+      "if": {
+        "properties": {
+          "operator": {
+            "enum": [
+              "Gather",
+              "GatherND"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "indices_shape"
+        ]
+      }
+    },
+    {
+      "$comment": "operator_required_fields:Requantize",
+      "if": {
+        "properties": {
+          "operator": {
+            "const": "Requantize"
+          }
+        }
+      },
       "then": {
         "required": [
           "effective_scale_multiplier",
@@ -206,14 +502,34 @@
       }
     },
     {
-      "if": { "properties": { "operator": { "const": "ResizeNearestNeighbor" } } },
-      "then": { "required": ["size"] }
+      "$comment": "operator_required_fields:ResizeNearestNeighbor",
+      "if": {
+        "properties": {
+          "operator": {
+            "const": "ResizeNearestNeighbor"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "size"
+        ]
+      }
     },
     {
-      "if": { "properties": { "operator": { "const": "HardSwishCompat" } } },
+      "$comment": "operator_activation_dtype_const:HardSwishCompat",
+      "if": {
+        "properties": {
+          "operator": {
+            "const": "HardSwishCompat"
+          }
+        }
+      },
       "then": {
         "properties": {
-          "activation_dtype": { "const": "S8" }
+          "activation_dtype": {
+            "const": "S8"
+          }
         }
       }
     }

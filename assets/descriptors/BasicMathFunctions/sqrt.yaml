@@ -1,0 +1,17 @@
+name: sqrt_small_tensor_s8
+operator: Sqrt
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [1, 2, 3, 4]
+---
+name: sqrt_long_row_s8
+operator: Sqrt
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [1, 1, 64, 1]
+---
+name: sqrt_multi_batch_s8
+operator: Sqrt
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [2, 3, 5, 3]

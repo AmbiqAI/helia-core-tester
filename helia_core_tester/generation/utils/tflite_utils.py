@@ -76,6 +76,42 @@ def elementwise_addsub_quant_params(
     }
 
 
+def elementwise_squared_difference_quant_params(
+    input1_scale: float,
+    input2_scale: float,
+    output_scale: float,
+    activation_dtype: str,
+) -> Dict[str, int]:
+    """
+    Calculate CMSIS/TFL-style quant params for elementwise SquaredDifference.
+
+    This follows the CMSIS refactored unit-test generation logic:
+      - left_shift = 7 for S8, 0 for S16
+      - input multipliers based on input_scale / (2 * max_input_scale)
+      - output multiplier based on:
+        (2 * max_input_scale)^2 / ((1 << (left_shift * 2)) * output_scale)
+    """
+    activation_dtype = str(activation_dtype).upper()
+    left_shift = 0 if activation_dtype == "S16" else 7
+
+    twice_max_input_scale = 2.0 * max(float(input1_scale), float(input2_scale))
+    input1_mult, input1_shift = calculate_multiplier_shift(float(input1_scale) / twice_max_input_scale)
+    input2_mult, input2_shift = calculate_multiplier_shift(float(input2_scale) / twice_max_input_scale)
+    output_mult, output_shift = calculate_multiplier_shift(
+        (twice_max_input_scale * twice_max_input_scale) / ((1 << (left_shift * 2)) * float(output_scale))
+    )
+
+    return {
+        "left_shift": int(left_shift),
+        "input1_mult": int(input1_mult),
+        "input1_shift": int(input1_shift),
+        "input2_mult": int(input2_mult),
+        "input2_shift": int(input2_shift),
+        "out_mult": int(output_mult),
+        "out_shift": int(output_shift),
+    }
+
+
 def calculate_multiplier_shift(scale: float) -> Tuple[int, int]:
     """
     Calculate multiplier and shift from quantization scale.

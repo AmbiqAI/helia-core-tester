@@ -4,7 +4,7 @@ Descriptor ingestion with dtype validation and kernel resolution.
 
 import yaml
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 from pathlib import Path
 
 from helia_core_tester.generation.ops.catalog import get_operator_spec
@@ -18,18 +18,135 @@ ALLOWED_DTYPE_COMBOS = {
     ('S32', 'S8'): 's32',
 }
 
-CONV_OPERATORS = {'Convolve', 'DepthwiseConv'}
-DUAL_INPUT_OPERATORS = {'BatchMatMul', 'Add', 'Sub', 'Mul', 'Maximum', 'Minimum', 'Comparison'}
-POOL_OPERATORS = {'AvgPool', 'MaxPool'}
-SINGLE_INPUT_OPERATORS = {
-    'Relu', 'Relu6', 'LeakyRelu', 'Softmax', 'Quantize', 'Dequantize', 'Abs',
-    'Transpose', 'StridedSlice', 'Pad', 'LSTMUnidirectional', 'SVDF',
-    'Mean', 'ReduceMax', 'ReduceMin', 'ArgMax', 'ArgMin', 'TransposeConv',
-    'Tanh', 'Logistic', 'HardSwishPrecise', 'HardSwishCompat', 'PReLU', 'Fill',
-    'Reshape', 'Squeeze', 'SpaceToDepth', 'DepthToSpace',
-    'Split', 'Concatenation', 'SpaceToBatchND', 'BatchToSpaceND',
-    'ResizeNearestNeighbor', 'VariableUpdate', 'Clamp', 'NNActivationS16', 'Gather', 'GatherND', 'Requantize'
+OPERATOR_DESCRIPTOR_PROFILES = {'Abs': 'single_input_unary',
+ 'Add': 'dual_input_elementwise',
+ 'ArgMax': 'arg_reduction',
+ 'ArgMin': 'arg_reduction',
+ 'AvgPool': 'pool',
+ 'BatchMatMul': 'dual_input_elementwise',
+ 'BatchToSpaceND': 'shape_transform',
+ 'Clamp': 'single_input_unary',
+ 'Comparison': 'dual_input_elementwise',
+ 'Concatenation': 'shape_transform',
+ 'Convolve': 'conv',
+ 'DepthToSpace': 'shape_transform',
+ 'DepthwiseConv': 'conv',
+ 'Dequantize': 'single_input_unary',
+ 'Fill': 'single_input_unary',
+ 'FullyConnected': 'fully_connected',
+ 'Gather': 'shape_transform',
+ 'GatherND': 'shape_transform',
+ 'HardSwishCompat': 'single_input_unary',
+ 'HardSwishPrecise': 'single_input_unary',
+ 'LSTMUnidirectional': 'single_input_unary',
+ 'LeakyRelu': 'single_input_unary',
+ 'Logistic': 'single_input_unary',
+ 'MaxPool': 'pool',
+ 'Maximum': 'dual_input_elementwise',
+ 'Mean': 'single_input_unary',
+ 'Minimum': 'dual_input_elementwise',
+ 'Mul': 'dual_input_elementwise',
+ 'NNActivationS16': 'single_input_unary',
+ 'PReLU': 'single_input_unary',
+ 'Pad': 'single_input_unary',
+ 'Quantize': 'single_input_unary',
+ 'ReduceMax': 'single_input_unary',
+ 'ReduceMin': 'single_input_unary',
+ 'Relu': 'single_input_unary',
+ 'Relu6': 'single_input_unary',
+ 'Requantize': 'single_input_unary',
+ 'Reshape': 'shape_transform',
+ 'ResizeNearestNeighbor': 'shape_transform',
+ 'SVDF': 'single_input_unary',
+ 'Softmax': 'single_input_unary',
+ 'SpaceToBatchND': 'shape_transform',
+ 'SpaceToDepth': 'shape_transform',
+ 'Split': 'shape_transform',
+ 'Sqrt': 'single_input_unary',
+ 'SquaredDifference': 'dual_input_elementwise',
+ 'Squeeze': 'shape_transform',
+ 'StridedSlice': 'shape_transform',
+ 'Sub': 'dual_input_elementwise',
+ 'Tanh': 'single_input_unary',
+ 'Transpose': 'shape_transform',
+ 'TransposeConv': 'shape_transform',
+ 'VariableUpdate': 'shape_transform'}
+
+PROFILE_REQUIRED_FIELDS = {
+    'arg_reduction': ('input_shape',),
+    'conv': ('input_shape', 'filter_shape'),
+    'custom': (),
+    'dual_input_elementwise': ('input_1_shape', 'input_2_shape'),
+    'fully_connected': ('input_shape', 'filter_shape'),
+    'pool': ('input_shape',),
+    'shape_transform': ('input_shape',),
+    'single_input_unary': ('input_shape',),
 }
+
+PROFILE_ONE_OF_REQUIRED_FIELDS = {
+    'pool': (('pool_size',), ('filter_shape',)),
+}
+
+OPERATOR_EXTRA_REQUIRED_FIELDS = {'Clamp': ('act_min', 'act_max'),
+ 'Comparison': ('operation',),
+ 'Gather': ('indices_shape',),
+ 'GatherND': ('indices_shape',),
+ 'NNActivationS16': ('activation_type',),
+ 'Requantize': ('effective_scale_multiplier',
+                'effective_scale_shift',
+                'input_zeropoint',
+                'output_zeropoint'),
+ 'ResizeNearestNeighbor': ('size',)}
+
+OPERATOR_FIELD_CONSTRAINTS = {'HardSwishCompat': {'activation_dtype': 'S8'}}
+
+
+def _operator_descriptor_profile(operator: str) -> str:
+    try:
+        return OPERATOR_DESCRIPTOR_PROFILES[operator]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported operator: {operator}") from exc
+
+
+def _requires_input_shape(operator: str, desc: Dict[str, Any]) -> bool:
+    return not (operator == 'LSTMUnidirectional' and desc.get('hint', {}).get('force_cmsis', False))
+
+
+def _validate_profile_requirements(
+    desc: Dict[str, Any],
+    operator: str,
+    *,
+    variation: bool = False,
+) -> None:
+    profile = _operator_descriptor_profile(operator)
+    suffix = " variation" if variation else ""
+
+    if profile == 'fully_connected':
+        if 'input_shape' not in desc or 'filter_shape' not in desc:
+            raise ValueError(f"{operator}{suffix} requires input_shape and filter_shape")
+    elif profile == 'conv':
+        if 'input_shape' not in desc or 'filter_shape' not in desc:
+            raise ValueError(f"{operator}{suffix} requires input_shape and filter_shape")
+    elif profile == 'dual_input_elementwise':
+        if 'input_1_shape' not in desc or 'input_2_shape' not in desc:
+            raise ValueError(f"{operator}{suffix} requires input_1_shape and input_2_shape")
+    elif profile == 'pool':
+        if 'input_shape' not in desc or ('pool_size' not in desc and 'filter_shape' not in desc):
+            raise ValueError(f"{operator}{suffix} requires input_shape and pool_size (or filter_shape)")
+    else:
+        for field in PROFILE_REQUIRED_FIELDS.get(profile, ()):
+            if field == 'input_shape' and not _requires_input_shape(operator, desc):
+                continue
+            if field not in desc:
+                raise ValueError(f"{operator}{suffix} requires {field}")
+
+    for field in OPERATOR_EXTRA_REQUIRED_FIELDS.get(operator, ()):
+        if field not in desc:
+            raise ValueError(f"{operator}{suffix} requires {field}")
+
+    for field, expected in OPERATOR_FIELD_CONSTRAINTS.get(operator, {}).items():
+        if str(desc.get(field, "")).upper() != str(expected).upper():
+            raise ValueError(f"{operator}{suffix} only supports {field}={expected}")
 
 
 def _annotate_descriptor_source(
@@ -91,56 +208,9 @@ def _validate_and_normalize_descriptor(desc: Dict[str, Any]) -> Dict[str, Any]:
 
     operator = desc['operator']
 
-    # Operator-specific dtype constraints (prevent runtime crashes/hardfaults)
-    # S4 is supported for Convolve/DepthwiseConv/FullyConnected via LiteRT-only generation.
-
+    # Operator-specific shape and field validation.
     if 'variations' not in desc:
-        if operator == 'FullyConnected':
-            if 'input_shape' not in desc or 'filter_shape' not in desc:
-                raise ValueError("FullyConnected requires input_shape and filter_shape")
-        elif operator in CONV_OPERATORS:
-            if 'input_shape' not in desc or 'filter_shape' not in desc:
-                raise ValueError(f"{operator} requires input_shape and filter_shape")
-        elif operator in DUAL_INPUT_OPERATORS:
-            if 'input_1_shape' not in desc or 'input_2_shape' not in desc:
-                raise ValueError(f"{operator} requires input_1_shape and input_2_shape")
-            if operator == 'Comparison' and 'operation' not in desc:
-                raise ValueError("Comparison requires operation")
-        elif operator in POOL_OPERATORS:
-            if 'input_shape' not in desc or ('pool_size' not in desc and 'filter_shape' not in desc):
-                raise ValueError(f"{operator} requires input_shape and pool_size (or filter_shape)")
-        elif operator in SINGLE_INPUT_OPERATORS:
-            if 'input_shape' not in desc:
-                if operator == 'LSTMUnidirectional' and desc.get('hint', {}).get('force_cmsis', False):
-                    pass
-                else:
-                    raise ValueError(f"{operator} requires input_shape")
-            if operator == 'Clamp':
-                if 'act_min' not in desc or 'act_max' not in desc:
-                    raise ValueError("Clamp requires act_min and act_max")
-            if operator == 'NNActivationS16':
-                if 'activation_type' not in desc:
-                    raise ValueError("NNActivationS16 requires activation_type")
-            if operator in ['Gather', 'GatherND']:
-                if 'indices_shape' not in desc:
-                    raise ValueError(f"{operator} requires indices_shape")
-            if operator == 'Requantize':
-                required = [
-                    'effective_scale_multiplier',
-                    'effective_scale_shift',
-                    'input_zeropoint',
-                    'output_zeropoint',
-                ]
-                for field in required:
-                    if field not in desc:
-                        raise ValueError(f"Requantize requires {field}")
-            if operator == 'ResizeNearestNeighbor':
-                if 'size' not in desc:
-                    raise ValueError("ResizeNearestNeighbor requires size")
-            if operator == 'HardSwishCompat' and desc['activation_dtype'] != 'S8':
-                raise ValueError("HardSwishCompat only supports S8 activations")
-        else:
-            raise ValueError(f"Unsupported operator: {operator}")
+        _validate_profile_requirements(desc, operator)
 
     for shape_key in ['input_shape', 'filter_shape', 'input_1_shape', 'input_2_shape', 'pool_size', 'indices_shape']:
         if shape_key in desc:
@@ -277,52 +347,9 @@ def expand_descriptor_variations(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Store base descriptor name for filtering purposes
         variation_desc['_base_name'] = base_name
         
-        # Validate the expanded variation has required shapes
+        # Validate the expanded variation has required shapes and operator-specific fields.
         operator = variation_desc['operator']
-        if operator == 'FullyConnected':
-            if 'input_shape' not in variation_desc or 'filter_shape' not in variation_desc:
-                raise ValueError("FullyConnected variation requires input_shape and filter_shape")
-        elif operator in CONV_OPERATORS:
-            if 'input_shape' not in variation_desc or 'filter_shape' not in variation_desc:
-                raise ValueError(f"{operator} variation requires input_shape and filter_shape")
-        elif operator in DUAL_INPUT_OPERATORS:
-            if 'input_1_shape' not in variation_desc or 'input_2_shape' not in variation_desc:
-                raise ValueError(f"{operator} variation requires input_1_shape and input_2_shape")
-            if operator == 'Comparison' and 'operation' not in variation_desc:
-                raise ValueError("Comparison variation requires operation")
-        elif operator in POOL_OPERATORS:
-            if 'input_shape' not in variation_desc or ('pool_size' not in variation_desc and 'filter_shape' not in variation_desc):
-                raise ValueError(f"{operator} variation requires input_shape and pool_size (or filter_shape)")
-        elif operator in SINGLE_INPUT_OPERATORS:
-            if 'input_shape' not in variation_desc:
-                if operator == 'LSTMUnidirectional' and variation_desc.get('hint', {}).get('force_cmsis', False):
-                    pass
-                else:
-                    raise ValueError(f"{operator} variation requires input_shape")
-            if operator == 'Clamp':
-                if 'act_min' not in variation_desc or 'act_max' not in variation_desc:
-                    raise ValueError("Clamp variation requires act_min and act_max")
-            if operator == 'NNActivationS16':
-                if 'activation_type' not in variation_desc:
-                    raise ValueError("NNActivationS16 variation requires activation_type")
-            if operator in ['Gather', 'GatherND']:
-                if 'indices_shape' not in variation_desc:
-                    raise ValueError(f"{operator} variation requires indices_shape")
-            if operator == 'Requantize':
-                required = [
-                    'effective_scale_multiplier',
-                    'effective_scale_shift',
-                    'input_zeropoint',
-                    'output_zeropoint',
-                ]
-                for field in required:
-                    if field not in variation_desc:
-                        raise ValueError(f"Requantize variation requires {field}")
-            if operator == 'ResizeNearestNeighbor':
-                if 'size' not in variation_desc:
-                    raise ValueError("ResizeNearestNeighbor variation requires size")
-            if operator == 'HardSwishCompat' and variation_desc['activation_dtype'] != 'S8':
-                raise ValueError("HardSwishCompat variation only supports S8 activations")
+        _validate_profile_requirements(variation_desc, operator, variation=True)
         
         # Normalize shapes (ensure they are lists)
         for shape_key in ['input_shape', 'filter_shape', 'input_1_shape', 'input_2_shape', 'pool_size']:

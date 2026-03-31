@@ -54,19 +54,7 @@ def _spec(
 
 
 OPERATOR_SPECS: Dict[str, OperatorSpec] = {
-    "Relu": _spec("Relu", "ActivationFunctions", "relu", "OpRelu", "ActivationFunctions/relu.yaml", "ActivationFunctions/relu"),
-    "Relu6": _spec("Relu6", "ActivationFunctions", "relu6", "OpRelu6", "ActivationFunctions/relu6.yaml", "ActivationFunctions/relu6"),
-    "LeakyRelu": _spec("LeakyRelu", "ActivationFunctions", "leaky_relu", "OpLeakyRelu", "ActivationFunctions/leaky_relu.yaml", "ActivationFunctions/leaky_relu"),
-    "Tanh": _spec("Tanh", "ActivationFunctions", "tanh", "OpTanh", "ActivationFunctions/tanh.yaml", "ActivationFunctions/tanh"),
-    "Logistic": _spec("Logistic", "ActivationFunctions", "logistic", "OpLogistic", "ActivationFunctions/logistic.yaml", "ActivationFunctions/logistic"),
-    "HardSwishPrecise": _spec(
-        "HardSwishPrecise",
-        "ActivationFunctions",
-        "hard_swish_precise",
-        "OpHardSwishPrecise",
-        "ActivationFunctions/hard_swish_precise.yaml",
-        "ActivationFunctions/hard_swish",
-    ),
+
     "HardSwishCompat": _spec(
         "HardSwishCompat",
         "ActivationFunctions",
@@ -85,6 +73,19 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         None,
         "ActivationFunctions/nn_activation",
     ),
+    "Relu": _spec("Relu", "ActivationFunctions", "relu", "OpRelu", "ActivationFunctions/relu.yaml", "ActivationFunctions/relu"),
+    "Relu6": _spec("Relu6", "ActivationFunctions", "relu6", "OpRelu6", "ActivationFunctions/relu6.yaml", "ActivationFunctions/relu6"),
+    "LeakyRelu": _spec("LeakyRelu", "ActivationFunctions", "leaky_relu", "OpLeakyRelu", "ActivationFunctions/leaky_relu.yaml", "ActivationFunctions/leaky_relu"),
+    "Tanh": _spec("Tanh", "ActivationFunctions", "tanh", "OpTanh", "ActivationFunctions/tanh.yaml", "ActivationFunctions/tanh"),
+    "Logistic": _spec("Logistic", "ActivationFunctions", "logistic", "OpLogistic", "ActivationFunctions/logistic.yaml", "ActivationFunctions/logistic"),
+    "HardSwishPrecise": _spec(
+        "HardSwishPrecise",
+        "ActivationFunctions",
+        "hard_swish_precise",
+        "OpHardSwishPrecise",
+        "ActivationFunctions/hard_swish_precise.yaml",
+        "ActivationFunctions/hard_swish",
+    ),
     "Abs": _spec("Abs", "BasicMathFunctions", "abs", "OpAbs", "BasicMathFunctions/abs.yaml", "BasicMathFunctions/abs"),
     "Add": _spec("Add", "BasicMathFunctions", "add", "OpAdd", "BasicMathFunctions/add.yaml", "BasicMathFunctions/add"),
     "Sub": _spec("Sub", "BasicMathFunctions", "sub", "OpSub", "BasicMathFunctions/sub.yaml", "BasicMathFunctions/sub"),
@@ -96,6 +97,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
     "ReduceMin": _spec("ReduceMin", "BasicMathFunctions", "reduce_min", "OpReduceMin", "BasicMathFunctions/reduce_min.yaml", "BasicMathFunctions/reduce_min"),
     "ArgMax": _spec("ArgMax", "BasicMathFunctions", "argmax", "OpArgMax", "BasicMathFunctions/argmax.yaml", "BasicMathFunctions/argmax"),
     "ArgMin": _spec("ArgMin", "BasicMathFunctions", "argmin", "OpArgMin", "BasicMathFunctions/argmin.yaml", "BasicMathFunctions/argmin"),
+    "Sqrt": _spec("Sqrt", "BasicMathFunctions", "sqrt", "OpSqrt", "BasicMathFunctions/sqrt.yaml", "BasicMathFunctions/sqrt"),
     "Comparison": _spec("Comparison", "ComparisonFunctions", "comparison", "OpComparison", "ComparisonFunctions/comparison.yaml", "ComparisonFunctions/comparison"),
     "Concatenation": _spec("Concatenation", "ConcatenationFunctions", "concatenation", "OpConcatenation", "ConcatenationFunctions/concatenation.yaml", "ConcatenationFunctions/concatenation"),
     "Split": _spec("Split", "ConcatenationFunctions", "split", "OpSplit", "ConcatenationFunctions/split.yaml", "ConcatenationFunctions/split"),
@@ -122,6 +124,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "ReshapeFunctions/resize_nearest_neighbor.yaml",
         "ReshapeFunctions/resize_nearest_neighbor",
     ),
+    "SquaredDifference": _spec("SquaredDifference", "BasicMathFunctions", "squared_difference", "OpSquaredDifference", "BasicMathFunctions/squared_difference.yaml", "BasicMathFunctions/squared_difference"),
     "SpaceToDepth": _spec("SpaceToDepth", "ReshapeFunctions", "space_to_depth", "OpSpaceToDepth", "ReshapeFunctions/space_to_depth.yaml", "ReshapeFunctions/space_to_depth"),
     "DepthToSpace": _spec("DepthToSpace", "ReshapeFunctions", "depth_to_space", "OpDepthToSpace", "ReshapeFunctions/depth_to_space.yaml", "ReshapeFunctions/depth_to_space"),
     "SpaceToBatchND": _spec("SpaceToBatchND", "ReshapeFunctions", "space_to_batch_nd", "OpSpaceToBatchND", "ReshapeFunctions/space_to_batch_nd.yaml", "ReshapeFunctions/space_to_batch_nd"),
@@ -161,6 +164,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         rationale="Tester-only stateful op kept public but isolated from CMSIS parity families.",
     ),
 }
+
 
 
 def get_operator_spec(operator: str) -> OperatorSpec:

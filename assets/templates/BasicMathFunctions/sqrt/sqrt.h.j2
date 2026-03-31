@@ -1,0 +1,32 @@
+#ifndef {{ prefix|upper }}_SQRT_H
+#define {{ prefix|upper }}_SQRT_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+// Input dimensions
+static const cmsis_nn_dims {{ name }}_input_dims = {
+    .n = {{ input_dims.n }}, .h = {{ input_dims.h }},
+    .w = {{ input_dims.w }}, .c = {{ input_dims.c }}
+};
+
+// Input data (for testing)
+static const {{ input_dtype }} {{ name }}_input[] = {
+{{ input_data_array }}
+};
+
+// LUT for Sqrt (256 values for uint8 input)
+static {{ input_dtype }} sqrt_lut[256] = {
+{% set chunk_size = 8 %}
+{% for i in range(0, sqrt_lut|length, chunk_size) %}
+{{ sqrt_lut[i:i+chunk_size] | join(', ') }},
+{% endfor %}
+};
+
+// Expected output (golden - int32 indices)
+static const {{ output_dtype }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif // {{ prefix|upper }}_SQRT_H

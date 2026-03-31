@@ -4,9 +4,23 @@ ArgMax operation implementation.
 
 from typing import Dict, Any
 import numpy as np
-import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.utils.litert_builder import build_arg_reduction_op
+
+
+def build_argmax_op(
+    *,
+    input_shape,
+    axis: int = -1,
+    dtype: str = "int8",
+) -> bytes:
+    return build_arg_reduction_op(
+        op_name="ARG_MAX",
+        input_shape=input_shape,
+        axis=axis,
+        dtype=dtype,
+    )
 
 
 class OpArgMax(OperationBase):
@@ -17,26 +31,11 @@ class OpArgMax(OperationBase):
     def needs_keras_model(self) -> bool:
         return False
     
-    def build_keras_model(self) -> tf.keras.Model:
-        """Build Keras model for ArgMax operation."""
-        input_shape = self.desc['input_shape']
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
-        # Get axis from descriptor (default to last dimension)
-        axis = self.desc.get('axis', -1)
-        
-        # ArgMax operation - returns int64 indices
-        x = tf.keras.layers.Lambda(
-            lambda x: tf.argmax(x, axis=axis, output_type=tf.int32),
-            name='argmax'
-        )(inputs)
-        
-        model = tf.keras.Model(inputs=inputs, outputs=x)
-        return model
+    def build_keras_model(self):
+        raise NotImplementedError("ArgMax uses LiteRT-only model generation.")
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
-        from helia_core_tester.generation.utils.litert_builder import build_arg_op
         activation_dtype = self.desc.get("activation_dtype", "S8")
         if activation_dtype == "S8":
             dtype = "int8"
@@ -44,12 +43,10 @@ class OpArgMax(OperationBase):
             dtype = "int16"
         else:
             raise NotImplementedError(f"Unsupported ArgMax dtype: {activation_dtype}")
-        model_bytes = build_arg_op(
-            "argmax",
+        model_bytes = build_argmax_op(
             input_shape=self.desc["input_shape"],
             axis=self.desc.get("axis", -1),
             dtype=dtype,
-            seed=rep_seed,
         )
         with open(out_path, "wb") as f:
             f.write(model_bytes)

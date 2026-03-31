@@ -1,38 +1,59 @@
 """
-ArgMin operation implementation.
+Sqrt operation implementation.
 """
 
 from typing import Dict, Any
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.utils.litert_builder import build_arg_reduction_op
+from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
+from helia_core_tester.generation.utils.litert_utils import (
+    load_litert_model, get_operator_tensors_from_litert
+)
+from math import sqrt 
 
 
-def build_argmin_op(
+def clamp_f32(x, min_val, max_val):
+    '''Clamp a float32 value to the specified range.'''
+    return max(min(x, max_val), min_val)
+
+def make_sqrt_lut(input_scale, input_zp, output_scale, output_zp)->np.ndarray:
+    '''Generate a lookup table for the Sqrt operation based on quantization parameters.'''
+    lut = np.zeros(256, dtype=np.int8)  
+    for i in range(-128, 128,1):
+        x = (i - input_zp) * input_scale
+        final_val = output_zp
+
+        if (x > 0.0):
+            res = sqrt(x)
+            q = (res / output_scale) + output_zp
+            final_val = clamp_f32(q, -128, 127)
+        lut[np.uint8(i)] = np.int8(final_val)
+
+    return lut
+
+
+def build_sqrt_op(
     *,
     input_shape,
-    axis: int = -1,
     dtype: str = "int8",
 ) -> bytes:
-    return build_arg_reduction_op(
-        op_name="ARG_MIN",
+    return build_unary_same_shape_op(
+        op_name="SQRT",
         input_shape=input_shape,
-        axis=axis,
         dtype=dtype,
     )
 
-
-class OpArgMin(OperationBase):
+class OpSqrt(OperationBase):
     """
-    ArgMin operation.
+    Sqrt operation.
     """
 
     def needs_keras_model(self) -> bool:
         return False
     
     def build_keras_model(self):
-        raise NotImplementedError("ArgMin uses LiteRT-only model generation.")
+        raise NotImplementedError("Sqrt uses LiteRT-only model generation.")
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
@@ -42,18 +63,19 @@ class OpArgMin(OperationBase):
         elif activation_dtype == "S16":
             dtype = "int16"
         else:
-            raise NotImplementedError(f"Unsupported ArgMin dtype: {activation_dtype}")
-        model_bytes = build_argmin_op(
-            input_shape=self.desc["input_shape"],
-            axis=self.desc.get("axis", -1),
+            raise NotImplementedError(f"Unsupported Sqrt dtype: {activation_dtype}")
+
+        input_shape = tuple(self.desc["input_shape"])
+        model_bytes = build_sqrt_op(
+            input_shape=input_shape,
             dtype=dtype,
         )
         with open(out_path, "wb") as f:
             f.write(model_bytes)
     
-    def _select_cmsis_argmin_kernel(self) -> Dict[str, str]:
+    def _select_cmsis_sqrt_kernel(self) -> Dict[str, str]:
         """
-        Select appropriate CMSIS-NN kernel function for ArgMin operation.
+        Select appropriate CMSIS-NN kernel function for Sqrt operation.
         
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
@@ -62,22 +84,22 @@ class OpArgMin(OperationBase):
         
         if activation_dtype == 'S8':
             return {
-                'kernel_fn': 'arm_argmin_s8',
+                'kernel_fn': 'arm_sqrt_s8',
                 'input_c_type': 'int8_t',
-                'output_c_type': 'int32_t'
+                'output_c_type': 'int8_t'
             }
         elif activation_dtype == 'S16':
             return {
-                'kernel_fn': 'arm_argmin_s16',
+                'kernel_fn': 'arm_sqrt_s16',
                 'input_c_type': 'int16_t',
-                'output_c_type': 'int32_t'
+                'output_c_type': 'int16_t'
             }
         else:
-            raise NotImplementedError(f"Unsupported ArgMin dtype: {activation_dtype}")
+            raise NotImplementedError(f"Unsupported Sqrt dtype: {activation_dtype}")
     
     def generate_c_files(self, output_dir: Path) -> None:
         """
-        Generate C and H files from templates for ArgMin operation.
+        Generate C and H files from templates for Sqrt operation.
         """
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
@@ -87,7 +109,7 @@ class OpArgMin(OperationBase):
             raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
         # Select CMSIS kernel + types
-        kernel_info = self._select_cmsis_argmin_kernel()
+        kernel_info = self._select_cmsis_sqrt_kernel()
         
         input_shape = tuple(self.desc["input_shape"])
         
@@ -95,14 +117,6 @@ class OpArgMin(OperationBase):
         
         # Convert shapes to CMSIS dims
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
-        
-        # Extract axis from descriptor (default to -1 for last dimension)
-        axis = self.desc.get('axis', -1)
-        # Convert to 0-based and account for batch dimension
-        # For NHWC: 0=N, 1=H, 2=W, 3=C
-        if axis < 0:
-            axis = len(input_shape) + axis
-        # axis is now 0-3 for NHWC
         
         # Generate deterministic integer input data
         rng_state = self.rng.__getstate__()
@@ -116,49 +130,70 @@ class OpArgMin(OperationBase):
             qmin, qmax = -32768, 32767
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
+        input_q = self.rng.integers(0, qmax + 1, size=input_shape, dtype=np_in_dtype)
         self.rng.__setstate__(rng_state)
 
-        # Compute expected output directly
-        output_data = np.argmin(input_q, axis=axis).astype(np.int32)
-        output_shape = tuple(output_data.shape)
+        model, subgraph = load_litert_model(str(tflite_path))
         
+        # Get operator tensors (first operator)
+        if len(subgraph.operators) == 0:
+            raise ValueError("No operators found in model")
+        
+        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
+
+        input_quant = op_tensors['inputs'][0]['quantization']
+        output_quant = op_tensors['outputs'][0]['quantization']
+
+        # Compute expected output directly
+        output_data = self.run_inference(str(tflite_path), input_q)
+        output_shape = tuple(output_data.shape)
+        input_scale = input_quant['scale']
+        input_zp = input_quant['zero_point']
+        output_scale = output_quant['scale']
+        output_zp = output_quant['zero_point'] 
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
-        
+
+
+        sqrt_lut = make_sqrt_lut(
+            input_scale=input_scale,
+            input_zp=input_zp,
+            output_scale=output_scale,
+            output_zp=output_zp)
+
         # Build template context
         context = {
             'name': name,
             'prefix': name,
             'input_dims': input_dims,
-            'axis': axis,
             'input_data_array': input_array_str,
             'expected_output_array': expected_output_array_str,
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
             'output_size': int(np.prod(output_shape)),
+            'sqrt_lut': sqrt_lut
         }
         
         # Render templates
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)
         
-        h_content = self.render_template("BasicMathFunctions/argmin/argmin.h.j2", context)
-        h_path = includes_api_dir / f"{name}_argmin.h"
+        h_content = self.render_template("BasicMathFunctions/sqrt/sqrt.h.j2", context)
+        h_path = includes_api_dir / f"{name}_sqrt.h"
         with open(h_path, 'w') as f:
             f.write(h_content)
         
-        c_content = self.render_template("BasicMathFunctions/argmin/argmin.c.j2", context)
-        c_path = output_dir / f"{name}_argmin.c"
+        c_content = self.render_template("BasicMathFunctions/sqrt/sqrt.c.j2", context)
+        c_path = output_dir / f"{name}_sqrt.c"
         with open(c_path, 'w') as f:
             f.write(c_content)
         
         cmake_context = {
             'name': name,
-            'operator': self.desc.get('operator', 'ArgMin'),
-            'operator_name': 'argmin'
+            'operator': self.desc.get('operator', 'Sqrt'),
+            'operator_name': 'sqrt'
         }
         cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
         cmake_path = output_dir / "CMakeLists.txt"

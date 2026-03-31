@@ -1,0 +1,53 @@
+#include "{{ name }}_sqrt.h"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+#define {{ name|upper }}_OUTPUT_SIZE {{ output_size }}
+static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+
+int32_t {{ prefix }}_{{ name }}_run(
+    const {{ input_dtype }}* __restrict input,
+    {{ output_dtype }}* __restrict output
+) {
+    // Call Sqrt kernel
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        input,
+        &{{ name }}_input_dims,
+        output,
+        sqrt_lut
+    );
+    
+    return kernel_status;
+}
+
+int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+{
+    const arm_cmsis_nn_status expected = ARM_CMSIS_NN_SUCCESS;
+    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
+    if (status != expected) {
+        printf("Sqrt failed with status %d\r\n", status);
+        printf("1 Failures\r\n");
+        return 1;
+    }
+
+    // Verify outputs (exact match for indices)
+    int failures = 0;
+    const int output_size = {{ name|upper }}_OUTPUT_SIZE;
+
+    const {{ output_dtype }} *act = {{ name }}_output;
+    const {{ output_dtype }} *exp = {{ name }}_expected_output;
+
+    for (int i = 0; i < output_size; i++) {
+        if (act[i] != exp[i]) {
+            failures++;
+            if (failures <= 20) {
+                printf("Mismatch[%d]: exp=%d got=%d\r\n", i, exp[i], act[i]);
+            }
+        }
+    }
+
+    printf("%d Failures\r\n", failures);
+    return failures;
+}
+
+{% include "common/standalone/main.j2" %}

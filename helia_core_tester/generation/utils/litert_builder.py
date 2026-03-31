@@ -220,28 +220,204 @@ def _broadcast_shape(shape_a: Sequence[int], shape_b: Sequence[int]) -> Tuple[in
     return tuple(out)
 
 
-def build_arg_op(
-    op: str = "argmax",
-    *,
-    input_shape: Iterable[int] = (1, 4, 4, 3),
-    axis: int = -1,
-    dtype: str = "int8",
-    golden_filename: str | None = None,
-    work_dir: str | Path | None = None,
-    seed: int = 0,
-) -> bytes:
-    op_lower = op.lower()
-    if op_lower not in {"argmax", "argmin"}:
-        raise ValueError(f"Unsupported arg operator '{op}'. Use 'argmax' or 'argmin'.")
+def _require_litert() -> None:
+    if not LITERT_AVAILABLE:
+        raise ImportError("ai_edge_litert is not available. Install it with: pip install ai-edge-litert")
 
+
+def _resolve_tensor_type(dtype: str) -> int:
     tensor_type = _DTYPE_MAP.get(dtype.lower())
     if tensor_type is None:
         raise ValueError(f"Unsupported dtype '{dtype}'.")
+    return tensor_type
 
-    input_shape = tuple(int(dim) for dim in input_shape)
+
+def _normalize_shape(input_shape: Iterable[int], *, op_label: str) -> Tuple[int, ...]:
+    shape = tuple(int(dim) for dim in input_shape)
+    if len(shape) < 1:
+        raise ValueError(f"{op_label} expects a non-empty input shape.")
+    return shape
+
+
+def build_unary_same_shape_op(
+    *,
+    op_name: str,
+    input_shape: Iterable[int],
+    dtype: str = "int8",
+    output_dtype: Optional[str] = None,
+    options=None,
+    options_type=None,
+) -> bytes:
+    _require_litert()
+
+    input_tensor_type = _resolve_tensor_type(dtype)
+    output_tensor_type = _resolve_tensor_type(output_dtype or dtype)
+    input_shape = _normalize_shape(input_shape, op_label=op_name)
+
+    builder = LiteRtSingleOpBuilder(op_name=op_name)
+
+    input_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="input",
+            shape=input_shape,
+            tensor_type=input_tensor_type,
+            is_input=True,
+            quantization=_default_quant(input_tensor_type),
+        )
+    )
+
+    output_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="output",
+            shape=input_shape,
+            tensor_type=output_tensor_type,
+            is_output=True,
+            quantization=_default_quant(output_tensor_type),
+        )
+    )
+
+    builder.add_operator(
+        op_name,
+        inputs=[input_tensor_idx],
+        outputs=[output_tensor_idx],
+        options=options,
+        options_type=litert.BuiltinOptions.NONE if options_type is None else options_type,
+    )
+
+    return builder.build()
+
+
+def build_binary_broadcast_op(
+    *,
+    op_name: str,
+    input_1_shape: Iterable[int],
+    input_2_shape: Iterable[int],
+    dtype: str = "int8",
+    input_1_quant: Optional[Tuple[Sequence[float], Sequence[int]]] = None,
+    input_2_quant: Optional[Tuple[Sequence[float], Sequence[int]]] = None,
+    output_quant: Optional[Tuple[Sequence[float], Sequence[int]]] = None,
+    options=None,
+    options_type=None,
+) -> bytes:
+    _require_litert()
+
+    tensor_type = _resolve_tensor_type(dtype)
+    input_1_shape = _normalize_shape(input_1_shape, op_label=op_name)
+    input_2_shape = _normalize_shape(input_2_shape, op_label=op_name)
+    output_shape = _broadcast_shape(input_1_shape, input_2_shape)
+
+    builder = LiteRtSingleOpBuilder(op_name=op_name)
+
+    input1_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="input1",
+            shape=input_1_shape,
+            tensor_type=tensor_type,
+            is_input=True,
+            quantization=input_1_quant if input_1_quant is not None else _default_quant(tensor_type),
+        )
+    )
+
+    input2_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="input2",
+            shape=input_2_shape,
+            tensor_type=tensor_type,
+            is_input=True,
+            quantization=input_2_quant if input_2_quant is not None else _default_quant(tensor_type),
+        )
+    )
+
+    output_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="output",
+            shape=output_shape,
+            tensor_type=tensor_type,
+            is_output=True,
+            quantization=output_quant if output_quant is not None else _default_quant(tensor_type),
+        )
+    )
+
+    builder.add_operator(
+        op_name,
+        inputs=[input1_tensor_idx, input2_tensor_idx],
+        outputs=[output_tensor_idx],
+        options=options,
+        options_type=litert.BuiltinOptions.NONE if options_type is None else options_type,
+    )
+
+    return builder.build()
+
+
+def build_shape_transform_op(
+    *,
+    op_name: str,
+    input_shape: Iterable[int],
+    output_shape: Iterable[int],
+    dtype: str = "int8",
+    extra_input_tensors: Optional[Sequence[TensorSpec]] = None,
+    options=None,
+    options_type=None,
+) -> bytes:
+    _require_litert()
+
+    tensor_type = _resolve_tensor_type(dtype)
+    input_shape = _normalize_shape(input_shape, op_label=op_name)
+    output_shape = _normalize_shape(output_shape, op_label=op_name)
+
+    builder = LiteRtSingleOpBuilder(op_name=op_name)
+
+    op_inputs = [
+        builder.add_tensor(
+            TensorSpec(
+                name="input",
+                shape=input_shape,
+                tensor_type=tensor_type,
+                is_input=True,
+                quantization=_default_quant(tensor_type),
+            )
+        )
+    ]
+
+    for tensor in extra_input_tensors or ():
+        op_inputs.append(builder.add_tensor(tensor))
+
+    output_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="output",
+            shape=output_shape,
+            tensor_type=tensor_type,
+            is_output=True,
+            quantization=_default_quant(tensor_type),
+        )
+    )
+
+    builder.add_operator(
+        op_name,
+        inputs=op_inputs,
+        outputs=[output_tensor_idx],
+        options=options,
+        options_type=litert.BuiltinOptions.NONE if options_type is None else options_type,
+    )
+
+    return builder.build()
+
+
+def build_arg_reduction_op(
+    *,
+    op_name: str,
+    input_shape: Iterable[int] = (1, 4, 4, 3),
+    axis: int = -1,
+    dtype: str = "int8",
+) -> bytes:
+    _require_litert()
+
+    if op_name not in {"ARG_MAX", "ARG_MIN"}:
+        raise ValueError(f"Unsupported arg reduction '{op_name}'.")
+
+    tensor_type = _resolve_tensor_type(dtype)
+    input_shape = _normalize_shape(input_shape, op_label=op_name)
     rank = len(input_shape)
-    if rank == 0:
-        raise ValueError("Input shape must have at least one dimension for ARG operators.")
 
     axis_norm = axis
     if axis_norm < 0:
@@ -254,7 +430,7 @@ def build_arg_op(
     if not output_shape:
         output_shape = [1]
 
-    builder = LiteRtSingleOpBuilder(op_name="ARG_MAX" if op_lower == "argmax" else "ARG_MIN")
+    builder = LiteRtSingleOpBuilder(op_name=op_name)
 
     input_tensor_idx = builder.add_tensor(
         TensorSpec(
@@ -284,16 +460,14 @@ def build_arg_op(
         )
     )
 
-    if op_lower == "argmax":
+    if op_name == "ARG_MAX":
         options = litert.ArgMaxOptionsT()
         options.outputType = litert.TensorType.INT32
         options_type = litert.BuiltinOptions.ArgMaxOptions
-        op_name = "ARG_MAX"
     else:
         options = litert.ArgMinOptionsT()
         options.outputType = litert.TensorType.INT32
         options_type = litert.BuiltinOptions.ArgMinOptions
-        op_name = "ARG_MIN"
 
     builder.add_operator(
         op_name,
@@ -303,28 +477,7 @@ def build_arg_op(
         options_type=options_type,
     )
 
-    model_bytes = builder.build()
-
-    if golden_filename is not None:
-        if work_dir is None:
-            raise ValueError("work_dir must be provided when golden_filename is set")
-        work_dir = Path(work_dir)
-        work_dir.mkdir(parents=True, exist_ok=True)
-        golden_path = work_dir / golden_filename
-
-        rng = np.random.default_rng(seed)
-        np_dtype = np.int8 if tensor_type == litert.TensorType.INT8 else np.int16
-        lo, hi = np.iinfo(np_dtype).min, np.iinfo(np_dtype).max
-        input_data = rng.integers(lo, hi + 1, size=input_shape, dtype=np_dtype)
-
-        if op_lower == "argmax":
-            output_data = np.argmax(input_data, axis=axis_norm).astype(np.int32)
-        else:
-            output_data = np.argmin(input_data, axis=axis_norm).astype(np.int32)
-
-        np.savez(golden_path, input_0=input_data, output_0=output_data)
-
-    return model_bytes
+    return builder.build()
 
 
 def build_space_to_depth_op(
@@ -819,121 +972,6 @@ def build_pad_op(
     builder.add_operator(
         "PAD",
         inputs=[input_tensor_idx, paddings_tensor_idx],
-        outputs=[output_tensor_idx],
-        options=None,
-        options_type=litert.BuiltinOptions.NONE,
-    )
-
-    return builder.build()
-
-
-def build_add_op(
-    *,
-    input_1_shape: Iterable[int],
-    input_2_shape: Iterable[int],
-    dtype: str = "int8",
-) -> bytes:
-    if not LITERT_AVAILABLE:
-        raise ImportError("ai_edge_litert is not available. Install it with: pip install ai-edge-litert")
-
-    tensor_type = _DTYPE_MAP.get(dtype.lower())
-    if tensor_type is None:
-        raise ValueError(f"Unsupported dtype '{dtype}'.")
-
-    input_1_shape = tuple(int(dim) for dim in input_1_shape)
-    input_2_shape = tuple(int(dim) for dim in input_2_shape)
-    if len(input_1_shape) < 1 or len(input_2_shape) < 1:
-        raise ValueError("Add expects non-empty input shapes.")
-
-    output_shape = _broadcast_shape(input_1_shape, input_2_shape)
-
-    builder = LiteRtSingleOpBuilder(op_name="ADD")
-
-    input1_tensor_idx = builder.add_tensor(
-        TensorSpec(
-            name="input1",
-            shape=input_1_shape,
-            tensor_type=tensor_type,
-            is_input=True,
-            quantization=_default_quant(tensor_type),
-        )
-    )
-
-    input2_tensor_idx = builder.add_tensor(
-        TensorSpec(
-            name="input2",
-            shape=input_2_shape,
-            tensor_type=tensor_type,
-            is_input=True,
-            quantization=_default_quant(tensor_type),
-        )
-    )
-
-    output_tensor_idx = builder.add_tensor(
-        TensorSpec(
-            name="output",
-            shape=output_shape,
-            tensor_type=tensor_type,
-            is_output=True,
-            quantization=_default_quant(tensor_type),
-        )
-    )
-
-    options = litert.AddOptionsT()
-    options.fusedActivationFunction = litert.ActivationFunctionType.NONE
-
-    builder.add_operator(
-        "ADD",
-        inputs=[input1_tensor_idx, input2_tensor_idx],
-        outputs=[output_tensor_idx],
-        options=options,
-        options_type=litert.BuiltinOptions.AddOptions,
-    )
-
-    return builder.build()
-
-
-def build_abs_op(
-    *,
-    input_shape: Iterable[int],
-    dtype: str = "int8",
-) -> bytes:
-    if not LITERT_AVAILABLE:
-        raise ImportError("ai_edge_litert is not available. Install it with: pip install ai-edge-litert")
-
-    tensor_type = _DTYPE_MAP.get(dtype.lower())
-    if tensor_type is None:
-        raise ValueError(f"Unsupported dtype '{dtype}'.")
-
-    input_shape = tuple(int(dim) for dim in input_shape)
-    if len(input_shape) < 1:
-        raise ValueError("Abs expects a non-empty input shape.")
-
-    builder = LiteRtSingleOpBuilder(op_name="ABS")
-
-    input_tensor_idx = builder.add_tensor(
-        TensorSpec(
-            name="input",
-            shape=input_shape,
-            tensor_type=tensor_type,
-            is_input=True,
-            quantization=_default_quant(tensor_type),
-        )
-    )
-
-    output_tensor_idx = builder.add_tensor(
-        TensorSpec(
-            name="output",
-            shape=input_shape,
-            tensor_type=tensor_type,
-            is_output=True,
-            quantization=_default_quant(tensor_type),
-        )
-    )
-
-    builder.add_operator(
-        "ABS",
-        inputs=[input_tensor_idx],
         outputs=[output_tensor_idx],
         options=None,
         options_type=litert.BuiltinOptions.NONE,

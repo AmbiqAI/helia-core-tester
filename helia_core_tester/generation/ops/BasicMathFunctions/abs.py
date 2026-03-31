@@ -6,6 +6,19 @@ from typing import Dict, Any
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
+
+
+def build_abs_op(
+    *,
+    input_shape,
+    dtype: str = "int8",
+) -> bytes:
+    return build_unary_same_shape_op(
+        op_name="ABS",
+        input_shape=input_shape,
+        dtype=dtype,
+    )
 
 
 class OpAbs(OperationBase):
@@ -20,8 +33,6 @@ class OpAbs(OperationBase):
         raise NotImplementedError("Abs uses LiteRT-only model generation.")
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_abs_op
-
         activation_dtype = self.desc.get("activation_dtype", "S8")
         if activation_dtype == "S8":
             dtype = "int8"
