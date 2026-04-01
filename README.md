@@ -72,7 +72,8 @@ Behavior:
 ## Release Process
 
 - Pull request titles should use conventional commit prefixes such as `feat:`, `fix:`, `perf:`, `refactor:`, `chore:`, `docs:`, `test:`, `ci:`, or `build:`
-- Pushes to `main` update a release PR through release-please; merging that release PR creates the `vX.Y.Z` tag, GitHub Release, and version bumps.
+- Pushes to `main` update a release PR through release-please; release-please updates the version files and changelog, but does not create a GitHub Release.
+- Merging the release PR creates the `vX.Y.Z` git tag automatically through the tag workflow.
 - The release workflow manages `CHANGELOG.md`, `pyproject.toml`, and `helia_core_tester/__init__.py`.
 - To force a specific version, add a `Release-As: 1.2.3` footer to the merged commit body.
 
