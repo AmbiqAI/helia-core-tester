@@ -69,6 +69,13 @@ Behavior:
 - `clean`: removes selected CPU artifacts for generated tests, reports (generation/tests/coverage), and matching build dirs.
 - `clean-all`: removes all `artifacts/generated_tests`, all `artifacts/reports`, and all `artifacts/build-*` directories.
 
+## Release Process
+
+- Pull request titles should use conventional commit prefixes such as `feat:`, `fix:`, `perf:`, `refactor:`, `chore:`, `docs:`, `test:`, `ci:`, or `build:`.
+- Pushes to `main` update a release PR through release-please; merging that release PR creates the `vX.Y.Z` tag, GitHub Release, and version bumps.
+- The release workflow manages `CHANGELOG.md`, `pyproject.toml`, and `helia_core_tester/__init__.py`.
+- To force a specific version, add a `Release-As: 1.2.3` footer to the merged commit body.
+
 ## Config Precedence
 
 Resolved config order:
