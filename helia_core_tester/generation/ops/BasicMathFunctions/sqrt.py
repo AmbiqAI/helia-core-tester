@@ -17,18 +17,34 @@ def clamp_f32(x, min_val, max_val):
     '''Clamp a float32 value to the specified range.'''
     return max(min(x, max_val), min_val)
 
+def _quant_param_to_scalar(value, name: str, cast):
+    """Normalize LiteRT quantization values to a scalar."""
+    arr = np.asarray(value)
+    if arr.size != 1:
+        raise ValueError(f"Sqrt expects scalar quantization for {name}, got shape {arr.shape}")
+    return cast(arr.reshape(-1)[0])
+
 def make_sqrt_lut(input_scale, input_zp, output_scale, output_zp)->np.ndarray:
     '''Generate a lookup table for the Sqrt operation based on quantization parameters.'''
-    lut = np.zeros(256, dtype=np.int8)  
-    for i in range(-128, 128,1):
-        x = (i - input_zp) * input_scale
-        final_val = output_zp
+    input_scale = _quant_param_to_scalar(input_scale, "input_scale", float)
+    input_zp = _quant_param_to_scalar(input_zp, "input_zero_point", int)
+    output_scale = _quant_param_to_scalar(output_scale, "output_scale", float)
+    output_zp = _quant_param_to_scalar(output_zp, "output_zero_point", int)
 
-        if (x > 0.0):
-            res = sqrt(x)
-            q = (res / output_scale) + output_zp
-            final_val = clamp_f32(q, -128, 127)
-        lut[np.uint8(i)] = np.int8(final_val)
+    lut = np.zeros(256, dtype=np.int8)
+    for i in range(-128, 128):
+        final_val = output_zp
+        x = np.float32(input_scale) * np.float32(i - input_zp)
+
+        if x > np.float32(0.0):
+            res = np.float32(sqrt(float(x)))
+            quantized_output = int(np.trunc(np.float32(res / np.float32(output_scale)))) + int(
+                output_zp
+            )
+            final_val = min(max(quantized_output, -128), 127)
+
+        # Mimic C's (uint8_t)i indexing with two's complement wrap.
+        lut[i & 0xFF] = np.int8(final_val)
 
     return lut
 
