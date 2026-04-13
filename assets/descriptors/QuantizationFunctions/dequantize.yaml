@@ -24,4 +24,3 @@ activation: RELU6
 hint:
   call_style: per_tensor
 input_shape: [1, 8]
-

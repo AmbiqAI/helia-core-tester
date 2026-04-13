@@ -4,7 +4,6 @@ Quantize operation implementation for Helia-Core Tester.
 Following the official CMSIS-NN test generator logic from RefactoredTestGen/Lib/op_quantize.py
 """
 
-from typing import Dict, Any
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
@@ -56,29 +55,32 @@ class OpQuantize(QuantizationFamilyBase):
             rep_seed=rep_seed,
         )
     
-    def _select_cmsis_quantize_kernel(self) -> Dict[str, str]:
+    def _select_cmsis_quantize_kernel(self) -> dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Quantize operation.
         
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        input_dtype = self.tensor_dtype("input")
+        output_dtype = self.tensor_dtype("output")
+
+        if input_dtype != "FP32":
+            raise NotImplementedError(f"Quantize currently requires FP32 input, got {input_dtype}")
         
-        if activation_dtype == 'S8':
+        if output_dtype == 'S8':
             return {
                 'kernel_fn': 'arm_quantize_f32_s8',
-                'input_c_type': 'float',
-                'output_c_type': 'int8_t'
+                'input_c_type': self.tensor_c_type("input"),
+                'output_c_type': self.tensor_c_type("output"),
             }
-        elif activation_dtype == 'S16':
+        if output_dtype == 'S16':
             return {
                 'kernel_fn': 'arm_quantize_f32_s16',
-                'input_c_type': 'float',
-                'output_c_type': 'int16_t'
+                'input_c_type': self.tensor_c_type("input"),
+                'output_c_type': self.tensor_c_type("output"),
             }
-        else:
-            raise NotImplementedError(f"Unsupported Quantize dtype: {activation_dtype}")
+        raise NotImplementedError(f"Unsupported Quantize output dtype: {output_dtype}")
     
     def generate_c_files(self, output_dir: Path) -> None:
         """
@@ -96,6 +98,7 @@ class OpQuantize(QuantizationFamilyBase):
         # Check for activation in descriptor
         activation_str = self.desc.get('activation', 'NONE')
         has_activation = activation_str in ['RELU', 'RELU6']
+        comparison_tolerance = 1
 
         if tflite_path.exists():
             # Load interpreter
@@ -189,6 +192,8 @@ class OpQuantize(QuantizationFamilyBase):
             'has_activation': has_activation,
             'activation_kernel_fn': activation_kernel_fn,
             'activation_type': activation_str if has_activation else 'NONE',
+            'comparison_tolerance': comparison_tolerance,
+            'validation_helpers': ['tolerant_int'],
         }
         
         cmake_context = {

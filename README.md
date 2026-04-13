@@ -48,6 +48,38 @@ Generation report files (always emitted):
 - `generation_failures.json`
 - `conversion_failures.json`
 - `manifest_pointer.json`
+- `capability_skips.json`
+
+## Float Descriptor Foundation
+
+Use `tensor_dtypes` for new float-aware descriptors. Legacy `activation_dtype` and `weight_dtype`
+still work, but the loader now normalizes both styles into `resolved_tensor_dtypes` and
+`resolved_comparison`.
+
+Example:
+
+```yaml
+name: quantize_fp32_to_s8_basic
+operator: Quantize
+tensor_dtypes:
+  input: FP32
+  output: S8
+input_shape: [1, 4]
+```
+
+Reference ops for float infrastructure:
+- `Quantize` is the source of truth for `FP32 -> S8/S16`
+- `Dequantize` is the source of truth for `S8/S16 -> FP32`
+
+Future ops should consume resolved tensor roles rather than raw legacy dtype fields:
+- `self.tensor_dtype("input")`
+- `self.tensor_c_type("output")`
+- `self.tensor_litert_dtype("input")`
+- `self.comparison_config()`
+
+To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
+Generated LiteRT-only ops should route through `build_<op>_op()` and resolve tensor roles from
+`tensor_dtypes` or the normalized descriptor metadata instead of hand-parsing legacy dtype fields.
 
 ## Coverage Merge
 

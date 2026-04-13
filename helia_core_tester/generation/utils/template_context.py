@@ -4,6 +4,7 @@ Handles dimension conversions, quantization parameters, and array formatting.
 """
 
 import numpy as np
+from pathlib import PurePosixPath
 from typing import Dict, Any, List, Tuple
 
 
@@ -12,6 +13,230 @@ class TemplateContextBuilder:
     Builds context dictionaries for Jinja templates.
     Handles dimension conversions, quantization parameters, and array formatting.
     """
+
+    _EXACT_INT_VALIDATION_TEMPLATES = {
+        "ActivationFunctions/clamp/clamp.c.j2",
+        "ActivationFunctions/nn_activation/nn_activation.c.j2",
+        "BasicMathFunctions/argmax/argmax.c.j2",
+        "BasicMathFunctions/argmin/argmin.c.j2",
+        "BasicMathFunctions/sqrt/sqrt.c.j2",
+        "GatherFunctions/gather/gather.c.j2",
+        "GatherFunctions/gather_nd/gather_nd.c.j2",
+        "LSTMFunctions/lstm_unidirectional/lstm_unidirectional.c.j2",
+        "NNSupportFunctions/requantize/requantize.c.j2",
+        "ReshapeFunctions/depth_to_space/depth_to_space.c.j2",
+        "ReshapeFunctions/resize_nearest_neighbor/resize_nearest_neighbor.c.j2",
+        "SVDFunctions/svdf/svdf.c.j2",
+    }
+
+    _TOLERANT_INT_VALIDATION_TEMPLATES = {
+        "ActivationFunctions/hard_swish/hard_swish.c.j2",
+        "ActivationFunctions/hard_swish/hard_swish_compat.c.j2",
+        "ActivationFunctions/leaky_relu/leaky_relu.c.j2",
+        "ActivationFunctions/logistic/logistic.c.j2",
+        "ActivationFunctions/prelu/prelu.c.j2",
+        "ActivationFunctions/relu/relu.c.j2",
+        "ActivationFunctions/relu6/relu6.c.j2",
+        "ActivationFunctions/tanh/tanh.c.j2",
+        "BasicMathFunctions/abs/abs.c.j2",
+        "BasicMathFunctions/add/add.c.j2",
+        "BasicMathFunctions/mean/mean.c.j2",
+        "BasicMathFunctions/minmax/minmax.c.j2",
+        "BasicMathFunctions/mul/mul.c.j2",
+        "BasicMathFunctions/reduce_max/reduce_max.c.j2",
+        "BasicMathFunctions/reduce_min/reduce_min.c.j2",
+        "BasicMathFunctions/squared_difference/squared_difference.c.j2",
+        "BasicMathFunctions/sub/sub.c.j2",
+        "ConcatenationFunctions/concatenation/concatenation.c.j2",
+        "ConcatenationFunctions/split/split.c.j2",
+        "ConvolutionFunctions/convolve/convolve.c.j2",
+        "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2",
+        "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2",
+        "FullyConnectedFunctions/batch_matmul/batch_matmul.c.j2",
+        "FullyConnectedFunctions/fully_connected/fully_connected.c.j2",
+        "PadFunctions/pad/pad.c.j2",
+        "PoolingFunctions/avg_pool/avg_pool.c.j2",
+        "PoolingFunctions/max_pool/max_pool.c.j2",
+        "QuantizationFunctions/quantize/quantize.c.j2",
+        "ReshapeFunctions/batch_to_space_nd/batch_to_space_nd.c.j2",
+        "ReshapeFunctions/reshape/reshape.c.j2",
+        "ReshapeFunctions/space_to_batch_nd/space_to_batch_nd.c.j2",
+        "ReshapeFunctions/space_to_depth/space_to_depth.c.j2",
+        "SoftmaxFunctions/softmax/softmax.c.j2",
+        "StridedSliceFunctions/strided_slice/strided_slice.c.j2",
+        "TesterExtensions/squeeze/squeeze.c.j2",
+        "TransposeFunctions/transpose/transpose.c.j2",
+    }
+
+    _FLOAT_VALIDATION_TEMPLATES = {
+        "QuantizationFunctions/dequantize/dequantize.c.j2",
+    }
+
+    _BOOL_VALIDATION_TEMPLATES = {
+        "ComparisonFunctions/comparison/comparison.c.j2",
+    }
+
+    _REPORT_LIMIT_OVERRIDES = {
+        "LSTMFunctions/lstm_unidirectional/lstm_unidirectional.c.j2": 8,
+        "SVDFunctions/svdf/svdf.c.j2": 8,
+    }
+
+    _TOLERANCE_OVERRIDES = {
+        "ActivationFunctions/prelu/prelu.c.j2": 2,
+    }
+
+    _INT16_TOLERANCE_OVERRIDES = {
+        "BasicMathFunctions/abs/abs.c.j2": 2,
+        "BasicMathFunctions/add/add.c.j2": 3,
+        "BasicMathFunctions/squared_difference/squared_difference.c.j2": 3,
+    }
+
+    _VALIDATION_HELPERS_BY_MODE = {
+        "exact_int": ["exact_int"],
+        "tolerant_int": ["tolerant_int"],
+        "float": ["float"],
+        "bool": ["bool"],
+        "none": [],
+    }
+
+    _VALIDATION_LABEL_OVERRIDES = {
+        "ActivationFunctions/nn_activation/nn_activation.c.j2": "NN activation",
+        "ActivationFunctions/prelu/prelu.c.j2": "PReLU",
+        "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2": "TransposeConv",
+        "ReshapeFunctions/depth_to_space/depth_to_space.c.j2": "DepthToSpace",
+        "ReshapeFunctions/resize_nearest_neighbor/resize_nearest_neighbor.c.j2": "ResizeNearestNeighbor",
+        "ReshapeFunctions/space_to_batch_nd/space_to_batch_nd.c.j2": "SpaceToBatchND",
+        "ReshapeFunctions/batch_to_space_nd/batch_to_space_nd.c.j2": "BatchToSpaceND",
+        "ReshapeFunctions/space_to_depth/space_to_depth.c.j2": "SpaceToDepth",
+        "StridedSliceFunctions/strided_slice/strided_slice.c.j2": "StridedSlice",
+        "TesterExtensions/squeeze/squeeze.c.j2": "Squeeze",
+        "SVDFunctions/svdf/svdf.c.j2": "SVDF",
+        "LSTMFunctions/lstm_unidirectional/lstm_unidirectional.c.j2": "LSTM",
+    }
+
+    @staticmethod
+    def _normalize_template_path(template_path: str) -> str:
+        return str(PurePosixPath(template_path))
+
+    @classmethod
+    def infer_validation_mode(cls, template_path: str, context: Dict[str, Any]) -> str:
+        normalized_path = cls._normalize_template_path(template_path)
+        explicit = context.get("validation_mode")
+        if explicit:
+            return str(explicit).strip().lower()
+        if normalized_path in cls._BOOL_VALIDATION_TEMPLATES:
+            return "bool"
+        if normalized_path in cls._FLOAT_VALIDATION_TEMPLATES:
+            return "float"
+        if normalized_path in cls._EXACT_INT_VALIDATION_TEMPLATES:
+            return "exact_int"
+        if normalized_path in cls._TOLERANT_INT_VALIDATION_TEMPLATES:
+            return "tolerant_int"
+
+        output_dtype = str(context.get("output_dtype", "")).strip().lower()
+        if output_dtype == "bool":
+            return "bool"
+        if "float" in output_dtype:
+            return "float"
+        return "exact_int"
+
+    @classmethod
+    def infer_validation_label(
+        cls,
+        template_path: str,
+        context: Dict[str, Any],
+        desc: Dict[str, Any] | None = None,
+    ) -> str:
+        normalized_path = cls._normalize_template_path(template_path)
+        override = cls._VALIDATION_LABEL_OVERRIDES.get(normalized_path)
+        if override:
+            return override
+
+        operator = ""
+        if desc:
+            operator = str(desc.get("operator", "")).strip()
+        if operator:
+            return operator.replace("_", " ").title()
+
+        filename = PurePosixPath(normalized_path).name
+        stem = filename[:-5] if filename.endswith(".c.j2") else PurePosixPath(normalized_path).stem
+        return stem.replace("_", " ").title()
+
+    @classmethod
+    def infer_validation_report_limit(cls, template_path: str, context: Dict[str, Any]) -> int:
+        explicit = context.get("validation_report_limit")
+        if explicit is not None:
+            return int(explicit)
+        normalized_path = cls._normalize_template_path(template_path)
+        return int(cls._REPORT_LIMIT_OVERRIDES.get(normalized_path, 20))
+
+    @classmethod
+    def infer_validation_tolerance(cls, template_path: str, context: Dict[str, Any], mode: str) -> int:
+        explicit = context.get("validation_tolerance")
+        if explicit is not None:
+            return int(explicit)
+        comparison_tolerance = context.get("comparison_tolerance")
+        if comparison_tolerance is not None:
+            return int(comparison_tolerance)
+        if mode != "tolerant_int":
+            return 1
+
+        normalized_path = cls._normalize_template_path(template_path)
+        if normalized_path in cls._TOLERANCE_OVERRIDES:
+            return int(cls._TOLERANCE_OVERRIDES[normalized_path])
+
+        output_dtype = str(context.get("output_dtype", "")).strip()
+        if output_dtype == "int16_t" and normalized_path in cls._INT16_TOLERANCE_OVERRIDES:
+            return int(cls._INT16_TOLERANCE_OVERRIDES[normalized_path])
+
+        return 1
+
+    @classmethod
+    def infer_validation_helpers(cls, context: Dict[str, Any], mode: str) -> List[str]:
+        explicit = context.get("validation_helpers")
+        if explicit is not None:
+            return list(explicit)
+        return list(cls._VALIDATION_HELPERS_BY_MODE.get(mode, []))
+
+    @classmethod
+    def build_validation_context(
+        cls,
+        template_path: str,
+        context: Dict[str, Any],
+        desc: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        resolved = dict(context)
+        mode = cls.infer_validation_mode(template_path, resolved)
+        resolved.setdefault("validation_mode", mode)
+        resolved.setdefault("validation_mode_token", mode.upper())
+        resolved.setdefault(
+            "validation_label",
+            cls.infer_validation_label(template_path, resolved, desc),
+        )
+        resolved.setdefault(
+            "validation_report_limit",
+            cls.infer_validation_report_limit(template_path, resolved),
+        )
+        resolved.setdefault(
+            "validation_tolerance",
+            cls.infer_validation_tolerance(template_path, resolved, mode),
+        )
+        resolved.setdefault(
+            "validation_atol",
+            float(resolved.get("comparison_atol", 0.01)),
+        )
+        resolved.setdefault(
+            "validation_rtol",
+            float(resolved.get("comparison_rtol", 0.001)),
+        )
+        resolved.setdefault("comparison_tolerance", resolved["validation_tolerance"])
+        resolved.setdefault("comparison_atol", resolved["validation_atol"])
+        resolved.setdefault("comparison_rtol", resolved["validation_rtol"])
+        resolved.setdefault(
+            "validation_helpers",
+            cls.infer_validation_helpers(resolved, mode),
+        )
+        return resolved
     
     @staticmethod
     def nhwc_to_cmsis_dims(shape: Tuple[int, ...]) -> Dict[str, int]:
@@ -116,19 +341,7 @@ class TemplateContextBuilder:
         current_line = []
 
         for i, val in enumerate(flat):
-            # Format value based on dtype
-            if arr.dtype == np.int8 or arr.dtype == np.uint8:
-                val_str = str(int(val))
-            elif arr.dtype == np.int16 or arr.dtype == np.uint16:
-                val_str = str(int(val))
-            elif arr.dtype == np.int32 or arr.dtype == np.uint32:
-                val_str = str(int(val))
-            elif arr.dtype == np.int64 or arr.dtype == np.uint64:
-                val_str = str(int(val))
-            elif arr.dtype == np.float32 or arr.dtype == np.float64:
-                val_str = f"{float(val):.6f}f"
-            else:
-                val_str = str(val)
+            val_str = TemplateContextBuilder.format_scalar_as_c_literal(val, arr.dtype)
 
             current_line.append(val_str)
 
@@ -140,6 +353,22 @@ class TemplateContextBuilder:
             lines.append(" " * indent + ", ".join(current_line))
 
         return "\n".join(lines)
+
+    @staticmethod
+    def format_scalar_as_c_literal(value: Any, dtype: Any) -> str:
+        """
+        Format a scalar value for generated C arrays.
+        """
+        np_dtype = np.dtype(dtype)
+        if np.issubdtype(np_dtype, np.bool_):
+            return "true" if bool(value) else "false"
+        if np.issubdtype(np_dtype, np.integer):
+            return str(int(value))
+        if np_dtype == np.float16:
+            return f"(float16_t){float(value):.6f}f"
+        if np.issubdtype(np_dtype, np.floating):
+            return f"{float(value):.6f}f"
+        return str(value)
 
     
     @staticmethod

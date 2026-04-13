@@ -10,7 +10,14 @@ from pathlib import Path
 import jinja2
 
 from helia_core_tester.core.discovery import find_tester_templates_dir
+from helia_core_tester.generation.io.dtypes import (
+    descriptor_dtype_to_c_type,
+    descriptor_dtype_to_litert_dtype,
+    get_resolved_tensor_dtype,
+    resolve_comparison,
+)
 from helia_core_tester.generation.ops.catalog import template_candidates
+from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 _JINJA2_ENV_CACHE: Dict[str, jinja2.Environment] = {}
 
@@ -65,6 +72,26 @@ class OperationBase(ABC):
     def activation_name(self) -> str:
         """Return the normalized descriptor activation name."""
         return str(self.desc.get("activation", "NONE")).upper()
+
+    def resolved_tensor_dtypes(self) -> Dict[str, str]:
+        """Return descriptor tensor dtypes after normalization."""
+        return dict(self.desc.get("resolved_tensor_dtypes", {}))
+
+    def tensor_dtype(self, role: str, default: Optional[str] = None) -> str:
+        """Return the resolved descriptor dtype for a tensor role."""
+        return get_resolved_tensor_dtype(self.desc, role, default=default)
+
+    def tensor_c_type(self, role: str, default: Optional[str] = None) -> str:
+        """Return the C type for a tensor role."""
+        return descriptor_dtype_to_c_type(self.tensor_dtype(role, default=default))
+
+    def tensor_litert_dtype(self, role: str, default: Optional[str] = None) -> str:
+        """Return the LiteRT builder dtype name for a tensor role."""
+        return descriptor_dtype_to_litert_dtype(self.tensor_dtype(role, default=default))
+
+    def comparison_config(self) -> Dict[str, Any]:
+        """Return the resolved comparison configuration for descriptor outputs."""
+        return resolve_comparison(self.desc, self.resolved_tensor_dtypes())
 
     def _write_tflite_bytes(self, out_path: str | Path, model_bytes: bytes) -> None:
         """Write converted LiteRT bytes to disk."""
@@ -396,10 +423,17 @@ class OperationBase(ABC):
             )
         env = _JINJA2_ENV_CACHE[template_dir]
         operator = str(self.desc.get("operator", ""))
+        render_context = dict(context)
+        if template_path.endswith(".c.j2"):
+            render_context = TemplateContextBuilder.build_validation_context(
+                template_path,
+                render_context,
+                self.desc,
+            )
         for candidate in template_candidates(operator, template_path):
             try:
                 template = env.get_template(candidate)
-                return template.render(**context)
+                return template.render(**render_context)
             except jinja2.TemplateNotFound:
                 continue
         raise jinja2.TemplateNotFound(template_path)

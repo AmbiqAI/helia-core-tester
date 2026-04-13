@@ -13,8 +13,9 @@ import pytest
 import yaml
 
 from helia_core_tester.core.discovery import find_descriptors_dir, find_generated_tests_dir, find_repo_root
+from helia_core_tester.core.cpu_targets import missing_required_capabilities, normalize_cpu
+from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, resolve_comparison, resolve_tensor_dtypes
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
-from helia_core_tester.core.cpu_targets import normalize_cpu
 from helia_core_tester.core.path_layout import generation_report_dir
 from helia_core_tester.generation.ops import get_op_map, get_operator_spec
 
@@ -64,14 +65,50 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
             return False
         
     # Filter by activation dtype
-    if filters.get('dtype') and desc['activation_dtype'] != filters['dtype']:
+    if filters.get('dtype') and not descriptor_matches_dtype_filter(desc, str(filters['dtype'])):
         return False
         
     # Filter by weight dtype
-    if filters.get('wtype') and desc['weight_dtype'] != filters['wtype']:
+    resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or resolve_tensor_dtypes(desc)
+    if filters.get('wtype') and resolved_tensor_dtypes.get('weights') != str(filters['wtype']).upper():
         return False
             
     return True
+
+
+def _required_capabilities(desc: Dict[str, Any]) -> list[str]:
+    raw = desc.get("required_capabilities")
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw]
+    return [str(capability) for capability in raw if str(capability).strip()]
+
+
+def _resolved_tensor_dtypes(desc: Dict[str, Any]) -> Dict[str, str]:
+    return dict(desc.get("resolved_tensor_dtypes") or resolve_tensor_dtypes(desc))
+
+
+def _resolved_comparison(desc: Dict[str, Any]) -> Dict[str, Any]:
+    return dict(desc.get("resolved_comparison") or resolve_comparison(desc, _resolved_tensor_dtypes(desc)))
+
+
+def _skip_manifest_entry(desc: Dict[str, Any], *, cpu: str, missing_capabilities: list[str]) -> Dict[str, Any]:
+    return {
+        "name": desc.get("name"),
+        "operator": desc.get("operator"),
+        "family": _descriptor_family(desc),
+        "parity_kind": _descriptor_parity_kind(desc),
+        "activation_dtype": desc.get("activation_dtype"),
+        "weight_dtype": desc.get("weight_dtype"),
+        "resolved_tensor_dtypes": _resolved_tensor_dtypes(desc),
+        "resolved_comparison": _resolved_comparison(desc),
+        "descriptor_relpath": desc.get("_source_relpath"),
+        "cpu": cpu,
+        "status": "skipped_capability",
+        "missing_capabilities": missing_capabilities,
+        "required_capabilities": _required_capabilities(desc),
+    }
 
 
 def generate_test(
@@ -231,9 +268,24 @@ def test_generation(test_filters):
     # Place models in generated tests root
     generated_count = 0
     manifest_entries: List[Dict[str, Any]] = []
+    skipped_entries: List[Dict[str, Any]] = []
     conversion_failures: List[Dict[str, Any]] = []
     generation_failures: List[Dict[str, Any]] = []
     for desc in filtered_descriptors:
+        missing_capabilities = missing_required_capabilities(target_cpu, _required_capabilities(desc))
+        if missing_capabilities:
+            skipped_entries.append(
+                _skip_manifest_entry(
+                    desc,
+                    cpu=target_cpu,
+                    missing_capabilities=missing_capabilities,
+                )
+            )
+            print(
+                f"Skipping {desc['name']} on {target_cpu}: missing capabilities "
+                f"{', '.join(missing_capabilities)}"
+            )
+            continue
         try:
             generate_test(
                 desc,
@@ -254,6 +306,8 @@ def test_generation(test_filters):
                 "parity_kind": _descriptor_parity_kind(desc),
                 "activation_dtype": desc.get("activation_dtype"),
                 "weight_dtype": desc.get("weight_dtype"),
+                "resolved_tensor_dtypes": _resolved_tensor_dtypes(desc),
+                "resolved_comparison": _resolved_comparison(desc),
                 "descriptor_relpath": desc.get("_source_relpath"),
                 "path": str(test_dir),
                 "relative_test_dir": relative_test_dir,
@@ -280,6 +334,13 @@ def test_generation(test_filters):
             str(item.get("exception", "")),
         ),
     )
+    skipped_entries = sorted(
+        skipped_entries,
+        key=lambda item: (
+            str(item.get("name", "")),
+            str(item.get("operator", "")),
+        ),
+    )
 
     print(f"Successfully generated {generated_count} TFLite models")
     conversion_failures_path = report_dir / "conversion_failures.json"
@@ -296,11 +357,19 @@ def test_generation(test_filters):
         print(f"Generation failures ({len(generation_failures)}): {failed_names}")
     else:
         print("Generation failures (0)")
+    capability_skips_path = report_dir / "capability_skips.json"
+    capability_skips_path.write_text(json.dumps(skipped_entries, indent=2))
+    if skipped_entries:
+        skipped_names = ", ".join(f["name"] for f in skipped_entries)
+        print(f"Capability skips ({len(skipped_entries)}): {skipped_names}")
+    else:
+        print("Capability skips (0)")
 
     manifest_path: Optional[Path] = None
-    if generated_count > 0:
+    if generated_count > 0 or skipped_entries:
         manifest_path = _write_manifest_and_cmake(
             manifest_entries,
+            skipped_entries,
             test_filters,
             generated_tests_dir=top_generated,
             cpu=target_cpu,
@@ -321,18 +390,24 @@ def test_generation(test_filters):
 
     end_time = datetime.now(timezone.utc)
     status = "success"
-    if generated_count == 0:
+    if conversion_failures or generation_failures:
+        status = "partial_failure" if generated_count > 0 or skipped_entries else "failed_no_generated_tests"
+    elif generated_count == 0 and skipped_entries:
+        status = "skipped_only"
+    elif generated_count == 0:
         status = "failed_no_generated_tests"
-    elif conversion_failures or generation_failures:
-        status = "partial_failure"
 
     summary = {
         "status": status,
         "cpu": target_cpu,
-        "families": sorted({entry["family"] for entry in manifest_entries}),
+        "families": sorted({entry["family"] for entry in [*manifest_entries, *skipped_entries]}),
         "parity_kind_counts": {
-            parity_kind: sum(1 for entry in manifest_entries if entry["parity_kind"] == parity_kind)
-            for parity_kind in sorted({entry["parity_kind"] for entry in manifest_entries})
+            parity_kind: sum(
+                1
+                for entry in [*manifest_entries, *skipped_entries]
+                if entry["parity_kind"] == parity_kind
+            )
+            for parity_kind in sorted({entry["parity_kind"] for entry in [*manifest_entries, *skipped_entries]})
         },
         "timestamps": {
             "started_utc": start_time.isoformat(),
@@ -351,6 +426,7 @@ def test_generation(test_filters):
             "descriptors_total": len(descriptors),
             "descriptors_after_filters": len(filtered_descriptors),
             "generated": generated_count,
+            "skipped_capability": len(skipped_entries),
             "conversion_failures": len(conversion_failures),
             "generation_failures": len(generation_failures),
         },
@@ -358,15 +434,17 @@ def test_generation(test_filters):
             "generated_tests_dir": str(top_generated),
             "conversion_failures": str(conversion_failures_path),
             "generation_failures": str(generation_failures_path),
+            "capability_skips": str(capability_skips_path),
             "manifest_pointer": str(manifest_pointer_path),
         },
     }
     (report_dir / "generation_summary.json").write_text(json.dumps(summary, indent=2))
-    assert generated_count > 0, "No TFLite models were generated"
+    assert generated_count > 0 or skipped_entries, "No TFLite models were generated"
 
 
 def _write_manifest_and_cmake(
     entries: List[Dict[str, Any]],
+    skipped_entries: List[Dict[str, Any]],
     test_filters: Dict[str, Any],
     generated_tests_dir: Path,
     cpu: str
@@ -375,8 +453,9 @@ def _write_manifest_and_cmake(
 
     manifest = {
         "generated_count": len(entries),
-        "families": sorted({str(entry["family"]) for entry in entries}),
-        "parity_kinds": sorted({str(entry["parity_kind"]) for entry in entries}),
+        "skipped_count": len(skipped_entries),
+        "families": sorted({str(entry["family"]) for entry in [*entries, *skipped_entries]}),
+        "parity_kinds": sorted({str(entry["parity_kind"]) for entry in [*entries, *skipped_entries]}),
         "filters": {
             "op": test_filters.get("op"),
             "dtype": test_filters.get("dtype"),
@@ -387,6 +466,7 @@ def _write_manifest_and_cmake(
             "cpu": cpu,
         },
         "tests": entries,
+        "skipped": skipped_entries,
     }
     manifest_path = generated_tests_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2))
@@ -423,7 +503,13 @@ def test_generated_files_exist(test_filters):
         
     # Check that we have some generated tests
     test_dirs = sorted(descriptor_file.parent for descriptor_file in generated_tests_dir.rglob("descriptor.yaml"))
-    assert len(test_dirs) > 0, "No test directories found"
+    if not test_dirs:
+        manifest_path = generated_tests_dir / "manifest.json"
+        if manifest_path.exists():
+            manifest = json.loads(manifest_path.read_text())
+            if manifest.get("skipped_count", 0) > 0 and manifest.get("generated_count", 0) == 0:
+                pytest.skip("Only capability-skipped descriptors are present")
+        assert len(test_dirs) > 0, "No test directories found"
     
     # Check that each test has TFLite file or generated headers
     for test_dir in test_dirs:

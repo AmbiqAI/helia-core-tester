@@ -2,12 +2,21 @@
 Descriptor ingestion with dtype validation and kernel resolution.
 """
 
+import copy
 import yaml
 import os
 from typing import Dict, Any, List, Tuple
 from pathlib import Path
 
 from helia_core_tester.generation.ops.catalog import get_operator_spec
+from helia_core_tester.generation.io.dtypes import (
+    derive_legacy_activation_dtype,
+    derive_legacy_weight_dtype,
+    descriptor_dtype_to_c_type,
+    normalize_tensor_dtypes,
+    resolve_comparison,
+    resolve_tensor_dtypes,
+)
 
 
 # Allowed dtype combinations
@@ -194,32 +203,55 @@ def _validate_and_normalize_descriptor(desc: Dict[str, Any]) -> Dict[str, Any]:
     """
     Validate and normalize a single descriptor dictionary.
     """
-    required_fields = ['operator', 'activation_dtype', 'weight_dtype']
+    normalized = copy.deepcopy(desc)
+    required_fields = ['operator']
     for field in required_fields:
-        if field not in desc:
+        if field not in normalized:
             raise ValueError(f"Missing required field: {field}")
 
-    # Normalize dtypes to upper-case for consistency
-    desc['activation_dtype'] = str(desc['activation_dtype']).upper()
-    desc['weight_dtype'] = str(desc['weight_dtype']).upper()
+    resolved_tensor_dtypes = resolve_tensor_dtypes(normalized)
+    normalized["resolved_tensor_dtypes"] = resolved_tensor_dtypes
+    normalized["resolved_comparison"] = resolve_comparison(normalized, resolved_tensor_dtypes)
 
-    if not validate_dtype_combo(desc['activation_dtype'], desc['weight_dtype']):
-        raise ValueError(f"Unsupported dtype combination: {desc['activation_dtype']} x {desc['weight_dtype']}")
+    activation_dtype = derive_legacy_activation_dtype(normalized, resolved_tensor_dtypes)
+    if activation_dtype is not None:
+        normalized['activation_dtype'] = activation_dtype
 
-    operator = desc['operator']
+    weight_dtype = derive_legacy_weight_dtype(normalized, resolved_tensor_dtypes)
+    if weight_dtype is not None:
+        normalized['weight_dtype'] = weight_dtype
+
+    explicit_tensor_dtypes = normalize_tensor_dtypes(normalized.get("tensor_dtypes"))
+    if explicit_tensor_dtypes:
+        normalized["tensor_dtypes"] = explicit_tensor_dtypes
+
+    if not explicit_tensor_dtypes and (
+        normalized.get('activation_dtype') is None or normalized.get('weight_dtype') is None
+    ):
+        raise ValueError("Descriptor must provide activation_dtype/weight_dtype or tensor_dtypes")
+
+    if not explicit_tensor_dtypes and not validate_dtype_combo(
+        normalized['activation_dtype'],
+        normalized['weight_dtype'],
+    ):
+        raise ValueError(
+            f"Unsupported dtype combination: {normalized['activation_dtype']} x {normalized['weight_dtype']}"
+        )
+
+    operator = normalized['operator']
 
     # Operator-specific shape and field validation.
-    if 'variations' not in desc:
-        _validate_profile_requirements(desc, operator)
+    if 'variations' not in normalized:
+        _validate_profile_requirements(normalized, operator)
 
     for shape_key in ['input_shape', 'filter_shape', 'input_1_shape', 'input_2_shape', 'pool_size', 'indices_shape']:
-        if shape_key in desc:
-            desc[shape_key] = list(desc[shape_key])
+        if shape_key in normalized:
+            normalized[shape_key] = list(normalized[shape_key])
 
-    if 'hint' not in desc:
-        desc['hint'] = {}
+    if 'hint' not in normalized:
+        normalized['hint'] = {}
 
-    return desc
+    return normalized
 
 
 def load_descriptor(desc_path: str) -> List[Dict[str, Any]]:
@@ -326,16 +358,8 @@ def expand_descriptor_variations(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
     base_name = base_desc['name']  # Preserve original base name
     
     for variation in desc['variations']:
-        # Create a new descriptor for this variation
-        variation_desc = base_desc.copy()
-        
-        # Override with variation-specific fields
-        for key, value in variation.items():
-            variation_desc[key] = value
-        if 'activation_dtype' in variation_desc:
-            variation_desc['activation_dtype'] = str(variation_desc['activation_dtype']).upper()
-        if 'weight_dtype' in variation_desc:
-            variation_desc['weight_dtype'] = str(variation_desc['weight_dtype']).upper()
+        variation_desc = copy.deepcopy(base_desc)
+        variation_desc.update(copy.deepcopy(variation))
         
         # Use the variation name directly (shorter, cleaner)
         if 'name' in variation:
@@ -346,17 +370,12 @@ def expand_descriptor_variations(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         
         # Store base descriptor name for filtering purposes
         variation_desc['_base_name'] = base_name
-        
-        # Validate the expanded variation has required shapes and operator-specific fields.
-        operator = variation_desc['operator']
-        _validate_profile_requirements(variation_desc, operator, variation=True)
-        
-        # Normalize shapes (ensure they are lists)
-        for shape_key in ['input_shape', 'filter_shape', 'input_1_shape', 'input_2_shape', 'pool_size']:
-            if shape_key in variation_desc:
-                variation_desc[shape_key] = list(variation_desc[shape_key])
-        
-        expanded_descriptors.append(variation_desc)
+
+        normalized_variation = _validate_and_normalize_descriptor(variation_desc)
+        operator = normalized_variation['operator']
+        _validate_profile_requirements(normalized_variation, operator, variation=True)
+        normalized_variation['_base_name'] = base_name
+        expanded_descriptors.append(normalized_variation)
     
     return expanded_descriptors
 
@@ -429,43 +448,13 @@ def get_io_dtypes(desc: Dict[str, Any]) -> Dict[str, str]:
     Returns:
         Dictionary mapping I/O type names to C types
     """
-    activation_dtype = desc['activation_dtype']
-    weight_dtype = desc['weight_dtype']
-    
-    # Determine output dtype
-    output_dtype = 'S8'  # Default
-    if activation_dtype == 'S16':
-        output_dtype = 'S16'
-    elif weight_dtype == 'S4':
-        output_dtype = 'S8'  # S4 weights typically produce S8 output
-        
-    # Override from hint if specified
-    if 'hint' in desc and 'extras' in desc['hint']:
-        if 'output_dtype' in desc['hint']['extras']:
-            output_dtype = desc['hint']['extras']['output_dtype']
-            
-    # Map to C types
-    ctype_map = {
-        'S8': 'int8_t',
-        'S16': 'int16_t',
-        'S4': 'int8_t'  # S4 weights are packed into int8_t
-    }
-    
-    # Special cases for Quantize/Dequantize operations
-    operator = desc.get('operator', '')
-    if operator == 'Quantize':
-        act_type = 'float'  # Input is float32 for Quantize
-    else:
-        act_type = ctype_map[activation_dtype]
-    
-    # Special case: Dequantize operations have float32 output
-    if operator == 'Dequantize':
-        out_type = 'float'  # Output is float32 for Dequantize
-    else:
-        out_type = ctype_map[output_dtype]
-    
+    resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or resolve_tensor_dtypes(desc)
+    activation_dtype = resolved_tensor_dtypes["input"]
+    weight_dtype = resolved_tensor_dtypes.get("weights", desc.get("weight_dtype", "S8"))
+    output_dtype = resolved_tensor_dtypes["output"]
+
     return {
-        'ACT_T': act_type,
-        'W_T': ctype_map[weight_dtype],
-        'OUT_T': out_type
+        'ACT_T': descriptor_dtype_to_c_type(activation_dtype),
+        'W_T': descriptor_dtype_to_c_type(weight_dtype),
+        'OUT_T': descriptor_dtype_to_c_type(output_dtype),
     }

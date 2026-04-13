@@ -1,4 +1,9 @@
-from helia_core_tester.core.cpu_targets import get_cpu_profile, normalize_cpu, parse_cpu_list
+from helia_core_tester.core.cpu_targets import (
+    get_cpu_profile,
+    missing_required_capabilities,
+    normalize_cpu,
+    parse_cpu_list,
+)
 
 
 def test_normalize_cpu_aliases():
@@ -15,3 +20,10 @@ def test_get_cpu_profile_flags():
     assert get_cpu_profile("cortex-m0").has_mve is False
     assert get_cpu_profile("cortex-m4").has_dsp is True
     assert get_cpu_profile("cortex-m55").has_mve is True
+
+
+def test_cpu_profiles_expose_float_capability_hooks():
+    assert get_cpu_profile("cortex-m0").supports_execution_dtype("FP32") is True
+    assert get_cpu_profile("cortex-m55").supports_execution_dtype("FP16") is False
+    assert missing_required_capabilities("cortex-m4", ["fp32_execution"]) == []
+    assert missing_required_capabilities("cortex-m55", ["fp16_execution"]) == ["fp16_execution"]

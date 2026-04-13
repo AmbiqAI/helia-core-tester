@@ -8,10 +8,20 @@ def _quantize_desc(name: str, activation: str, dtype: str) -> dict:
     return {
         "operator": "Quantize",
         "name": name,
+        "tensor_dtypes": {
+            "input": "FP32",
+            "output": dtype,
+        },
         "activation_dtype": dtype,
-        "weight_dtype": "S8",
         "activation": activation,
         "input_shape": [1, 4],
+        "resolved_tensor_dtypes": {
+            "input": "FP32",
+            "output": dtype,
+        },
+        "resolved_comparison": {
+            "mode": "exact_int",
+        },
     }
 
 
@@ -19,10 +29,22 @@ def _dequantize_desc(name: str, activation: str, dtype: str) -> dict:
     return {
         "operator": "Dequantize",
         "name": name,
+        "tensor_dtypes": {
+            "input": dtype,
+            "output": "FP32",
+        },
         "activation_dtype": dtype,
-        "weight_dtype": "S8",
         "activation": activation,
         "input_shape": [1, 4],
+        "resolved_tensor_dtypes": {
+            "input": dtype,
+            "output": "FP32",
+        },
+        "resolved_comparison": {
+            "mode": "float",
+            "atol": 0.01,
+            "rtol": 0.001,
+        },
     }
 
 
@@ -34,14 +56,14 @@ def _assert_generated(output_dir: Path, name: str, suffix: str) -> None:
 
 
 def test_quantize_generates_without_tflite(tmp_path: Path) -> None:
-    desc = _quantize_desc("quantize_relu_s8", "RELU", "S8")
+    desc = _quantize_desc("quantize_fp32_to_s8_basic", "NONE", "S8")
     op = OpQuantize(desc, seed=1, target_cpu="cortex-m55")
     op.generate_c_files(tmp_path)
     _assert_generated(tmp_path, desc["name"], "quantize")
 
 
 def test_dequantize_generates_without_tflite(tmp_path: Path) -> None:
-    desc = _dequantize_desc("dequantize_relu_s16", "RELU", "S16")
+    desc = _dequantize_desc("dequantize_s8_to_fp32_basic", "NONE", "S8")
     op = OpDequantize(desc, seed=1, target_cpu="cortex-m55")
     op.generate_c_files(tmp_path)
     _assert_generated(tmp_path, desc["name"], "dequantize")

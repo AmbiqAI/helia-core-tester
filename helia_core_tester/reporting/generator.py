@@ -33,6 +33,16 @@ class ReportGenerator:
                    .replace(">", "&gt;")
                    .replace('"', "&quot;")
                    .replace("'", "&#x27;"))
+
+    @staticmethod
+    def _format_descriptor_dtypes(desc_content: dict) -> str:
+        resolved = desc_content.get("resolved_tensor_dtypes") or {}
+        if resolved:
+            ordered = ("input", "output", "weights", "bias")
+            return ", ".join(f"{role}={resolved[role]}" for role in ordered if role in resolved)
+        activation_dtype = desc_content.get("activation_dtype", "N/A")
+        weight_dtype = desc_content.get("weight_dtype", "N/A")
+        return f"{activation_dtype}/{weight_dtype}"
     
     def generate_reports(self, 
                         report: TestReport, 
@@ -317,9 +327,7 @@ class ReportGenerator:
         for desc_name, desc_result in sorted_descriptors:
             desc_content = desc_result.descriptor_content
             operator = desc_content.get('operator', 'N/A')
-            activation_dtype = desc_content.get('activation_dtype', 'N/A')
-            weight_dtype = desc_content.get('weight_dtype', 'N/A')
-            dtypes = f"{activation_dtype}/{weight_dtype}"
+            dtypes = self._format_descriptor_dtypes(desc_content)
             
             status_class = f"status-{desc_result.status.value.lower().replace('_', '-')}"
             duration = desc_result.test_result.duration if desc_result.test_result else 0.0
@@ -440,12 +448,14 @@ class ReportGenerator:
             operator = desc_content.get('operator', 'N/A')
             activation_dtype = desc_content.get('activation_dtype', 'N/A')
             weight_dtype = desc_content.get('weight_dtype', 'N/A')
+            resolved_dtypes = self._format_descriptor_dtypes(desc_content)
             
             md += f"### {desc_name}\n\n"
             md += f"- **Status:** {desc_result.status.value}\n"
             md += f"- **Operator:** {operator}\n"
             md += f"- **Activation DType:** {activation_dtype}\n"
             md += f"- **Weight DType:** {weight_dtype}\n"
+            md += f"- **Resolved Tensor DTypes:** {resolved_dtypes}\n"
         
             if desc_result.failure_stage:
                 md += f"- **Failure Stage:** {desc_result.failure_stage}\n"

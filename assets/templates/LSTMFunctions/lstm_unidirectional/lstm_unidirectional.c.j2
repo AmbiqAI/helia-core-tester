@@ -2,32 +2,16 @@
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
 
-static int compare_output(const {{ output_dtype }} *act, const {{ output_dtype }} *exp, int count)
-{
-    int failures = 0;
-    for (int i = 0; i < count; i++) {
-        if (act[i] != exp[i]) {
-            failures++;
-            if (failures <= 8) {
-                printf("Mismatch[%d]: exp=%d got=%d\r\n", i, (int)exp[i], (int)act[i]);
-            }
-        }
-    }
-    return failures;
-}
-
 #define LSTM_BUFFER_SIZE ({{ macro_prefix }}HIDDEN_SIZE * {{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS)
+#define LSTM_OUTPUT_SIZE ({{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS * {{ macro_prefix }}HIDDEN_SIZE)
 
 static {{ output_dtype }} buffer1[LSTM_BUFFER_SIZE];
 static {{ output_dtype }} buffer2[LSTM_BUFFER_SIZE];
 static {{ output_dtype }} buffer3[LSTM_BUFFER_SIZE];
+static {{ output_dtype }} {{ name }}_output[LSTM_OUTPUT_SIZE];
 
-static int run_lstm(void)
+static int32_t run_lstm(void)
 {
-    {{ output_dtype }} output[{{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS * {{ macro_prefix }}HIDDEN_SIZE] = {0};
-    const {{ output_dtype }} *output_ref = &{{ data_prefix }}output[0];
-    const int32_t output_ref_size = {{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS * {{ macro_prefix }}HIDDEN_SIZE;
-
 {% if dtype == "s8" %}
     int32_t input_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
     int32_t forget_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
@@ -247,23 +231,32 @@ static int run_lstm(void)
     buffers.cell_state = buffer3;
 
 {% if dtype == "s8" %}
-    arm_cmsis_nn_status result = arm_lstm_unidirectional_s8({{ data_prefix }}input_tensor, output, &params, &buffers);
+    arm_cmsis_nn_status result = arm_lstm_unidirectional_s8({{ data_prefix }}input_tensor, {{ name }}_output, &params, &buffers);
 {% else %}
-    arm_cmsis_nn_status result = arm_lstm_unidirectional_s16({{ data_prefix }}input_tensor, output, &params, &buffers);
+    arm_cmsis_nn_status result = arm_lstm_unidirectional_s16({{ data_prefix }}input_tensor, {{ name }}_output, &params, &buffers);
 {% endif %}
 
-    if (result != ARM_CMSIS_NN_SUCCESS) {
-        printf("LSTM failed with status %d\r\n", (int)result);
-        return 1;
-    }
-    return compare_output(output, output_ref, output_ref_size);
+    return result;
 }
 
 int32_t {{ prefix }}_{{ name }}_test_case_run(void)
 {
-    int failures = run_lstm();
-    helia_test_print_failure_count(failures);
-    return failures;
+    int32_t status = run_lstm();
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);
+
+    int failures = 0;
+    HELIA_VALIDATE_OUTPUTS(
+        {{ validation_mode_token | default("EXACT_INT") }},
+        {{ name }}_output,
+        &{{ data_prefix }}output[0],
+        LSTM_OUTPUT_SIZE,
+        {{ validation_tolerance | default(1) }},
+        {{ validation_atol | default(0.01) }}f,
+        {{ validation_rtol | default(0.001) }}f,
+        {{ validation_report_limit | default(8) }},
+        failures
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 
 {% include "common/standalone/main.j2" %}
