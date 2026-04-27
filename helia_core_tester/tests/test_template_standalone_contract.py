@@ -212,6 +212,34 @@ def test_transpose_invalid_status_render_uses_expected_status_helper() -> None:
     assert "{{ name }}_expected_output" not in text
 
 
+def test_rsqrt_invalid_status_render_uses_expected_status_helper() -> None:
+    text = _render(
+        "BasicMathFunctions/rsqrt/rsqrt.c.j2",
+        {
+            "name": "rsqrt_invalid_smoke",
+            "prefix": "rsqrt",
+            "call_style": "per_op",
+            "input_dtype": "int16_t",
+            "output_dtype": "int16_t",
+            "kernel_fn": "arm_rsqrt_s16_per_op",
+            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+            "input_dims": {"n": 1, "h": 1, "w": 4, "c": 1},
+            "output_dims": {"n": 1, "h": 1, "w": 4, "c": 1},
+            "input_offset": 0,
+            "output_offset": 0,
+            "out_activation_min": -32768,
+            "out_activation_max": 32767,
+            "block_size": 4,
+            "rsqrt_lut_array": "    32767",
+            "lut_dtype": "int16_t",
+        },
+    )
+
+    assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
+    assert "ARM_CMSIS_NN_ARG_ERROR" in text
+    assert "{{ name }}_expected_output" not in text
+
+
 def test_lstm_and_svdf_keep_specialized_shared_validation_contracts() -> None:
     lstm = (
         _templates_root()

@@ -141,6 +141,7 @@ def test_selected_ops_define_local_litert_wrappers() -> None:
         "add.py": "build_add_op",
         "argmax.py": "build_argmax_op",
         "argmin.py": "build_argmin_op",
+        "rsqrt.py": "build_rsqrt_op",
         "sqrt.py": "build_sqrt_op",
     }
 
@@ -153,6 +154,7 @@ def test_selected_ops_define_local_litert_wrappers() -> None:
     assert "def build_abs_op(" not in litert_builder_text
     assert "def build_add_op(" not in litert_builder_text
     assert "def build_arg_op(" not in litert_builder_text
+    assert "def build_rsqrt_op(" not in litert_builder_text
     assert "def build_sqrt_op(" not in litert_builder_text
 
 

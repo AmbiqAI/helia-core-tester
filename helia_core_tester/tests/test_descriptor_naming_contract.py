@@ -85,7 +85,7 @@ def test_schema_is_valid_and_excludes_old_operator_names() -> None:
     for operator_name in _OLD_OPERATOR_NAMES:
         assert operator_name not in operators
 
-    for operator_name in ("Convolve", "DepthwiseConv", "BatchMatMul", "AvgPool", "MaxPool", "Comparison"):
+    for operator_name in ("Convolve", "DepthwiseConv", "BatchMatMul", "AvgPool", "MaxPool", "Comparison", "Rsqrt"):
         assert operator_name in operators
 
 

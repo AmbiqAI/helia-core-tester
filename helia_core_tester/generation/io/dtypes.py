@@ -162,6 +162,13 @@ def resolve_comparison(desc: Mapping[str, Any], resolved_tensor_dtypes: Mapping[
     user_config = desc.get("comparison")
     if not isinstance(user_config, Mapping):
         return comparison
+    if comparison["mode"] == "exact_int":
+        if user_config.get("tolerance") is not None:
+            comparison = {
+                "mode": "tolerant_int",
+                "tolerance": int(user_config["tolerance"]),
+            }
+        return comparison
     if comparison["mode"] == "float":
         if user_config.get("atol") is not None:
             comparison["atol"] = float(user_config["atol"])

@@ -98,6 +98,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
     "ArgMax": _spec("ArgMax", "BasicMathFunctions", "argmax", "OpArgMax", "BasicMathFunctions/argmax.yaml", "BasicMathFunctions/argmax"),
     "ArgMin": _spec("ArgMin", "BasicMathFunctions", "argmin", "OpArgMin", "BasicMathFunctions/argmin.yaml", "BasicMathFunctions/argmin"),
     "Sqrt": _spec("Sqrt", "BasicMathFunctions", "sqrt", "OpSqrt", "BasicMathFunctions/sqrt.yaml", "BasicMathFunctions/sqrt"),
+    "Rsqrt": _spec("Rsqrt", "BasicMathFunctions", "rsqrt", "OpRsqrt", "BasicMathFunctions/rsqrt.yaml", "BasicMathFunctions/rsqrt"),
     "Comparison": _spec("Comparison", "ComparisonFunctions", "comparison", "OpComparison", "ComparisonFunctions/comparison.yaml", "ComparisonFunctions/comparison"),
     "Concatenation": _spec("Concatenation", "ConcatenationFunctions", "concatenation", "OpConcatenation", "ConcatenationFunctions/concatenation.yaml", "ConcatenationFunctions/concatenation"),
     "Split": _spec("Split", "ConcatenationFunctions", "split", "OpSplit", "ConcatenationFunctions/split.yaml", "ConcatenationFunctions/split"),

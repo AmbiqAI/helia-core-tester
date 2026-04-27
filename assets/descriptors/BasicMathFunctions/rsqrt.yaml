@@ -1,0 +1,47 @@
+name: rsqrt_small_tensor_per_op_s16
+operator: Rsqrt
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: per_op
+input_shape: [1, 2, 3, 4]
+---
+name: rsqrt_small_tensor_universal_s16
+operator: Rsqrt
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: universal
+input_shape: [1, 2, 3, 4]
+---
+name: rsqrt_long_row_per_op_s16
+operator: Rsqrt
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: per_op
+input_shape: [1, 1, 64, 1]
+---
+name: rsqrt_long_row_universal_s16
+operator: Rsqrt
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: universal
+input_shape: [1, 1, 64, 1]
+---
+name: rsqrt_multi_batch_per_op_s16
+operator: Rsqrt
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: per_op
+input_shape: [2, 3, 5, 3]
+---
+name: rsqrt_multi_batch_universal_s16
+operator: Rsqrt
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: universal
+input_shape: [2, 3, 5, 3]

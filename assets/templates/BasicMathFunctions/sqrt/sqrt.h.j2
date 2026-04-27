@@ -16,8 +16,8 @@ static const {{ input_dtype }} {{ name }}_input[] = {
 {{ input_data_array }}
 };
 
-// LUT for Sqrt (256 values for uint8 input)
-static {{ input_dtype }} sqrt_lut[256] = {
+// LUT for Sqrt
+static {{ lut_c_type }} sqrt_lut[{{ lut_size }}] = {
 {% set chunk_size = 8 %}
 {% for i in range(0, sqrt_lut|length, chunk_size) %}
 {{ sqrt_lut[i:i+chunk_size] | join(', ') }},

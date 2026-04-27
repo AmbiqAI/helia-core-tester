@@ -63,6 +63,7 @@ OPERATOR_DESCRIPTOR_PROFILES = {'Abs': 'single_input_unary',
  'ReduceMin': 'single_input_unary',
  'Relu': 'single_input_unary',
  'Relu6': 'single_input_unary',
+ 'Rsqrt': 'single_input_unary',
  'Requantize': 'single_input_unary',
  'Reshape': 'shape_transform',
  'ResizeNearestNeighbor': 'shape_transform',
@@ -107,7 +108,8 @@ OPERATOR_EXTRA_REQUIRED_FIELDS = {'Clamp': ('act_min', 'act_max'),
                 'output_zeropoint'),
  'ResizeNearestNeighbor': ('size',)}
 
-OPERATOR_FIELD_CONSTRAINTS = {'HardSwishCompat': {'activation_dtype': 'S8'}}
+OPERATOR_FIELD_CONSTRAINTS = {'HardSwishCompat': {'activation_dtype': 'S8'},
+ 'Rsqrt': {'activation_dtype': 'S16'}}
 
 
 def _operator_descriptor_profile(operator: str) -> str:

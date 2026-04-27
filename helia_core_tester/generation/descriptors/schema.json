@@ -55,6 +55,7 @@
         "Requantize",
         "Reshape",
         "ResizeNearestNeighbor",
+        "Rsqrt",
         "SVDF",
         "Softmax",
         "SpaceToBatchND",
@@ -114,6 +115,9 @@
         },
         "rtol": {
           "type": "number"
+        },
+        "tolerance": {
+          "type": "integer"
         }
       }
     },
@@ -458,6 +462,7 @@
               "ReduceMin",
               "ArgMax",
               "ArgMin",
+              "Rsqrt",
               "Sqrt",
               "TransposeConv",
               "Tanh",
