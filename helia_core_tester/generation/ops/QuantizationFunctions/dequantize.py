@@ -2,7 +2,6 @@
 Dequantize operation implementation.
 """
 
-from typing import Dict, Any
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
@@ -46,29 +45,32 @@ class OpDequantize(QuantizationFamilyBase):
             rep_seed=rep_seed,
         )
     
-    def _select_cmsis_dequantize_kernel(self) -> Dict[str, str]:
+    def _select_cmsis_dequantize_kernel(self) -> dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Dequantize operation.
         
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        input_dtype = self.tensor_dtype("input")
+        output_dtype = self.tensor_dtype("output")
+
+        if output_dtype != "FP32":
+            raise NotImplementedError(f"Dequantize currently requires FP32 output, got {output_dtype}")
         
-        if activation_dtype == 'S8':
+        if input_dtype == 'S8':
             return {
                 'kernel_fn': 'arm_dequantize_s8_f32',
-                'input_c_type': 'int8_t',
-                'output_c_type': 'float'
+                'input_c_type': self.tensor_c_type("input"),
+                'output_c_type': self.tensor_c_type("output"),
             }
-        elif activation_dtype == 'S16':
+        if input_dtype == 'S16':
             return {
                 'kernel_fn': 'arm_dequantize_s16_f32',
-                'input_c_type': 'int16_t',
-                'output_c_type': 'float'
+                'input_c_type': self.tensor_c_type("input"),
+                'output_c_type': self.tensor_c_type("output"),
             }
-        else:
-            raise NotImplementedError(f"Unsupported Dequantize dtype: {activation_dtype}")
+        raise NotImplementedError(f"Unsupported Dequantize input dtype: {input_dtype}")
     
     def generate_c_files(self, output_dir: Path) -> None:
         """
@@ -82,6 +84,7 @@ class OpDequantize(QuantizationFamilyBase):
         kernel_info = self._select_cmsis_dequantize_kernel()
         
         builder = TemplateContextBuilder()
+        comparison = self.comparison_config()
 
         # The CMSIS-NN arm_dequantize_* kernels only dequantize, so apply any
         # descriptor activation in C to match TFLite behavior.
@@ -257,6 +260,9 @@ class OpDequantize(QuantizationFamilyBase):
             'kernel_fn': kernel_info["kernel_fn"],
             'has_activation': has_activation,
             'activation_type': activation_str if has_activation else 'NONE',
+            'comparison_atol': float(comparison.get("atol", 0.0)),
+            'comparison_rtol': float(comparison.get("rtol", 0.0)),
+            'validation_helpers': ['float'],
         }
         
         cmake_context = {

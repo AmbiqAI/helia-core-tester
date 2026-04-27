@@ -1,5 +1,6 @@
 #ifndef HELIA_CORE_TEMPLATE_VALIDATE_H
 #define HELIA_CORE_TEMPLATE_VALIDATE_H
+{% set validation_helpers = validation_helpers | default([]) %}
 
 #include <math.h>
 #include <stdbool.h>
@@ -9,21 +10,90 @@ static inline void helia_test_print_failure_count(int failures)
     printf("%d Failures\r\n", failures);
 }
 
-#define HELIA_VALIDATE_EXACT_INTS(actual, expected, size, failures) \
+static inline int helia_test_status_failure(const char *label, int status)
+{
+    printf("%s failed with status %d\r\n", label, status);
+    helia_test_print_failure_count(1);
+    return 1;
+}
+
+static inline int helia_test_expected_status_failure(const char *label, int status, int expected_status)
+{
+    printf("%s failed with status %d (expected %d)\r\n", label, status, expected_status);
+    helia_test_print_failure_count(1);
+    return 1;
+}
+
+static inline int helia_test_scalar_int_mismatch(const char *label, const char *subject, int expected, int actual)
+{
+    printf("%s %s mismatch: expected %d got %d\r\n", label, subject, expected, actual);
+    helia_test_print_failure_count(1);
+    return 1;
+}
+
+static inline int helia_test_finish_validation(int failures)
+{
+    helia_test_print_failure_count(failures);
+    return failures;
+}
+
+#define HELIA_VALIDATE_EXPECTED_STATUS(label, status, expected_status) \
+    do { \
+        int helia_status = (int)(status); \
+        int helia_expected_status = (int)(expected_status); \
+        if (helia_status != helia_expected_status) { \
+            if (helia_expected_status == (int)ARM_CMSIS_NN_SUCCESS) { \
+                return helia_test_status_failure((label), helia_status); \
+            } \
+            return helia_test_expected_status_failure((label), helia_status, helia_expected_status); \
+        } \
+    } while (0)
+
+#define HELIA_VALIDATE_STATUS(label, status) \
+    HELIA_VALIDATE_EXPECTED_STATUS((label), (status), ARM_CMSIS_NN_SUCCESS)
+
+#define HELIA_VALIDATE_SCALAR_EQ_INT(label, subject, expected, actual) \
+    do { \
+        int helia_expected = (int)(expected); \
+        int helia_actual = (int)(actual); \
+        if (helia_actual != helia_expected) { \
+            return helia_test_scalar_int_mismatch((label), (subject), helia_expected, helia_actual); \
+        } \
+    } while (0)
+
+#define HELIA_VALIDATE_RETURN_FAILURES(failures) \
+    return helia_test_finish_validation((failures))
+
+{% if "float" in validation_helpers %}
+static inline double helia_test_max_double(double lhs, double rhs)
+{
+    return lhs > rhs ? lhs : rhs;
+}
+
+static inline double helia_test_float_tolerance(double expected, double atol, double rtol)
+{
+    return helia_test_max_double(atol, rtol * fabs(expected));
+}
+{% endif %}
+
+{% if "exact_int" in validation_helpers %}
+#define HELIA_VALIDATE_EXACT_INTS(actual, expected, size, max_reports, failures) \
     do { \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
             long long helia_act_val = (long long)((actual)[helia_i]); \
             long long helia_exp_val = (long long)((expected)[helia_i]); \
             if (helia_act_val != helia_exp_val) { \
                 ++(failures); \
-                if ((failures) <= 20) { \
+                if ((failures) <= (max_reports)) { \
                     printf("Mismatch[%d]: exp=%lld got=%lld\r\n", helia_i, helia_exp_val, helia_act_val); \
                 } \
             } \
         } \
     } while (0)
+{% endif %}
 
-#define HELIA_VALIDATE_TOLERANT_INTS(actual, expected, size, tolerance, failures) \
+{% if "tolerant_int" in validation_helpers %}
+#define HELIA_VALIDATE_TOLERANT_INTS(actual, expected, size, tolerance, max_reports, failures) \
     do { \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
             long long helia_act_val = (long long)((actual)[helia_i]); \
@@ -34,7 +104,7 @@ static inline void helia_test_print_failure_count(int failures)
             } \
             if (helia_diff > (long long)(tolerance)) { \
                 ++(failures); \
-                if ((failures) <= 20) { \
+                if ((failures) <= (max_reports)) { \
                     printf( \
                         "Mismatch[%d]: exp=%lld got=%lld (diff=%lld)\r\n", \
                         helia_i, \
@@ -46,41 +116,78 @@ static inline void helia_test_print_failure_count(int failures)
             } \
         } \
     } while (0)
+{% endif %}
 
-#define HELIA_VALIDATE_FLOATS(actual, expected, size, tolerance, failures) \
+{% if "float" in validation_helpers %}
+#define HELIA_VALIDATE_FLOATS(actual, expected, size, atol, rtol, max_reports, failures) \
     do { \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
             double helia_act_val = (double)((actual)[helia_i]); \
             double helia_exp_val = (double)((expected)[helia_i]); \
             double helia_diff = fabs(helia_act_val - helia_exp_val); \
-            if (helia_diff > (double)(tolerance)) { \
+            double helia_tol = helia_test_float_tolerance( \
+                helia_exp_val, \
+                (double)(atol), \
+                (double)(rtol) \
+            ); \
+            if (helia_diff > helia_tol) { \
                 ++(failures); \
-                if ((failures) <= 20) { \
+                if ((failures) <= (max_reports)) { \
                     printf( \
                         "Mismatch[%d]: exp=%.6f got=%.6f (diff=%.6f, tol=%.6f)\r\n", \
                         helia_i, \
                         helia_exp_val, \
                         helia_act_val, \
                         helia_diff, \
-                        (double)(tolerance) \
+                        helia_tol \
                     ); \
                 } \
             } \
         } \
     } while (0)
+{% endif %}
 
-#define HELIA_VALIDATE_BOOLEANS(actual, expected, size, failures) \
+{% if "bool" in validation_helpers %}
+#define HELIA_VALIDATE_BOOLEANS(actual, expected, size, max_reports, failures) \
     do { \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
             int helia_act_val = ((actual)[helia_i]) ? 1 : 0; \
             int helia_exp_val = ((expected)[helia_i]) ? 1 : 0; \
             if (helia_act_val != helia_exp_val) { \
                 ++(failures); \
-                if ((failures) <= 20) { \
+                if ((failures) <= (max_reports)) { \
                     printf("Mismatch[%d]: exp=%d got=%d\r\n", helia_i, helia_exp_val, helia_act_val); \
                 } \
             } \
         } \
     } while (0)
+{% endif %}
+
+#define HELIA_VALIDATE_OUTPUTS_EXACT_INT(actual, expected, size, tolerance, atol, rtol, max_reports, failures) \
+    HELIA_VALIDATE_EXACT_INTS((actual), (expected), (size), (max_reports), (failures))
+
+#define HELIA_VALIDATE_OUTPUTS_TOLERANT_INT(actual, expected, size, tolerance, atol, rtol, max_reports, failures) \
+    HELIA_VALIDATE_TOLERANT_INTS((actual), (expected), (size), (tolerance), (max_reports), (failures))
+
+#define HELIA_VALIDATE_OUTPUTS_FLOAT(actual, expected, size, tolerance, atol, rtol, max_reports, failures) \
+    HELIA_VALIDATE_FLOATS((actual), (expected), (size), (atol), (rtol), (max_reports), (failures))
+
+#define HELIA_VALIDATE_OUTPUTS_BOOL(actual, expected, size, tolerance, atol, rtol, max_reports, failures) \
+    HELIA_VALIDATE_BOOLEANS((actual), (expected), (size), (max_reports), (failures))
+
+#define HELIA_VALIDATE_OUTPUTS_NONE(actual, expected, size, tolerance, atol, rtol, max_reports, failures) \
+    do { \
+        (void)(actual); \
+        (void)(expected); \
+        (void)(size); \
+        (void)(tolerance); \
+        (void)(atol); \
+        (void)(rtol); \
+        (void)(max_reports); \
+        (void)(failures); \
+    } while (0)
+
+#define HELIA_VALIDATE_OUTPUTS(mode, actual, expected, size, tolerance, atol, rtol, max_reports, failures) \
+    HELIA_VALIDATE_OUTPUTS_##mode((actual), (expected), (size), (tolerance), (atol), (rtol), (max_reports), (failures))
 
 #endif

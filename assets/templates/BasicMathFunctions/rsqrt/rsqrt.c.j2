@@ -1,4 +1,4 @@
-#include "{{ name }}_transpose.h"
+#include "{{ name }}_rsqrt.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
 
@@ -9,15 +9,34 @@ int32_t {{ prefix }}_{{ name }}_run(
     const {{ input_dtype }}* __restrict input,
     {{ output_dtype }}* __restrict output
 ) {
-    // Call Transpose kernel
-    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
-        input,
-        output,
-        &{{ name }}_input_dims,
-        &{{ name }}_output_dims,
-        &{{ name }}_transpose_params
-    );
-    
+    arm_cmsis_nn_status kernel_status =
+{% if call_style == "universal" %}
+        {{ kernel_fn }}(
+            input,
+            {{ input_offset }},       // input_offset
+            output,
+            {{ output_offset }},      // out_offset
+            {{ out_mult }},           // out_mult
+            {{ out_shift }},          // out_shift
+            {{ needs_rescale }},      // needs_rescale
+            {{ out_activation_min }}, // out_activation_min
+            {{ out_activation_max }}, // out_activation_max
+            {{ block_size }},         // block_size
+            {{ name }}_rsqrt_lut
+        );
+{% else %}
+        {{ kernel_fn }}(
+            input,
+            {{ input_offset }},       // input_offset
+            output,
+            {{ output_offset }},      // out_offset
+            {{ out_activation_min }}, // out_activation_min
+            {{ out_activation_max }}, // out_activation_max
+            {{ block_size }},         // block_size
+            {{ name }}_rsqrt_lut
+        );
+{% endif %}
+
     return kernel_status;
 }
 
@@ -25,7 +44,7 @@ int32_t {{ prefix }}_{{ name }}_test_case_run(void)
 {
     int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
     HELIA_VALIDATE_EXPECTED_STATUS(
-        "{{ validation_label | default("Transpose") }}",
+        "{{ validation_label | default("Rsqrt") }}",
         status,
         {{ expected_status | default("ARM_CMSIS_NN_SUCCESS") }}
     );
@@ -37,7 +56,7 @@ int32_t {{ prefix }}_{{ name }}_test_case_run(void)
         {{ name }}_output,
         {{ name }}_expected_output,
         {{ name|upper }}_OUTPUT_SIZE,
-        {{ validation_tolerance | default(1) }},
+        {{ validation_tolerance | default(3) }},
         {{ validation_atol | default(0.01) }}f,
         {{ validation_rtol | default(0.001) }}f,
         {{ validation_report_limit | default(20) }},

@@ -5,7 +5,7 @@ CPU target parsing and capability helpers.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Sequence
 
 
 _CPU_ALIASES = {
@@ -23,6 +23,18 @@ class CpuProfile:
     cpu: str
     has_dsp: bool
     has_mve: bool
+    capabilities: frozenset[str]
+
+    def supports_capability(self, capability: str) -> bool:
+        return str(capability).lower() in self.capabilities
+
+    def supports_execution_dtype(self, dtype: str) -> bool:
+        normalized = str(dtype).upper()
+        if normalized == "FP32":
+            return self.supports_capability("fp32_execution")
+        if normalized == "FP16":
+            return self.supports_capability("fp16_execution")
+        return True
 
 
 def normalize_cpu(cpu: str) -> str:
@@ -52,9 +64,34 @@ def parse_cpu_list(cpu_str: str | Iterable[str]) -> list[str]:
 def get_cpu_profile(cpu: str) -> CpuProfile:
     canon = normalize_cpu(cpu)
     if canon == "cortex-m55":
-        return CpuProfile(cpu=canon, has_dsp=True, has_mve=True)
+        return CpuProfile(
+            cpu=canon,
+            has_dsp=True,
+            has_mve=True,
+            capabilities=frozenset({"dsp", "mve", "fp32_execution"}),
+        )
     if canon == "cortex-m4":
-        return CpuProfile(cpu=canon, has_dsp=True, has_mve=False)
+        return CpuProfile(
+            cpu=canon,
+            has_dsp=True,
+            has_mve=False,
+            capabilities=frozenset({"dsp", "fp32_execution"}),
+        )
     if canon == "cortex-m0":
-        return CpuProfile(cpu=canon, has_dsp=False, has_mve=False)
+        return CpuProfile(
+            cpu=canon,
+            has_dsp=False,
+            has_mve=False,
+            capabilities=frozenset({"fp32_execution"}),
+        )
     raise ValueError(f"Unsupported CPU target: {cpu}")
+
+
+def missing_required_capabilities(cpu: str, required_capabilities: Sequence[str]) -> list[str]:
+    profile = get_cpu_profile(cpu)
+    missing: list[str] = []
+    for capability in required_capabilities:
+        capability_name = str(capability).strip().lower()
+        if capability_name and not profile.supports_capability(capability_name):
+            missing.append(capability_name)
+    return missing

@@ -33,37 +33,24 @@ int32_t {{ prefix }}_{{ name }}_run(
 
 int32_t {{ prefix }}_{{ name }}_test_case_run(void)
 {
-    const arm_cmsis_nn_status expected = ARM_CMSIS_NN_SUCCESS;
     int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input);
-    if (status != expected) {
-        printf("Split failed with status %d\r\n", (int)status);
-        printf("1 Failures\r\n");
-        return 1;
-    }
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("Split") }}", status);
 
     int failures = 0;
     {% for out in outputs %}
-    {
-        const int output_size = {{ out.name|upper }}_OUTPUT_SIZE;
-        const {{ output_dtype }} *act = {{ out.name }}_output;
-        const {{ output_dtype }} *exp = {{ out.name }}_expected_output;
-        for (int i = 0; i < output_size; i++) {
-            int act_val = (int)act[i];
-            int exp_val = (int)exp[i];
-            int diff = act_val - exp_val;
-            if (diff < 0) diff = -diff;  // absolute difference
-            if (diff > 1) {  // Allow tolerance of 1 bit difference
-                failures++;
-                if (failures <= 20) {
-                    printf("Mismatch[%d]: exp=%d got=%d (diff=%d)\r\n", i, exp_val, act_val, diff);
-                }
-            }
-        }
-    }
+    HELIA_VALIDATE_OUTPUTS(
+        {{ validation_mode_token | default("TOLERANT_INT") }},
+        {{ out.name }}_output,
+        {{ out.name }}_expected_output,
+        {{ out.name|upper }}_OUTPUT_SIZE,
+        {{ validation_tolerance | default(1) }},
+        {{ validation_atol | default(0.01) }}f,
+        {{ validation_rtol | default(0.001) }}f,
+        {{ validation_report_limit | default(20) }},
+        failures
+    );
     {% endfor %}
-
-    printf("%d Failures\r\n", failures);
-    return failures;
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 
 {% include "common/standalone/main.j2" %}

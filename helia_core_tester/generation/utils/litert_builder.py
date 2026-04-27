@@ -23,10 +23,19 @@ except ImportError:  # pragma: no cover - runtime dependency
 _INT4_TENSOR_TYPE = getattr(litert.TensorType, "INT4", None) if LITERT_AVAILABLE else None
 
 _DTYPE_MAP = {
+    "fp32": litert.TensorType.FLOAT32 if LITERT_AVAILABLE else None,
+    "float32": litert.TensorType.FLOAT32 if LITERT_AVAILABLE else None,
+    "fp16": litert.TensorType.FLOAT16 if LITERT_AVAILABLE else None,
+    "float16": litert.TensorType.FLOAT16 if LITERT_AVAILABLE else None,
+    "s8": litert.TensorType.INT8 if LITERT_AVAILABLE else None,
     "int8": litert.TensorType.INT8 if LITERT_AVAILABLE else None,
+    "s16": litert.TensorType.INT16 if LITERT_AVAILABLE else None,
     "int16": litert.TensorType.INT16 if LITERT_AVAILABLE else None,
+    "s32": litert.TensorType.INT32 if LITERT_AVAILABLE else None,
     "bool": litert.TensorType.BOOL if LITERT_AVAILABLE else None,
+    "bool8": litert.TensorType.BOOL if LITERT_AVAILABLE else None,
     "int32": litert.TensorType.INT32 if LITERT_AVAILABLE else None,
+    "s4": _INT4_TENSOR_TYPE,
     "int4": _INT4_TENSOR_TYPE,
 }
 
@@ -49,6 +58,7 @@ _TENSOR_TYPE_TO_NP = (
         litert.TensorType.UINT8: np.uint8,
         litert.TensorType.INT64: np.int64,
         litert.TensorType.FLOAT32: np.float32,
+        litert.TensorType.FLOAT16: np.float16,
         **({litert.TensorType.INT4: np.int8} if _INT4_TENSOR_TYPE is not None else {}),
     }
     if LITERT_AVAILABLE

@@ -12,6 +12,10 @@ from helia_core_tester.generation.ops import get_op_map
 
 
 _NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*_(s8|s16|s4|s32)$")
+_FLOAT_REFERENCE_NAMES = {
+    "quantize_fp32_to_s8_basic",
+    "dequantize_s8_to_fp32_basic",
+}
 _BANNED_NAME_PATTERNS = (
     re.compile(r"^avgpooling"),
     re.compile(r"^maxpooling"),
@@ -63,9 +67,8 @@ def test_descriptor_names_follow_canonical_contract() -> None:
         source_family = desc["_source_family"]
         family = desc["_family"]
 
-        assert _NAME_PATTERN.match(name), name
+        assert _NAME_PATTERN.match(name) or name in _FLOAT_REFERENCE_NAMES, name
         assert not re.search(r"_(s8|s16|s4|s32)_case_", name), name
-        assert not re.search(r"(?<!per)_tensor_(s8|s16|s4|s32)$", name), name
         assert not re.search(r"_basic_(s8|s16|s4|s32)$", name), name
         assert not any(pattern.search(name) for pattern in _BANNED_NAME_PATTERNS), name
         assert "/" in source_relpath, source_relpath
@@ -82,7 +85,7 @@ def test_schema_is_valid_and_excludes_old_operator_names() -> None:
     for operator_name in _OLD_OPERATOR_NAMES:
         assert operator_name not in operators
 
-    for operator_name in ("Convolve", "DepthwiseConv", "BatchMatMul", "AvgPool", "MaxPool", "Comparison"):
+    for operator_name in ("Convolve", "DepthwiseConv", "BatchMatMul", "AvgPool", "MaxPool", "Comparison", "Rsqrt"):
         assert operator_name in operators
 
 

@@ -4,14 +4,38 @@ activation_dtype: S8
 weight_dtype: S8
 input_shape: [1, 2, 3, 4]
 ---
+name: sqrt_small_tensor_s16
+operator: Sqrt
+activation_dtype: S16
+weight_dtype: S8
+input_shape: [1, 2, 3, 4]
+comparison:
+  tolerance: 1
+---
 name: sqrt_long_row_s8
 operator: Sqrt
 activation_dtype: S8
 weight_dtype: S8
 input_shape: [1, 1, 64, 1]
 ---
+name: sqrt_long_row_s16
+operator: Sqrt
+activation_dtype: S16
+weight_dtype: S8
+input_shape: [1, 1, 64, 1]
+comparison:
+  tolerance: 1
+---
 name: sqrt_multi_batch_s8
 operator: Sqrt
 activation_dtype: S8
 weight_dtype: S8
 input_shape: [2, 3, 5, 3]
+---
+name: sqrt_multi_batch_s16
+operator: Sqrt
+activation_dtype: S16
+weight_dtype: S8
+input_shape: [2, 3, 5, 3]
+comparison:
+  tolerance: 1

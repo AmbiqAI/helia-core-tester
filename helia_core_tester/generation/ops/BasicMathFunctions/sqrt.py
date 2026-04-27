@@ -1,16 +1,22 @@
-"""
-Sqrt operation implementation.
-"""
+"""Sqrt operation implementation."""
 
-from typing import Dict, Any
-import numpy as np
+from math import sqrt
 from pathlib import Path
+from typing import Any, Dict
+
+import numpy as np
+
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
 from helia_core_tester.generation.utils.litert_utils import (
-    load_litert_model, get_operator_tensors_from_litert
+    get_operator_tensors_from_litert,
+    load_litert_model,
 )
-from math import sqrt 
+
+
+SQRT_S16_LUT_SIZE = 513
+SQRT_S16_SLOT_SHIFT = 7
+SQRT_S16_SLOT_HALF_STEP = 1 << (SQRT_S16_SLOT_SHIFT - 1)
 
 
 def clamp_f32(x, min_val, max_val):
@@ -24,8 +30,21 @@ def _quant_param_to_scalar(value, name: str, cast):
         raise ValueError(f"Sqrt expects scalar quantization for {name}, got shape {arr.shape}")
     return cast(arr.reshape(-1)[0])
 
-def make_sqrt_lut(input_scale, input_zp, output_scale, output_zp)->np.ndarray:
-    '''Generate a lookup table for the Sqrt operation based on quantization parameters.'''
+
+def _sqrt_quantized_real(real_value: float) -> float:
+    """Return sqrt(real_value) while clamping the invalid negative domain to zero."""
+    if real_value <= 0.0:
+        return 0.0
+    return float(sqrt(real_value))
+
+
+def _quantize_s16_sqrt_output(real_value: float, output_scale: float, output_zp: int) -> int:
+    """Match LiteRT's int16 sqrt output more closely with truncation-based requantization."""
+    quantized_output = int(np.trunc(np.float32(real_value / np.float32(output_scale)))) + int(output_zp)
+    return int(np.clip(quantized_output, -32768, 32767))
+
+def make_sqrt_lut_s8(input_scale, input_zp, output_scale, output_zp) -> np.ndarray:
+    """Generate the uint8-addressed LUT required by arm_sqrt_s8."""
     input_scale = _quant_param_to_scalar(input_scale, "input_scale", float)
     input_zp = _quant_param_to_scalar(input_zp, "input_zero_point", int)
     output_scale = _quant_param_to_scalar(output_scale, "output_scale", float)
@@ -47,6 +66,47 @@ def make_sqrt_lut(input_scale, input_zp, output_scale, output_zp)->np.ndarray:
         lut[i & 0xFF] = np.int8(final_val)
 
     return lut
+
+
+def make_sqrt_lut_s16(input_scale, input_zp, output_scale, output_zp) -> np.ndarray:
+    """Generate the 513-entry interpolated LUT required by arm_sqrt_s16."""
+    input_scale = _quant_param_to_scalar(input_scale, "input_scale", float)
+    input_zp = _quant_param_to_scalar(input_zp, "input_zero_point", int)
+    output_scale = _quant_param_to_scalar(output_scale, "output_scale", float)
+    output_zp = _quant_param_to_scalar(output_zp, "output_zero_point", int)
+
+    lut = np.zeros(SQRT_S16_LUT_SIZE, dtype=np.int16)
+    for index in range(SQRT_S16_LUT_SIZE):
+        q_value = -32768 + (index << SQRT_S16_SLOT_SHIFT)
+        real_value = float(np.float32(input_scale) * np.float32(q_value - input_zp))
+        compensated_sqrt = _sqrt_quantized_real(real_value)
+
+        # arm_sqrt_s16 linearly interpolates between neighboring LUT anchors.
+        # Bias interior positive anchors upward by the local midpoint sag of sqrt(x)
+        # so the piecewise-linear approximation tracks the concave curve better.
+        if 0 < index < (SQRT_S16_LUT_SIZE - 1) and real_value > 0.0:
+            next_q_value = q_value + (1 << SQRT_S16_SLOT_SHIFT)
+            midpoint_q_value = q_value + SQRT_S16_SLOT_HALF_STEP
+            next_real_value = float(np.float32(input_scale) * np.float32(next_q_value - input_zp))
+            midpoint_real_value = float(np.float32(input_scale) * np.float32(midpoint_q_value - input_zp))
+            next_sqrt = _sqrt_quantized_real(next_real_value)
+            midpoint_sqrt = _sqrt_quantized_real(midpoint_real_value)
+            compensated_sqrt += midpoint_sqrt - 0.5 * (compensated_sqrt + next_sqrt)
+
+        lut[index] = np.int16(
+            _quantize_s16_sqrt_output(compensated_sqrt, output_scale, output_zp)
+        )
+
+    return lut
+
+
+def make_sqrt_lut(input_scale, input_zp, output_scale, output_zp, activation_dtype: str) -> np.ndarray:
+    """Generate a dtype-specific lookup table for the Sqrt operation."""
+    if activation_dtype == "S8":
+        return make_sqrt_lut_s8(input_scale, input_zp, output_scale, output_zp)
+    if activation_dtype == "S16":
+        return make_sqrt_lut_s16(input_scale, input_zp, output_scale, output_zp)
+    raise NotImplementedError(f"Unsupported Sqrt dtype: {activation_dtype}")
 
 
 def build_sqrt_op(
@@ -97,18 +157,22 @@ class OpSqrt(OperationBase):
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
         activation_dtype = self.desc.get('activation_dtype', 'S8')
-        
+
         if activation_dtype == 'S8':
             return {
                 'kernel_fn': 'arm_sqrt_s8',
                 'input_c_type': 'int8_t',
-                'output_c_type': 'int8_t'
+                'output_c_type': 'int8_t',
+                'lut_c_type': 'int8_t',
+                'lut_size': 256,
             }
         elif activation_dtype == 'S16':
             return {
                 'kernel_fn': 'arm_sqrt_s16',
                 'input_c_type': 'int16_t',
-                'output_c_type': 'int16_t'
+                'output_c_type': 'int16_t',
+                'lut_c_type': 'int16_t',
+                'lut_size': SQRT_S16_LUT_SIZE,
             }
         else:
             raise NotImplementedError(f"Unsupported Sqrt dtype: {activation_dtype}")
@@ -130,6 +194,7 @@ class OpSqrt(OperationBase):
         input_shape = tuple(self.desc["input_shape"])
         
         builder = TemplateContextBuilder()
+        comparison = self.comparison_config()
         
         # Convert shapes to CMSIS dims
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
@@ -172,11 +237,14 @@ class OpSqrt(OperationBase):
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
 
 
+        activation_dtype = self.desc.get("activation_dtype", "S8")
         sqrt_lut = make_sqrt_lut(
             input_scale=input_scale,
             input_zp=input_zp,
             output_scale=output_scale,
-            output_zp=output_zp)
+            output_zp=output_zp,
+            activation_dtype=activation_dtype,
+        )
 
         # Build template context
         context = {
@@ -189,8 +257,13 @@ class OpSqrt(OperationBase):
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
             'output_size': int(np.prod(output_shape)),
-            'sqrt_lut': sqrt_lut
+            'lut_c_type': kernel_info["lut_c_type"],
+            'lut_size': kernel_info["lut_size"],
+            'sqrt_lut': sqrt_lut,
         }
+        if comparison.get("mode") == "tolerant_int":
+            context["validation_mode"] = "tolerant_int"
+            context["comparison_tolerance"] = int(comparison.get("tolerance", 1))
         
         # Render templates
         includes_api_dir = output_dir / "includes"

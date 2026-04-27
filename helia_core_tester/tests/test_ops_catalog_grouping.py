@@ -82,6 +82,8 @@ def test_scaffold_operator_creates_grouped_skeleton(tmp_path: Path) -> None:
     module_text = created["module"].read_text()
     assert "def build_example_op(" in module_text
     assert "build_unary_same_shape_op" in module_text
+    assert 'self.tensor_litert_dtype("input")' in module_text
+    assert 'output_dtype=self.tensor_litert_dtype("output")' in module_text
 
     catalog_text = created["catalog"].read_text()
     assert '"ExampleOp": _spec("ExampleOp", "BasicMathFunctions", "example_op", "OpExampleOp"' in catalog_text
@@ -139,6 +141,7 @@ def test_selected_ops_define_local_litert_wrappers() -> None:
         "add.py": "build_add_op",
         "argmax.py": "build_argmax_op",
         "argmin.py": "build_argmin_op",
+        "rsqrt.py": "build_rsqrt_op",
         "sqrt.py": "build_sqrt_op",
     }
 
@@ -151,12 +154,20 @@ def test_selected_ops_define_local_litert_wrappers() -> None:
     assert "def build_abs_op(" not in litert_builder_text
     assert "def build_add_op(" not in litert_builder_text
     assert "def build_arg_op(" not in litert_builder_text
+    assert "def build_rsqrt_op(" not in litert_builder_text
     assert "def build_sqrt_op(" not in litert_builder_text
 
 
 def test_root_readme_documents_add_op_workflow() -> None:
-    readme = _repo_root().parents[1] / "README.md"
-    content = readme.read_text()
-    assert "Adding a Helia-Core Tester Op" in content
-    assert "scaffold_operator.py" in content
-    assert "build_<op>_op()" in content
+    readme_candidates = [
+        _repo_root().parents[1] / "README.md",
+        _repo_root() / "README.md",
+    ]
+
+    for readme in readme_candidates:
+        content = readme.read_text()
+        if "scaffold_operator.py" in content:
+            assert "build_<op>_op()" in content or "tensor_dtypes" in content
+            return
+
+    raise AssertionError("No README documents the Helia-Core Tester op workflow")

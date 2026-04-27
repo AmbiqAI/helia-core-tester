@@ -4,6 +4,8 @@ from pathlib import Path
 
 import jinja2
 
+from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -19,7 +21,8 @@ def _render(template_name: str, context: dict[str, object]) -> str:
         trim_blocks=True,
         lstrip_blocks=True,
     )
-    return env.get_template(template_name).render(**context)
+    render_context = TemplateContextBuilder.build_validation_context(template_name, context)
+    return env.get_template(template_name).render(**render_context)
 
 
 def test_all_c_templates_use_standalone_harness_contract() -> None:
@@ -36,12 +39,37 @@ def test_all_c_templates_use_standalone_harness_contract() -> None:
         assert '{% include "common/standalone/runtime_common.j2" %}' in text, path
         assert '{% include "common/standalone/main.j2" %}' in text, path
         assert "int32_t {{ prefix }}_{{ name }}_test_case_run(void)" in text, path
+        assert (
+            "HELIA_VALIDATE_STATUS(" in text
+            or "HELIA_VALIDATE_EXPECTED_STATUS(" in text
+        ), path
+        assert "HELIA_VALIDATE_OUTPUTS(" in text, path
+        assert "HELIA_VALIDATE_RETURN_FAILURES(" in text, path
 
 
-def test_rendered_templates_keep_helper_and_main_shape() -> None:
+def test_all_c_templates_keep_inline_validation_out_of_templates() -> None:
+    template_paths = sorted(_templates_root().glob("**/*.c.j2"))
+    assert template_paths
+
+    for path in template_paths:
+        text = path.read_text()
+        assert "Mismatch[" not in text, path
+        assert 'printf("%d Failures' not in text, path
+        assert "compare_output(" not in text, path
+
+        marker = "int32_t {{ prefix }}_{{ name }}_test_case_run(void)"
+        start = text.find(marker)
+        assert start >= 0, path
+        end = text.find('{% include "common/standalone/main.j2" %}', start)
+        assert end > start, path
+        test_case_run = text[start:end]
+        assert "if (status !=" not in test_case_run, path
+
+
+def test_rendered_templates_use_shared_validation_helpers() -> None:
     rendered = {
         "relu": _render(
-            "relu/relu.c.j2",
+            "ActivationFunctions/relu/relu.c.j2",
             {
                 "name": "relu_smoke",
                 "prefix": "relu",
@@ -56,7 +84,7 @@ def test_rendered_templates_keep_helper_and_main_shape() -> None:
             },
         ),
         "comparison": _render(
-            "comparison/comparison.c.j2",
+            "ComparisonFunctions/comparison/comparison.c.j2",
             {
                 "name": "comparison_smoke",
                 "prefix": "comparison",
@@ -72,43 +100,49 @@ def test_rendered_templates_keep_helper_and_main_shape() -> None:
                 "left_shift": 0,
             },
         ),
-        "reduce_max": _render(
-            "reduce_max/reduce_max.c.j2",
+        "argmax": _render(
+            "BasicMathFunctions/argmax/argmax.c.j2",
             {
-                "name": "reduce_max_smoke",
-                "prefix": "reduce_max",
+                "name": "argmax_smoke",
+                "prefix": "argmax",
                 "input_dtype": "int8_t",
-                "output_dtype": "int8_t",
-                "kernel_fn": "arm_reduce_max_s8",
-                "output_dims": {"n": 1, "h": 1, "w": 1, "c": 1},
-            },
-        ),
-        "convolve": _render(
-            "convolve/convolve.c.j2",
-            {
-                "name": "convolve_smoke",
-                "prefix": "convolve",
-                "input_dtype": "int8_t",
-                "output_dtype": "int8_t",
-                "buffer_size_max": 128,
-                "kernel_fn": "arm_convolve_wrapper_s8",
-                "kernel_get_buffer_size_fn": "arm_convolve_wrapper_s8_get_buffer_size",
-                "output_dims": {"n": 1, "h": 1, "w": 1, "c": 1},
-                "filter_dims": {"n": 1},
-                "has_biases": False,
-            },
-        ),
-        "pack": _render(
-            "pack/pack.c.j2",
-            {
-                "name": "pack_smoke",
-                "prefix": "pack",
-                "input_dtype": "int8_t",
-                "output_dtype": "int8_t",
+                "output_dtype": "int32_t",
                 "output_size": 4,
-                "outer_size": 2,
-                "inner_size": 1,
-                "num_tensors": 2,
+                "kernel_fn": "arm_argmax_s8",
+            },
+        ),
+        "dequantize": _render(
+            "QuantizationFunctions/dequantize/dequantize.c.j2",
+            {
+                "name": "dequantize_smoke",
+                "prefix": "dequantize",
+                "input_size": 4,
+                "zero_point": 0,
+                "scale": 0.125,
+                "input_data_array": "    0",
+                "expected_output_array": "    0.000000f",
+                "input_dtype": "int8_t",
+                "output_dtype": "float",
+                "kernel_fn": "arm_dequantize_s8_f32",
+                "has_activation": False,
+                "activation_type": "NONE",
+            },
+        ),
+        "split": _render(
+            "ConcatenationFunctions/split/split.c.j2",
+            {
+                "name": "split_smoke",
+                "prefix": "split",
+                "input_dtype": "int8_t",
+                "output_dtype": "int8_t",
+                "kernel_fn": "arm_split_s8",
+                "input_dims_count": 4,
+                "axis": 3,
+                "num_splits": 2,
+                "outputs": [
+                    {"name": "split_smoke_out0", "size": 4},
+                    {"name": "split_smoke_out1", "size": 4},
+                ],
             },
         ),
     }
@@ -122,6 +156,160 @@ def test_rendered_templates_keep_helper_and_main_shape() -> None:
         assert "helia_test_finish(failures);" in text, name
         assert "int main(void)" in text, name
         assert "_test_case_run(void)" in text, name
+        assert "HELIA_VALIDATE_STATUS(" in text, name
+        assert "HELIA_VALIDATE_OUTPUTS(" in text, name
+        assert "HELIA_VALIDATE_RETURN_FAILURES(" in text, name
+
+    assert "TOLERANT_INT" in rendered["relu"]
+    assert "BOOL" in rendered["comparison"]
+    assert "EXACT_INT" in rendered["argmax"]
+    assert "FLOAT" in rendered["dequantize"]
+    assert "split_smoke_out0_output" in rendered["split"]
+    assert "split_smoke_out1_output" in rendered["split"]
+
+
+def test_gather_nd_invalid_status_render_uses_expected_status_helper() -> None:
+    text = _render(
+        "GatherFunctions/gather_nd/gather_nd.c.j2",
+        {
+            "name": "gather_nd_invalid_smoke",
+            "prefix": "gather_nd",
+            "input_dtype": "int8_t",
+            "output_dtype": "int8_t",
+            "kernel_fn": "arm_gather_nd_s8",
+            "params_rank_test": 3,
+            "indices_rank_test": 2,
+            "batch_dims_test": 0,
+            "output_size": 4,
+            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+        },
+    )
+
+    assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
+    assert "ARM_CMSIS_NN_ARG_ERROR" in text
+    assert "{{ name }}_expected_output" not in text
+
+
+def test_transpose_invalid_status_render_uses_expected_status_helper() -> None:
+    text = _render(
+        "TransposeFunctions/transpose/transpose.c.j2",
+        {
+            "name": "transpose_invalid_smoke",
+            "prefix": "transpose",
+            "input_dtype": "int8_t",
+            "output_dtype": "int8_t",
+            "kernel_fn": "arm_transpose_s8",
+            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+            "input_dims": {"n": 2, "h": 4, "w": 3, "c": 1},
+            "output_dims": {"n": 2, "h": 4, "w": 3, "c": 1},
+            "num_dims": 3,
+            "permutation_array": "    0, 1, 3",
+        },
+    )
+
+    assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
+    assert "ARM_CMSIS_NN_ARG_ERROR" in text
+    assert "{{ name }}_expected_output" not in text
+
+
+def test_rsqrt_invalid_status_render_uses_expected_status_helper() -> None:
+    text = _render(
+        "BasicMathFunctions/rsqrt/rsqrt.c.j2",
+        {
+            "name": "rsqrt_invalid_smoke",
+            "prefix": "rsqrt",
+            "call_style": "per_op",
+            "input_dtype": "int16_t",
+            "output_dtype": "int16_t",
+            "kernel_fn": "arm_rsqrt_s16_per_op",
+            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+            "input_dims": {"n": 1, "h": 1, "w": 4, "c": 1},
+            "output_dims": {"n": 1, "h": 1, "w": 4, "c": 1},
+            "input_offset": 0,
+            "output_offset": 0,
+            "out_activation_min": -32768,
+            "out_activation_max": 32767,
+            "block_size": 4,
+            "rsqrt_lut_array": "    32767",
+            "lut_dtype": "int16_t",
+        },
+    )
+
+    assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
+    assert "ARM_CMSIS_NN_ARG_ERROR" in text
+    assert "{{ name }}_expected_output" not in text
+
+
+def test_lstm_and_svdf_keep_specialized_shared_validation_contracts() -> None:
+    lstm = (
+        _templates_root()
+        / "LSTMFunctions"
+        / "lstm_unidirectional"
+        / "lstm_unidirectional.c.j2"
+    ).read_text()
+    svdf = (_templates_root() / "SVDFunctions" / "svdf" / "svdf.c.j2").read_text()
+
+    assert '{{ validation_report_limit | default(8) }}' in lstm
+    assert "HELIA_VALIDATE_OUTPUTS(" in lstm
+
+    assert '{{ validation_report_limit | default(8) }}' in svdf
+    assert "HELIA_VALIDATE_SCALAR_EQ_INT(" in svdf
+    assert "HELIA_VALIDATE_OUTPUTS(" in svdf
+
+
+def test_quantize_and_dequantize_render_only_requested_validation_helpers() -> None:
+    quantize = _render(
+        "QuantizationFunctions/quantize/quantize.c.j2",
+        {
+            "name": "quantize_smoke",
+            "prefix": "quantize",
+            "input_size": 4,
+            "zero_point": 0,
+            "scale": 0.125,
+            "input_data_array": "    0.000000f",
+            "expected_output_array": "    0",
+            "input_dtype": "float",
+            "output_dtype": "int8_t",
+            "kernel_fn": "arm_quantize_f32_s8",
+            "has_activation": False,
+            "activation_kernel_fn": None,
+            "activation_type": "NONE",
+            "comparison_tolerance": 1,
+            "validation_helpers": ["tolerant_int"],
+        },
+    )
+    dequantize = _render(
+        "QuantizationFunctions/dequantize/dequantize.c.j2",
+        {
+            "name": "dequantize_smoke",
+            "prefix": "dequantize",
+            "input_size": 4,
+            "zero_point": 0,
+            "scale": 0.125,
+            "input_data_array": "    0",
+            "expected_output_array": "    0.000000f",
+            "input_dtype": "int8_t",
+            "output_dtype": "float",
+            "kernel_fn": "arm_dequantize_s8_f32",
+            "has_activation": False,
+            "activation_type": "NONE",
+            "comparison_atol": 0.01,
+            "comparison_rtol": 0.001,
+            "validation_helpers": ["float"],
+        },
+    )
+
+    assert "#define HELIA_VALIDATE_TOLERANT_INTS" in quantize
+    assert "#define HELIA_VALIDATE_FLOATS" not in quantize
+    assert "#define HELIA_VALIDATE_EXACT_INTS" not in quantize
+    assert "#define HELIA_VALIDATE_BOOLEANS" not in quantize
+    assert "TOLERANT_INT" in quantize
+
+    assert "#define HELIA_VALIDATE_FLOATS" in dequantize
+    assert "#define HELIA_VALIDATE_TOLERANT_INTS" not in dequantize
+    assert "#define HELIA_VALIDATE_EXACT_INTS" not in dequantize
+    assert "#define HELIA_VALIDATE_BOOLEANS" not in dequantize
+    assert "FLOAT" in dequantize
 
 
 def test_top_level_cmake_no_longer_uses_unity() -> None:
