@@ -6,16 +6,8 @@ activation: NONE
 operation: equal
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 3]
 ---
 operator: Comparison
 name: comparison_not_equal_nhwc_s8
@@ -25,16 +17,8 @@ activation: NONE
 operation: not_equal
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 3
-- 4
-input_2_shape:
-- 1
-- 2
-- 3
-- 4
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 2, 3, 4]
 ---
 operator: Comparison
 name: comparison_greater_row_broadcast_s8
@@ -44,16 +28,8 @@ activation: NONE
 operation: greater
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 1
-- 3
-- 4
-input_2_shape:
-- 1
-- 2
-- 3
-- 4
+input_1_shape: [1, 1, 3, 4]
+input_2_shape: [1, 2, 3, 4]
 ---
 operator: Comparison
 name: comparison_less_scalar_left_s8
@@ -63,13 +39,8 @@ activation: NONE
 operation: less
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
+input_1_shape: [1]
+input_2_shape: [1, 2, 2, 3]
 ---
 operator: Comparison
 name: comparison_less_equal_scalar_right_s8
@@ -79,13 +50,8 @@ activation: NONE
 operation: less_equal
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1]
 ---
 operator: Comparison
 name: comparison_greater_equal_row_broadcast_rev_s8
@@ -95,121 +61,8 @@ activation: NONE
 operation: greater_equal
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 3
-- 4
-input_2_shape:
-- 1
-- 1
-- 3
-- 4
----
-operator: Comparison
-name: comparison_greater_scalar_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-operation: greater
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-input_2_shape:
-- 1
-- 2
-- 2
-- 2
----
-operator: Comparison
-name: comparison_equal_nhwc_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-operation: equal
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 3
-- 2
-input_2_shape:
-- 1
-- 2
-- 3
-- 2
----
-operator: Comparison
-name: comparison_not_equal_row_broadcast_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-operation: not_equal
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-- 1
-- 2
-- 5
-input_2_shape:
-- 1
-- 3
-- 2
-- 5
----
-operator: Comparison
-name: comparison_less_scalar_left_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-operation: less
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-input_2_shape:
-- 1
-- 2
-- 4
-- 2
----
-operator: Comparison
-name: comparison_less_equal_scalar_right_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-operation: less_equal
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 4
-- 2
-input_2_shape:
-- 1
----
-operator: Comparison
-name: comparison_greater_equal_nhwc_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-operation: greater_equal
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 3
-- 3
-input_2_shape:
-- 1
-- 2
-- 3
-- 3
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 1, 3, 4]
 ---
 operator: Comparison
 name: comparison_equal_row_scalar_left_s8
@@ -219,16 +72,8 @@ activation: NONE
 operation: equal
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 1
-- 1
-input_2_shape:
-- 1
-- 2
-- 3
-- 4
+input_1_shape: [1, 2, 1, 1]
+input_2_shape: [1, 2, 3, 4]
 ---
 operator: Comparison
 name: comparison_not_equal_row_scalar_right_s8
@@ -238,16 +83,8 @@ activation: NONE
 operation: not_equal
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 3
-- 4
-input_2_shape:
-- 1
-- 2
-- 1
-- 1
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 2, 1, 1]
 ---
 operator: Comparison
 name: comparison_greater_pixel_scalar_left_s8
@@ -257,16 +94,8 @@ activation: NONE
 operation: greater
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 1
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
+input_1_shape: [1, 2, 2, 1]
+input_2_shape: [1, 2, 2, 3]
 ---
 operator: Comparison
 name: comparison_less_equal_pixel_scalar_right_s8
@@ -276,16 +105,162 @@ activation: NONE
 operation: less_equal
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 1
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 1]
+---
+operator: Comparison
+name: comparison_greater_nhwc_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+operation: greater
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 3]
+---
+operator: Comparison
+name: comparison_greater_equal_nhwc_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+operation: greater_equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 3]
+---
+operator: Comparison
+name: comparison_less_nhwc_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+operation: less
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 3]
+---
+operator: Comparison
+name: comparison_less_broadcast_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+operation: less
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 1, 1, 3]
+---
+operator: Comparison
+name: comparison_less_equal_nhwc_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+operation: less_equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 3]
+---
+operator: Comparison
+name: comparison_equal_batch_broadcast_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+operation: equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [2, 2, 2, 3]
+---
+operator: Comparison
+name: comparison_less_batch_scalar_left_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+operation: less
+hint:
+  call_style: per_tensor
+input_1_shape: [2, 1, 1, 1]
+input_2_shape: [1, 2, 2, 3]
+---
+operator: Comparison
+name: comparison_less_equal_batch_scalar_right_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+operation: less_equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [2, 1, 1, 1]
+---
+operator: Comparison
+name: comparison_greater_scalar_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+operation: greater
+hint:
+  call_style: per_tensor
+input_1_shape: [1]
+input_2_shape: [1, 2, 2, 2]
+---
+operator: Comparison
+name: comparison_equal_nhwc_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+operation: equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 3, 2]
+input_2_shape: [1, 2, 3, 2]
+---
+operator: Comparison
+name: comparison_not_equal_row_broadcast_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+operation: not_equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 1, 2, 5]
+input_2_shape: [1, 3, 2, 5]
+---
+operator: Comparison
+name: comparison_less_scalar_left_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+operation: less
+hint:
+  call_style: per_tensor
+input_1_shape: [1]
+input_2_shape: [1, 2, 4, 2]
+---
+operator: Comparison
+name: comparison_less_equal_scalar_right_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+operation: less_equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 4, 2]
+input_2_shape: [1]
+---
+operator: Comparison
+name: comparison_greater_equal_nhwc_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+operation: greater_equal
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 3, 3]
+input_2_shape: [1, 2, 3, 3]
 ---
 operator: Comparison
 name: comparison_equal_row_scalar_left_s16
@@ -295,16 +270,8 @@ activation: NONE
 operation: equal
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 1
-- 1
-input_2_shape:
-- 1
-- 2
-- 3
-- 4
+input_1_shape: [1, 2, 1, 1]
+input_2_shape: [1, 2, 3, 4]
 ---
 operator: Comparison
 name: comparison_not_equal_row_scalar_right_s16
@@ -314,16 +281,8 @@ activation: NONE
 operation: not_equal
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 3
-- 4
-input_2_shape:
-- 1
-- 2
-- 1
-- 1
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 2, 1, 1]
 ---
 operator: Comparison
 name: comparison_greater_pixel_scalar_left_s16
@@ -333,16 +292,8 @@ activation: NONE
 operation: greater
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 1
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
+input_1_shape: [1, 2, 2, 1]
+input_2_shape: [1, 2, 2, 3]
 ---
 operator: Comparison
 name: comparison_less_equal_pixel_scalar_right_s16
@@ -352,393 +303,115 @@ activation: NONE
 operation: less_equal
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 1
----
-operator: Comparison
-name: comparison_equal_nhwc_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
-operation: equal
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 1]
 ---
 operator: Comparison
 name: comparison_equal_nhwc_case_02_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
 operation: equal
----
-operator: Comparison
-name: comparison_not_equal_nhwc_case_02_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
-operation: not_equal
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 3]
 ---
 operator: Comparison
 name: comparison_not_equal_nhwc_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
 operation: not_equal
----
-operator: Comparison
-name: comparison_greater_nhwc_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
-operation: greater
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 3]
 ---
 operator: Comparison
 name: comparison_greater_nhwc_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
 operation: greater
----
-operator: Comparison
-name: comparison_greater_equal_nhwc_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
-operation: greater_equal
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 3]
 ---
 operator: Comparison
 name: comparison_greater_equal_nhwc_case_02_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
 operation: greater_equal
----
-operator: Comparison
-name: comparison_less_nhwc_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
-operation: less
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 3]
 ---
 operator: Comparison
 name: comparison_less_nhwc_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
 operation: less
----
-operator: Comparison
-name: comparison_less_broadcast_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 1
-- 1
-- 3
-operation: less
----
-operator: Comparison
-name: comparison_less_equal_nhwc_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
-operation: less_equal
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 3]
 ---
 operator: Comparison
 name: comparison_less_equal_nhwc_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
 operation: less_equal
----
-operator: Comparison
-name: comparison_equal_batch_broadcast_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 2
-- 2
-- 2
-- 3
-operation: equal
----
-operator: Comparison
-name: comparison_less_batch_scalar_left_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 2
-- 1
-- 1
-- 1
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
-operation: less
----
-operator: Comparison
-name: comparison_less_equal_batch_scalar_right_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-hint:
-  call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 2
-- 1
-- 1
-- 1
-operation: less_equal
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 2, 3]
 ---
 operator: Comparison
 name: comparison_equal_batch_broadcast_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
+operation: equal
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 2
-- 2
-- 2
-- 3
-operation: equal
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [2, 2, 2, 3]
 ---
 operator: Comparison
 name: comparison_less_batch_scalar_left_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
+operation: less
 hint:
   call_style: per_tensor
-input_1_shape:
-- 2
-- 1
-- 1
-- 1
-input_2_shape:
-- 1
-- 2
-- 2
-- 3
-operation: less
+input_1_shape: [2, 1, 1, 1]
+input_2_shape: [1, 2, 2, 3]
 ---
 operator: Comparison
 name: comparison_less_equal_batch_scalar_right_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
+operation: less_equal
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 2
-- 1
-- 1
-- 1
-operation: less_equal
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [2, 1, 1, 1]
 ---
 operator: Comparison
 name: comparison_less_broadcast_s16
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
+operation: less
 hint:
   call_style: per_tensor
-input_1_shape:
-- 1
-- 2
-- 2
-- 3
-input_2_shape:
-- 1
-- 1
-- 1
-- 3
-operation: less
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 1, 1, 3]

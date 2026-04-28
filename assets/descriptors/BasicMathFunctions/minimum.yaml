@@ -1,11 +1,4 @@
 operator: Minimum
-name: minimum_2x2x7_s16
-activation_dtype: S16
-weight_dtype: S8
-input_1_shape: [1, 2, 2, 7]
-input_2_shape: [1, 2, 2, 7]
----
-operator: Minimum
 name: minimum_dual_s8
 activation_dtype: S8
 weight_dtype: S8
@@ -86,6 +79,35 @@ input_1_shape: [1, 2, 2, 3]
 input_2_shape: [2, 2, 2, 3]
 ---
 operator: Minimum
+name: minimum_row_scalar1_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 1, 1]
+input_2_shape: [1, 2, 3, 4]
+---
+operator: Minimum
+name: minimum_row_scalar2_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 2, 1, 1]
+---
+operator: Minimum
+name: minimum_2x2x7_s16
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 2, 7]
+input_2_shape: [1, 2, 2, 7]
+---
+operator: Minimum
 name: minimum_scalar_left_s16
 activation_dtype: S16
 weight_dtype: S8
@@ -138,3 +160,21 @@ hint:
   call_style: per_tensor
 input_1_shape: [1, 2, 2, 3]
 input_2_shape: [2, 2, 2, 3]
+---
+operator: Minimum
+name: minimum_row_scalar1_s16
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 1, 1]
+input_2_shape: [1, 2, 3, 4]
+---
+operator: Minimum
+name: minimum_row_scalar2_s16
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 2, 1, 1]
