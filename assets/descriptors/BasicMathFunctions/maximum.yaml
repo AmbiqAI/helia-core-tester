@@ -9,18 +9,24 @@ input_1_shape: [1, 32, 32, 3]
 input_2_shape: [1, 32, 32, 3]
 ---
 operator: Maximum
-name: maximum_32x32x3_s16
-activation_dtype: S16
+name: maximum_scalar_left_s8
+activation_dtype: S8
 weight_dtype: S8
-input_1_shape: [1, 32, 32, 3]
-input_2_shape: [1, 32, 32, 3]
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 1, 1, 1]
+input_2_shape: [1, 2, 3, 4]
 ---
 operator: Maximum
-name: maximum_4x4x14_s16
-activation_dtype: S16
+name: maximum_scalar_right_s8
+activation_dtype: S8
 weight_dtype: S8
-input_1_shape: [1, 4, 4, 14]
-input_2_shape: [1, 4, 4, 14]
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 1, 1, 1]
 ---
 operator: Maximum
 name: maximum_dual_s8
@@ -83,6 +89,44 @@ input_1_shape: [1, 2, 2, 3]
 input_2_shape: [2, 2, 2, 3]
 ---
 operator: Maximum
+name: maximum_row_scalar1_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 1, 1]
+input_2_shape: [1, 2, 3, 4]
+---
+operator: Maximum
+name: maximum_row_scalar2_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 2, 1, 1]
+---
+operator: Maximum
+name: maximum_32x32x3_s16
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 32, 32, 3]
+input_2_shape: [1, 32, 32, 3]
+---
+operator: Maximum
+name: maximum_4x4x14_s16
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 4, 4, 14]
+input_2_shape: [1, 4, 4, 14]
+---
+operator: Maximum
 name: maximum_scalar_left_s16
 activation_dtype: S16
 weight_dtype: S8
@@ -135,3 +179,21 @@ hint:
   call_style: per_tensor
 input_1_shape: [1, 2, 2, 3]
 input_2_shape: [2, 2, 2, 3]
+---
+operator: Maximum
+name: maximum_row_scalar1_s16
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 1, 1]
+input_2_shape: [1, 2, 3, 4]
+---
+operator: Maximum
+name: maximum_row_scalar2_s16
+activation_dtype: S16
+weight_dtype: S8
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 2, 1, 1]
