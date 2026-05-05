@@ -29,6 +29,12 @@ SQDIFF_PARITY_CASES = (
     ("squared_difference_broadcast_w_s8", "S8", (1, 2, 3, 4), (1, 2, 1, 4), "arm_squared_difference_s8"),
     ("squared_difference_broadcast_c_s8", "S8", (1, 2, 3, 4), (1, 2, 3, 1), "arm_squared_difference_s8"),
     ("squared_difference_broadcast_hc_s8", "S8", (1, 2, 3, 1), (1, 1, 3, 4), "arm_squared_difference_s8"),
+    ("squared_difference_broadcast_hc_w2_s8", "S8", (1, 1, 2, 1), (1, 2, 2, 4), "arm_squared_difference_s8"),
+    ("squared_difference_broadcast_hc_w2_rev_s8", "S8", (1, 2, 2, 4), (1, 1, 2, 1), "arm_squared_difference_s8"),
+    ("squared_difference_row_scalar_input1_s8", "S8", (1, 2, 1, 1), (1, 2, 3, 4), "arm_squared_difference_s8"),
+    ("squared_difference_row_scalar_input2_s8", "S8", (1, 2, 3, 4), (1, 2, 1, 1), "arm_squared_difference_s8"),
+    ("squared_difference_batch_broadcast_input1_s8", "S8", (1, 2, 3, 4), (2, 2, 3, 4), "arm_squared_difference_s8"),
+    ("squared_difference_batch_broadcast_input2_s8", "S8", (2, 2, 3, 4), (1, 2, 3, 4), "arm_squared_difference_s8"),
     ("squared_difference_scalar_s16", "S16", (1, 2, 3, 4), (1, 1, 1, 1), "arm_squared_difference_s16"),
     ("squared_difference_ident_s16", "S16", (1, 2, 3, 4), (1, 2, 3, 4), "arm_squared_difference_s16"),
     ("squared_difference_broadcast_n_s16", "S16", (1, 2, 3, 4), (2, 2, 3, 4), "arm_squared_difference_s16"),
@@ -36,6 +42,12 @@ SQDIFF_PARITY_CASES = (
     ("squared_difference_broadcast_w_s16", "S16", (1, 2, 3, 4), (1, 2, 1, 4), "arm_squared_difference_s16"),
     ("squared_difference_broadcast_c_s16", "S16", (1, 2, 3, 4), (1, 2, 3, 1), "arm_squared_difference_s16"),
     ("squared_difference_broadcast_hc_s16", "S16", (1, 2, 3, 1), (1, 1, 3, 4), "arm_squared_difference_s16"),
+    ("squared_difference_broadcast_hc_w2_s16", "S16", (1, 1, 2, 1), (1, 2, 2, 4), "arm_squared_difference_s16"),
+    ("squared_difference_broadcast_hc_w2_rev_s16", "S16", (1, 2, 2, 4), (1, 1, 2, 1), "arm_squared_difference_s16"),
+    ("squared_difference_row_scalar_input1_s16", "S16", (1, 2, 1, 1), (1, 2, 3, 4), "arm_squared_difference_s16"),
+    ("squared_difference_row_scalar_input2_s16", "S16", (1, 2, 3, 4), (1, 2, 1, 1), "arm_squared_difference_s16"),
+    ("squared_difference_batch_broadcast_input1_s16", "S16", (1, 2, 3, 4), (2, 2, 3, 4), "arm_squared_difference_s16"),
+    ("squared_difference_batch_broadcast_input2_s16", "S16", (2, 2, 3, 4), (1, 2, 3, 4), "arm_squared_difference_s16"),
 )
 
 
@@ -68,7 +80,7 @@ def test_squared_difference_descriptors_match_unit_test_parity() -> None:
     descriptors = load_descriptor(str(SQDIFF_DESCRIPTOR_PATH))
 
     assert [desc["name"] for desc in descriptors] == [case[0] for case in SQDIFF_PARITY_CASES]
-    assert len(descriptors) == 14
+    assert len(descriptors) == len(SQDIFF_PARITY_CASES)
 
     for desc, (name, dtype, input_1_shape, input_2_shape, _) in zip(descriptors, SQDIFF_PARITY_CASES):
         assert desc["name"] == name

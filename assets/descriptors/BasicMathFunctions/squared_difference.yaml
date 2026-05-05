@@ -54,14 +54,28 @@ weight_dtype: S8
 input_1_shape: [1, 2, 3, 1]
 input_2_shape: [1, 1, 3, 4]
 ---
-name: squared_difference_h_broadcast_scalar_input1_s8
+name: squared_difference_broadcast_hc_w2_s8
+operator: SquaredDifference
+activation_dtype: S8
+weight_dtype: S8
+input_1_shape: [1, 1, 2, 1]
+input_2_shape: [1, 2, 2, 4]
+---
+name: squared_difference_broadcast_hc_w2_rev_s8
+operator: SquaredDifference
+activation_dtype: S8
+weight_dtype: S8
+input_1_shape: [1, 2, 2, 4]
+input_2_shape: [1, 1, 2, 1]
+---
+name: squared_difference_row_scalar_input1_s8
 operator: SquaredDifference
 activation_dtype: S8
 weight_dtype: S8
 input_1_shape: [1, 2, 1, 1]
 input_2_shape: [1, 2, 3, 4]
 ---
-name: squared_difference_h_broadcast_scalar_input2_s8
+name: squared_difference_row_scalar_input2_s8
 operator: SquaredDifference
 activation_dtype: S8
 weight_dtype: S8
@@ -138,14 +152,28 @@ weight_dtype: S8
 input_1_shape: [1, 2, 3, 1]
 input_2_shape: [1, 1, 3, 4]
 ---
-name: squared_difference_h_broadcast_scalar_input1_s16
+name: squared_difference_broadcast_hc_w2_s16
+operator: SquaredDifference
+activation_dtype: S16
+weight_dtype: S8
+input_1_shape: [1, 1, 2, 1]
+input_2_shape: [1, 2, 2, 4]
+---
+name: squared_difference_broadcast_hc_w2_rev_s16
+operator: SquaredDifference
+activation_dtype: S16
+weight_dtype: S8
+input_1_shape: [1, 2, 2, 4]
+input_2_shape: [1, 1, 2, 1]
+---
+name: squared_difference_row_scalar_input1_s16
 operator: SquaredDifference
 activation_dtype: S16
 weight_dtype: S8
 input_1_shape: [1, 2, 1, 1]
 input_2_shape: [1, 2, 3, 4]
 ---
-name: squared_difference_h_broadcast_scalar_input2_s16
+name: squared_difference_row_scalar_input2_s16
 operator: SquaredDifference
 activation_dtype: S16
 weight_dtype: S8
