@@ -63,17 +63,33 @@ class OpBroadcastTo(OperationBase):
         np_dtype = np.int16 if ki['np_dtype'] == 'int16' else np.int8
         input_data = rng.integers(ki['qmin'], ki['qmax'] + 1, size=input_shape, dtype=np_dtype)
 
-        # Use TFLite interpreter for reference output (fallback to numpy if unsupported)
-        tflite_path = str(output_dir / f"{name}.tflite")
-        try:
-            interpreter = self.load_litert_interpreter(tflite_path)
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            interpreter.set_tensor(input_details[0]["index"], input_data)
-            interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
-        except (ValueError, RuntimeError):
-            output_data = np.broadcast_to(input_data, output_shape).copy()
+        # Use TFLite TILE op (INT32) as interpreter proxy for BROADCAST_TO
+        # BROADCAST_TO is not registered in this runtime; TILE with multiples achieves same result
+        from ai_edge_litert.interpreter import Interpreter
+        from helia_core_tester.generation.utils.litert_builder import LiteRtSingleOpBuilder, TensorSpec
+        import ai_edge_litert.schema_py_generated as litert
+
+        multiples = [output_shape[i] // input_shape[i] for i in range(rank)]
+        builder = LiteRtSingleOpBuilder(op_name="TILE")
+        inp_idx = builder.add_tensor(TensorSpec(
+            name="input", shape=tuple(input_shape), tensor_type=litert.TensorType.INT32, is_input=True,
+        ))
+        mult_idx = builder.add_tensor(TensorSpec(
+            name="multiples", shape=(rank,), tensor_type=litert.TensorType.INT32,
+            is_input=False, data=np.array(multiples, dtype=np.int32),
+        ))
+        out_idx = builder.add_tensor(TensorSpec(
+            name="output", shape=tuple(output_shape), tensor_type=litert.TensorType.INT32, is_output=True,
+        ))
+        builder.add_operator("TILE", inputs=[inp_idx, mult_idx], outputs=[out_idx],
+            options=None, options_type=litert.BuiltinOptions.NONE)
+        interp = Interpreter(model_content=bytes(builder.build()))
+        interp.allocate_tensors()
+        inp_details = interp.get_input_details()
+        out_details = interp.get_output_details()
+        interp.set_tensor(inp_details[0]["index"], input_data.astype(np.int32))
+        interp.invoke()
+        output_data = interp.get_tensor(out_details[0]["index"]).astype(np_dtype)
 
         builder = TemplateContextBuilder()
         context = {

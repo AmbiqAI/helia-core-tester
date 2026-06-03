@@ -60,7 +60,7 @@ class OpWhere(OperationBase):
         # Generate condition with ~50% non-zero
         condition = rng.integers(-5, 6, size=input_shape, dtype=np_dtype)
 
-        # Use TFLite interpreter for reference output (fallback to numpy if unsupported)
+        # Use TFLite interpreter for reference output; fall back to INT32 model if type unsupported
         tflite_path = str(output_dir / f"{name}.tflite")
         try:
             interpreter = self.load_litert_interpreter(tflite_path)
@@ -71,8 +71,21 @@ class OpWhere(OperationBase):
             # TFLite WHERE returns int64 coordinates; cast to int32 for our kernel
             output_data = np.array(interpreter.get_tensor(output_details[0]["index"]), dtype=np.int32)
         except (ValueError, RuntimeError):
-            coords = np.argwhere(condition != 0).astype(np.int32)
-            output_data = coords
+            # Rebuild with INT32 condition (WHERE doesn't support INT16)
+            from ai_edge_litert.interpreter import Interpreter
+            from helia_core_tester.generation.utils.litert_builder import LiteRtSingleOpBuilder, TensorSpec
+            import ai_edge_litert.schema_py_generated as litert
+            b = LiteRtSingleOpBuilder(op_name="WHERE")
+            i_idx = b.add_tensor(TensorSpec(name="condition", shape=tuple(input_shape), tensor_type=litert.TensorType.INT32, is_input=True))
+            o_idx = b.add_tensor(TensorSpec(name="output", shape=(total_elements, rank), tensor_type=litert.TensorType.INT64, is_output=True))
+            b.add_operator("WHERE", inputs=[i_idx], outputs=[o_idx], options=None, options_type=litert.BuiltinOptions.NONE)
+            interp = Interpreter(model_content=bytes(b.build()))
+            interp.allocate_tensors()
+            inp_d = interp.get_input_details()
+            out_d = interp.get_output_details()
+            interp.set_tensor(inp_d[0]["index"], condition.astype(np.int32))
+            interp.invoke()
+            output_data = np.array(interp.get_tensor(out_d[0]["index"]), dtype=np.int32)
         num_true = output_data.shape[0]
         max_output_size = total_elements * rank  # worst case all true
 

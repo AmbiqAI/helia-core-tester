@@ -65,7 +65,7 @@ class OpTile(OperationBase):
         np_dtype = np.int16 if ki['np_dtype'] == 'int16' else np.int8
         input_data = rng.integers(ki['qmin'], ki['qmax'] + 1, size=input_shape, dtype=np_dtype)
 
-        # Use TFLite interpreter for reference output (fallback to numpy if unsupported)
+        # Use TFLite interpreter for reference output; fall back to INT32 model if type unsupported
         tflite_path = str(output_dir / f"{name}.tflite")
         try:
             interpreter = self.load_litert_interpreter(tflite_path)
@@ -75,7 +75,22 @@ class OpTile(OperationBase):
             interpreter.invoke()
             output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
         except (ValueError, RuntimeError):
-            output_data = np.tile(input_data, multiples)
+            # Rebuild with INT32 (TILE doesn't support INT16 but result is type-independent)
+            from ai_edge_litert.interpreter import Interpreter
+            from helia_core_tester.generation.utils.litert_builder import LiteRtSingleOpBuilder, TensorSpec
+            import ai_edge_litert.schema_py_generated as litert
+            b = LiteRtSingleOpBuilder(op_name="TILE")
+            i_idx = b.add_tensor(TensorSpec(name="input", shape=tuple(input_shape), tensor_type=litert.TensorType.INT32, is_input=True))
+            m_idx = b.add_tensor(TensorSpec(name="multiples", shape=(rank,), tensor_type=litert.TensorType.INT32, is_input=False, data=np.array(multiples, dtype=np.int32)))
+            o_idx = b.add_tensor(TensorSpec(name="output", shape=tuple(output_shape), tensor_type=litert.TensorType.INT32, is_output=True))
+            b.add_operator("TILE", inputs=[i_idx, m_idx], outputs=[o_idx], options=None, options_type=litert.BuiltinOptions.NONE)
+            interp = Interpreter(model_content=bytes(b.build()))
+            interp.allocate_tensors()
+            inp_d = interp.get_input_details()
+            out_d = interp.get_output_details()
+            interp.set_tensor(inp_d[0]["index"], input_data.astype(np.int32))
+            interp.invoke()
+            output_data = interp.get_tensor(out_d[0]["index"]).astype(np_dtype)
 
         builder = TemplateContextBuilder()
         context = {

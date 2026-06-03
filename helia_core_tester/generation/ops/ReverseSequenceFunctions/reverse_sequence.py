@@ -70,29 +70,34 @@ class OpReverseSequence(OperationBase):
         np_dtype = np.int16 if ki["np_dtype"] == "int16" else np.int8
         input_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=input_shape, dtype=np_dtype)
 
-        # Use TFLite interpreter for reference output (fallback to numpy if unsupported)
-        tflite_path = str(output_dir / f"{name}.tflite")
-        try:
-            interpreter = self.load_litert_interpreter(tflite_path)
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            interpreter.set_tensor(input_details[0]["index"], input_data)
-            interpreter.set_tensor(input_details[1]["index"], np.array(seq_lengths, dtype=np.int32))
-            interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
-        except (ValueError, RuntimeError):
-            output_data = input_data.copy()
-            # Adjust seq_dim for the reduced array after indexing batch_dim
-            adj_seq_dim = seq_dim if seq_dim < batch_dim else seq_dim - 1
-            for b in range(input_shape[batch_dim]):
-                sl = [slice(None)] * rank
-                sl[batch_dim] = b
-                batch_slice = input_data[tuple(sl)]  # shape with batch_dim removed
-                rev_sl = [slice(None)] * (rank - 1)
-                rev_sl[adj_seq_dim] = slice(0, seq_lengths[b])
-                batch_slice_out = batch_slice.copy()
-                batch_slice_out[tuple(rev_sl)] = np.flip(batch_slice[tuple(rev_sl)], axis=adj_seq_dim)
-                output_data[tuple(sl)] = batch_slice_out
+        # Use TFLite interpreter with INT32 model (runtime doesn't support INT8/INT16 for this op)
+        from ai_edge_litert.interpreter import Interpreter
+        from helia_core_tester.generation.utils.litert_builder import LiteRtSingleOpBuilder, TensorSpec
+        import ai_edge_litert.schema_py_generated as litert
+
+        ref_builder = LiteRtSingleOpBuilder(op_name="REVERSE_SEQUENCE")
+        inp_idx = ref_builder.add_tensor(TensorSpec(
+            name="input", shape=tuple(input_shape), tensor_type=litert.TensorType.INT32, is_input=True,
+        ))
+        seq_idx = ref_builder.add_tensor(TensorSpec(
+            name="seq_lengths", shape=(input_shape[batch_dim],), tensor_type=litert.TensorType.INT32, is_input=True,
+        ))
+        out_idx = ref_builder.add_tensor(TensorSpec(
+            name="output", shape=tuple(input_shape), tensor_type=litert.TensorType.INT32, is_output=True,
+        ))
+        opts = litert.ReverseSequenceOptionsT()
+        opts.seqDim = seq_dim
+        opts.batchDim = batch_dim
+        ref_builder.add_operator("REVERSE_SEQUENCE", inputs=[inp_idx, seq_idx], outputs=[out_idx],
+            options=opts, options_type=litert.BuiltinOptions.ReverseSequenceOptions)
+        interp = Interpreter(model_content=bytes(ref_builder.build()))
+        interp.allocate_tensors()
+        inp_details = interp.get_input_details()
+        out_details = interp.get_output_details()
+        interp.set_tensor(inp_details[0]["index"], input_data.astype(np.int32))
+        interp.set_tensor(inp_details[1]["index"], np.array(seq_lengths, dtype=np.int32))
+        interp.invoke()
+        output_data = interp.get_tensor(out_details[0]["index"]).astype(np_dtype)
 
         builder = TemplateContextBuilder()
         context = {
