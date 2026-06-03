@@ -1,0 +1,29 @@
+#ifndef {{ prefix|upper }}_REVERSE_SEQUENCE_H
+#define {{ prefix|upper }}_REVERSE_SEQUENCE_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+static const int32_t {{ name }}_shape[] = { {{ input_shape | join(', ') }} };
+
+static const cmsis_nn_reverse_sequence_params {{ name }}_params = {
+    .rank = {{ rank }},
+    .shape = {{ name }}_shape,
+    .seq_dim = {{ seq_dim }},
+    .batch_dim = {{ batch_dim }},
+};
+
+static const {{ c_type }} {{ name }}_input[] = {
+{{ input_data_array }}
+};
+
+static const int32_t {{ name }}_seq_lengths[] = {
+{{ seq_lengths_array }}
+};
+
+static const {{ c_type }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

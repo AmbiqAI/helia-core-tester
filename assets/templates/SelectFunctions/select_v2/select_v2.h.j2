@@ -1,0 +1,37 @@
+#ifndef {{ prefix|upper }}_SELECT_V2_H
+#define {{ prefix|upper }}_SELECT_V2_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+static const int32_t {{ name }}_output_shape[] = { {{ output_shape | join(', ') }} };
+static const int32_t {{ name }}_cond_strides[] = { {{ cond_strides | join(', ') }} };
+static const int32_t {{ name }}_x_strides[] = { {{ x_strides | join(', ') }} };
+static const int32_t {{ name }}_y_strides[] = { {{ y_strides | join(', ') }} };
+
+static const cmsis_nn_select_v2_params {{ name }}_params = {
+    .rank = {{ rank }},
+    .output_shape = {{ name }}_output_shape,
+    .cond_strides = {{ name }}_cond_strides,
+    .x_strides = {{ name }}_x_strides,
+    .y_strides = {{ name }}_y_strides,
+};
+
+static const int8_t {{ name }}_condition[] = {
+{{ condition_array }}
+};
+
+static const {{ c_type }} {{ name }}_x[] = {
+{{ x_data_array }}
+};
+
+static const {{ c_type }} {{ name }}_y[] = {
+{{ y_data_array }}
+};
+
+static const {{ c_type }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

@@ -1,0 +1,30 @@
+#ifndef {{ prefix|upper }}_SCATTER_ND_H
+#define {{ prefix|upper }}_SCATTER_ND_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+static const int32_t {{ name }}_output_strides[] = { {{ output_strides | join(', ') }} };
+
+static const cmsis_nn_scatter_nd_params {{ name }}_params = {
+    .num_updates = {{ num_updates }},
+    .index_depth = {{ index_depth }},
+    .slice_size = {{ slice_size }},
+    .output_size = {{ output_size }},
+    .output_strides = {{ name }}_output_strides,
+};
+
+static const int32_t {{ name }}_indices[] = {
+{{ indices_array }}
+};
+
+static const {{ c_type }} {{ name }}_updates[] = {
+{{ updates_array }}
+};
+
+static const {{ c_type }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

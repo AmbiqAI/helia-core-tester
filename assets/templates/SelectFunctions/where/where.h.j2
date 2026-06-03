@@ -1,0 +1,23 @@
+#ifndef {{ prefix|upper }}_WHERE_H
+#define {{ prefix|upper }}_WHERE_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+static const int32_t {{ name }}_shape[] = { {{ input_shape | join(', ') }} };
+
+static const cmsis_nn_where_params {{ name }}_params = {
+    .rank = {{ rank }},
+    .shape = {{ name }}_shape,
+};
+
+static const {{ cond_c_type }} {{ name }}_condition[] = {
+{{ condition_array }}
+};
+
+static const int32_t {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

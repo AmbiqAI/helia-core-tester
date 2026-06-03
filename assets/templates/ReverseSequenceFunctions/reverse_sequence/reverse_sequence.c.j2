@@ -1,0 +1,33 @@
+#include "{{ name }}_reverse_sequence.h"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+#define {{ name|upper }}_OUTPUT_SIZE {{ output_size }}
+static {{ c_type }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+
+int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+{
+    arm_cmsis_nn_status status = {{ kernel_fn }}(
+        {{ name }}_input,
+        {{ name }}_seq_lengths,
+        &{{ name }}_params,
+        {{ name }}_output
+    );
+    HELIA_VALIDATE_STATUS("ReverseSequence", status);
+
+    int failures = 0;
+    HELIA_VALIDATE_OUTPUTS(
+        {{ validation_mode_token | default("TOLERANT_INT") }},
+        {{ name }}_output,
+        {{ name }}_expected_output,
+        {{ name|upper }}_OUTPUT_SIZE,
+        {{ validation_tolerance | default(0) }},
+        {{ validation_atol | default(0.01) }}f,
+        {{ validation_rtol | default(0.001) }}f,
+        {{ validation_report_limit | default(20) }},
+        failures
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
+}
+
+{% include "common/standalone/main.j2" %}

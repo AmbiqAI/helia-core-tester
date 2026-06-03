@@ -1,0 +1,39 @@
+operator: Tile
+name: tile_2d_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 2, 3]
+multiples: [1, 3, 2]
+---
+operator: Tile
+name: tile_3d_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 3, 4]
+multiples: [2, 1, 3]
+---
+operator: Tile
+name: tile_2d_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 2, 3]
+multiples: [1, 3, 2]
+---
+operator: Tile
+name: tile_3d_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 3, 4]
+multiples: [2, 1, 3]

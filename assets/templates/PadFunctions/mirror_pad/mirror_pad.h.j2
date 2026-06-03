@@ -1,0 +1,28 @@
+#ifndef {{ prefix|upper }}_MIRROR_PAD_H
+#define {{ prefix|upper }}_MIRROR_PAD_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+static const int32_t {{ name }}_input_shape[] = { {{ input_shape | join(', ') }} };
+static const int32_t {{ name }}_output_shape[] = { {{ output_shape | join(', ') }} };
+static const int32_t {{ name }}_pad_before[] = { {{ pad_before | join(', ') }} };
+
+static const cmsis_nn_mirror_pad_params {{ name }}_params = {
+    .rank = {{ rank }},
+    .input_shape = {{ name }}_input_shape,
+    .output_shape = {{ name }}_output_shape,
+    .pad_before = {{ name }}_pad_before,
+    .mode = {{ mode }},
+};
+
+static const {{ c_type }} {{ name }}_input[] = {
+{{ input_data_array }}
+};
+
+static const {{ c_type }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

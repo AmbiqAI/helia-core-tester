@@ -1,0 +1,47 @@
+operator: SelectV2
+name: select_v2_basic_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 3]
+condition_shape: [2, 3]
+x_shape: [2, 3]
+y_shape: [2, 3]
+---
+operator: SelectV2
+name: select_v2_broadcast_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 3]
+condition_shape: [1, 3]
+x_shape: [2, 3]
+y_shape: [2, 3]
+---
+operator: SelectV2
+name: select_v2_basic_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 3]
+condition_shape: [2, 3]
+x_shape: [2, 3]
+y_shape: [2, 3]
+---
+operator: SelectV2
+name: select_v2_broadcast_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 3]
+condition_shape: [1, 3]
+x_shape: [2, 3]
+y_shape: [2, 3]
