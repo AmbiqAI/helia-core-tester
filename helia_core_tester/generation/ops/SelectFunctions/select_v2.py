@@ -65,8 +65,10 @@ class OpSelectV2(OperationBase):
         for i in range(rank - 1, -1, -1):
             if padded[i] == output_shape[i]:
                 strides[i] = stride
-            else:
+            elif padded[i] == 1:
                 strides[i] = 0  # broadcast dimension
+            else:
+                raise ValueError(f"Shapes not broadcastable: {tensor_shape} vs {output_shape}")
             stride *= padded[i]
         return strides
 

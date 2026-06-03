@@ -17,9 +17,7 @@ int32_t {{ prefix }}_{{ name }}_test_case_run(void)
     HELIA_VALIDATE_STATUS("Where", status);
 
     /* Validate num_true matches expected */
-    if (num_true != {{ num_true }}) {
-        return 1;
-    }
+    HELIA_VALIDATE_SCALAR_EQ_INT("Where", "num_true", {{ num_true }}, num_true);
 
     int failures = 0;
     int output_count = num_true * {{ rank }};

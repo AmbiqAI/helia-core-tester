@@ -105,16 +105,22 @@ PROFILE_ONE_OF_REQUIRED_FIELDS = {
     'pool': (('pool_size',), ('filter_shape',)),
 }
 
-OPERATOR_EXTRA_REQUIRED_FIELDS = {'Clamp': ('act_min', 'act_max'),
+OPERATOR_EXTRA_REQUIRED_FIELDS = {'BroadcastTo': ('output_shape',),
+ 'Clamp': ('act_min', 'act_max'),
  'Comparison': ('operation',),
+ 'DynamicUpdateSlice': ('operand_shape', 'update_shape', 'start_indices'),
  'Gather': ('indices_shape',),
  'GatherND': ('indices_shape',),
+ 'MirrorPad': ('paddings',),
  'NNActivationS16': ('activation_type',),
  'Requantize': ('effective_scale_multiplier',
                 'effective_scale_shift',
                 'input_zeropoint',
                 'output_zeropoint'),
- 'ResizeNearestNeighbor': ('size',)}
+ 'ResizeNearestNeighbor': ('size',),
+ 'ReverseSequence': ('seq_lengths', 'seq_dim', 'batch_dim'),
+ 'ScatterNd': ('indices', 'updates'),
+ 'Tile': ('multiples',)}
 
 OPERATOR_FIELD_CONSTRAINTS = {'HardSwishCompat': {'activation_dtype': 'S8'}, 'Rsqrt': {'activation_dtype': 'S16'}}
 
