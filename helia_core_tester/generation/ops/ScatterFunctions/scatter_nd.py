@@ -60,12 +60,11 @@ class OpScatterNd(OperationBase):
         slice_size = int(np.prod(updates.shape[1:])) if updates.ndim > 1 else 1
         output_size = int(np.prod(output_shape))
 
-        # Compute output strides
+        # Compute output strides for each indexed dimension.
+        # strides[d] = product of output_shape[d+1:]
         output_strides = []
-        stride = 1
-        for d in reversed(output_shape[:index_depth]):
-            output_strides.insert(0, stride)
-            stride *= d
+        for d in range(index_depth):
+            output_strides.append(int(np.prod(output_shape[d + 1:])))
 
         # Reference: scatter into zeros
         output_data = np.zeros(output_shape, dtype=np_dtype)
