@@ -17,7 +17,7 @@ class OpTile(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         from helia_core_tester.generation.utils.litert_builder import (
-            build_shape_transform_op, TensorSpec, _resolve_tensor_type, _default_quant,
+            build_shape_transform_op, TensorSpec,
         )
         import ai_edge_litert.schema_py_generated as litert
 
@@ -33,8 +33,7 @@ class OpTile(OperationBase):
             shape=(len(multiples),),
             tensor_type=litert.TensorType.INT32,
             is_input=False,
-            is_variable=False,
-            data=np.array(multiples, dtype=np.int32).tobytes(),
+            data=np.array(multiples, dtype=np.int32),
         )
 
         model_bytes = build_shape_transform_op(

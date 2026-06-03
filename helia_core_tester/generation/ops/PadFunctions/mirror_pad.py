@@ -38,8 +38,7 @@ class OpMirrorPad(OperationBase):
             shape=(len(paddings), 2),
             tensor_type=litert.TensorType.INT32,
             is_input=False,
-            is_variable=False,
-            data=np.array(paddings_flat, dtype=np.int32).tobytes(),
+            data=np.array(paddings_flat, dtype=np.int32),
         )
 
         model_bytes = build_shape_transform_op(

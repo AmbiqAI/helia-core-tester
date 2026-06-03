@@ -32,8 +32,7 @@ class OpBroadcastTo(OperationBase):
             shape=(len(output_shape),),
             tensor_type=litert.TensorType.INT32,
             is_input=False,
-            is_variable=False,
-            data=np.array(output_shape, dtype=np.int32).tobytes(),
+            data=np.array(output_shape, dtype=np.int32),
         )
 
         model_bytes = build_shape_transform_op(
