@@ -16,14 +16,38 @@ class OpReverseSequence(OperationBase):
         raise NotImplementedError("ReverseSequence uses LiteRT-only model generation.")
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_shape_transform_op
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        dtype = "int16" if activation_dtype == "S16" else "int8"
-        input_shape = tuple(self.desc["input_shape"])
-        model_bytes = build_shape_transform_op(
-            op_name="RESHAPE", input_shape=input_shape, output_shape=input_shape, dtype=dtype,
+        from helia_core_tester.generation.utils.litert_builder import (
+            LiteRtSingleOpBuilder, TensorSpec, _default_quant,
         )
-        self._write_tflite_bytes(out_path, model_bytes)
+        import ai_edge_litert.schema_py_generated as litert
+
+        activation_dtype = self.desc.get("activation_dtype", "S8")
+        tensor_type = litert.TensorType.INT16 if activation_dtype == "S16" else litert.TensorType.INT8
+        input_shape = tuple(self.desc["input_shape"])
+        seq_lengths = self.desc["seq_lengths"]
+        seq_dim = int(self.desc["seq_dim"])
+        batch_dim = int(self.desc["batch_dim"])
+        batch_size = input_shape[batch_dim]
+
+        builder = LiteRtSingleOpBuilder(op_name="REVERSE_SEQUENCE")
+        input_idx = builder.add_tensor(TensorSpec(
+            name="input", shape=input_shape, tensor_type=tensor_type, is_input=True,
+            quantization=_default_quant(tensor_type),
+        ))
+        seq_len_idx = builder.add_tensor(TensorSpec(
+            name="seq_lengths", shape=(batch_size,), tensor_type=litert.TensorType.INT32, is_input=True,
+        ))
+        output_idx = builder.add_tensor(TensorSpec(
+            name="output", shape=input_shape, tensor_type=tensor_type, is_output=True,
+            quantization=_default_quant(tensor_type),
+        ))
+
+        opts = litert.ReverseSequenceOptionsT()
+        opts.seqDim = seq_dim
+        opts.batchDim = batch_dim
+        builder.add_operator("REVERSE_SEQUENCE", inputs=[input_idx, seq_len_idx],
+            outputs=[output_idx], options=opts, options_type=litert.BuiltinOptions.ReverseSequenceOptions)
+        self._write_tflite_bytes(out_path, builder.build())
 
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
@@ -46,23 +70,29 @@ class OpReverseSequence(OperationBase):
         np_dtype = np.int16 if ki["np_dtype"] == "int16" else np.int8
         input_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=input_shape, dtype=np_dtype)
 
-        # Reference implementation
-        output_data = input_data.copy()
-        batch_size = input_shape[batch_dim]
-        for b in range(batch_size):
-            seq_len = seq_lengths[b]
-            # Build index slices for this batch
-            idx = [slice(None)] * rank
-            idx[batch_dim] = b
-            batch_slice = input_data[tuple(idx)]
-            # Reverse along seq_dim (relative to batch_slice which has one fewer dim)
-            actual_seq_dim = seq_dim if seq_dim < batch_dim else seq_dim - 1
-            rev_idx = [slice(None)] * (rank - 1)
-            rev_idx[actual_seq_dim] = slice(None, seq_len)
-            result = batch_slice.copy()
-            chunk = result[tuple(rev_idx)]
-            result[tuple(rev_idx)] = np.flip(chunk, axis=actual_seq_dim)
-            output_data[tuple(idx)] = result
+        # Use TFLite interpreter for reference output (fallback to numpy if unsupported)
+        tflite_path = str(output_dir / f"{name}.tflite")
+        try:
+            interpreter = self.load_litert_interpreter(tflite_path)
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+            interpreter.set_tensor(input_details[0]["index"], input_data)
+            interpreter.set_tensor(input_details[1]["index"], np.array(seq_lengths, dtype=np.int32))
+            interpreter.invoke()
+            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
+        except (ValueError, RuntimeError):
+            output_data = input_data.copy()
+            # Adjust seq_dim for the reduced array after indexing batch_dim
+            adj_seq_dim = seq_dim if seq_dim < batch_dim else seq_dim - 1
+            for b in range(input_shape[batch_dim]):
+                sl = [slice(None)] * rank
+                sl[batch_dim] = b
+                batch_slice = input_data[tuple(sl)]  # shape with batch_dim removed
+                rev_sl = [slice(None)] * (rank - 1)
+                rev_sl[adj_seq_dim] = slice(0, seq_lengths[b])
+                batch_slice_out = batch_slice.copy()
+                batch_slice_out[tuple(rev_sl)] = np.flip(batch_slice[tuple(rev_sl)], axis=adj_seq_dim)
+                output_data[tuple(sl)] = batch_slice_out
 
         builder = TemplateContextBuilder()
         context = {
@@ -75,7 +105,7 @@ class OpReverseSequence(OperationBase):
             "batch_dim": batch_dim,
             "input_size": int(np.prod(input_shape)),
             "output_size": int(np.prod(input_shape)),
-            "num_batches": batch_size,
+            "num_batches": input_shape[batch_dim],
             "input_data_array": builder.format_array_as_c_literal(input_data),
             "seq_lengths_array": builder.format_array_as_c_literal(np.array(seq_lengths, dtype=np.int32)),
             "expected_output_array": builder.format_array_as_c_literal(output_data),

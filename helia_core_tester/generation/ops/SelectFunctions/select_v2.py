@@ -17,18 +17,37 @@ class OpSelectV2(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         from helia_core_tester.generation.utils.litert_builder import (
-            build_shape_transform_op,
+            LiteRtSingleOpBuilder, TensorSpec, _default_quant,
         )
+        import ai_edge_litert.schema_py_generated as litert
+
         activation_dtype = self.desc.get("activation_dtype", "S8")
-        dtype = "int16" if activation_dtype == "S16" else "int8"
+        tensor_type = litert.TensorType.INT16 if activation_dtype == "S16" else litert.TensorType.INT8
+
         output_shape = tuple(self.desc["input_shape"])
-        model_bytes = build_shape_transform_op(
-            op_name="RESHAPE",
-            input_shape=output_shape,
-            output_shape=output_shape,
-            dtype=dtype,
-        )
-        self._write_tflite_bytes(out_path, model_bytes)
+        condition_shape = tuple(self.desc.get("condition_shape", output_shape))
+        x_shape = tuple(self.desc.get("x_shape", output_shape))
+        y_shape = tuple(self.desc.get("y_shape", output_shape))
+
+        builder = LiteRtSingleOpBuilder(op_name="SELECT_V2")
+        cond_idx = builder.add_tensor(TensorSpec(
+            name="condition", shape=condition_shape, tensor_type=litert.TensorType.BOOL, is_input=True,
+        ))
+        x_idx = builder.add_tensor(TensorSpec(
+            name="x", shape=x_shape, tensor_type=tensor_type, is_input=True,
+            quantization=_default_quant(tensor_type),
+        ))
+        y_idx = builder.add_tensor(TensorSpec(
+            name="y", shape=y_shape, tensor_type=tensor_type, is_input=True,
+            quantization=_default_quant(tensor_type),
+        ))
+        output_idx = builder.add_tensor(TensorSpec(
+            name="output", shape=output_shape, tensor_type=tensor_type, is_output=True,
+            quantization=_default_quant(tensor_type),
+        ))
+        builder.add_operator("SELECT_V2", inputs=[cond_idx, x_idx, y_idx],
+            outputs=[output_idx], options=None, options_type=litert.BuiltinOptions.SelectV2Options)
+        self._write_tflite_bytes(out_path, builder.build())
 
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
@@ -65,15 +84,26 @@ class OpSelectV2(OperationBase):
         rng = self._seeded_rng()
         np_dtype = np.int16 if ki["np_dtype"] == "int16" else np.int8
 
-        condition = rng.integers(0, 2, size=condition_shape, dtype=np.int8)
+        condition = rng.integers(0, 2, size=condition_shape, dtype=np.bool_)
         x_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=x_shape, dtype=np_dtype)
         y_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=y_shape, dtype=np_dtype)
 
-        # Broadcast and compute reference
-        cond_bc = np.broadcast_to(condition, output_shape)
-        x_bc = np.broadcast_to(x_data, output_shape)
-        y_bc = np.broadcast_to(y_data, output_shape)
-        output_data = np.where(cond_bc != 0, x_bc, y_bc).astype(np_dtype)
+        # Use TFLite interpreter for reference output (fallback to numpy if unsupported)
+        tflite_path = str(output_dir / f"{name}.tflite")
+        try:
+            interpreter = self.load_litert_interpreter(tflite_path)
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+            interpreter.set_tensor(input_details[0]["index"], condition)
+            interpreter.set_tensor(input_details[1]["index"], x_data)
+            interpreter.set_tensor(input_details[2]["index"], y_data)
+            interpreter.invoke()
+            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
+        except (ValueError, RuntimeError):
+            output_data = np.where(condition, x_data, y_data)
+
+        # Convert condition to int8 for the C test (kernel uses int8 condition)
+        condition_int8 = condition.astype(np.int8)
 
         cond_strides = self._compute_broadcast_strides(condition_shape, output_shape)
         x_strides = self._compute_broadcast_strides(x_shape, output_shape)
@@ -95,7 +125,7 @@ class OpSelectV2(OperationBase):
             "x_size": int(np.prod(x_shape)),
             "y_size": int(np.prod(y_shape)),
             "output_size": int(np.prod(output_shape)),
-            "condition_array": builder.format_array_as_c_literal(condition),
+            "condition_array": builder.format_array_as_c_literal(condition_int8),
             "x_data_array": builder.format_array_as_c_literal(x_data),
             "y_data_array": builder.format_array_as_c_literal(y_data),
             "expected_output_array": builder.format_array_as_c_literal(output_data),

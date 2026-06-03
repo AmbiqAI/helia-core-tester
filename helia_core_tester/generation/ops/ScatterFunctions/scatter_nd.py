@@ -16,26 +16,44 @@ class OpScatterNd(OperationBase):
         raise NotImplementedError("ScatterNd uses LiteRT-only model generation.")
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        # ScatterNd does not have a standard TFLite builtin that maps cleanly.
-        # We generate test data directly in generate_c_files using numpy reference.
-        # Write a minimal placeholder tflite.
         from helia_core_tester.generation.utils.litert_builder import (
-            build_shape_transform_op, TensorSpec,
+            LiteRtSingleOpBuilder, TensorSpec, _default_quant,
         )
         import ai_edge_litert.schema_py_generated as litert
 
         activation_dtype = self.desc.get("activation_dtype", "S8")
-        dtype = "int16" if activation_dtype == "S16" else "int8"
-        input_shape = tuple(self.desc["input_shape"])
+        tensor_type = litert.TensorType.INT16 if activation_dtype == "S16" else litert.TensorType.INT8
 
-        # Build a trivial identity-like model as placeholder
-        model_bytes = build_shape_transform_op(
-            op_name="RESHAPE",
-            input_shape=input_shape,
-            output_shape=input_shape,
-            dtype=dtype,
-        )
-        self._write_tflite_bytes(out_path, model_bytes)
+        output_shape = tuple(self.desc["input_shape"])
+        indices = np.array(self.desc["indices"], dtype=np.int32)
+        updates_raw = self.desc["updates"]
+        np_dtype = np.int16 if activation_dtype == "S16" else np.int8
+        updates = np.array(updates_raw, dtype=np_dtype)
+
+        num_updates = indices.shape[0]
+        index_depth = indices.shape[1] if indices.ndim > 1 else 1
+        indices_shape = (num_updates, index_depth) if indices.ndim > 1 else (num_updates,)
+        updates_shape = tuple(updates.shape)
+
+        builder = LiteRtSingleOpBuilder(op_name="SCATTER_ND")
+        indices_idx = builder.add_tensor(TensorSpec(
+            name="indices", shape=indices_shape, tensor_type=litert.TensorType.INT32, is_input=True,
+        ))
+        updates_idx = builder.add_tensor(TensorSpec(
+            name="updates", shape=updates_shape, tensor_type=tensor_type, is_input=True,
+            quantization=_default_quant(tensor_type),
+        ))
+        shape_idx = builder.add_tensor(TensorSpec(
+            name="shape", shape=(len(output_shape),), tensor_type=litert.TensorType.INT32,
+            is_input=False, data=np.array(output_shape, dtype=np.int32),
+        ))
+        output_idx = builder.add_tensor(TensorSpec(
+            name="output", shape=output_shape, tensor_type=tensor_type, is_output=True,
+            quantization=_default_quant(tensor_type),
+        ))
+        builder.add_operator("SCATTER_ND", inputs=[indices_idx, updates_idx, shape_idx],
+            outputs=[output_idx], options=None, options_type=litert.BuiltinOptions.NONE)
+        self._write_tflite_bytes(out_path, builder.build())
 
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
@@ -48,7 +66,7 @@ class OpScatterNd(OperationBase):
 
         name = self.desc["name"]
         ki = self._select_kernel()
-        output_shape = list(self.desc["input_shape"])  # scatter_nd output shape = input_shape in descriptor
+        output_shape = list(self.desc["input_shape"])
         indices = np.array(self.desc["indices"], dtype=np.int32)
         updates_raw = self.desc["updates"]
 
@@ -66,13 +84,20 @@ class OpScatterNd(OperationBase):
         for d in range(index_depth):
             output_strides.append(int(np.prod(output_shape[d + 1:])))
 
-        # Reference: scatter into zeros
-        output_data = np.zeros(output_shape, dtype=np_dtype)
-        for i in range(num_updates):
-            idx = tuple(indices[i]) if indices.ndim > 1 else (int(indices[i]),)
-            if updates.ndim > 1:
-                output_data[idx] = updates[i]
-            else:
+        # Use TFLite interpreter for reference output (fallback to numpy if unsupported)
+        tflite_path = str(output_dir / f"{name}.tflite")
+        try:
+            interpreter = self.load_litert_interpreter(tflite_path)
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+            interpreter.set_tensor(input_details[0]["index"], indices)
+            interpreter.set_tensor(input_details[1]["index"], updates)
+            interpreter.invoke()
+            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
+        except (ValueError, RuntimeError):
+            output_data = np.zeros(output_shape, dtype=np_dtype)
+            for i in range(num_updates):
+                idx = tuple(indices[i])
                 output_data[idx] = updates[i]
 
         builder = TemplateContextBuilder()

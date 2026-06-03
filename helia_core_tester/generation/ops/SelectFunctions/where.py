@@ -16,14 +16,29 @@ class OpWhere(OperationBase):
         raise NotImplementedError("Where uses LiteRT-only model generation.")
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        from helia_core_tester.generation.utils.litert_builder import build_shape_transform_op
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        dtype = "int16" if activation_dtype == "S16" else "int8"
-        input_shape = tuple(self.desc["input_shape"])
-        model_bytes = build_shape_transform_op(
-            op_name="RESHAPE", input_shape=input_shape, output_shape=input_shape, dtype=dtype,
+        from helia_core_tester.generation.utils.litert_builder import (
+            LiteRtSingleOpBuilder, TensorSpec, _default_quant,
         )
-        self._write_tflite_bytes(out_path, model_bytes)
+        import ai_edge_litert.schema_py_generated as litert
+
+        activation_dtype = self.desc.get("activation_dtype", "S8")
+        tensor_type = litert.TensorType.INT16 if activation_dtype == "S16" else litert.TensorType.INT8
+        input_shape = tuple(self.desc["input_shape"])
+        total_elements = int(np.prod(input_shape))
+        rank = len(input_shape)
+
+        builder = LiteRtSingleOpBuilder(op_name="WHERE")
+        input_idx = builder.add_tensor(TensorSpec(
+            name="condition", shape=input_shape, tensor_type=tensor_type, is_input=True,
+            quantization=_default_quant(tensor_type),
+        ))
+        # Output is dynamic: max shape is [total_elements, rank]
+        output_idx = builder.add_tensor(TensorSpec(
+            name="output", shape=(total_elements, rank), tensor_type=litert.TensorType.INT64, is_output=True,
+        ))
+        builder.add_operator("WHERE", inputs=[input_idx], outputs=[output_idx],
+            options=None, options_type=litert.BuiltinOptions.NONE)
+        self._write_tflite_bytes(out_path, builder.build())
 
     def _select_kernel(self) -> Dict[str, str]:
         activation_dtype = self.desc.get("activation_dtype", "S8")
@@ -45,11 +60,20 @@ class OpWhere(OperationBase):
         # Generate condition with ~50% non-zero
         condition = rng.integers(-5, 6, size=input_shape, dtype=np_dtype)
 
-        # Reference: find non-zero coordinates
-        nonzero_coords = np.argwhere(condition != 0)
-        num_true = len(nonzero_coords)
-        # Output is int32 array of shape [num_true, rank]
-        output_data = nonzero_coords.astype(np.int32)
+        # Use TFLite interpreter for reference output (fallback to numpy if unsupported)
+        tflite_path = str(output_dir / f"{name}.tflite")
+        try:
+            interpreter = self.load_litert_interpreter(tflite_path)
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+            interpreter.set_tensor(input_details[0]["index"], condition)
+            interpreter.invoke()
+            # TFLite WHERE returns int64 coordinates; cast to int32 for our kernel
+            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]), dtype=np.int32)
+        except (ValueError, RuntimeError):
+            coords = np.argwhere(condition != 0).astype(np.int32)
+            output_data = coords
+        num_true = output_data.shape[0]
         max_output_size = total_elements * rank  # worst case all true
 
         builder = TemplateContextBuilder()

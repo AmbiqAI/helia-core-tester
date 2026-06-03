@@ -64,7 +64,18 @@ class OpTile(OperationBase):
         rng = self._seeded_rng()
         np_dtype = np.int16 if ki['np_dtype'] == 'int16' else np.int8
         input_data = rng.integers(ki['qmin'], ki['qmax'] + 1, size=input_shape, dtype=np_dtype)
-        output_data = np.tile(input_data, multiples)
+
+        # Use TFLite interpreter for reference output (fallback to numpy if unsupported)
+        tflite_path = str(output_dir / f"{name}.tflite")
+        try:
+            interpreter = self.load_litert_interpreter(tflite_path)
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+            interpreter.set_tensor(input_details[0]["index"], input_data)
+            interpreter.invoke()
+            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
+        except (ValueError, RuntimeError):
+            output_data = np.tile(input_data, multiples)
 
         builder = TemplateContextBuilder()
         context = {
