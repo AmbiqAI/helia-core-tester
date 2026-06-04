@@ -1,0 +1,38 @@
+#include "{{ name }}_where.h"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+#define {{ name|upper }}_MAX_OUTPUT_SIZE {{ max_output_size }}
+static int32_t {{ name }}_output[{{ name|upper }}_MAX_OUTPUT_SIZE];
+
+int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+{
+    int32_t num_true = 0;
+    arm_cmsis_nn_status status = {{ kernel_fn }}(
+        {{ name }}_condition,
+        &{{ name }}_params,
+        {{ name }}_output,
+        &num_true
+    );
+    HELIA_VALIDATE_STATUS("Where", status);
+
+    /* Validate num_true matches expected */
+    HELIA_VALIDATE_SCALAR_EQ_INT("Where", "num_true", {{ num_true }}, num_true);
+
+    int failures = 0;
+    int output_count = num_true * {{ rank }};
+    HELIA_VALIDATE_OUTPUTS(
+        {{ validation_mode_token | default("TOLERANT_INT") }},
+        {{ name }}_output,
+        {{ name }}_expected_output,
+        output_count,
+        {{ validation_tolerance | default(0) }},
+        {{ validation_atol | default(0.01) }}f,
+        {{ validation_rtol | default(0.001) }}f,
+        {{ validation_report_limit | default(20) }},
+        failures
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
+}
+
+{% include "common/standalone/main.j2" %}

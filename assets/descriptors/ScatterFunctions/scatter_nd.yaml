@@ -1,0 +1,43 @@
+operator: ScatterNd
+name: scatter_nd_1d_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [8]
+indices: [[4], [3], [1], [7]]
+updates: [9, 10, 11, 12]
+---
+operator: ScatterNd
+name: scatter_nd_2d_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [4, 3]
+indices: [[0], [2]]
+updates: [[5, 6, 7], [8, 9, 10]]
+---
+operator: ScatterNd
+name: scatter_nd_1d_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [8]
+indices: [[4], [3], [1], [7]]
+updates: [9, 10, 11, 12]
+---
+operator: ScatterNd
+name: scatter_nd_2d_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [4, 3]
+indices: [[0], [2]]
+updates: [[5, 6, 7], [8, 9, 10]]

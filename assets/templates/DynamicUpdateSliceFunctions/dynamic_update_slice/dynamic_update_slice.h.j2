@@ -1,0 +1,37 @@
+#ifndef {{ prefix|upper }}_DYNAMIC_UPDATE_SLICE_H
+#define {{ prefix|upper }}_DYNAMIC_UPDATE_SLICE_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+static const int32_t {{ name }}_operand_shape[] = { {{ operand_shape | join(', ') }} };
+static const int32_t {{ name }}_update_shape[] = { {{ update_shape | join(', ') }} };
+static const int32_t {{ name }}_operand_strides[] = { {{ operand_strides | join(', ') }} };
+
+static const cmsis_nn_dynamic_update_slice_params {{ name }}_params = {
+    .rank = {{ rank }},
+    .operand_shape = {{ name }}_operand_shape,
+    .update_shape = {{ name }}_update_shape,
+    .operand_size = {{ operand_size }},
+    .update_size = {{ update_size }},
+    .operand_strides = {{ name }}_operand_strides,
+};
+
+static const {{ c_type }} {{ name }}_operand[] = {
+{{ operand_data_array }}
+};
+
+static const {{ c_type }} {{ name }}_update[] = {
+{{ update_data_array }}
+};
+
+static const int32_t {{ name }}_start_indices[] = {
+{{ start_indices_array }}
+};
+
+static const {{ c_type }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

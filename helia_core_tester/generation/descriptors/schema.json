@@ -23,6 +23,7 @@
         "AvgPool",
         "BatchMatMul",
         "BatchToSpaceND",
+        "BroadcastTo",
         "Clamp",
         "Comparison",
         "Concatenation",
@@ -30,6 +31,7 @@
         "DepthToSpace",
         "DepthwiseConv",
         "Dequantize",
+        "DynamicUpdateSlice",
         "Fill",
         "FullyConnected",
         "Gather",
@@ -43,6 +45,7 @@
         "Maximum",
         "Mean",
         "Minimum",
+        "MirrorPad",
         "Mul",
         "NNActivationS16",
         "PReLU",
@@ -55,8 +58,11 @@
         "Requantize",
         "Reshape",
         "ResizeNearestNeighbor",
+        "ReverseSequence",
         "Rsqrt",
         "SVDF",
+        "ScatterNd",
+        "SelectV2",
         "Softmax",
         "SpaceToBatchND",
         "SpaceToDepth",
@@ -67,9 +73,11 @@
         "StridedSlice",
         "Sub",
         "Tanh",
+        "Tile",
         "Transpose",
         "TransposeConv",
-        "VariableUpdate"
+        "VariableUpdate",
+        "Where"
       ]
     },
     "activation_dtype": {
@@ -381,6 +389,7 @@
               "Maximum",
               "Minimum",
               "Mul",
+              "SelectV2",
               "SquaredDifference",
               "Sub"
             ]
@@ -594,6 +603,55 @@
           }
         }
       }
+    },
+    {
+      "$comment": "descriptor_profile:shape_transform",
+      "if": {
+        "properties": {
+          "operator": {
+            "enum": [
+              "BroadcastTo",
+              "ReverseSequence",
+              "Tile"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "input_shape"
+        ]
+      }
+    },
+    {
+      "$comment": "BroadcastTo requires output_shape",
+      "if": { "properties": { "operator": { "const": "BroadcastTo" } } },
+      "then": { "required": ["output_shape"] }
+    },
+    {
+      "$comment": "Tile requires multiples",
+      "if": { "properties": { "operator": { "const": "Tile" } } },
+      "then": { "required": ["multiples"] }
+    },
+    {
+      "$comment": "ReverseSequence requires seq_lengths, seq_dim, batch_dim",
+      "if": { "properties": { "operator": { "const": "ReverseSequence" } } },
+      "then": { "required": ["seq_lengths", "seq_dim", "batch_dim"] }
+    },
+    {
+      "$comment": "MirrorPad requires paddings",
+      "if": { "properties": { "operator": { "const": "MirrorPad" } } },
+      "then": { "required": ["input_shape", "paddings"] }
+    },
+    {
+      "$comment": "ScatterNd requires indices, updates",
+      "if": { "properties": { "operator": { "const": "ScatterNd" } } },
+      "then": { "required": ["input_shape", "indices", "updates"] }
+    },
+    {
+      "$comment": "DynamicUpdateSlice requires operand_shape, update_shape, start_indices",
+      "if": { "properties": { "operator": { "const": "DynamicUpdateSlice" } } },
+      "then": { "required": ["operand_shape", "update_shape", "start_indices"] }
     }
   ]
 }

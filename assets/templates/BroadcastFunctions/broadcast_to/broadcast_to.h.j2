@@ -1,0 +1,25 @@
+#ifndef {{ prefix|upper }}_BROADCAST_TO_H
+#define {{ prefix|upper }}_BROADCAST_TO_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+static const int32_t {{ name }}_input_shape[] = { {{ input_shape | join(', ') }} };
+static const int32_t {{ name }}_output_shape[] = { {{ output_shape | join(', ') }} };
+
+static const cmsis_nn_broadcast_to_params {{ name }}_params = {
+    .rank = {{ rank }},
+    .input_shape = {{ name }}_input_shape,
+    .output_shape = {{ name }}_output_shape,
+};
+
+static const {{ c_type }} {{ name }}_input[] = {
+{{ input_data_array }}
+};
+
+static const {{ c_type }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif
