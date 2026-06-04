@@ -9,13 +9,46 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 class OpDynamicUpdateSlice(OperationBase):
     """DynamicUpdateSlice operation."""
 
+    _SUCCESS = "ARM_CMSIS_NN_SUCCESS"
+    _ARG_ERROR = "ARM_CMSIS_NN_ARG_ERROR"
+    _ARG_ERROR_CASES = {"operand", "update", "start_indices", "params", "output"}
+
     def needs_keras_model(self) -> bool:
         return False
+
+    def allow_no_tflite(self) -> bool:
+        return self._expected_status() != self._SUCCESS
 
     def build_keras_model(self):
         raise NotImplementedError("DynamicUpdateSlice uses LiteRT-only model generation.")
 
+    def _expected_status(self) -> str:
+        expected_status = str(self.desc.get("expected_status", self._SUCCESS))
+        if expected_status not in {self._SUCCESS, self._ARG_ERROR}:
+            raise ValueError(f"Unsupported DynamicUpdateSlice expected_status: {expected_status}")
+        return expected_status
+
+    def _extras(self) -> dict:
+        hint = self.desc.get("hint", {})
+        extras = hint.get("extras", {}) if isinstance(hint, dict) else {}
+        return extras if isinstance(extras, dict) else {}
+
+    def _arg_error_case(self) -> str | None:
+        case = self._extras().get("arg_error_case")
+        if case is None:
+            return None
+        case = str(case)
+        if case not in self._ARG_ERROR_CASES:
+            raise ValueError(f"Unsupported DynamicUpdateSlice arg_error_case: {case}")
+        return case
+
+    def _params_rank(self, default_rank: int) -> int:
+        return int(self._extras().get("params_rank", default_rank))
+
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
+        if self._expected_status() != self._SUCCESS:
+            raise RuntimeError("DynamicUpdateSlice expected error; skip LiteRT generation.")
+
         from helia_core_tester.generation.utils.litert_builder import (
             LiteRtSingleOpBuilder, TensorSpec, _default_quant,
         )
@@ -63,28 +96,40 @@ class OpDynamicUpdateSlice(OperationBase):
         operand_shape = list(self.desc["operand_shape"])
         update_shape = list(self.desc["update_shape"])
         start_indices = list(self.desc["start_indices"])
-        rank = len(operand_shape)
+        data_rank = len(operand_shape)
+        expected_status = self._expected_status()
+        params_rank = self._params_rank(data_rank)
+        arg_error_case = self._arg_error_case()
 
         rng = self._seeded_rng()
         np_dtype = np.int16 if ki["np_dtype"] == "int16" else np.int8
         operand_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=operand_shape, dtype=np_dtype)
         update_data = rng.integers(ki["qmin"], ki["qmax"] + 1, size=update_shape, dtype=np_dtype)
 
-        # Use TFLite interpreter for reference output (fallback to numpy if unsupported)
-        tflite_path = str(output_dir / f"{name}.tflite")
-        try:
-            interpreter = self.load_litert_interpreter(tflite_path)
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            interpreter.set_tensor(input_details[0]["index"], operand_data)
-            interpreter.set_tensor(input_details[1]["index"], update_data)
-            interpreter.set_tensor(input_details[2]["index"], np.array(start_indices, dtype=np.int32))
-            interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
-        except (ValueError, RuntimeError):
+        if expected_status == self._SUCCESS:
+            # Use TFLite interpreter for reference output (fallback to numpy if unsupported).
+            tflite_path = str(output_dir / f"{name}.tflite")
+            try:
+                interpreter = self.load_litert_interpreter(tflite_path)
+                input_details = interpreter.get_input_details()
+                output_details = interpreter.get_output_details()
+                interpreter.set_tensor(input_details[0]["index"], operand_data)
+                interpreter.set_tensor(input_details[1]["index"], update_data)
+                interpreter.set_tensor(input_details[2]["index"], np.array(start_indices, dtype=np.int32))
+                interpreter.invoke()
+                output_data = np.array(interpreter.get_tensor(output_details[0]["index"]))
+            except (ValueError, RuntimeError):
+                clamped_starts = [
+                    min(max(0, start_indices[i]), operand_shape[i] - update_shape[i])
+                    for i in range(data_rank)
+                ]
+                output_data = operand_data.copy()
+                slices = tuple(slice(s, s + u) for s, u in zip(clamped_starts, update_shape))
+                output_data[slices] = update_data
+        else:
             clamped_starts = [
                 min(max(0, start_indices[i]), operand_shape[i] - update_shape[i])
-                for i in range(rank)
+                for i in range(data_rank)
             ]
             output_data = operand_data.copy()
             slices = tuple(slice(s, s + u) for s, u in zip(clamped_starts, update_shape))
@@ -101,7 +146,7 @@ class OpDynamicUpdateSlice(OperationBase):
         context = {
             "name": name,
             "prefix": name,
-            "rank": rank,
+            "rank": params_rank,
             "operand_shape": operand_shape,
             "update_shape": update_shape,
             "start_indices": start_indices,
@@ -114,6 +159,12 @@ class OpDynamicUpdateSlice(OperationBase):
             "expected_output_array": builder.format_array_as_c_literal(output_data),
             "c_type": ki["c_type"],
             "kernel_fn": ki["kernel_fn"],
+            "expected_status": expected_status,
+            "operand_arg": "NULL" if arg_error_case == "operand" else f"{name}_operand",
+            "update_arg": "NULL" if arg_error_case == "update" else f"{name}_update",
+            "start_indices_arg": "NULL" if arg_error_case == "start_indices" else f"{name}_start_indices",
+            "params_arg": "NULL" if arg_error_case == "params" else f"&{name}_params",
+            "output_arg": "NULL" if arg_error_case == "output" else f"{name}_output",
         }
 
         includes_dir = output_dir / "includes"

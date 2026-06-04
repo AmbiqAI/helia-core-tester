@@ -9,13 +9,46 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 class OpBroadcastTo(OperationBase):
     """BroadcastTo operation."""
 
+    _SUCCESS = "ARM_CMSIS_NN_SUCCESS"
+    _ARG_ERROR = "ARM_CMSIS_NN_ARG_ERROR"
+    _ARG_ERROR_CASES = {"input", "params", "output"}
+
     def needs_keras_model(self) -> bool:
         return False
+
+    def allow_no_tflite(self) -> bool:
+        return self._expected_status() != self._SUCCESS
 
     def build_keras_model(self):
         raise NotImplementedError("BroadcastTo uses LiteRT-only model generation.")
 
+    def _expected_status(self) -> str:
+        expected_status = str(self.desc.get("expected_status", self._SUCCESS))
+        if expected_status not in {self._SUCCESS, self._ARG_ERROR}:
+            raise ValueError(f"Unsupported BroadcastTo expected_status: {expected_status}")
+        return expected_status
+
+    def _extras(self) -> dict:
+        hint = self.desc.get("hint", {})
+        extras = hint.get("extras", {}) if isinstance(hint, dict) else {}
+        return extras if isinstance(extras, dict) else {}
+
+    def _arg_error_case(self) -> str | None:
+        case = self._extras().get("arg_error_case")
+        if case is None:
+            return None
+        case = str(case)
+        if case not in self._ARG_ERROR_CASES:
+            raise ValueError(f"Unsupported BroadcastTo arg_error_case: {case}")
+        return case
+
+    def _params_rank(self, default_rank: int) -> int:
+        return int(self._extras().get("params_rank", default_rank))
+
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
+        if self._expected_status() != self._SUCCESS:
+            raise RuntimeError("BroadcastTo expected error; skip LiteRT generation.")
+
         from helia_core_tester.generation.utils.litert_builder import (
             build_shape_transform_op, TensorSpec,
         )
@@ -57,45 +90,51 @@ class OpBroadcastTo(OperationBase):
         ki = self._select_kernel()
         input_shape = list(self.desc['input_shape'])
         output_shape = list(self.desc['output_shape'])
-        rank = len(output_shape)
+        data_rank = len(output_shape)
+        expected_status = self._expected_status()
+        params_rank = self._params_rank(data_rank)
+        arg_error_case = self._arg_error_case()
 
         rng = self._seeded_rng()
         np_dtype = np.int16 if ki['np_dtype'] == 'int16' else np.int8
         input_data = rng.integers(ki['qmin'], ki['qmax'] + 1, size=input_shape, dtype=np_dtype)
 
-        # Use TFLite TILE op (INT32) as interpreter proxy for BROADCAST_TO
-        # BROADCAST_TO is not registered in this runtime; TILE with multiples achieves same result
-        from ai_edge_litert.interpreter import Interpreter
-        from helia_core_tester.generation.utils.litert_builder import LiteRtSingleOpBuilder, TensorSpec
-        import ai_edge_litert.schema_py_generated as litert
+        if expected_status == self._SUCCESS:
+            # Use TFLite TILE op (INT32) as interpreter proxy for BROADCAST_TO.
+            # BROADCAST_TO is not registered in this runtime; TILE with multiples achieves the same result.
+            from ai_edge_litert.interpreter import Interpreter
+            from helia_core_tester.generation.utils.litert_builder import LiteRtSingleOpBuilder, TensorSpec
+            import ai_edge_litert.schema_py_generated as litert
 
-        multiples = [output_shape[i] // input_shape[i] for i in range(rank)]
-        builder = LiteRtSingleOpBuilder(op_name="TILE")
-        inp_idx = builder.add_tensor(TensorSpec(
-            name="input", shape=tuple(input_shape), tensor_type=litert.TensorType.INT32, is_input=True,
-        ))
-        mult_idx = builder.add_tensor(TensorSpec(
-            name="multiples", shape=(rank,), tensor_type=litert.TensorType.INT32,
-            is_input=False, data=np.array(multiples, dtype=np.int32),
-        ))
-        out_idx = builder.add_tensor(TensorSpec(
-            name="output", shape=tuple(output_shape), tensor_type=litert.TensorType.INT32, is_output=True,
-        ))
-        builder.add_operator("TILE", inputs=[inp_idx, mult_idx], outputs=[out_idx],
-            options=None, options_type=litert.BuiltinOptions.NONE)
-        interp = Interpreter(model_content=bytes(builder.build()))
-        interp.allocate_tensors()
-        inp_details = interp.get_input_details()
-        out_details = interp.get_output_details()
-        interp.set_tensor(inp_details[0]["index"], input_data.astype(np.int32))
-        interp.invoke()
-        output_data = interp.get_tensor(out_details[0]["index"]).astype(np_dtype)
+            multiples = [output_shape[i] // input_shape[i] for i in range(data_rank)]
+            builder = LiteRtSingleOpBuilder(op_name="TILE")
+            inp_idx = builder.add_tensor(TensorSpec(
+                name="input", shape=tuple(input_shape), tensor_type=litert.TensorType.INT32, is_input=True,
+            ))
+            mult_idx = builder.add_tensor(TensorSpec(
+                name="multiples", shape=(data_rank,), tensor_type=litert.TensorType.INT32,
+                is_input=False, data=np.array(multiples, dtype=np.int32),
+            ))
+            out_idx = builder.add_tensor(TensorSpec(
+                name="output", shape=tuple(output_shape), tensor_type=litert.TensorType.INT32, is_output=True,
+            ))
+            builder.add_operator("TILE", inputs=[inp_idx, mult_idx], outputs=[out_idx],
+                options=None, options_type=litert.BuiltinOptions.NONE)
+            interp = Interpreter(model_content=bytes(builder.build()))
+            interp.allocate_tensors()
+            inp_details = interp.get_input_details()
+            out_details = interp.get_output_details()
+            interp.set_tensor(inp_details[0]["index"], input_data.astype(np.int32))
+            interp.invoke()
+            output_data = interp.get_tensor(out_details[0]["index"]).astype(np_dtype)
+        else:
+            output_data = np.zeros(output_shape, dtype=np_dtype)
 
         builder = TemplateContextBuilder()
         context = {
             'name': name,
             'prefix': name,
-            'rank': rank,
+            'rank': params_rank,
             'input_shape': input_shape,
             'output_shape': output_shape,
             'input_size': int(np.prod(input_shape)),
@@ -104,6 +143,10 @@ class OpBroadcastTo(OperationBase):
             'expected_output_array': builder.format_array_as_c_literal(output_data),
             'c_type': ki['c_type'],
             'kernel_fn': ki['kernel_fn'],
+            'expected_status': expected_status,
+            'input_arg': 'NULL' if arg_error_case == 'input' else f'{name}_input',
+            'params_arg': 'NULL' if arg_error_case == 'params' else f'&{name}_params',
+            'output_arg': 'NULL' if arg_error_case == 'output' else f'{name}_output',
         }
 
         includes_dir = output_dir / "includes"
