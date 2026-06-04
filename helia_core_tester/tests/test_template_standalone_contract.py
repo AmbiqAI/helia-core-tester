@@ -4,6 +4,8 @@ from pathlib import Path
 
 import jinja2
 
+from helia_core_tester.generation.ops.BroadcastFunctions.broadcast_to import OpBroadcastTo
+from helia_core_tester.generation.ops.DynamicUpdateSliceFunctions.dynamic_update_slice import OpDynamicUpdateSlice
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -238,6 +240,101 @@ def test_rsqrt_invalid_status_render_uses_expected_status_helper() -> None:
     assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
     assert "ARM_CMSIS_NN_ARG_ERROR" in text
     assert "{{ name }}_expected_output" not in text
+
+
+def test_broadcast_to_invalid_status_render_uses_expected_status_helper() -> None:
+    text = _render(
+        "BroadcastFunctions/broadcast_to/broadcast_to.c.j2",
+        {
+            "name": "broadcast_invalid_smoke",
+            "prefix": "broadcast",
+            "c_type": "int8_t",
+            "kernel_fn": "arm_broadcast_to_s8",
+            "output_size": 4,
+            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+            "input_arg": "NULL",
+            "params_arg": "&broadcast_invalid_smoke_params",
+            "output_arg": "broadcast_invalid_smoke_output",
+        },
+    )
+
+    assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
+    assert "ARM_CMSIS_NN_ARG_ERROR" in text
+    assert "NULL," in text
+    assert "broadcast_invalid_smoke_expected_output" not in text
+
+
+def test_dynamic_update_slice_invalid_status_render_uses_expected_status_helper() -> None:
+    text = _render(
+        "DynamicUpdateSliceFunctions/dynamic_update_slice/dynamic_update_slice.c.j2",
+        {
+            "name": "dynamic_update_slice_invalid_smoke",
+            "prefix": "dynamic_update_slice",
+            "c_type": "int8_t",
+            "kernel_fn": "arm_dynamic_update_slice_s8",
+            "operand_size": 20,
+            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+            "operand_arg": "dynamic_update_slice_invalid_smoke_operand",
+            "update_arg": "dynamic_update_slice_invalid_smoke_update",
+            "start_indices_arg": "NULL",
+            "params_arg": "&dynamic_update_slice_invalid_smoke_params",
+            "output_arg": "dynamic_update_slice_invalid_smoke_output",
+        },
+    )
+
+    assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
+    assert "ARM_CMSIS_NN_ARG_ERROR" in text
+    assert "NULL," in text
+    assert "dynamic_update_slice_invalid_smoke_expected_output" not in text
+
+
+def test_broadcast_to_expected_error_generation_renders_rank_override(tmp_path: Path) -> None:
+    desc = {
+        "operator": "BroadcastTo",
+        "name": "broadcast_to_rank9_smoke",
+        "activation_dtype": "S8",
+        "weight_dtype": "S8",
+        "activation": "NONE",
+        "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+        "hint": {"call_style": "per_tensor", "extras": {"params_rank": 9}},
+        "input_shape": [1],
+        "output_shape": [1],
+    }
+    op = OpBroadcastTo(desc, seed=1)
+
+    assert op.allow_no_tflite()
+    op.generate_c_files(tmp_path)
+
+    header = (tmp_path / "includes" / "broadcast_to_rank9_smoke_broadcast_to.h").read_text()
+    source = (tmp_path / "broadcast_to_rank9_smoke_broadcast_to.c").read_text()
+    assert ".rank = 9" in header
+    assert "ARM_CMSIS_NN_ARG_ERROR" in source
+    assert "HELIA_VALIDATE_RETURN_FAILURES(0)" in source
+
+
+def test_dynamic_update_slice_expected_error_generation_renders_rank_override(tmp_path: Path) -> None:
+    desc = {
+        "operator": "DynamicUpdateSlice",
+        "name": "dynamic_update_slice_rank0_smoke",
+        "activation_dtype": "S8",
+        "weight_dtype": "S8",
+        "activation": "NONE",
+        "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+        "hint": {"call_style": "per_tensor", "extras": {"params_rank": 0}},
+        "operand_shape": [4, 5],
+        "update_shape": [2, 3],
+        "start_indices": [1, 1],
+    }
+    op = OpDynamicUpdateSlice(desc, seed=1)
+
+    assert op.allow_no_tflite()
+    op.generate_c_files(tmp_path)
+
+    header = (tmp_path / "includes" / "dynamic_update_slice_rank0_smoke_dynamic_update_slice.h").read_text()
+    source = (tmp_path / "dynamic_update_slice_rank0_smoke_dynamic_update_slice.c").read_text()
+    assert ".rank = 0" in header
+    assert "ARM_CMSIS_NN_ARG_ERROR" in source
+    assert "HELIA_VALIDATE_RETURN_FAILURES(0)" in source
 
 
 def test_lstm_and_svdf_keep_specialized_shared_validation_contracts() -> None:
