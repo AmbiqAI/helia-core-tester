@@ -183,10 +183,11 @@ class OpSquaredDifference(BinaryBasicMathBase):
         input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
         input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
         
-        # Run inference using LiteRT interpreter when shapes match (no broadcast).
-        # LiteRT broadcasting can abort in some runtimes, so fall back to a local
-        # quantized simulation for broadcasted shapes.
-        if input1_shape == input2_shape:
+        # Run inference using LiteRT interpreter when shapes match for int8.
+        # LiteRT does not currently invoke INT16 SQUARED_DIFFERENCE reliably,
+        # and broadcasting can abort in some runtimes, so use the local
+        # quantized simulation for those cases.
+        if input1_shape == input2_shape and activation_dtype != "S16":
             interpreter = self.load_litert_interpreter(str(tflite_path))
             input_details = interpreter.get_input_details()
             output_details = interpreter.get_output_details()
