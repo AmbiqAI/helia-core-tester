@@ -72,7 +72,7 @@ echo ""
 echo -e "${GREEN}=== Setting up Python Environment ===${NC}"
 
 cd "${REPO_ROOT}"
-uv sync
+uv sync --python 3.11
 echo -e "${GREEN}✓ Python dependencies installed with uv sync${NC}"
 
 # Setup build dependencies (ARM GCC, CMSIS-5, etc.)
