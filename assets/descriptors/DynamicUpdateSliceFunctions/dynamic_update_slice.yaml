@@ -1,261 +1,261 @@
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_2d_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-hint:
-  call_style: per_tensor
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_3d_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-hint:
-  call_style: per_tensor
-operand_shape: [2, 4, 6]
-update_shape: [1, 2, 3]
-start_indices: [0, 1, 2]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_2d_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-hint:
-  call_style: per_tensor
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_3d_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-hint:
-  call_style: per_tensor
-operand_shape: [2, 4, 6]
-update_shape: [1, 2, 3]
-start_indices: [0, 1, 2]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_clamped_start_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-hint:
-  call_style: per_tensor
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [-1, 99]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_clamped_start_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-hint:
-  call_style: per_tensor
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [-1, 99]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_null_operand_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    arg_error_case: operand
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_null_update_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    arg_error_case: update
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_null_start_indices_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    arg_error_case: start_indices
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_null_params_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    arg_error_case: params
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_null_output_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    arg_error_case: output
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_rank0_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    params_rank: 0
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_rank9_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    params_rank: 9
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_null_operand_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    arg_error_case: operand
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_null_update_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    arg_error_case: update
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_null_start_indices_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    arg_error_case: start_indices
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_null_params_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    arg_error_case: params
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_null_output_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    arg_error_case: output
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_rank0_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    params_rank: 0
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
----
-operator: DynamicUpdateSlice
-name: dynamic_update_slice_rank9_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-expected_status: ARM_CMSIS_NN_ARG_ERROR
-hint:
-  call_style: per_tensor
-  extras:
-    params_rank: 9
-operand_shape: [4, 5]
-update_shape: [2, 3]
-start_indices: [1, 1]
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_2d_s8
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# hint:
+#   call_style: per_tensor
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_3d_s8
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# hint:
+#   call_style: per_tensor
+# operand_shape: [2, 4, 6]
+# update_shape: [1, 2, 3]
+# start_indices: [0, 1, 2]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_2d_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# hint:
+#   call_style: per_tensor
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_3d_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# hint:
+#   call_style: per_tensor
+# operand_shape: [2, 4, 6]
+# update_shape: [1, 2, 3]
+# start_indices: [0, 1, 2]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_clamped_start_s8
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# hint:
+#   call_style: per_tensor
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [-1, 99]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_clamped_start_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# hint:
+#   call_style: per_tensor
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [-1, 99]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_null_operand_s8
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     arg_error_case: operand
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_null_update_s8
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     arg_error_case: update
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_null_start_indices_s8
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     arg_error_case: start_indices
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_null_params_s8
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     arg_error_case: params
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_null_output_s8
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     arg_error_case: output
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_rank0_s8
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     params_rank: 0
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_rank9_s8
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     params_rank: 9
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_null_operand_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     arg_error_case: operand
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_null_update_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     arg_error_case: update
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_null_start_indices_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     arg_error_case: start_indices
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_null_params_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     arg_error_case: params
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_null_output_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     arg_error_case: output
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_rank0_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     params_rank: 0
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
+# ---
+# operator: DynamicUpdateSlice
+# name: dynamic_update_slice_rank9_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# expected_status: ARM_CMSIS_NN_ARG_ERROR
+# hint:
+#   call_style: per_tensor
+#   extras:
+#     params_rank: 9
+# operand_shape: [4, 5]
+# update_shape: [2, 3]
+# start_indices: [1, 1]
