@@ -1,0 +1,8 @@
+operator: Add
+name: add_float_default_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 4, 4, 8]
+input_2_shape: [1, 4, 4, 8]

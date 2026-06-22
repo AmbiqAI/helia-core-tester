@@ -1,0 +1,43 @@
+#include "{{ name }}_batch_norm.h"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+#define {{ name|upper }}_OUTPUT_SIZE ({{ input_dims.n }} * {{ input_dims.h }} * {{ input_dims.w }} * {{ input_dims.c }})
+static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+
+int32_t {{ prefix }}_{{ name }}_run(
+    const {{ input_dtype }}* __restrict input,
+    {{ output_dtype }}* __restrict output
+) {
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        input,
+        output,
+        {{ name }}_scale,
+        {{ name }}_bias,
+        &{{ name }}_input_dims,
+        {{ layout }}
+    );
+    return kernel_status;
+}
+
+int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+{
+    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("BatchNorm") }}", status);
+
+    int failures = 0;
+    HELIA_VALIDATE_OUTPUTS(
+        {{ validation_mode_token | default("FLOAT") }},
+        {{ name }}_output,
+        {{ name }}_expected_output,
+        {{ name|upper }}_OUTPUT_SIZE,
+        {{ validation_tolerance | default(0) }},
+        {{ validation_atol | default(0.01) }}f,
+        {{ validation_rtol | default(0.001) }}f,
+        {{ validation_report_limit | default(20) }},
+        failures
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
+}
+
+{% include "common/standalone/main.j2" %}

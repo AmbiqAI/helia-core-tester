@@ -42,7 +42,7 @@ class OpTranspose(OperationBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input")
         
         if activation_dtype == 'S8':
             return {
@@ -55,6 +55,12 @@ class OpTranspose(OperationBase):
                 'kernel_fn': 'arm_transpose_s16',
                 'input_c_type': 'int16_t',
                 'output_c_type': 'int16_t'
+            }
+        elif activation_dtype == 'FP32':
+            return {
+                'kernel_fn': 'arm_transpose_f32',
+                'input_c_type': 'float',
+                'output_c_type': 'float'
             }
         else:
             raise NotImplementedError(f"Unsupported Transpose dtype: {activation_dtype}")
@@ -201,7 +207,15 @@ class OpTranspose(OperationBase):
         self.rng.__setstate__(rng_state)
 
         # Quantize inputs
-        if kernel_info["input_c_type"] == "int8_t":
+        if kernel_info["input_c_type"] == "float":
+            input_q = input_data.astype(np.float32)
+            interpreter = self.load_litert_interpreter(str(tflite_path))
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+            interpreter.set_tensor(input_details[0]['index'], input_q)
+            interpreter.invoke()
+            output_data = np.array(interpreter.get_tensor(output_details[0]['index']), dtype=np.float32)
+        elif kernel_info["input_c_type"] == "int8_t":
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
         elif kernel_info["input_c_type"] == "int16_t":
@@ -210,7 +224,9 @@ class OpTranspose(OperationBase):
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
 
-        if force_cmsis or expected_status != "ARM_CMSIS_NN_SUCCESS":
+        if kernel_info["input_c_type"] == "float":
+            pass
+        elif force_cmsis or expected_status != "ARM_CMSIS_NN_SUCCESS":
             input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
             if expected_status == "ARM_CMSIS_NN_SUCCESS":
                 output_data = np.transpose(input_q, permutation)
@@ -262,6 +278,8 @@ class OpTranspose(OperationBase):
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
+            'transpose_params_type': 'cmsis_nn_transpose_params_f32' if kernel_info["input_c_type"] == "float" else 'cmsis_nn_transpose_params',
+            'float_kernel': kernel_info["input_c_type"] == "float",
             'expected_status': expected_status,
         }
         

@@ -48,6 +48,8 @@ class BuildStep(StepBase):
             "--no-run",
             "--no-report",
         ]
+        if getattr(self.config, "include_float", False):
+            cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F32=ON"])
         if getattr(self.config, "coverage", False):
             cmd.append("--coverage")
         
@@ -128,6 +130,8 @@ class BuildStep(StepBase):
             "--no-run",
             "--no-report",
         ]
+        if getattr(self.config, "include_float", False):
+            cmd_preview.extend(["--cmake-def", "ARM_NN_ENABLE_F32=ON"])
         if getattr(self.config, "coverage", False):
             cmd_preview.append("--coverage")
         if self.config.jobs:
@@ -148,6 +152,8 @@ class BuildStep(StepBase):
             "--no-run",
             "--no-report",
         ]
+        if getattr(self.config, "include_float", False):
+            cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F32=ON"])
         if getattr(self.config, "coverage", False):
             cmd.append("--coverage")
         if self.config.jobs:

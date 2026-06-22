@@ -81,6 +81,20 @@ class OpQuantize(QuantizationFamilyBase):
                 'output_c_type': self.tensor_c_type("output"),
             }
         raise NotImplementedError(f"Unsupported Quantize output dtype: {output_dtype}")
+
+    def _extract_per_tensor_output_quantization(self, output_qp: dict) -> tuple[float, int]:
+        """Return per-tensor output quantization from LiteRT metadata."""
+        if output_qp:
+            scales = output_qp.get("scales", [1.0])
+            zero_points = output_qp.get("zero_points", [0])
+            if isinstance(scales, (list, tuple, np.ndarray)) and len(scales) == 0:
+                raise ValueError("Quantize output quantization metadata missing per-tensor scale")
+            if isinstance(zero_points, (list, tuple, np.ndarray)) and len(zero_points) == 0:
+                raise ValueError("Quantize output quantization metadata missing per-tensor zero point")
+
+        output_scale = float(self._quant_param_scalar(output_qp, "scales", 1.0))
+        output_zp = int(self._quant_param_scalar(output_qp, "zero_points", 0))
+        return output_scale, output_zp
     
     def generate_c_files(self, output_dir: Path) -> None:
         """
@@ -113,10 +127,7 @@ class OpQuantize(QuantizationFamilyBase):
             
             # Extract quantization from output (quantized tensor)
             output_qp = output_details[0].get('quantization_parameters', {})
-            output_scale = output_qp.get('scales', [1.0])
-            output_zp = output_qp.get('zero_points', [0])
-            output_scale = float(output_scale[0] if isinstance(output_scale, list) else output_scale)
-            output_zp = int(output_zp[0] if isinstance(output_zp, list) else output_zp)
+            output_scale, output_zp = self._extract_per_tensor_output_quantization(output_qp)
             
             # Generate input data (float32)
             input_data = self._sample_uniform(input_shape)

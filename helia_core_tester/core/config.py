@@ -56,6 +56,7 @@ class Config:
     optimization: str = "-Ofast"
     jobs: Optional[int] = None
     coverage: bool = False
+    include_float: bool = False
 
     timeout: float = 0.0
     fail_fast: bool = True
@@ -194,6 +195,7 @@ class Config:
             return float(value)
         if key in {
             "coverage",
+            "include_float",
             "fail_fast",
             "dry_run",
             "plan",
@@ -285,6 +287,7 @@ class Config:
             "optimization": self.optimization,
             "jobs": self.jobs,
             "coverage": self.coverage,
+            "include_float": self.include_float,
             "timeout": self.timeout,
             "fail_fast": self.fail_fast,
             "run_jobs": self.run_jobs,

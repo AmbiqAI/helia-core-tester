@@ -56,7 +56,7 @@ class PoolFamilyBase(OperationBase):
         Returns:
             Dictionary with kernel function name, C types, and buffer size function
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8').upper()
+        activation_dtype = self.tensor_dtype("input").upper()
         
         if self.POOL_KIND == 'MAX':
             if activation_dtype == 'S8':
@@ -72,6 +72,13 @@ class PoolFamilyBase(OperationBase):
                     'kernel_get_buffer_size_fn': None,
                     'input_c_type': 'int16_t',
                     'output_c_type': 'int16_t',
+                }
+            elif activation_dtype == 'FP32':
+                return {
+                    'kernel_fn': 'arm_max_pool_f32',
+                    'kernel_get_buffer_size_fn': None,
+                    'input_c_type': 'float',
+                    'output_c_type': 'float',
                 }
             else:
                 raise NotImplementedError(f"Unsupported MaxPool dtype: {activation_dtype}")
@@ -89,6 +96,13 @@ class PoolFamilyBase(OperationBase):
                     'kernel_get_buffer_size_fn': 'arm_avgpool_s16_get_buffer_size',
                     'input_c_type': 'int16_t',
                     'output_c_type': 'int16_t',
+                }
+            elif activation_dtype == 'FP32':
+                return {
+                    'kernel_fn': 'arm_avg_pool_f32',
+                    'kernel_get_buffer_size_fn': None,
+                    'input_c_type': 'float',
+                    'output_c_type': 'float',
                 }
             else:
                 raise NotImplementedError(f"Unsupported AvgPool dtype: {activation_dtype}")
@@ -159,20 +173,24 @@ class PoolFamilyBase(OperationBase):
         
         input_data = self.generate_input_data()
         
-        input_scale = float(self._quant_param_scalar(quant_params['input'], 'scale', 1.0))
-        input_zp = int(self._quant_param_scalar(quant_params['input'], 'zero_point', 0))
-        
+        if kernel_info["input_c_type"] == "float":
+            input_q = input_data.astype(np.float32)
+        else:
+            input_scale = float(self._quant_param_scalar(quant_params['input'], 'scale', 1.0))
+            input_zp = int(self._quant_param_scalar(quant_params['input'], 'zero_point', 0))
+
         if kernel_info["input_c_type"] == "int8_t":
             qmin, qmax = -128, 127
             np_in_dtype = np.int8
         elif kernel_info["input_c_type"] == "int16_t":
             qmin, qmax = -32768, 32767
             np_in_dtype = np.int16
-        else:
+        elif kernel_info["input_c_type"] != "float":
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
         
-        input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-        input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+        if kernel_info["input_c_type"] != "float":
+            input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
+            input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
         
         output_data = self.run_inference(str(tflite_path), input_q)
         
@@ -181,7 +199,7 @@ class PoolFamilyBase(OperationBase):
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
         
         # Calculate buffer size max
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input")
         buffer_size_max = builder.calculate_pooling_buffer_size_max(
             input_dims,
             output_dims,
@@ -205,6 +223,8 @@ class PoolFamilyBase(OperationBase):
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
             'buffer_size_max': buffer_size_max,
             'pooling_type': pooling_type,
+            'pool_params_type': 'cmsis_nn_pool_params_f32' if kernel_info["input_c_type"] == "float" else 'cmsis_nn_pool_params',
+            'float_kernel': kernel_info["input_c_type"] == "float",
         }
         
         cmake_context = {

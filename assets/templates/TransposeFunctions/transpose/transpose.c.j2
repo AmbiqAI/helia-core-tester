@@ -2,6 +2,10 @@
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
 
+{% if float_kernel %}
+static cmsis_nn_context {{ name }}_ctx = { .buf = NULL, .size = 0 };
+{% endif %}
+
 #define {{ name|upper }}_OUTPUT_SIZE ({{ output_dims.n }} * {{ output_dims.h }} * {{ output_dims.w }} * {{ output_dims.c }})
 static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
 
@@ -10,6 +14,16 @@ int32_t {{ prefix }}_{{ name }}_run(
     {{ output_dtype }}* __restrict output
 ) {
     // Call Transpose kernel
+    {% if float_kernel %}
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        &{{ name }}_ctx,
+        &{{ name }}_transpose_params,
+        &{{ name }}_input_dims,
+        input,
+        &{{ name }}_output_dims,
+        output
+    );
+    {% else %}
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         input,
         output,
@@ -17,6 +31,7 @@ int32_t {{ prefix }}_{{ name }}_run(
         &{{ name }}_output_dims,
         &{{ name }}_transpose_params
     );
+    {% endif %}
     
     return kernel_status;
 }

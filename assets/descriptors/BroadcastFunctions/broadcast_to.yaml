@@ -1,209 +1,209 @@
-# operator: BroadcastTo
-# name: broadcast_to_2d_s8
-# activation_dtype: S8
-# weight_dtype: S8
-# activation: NONE
-# hint:
-#   call_style: per_tensor
-# input_shape: [1, 3]
-# output_shape: [4, 3]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_3d_s8
-# activation_dtype: S8
-# weight_dtype: S8
-# activation: NONE
-# hint:
-#   call_style: per_tensor
-# input_shape: [2, 1, 3]
-# output_shape: [2, 4, 3]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_2d_s16
-# activation_dtype: S16
-# weight_dtype: S8
-# activation: NONE
-# hint:
-#   call_style: per_tensor
-# input_shape: [1, 3]
-# output_shape: [4, 3]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_3d_s16
-# activation_dtype: S16
-# weight_dtype: S8
-# activation: NONE
-# hint:
-#   call_style: per_tensor
-# input_shape: [2, 1, 3]
-# output_shape: [2, 4, 3]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_identity_s8
-# activation_dtype: S8
-# weight_dtype: S8
-# activation: NONE
-# hint:
-#   call_style: per_tensor
-# input_shape: [2, 3]
-# output_shape: [2, 3]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_last_dim_s8
-# activation_dtype: S8
-# weight_dtype: S8
-# activation: NONE
-# hint:
-#   call_style: per_tensor
-# input_shape: [2, 1]
-# output_shape: [2, 4]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_identity_s16
-# activation_dtype: S16
-# weight_dtype: S8
-# activation: NONE
-# hint:
-#   call_style: per_tensor
-# input_shape: [2, 3]
-# output_shape: [2, 3]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_last_dim_s16
-# activation_dtype: S16
-# weight_dtype: S8
-# activation: NONE
-# hint:
-#   call_style: per_tensor
-# input_shape: [2, 1]
-# output_shape: [2, 4]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_null_input_s8
-# activation_dtype: S8
-# weight_dtype: S8
-# activation: NONE
-# expected_status: ARM_CMSIS_NN_ARG_ERROR
-# hint:
-#   call_style: per_tensor
-#   extras:
-#     arg_error_case: input
-# input_shape: [1, 3]
-# output_shape: [4, 3]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_null_params_s8
-# activation_dtype: S8
-# weight_dtype: S8
-# activation: NONE
-# expected_status: ARM_CMSIS_NN_ARG_ERROR
-# hint:
-#   call_style: per_tensor
-#   extras:
-#     arg_error_case: params
-# input_shape: [1, 3]
-# output_shape: [4, 3]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_null_output_s8
-# activation_dtype: S8
-# weight_dtype: S8
-# activation: NONE
-# expected_status: ARM_CMSIS_NN_ARG_ERROR
-# hint:
-#   call_style: per_tensor
-#   extras:
-#     arg_error_case: output
-# input_shape: [1, 3]
-# output_shape: [4, 3]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_rank0_s8
-# activation_dtype: S8
-# weight_dtype: S8
-# activation: NONE
-# expected_status: ARM_CMSIS_NN_ARG_ERROR
-# hint:
-#   call_style: per_tensor
-#   extras:
-#     params_rank: 0
-# input_shape: [1]
-# output_shape: [1]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_rank9_s8
-# activation_dtype: S8
-# weight_dtype: S8
-# activation: NONE
-# expected_status: ARM_CMSIS_NN_ARG_ERROR
-# hint:
-#   call_style: per_tensor
-#   extras:
-#     params_rank: 9
-# input_shape: [1]
-# output_shape: [1]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_null_input_s16
-# activation_dtype: S16
-# weight_dtype: S8
-# activation: NONE
-# expected_status: ARM_CMSIS_NN_ARG_ERROR
-# hint:
-#   call_style: per_tensor
-#   extras:
-#     arg_error_case: input
-# input_shape: [1, 3]
-# output_shape: [4, 3]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_null_params_s16
-# activation_dtype: S16
-# weight_dtype: S8
-# activation: NONE
-# expected_status: ARM_CMSIS_NN_ARG_ERROR
-# hint:
-#   call_style: per_tensor
-#   extras:
-#     arg_error_case: params
-# input_shape: [1, 3]
-# output_shape: [4, 3]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_null_output_s16
-# activation_dtype: S16
-# weight_dtype: S8
-# activation: NONE
-# expected_status: ARM_CMSIS_NN_ARG_ERROR
-# hint:
-#   call_style: per_tensor
-#   extras:
-#     arg_error_case: output
-# input_shape: [1, 3]
-# output_shape: [4, 3]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_rank0_s16
-# activation_dtype: S16
-# weight_dtype: S8
-# activation: NONE
-# expected_status: ARM_CMSIS_NN_ARG_ERROR
-# hint:
-#   call_style: per_tensor
-#   extras:
-#     params_rank: 0
-# input_shape: [1]
-# output_shape: [1]
-# ---
-# operator: BroadcastTo
-# name: broadcast_to_rank9_s16
-# activation_dtype: S16
-# weight_dtype: S8
-# activation: NONE
-# expected_status: ARM_CMSIS_NN_ARG_ERROR
-# hint:
-#   call_style: per_tensor
-#   extras:
-#     params_rank: 9
-# input_shape: [1]
-# output_shape: [1]
+operator: BroadcastTo
+name: broadcast_to_2d_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 3]
+output_shape: [4, 3]
+---
+operator: BroadcastTo
+name: broadcast_to_3d_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 1, 3]
+output_shape: [2, 4, 3]
+---
+operator: BroadcastTo
+name: broadcast_to_2d_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 3]
+output_shape: [4, 3]
+---
+operator: BroadcastTo
+name: broadcast_to_3d_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 1, 3]
+output_shape: [2, 4, 3]
+---
+operator: BroadcastTo
+name: broadcast_to_identity_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 3]
+output_shape: [2, 3]
+---
+operator: BroadcastTo
+name: broadcast_to_last_dim_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 1]
+output_shape: [2, 4]
+---
+operator: BroadcastTo
+name: broadcast_to_identity_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 3]
+output_shape: [2, 3]
+---
+operator: BroadcastTo
+name: broadcast_to_last_dim_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [2, 1]
+output_shape: [2, 4]
+---
+operator: BroadcastTo
+name: broadcast_to_null_input_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    arg_error_case: input
+input_shape: [1, 3]
+output_shape: [4, 3]
+---
+operator: BroadcastTo
+name: broadcast_to_null_params_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    arg_error_case: params
+input_shape: [1, 3]
+output_shape: [4, 3]
+---
+operator: BroadcastTo
+name: broadcast_to_null_output_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    arg_error_case: output
+input_shape: [1, 3]
+output_shape: [4, 3]
+---
+operator: BroadcastTo
+name: broadcast_to_rank0_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    params_rank: 0
+input_shape: [1]
+output_shape: [1]
+---
+operator: BroadcastTo
+name: broadcast_to_rank9_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    params_rank: 9
+input_shape: [1]
+output_shape: [1]
+---
+operator: BroadcastTo
+name: broadcast_to_null_input_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    arg_error_case: input
+input_shape: [1, 3]
+output_shape: [4, 3]
+---
+operator: BroadcastTo
+name: broadcast_to_null_params_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    arg_error_case: params
+input_shape: [1, 3]
+output_shape: [4, 3]
+---
+operator: BroadcastTo
+name: broadcast_to_null_output_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    arg_error_case: output
+input_shape: [1, 3]
+output_shape: [4, 3]
+---
+operator: BroadcastTo
+name: broadcast_to_rank0_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    params_rank: 0
+input_shape: [1]
+output_shape: [1]
+---
+operator: BroadcastTo
+name: broadcast_to_rank9_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  call_style: per_tensor
+  extras:
+    params_rank: 9
+input_shape: [1]
+output_shape: [1]

@@ -23,8 +23,13 @@ class OpPad(OperationBase):
         """Convert model to LiteRT (single-op)."""
         from helia_core_tester.generation.utils.litert_builder import build_pad_op
 
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        dtype = 'int16' if activation_dtype == 'S16' else 'int8'
+        activation_dtype = self.tensor_dtype("input")
+        if activation_dtype == "S16":
+            dtype = "int16"
+        elif activation_dtype == "FP32":
+            dtype = "float32"
+        else:
+            dtype = "int8"
 
         input_shape = tuple(self.desc['input_shape'])
         paddings = self.desc.get('paddings')
@@ -46,7 +51,7 @@ class OpPad(OperationBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input")
         
         if activation_dtype == 'S8':
             return {
@@ -59,6 +64,12 @@ class OpPad(OperationBase):
                 'kernel_fn': 'arm_pad_s16',
                 'input_c_type': 'int16_t',
                 'output_c_type': 'int16_t'
+            }
+        elif activation_dtype == 'FP32':
+            return {
+                'kernel_fn': 'arm_pad_f32',
+                'input_c_type': 'float',
+                'output_c_type': 'float'
             }
         else:
             raise NotImplementedError(f"Unsupported Pad dtype: {activation_dtype}")
@@ -96,14 +107,16 @@ class OpPad(OperationBase):
         pre_pad_dims = builder.nhwc_to_cmsis_dims(pre_pad)
         post_pad_dims = builder.nhwc_to_cmsis_dims(post_pad)
 
-        pad_value = int(self.desc.get('pad_value', 0))
+        pad_value = float(self.desc.get('pad_value', 0.0)) if kernel_info["input_c_type"] == "float" else int(self.desc.get('pad_value', 0))
 
         # Generate input data
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
 
         # Generate input values
-        if kernel_info["input_c_type"] == "int8_t":
+        if kernel_info["input_c_type"] == "float":
+            input_q = self._sample_uniform(input_shape)
+        elif kernel_info["input_c_type"] == "int8_t":
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
             input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
@@ -144,6 +157,7 @@ class OpPad(OperationBase):
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
+            'float_kernel': kernel_info["input_c_type"] == "float",
         }
         
         # Render templates

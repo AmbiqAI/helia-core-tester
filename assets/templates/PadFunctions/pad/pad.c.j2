@@ -13,7 +13,7 @@ int32_t {{ prefix }}_{{ name }}_run(
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         input,
         output,
-        {{ pad_value }},              // pad_value
+        {{ pad_value }}{% if float_kernel %}f{% endif %},              // pad_value
         &{{ name }}_input_dims,        // input_size
         &{{ name }}_pre_pad,           // pre_pad
         &{{ name }}_post_pad           // post_pad

@@ -21,6 +21,7 @@
         "ArgMax",
         "ArgMin",
         "AvgPool",
+        "BatchNorm",
         "BatchMatMul",
         "BatchToSpaceND",
         "BroadcastTo",
@@ -47,6 +48,7 @@
         "Minimum",
         "MirrorPad",
         "Mul",
+        "NNActivationFloat",
         "NNActivationS16",
         "PReLU",
         "Pad",
@@ -181,6 +183,9 @@
     "size": {
       "$ref": "#/$defs/intArray"
     },
+    "target_shape": {
+      "$ref": "#/$defs/intArray"
+    },
     "strides": {
       "$ref": "#/$defs/intArray"
     },
@@ -222,6 +227,12 @@
     },
     "activation_type": {
       "type": "string"
+    },
+    "layout": {
+      "type": "string",
+      "enum": [
+        "ARM_NN_LAYOUT_NHWC"
+      ]
     },
     "dataset": {
       "type": "string"

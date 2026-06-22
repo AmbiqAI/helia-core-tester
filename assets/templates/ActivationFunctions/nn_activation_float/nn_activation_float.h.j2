@@ -1,0 +1,16 @@
+#ifndef {{ prefix|upper }}_NN_ACTIVATION_FLOAT_H
+#define {{ prefix|upper }}_NN_ACTIVATION_FLOAT_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+static const {{ input_dtype }} {{ name }}_input[] = {
+{{ input_data_array }}
+};
+
+static const {{ output_dtype }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

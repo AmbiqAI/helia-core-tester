@@ -1,0 +1,8 @@
+operator: BatchNorm
+name: batch_norm_default_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 4, 4, 3]
+layout: ARM_NN_LAYOUT_NHWC

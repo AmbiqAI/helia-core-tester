@@ -1,0 +1,7 @@
+operator: Transpose
+name: transpose_float_default_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 2, 3, 4]

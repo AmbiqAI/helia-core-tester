@@ -435,8 +435,12 @@ class TemplateContextBuilder:
             pad_w = 0
 
         # Activation clamp defaults depend on activation dtype
-        act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
-        if act_dtype == 'S16':
+        resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or {}
+        act_dtype = str(resolved_tensor_dtypes.get("input", desc.get('activation_dtype', 'S8'))).upper()
+        if act_dtype == 'FP32':
+            activation_min = float(desc.get('activation_min', -1.0e30))
+            activation_max = float(desc.get('activation_max', 1.0e30))
+        elif act_dtype == 'S16':
             activation_min = int(desc.get('activation_min', -32768))
             activation_max = int(desc.get('activation_max', 32767))
         else:
@@ -456,8 +460,8 @@ class TemplateContextBuilder:
             'dilation_w': int(dil_w),
             'pad_h': int(pad_h),
             'pad_w': int(pad_w),
-            'activation_min': int(activation_min),
-            'activation_max': int(activation_max),
+            'activation_min': activation_min,
+            'activation_max': activation_max,
         }
     
     @staticmethod

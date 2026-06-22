@@ -112,6 +112,7 @@ def generate(
     limit: Optional[int] = typer.Option(None, help="Limit number of models to generate"),
     seed: Optional[int] = typer.Option(None, help="Random seed for test generation"),
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
+    include_float: bool = typer.Option(False, "--include-float", help="Include float descriptor suite"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -129,6 +130,7 @@ def generate(
         name_filter=name,
         limit=limit,
         seed=seed,
+        include_float=include_float,
     )
     if config.plan:
         _print_plan_item(GenerateStep(config).plan())
@@ -147,6 +149,7 @@ def build(
     opt: str = typer.Option("-Ofast", help="Optimization level"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn code coverage instrumentation"),
+    include_float: bool = typer.Option(False, "--include-float", help="Enable float CMSIS-NN build surface"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -162,6 +165,7 @@ def build(
         optimization=opt,
         jobs=jobs,
         coverage=coverage,
+        include_float=include_float,
     )
     if config.plan:
         _print_plan_item(BuildStep(config).plan())
@@ -221,6 +225,7 @@ def full(
     limit: Optional[int] = typer.Option(None, help="Limit number of models to generate"),
     seed: Optional[int] = typer.Option(None, help="Random seed for test generation"),
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
+    include_float: bool = typer.Option(False, "--include-float", help="Include float descriptor suite and build flags"),
     opt: str = typer.Option("-Ofast", help="Optimization level"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     timeout: float = typer.Option(0.0, help="Per-test timeout in seconds (0 = none)"),
@@ -249,6 +254,7 @@ def full(
         name_filter=name,
         limit=limit,
         seed=seed,
+        include_float=include_float,
         optimization=opt,
         jobs=jobs,
         timeout=timeout,

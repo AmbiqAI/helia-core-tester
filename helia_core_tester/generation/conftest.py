@@ -29,6 +29,8 @@ def pytest_addoption(parser):
                     help="Target CPU for code generation")
     parser.addoption("--generated-tests-dir", action="store", default=None,
                     help="Override generated tests output directory")
+    parser.addoption("--include-float", action="store_true", default=False,
+                    help="Include float descriptor suite")
 
 
 def pytest_configure(config):
@@ -79,4 +81,5 @@ def test_filters(request):
         'seed': request.config.getoption("--seed"),
         'cpu': request.config.getoption("--cpu"),
         'generated_tests_dir': request.config.getoption("--generated-tests-dir"),
+        'include_float': request.config.getoption("--include-float"),
     }

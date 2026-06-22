@@ -68,8 +68,7 @@ class OpWhere(OperationBase):
             output_details = interpreter.get_output_details()
             interpreter.set_tensor(input_details[0]["index"], condition)
             interpreter.invoke()
-            # TFLite WHERE returns int64 coordinates; cast to int32 for our kernel
-            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]), dtype=np.int32)
+            output_data = np.array(interpreter.get_tensor(output_details[0]["index"]), dtype=np.int64)
         except (ValueError, RuntimeError):
             # Rebuild with INT32 condition (WHERE doesn't support INT16)
             from ai_edge_litert.interpreter import Interpreter
@@ -85,7 +84,7 @@ class OpWhere(OperationBase):
             out_d = interp.get_output_details()
             interp.set_tensor(inp_d[0]["index"], condition.astype(np.int32))
             interp.invoke()
-            output_data = np.array(interp.get_tensor(out_d[0]["index"]), dtype=np.int32)
+            output_data = np.array(interp.get_tensor(out_d[0]["index"]), dtype=np.int64)
         num_true = output_data.shape[0]
         max_output_size = total_elements * rank  # worst case all true
 
@@ -101,6 +100,7 @@ class OpWhere(OperationBase):
             "condition_array": builder.format_array_as_c_literal(condition),
             "expected_output_array": builder.format_array_as_c_literal(output_data.flatten()),
             "cond_c_type": ki["cond_c_type"],
+            "output_c_type": "int64_t",
             "kernel_fn": ki["kernel_fn"],
         }
 

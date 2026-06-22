@@ -32,6 +32,10 @@ def _descriptor_test_dir(root_dir: Path, desc: Dict[str, Any]) -> Path:
     return root_dir / _descriptor_family(desc) / str(desc["name"])
 
 
+def _descriptor_suite(desc: Dict[str, Any]) -> str:
+    return str(desc.get("_descriptor_suite") or desc.get("suite") or "default")
+
+
 def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     """
     Determine if test should run based on filters.
@@ -67,6 +71,9 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     # Filter by activation dtype
     if filters.get('dtype') and not descriptor_matches_dtype_filter(desc, str(filters['dtype'])):
         return False
+
+    if _descriptor_suite(desc) == "float" and not filters.get("include_float", False):
+        return False
         
     # Filter by weight dtype
     resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or resolve_tensor_dtypes(desc)
@@ -77,12 +84,28 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
 
 
 def _required_capabilities(desc: Dict[str, Any]) -> list[str]:
+    required: list[str] = []
     raw = desc.get("required_capabilities")
-    if raw is None:
-        return []
-    if isinstance(raw, str):
-        return [raw]
-    return [str(capability) for capability in raw if str(capability).strip()]
+    if raw is not None:
+        if isinstance(raw, str):
+            required.append(raw)
+        else:
+            required.extend(str(capability) for capability in raw if str(capability).strip())
+
+    resolved = _resolved_tensor_dtypes(desc)
+    if any(dtype == "FP32" for dtype in resolved.values()):
+        required.append("fp32_execution")
+    if any(dtype == "FP16" for dtype in resolved.values()):
+        required.append("fp16_execution")
+
+    normalized: list[str] = []
+    seen = set()
+    for capability in required:
+        capability_name = str(capability).strip()
+        if capability_name and capability_name not in seen:
+            normalized.append(capability_name)
+            seen.add(capability_name)
+    return normalized
 
 
 def _resolved_tensor_dtypes(desc: Dict[str, Any]) -> Dict[str, str]:
@@ -104,6 +127,7 @@ def _skip_manifest_entry(desc: Dict[str, Any], *, cpu: str, missing_capabilities
         "resolved_tensor_dtypes": _resolved_tensor_dtypes(desc),
         "resolved_comparison": _resolved_comparison(desc),
         "descriptor_relpath": desc.get("_source_relpath"),
+        "suite": _descriptor_suite(desc),
         "cpu": cpu,
         "status": "skipped_capability",
         "missing_capabilities": missing_capabilities,
@@ -309,6 +333,7 @@ def test_generation(test_filters):
                 "resolved_tensor_dtypes": _resolved_tensor_dtypes(desc),
                 "resolved_comparison": _resolved_comparison(desc),
                 "descriptor_relpath": desc.get("_source_relpath"),
+                "suite": _descriptor_suite(desc),
                 "path": str(test_dir),
                 "relative_test_dir": relative_test_dir,
                 "tflite": str(tflite_path),
@@ -421,6 +446,7 @@ def test_generation(test_filters):
             "name": test_filters.get("name"),
             "limit": test_filters.get("limit"),
             "seed": test_filters.get("seed"),
+            "include_float": bool(test_filters.get("include_float", False)),
         },
         "counts": {
             "descriptors_total": len(descriptors),
@@ -464,6 +490,7 @@ def _write_manifest_and_cmake(
             "limit": test_filters.get("limit"),
             "seed": test_filters.get("seed"),
             "cpu": cpu,
+            "include_float": bool(test_filters.get("include_float", False)),
         },
         "tests": entries,
         "skipped": skipped_entries,

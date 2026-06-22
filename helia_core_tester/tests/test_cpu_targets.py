@@ -23,7 +23,7 @@ def test_get_cpu_profile_flags():
 
 
 def test_cpu_profiles_expose_float_capability_hooks():
-    assert get_cpu_profile("cortex-m0").supports_execution_dtype("FP32") is True
-    assert get_cpu_profile("cortex-m55").supports_execution_dtype("FP16") is False
+    assert get_cpu_profile("cortex-m0").supports_execution_dtype("FP32") is False
+    assert get_cpu_profile("cortex-m55").supports_execution_dtype("FP16") is True
     assert missing_required_capabilities("cortex-m4", ["fp32_execution"]) == []
-    assert missing_required_capabilities("cortex-m55", ["fp16_execution"]) == ["fp16_execution"]
+    assert missing_required_capabilities("cortex-m55", ["fp16_execution"]) == []

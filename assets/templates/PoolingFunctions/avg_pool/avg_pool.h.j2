@@ -24,13 +24,13 @@ static const cmsis_nn_dims {{ name }}_output_dims = {
 };
 
 // Pooling parameters
-static const cmsis_nn_pool_params {{ name }}_pool_params = {
+static const {{ pool_params_type }} {{ name }}_pool_params = {
     .stride.w = {{ pool_params.stride_w }},
     .stride.h = {{ pool_params.stride_h }},
     .padding.w = {{ pool_params.pad_w }},
     .padding.h = {{ pool_params.pad_h }},
-    .activation.min = {{ pool_params.activation_min }},
-    .activation.max = {{ pool_params.activation_max }}
+    .activation.min = {{ pool_params.activation_min }}{% if float_kernel %}f{% endif %},
+    .activation.max = {{ pool_params.activation_max }}{% if float_kernel %}f{% endif %}
 };
 
 // Input data (for testing)

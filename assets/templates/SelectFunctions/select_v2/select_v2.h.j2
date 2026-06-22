@@ -18,7 +18,7 @@ static const cmsis_nn_select_v2_params {{ name }}_params = {
     .y_strides = {{ name }}_y_strides,
 };
 
-static const int8_t {{ name }}_condition[] = {
+static const {{ condition_c_type }} {{ name }}_condition[] = {
 {{ condition_array }}
 };
 

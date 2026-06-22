@@ -48,6 +48,8 @@ class GenerateStep(StepBase):
             cmd.extend(["--name", self.config.name_filter])
         if self.config.limit:
             cmd.extend(["--limit", str(self.config.limit)])
+        if getattr(self.config, "include_float", False):
+            cmd.append("--include-float")
         if include_seed and self.config.seed is not None:
             cmd.extend(["--seed", str(self.config.seed)])
         return cmd

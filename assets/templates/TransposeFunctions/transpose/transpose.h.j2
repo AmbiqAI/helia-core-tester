@@ -22,7 +22,7 @@ static const uint32_t {{ name }}_permutations[] = {
 {{ permutation_array }}
 };
 
-static const cmsis_nn_transpose_params {{ name }}_transpose_params = {
+static const {{ transpose_params_type }} {{ name }}_transpose_params = {
     .num_dims = {{ num_dims }},
     .permutations = {{ name }}_permutations
 };

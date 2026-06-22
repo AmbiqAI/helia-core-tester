@@ -22,9 +22,13 @@ class OpReshape(OperationBase):
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         from helia_core_tester.generation.utils.litert_builder import build_reshape_op
 
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        if activation_dtype != 'S8':
-            raise NotImplementedError(f"Unsupported Reshape dtype: {activation_dtype} (only S8 supported)")
+        activation_dtype = self.tensor_dtype("input")
+        if activation_dtype == 'S8':
+            dtype = "int8"
+        elif activation_dtype == 'FP32':
+            dtype = "float32"
+        else:
+            raise NotImplementedError(f"Unsupported Reshape dtype: {activation_dtype}")
 
         input_shape = tuple(self.desc['input_shape'])
         target_shape = tuple(self.desc.get('target_shape'))
@@ -34,7 +38,7 @@ class OpReshape(OperationBase):
         model_bytes = build_reshape_op(
             input_shape=input_shape,
             target_shape=target_shape,
-            dtype="int8",
+            dtype=dtype,
         )
         with open(out_path, "wb") as f:
             f.write(model_bytes)
@@ -46,7 +50,7 @@ class OpReshape(OperationBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input")
         
         if activation_dtype == 'S8':
             return {
@@ -54,8 +58,14 @@ class OpReshape(OperationBase):
                 'input_c_type': 'int8_t',
                 'output_c_type': 'int8_t'
             }
+        elif activation_dtype == 'FP32':
+            return {
+                'kernel_fn': 'arm_reshape_f32',
+                'input_c_type': 'float',
+                'output_c_type': 'float'
+            }
         else:
-            raise NotImplementedError(f"Unsupported Reshape dtype: {activation_dtype} (only S8 supported)")
+            raise NotImplementedError(f"Unsupported Reshape dtype: {activation_dtype}")
     
     def generate_c_files(self, output_dir: Path) -> None:
         """
@@ -88,7 +98,10 @@ class OpReshape(OperationBase):
         # Generate input data
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        input_q = self.rng.integers(-128, 128, size=input_shape, dtype=np.int8)
+        if kernel_info["input_c_type"] == "float":
+            input_q = self._sample_uniform(input_shape)
+        else:
+            input_q = self.rng.integers(-128, 128, size=input_shape, dtype=np.int8)
         self.rng.__setstate__(rng_state)
 
         output_data = input_q.reshape(output_shape)

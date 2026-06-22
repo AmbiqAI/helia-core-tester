@@ -104,9 +104,6 @@ class OpSelectV2(OperationBase):
         except (ValueError, RuntimeError):
             output_data = np.where(condition, x_data, y_data)
 
-        # Convert condition to int8 for the C test (kernel uses int8 condition)
-        condition_int8 = condition.astype(np.int8)
-
         cond_strides = self._compute_broadcast_strides(condition_shape, output_shape)
         x_strides = self._compute_broadcast_strides(x_shape, output_shape)
         y_strides = self._compute_broadcast_strides(y_shape, output_shape)
@@ -127,11 +124,12 @@ class OpSelectV2(OperationBase):
             "x_size": int(np.prod(x_shape)),
             "y_size": int(np.prod(y_shape)),
             "output_size": int(np.prod(output_shape)),
-            "condition_array": builder.format_array_as_c_literal(condition_int8),
+            "condition_array": builder.format_array_as_c_literal(condition),
             "x_data_array": builder.format_array_as_c_literal(x_data),
             "y_data_array": builder.format_array_as_c_literal(y_data),
             "expected_output_array": builder.format_array_as_c_literal(output_data),
             "c_type": ki["c_type"],
+            "condition_c_type": "bool",
             "kernel_fn": ki["kernel_fn"],
         }
 
