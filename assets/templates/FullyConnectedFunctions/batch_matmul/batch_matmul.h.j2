@@ -24,9 +24,16 @@ static const cmsis_nn_dims {{ name }}_output_dims = {
 };
 
 // Batch matmul parameters
-static const cmsis_nn_bmm_params {{ name }}_bmm_params = {
+static const {{ bmm_params_type | default("cmsis_nn_bmm_params") }} {{ name }}_bmm_params = {
     .adj_x = {{ bmm_params.adj_x|lower }},
     .adj_y = {{ bmm_params.adj_y|lower }},
+{% if float_kernel %}
+    .activation = {
+        .min = {{ bmm_activation_min_literal }},
+        .max = {{ bmm_activation_max_literal }}
+    },
+    .rhs_format = ARM_NN_WEIGHT_FORMAT_STANDARD
+{% else %}
     .fc_params = {
         .input_offset = {{ bmm_params.fc_params.input_offset }},
         .filter_offset = {{ bmm_params.fc_params.filter_offset }},
@@ -36,13 +43,16 @@ static const cmsis_nn_bmm_params {{ name }}_bmm_params = {
             .max = {{ bmm_params.fc_params.activation_max }}
         }
     }
+{% endif %}
 };
 
+{% if not float_kernel %}
 // Quantization parameters (per-tensor)
 static const cmsis_nn_per_tensor_quant_params {{ name }}_quant_params = {
     .multiplier = {{ quant_params.multiplier }},
     .shift = {{ quant_params.shift }}
 };
+{% endif %}
 
 // Input LHS data (for testing)
 static const {{ input_dtype }} {{ name }}_input_lhs[] = {

@@ -16,8 +16,8 @@ int32_t {{ prefix }}_{{ name }}_run(
         input1,
         input2,
         output,
-        {{ out_activation_min }}f,
-        {{ out_activation_max }}f,
+        {{ out_activation_min_literal }},
+        {{ out_activation_max_literal }},
         {{ block_size }}
     );
     {% else %}

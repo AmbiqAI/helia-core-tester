@@ -133,10 +133,163 @@ class OpLSTMUnidirectional(OperationBase):
         data_prefix = dataset.lower() + "_"
         return macro_prefix, data_prefix
 
+    @staticmethod
+    def _sigmoid(x: np.ndarray) -> np.ndarray:
+        return 1.0 / (1.0 + np.exp(-x))
+
+    def _generate_lstm_expected_f32(
+        self,
+        input_tensor: np.ndarray,
+        forget_w_in: np.ndarray,
+        input_w_in: np.ndarray,
+        cell_w_in: np.ndarray,
+        output_w_in: np.ndarray,
+        forget_w_hidden: np.ndarray,
+        input_w_hidden: np.ndarray,
+        cell_w_hidden: np.ndarray,
+        output_w_hidden: np.ndarray,
+        forget_bias: np.ndarray,
+        input_bias: np.ndarray,
+        cell_bias: np.ndarray,
+        output_bias: np.ndarray,
+        *,
+        batch_size: int,
+        time_steps: int,
+        input_size: int,
+        hidden_size: int,
+        time_major: bool,
+        cell_clip: float,
+    ) -> np.ndarray:
+        hidden = np.zeros((batch_size, hidden_size), dtype=np.float32)
+        cell = np.zeros((batch_size, hidden_size), dtype=np.float32)
+        output = np.zeros((time_steps, batch_size, hidden_size), dtype=np.float32)
+
+        if time_major:
+            sequence = np.asarray(input_tensor, dtype=np.float32).reshape(time_steps, batch_size, input_size)
+        else:
+            sequence = np.transpose(
+                np.asarray(input_tensor, dtype=np.float32).reshape(batch_size, time_steps, input_size),
+                (1, 0, 2),
+            )
+
+        for t in range(time_steps):
+            x = sequence[t]
+            forget_gate = self._sigmoid(x @ forget_w_in.T + hidden @ forget_w_hidden.T + forget_bias)
+            input_gate = self._sigmoid(x @ input_w_in.T + hidden @ input_w_hidden.T + input_bias)
+            cell_gate = np.tanh(x @ cell_w_in.T + hidden @ cell_w_hidden.T + cell_bias)
+            output_gate = self._sigmoid(x @ output_w_in.T + hidden @ output_w_hidden.T + output_bias)
+            cell = forget_gate * cell + input_gate * cell_gate
+            if cell_clip > 0.0:
+                cell = np.clip(cell, -cell_clip, cell_clip)
+            hidden = output_gate * np.tanh(cell)
+            output[t] = hidden
+
+        if time_major:
+            return output.astype(np.float32).flatten()
+        return np.transpose(output, (1, 0, 2)).astype(np.float32).flatten()
+
     def generate_c_files(self, output_dir) -> None:
         """
         Generate C and H files for CMSIS-only LSTM tests.
         """
+        if (
+            self.desc.get("hint", {}).get("force_cmsis", False)
+            and str(self.desc.get("activation_dtype", "S8")).upper() == "FP32"
+        ):
+            from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+            name = self.desc['name']
+            batch_size = int(self.desc.get("batch_size", 1))
+            time_steps = int(self.desc.get("time_steps", 1))
+            input_size = int(self.desc.get("feature_size", self.desc.get("input_size", 1)))
+            hidden_size = int(self.desc.get("units", self.desc.get("hidden_size", 1)))
+            time_major = bool(self.desc.get("time_major", False))
+            cell_clip = float(self.desc.get("cell_clip", 0.0))
+
+            rng_state = self.rng.__getstate__()
+            self.rng = np.random.default_rng(self.seed)
+            if time_major:
+                input_tensor = self.rng.uniform(-1.0, 1.0, size=(time_steps, batch_size, input_size)).astype(np.float32)
+            else:
+                input_tensor = self.rng.uniform(-1.0, 1.0, size=(batch_size, time_steps, input_size)).astype(np.float32)
+            forget_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(np.float32)
+            input_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(np.float32)
+            cell_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(np.float32)
+            output_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(np.float32)
+            forget_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(np.float32)
+            input_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(np.float32)
+            cell_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(np.float32)
+            output_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(np.float32)
+            forget_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(np.float32)
+            input_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(np.float32)
+            cell_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(np.float32)
+            output_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(np.float32)
+            self.rng.__setstate__(rng_state)
+
+            output_ref = self._generate_lstm_expected_f32(
+                input_tensor,
+                forget_w_in,
+                input_w_in,
+                cell_w_in,
+                output_w_in,
+                forget_w_hidden,
+                input_w_hidden,
+                cell_w_hidden,
+                output_w_hidden,
+                forget_bias,
+                input_bias,
+                cell_bias,
+                output_bias,
+                batch_size=batch_size,
+                time_steps=time_steps,
+                input_size=input_size,
+                hidden_size=hidden_size,
+                time_major=time_major,
+                cell_clip=cell_clip,
+            )
+
+            builder = TemplateContextBuilder()
+            context = {
+                "name": name,
+                "prefix": name,
+                "time_major_literal": "1" if time_major else "0",
+                "batch_size": batch_size,
+                "time_steps": time_steps,
+                "input_size": input_size,
+                "hidden_size": hidden_size,
+                "cell_clip_literal": builder.format_float_literal(cell_clip),
+                "input_tensor_array": builder.format_array_as_c_literal(input_tensor),
+                "output_array": builder.format_array_as_c_literal(output_ref),
+                "forget_gate_input_weights_array": builder.format_array_as_c_literal(forget_w_in),
+                "input_gate_input_weights_array": builder.format_array_as_c_literal(input_w_in),
+                "cell_gate_input_weights_array": builder.format_array_as_c_literal(cell_w_in),
+                "output_gate_input_weights_array": builder.format_array_as_c_literal(output_w_in),
+                "forget_gate_hidden_weights_array": builder.format_array_as_c_literal(forget_w_hidden),
+                "input_gate_hidden_weights_array": builder.format_array_as_c_literal(input_w_hidden),
+                "cell_gate_hidden_weights_array": builder.format_array_as_c_literal(cell_w_hidden),
+                "output_gate_hidden_weights_array": builder.format_array_as_c_literal(output_w_hidden),
+                "forget_gate_bias_array": builder.format_array_as_c_literal(forget_bias),
+                "input_gate_bias_array": builder.format_array_as_c_literal(input_bias),
+                "cell_gate_bias_array": builder.format_array_as_c_literal(cell_bias),
+                "output_gate_bias_array": builder.format_array_as_c_literal(output_bias),
+                "cell_state_size": batch_size * hidden_size,
+                "dst_size": batch_size * time_steps * hidden_size,
+            }
+
+            self._write_op_outputs(
+                Path(output_dir),
+                "lstm_unidirectional",
+                "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.h.j2",
+                "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.c.j2",
+                context,
+                {
+                    "name": name,
+                    "operator": self.desc.get("operator", "LSTMUnidirectional"),
+                    "operator_name": "lstm_unidirectional",
+                },
+            )
+            return
+
         if not self.desc.get("hint", {}).get("force_cmsis", False):
             return
 

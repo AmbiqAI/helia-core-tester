@@ -29,8 +29,8 @@ static const {{ pool_params_type }} {{ name }}_pool_params = {
     .stride.h = {{ pool_params.stride_h }},
     .padding.w = {{ pool_params.pad_w }},
     .padding.h = {{ pool_params.pad_h }},
-    .activation.min = {{ pool_params.activation_min }}{% if float_kernel %}f{% endif %},
-    .activation.max = {{ pool_params.activation_max }}{% if float_kernel %}f{% endif %}
+    .activation.min = {% if float_kernel %}{{ pool_activation_min_literal }}{% else %}{{ pool_params.activation_min }}{% endif %},
+    .activation.max = {% if float_kernel %}{{ pool_activation_max_literal }}{% else %}{{ pool_params.activation_max }}{% endif %}
 };
 
 // Input data (for testing)

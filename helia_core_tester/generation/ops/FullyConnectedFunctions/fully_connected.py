@@ -349,6 +349,7 @@ class OpFullyConnected(OperationBase):
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_fc_kernel()
+        float_kernel = kernel_info["input_c_type"] == "float"
         
         # Load LiteRT model for shape and quantization extraction
         from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
@@ -464,8 +465,7 @@ class OpFullyConnected(OperationBase):
             if len(filter_shape) != 2:
                 raise ValueError(f"Unsupported filter shape: {filter_shape}")
             
-            # Ensure weights are int8
-            if weights.dtype != np.int8:
+            if not float_kernel and weights.dtype != np.int8:
                 weights = weights.astype(np.int8)
             
             # TFLite format: [output_units, input_features]
@@ -539,6 +539,86 @@ class OpFullyConnected(OperationBase):
             }
         else:
             output_dims = builder.nhwc_to_cmsis_dims(output_shape)
+        
+        float_kernel = kernel_info["input_c_type"] == "float"
+        if float_kernel:
+            if weights is not None and weights.dtype != np.float32:
+                weights = weights.astype(np.float32)
+            has_biases = biases is not None and biases.size > 0
+            if has_biases and biases.dtype != np.float32:
+                biases = biases.astype(np.float32)
+
+            fc_params = builder.build_fc_params(
+                self.desc,
+                input_quant,
+                weight_quant_dict,
+                output_quant,
+            )
+
+            input_data = self._sample_uniform(input_shape)
+            from helia_core_tester.generation.utils.litert_utils import run_inference_litert
+            output_data = run_inference_litert(str(tflite_path), input_data.astype(np.float32), subgraph_index=0)
+
+            weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
+            biases_array_str = builder.format_array_as_c_literal(biases) if has_biases else ""
+            input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=np.float32).flatten())
+            expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=np.float32).flatten())
+            buffer_size_max = max(
+                1024,
+                int((input_dims['n'] * input_dims['c'] + filter_dims['n'] * filter_dims['c'] + output_dims['n'] * output_dims['c']) * 4),
+            )
+
+            context = {
+                'name': name,
+                'prefix': name,
+                'input_dims': input_dims,
+                'filter_dims': filter_dims,
+                'output_dims': output_dims,
+                'fc_params': fc_params,
+                'weights_array': weights_array_str,
+                'biases_array': biases_array_str,
+                'has_biases': has_biases,
+                'input_data_array': input_data_array_str,
+                'expected_output_array': expected_output_array_str,
+                'input_dtype': kernel_info["input_c_type"],
+                'output_dtype': kernel_info["output_c_type"],
+                'weight_dtype': kernel_info.get("weight_c_type", kernel_info["input_c_type"]),
+                'bias_dtype': kernel_info["bias_c_type"],
+                'kernel_fn': kernel_info["kernel_fn"],
+                'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+                'call_style': kernel_info.get("call_style", "baseline"),
+                'buffer_size_max': buffer_size_max,
+                'weight_sum_array': "",
+                'has_weight_sum': False,
+                'float_kernel': True,
+                'fc_params_type': 'cmsis_nn_fc_params_f32',
+                'fc_activation_min_literal': builder.format_float_literal(fc_params['activation_min']),
+                'fc_activation_max_literal': builder.format_float_literal(fc_params['activation_max']),
+            }
+
+            includes_api_dir = output_dir / "includes"
+            includes_api_dir.mkdir(parents=True, exist_ok=True)
+            
+            h_content = self.render_template("FullyConnectedFunctions/fully_connected/fully_connected.h.j2", context)
+            h_path = includes_api_dir / f"{name}_fully_connected.h"
+            with open(h_path, 'w') as f:
+                f.write(h_content)
+            
+            c_content = self.render_template("FullyConnectedFunctions/fully_connected/fully_connected.c.j2", context)
+            c_path = output_dir / f"{name}_fully_connected.c"
+            with open(c_path, 'w') as f:
+                f.write(c_content)
+            
+            cmake_context = {
+                'name': name,
+                'operator': self.desc.get('operator', 'FullyConnected'),
+                'operator_name': 'fully_connected'
+            }
+            cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
+            cmake_path = output_dir / "CMakeLists.txt"
+            with open(cmake_path, 'w') as f:
+                f.write(cmake_content)
+            return
         
         # Get scales as arrays for per-channel computation
         input_scale = input_quant['scale']

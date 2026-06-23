@@ -31,12 +31,22 @@ int32_t {{ prefix }}_{{ name }}_run(
 ) {
     
     // Calculate required buffer size
+    {% if float_kernel %}
+    int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
+        &{{ name }}_dw_conv_params,
+        &{{ name }}_input_dims,
+        &{{ name }}_filter_dims,
+        &{{ name }}_output_dims,
+        {{ kernel_layout }}
+    );
+    {% else %}
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
         &{{ name }}_dw_conv_params,
         &{{ name }}_input_dims,
         &{{ name }}_filter_dims,
         &{{ name }}_output_dims
     );
+    {% endif %}
 
     if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
         return ARM_CMSIS_NN_ARG_ERROR;
@@ -72,6 +82,25 @@ int32_t {{ prefix }}_{{ name }}_run(
     {% endif %}
 
     // Call depthwise convolution kernel
+    {% if float_kernel %}
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        &{{ name }}_ctx,
+        &{{ name }}_dw_conv_params,
+        &{{ name }}_input_dims,
+        input,
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        &{{ name }}_bias_dims,
+        {% if has_biases %}
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        output,
+        {{ kernel_layout }}
+    );
+    {% else %}
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         &{{ name }}_ctx,
         {% if kernel_fn == 'arm_depthwise_conv_wrapper_s8' and has_weight_sum %}
@@ -96,6 +125,7 @@ int32_t {{ prefix }}_{{ name }}_run(
         &{{ name }}_output_dims,
         output
     );
+    {% endif %}
 
     return kernel_status;
 }

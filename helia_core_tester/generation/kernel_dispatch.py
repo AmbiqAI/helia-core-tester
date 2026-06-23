@@ -22,6 +22,18 @@ def resolve_convolve_kernel(activation_dtype: str, weight_dtype: str, cpu: str) 
     act = str(activation_dtype).upper()
     w = str(weight_dtype).upper()
 
+    if act == "FP32" and w == "FP32":
+        return {
+            "kernel_fn": "arm_convolve_f32",
+            "kernel_get_buffer_size_fn": "arm_convolve_f32_get_buffer_size",
+            "input_c_type": "float",
+            "output_c_type": "float",
+            "weight_c_type": "float",
+            "bias_c_type": "float",
+            "call_style": "baseline",
+            "layout": "ARM_NN_LAYOUT_NHWC",
+        }
+
     if w == "S4":
         if act != "S8":
             raise NotImplementedError(f"Unsupported Convolve dtype combo: {act} x {w}")
@@ -30,6 +42,7 @@ def resolve_convolve_kernel(activation_dtype: str, weight_dtype: str, cpu: str) 
             "kernel_get_buffer_size_fn": _cpu_buffer_api("arm_convolve_wrapper_s4_get_buffer_size", cpu),
             "input_c_type": "int8_t",
             "output_c_type": "int8_t",
+            "weight_c_type": "int8_t",
             "bias_c_type": "int32_t",
             "call_style": "m55" if get_cpu_profile(cpu).has_mve else "baseline",
         }
@@ -40,6 +53,7 @@ def resolve_convolve_kernel(activation_dtype: str, weight_dtype: str, cpu: str) 
             "kernel_get_buffer_size_fn": _cpu_buffer_api("arm_convolve_wrapper_s8_get_buffer_size", cpu),
             "input_c_type": "int8_t",
             "output_c_type": "int8_t",
+            "weight_c_type": "int8_t",
             "bias_c_type": "int32_t",
             "call_style": "m55" if get_cpu_profile(cpu).has_mve else "baseline",
         }
@@ -50,6 +64,7 @@ def resolve_convolve_kernel(activation_dtype: str, weight_dtype: str, cpu: str) 
             "kernel_get_buffer_size_fn": _cpu_buffer_api("arm_convolve_wrapper_s16_get_buffer_size", cpu),
             "input_c_type": "int16_t",
             "output_c_type": "int16_t",
+            "weight_c_type": "int8_t",
             "bias_c_type": "int64_t",
             "call_style": "m55" if get_cpu_profile(cpu).has_mve else "baseline",
         }
@@ -61,12 +76,25 @@ def resolve_depthwise_conv_kernel(activation_dtype: str, weight_dtype: str, cpu:
     act = str(activation_dtype).upper()
     w = str(weight_dtype).upper()
 
+    if act == "FP32" and w == "FP32":
+        return {
+            "kernel_fn": "arm_depthwise_conv_f32",
+            "kernel_get_buffer_size_fn": "arm_depthwise_conv_f32_get_buffer_size",
+            "input_c_type": "float",
+            "output_c_type": "float",
+            "weight_c_type": "float",
+            "bias_c_type": "float",
+            "call_style": "baseline",
+            "layout": "ARM_NN_LAYOUT_NHWC",
+        }
+
     if act == "S8" and w == "S4":
         return {
             "kernel_fn": "arm_depthwise_conv_wrapper_s4",
             "kernel_get_buffer_size_fn": _cpu_buffer_api("arm_depthwise_conv_wrapper_s4_get_buffer_size", cpu),
             "input_c_type": "int8_t",
             "output_c_type": "int8_t",
+            "weight_c_type": "int8_t",
             "bias_c_type": "int32_t",
             "call_style": "m55" if get_cpu_profile(cpu).has_mve else "baseline",
         }
@@ -77,6 +105,7 @@ def resolve_depthwise_conv_kernel(activation_dtype: str, weight_dtype: str, cpu:
             "kernel_get_buffer_size_fn": _cpu_buffer_api("arm_depthwise_conv_wrapper_s8_get_buffer_size", cpu),
             "input_c_type": "int8_t",
             "output_c_type": "int8_t",
+            "weight_c_type": "int8_t",
             "bias_c_type": "int32_t",
             "call_style": "m55" if get_cpu_profile(cpu).has_mve else "baseline",
         }
@@ -87,6 +116,7 @@ def resolve_depthwise_conv_kernel(activation_dtype: str, weight_dtype: str, cpu:
             "kernel_get_buffer_size_fn": _cpu_buffer_api("arm_depthwise_conv_wrapper_s16_get_buffer_size", cpu),
             "input_c_type": "int16_t",
             "output_c_type": "int16_t",
+            "weight_c_type": "int8_t",
             "bias_c_type": "int64_t",
             "call_style": "m55" if get_cpu_profile(cpu).has_mve else "baseline",
         }
@@ -97,6 +127,17 @@ def resolve_depthwise_conv_kernel(activation_dtype: str, weight_dtype: str, cpu:
 def resolve_fully_connected_kernel(activation_dtype: str, weight_dtype: str, cpu: str) -> Dict[str, str]:
     act = str(activation_dtype).upper()
     w = str(weight_dtype).upper()
+
+    if act == "FP32" and w == "FP32":
+        return {
+            "kernel_fn": "arm_fully_connected_f32",
+            "kernel_get_buffer_size_fn": "arm_fully_connected_f32_get_buffer_size",
+            "input_c_type": "float",
+            "output_c_type": "float",
+            "weight_c_type": "float",
+            "bias_c_type": "float",
+            "call_style": "baseline",
+        }
 
     if act == "S8" and w == "S4":
         return {

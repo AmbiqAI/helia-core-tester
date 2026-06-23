@@ -226,6 +226,9 @@ class PoolFamilyBase(OperationBase):
             'pool_params_type': 'cmsis_nn_pool_params_f32' if kernel_info["input_c_type"] == "float" else 'cmsis_nn_pool_params',
             'float_kernel': kernel_info["input_c_type"] == "float",
         }
+        if kernel_info["input_c_type"] == "float":
+            context["pool_activation_min_literal"] = builder.format_float_literal(pool_params["activation_min"])
+            context["pool_activation_max_literal"] = builder.format_float_literal(pool_params["activation_max"])
         
         cmake_context = {
             'name': name,

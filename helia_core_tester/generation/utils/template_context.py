@@ -370,6 +370,28 @@ class TemplateContextBuilder:
             return f"{float(value):.6f}f"
         return str(value)
 
+    @staticmethod
+    def format_float_literal(value: Any, suffix: str = "f") -> str:
+        """
+        Format a standalone floating-point scalar as a valid C literal.
+        """
+        numeric = float(value)
+        abs_numeric = abs(numeric)
+        use_scientific = abs_numeric >= 1.0e6 or (abs_numeric != 0.0 and abs_numeric < 1.0e-4)
+
+        if use_scientific:
+            mantissa, exponent = f"{numeric:.9e}".split("e")
+            mantissa = mantissa.rstrip("0").rstrip(".")
+            if "." not in mantissa:
+                mantissa += ".0"
+            literal = f"{mantissa}e{exponent}"
+        else:
+            literal = f"{numeric:.9f}".rstrip("0").rstrip(".")
+            if "." not in literal:
+                literal += ".0"
+
+        return f"{literal}{suffix}"
+
     
     @staticmethod
     def build_conv_params(
@@ -436,7 +458,13 @@ class TemplateContextBuilder:
 
         # Activation clamp defaults depend on activation dtype
         resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or {}
-        act_dtype = str(resolved_tensor_dtypes.get("input", desc.get('activation_dtype', 'S8'))).upper()
+        tensor_dtypes = desc.get("tensor_dtypes") or {}
+        act_dtype = str(
+            resolved_tensor_dtypes.get(
+                "input",
+                tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
+            )
+        ).upper()
         if act_dtype == 'FP32':
             activation_min = float(desc.get('activation_min', -1.0e30))
             activation_max = float(desc.get('activation_max', 1.0e30))
@@ -533,8 +561,18 @@ class TemplateContextBuilder:
             pad_w = 0
         
         # Activation clamp defaults depend on activation dtype
-        act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
-        if act_dtype == 'S16':
+        resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or {}
+        tensor_dtypes = desc.get("tensor_dtypes") or {}
+        act_dtype = str(
+            resolved_tensor_dtypes.get(
+                "input",
+                tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
+            )
+        ).upper()
+        if act_dtype == 'FP32':
+            activation_min = float(desc.get('activation_min', -1.0e30))
+            activation_max = float(desc.get('activation_max', 1.0e30))
+        elif act_dtype == 'S16':
             activation_min = int(desc.get('activation_min', -32768))
             activation_max = int(desc.get('activation_max', 32767))
         else:
@@ -560,8 +598,8 @@ class TemplateContextBuilder:
             'dilation_w': int(dil_w),
             'pad_h': int(pad_h),
             'pad_w': int(pad_w),
-            'activation_min': int(activation_min),
-            'activation_max': int(activation_max),
+            'activation_min': activation_min,
+            'activation_max': activation_max,
         }
 
     
@@ -771,8 +809,18 @@ class TemplateContextBuilder:
             pad_offset_w = 0
         
         # Activation clamp defaults depend on activation dtype
-        act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
-        if act_dtype == 'S16':
+        resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or {}
+        tensor_dtypes = desc.get("tensor_dtypes") or {}
+        act_dtype = str(
+            resolved_tensor_dtypes.get(
+                "input",
+                tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
+            )
+        ).upper()
+        if act_dtype == 'FP32':
+            activation_min = float(desc.get('activation_min', -1.0e30))
+            activation_max = float(desc.get('activation_max', 1.0e30))
+        elif act_dtype == 'S16':
             activation_min = int(desc.get('activation_min', -32768))
             activation_max = int(desc.get('activation_max', 32767))
         else:
@@ -793,8 +841,8 @@ class TemplateContextBuilder:
             'pad_w': int(pad_w),
             'pad_offset_h': int(pad_offset_h),
             'pad_offset_w': int(pad_offset_w),
-            'activation_min': int(activation_min),
-            'activation_max': int(activation_max),
+            'activation_min': activation_min,
+            'activation_max': activation_max,
         }
     
     @staticmethod
@@ -867,8 +915,18 @@ class TemplateContextBuilder:
         - Activation clamp defaults depend on activation dtype
         """
         # Activation clamp defaults depend on activation dtype
-        act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
-        if act_dtype == 'S16':
+        resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or {}
+        tensor_dtypes = desc.get("tensor_dtypes") or {}
+        act_dtype = str(
+            resolved_tensor_dtypes.get(
+                "input",
+                tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
+            )
+        ).upper()
+        if act_dtype == 'FP32':
+            activation_min = float(desc.get('activation_min', -1.0e30))
+            activation_max = float(desc.get('activation_max', 1.0e30))
+        elif act_dtype == 'S16':
             activation_min = int(desc.get('activation_min', -32768))
             activation_max = int(desc.get('activation_max', 32767))
         else:
@@ -895,7 +953,11 @@ class TemplateContextBuilder:
         
         # For S16 fully connected, CMSIS-NN requires offsets to be 0
         # (S16 quantization typically uses symmetric quantization with zero_point=0)
-        if act_dtype == 'S16':
+        if act_dtype == 'FP32':
+            input_offset = 0
+            filter_offset = 0
+            output_offset = 0
+        elif act_dtype == 'S16':
             input_offset = 0
             filter_offset = 0
             output_offset = 0
@@ -909,8 +971,8 @@ class TemplateContextBuilder:
             'input_offset': input_offset,
             'filter_offset': filter_offset,
             'output_offset': output_offset,
-            'activation_min': int(activation_min),
-            'activation_max': int(activation_max),
+            'activation_min': activation_min,
+            'activation_max': activation_max,
         }
     
     @staticmethod
@@ -989,21 +1051,31 @@ class TemplateContextBuilder:
             pad_w = 0
         
         # Activation clamp defaults depend on activation dtype
-        act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
-        if act_dtype == 'S16':
+        resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or {}
+        tensor_dtypes = desc.get("tensor_dtypes") or {}
+        act_dtype = str(
+            resolved_tensor_dtypes.get(
+                "input",
+                tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
+            )
+        ).upper()
+        if act_dtype == 'FP32':
+            activation_min = float(desc.get('activation_min', -1.0e30))
+            activation_max = float(desc.get('activation_max', 1.0e30))
+        elif act_dtype == 'S16':
             activation_min = int(desc.get('activation_min', -32768))
             activation_max = int(desc.get('activation_max', 32767))
         else:
             activation_min = int(desc.get('activation_min', -128))
             activation_max = int(desc.get('activation_max', 127))
-        
+
         return {
             'stride_h': int(stride_h),
             'stride_w': int(stride_w),
             'pad_h': int(pad_h),
             'pad_w': int(pad_w),
-            'activation_min': int(activation_min),
-            'activation_max': int(activation_max),
+            'activation_min': activation_min,
+            'activation_max': activation_max,
         }
     
     @staticmethod

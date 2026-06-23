@@ -19,6 +19,14 @@ int32_t {{ prefix }}_{{ name }}_run(
     {{ output_dtype }}* __restrict output
 ) {
     // Calculate required buffer size
+    {% if float_kernel %}
+    int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
+        &{{ name }}_bmm_params,
+        &{{ name }}_input_lhs_dims,
+        &{{ name }}_input_rhs_dims,
+        &{{ name }}_output_dims
+    );
+    {% else %}
     // For batch matmul, we use RHS dims as filter_dims for buffer size calculation
     // RHS shape: [batch, K, N] -> filter_dims: n=K, c=N, h=1, w=1
     cmsis_nn_dims filter_dims_for_buffer = {
@@ -29,6 +37,7 @@ int32_t {{ prefix }}_{{ name }}_run(
     };
     
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(&filter_dims_for_buffer);
+    {% endif %}
 
     if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
         return ARM_CMSIS_NN_ARG_ERROR;
@@ -39,6 +48,18 @@ int32_t {{ prefix }}_{{ name }}_run(
     {{ name }}_ctx.size = required_buffer_size;
 
     // Call batch matmul kernel
+    {% if float_kernel %}
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        &{{ name }}_ctx,
+        &{{ name }}_bmm_params,
+        &{{ name }}_input_lhs_dims,
+        input_lhs,
+        &{{ name }}_input_rhs_dims,
+        input_rhs,
+        &{{ name }}_output_dims,
+        output
+    );
+    {% else %}
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         &{{ name }}_ctx,
         &{{ name }}_bmm_params,
@@ -50,6 +71,7 @@ int32_t {{ prefix }}_{{ name }}_run(
         &{{ name }}_output_dims,
         output
     );
+    {% endif %}
     
     return kernel_status;
 }

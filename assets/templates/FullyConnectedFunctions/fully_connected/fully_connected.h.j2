@@ -31,13 +31,19 @@ static const cmsis_nn_dims {{ name }}_output_dims = {
 };
 
 // Fully connected parameters
-static const cmsis_nn_fc_params {{ name }}_fc_params = {
+static const {{ fc_params_type | default("cmsis_nn_fc_params") }} {{ name }}_fc_params = {
+{% if float_kernel %}
+    .activation = {.min = {{ fc_activation_min_literal }}, .max = {{ fc_activation_max_literal }}},
+    .weight_format = ARM_NN_WEIGHT_FORMAT_STANDARD
+{% else %}
     .input_offset = {{ fc_params.input_offset }},
     .filter_offset = {{ fc_params.filter_offset }},
     .output_offset = {{ fc_params.output_offset }},
     .activation = {.min = {{ fc_params.activation_min }}, .max = {{ fc_params.activation_max }}}
+{% endif %}
 };
 
+{% if not float_kernel %}
 // Quantization parameters
 {% if quant_params.per_channel %}
 // Per-channel quantization
@@ -63,9 +69,10 @@ static const cmsis_nn_per_tensor_quant_params {{ name }}_quant_params = {
     .shift = {{ quant_params.shift }}
 };
 {% endif %}
+{% endif %}
 
 // Weights
-static const int8_t {{ name }}_weights[] = {
+static const {{ weight_dtype | default("int8_t") }} {{ name }}_weights[] = {
 {{ weights_array }}
 };
 

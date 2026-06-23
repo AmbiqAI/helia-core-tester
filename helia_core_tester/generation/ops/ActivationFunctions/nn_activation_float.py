@@ -63,7 +63,7 @@ class OpNNActivationFloat(OperationBase):
             "input_data_array": builder.format_array_as_c_literal(input_data),
             "expected_output_array": builder.format_array_as_c_literal(output_data),
             "activation_symbol": self._activation_symbol(),
-            "act_param": float(self.desc.get("act_param", 0.0)),
+            "act_param_literal": builder.format_float_literal(self.desc.get("act_param", 0.0)),
             "input_dtype": "float",
             "output_dtype": "float",
             "kernel_fn": "arm_nn_activation_f32",

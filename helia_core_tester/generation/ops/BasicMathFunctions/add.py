@@ -142,6 +142,8 @@ class OpAdd(BinaryBasicMathBase):
             output_data = np.array(interpreter.get_tensor(output_details[0]['index']), dtype=np.float32)
             activation_min = float(self.desc.get("act_min", -1.0e30))
             activation_max = float(self.desc.get("act_max", 1.0e30))
+            activation_min_literal = builder.format_float_literal(activation_min)
+            activation_max_literal = builder.format_float_literal(activation_max)
             mult1 = shift1 = mult2 = shift2 = output_mult = output_shift = left_shift = 0
             input1_zp = input2_zp = output_zp = 0
         else:
@@ -241,6 +243,9 @@ class OpAdd(BinaryBasicMathBase):
             'kernel_fn': kernel_info["kernel_fn"],
             'float_kernel': kernel_info["float_kernel"],
         }
+        if kernel_info["float_kernel"]:
+            context["out_activation_min_literal"] = activation_min_literal
+            context["out_activation_max_literal"] = activation_max_literal
         
         cmake_context = {
             'name': name,
