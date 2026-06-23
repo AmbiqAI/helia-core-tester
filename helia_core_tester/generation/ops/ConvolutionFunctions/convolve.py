@@ -198,16 +198,38 @@ class OpConvolve(OperationBase):
 
         # Load LiteRT model for tensor extraction
         from helia_core_tester.generation.utils.litert_utils import (
-            load_litert_model, get_operator_tensors_from_litert
+            load_litert_model,
+            get_operator_tensors_from_litert,
+            get_tensor_shape_from_litert,
+            get_tensor_quantization_from_litert,
         )
         
         model, subgraph = load_litert_model(str(tflite_path))
         
-        # Get operator tensors (first operator)
+        # Get operator tensors from the actual CONV_2D op.
+        # Dilated graphs can be lowered as SpaceToBatch -> Conv2D -> BatchToSpace,
+        # so selecting op index 0 can bind to the wrong tensors.
         if len(subgraph.operators) == 0:
             raise ValueError("No operators found in model")
         
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
+        conv_op_index = 0
+        bts_op_index = None
+        try:
+            from ai_edge_litert import schema_py_generated as litert
+
+            found_conv = False
+            for i, op in enumerate(subgraph.operators):
+                opcode = model.operatorCodes[op.opcodeIndex]
+                if not found_conv and opcode.builtinCode == litert.BuiltinOperator.CONV_2D:
+                    conv_op_index = i
+                    found_conv = True
+                if opcode.builtinCode == litert.BuiltinOperator.BATCH_TO_SPACE_ND:
+                    bts_op_index = i
+        except Exception:
+            conv_op_index = 0
+            bts_op_index = None
+
+        op_tensors = get_operator_tensors_from_litert(model, subgraph, conv_op_index)
         
         # Extract shapes from LiteRT
         if not op_tensors['inputs']:
@@ -215,12 +237,47 @@ class OpConvolve(OperationBase):
         if not op_tensors['outputs']:
             raise ValueError("No output tensors found")
         
-        input_shape = op_tensors['inputs'][0]['shape']
-        output_shape = op_tensors['outputs'][0]['shape']
+        input_tensor = None
+        output_tensor = None
+        if subgraph.inputs is not None and len(subgraph.inputs) > 0:
+            input_tensor = subgraph.tensors[int(subgraph.inputs[0])]
+        if subgraph.outputs is not None and len(subgraph.outputs) > 0:
+            output_tensor = subgraph.tensors[int(subgraph.outputs[0])]
+
+        expected_tensor = None
+        if bts_op_index is not None:
+            bts_outs = subgraph.operators[bts_op_index].outputs
+            if bts_outs is not None and len(bts_outs) > 0:
+                expected_tensor = subgraph.tensors[int(bts_outs[0])]
+
+        input_shape = get_tensor_shape_from_litert(input_tensor) if input_tensor is not None else None
+        output_shape = (
+            get_tensor_shape_from_litert(expected_tensor)
+            if expected_tensor is not None
+            else (get_tensor_shape_from_litert(output_tensor) if output_tensor is not None else None)
+        )
+        if input_shape is None:
+            input_shape = op_tensors['inputs'][0]['shape']
+        if output_shape is None:
+            output_shape = op_tensors['outputs'][0]['shape']
+
+        input_shape = tuple(input_shape)
+        output_shape = tuple(output_shape)
         
         # Extract quantization parameters from LiteRT
-        input_quant = op_tensors['inputs'][0]['quantization']
-        output_quant = op_tensors['outputs'][0]['quantization']
+        if expected_tensor is not None:
+            input_quant = (
+                get_tensor_quantization_from_litert(input_tensor)
+                if input_tensor is not None
+                else op_tensors['inputs'][0]['quantization']
+            )
+            output_quant = get_tensor_quantization_from_litert(expected_tensor)
+        elif input_tensor is not None and output_tensor is not None:
+            input_quant = get_tensor_quantization_from_litert(input_tensor)
+            output_quant = get_tensor_quantization_from_litert(output_tensor)
+        else:
+            input_quant = op_tensors['inputs'][0]['quantization']
+            output_quant = op_tensors['outputs'][0]['quantization']
         
         # Find weight quantization (from weight tensor in inputs)
         weight_quant = None
@@ -307,13 +364,13 @@ class OpConvolve(OperationBase):
                 input_scale = float(input_scale[0])
             else:
                 input_scale = float(input_scale)
-            
+
             output_scale = output_quant.get('scale', 1.0)
             if isinstance(output_scale, (list, np.ndarray)):
                 output_scale = float(output_scale[0])
             else:
                 output_scale = float(output_scale)
-            
+
             weight_scale = weight_quant.get('scale', 1.0)
             per_channel = bool(weight_quant.get('per_channel', False))
             

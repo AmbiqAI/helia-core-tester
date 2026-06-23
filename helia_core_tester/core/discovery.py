@@ -140,7 +140,12 @@ def find_descriptors_dir(repo_root: Optional[Path] = None) -> Path:
     return descriptors_dir
 
 
-def find_generated_tests_dir(repo_root: Optional[Path] = None, cpu: str = "cortex-m55", create: bool = True) -> Path:
+def find_generated_tests_dir(
+    repo_root: Optional[Path] = None,
+    cpu: str = "cortex-m55",
+    suite: str = "int",
+    create: bool = True,
+) -> Path:
     """
     Find or create the generated tests directory for a CPU.
     
@@ -155,7 +160,7 @@ def find_generated_tests_dir(repo_root: Optional[Path] = None, cpu: str = "corte
         RepoRootNotFoundError: If repo root cannot be found
     """
     repo_root = _resolve_repo_root(repo_root)
-    generated_tests_dir = canonical_generated_tests_dir(repo_root, cpu)
+    generated_tests_dir = canonical_generated_tests_dir(repo_root, cpu, suite=suite)
     
     if create and not generated_tests_dir.exists():
         generated_tests_dir.mkdir(parents=True, exist_ok=True)
@@ -177,10 +182,10 @@ def find_tester_templates_dir(repo_root: Optional[Path] = None) -> Path:
     return repo_root / "assets" / "templates"
 
 
-def find_build_dir(cpu: str, repo_root: Optional[Path] = None) -> Path:
+def find_build_dir(cpu: str, repo_root: Optional[Path] = None, suite: str = "int") -> Path:
     """Return build directory for a CPU under artifacts."""
     repo_root = _resolve_repo_root(repo_root)
-    return canonical_build_dir(repo_root, cpu, compiler_tag="gcc")
+    return canonical_build_dir(repo_root, cpu, compiler_tag="gcc", suite=suite)
 
 
 def find_fvp_script_path(repo_root: Optional[Path] = None) -> Path:

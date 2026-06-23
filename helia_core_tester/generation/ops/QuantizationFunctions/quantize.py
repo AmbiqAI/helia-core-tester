@@ -84,16 +84,27 @@ class OpQuantize(QuantizationFamilyBase):
 
     def _extract_per_tensor_output_quantization(self, output_qp: dict) -> tuple[float, int]:
         """Return per-tensor output quantization from LiteRT metadata."""
-        if output_qp:
-            scales = output_qp.get("scales", [1.0])
-            zero_points = output_qp.get("zero_points", [0])
-            if isinstance(scales, (list, tuple, np.ndarray)) and len(scales) == 0:
-                raise ValueError("Quantize output quantization metadata missing per-tensor scale")
-            if isinstance(zero_points, (list, tuple, np.ndarray)) and len(zero_points) == 0:
-                raise ValueError("Quantize output quantization metadata missing per-tensor zero point")
+        output_scale = 1.0
+        output_zp = 0
 
-        output_scale = float(self._quant_param_scalar(output_qp, "scales", 1.0))
-        output_zp = int(self._quant_param_scalar(output_qp, "zero_points", 0))
+        if output_qp:
+            scales = output_qp.get("scales", None)
+            zero_points = output_qp.get("zero_points", None)
+
+            # Some LiteRT paths emit empty quant metadata for identity-style models.
+            # Fall back to safe defaults so codegen can proceed.
+            if isinstance(scales, (list, tuple, np.ndarray)):
+                if len(scales) > 0:
+                    output_scale = float(scales[0])
+            elif scales is not None:
+                output_scale = float(scales)
+
+            if isinstance(zero_points, (list, tuple, np.ndarray)):
+                if len(zero_points) > 0:
+                    output_zp = int(zero_points[0])
+            elif zero_points is not None:
+                output_zp = int(zero_points)
+
         return output_scale, output_zp
     
     def generate_c_files(self, output_dir: Path) -> None:

@@ -137,6 +137,21 @@ def resolve_fully_connected_kernel(activation_dtype: str, weight_dtype: str, cpu
             "weight_c_type": "float",
             "bias_c_type": "float",
             "call_style": "baseline",
+            "fc_params_type": "cmsis_nn_fc_params_f32",
+            "layout": "ARM_NN_LAYOUT_NHWC",
+        }
+
+    if act == "FP16" and w == "FP16":
+        return {
+            "kernel_fn": "arm_fully_connected_f16",
+            "kernel_get_buffer_size_fn": "arm_fully_connected_f16_get_buffer_size",
+            "input_c_type": "float16_t",
+            "output_c_type": "float16_t",
+            "weight_c_type": "float16_t",
+            "bias_c_type": "float16_t",
+            "call_style": "baseline",
+            "fc_params_type": "cmsis_nn_fc_params_f16",
+            "layout": "ARM_NN_LAYOUT_NHWC",
         }
 
     if act == "S8" and w == "S4":

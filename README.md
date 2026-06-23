@@ -26,21 +26,42 @@ Removed interfaces:
 - `--skip-runners`
 - `--regen-generated-tests-after-cleanup`
 - report-dir override flags
+- `--include-float` (replaced by `--suite float` or `--suite both`)
+
+## Suite-Based Runs
+
+Run integer-only (default):
+
+```bash
+uv run helia_core_tester full --cpu cortex-m0,cortex-m4,cortex-m55 --suite int
+```
+
+Run float-only:
+
+```bash
+uv run helia_core_tester full --cpu cortex-m4,cortex-m55 --suite float --float-precision both
+```
+
+Run both suites as separate flows:
+
+```bash
+uv run helia_core_tester full --cpu cortex-m0,cortex-m4,cortex-m55 --suite both
+```
 
 ## Canonical Artifacts
 
 Generated tests:
-- `artifacts/generated_tests/<cpu>/manifest.json`
-- `artifacts/generated_tests/<cpu>/tests.cmake`
-- `artifacts/generated_tests/<cpu>/<Family>/<descriptor_name>/...`
+- `artifacts/generated_tests/<suite>/<cpu>/manifest.json`
+- `artifacts/generated_tests/<suite>/<cpu>/tests.cmake`
+- `artifacts/generated_tests/<suite>/<cpu>/<Family>/<descriptor_name>/...`
 
 Build outputs:
-- `artifacts/build-<cpu>-<compiler>/tests/<Family>/<descriptor_name>.elf`
+- `artifacts/build-<suite>-<cpu>-<compiler>/tests/<Family>/<descriptor_name>.elf`
 
 Reports:
-- generation: `artifacts/reports/generation/<cpu>/`
-- test execution: `artifacts/reports/tests/<cpu>/`
-- per-CPU coverage: `artifacts/reports/coverage/<cpu>/`
+- generation: `artifacts/reports/generation/<suite>/<cpu>/`
+- test execution: `artifacts/reports/tests/<suite>/<cpu>/`
+- per-suite CPU coverage: `artifacts/reports/coverage/<suite>/<cpu>/`
 - merged coverage: `artifacts/reports/coverage/merged/`
 
 Generation report files (always emitted):
@@ -84,7 +105,7 @@ Generated LiteRT-only ops should route through `build_<op>_op()` and resolve ten
 ## Coverage Merge
 
 ```bash
-uv run helia_core_tester coverage-merge --cpu cortex-m0,cortex-m4,cortex-m55
+uv run helia_core_tester coverage-merge --cpu cortex-m0,cortex-m4,cortex-m55 --suite both
 ```
 
 Outputs:
@@ -94,7 +115,8 @@ Outputs:
 - `artifacts/reports/coverage/merged/index.html`
 
 Behavior:
-- merge is strict and fails if any requested CPU `coverage.info` input is missing.
+- for a single suite (`--suite int` or `--suite float`), merge is strict and fails if any requested CPU input is missing.
+- for `--suite both`, merge requires at least one suite input per requested CPU and reports suite-specific missing inputs.
 
 ## Clean Contract
 

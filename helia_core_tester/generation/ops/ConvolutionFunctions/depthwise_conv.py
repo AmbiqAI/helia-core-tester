@@ -748,13 +748,13 @@ class OpDepthwiseConv(OperationBase):
             input_scale = float(input_scale[0])
         else:
             input_scale = float(input_scale)
-        
+
         output_scale = output_quant.get('scale', 1.0)
         if isinstance(output_scale, (list, np.ndarray)):
             output_scale = float(output_scale[0])
         else:
             output_scale = float(output_scale)
-        
+
         weight_scale = weight_quant.get('scale', 1.0)
         per_channel = bool(weight_quant.get('per_channel', False))
         

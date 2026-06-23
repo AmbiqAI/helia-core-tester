@@ -54,10 +54,10 @@ def _write_test_report(path: Path, *, cpu: str, total: int, passed: int, failed:
     path.write_text(json.dumps(payload, indent=2))
 
 
-def _setup_cpu_artifacts(root: Path, cpu: str, sf_suffix: str, counts: dict) -> None:
+def _setup_cpu_artifacts(root: Path, cpu: str, sf_suffix: str, counts: dict, suite: str = "int") -> None:
     reports_dir = root / "artifacts" / "reports"
-    coverage_info = reports_dir / "coverage" / cpu / "coverage.info"
-    tests_dir = reports_dir / "tests" / cpu
+    coverage_info = reports_dir / "coverage" / suite / cpu / "coverage.info"
+    tests_dir = reports_dir / "tests" / suite / cpu
     sf = str(root / "Source" / sf_suffix)
     _write_lcov(
         coverage_info,
@@ -185,10 +185,10 @@ def test_build_rows_and_table_with_union_totals_and_status_formulas(tmp_path: Pa
 
 def test_generic_test_report_name_fallback(tmp_path: Path) -> None:
     cpu = "cortex-m0"
-    tests_dir = tmp_path / "artifacts" / "reports" / "tests" / cpu
+    tests_dir = tmp_path / "artifacts" / "reports" / "tests" / "int" / cpu
 
     _write_lcov(
-        tmp_path / "artifacts" / "reports" / "coverage" / cpu / "coverage.info",
+        tmp_path / "artifacts" / "reports" / "coverage" / "int" / cpu / "coverage.info",
         sf=str(tmp_path / "Source" / "Nested" / "n.c"),
         da=[(1, 1)],
         fns=[(1, "nested_fn", 1)],
@@ -221,3 +221,96 @@ def test_main_fails_fast_when_missing_inputs(tmp_path: Path, capsys: pytest.Capt
     err = capsys.readouterr().err
     assert "error:" in err
     assert "coverage.info not found" in err
+
+
+def test_build_rows_includes_float_variations_for_m4_and_m55(tmp_path: Path) -> None:
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m0",
+        "ActivationFunctions/int_m0.c",
+        {
+            "da": [(1, 1)],
+            "fns": [(1, "fn_int_m0", 1)],
+            "branches": [(1, "0", "0", "1")],
+            "total_tests": 2,
+            "passed": 2,
+            "failed": 0,
+            "skipped": 0,
+        },
+        suite="int",
+    )
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m4",
+        "ActivationFunctions/int_m4.c",
+        {
+            "da": [(10, 1)],
+            "fns": [(10, "fn_int_m4", 1)],
+            "branches": [(10, "1", "0", "1")],
+            "total_tests": 3,
+            "passed": 3,
+            "failed": 0,
+            "skipped": 0,
+        },
+        suite="int",
+    )
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m4",
+        "ActivationFunctions/float_m4_f32.c",
+        {
+            "da": [(20, 1)],
+            "fns": [(20, "fn_float_m4", 1)],
+            "branches": [(20, "2", "0", "1")],
+            "total_tests": 4,
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+        },
+        suite="float",
+    )
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m55",
+        "ActivationFunctions/int_m55.c",
+        {
+            "da": [(30, 1)],
+            "fns": [(30, "fn_int_m55", 1)],
+            "branches": [(30, "3", "0", "1")],
+            "total_tests": 5,
+            "passed": 5,
+            "failed": 0,
+            "skipped": 0,
+        },
+        suite="int",
+    )
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m55",
+        "ActivationFunctions/float_m55_f16.c",
+        {
+            "da": [(40, 1)],
+            "fns": [(40, "fn_float_m55_f16", 1)],
+            "branches": [(40, "4", "0", "1")],
+            "total_tests": 6,
+            "passed": 6,
+            "failed": 0,
+            "skipped": 0,
+        },
+        suite="float",
+    )
+
+    rows, total = build_rows(
+        tmp_path / "artifacts",
+        ["cortex-m0", "cortex-m4", "cortex-m55"],
+        suites=["int", "float"],
+    )
+
+    m4 = next(r for r in rows if r["cpu"] == "cortex-m4")
+    m55 = next(r for r in rows if r["cpu"] == "cortex-m55")
+
+    assert m4["coverage"]["lf"] == 2
+    assert m55["coverage"]["lf"] == 2
+    assert m4["tests"]["number_of_tests"] == 7
+    assert m55["tests"]["number_of_tests"] == 11
+    assert total["tests"]["number_of_tests"] == 20

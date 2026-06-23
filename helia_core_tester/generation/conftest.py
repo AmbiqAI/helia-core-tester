@@ -29,18 +29,21 @@ def pytest_addoption(parser):
                     help="Target CPU for code generation")
     parser.addoption("--generated-tests-dir", action="store", default=None,
                     help="Override generated tests output directory")
-    parser.addoption("--include-float", action="store_true", default=False,
-                    help="Include float descriptor suite")
+    parser.addoption("--suite", action="store", default="int",
+                    help="Suite selection: int or float")
+    parser.addoption("--float-precision", action="store", default="both",
+                    help="Float precision for float suite: f16, f32, or both")
 
 
 def pytest_configure(config):
     """Configure pytest with custom options."""
     generated_override = config.getoption("--generated-tests-dir")
     target_cpu = config.getoption("--cpu") or "cortex-m55"
+    target_suite = config.getoption("--suite") or "int"
     generated_tests_dir = (
         Path(generated_override).resolve()
         if generated_override
-        else find_generated_tests_dir(cpu=target_cpu, create=False)
+        else find_generated_tests_dir(cpu=target_cpu, suite=target_suite, create=False)
     )
 
     # Clean generated tests directory before running
@@ -80,6 +83,7 @@ def test_filters(request):
         'limit': request.config.getoption("--limit"),
         'seed': request.config.getoption("--seed"),
         'cpu': request.config.getoption("--cpu"),
+        'suite': request.config.getoption("--suite"),
+        'float_precision': request.config.getoption("--float-precision"),
         'generated_tests_dir': request.config.getoption("--generated-tests-dir"),
-        'include_float': request.config.getoption("--include-float"),
     }

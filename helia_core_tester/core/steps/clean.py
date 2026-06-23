@@ -32,12 +32,13 @@ class CleanStep(StepBase):
     def _targets(self) -> list:
         targets = []
         art_root = artifacts_root(self.config.project_root)
-        for cpu in self.config.cpus:
-            targets.append(self.config.generated_tests_dir_for(cpu))
-            targets.append(generation_report_dir(self.config.project_root, cpu))
-            targets.append(tests_report_dir(self.config.project_root, cpu))
-            targets.append(coverage_report_dir(self.config.project_root, cpu))
-            targets.extend(sorted(p for p in art_root.glob(f"build-{cpu}-*") if p.is_dir()))
+        for suite in self.config.suites:
+            for cpu in self.config.cpus:
+                targets.append(self.config.generated_tests_dir_for(cpu, suite=suite))
+                targets.append(generation_report_dir(self.config.project_root, cpu, suite=suite))
+                targets.append(tests_report_dir(self.config.project_root, cpu, suite=suite))
+                targets.append(coverage_report_dir(self.config.project_root, cpu, suite=suite))
+                targets.extend(sorted(p for p in art_root.glob(f"build-{suite}-{cpu}-*") if p.is_dir()))
         return targets
 
     def _do_execute(self) -> StepResult:

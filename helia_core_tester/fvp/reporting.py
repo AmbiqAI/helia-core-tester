@@ -21,16 +21,17 @@ from .env import REPO_ROOT, get_git_sha
 from .runner import ProcessSupervisor, run_elf_jobs_with_reporting
 
 
-def resolve_generated_tests_dir(source_dir: Path, cpu: str) -> Path:
-    return canonical_generated_tests_dir(source_dir, cpu)
+def resolve_generated_tests_dir(source_dir: Path, cpu: str, suite: str) -> Path:
+    return canonical_generated_tests_dir(source_dir, cpu, suite=suite)
 
 
-def _tests_report_dir(cpu: str) -> Path:
-    return canonical_tests_report_dir(REPO_ROOT, cpu)
+def _tests_report_dir(cpu: str, suite: str) -> Path:
+    return canonical_tests_report_dir(REPO_ROOT, cpu, suite=suite)
 
 
 def run_tests_with_reporting(
     cpus: List[str],
+    suite: str,
     source_dir: Path,
     toolchain_file: Path,
     cmsis5: Path,
@@ -50,10 +51,10 @@ def run_tests_with_reporting(
     for cpu in cpus:
         cpu_start_time = datetime.now()
         if verbosity >= 1:
-            print(f"\nTarget: {cpu} ({compiler_tag})")
-        build_dir = canonical_build_dir(REPO_ROOT, cpu, compiler_tag)
-        cpu_generated_tests_dir = resolve_generated_tests_dir(source_dir, cpu)
-        cpu_tests_report_dir = _tests_report_dir(cpu)
+            print(f"\nTarget: {cpu} ({compiler_tag}, suite={suite})")
+        build_dir = canonical_build_dir(REPO_ROOT, cpu, compiler_tag, suite=suite)
+        cpu_generated_tests_dir = resolve_generated_tests_dir(source_dir, cpu, suite=suite)
+        cpu_tests_report_dir = _tests_report_dir(cpu, suite=suite)
         coverage_ctx = new_coverage_context(build_dir, getattr(args, "_gcov_tool", None)) if args.coverage else None
 
         if cpu_tests_report_dir.exists():
@@ -187,6 +188,7 @@ def run_tests_with_reporting(
 
         metadata = {
             "cpu": cpu,
+            "suite": suite,
             "optimization": args.opt,
             "compiler": compiler_tag,
             "toolchain_file": str(toolchain_file),
@@ -226,6 +228,6 @@ def run_tests_with_reporting(
         if any_fail and args.fail_fast:
             break
 
-    generate_coverage_reports(cpus, args, env, source_dir, compiler_tag, verbosity)
+    generate_coverage_reports(cpus, suite, args, env, source_dir, compiler_tag, verbosity)
     all_results = sorted(all_results, key=lambda item: (item.cpu, item.test_name))
     return all_results, not any_fail

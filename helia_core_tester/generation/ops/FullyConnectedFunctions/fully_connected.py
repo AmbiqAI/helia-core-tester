@@ -349,7 +349,7 @@ class OpFullyConnected(OperationBase):
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_fc_kernel()
-        float_kernel = kernel_info["input_c_type"] == "float"
+        float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
         
         # Load LiteRT model for shape and quantization extraction
         from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
@@ -540,13 +540,14 @@ class OpFullyConnected(OperationBase):
         else:
             output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         
-        float_kernel = kernel_info["input_c_type"] == "float"
+        float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
         if float_kernel:
-            if weights is not None and weights.dtype != np.float32:
-                weights = weights.astype(np.float32)
+            float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+            if weights is not None and weights.dtype != float_dtype:
+                weights = weights.astype(float_dtype)
             has_biases = biases is not None and biases.size > 0
-            if has_biases and biases.dtype != np.float32:
-                biases = biases.astype(np.float32)
+            if has_biases and biases.dtype != float_dtype:
+                biases = biases.astype(float_dtype)
 
             fc_params = builder.build_fc_params(
                 self.desc,
@@ -555,14 +556,14 @@ class OpFullyConnected(OperationBase):
                 output_quant,
             )
 
-            input_data = self._sample_uniform(input_shape)
+            input_data = np.asarray(self._sample_uniform(input_shape), dtype=float_dtype)
             from helia_core_tester.generation.utils.litert_utils import run_inference_litert
-            output_data = run_inference_litert(str(tflite_path), input_data.astype(np.float32), subgraph_index=0)
+            output_data = run_inference_litert(str(tflite_path), input_data, subgraph_index=0)
 
             weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
             biases_array_str = builder.format_array_as_c_literal(biases) if has_biases else ""
-            input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=np.float32).flatten())
-            expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=np.float32).flatten())
+            input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=float_dtype).flatten())
+            expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=float_dtype).flatten())
             buffer_size_max = max(
                 1024,
                 int((input_dims['n'] * input_dims['c'] + filter_dims['n'] * filter_dims['c'] + output_dims['n'] * output_dims['c']) * 4),
@@ -591,7 +592,8 @@ class OpFullyConnected(OperationBase):
                 'weight_sum_array': "",
                 'has_weight_sum': False,
                 'float_kernel': True,
-                'fc_params_type': 'cmsis_nn_fc_params_f32',
+                'fc_params_type': kernel_info.get("fc_params_type", 'cmsis_nn_fc_params_f32'),
+                'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
                 'fc_activation_min_literal': builder.format_float_literal(fc_params['activation_min']),
                 'fc_activation_max_literal': builder.format_float_literal(fc_params['activation_max']),
             }

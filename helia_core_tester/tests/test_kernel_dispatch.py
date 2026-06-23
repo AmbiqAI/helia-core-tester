@@ -37,3 +37,18 @@ def test_fully_connected_dispatch_uses_cpu_specific_buffer_api():
 
     assert m55["kernel_get_buffer_size_fn"].endswith("_mve")
     assert m0["kernel_get_buffer_size_fn"] == "arm_fully_connected_s8_get_buffer_size"
+
+
+def test_fully_connected_float_dispatch_exposes_layout_and_params_type():
+    f32 = resolve_fully_connected_kernel("FP32", "FP32", "cortex-m55")
+    f16 = resolve_fully_connected_kernel("FP16", "FP16", "cortex-m55")
+
+    assert f32["kernel_fn"] == "arm_fully_connected_f32"
+    assert f32["kernel_get_buffer_size_fn"] == "arm_fully_connected_f32_get_buffer_size"
+    assert f32["layout"] == "ARM_NN_LAYOUT_NHWC"
+    assert f32["fc_params_type"] == "cmsis_nn_fc_params_f32"
+
+    assert f16["kernel_fn"] == "arm_fully_connected_f16"
+    assert f16["kernel_get_buffer_size_fn"] == "arm_fully_connected_f16_get_buffer_size"
+    assert f16["layout"] == "ARM_NN_LAYOUT_NHWC"
+    assert f16["fc_params_type"] == "cmsis_nn_fc_params_f16"

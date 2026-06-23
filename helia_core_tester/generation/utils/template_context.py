@@ -7,7 +7,6 @@ import numpy as np
 from pathlib import PurePosixPath
 from typing import Dict, Any, List, Tuple
 
-
 class TemplateContextBuilder:
     """
     Builds context dictionaries for Jinja templates.
@@ -457,26 +456,22 @@ class TemplateContextBuilder:
             pad_w = 0
 
         # Activation clamp defaults depend on activation dtype
-        resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or {}
-        tensor_dtypes = desc.get("tensor_dtypes") or {}
-        act_dtype = str(
-            resolved_tensor_dtypes.get(
-                "input",
-                tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
-            )
-        ).upper()
+        act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
         if act_dtype == 'FP32':
             activation_min = float(desc.get('activation_min', -1.0e30))
             activation_max = float(desc.get('activation_max', 1.0e30))
+            in_zp = 0
+            out_zp = 0
         elif act_dtype == 'S16':
             activation_min = int(desc.get('activation_min', -32768))
             activation_max = int(desc.get('activation_max', 32767))
+            in_zp = int(input_quant.get('zero_point', 0))
+            out_zp = int(output_quant.get('zero_point', 0))
         else:
             activation_min = int(desc.get('activation_min', -128))
             activation_max = int(desc.get('activation_max', 127))
-
-        in_zp = int(input_quant.get('zero_point', 0))
-        out_zp = int(output_quant.get('zero_point', 0))
+            in_zp = int(input_quant.get('zero_point', 0))
+            out_zp = int(output_quant.get('zero_point', 0))
 
         return {
             # CMSIS-NN convention: input_offset = -input_zero_point
@@ -488,8 +483,8 @@ class TemplateContextBuilder:
             'dilation_w': int(dil_w),
             'pad_h': int(pad_h),
             'pad_w': int(pad_w),
-            'activation_min': activation_min,
-            'activation_max': activation_max,
+            'activation_min': int(activation_min) if act_dtype != 'FP32' else activation_min,
+            'activation_max': int(activation_max) if act_dtype != 'FP32' else activation_max,
         }
     
     @staticmethod
@@ -561,26 +556,22 @@ class TemplateContextBuilder:
             pad_w = 0
         
         # Activation clamp defaults depend on activation dtype
-        resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or {}
-        tensor_dtypes = desc.get("tensor_dtypes") or {}
-        act_dtype = str(
-            resolved_tensor_dtypes.get(
-                "input",
-                tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
-            )
-        ).upper()
+        act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
         if act_dtype == 'FP32':
             activation_min = float(desc.get('activation_min', -1.0e30))
             activation_max = float(desc.get('activation_max', 1.0e30))
+            in_zp = 0
+            out_zp = 0
         elif act_dtype == 'S16':
             activation_min = int(desc.get('activation_min', -32768))
             activation_max = int(desc.get('activation_max', 32767))
+            in_zp = int(input_quant.get('zero_point', 0))
+            out_zp = int(output_quant.get('zero_point', 0))
         else:
             activation_min = int(desc.get('activation_min', -128))
             activation_max = int(desc.get('activation_max', 127))
-        
-        in_zp = int(input_quant.get('zero_point', 0))
-        out_zp = int(output_quant.get('zero_point', 0))
+            in_zp = int(input_quant.get('zero_point', 0))
+            out_zp = int(output_quant.get('zero_point', 0))
         
         # Calculate channel multiplier: output_channels / input_channels
         ch_mult = out_c // in_c if in_c > 0 else 1
@@ -598,8 +589,8 @@ class TemplateContextBuilder:
             'dilation_w': int(dil_w),
             'pad_h': int(pad_h),
             'pad_w': int(pad_w),
-            'activation_min': activation_min,
-            'activation_max': activation_max,
+            'activation_min': int(activation_min) if act_dtype != 'FP32' else activation_min,
+            'activation_max': int(activation_max) if act_dtype != 'FP32' else activation_max,
         }
 
     
@@ -809,26 +800,22 @@ class TemplateContextBuilder:
             pad_offset_w = 0
         
         # Activation clamp defaults depend on activation dtype
-        resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or {}
-        tensor_dtypes = desc.get("tensor_dtypes") or {}
-        act_dtype = str(
-            resolved_tensor_dtypes.get(
-                "input",
-                tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
-            )
-        ).upper()
+        act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
         if act_dtype == 'FP32':
             activation_min = float(desc.get('activation_min', -1.0e30))
             activation_max = float(desc.get('activation_max', 1.0e30))
+            in_zp = 0
+            out_zp = 0
         elif act_dtype == 'S16':
             activation_min = int(desc.get('activation_min', -32768))
             activation_max = int(desc.get('activation_max', 32767))
+            in_zp = int(input_quant.get('zero_point', 0))
+            out_zp = int(output_quant.get('zero_point', 0))
         else:
             activation_min = int(desc.get('activation_min', -128))
             activation_max = int(desc.get('activation_max', 127))
-        
-        in_zp = int(input_quant.get('zero_point', 0))
-        out_zp = int(output_quant.get('zero_point', 0))
+            in_zp = int(input_quant.get('zero_point', 0))
+            out_zp = int(output_quant.get('zero_point', 0))
         
         return {
             'input_offset': int(-in_zp),
@@ -841,8 +828,8 @@ class TemplateContextBuilder:
             'pad_w': int(pad_w),
             'pad_offset_h': int(pad_offset_h),
             'pad_offset_w': int(pad_offset_w),
-            'activation_min': activation_min,
-            'activation_max': activation_max,
+            'activation_min': int(activation_min) if act_dtype != 'FP32' else activation_min,
+            'activation_max': int(activation_max) if act_dtype != 'FP32' else activation_max,
         }
     
     @staticmethod

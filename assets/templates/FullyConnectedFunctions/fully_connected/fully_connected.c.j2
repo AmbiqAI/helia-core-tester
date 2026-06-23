@@ -24,7 +24,8 @@ int32_t {{ prefix }}_{{ name }}_run(
         &{{ name }}_fc_params,
         &{{ name }}_input_dims,
         &{{ name }}_filter_dims,
-        &{{ name }}_output_dims
+        &{{ name }}_output_dims,
+        {{ kernel_layout }}
     );
     {% elif kernel_fn == 'arm_fully_connected_s4' %}
     int32_t required_buffer_size = 0;
@@ -78,7 +79,8 @@ int32_t {{ prefix }}_{{ name }}_run(
         NULL,
         {% endif %}
         &{{ name }}_output_dims,
-        output
+        output,
+        {{ kernel_layout }}
     );
     {% elif kernel_fn == 'arm_fully_connected_s4' %}
     arm_cmsis_nn_status kernel_status = arm_fully_connected_s4(

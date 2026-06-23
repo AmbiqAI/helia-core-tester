@@ -46,6 +46,7 @@ def test_fvp_parser_option_surface_unchanged() -> None:
     expected = {
         "-h", "--help",
         "-c", "--cpu",
+        "--suite",
         "-o", "--opt",
         "--verbosity",
         "-b", "--no-build",

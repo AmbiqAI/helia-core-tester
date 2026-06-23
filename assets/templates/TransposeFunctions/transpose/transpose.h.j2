@@ -18,6 +18,20 @@ static const cmsis_nn_dims {{ name }}_output_dims = {
 };
 
 // Transpose parameters
+{% if float_kernel %}
+static const int32_t {{ name }}_perm[] = {
+{{ permutation_array }}
+};
+
+static const {{ transpose_params_type }} {{ name }}_transpose_params = {
+    .num_dims = {{ num_dims }},
+    .perm = {
+{% for i in range(num_dims) %}
+        (int32_t){{ name }}_perm[{{ i }}]{% if not loop.last %},{% endif %}
+{% endfor %}
+    }
+};
+{% else %}
 static const uint32_t {{ name }}_permutations[] = {
 {{ permutation_array }}
 };
@@ -26,6 +40,7 @@ static const {{ transpose_params_type }} {{ name }}_transpose_params = {
     .num_dims = {{ num_dims }},
     .permutations = {{ name }}_permutations
 };
+{% endif %}
 
 // Input data (for testing)
 static const {{ input_dtype }} {{ name }}_input[] = {

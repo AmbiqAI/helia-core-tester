@@ -45,3 +45,9 @@ def test_run_rejects_removed_report_dir_override() -> None:
     result = runner.invoke(app, ["run", "--report-dir", "artifacts/reports"])
     assert result.exit_code != 0
     assert "No such option" in _result_text(result)
+
+
+def test_full_rejects_removed_include_float_flag() -> None:
+    result = runner.invoke(app, ["full", "--include-float"])
+    assert result.exit_code != 0
+    assert "No such option" in _result_text(result)

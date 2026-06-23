@@ -364,6 +364,7 @@ def _run_cmd(cmd: List[str], cwd: Optional[Path] = None) -> Tuple[bool, str]:
 def _try_write_gcovr_html(
     root: Path,
     cpus: List[str],
+    suites: List[str],
     out_dir: Path,
 ) -> Tuple[bool, str]:
     gcovr = shutil.which("gcovr")
@@ -378,12 +379,13 @@ def _try_write_gcovr_html(
     build_dirs: List[Path] = []
     errors: List[str] = []
 
-    for cpu in cpus:
-        build_dir = root / "artifacts" / f"build-{cpu}-gcc"
-        if not build_dir.exists():
-            errors.append(f"{cpu}: build dir missing ({build_dir})")
-            continue
-        build_dirs.append(build_dir)
+    for suite in suites:
+        for cpu in cpus:
+            build_dir = root / "artifacts" / f"build-{suite}-{cpu}-gcc"
+            if not build_dir.exists():
+                errors.append(f"{suite}:{cpu}: build dir missing ({build_dir})")
+                continue
+            build_dirs.append(build_dir)
 
     if not build_dirs:
         return False, "; ".join(errors) if errors else "no build directories found"
@@ -391,36 +393,37 @@ def _try_write_gcovr_html(
     gcovr_root = _resolve_cmsis_nn_root(root, build_dirs)
     gcov_exe = _resolve_gcov_executable(root, build_dirs)
 
-    for cpu in cpus:
-        build_dir = root / "artifacts" / f"build-{cpu}-gcc"
-        if not build_dir.exists():
-            continue
-        trace_path = trace_dir / f"{cpu}.json"
-        cmd = [
-            gcovr,
-            "--root",
-            str(gcovr_root),
-            "--filter",
-            source_filter,
-            "--gcov-ignore-parse-errors",
-            "suspicious_hits.warn_once_per_file",
-            "--gcov-ignore-errors=no_working_dir_found",
-            "--merge-mode-functions",
-            "merge-use-line-min",
-            "--object-directory",
-            str(build_dir),
-            "--json",
-            str(trace_path),
-            str(build_dir),
-        ]
-        if gcov_exe:
-            cmd.extend(["--gcov-executable", gcov_exe])
+    for suite in suites:
+        for cpu in cpus:
+            build_dir = root / "artifacts" / f"build-{suite}-{cpu}-gcc"
+            if not build_dir.exists():
+                continue
+            trace_path = trace_dir / f"{suite}_{cpu}.json"
+            cmd = [
+                gcovr,
+                "--root",
+                str(gcovr_root),
+                "--filter",
+                source_filter,
+                "--gcov-ignore-parse-errors",
+                "suspicious_hits.warn_once_per_file",
+                "--gcov-ignore-errors=no_working_dir_found",
+                "--merge-mode-functions",
+                "merge-use-line-min",
+                "--object-directory",
+                str(build_dir),
+                "--json",
+                str(trace_path),
+                str(build_dir),
+            ]
+            if gcov_exe:
+                cmd.extend(["--gcov-executable", gcov_exe])
 
-        ok, details = _run_cmd(cmd, cwd=build_dir)
-        if ok and trace_path.exists():
-            trace_files.append(trace_path)
-        else:
-            errors.append(f"{cpu}: {details}")
+            ok, details = _run_cmd(cmd, cwd=build_dir)
+            if ok and trace_path.exists():
+                trace_files.append(trace_path)
+            else:
+                errors.append(f"{suite}:{cpu}: {details}")
 
     if not trace_files:
         if errors:
@@ -442,7 +445,7 @@ def _try_write_gcovr_html(
         "--html-details",
         str(html_path),
         "--html-title",
-        f"Merged Coverage ({', '.join(cpus)})",
+        f"Merged Coverage ({', '.join(suites)} x {', '.join(cpus)})",
     ]
     for trace_file in trace_files:
         cmd.extend(["--add-tracefile", str(trace_file)])
@@ -457,11 +460,16 @@ def _try_write_gcovr_html(
 def run_coverage_merge(
     project_root: Path,
     cpus: str | Iterable[str],
+    suites: Iterable[str] | None = None,
     report_dir: Optional[Path] = None,
     expected_zero_config: Optional[Path] = None,
 ) -> Tuple[int, CoverageMergeReport]:
     root = Path(project_root).resolve()
     cpu_list = parse_cpu_list(cpus)
+    suite_list = ["int", "float"] if suites is None else [str(item).strip().lower() for item in suites]
+    suite_list = [item for item in suite_list if item in {"int", "float"}]
+    if not suite_list:
+        suite_list = ["int", "float"]
 
     if expected_zero_config is None:
         expected_zero_config = root / "assets" / "coverage_expected_zero.json"
@@ -472,37 +480,39 @@ def run_coverage_merge(
 
     merged_lines: Dict[str, Dict[int, int]] = {}
     merged_lf: Dict[str, int] = {}
-    cpus_with_hits: Dict[str, Set[str]] = {}
+    sources_with_hits: Dict[str, Set[str]] = {}
     coverage_inputs: Dict[str, str] = {}
     missing_inputs: Dict[str, str] = {}
 
-    for cpu in cpu_list:
-        lcov_path = coverage_report_dir(root, cpu) / "coverage.info"
-        if not lcov_path.exists():
-            missing_inputs[cpu] = str(lcov_path)
-            continue
+    for suite in suite_list:
+        for cpu in cpu_list:
+            source_key = f"{suite}:{cpu}"
+            lcov_path = coverage_report_dir(root, cpu, suite=suite) / "coverage.info"
+            if not lcov_path.exists():
+                missing_inputs[source_key] = str(lcov_path)
+                continue
 
-        coverage_inputs[cpu] = str(lcov_path)
-        records = _parse_lcov(lcov_path)
-        for source_path, record in records.items():
-            rel = _relative_source_path(source_path, root)
-            lines = record["lines"]
+            coverage_inputs[source_key] = str(lcov_path)
+            records = _parse_lcov(lcov_path)
+            for source_path, record in records.items():
+                rel = _relative_source_path(source_path, root)
+                lines = record["lines"]
 
-            if rel not in merged_lines:
-                merged_lines[rel] = {}
-            if rel not in cpus_with_hits:
-                cpus_with_hits[rel] = set()
+                if rel not in merged_lines:
+                    merged_lines[rel] = {}
+                if rel not in sources_with_hits:
+                    sources_with_hits[rel] = set()
 
-            for line_no, count in lines.items():
-                merged_lines[rel][line_no] = merged_lines[rel].get(line_no, 0) + count
+                for line_no, count in lines.items():
+                    merged_lines[rel][line_no] = merged_lines[rel].get(line_no, 0) + count
 
-            if record.get("lf") is not None:
-                merged_lf[rel] = max(merged_lf.get(rel, 0), int(record["lf"]))
-            else:
-                merged_lf[rel] = max(merged_lf.get(rel, 0), len(merged_lines[rel]))
+                if record.get("lf") is not None:
+                    merged_lf[rel] = max(merged_lf.get(rel, 0), int(record["lf"]))
+                else:
+                    merged_lf[rel] = max(merged_lf.get(rel, 0), len(merged_lines[rel]))
 
-            if any(count > 0 for count in lines.values()) or int(record.get("lh") or 0) > 0:
-                cpus_with_hits[rel].add(cpu)
+                if any(count > 0 for count in lines.values()) or int(record.get("lh") or 0) > 0:
+                    sources_with_hits[rel].add(source_key)
 
     covered_files: List[str] = []
     zero_reachable_files: List[str] = []
@@ -543,7 +553,7 @@ def run_coverage_merge(
                 "lf": lf,
                 "line_rate": round(_line_rate(lh, lf), 2),
                 "classification": classification,
-                "covered_on_cpus": sorted(cpus_with_hits.get(rel, set())),
+                "covered_on_cpus": sorted(sources_with_hits.get(rel, set())),
             }
         )
 
@@ -576,7 +586,7 @@ def run_coverage_merge(
         expected_zero_missing_files=expected_zero_missing_files,
     )
 
-    gcovr_ok, gcovr_note = _try_write_gcovr_html(root, cpu_list, out_dir)
+    gcovr_ok, gcovr_note = _try_write_gcovr_html(root, cpu_list, suite_list, out_dir)
     if gcovr_ok:
         report.html_generator = "gcovr"
         report.html_generation_note = gcovr_note
@@ -588,5 +598,15 @@ def run_coverage_merge(
     _write_markdown(report, report.summary_md_path)
     report.summary_json_path.write_text(json.dumps(report.to_dict(), indent=2))
 
-    exit_code = 0 if coverage_inputs and not missing_inputs else 1
+    if not coverage_inputs:
+        exit_code = 1
+    elif len(suite_list) == 1:
+        exit_code = 0 if not missing_inputs else 1
+    else:
+        covered_cpus = {
+            key.split(":", 1)[1]
+            for key in coverage_inputs.keys()
+            if ":" in key
+        }
+        exit_code = 0 if all(cpu in covered_cpus for cpu in cpu_list) else 1
     return exit_code, report

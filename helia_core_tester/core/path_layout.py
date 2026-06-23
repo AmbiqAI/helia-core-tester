@@ -7,6 +7,16 @@ from __future__ import annotations
 from pathlib import Path
 
 
+VALID_SUITES = {"int", "float"}
+
+
+def normalize_suite(suite: str) -> str:
+    normalized = str(suite).strip().lower()
+    if normalized not in VALID_SUITES:
+        raise ValueError(f"Unsupported suite: {suite}")
+    return normalized
+
+
 def _root(project_root: Path) -> Path:
     return Path(project_root).resolve()
 
@@ -15,56 +25,67 @@ def artifacts_root(project_root: Path) -> Path:
     return _root(project_root) / "artifacts"
 
 
-def build_dir(project_root: Path, cpu: str, compiler_tag: str = "gcc") -> Path:
-    return artifacts_root(project_root) / f"build-{cpu}-{compiler_tag}"
+def build_dir(project_root: Path, cpu: str, compiler_tag: str = "gcc", suite: str = "int") -> Path:
+    suite_name = normalize_suite(suite)
+    return artifacts_root(project_root) / f"build-{suite_name}-{cpu}-{compiler_tag}"
 
 
 def generated_tests_root(project_root: Path) -> Path:
     return artifacts_root(project_root) / "generated_tests"
 
 
-def generated_tests_dir(project_root: Path, cpu: str) -> Path:
-    return generated_tests_root(project_root) / cpu
+def generated_tests_dir(project_root: Path, cpu: str, suite: str = "int") -> Path:
+    suite_name = normalize_suite(suite)
+    return generated_tests_root(project_root) / suite_name / cpu
 
 
-def generated_tests_family_dir(project_root: Path, cpu: str, family: str) -> Path:
-    return generated_tests_dir(project_root, cpu) / family
+def generated_tests_family_dir(project_root: Path, cpu: str, family: str, suite: str = "int") -> Path:
+    return generated_tests_dir(project_root, cpu, suite=suite) / family
 
 
-def generated_test_case_dir(project_root: Path, cpu: str, family: str, test_name: str) -> Path:
-    return generated_tests_family_dir(project_root, cpu, family) / test_name
+def generated_test_case_dir(project_root: Path, cpu: str, family: str, test_name: str, suite: str = "int") -> Path:
+    return generated_tests_family_dir(project_root, cpu, family, suite=suite) / test_name
 
 
 def reports_root(project_root: Path) -> Path:
     return artifacts_root(project_root) / "reports"
 
 
-def generation_report_dir(project_root: Path, cpu: str) -> Path:
-    return reports_root(project_root) / "generation" / cpu
+def generation_report_dir(project_root: Path, cpu: str, suite: str = "int") -> Path:
+    suite_name = normalize_suite(suite)
+    return reports_root(project_root) / "generation" / suite_name / cpu
 
 
-def tests_report_dir(project_root: Path, cpu: str) -> Path:
-    return reports_root(project_root) / "tests" / cpu
+def tests_report_dir(project_root: Path, cpu: str, suite: str = "int") -> Path:
+    suite_name = normalize_suite(suite)
+    return reports_root(project_root) / "tests" / suite_name / cpu
 
 
 def coverage_root(project_root: Path) -> Path:
     return reports_root(project_root) / "coverage"
 
 
-def coverage_report_dir(project_root: Path, cpu: str) -> Path:
-    return coverage_root(project_root) / cpu
+def coverage_report_dir(project_root: Path, cpu: str, suite: str = "int") -> Path:
+    suite_name = normalize_suite(suite)
+    return coverage_root(project_root) / suite_name / cpu
 
 
 def coverage_merged_dir(project_root: Path) -> Path:
     return coverage_root(project_root) / "merged"
 
 
-def build_tests_dir(project_root: Path, cpu: str, compiler_tag: str = "gcc") -> Path:
-    return build_dir(project_root, cpu, compiler_tag) / "tests"
+def build_tests_dir(project_root: Path, cpu: str, compiler_tag: str = "gcc", suite: str = "int") -> Path:
+    return build_dir(project_root, cpu, compiler_tag, suite=suite) / "tests"
 
 
-def build_tests_family_dir(project_root: Path, cpu: str, family: str, compiler_tag: str = "gcc") -> Path:
-    return build_tests_dir(project_root, cpu, compiler_tag) / family
+def build_tests_family_dir(
+    project_root: Path,
+    cpu: str,
+    family: str,
+    compiler_tag: str = "gcc",
+    suite: str = "int",
+) -> Path:
+    return build_tests_dir(project_root, cpu, compiler_tag, suite=suite) / family
 
 
 def build_test_elf_path(
@@ -73,5 +94,6 @@ def build_test_elf_path(
     family: str,
     test_name: str,
     compiler_tag: str = "gcc",
+    suite: str = "int",
 ) -> Path:
-    return build_tests_family_dir(project_root, cpu, family, compiler_tag) / f"{test_name}.elf"
+    return build_tests_family_dir(project_root, cpu, family, compiler_tag, suite=suite) / f"{test_name}.elf"

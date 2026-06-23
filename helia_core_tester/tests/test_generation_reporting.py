@@ -17,14 +17,15 @@ def _filters(generated_tests_dir: Path, cpu: str = "cortex-m55") -> dict[str, ob
         "limit": None,
         "seed": 123,
         "cpu": cpu,
+        "suite": "int",
+        "float_precision": "both",
         "generated_tests_dir": str(generated_tests_dir),
-        "include_float": False,
     }
 
 
 def test_generation_emits_canonical_report_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path
-    generated_tests_dir = repo_root / "artifacts" / "generated_tests" / "cortex-m4"
+    generated_tests_dir = repo_root / "artifacts" / "generated_tests" / "int" / "cortex-m4"
 
     monkeypatch.setattr(generation_module, "find_repo_root", lambda: repo_root)
     monkeypatch.setattr(generation_module, "find_descriptors_dir", lambda: repo_root / "assets" / "descriptors")
@@ -55,7 +56,7 @@ def test_generation_emits_canonical_report_files(tmp_path: Path, monkeypatch: py
 
     generation_module.test_generation(_filters(generated_tests_dir, cpu="cortex-m4"))
 
-    report_dir = repo_root / "artifacts" / "reports" / "generation" / "cortex-m4"
+    report_dir = repo_root / "artifacts" / "reports" / "generation" / "int" / "cortex-m4"
     summary = json.loads((report_dir / "generation_summary.json").read_text())
     manifest_pointer = json.loads((report_dir / "manifest_pointer.json").read_text())
     conversion_failures = json.loads((report_dir / "conversion_failures.json").read_text())
@@ -71,7 +72,7 @@ def test_generation_emits_canonical_report_files(tmp_path: Path, monkeypatch: py
     manifest = json.loads((generated_tests_dir / "manifest.json").read_text())
     assert manifest["tests"][0]["relative_test_dir"] == "FullyConnectedFunctions/fc_smoke"
     assert manifest["tests"][0]["resolved_tensor_dtypes"] == {"input": "S8", "output": "S8", "weights": "S8"}
-    assert '"artifacts/generated_tests/cortex-m4/FullyConnectedFunctions/fc_smoke"' in (generated_tests_dir / "tests.cmake").read_text()
+    assert '"artifacts/generated_tests/int/cortex-m4/FullyConnectedFunctions/fc_smoke"' in (generated_tests_dir / "tests.cmake").read_text()
     assert conversion_failures == []
     assert generation_failures == []
     assert capability_skips == []
@@ -79,7 +80,7 @@ def test_generation_emits_canonical_report_files(tmp_path: Path, monkeypatch: py
 
 def test_generation_writes_reports_even_when_no_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path
-    generated_tests_dir = repo_root / "artifacts" / "generated_tests" / "cortex-m4"
+    generated_tests_dir = repo_root / "artifacts" / "generated_tests" / "int" / "cortex-m4"
 
     monkeypatch.setattr(generation_module, "find_repo_root", lambda: repo_root)
     monkeypatch.setattr(generation_module, "find_descriptors_dir", lambda: repo_root / "assets" / "descriptors")
@@ -109,7 +110,7 @@ def test_generation_writes_reports_even_when_no_outputs(tmp_path: Path, monkeypa
     with pytest.raises(AssertionError, match="No TFLite models were generated"):
         generation_module.test_generation(_filters(generated_tests_dir))
 
-    report_dir = repo_root / "artifacts" / "reports" / "generation" / "cortex-m55"
+    report_dir = repo_root / "artifacts" / "reports" / "generation" / "int" / "cortex-m55"
     summary = json.loads((report_dir / "generation_summary.json").read_text())
     manifest_pointer = json.loads((report_dir / "manifest_pointer.json").read_text())
 
@@ -123,7 +124,7 @@ def test_generation_records_capability_skips_in_manifest_and_reports(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo_root = tmp_path
-    generated_tests_dir = repo_root / "artifacts" / "generated_tests" / "cortex-m55"
+    generated_tests_dir = repo_root / "artifacts" / "generated_tests" / "int" / "cortex-m55"
 
     monkeypatch.setattr(generation_module, "find_repo_root", lambda: repo_root)
     monkeypatch.setattr(generation_module, "find_descriptors_dir", lambda: repo_root / "assets" / "descriptors")
@@ -149,7 +150,7 @@ def test_generation_records_capability_skips_in_manifest_and_reports(
 
     generation_module.test_generation(_filters(generated_tests_dir, cpu="cortex-m4"))
 
-    report_dir = repo_root / "artifacts" / "reports" / "generation" / "cortex-m4"
+    report_dir = repo_root / "artifacts" / "reports" / "generation" / "int" / "cortex-m4"
     summary = json.loads((report_dir / "generation_summary.json").read_text())
     manifest = json.loads((generated_tests_dir / "manifest.json").read_text())
     capability_skips = json.loads((report_dir / "capability_skips.json").read_text())
@@ -165,7 +166,7 @@ def test_generation_records_capability_skips_in_manifest_and_reports(
 
 def test_generation_excludes_float_suite_unless_requested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path
-    generated_tests_dir = repo_root / "artifacts" / "generated_tests" / "cortex-m4"
+    generated_tests_dir = repo_root / "artifacts" / "generated_tests" / "int" / "cortex-m4"
 
     monkeypatch.setattr(generation_module, "find_repo_root", lambda: repo_root)
     monkeypatch.setattr(generation_module, "find_descriptors_dir", lambda: repo_root / "assets" / "descriptors")
@@ -192,6 +193,6 @@ def test_generation_excludes_float_suite_unless_requested(tmp_path: Path, monkey
     with pytest.raises(AssertionError, match="No TFLite models were generated"):
         generation_module.test_generation(_filters(generated_tests_dir, cpu="cortex-m4"))
 
-    summary = json.loads((repo_root / "artifacts" / "reports" / "generation" / "cortex-m4" / "generation_summary.json").read_text())
+    summary = json.loads((repo_root / "artifacts" / "reports" / "generation" / "int" / "cortex-m4" / "generation_summary.json").read_text())
     assert not (generated_tests_dir / "manifest.json").exists()
     assert summary["counts"]["descriptors_after_filters"] == 0

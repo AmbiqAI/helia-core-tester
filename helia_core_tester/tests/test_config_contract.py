@@ -57,3 +57,65 @@ def test_invalid_env_bool_raises_configuration_error(monkeypatch: pytest.MonkeyP
 
     with pytest.raises(ConfigurationError, match="Invalid env override HELIA_CORE_TESTER_COVERAGE"):
         Config(project_root=root)
+
+
+def test_suite_both_routes_float_by_cpu_capability(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+
+    cfg = Config(
+        project_root=root,
+        cpu="cortex-m0,cortex-m4,cortex-m55",
+        suite="both",
+        float_precision="f16",
+        _explicit_overrides={"project_root", "cpu", "suite", "float_precision"},
+    )
+
+    assert cfg.effective_suites_for_cpu("cortex-m0") == ["int"]
+    assert cfg.effective_suites_for_cpu("cortex-m4") == ["int", "float"]
+    assert cfg.effective_suites_for_cpu("cortex-m55") == ["int", "float"]
+
+    assert cfg.effective_float_precision_for_cpu("cortex-m0", suite="float") is None
+    assert cfg.effective_float_precision_for_cpu("cortex-m4", suite="float") == "f32"
+    assert cfg.effective_float_precision_for_cpu("cortex-m55", suite="float") == "both"
+
+
+def test_float_f16_rejected_for_cpus_without_fp16_execution(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+
+    with pytest.raises(ConfigurationError, match="requires FP16 execution support"):
+        Config(
+            project_root=root,
+            cpu="cortex-m4,cortex-m55",
+            suite="float",
+            float_precision="both",
+            _explicit_overrides={"project_root", "cpu", "suite", "float_precision"},
+        )
+
+
+def test_float_suite_rejected_for_cpu_without_fp32_execution(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+
+    with pytest.raises(ConfigurationError, match="requires FP32 execution support"):
+        Config(
+            project_root=root,
+            cpu="cortex-m0,cortex-m55",
+            suite="float",
+            float_precision="f32",
+            _explicit_overrides={"project_root", "cpu", "suite", "float_precision"},
+        )
+
+
+def test_float_f16_allowed_for_fp16_capable_cpu(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+
+    cfg = Config(
+        project_root=root,
+        cpu="cortex-m55",
+        suite="float",
+        float_precision="f16",
+        _explicit_overrides={"project_root", "cpu", "suite", "float_precision"},
+    )
+
+    assert cfg.cpus == ["cortex-m55"]
+    assert cfg.suite == "float"
+    assert cfg.float_precision == "f16"

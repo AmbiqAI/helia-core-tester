@@ -125,12 +125,13 @@ def process_coverage_output(
     return cleaned_output
 
 
-def _coverage_report_dir(cpu: str) -> Path:
-    return canonical_coverage_report_dir(REPO_ROOT, cpu)
+def _coverage_report_dir(cpu: str, suite: str) -> Path:
+    return canonical_coverage_report_dir(REPO_ROOT, cpu, suite=suite)
 
 
 def generate_coverage_reports(
     cpus: List[str],
+    suite: str,
     args,
     env: dict,
     source_dir: Path,
@@ -154,12 +155,12 @@ def generate_coverage_reports(
         return
 
     for cpu in cpus:
-        cpu_dir = _coverage_report_dir(cpu)
+        cpu_dir = _coverage_report_dir(cpu, suite)
         if cpu_dir.exists():
             shutil.rmtree(cpu_dir, ignore_errors=True)
         cpu_dir.mkdir(parents=True, exist_ok=True)
 
-        cpu_build_dir = canonical_build_dir(REPO_ROOT, cpu, compiler_tag)
+        cpu_build_dir = canonical_build_dir(REPO_ROOT, cpu, compiler_tag, suite=suite)
         if not cpu_build_dir.exists():
             continue
 

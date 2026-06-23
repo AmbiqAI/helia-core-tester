@@ -12,6 +12,7 @@ from helia_core_tester.fvp.build_and_run_fvp import (
     _resolve_downloaded_fvp_executable,
     _resolve_run_jobs,
 )
+from helia_core_tester.fvp.runner import _sanitize_terminal_text, _signal_process_group
 
 
 def _make_config_root(tmp_path: Path) -> Path:
@@ -49,11 +50,41 @@ def test_run_step_passes_fail_fast_and_run_jobs(tmp_path: Path, monkeypatch) -> 
     result = RunStep(cfg)._do_execute()
 
     assert result.success
-    cmd = result.details["command"]
+    cmd = result.details["commands"][0]
     assert "--fail-fast" in cmd
     assert "--run-jobs" in cmd
     assert "4" in cmd
     assert "--no-fail-fast" not in cmd
+
+
+def test_run_step_routes_suite_both_into_cpu_groups(tmp_path: Path, monkeypatch) -> None:
+    seen = []
+
+    def fake_run(cmd, cwd, check, text, bufsize):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr("helia_core_tester.core.steps.run.subprocess.run", fake_run)
+
+    root = _make_config_root(tmp_path)
+    cfg = Config(
+        project_root=root,
+        cpu="cortex-m0,cortex-m4,cortex-m55",
+        suite="both",
+        float_precision="f16",
+        fail_fast=False,
+        enable_reporting=False,
+        _explicit_overrides={"project_root", "cpu", "suite", "float_precision"},
+    )
+
+    result = RunStep(cfg)._do_execute()
+
+    assert result.success
+    assert len(result.details["commands"]) == 3
+    rendered = [" ".join(cmd) for cmd in seen]
+    assert any("--suite int" in cmd and "--cpu cortex-m0,cortex-m4,cortex-m55" in cmd for cmd in rendered)
+    assert any("--suite float" in cmd and "--cpu cortex-m4" in cmd for cmd in rendered)
+    assert any("--suite float" in cmd and "--cpu cortex-m55" in cmd for cmd in rendered)
 
 
 def test_resolve_run_jobs_caps_to_test_count() -> None:
@@ -111,3 +142,36 @@ def test_resolve_downloaded_fvp_executable_falls_back_to_other_dir(tmp_path: Pat
     exe, checked = _resolve_downloaded_fvp_executable(tmp_path, "x86_64")
     assert exe == arm
     assert len(checked) == 2
+
+
+def test_sanitize_terminal_text_escapes_control_chars() -> None:
+    raw = "ok\x03line\x1b"
+    sanitized = _sanitize_terminal_text(raw)
+    assert sanitized == "ok\\x03line\\x1b"
+
+
+def test_signal_process_group_falls_back_to_direct_signal_when_same_group(monkeypatch) -> None:
+    class DummyProc:
+        pid = 4242
+
+        def poll(self):
+            return None
+
+        def send_signal(self, sig):
+            self.sent = sig
+
+    proc = DummyProc()
+    called = {"killpg": False}
+
+    monkeypatch.setattr("helia_core_tester.fvp.runner.os.getpgid", lambda _pid: 100)
+    monkeypatch.setattr("helia_core_tester.fvp.runner.os.getpgrp", lambda: 100)
+
+    def _killpg(*_args, **_kwargs):
+        called["killpg"] = True
+
+    monkeypatch.setattr("helia_core_tester.fvp.runner.os.killpg", _killpg)
+
+    _signal_process_group(proc, 15)
+
+    assert getattr(proc, "sent", None) == 15
+    assert called["killpg"] is False

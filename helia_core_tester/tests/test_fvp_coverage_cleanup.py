@@ -9,12 +9,13 @@ from helia_core_tester.fvp.coverage import generate_coverage_reports
 
 def test_generate_coverage_reports_clears_stale_cpu_dir(tmp_path: Path, monkeypatch) -> None:
     cpu = "cortex-m55"
+    suite = "int"
     source_dir = tmp_path / "Tests" / "UnitTest"
     source_dir.mkdir(parents=True, exist_ok=True)
-    build_dir = tmp_path / "artifacts" / f"build-{cpu}-gcc"
+    build_dir = tmp_path / "artifacts" / f"build-{suite}-{cpu}-gcc"
     build_dir.mkdir(parents=True, exist_ok=True)
 
-    report_dir = tmp_path / "artifacts" / "reports" / "coverage" / cpu
+    report_dir = tmp_path / "artifacts" / "reports" / "coverage" / suite / cpu
     stale_file = report_dir / "stale.txt"
     report_dir.mkdir(parents=True, exist_ok=True)
     stale_file.write_text("stale")
@@ -34,6 +35,7 @@ def test_generate_coverage_reports_clears_stale_cpu_dir(tmp_path: Path, monkeypa
 
     generate_coverage_reports(
         cpus=[cpu],
+        suite=suite,
         args=SimpleNamespace(coverage=True),
         env={"PATH": ""},
         source_dir=source_dir,
@@ -47,10 +49,11 @@ def test_generate_coverage_reports_clears_stale_cpu_dir(tmp_path: Path, monkeypa
 
 def test_generate_coverage_reports_clears_stale_dir_even_without_build(tmp_path: Path, monkeypatch) -> None:
     cpu = "cortex-m0"
+    suite = "int"
     source_dir = tmp_path / "Tests" / "UnitTest"
     source_dir.mkdir(parents=True, exist_ok=True)
 
-    report_dir = tmp_path / "artifacts" / "reports" / "coverage" / cpu
+    report_dir = tmp_path / "artifacts" / "reports" / "coverage" / suite / cpu
     stale_file = report_dir / "stale.txt"
     report_dir.mkdir(parents=True, exist_ok=True)
     stale_file.write_text("stale")
@@ -70,6 +73,7 @@ def test_generate_coverage_reports_clears_stale_dir_even_without_build(tmp_path:
 
     generate_coverage_reports(
         cpus=[cpu],
+        suite=suite,
         args=SimpleNamespace(coverage=True),
         env={"PATH": ""},
         source_dir=source_dir,

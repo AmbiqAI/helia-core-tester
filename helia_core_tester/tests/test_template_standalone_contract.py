@@ -593,6 +593,54 @@ def test_transpose_invalid_status_render_uses_expected_status_helper() -> None:
     assert "{{ name }}_expected_output" not in text
 
 
+def test_transpose_header_float_uses_inline_perm_array() -> None:
+    text = _render(
+        "TransposeFunctions/transpose/transpose.h.j2",
+        {
+            "name": "transpose_float_smoke",
+            "prefix": "transpose",
+            "input_dims": {"n": 1, "h": 2, "w": 3, "c": 4},
+            "output_dims": {"n": 1, "h": 3, "w": 2, "c": 4},
+            "num_dims": 4,
+            "permutation_array": "    0, 2, 1, 3",
+            "input_data_array": "    0.0f",
+            "expected_output_array": "    0.0f",
+            "input_dtype": "float",
+            "output_dtype": "float",
+            "transpose_params_type": "cmsis_nn_transpose_params_f32",
+            "float_kernel": True,
+        },
+    )
+
+    assert "static const int32_t transpose_float_smoke_perm[]" in text
+    assert ".perm = {" in text
+    assert ".permutations =" not in text
+
+
+def test_transpose_header_int_uses_permutations_pointer() -> None:
+    text = _render(
+        "TransposeFunctions/transpose/transpose.h.j2",
+        {
+            "name": "transpose_int_smoke",
+            "prefix": "transpose",
+            "input_dims": {"n": 1, "h": 2, "w": 3, "c": 4},
+            "output_dims": {"n": 1, "h": 3, "w": 2, "c": 4},
+            "num_dims": 4,
+            "permutation_array": "    0, 2, 1, 3",
+            "input_data_array": "    0",
+            "expected_output_array": "    0",
+            "input_dtype": "int8_t",
+            "output_dtype": "int8_t",
+            "transpose_params_type": "cmsis_nn_transpose_params",
+            "float_kernel": False,
+        },
+    )
+
+    assert "static const uint32_t transpose_int_smoke_permutations[]" in text
+    assert ".permutations = transpose_int_smoke_permutations" in text
+    assert ".perm = {" not in text
+
+
 def test_rsqrt_invalid_status_render_uses_expected_status_helper() -> None:
     text = _render(
         "BasicMathFunctions/rsqrt/rsqrt.c.j2",
