@@ -1,0 +1,65 @@
+#ifndef {{ prefix|upper }}_SVDF_H
+#define {{ prefix|upper }}_SVDF_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+
+static const cmsis_nn_dims {{ name }}_input_dims = {
+    .n = {{ input_batches }}, .h = {{ input_height }}, .w = 1, .c = 1
+};
+
+static const cmsis_nn_dims {{ name }}_state_dims = {
+    .n = {{ input_batches }}, .h = {{ feature_batches }}, .w = {{ time_batches }}, .c = 1
+};
+
+static const cmsis_nn_dims {{ name }}_weights_feature_dims = {
+    .n = {{ feature_batches }}, .h = {{ input_height }}, .w = 1, .c = 1
+};
+
+static const cmsis_nn_dims {{ name }}_weights_time_dims = {
+    .n = {{ feature_batches }}, .h = {{ time_batches }}, .w = 1, .c = 1
+};
+
+static const cmsis_nn_dims {{ name }}_bias_dims = {
+    .n = {{ unit_count }}, .h = 1, .w = 1, .c = 1
+};
+
+static const cmsis_nn_dims {{ name }}_output_dims = {
+    .n = {{ input_batches }}, .h = {{ unit_count }}, .w = 1, .c = 1
+};
+
+static const cmsis_nn_svdf_params_f32 {{ name }}_svdf_params = {
+    .rank = {{ rank }},
+    .input_activation = {.min = {{ input_activation_min_literal }}, .max = {{ input_activation_max_literal }}},
+    .output_activation = {.min = {{ output_activation_min_literal }}, .max = {{ output_activation_max_literal }}}
+};
+
+static const float {{ name }}_input_sequence[] = {
+{{ input_data_array }}
+};
+
+static const float {{ name }}_weights_feature[] = {
+{{ weights_feature_array }}
+};
+
+static const float {{ name }}_weights_time[] = {
+{{ weights_time_array }}
+};
+
+static const float {{ name }}_initial_state[] = {
+{{ state_init_array }}
+};
+
+{% if use_bias %}
+static const float {{ name }}_bias[] = {
+{{ bias_array }}
+};
+{% else %}
+static const float *{{ name }}_bias = NULL;
+{% endif %}
+
+static const float {{ name }}_expected_output[] = {
+{{ output_ref_array }}
+};
+
+#endif

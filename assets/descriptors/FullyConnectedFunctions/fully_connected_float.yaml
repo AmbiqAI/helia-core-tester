@@ -1,0 +1,13 @@
+operator: FullyConnected
+name: fully_connected_float_default_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 12]
+filter_shape: [5, 12]
+use_bias: true
