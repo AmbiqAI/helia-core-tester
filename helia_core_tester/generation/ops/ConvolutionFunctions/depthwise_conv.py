@@ -251,6 +251,12 @@ class OpDepthwiseConv(OperationBase):
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_depthwise_conv_kernel()
+        weight_c_type = kernel_info.get("weight_c_type")
+        if weight_c_type is None:
+            raise ValueError(
+                f"Kernel dispatch missing weight_c_type for DepthwiseConv descriptor '{name}' "
+                f"({self.desc.get('activation_dtype', 'S8')} x {self.desc.get('weight_dtype', 'S8')})"
+            )
         
         # Load LiteRT model for tensor extraction
         from helia_core_tester.generation.utils.litert_utils import (
@@ -491,8 +497,7 @@ class OpDepthwiseConv(OperationBase):
             except:
                 pass
             # #endregion
-            # Ensure weights are int8 in generated C
-            if weights.dtype != np.int8:
+            if kernel_info["input_c_type"] != "float" and weights.dtype != np.int8:
                 weights = weights.astype(np.int8)
         else:
             # Fallback: descriptor is [H, W, I, M]
@@ -649,6 +654,89 @@ class OpDepthwiseConv(OperationBase):
             quant_params['input'],
             quant_params['output']
         )
+        float_kernel = kernel_info["input_c_type"] == "float"
+        if float_kernel:
+            if weights is not None and weights.dtype != np.float32:
+                weights = weights.astype(np.float32)
+            has_biases = biases is not None and getattr(biases, "size", 0) > 0
+            if has_biases and biases.dtype != np.float32:
+                biases = biases.astype(np.float32)
+
+            input_data = self._sample_uniform(input_shape)
+
+            dw_out_tensor_idx = int(subgraph.operators[dw_op_index].outputs[0])
+            if bts_op_index is not None:
+                bts_outs = subgraph.operators[bts_op_index].outputs
+                out_tensor_idx = int(bts_outs[0]) if bts_outs is not None and len(bts_outs) > 0 else dw_out_tensor_idx
+            else:
+                out_tensor_idx = dw_out_tensor_idx
+            output_data = run_inference_litert_tensor(str(tflite_path), input_data.astype(np.float32), out_tensor_idx)
+
+            weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
+            biases_array_str = builder.format_array_as_c_literal(biases) if has_biases else ""
+            input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=np.float32))
+            expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=np.float32))
+
+            buffer_size_max = max(
+                1024,
+                int(
+                    (input_dims['n'] * input_dims['h'] * input_dims['w'] * input_dims['c']
+                     + filter_dims['n'] * filter_dims['h'] * filter_dims['w'] * max(filter_dims['c'], 1)
+                     + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * 4
+                ),
+            )
+
+            context = {
+                'name': name,
+                'prefix': name,
+                'input_dims': input_dims,
+                'filter_dims': filter_dims,
+                'output_dims': output_dims,
+                'dw_conv_params': dw_conv_params,
+                'weights_array': weights_array_str,
+                'biases_array': biases_array_str,
+                'has_biases': has_biases,
+                'weight_sum_array': "",
+                'has_weight_sum': False,
+                'input_data_array': input_data_array_str,
+                'expected_output_array': expected_output_array_str,
+                'input_dtype': kernel_info["input_c_type"],
+                'output_dtype': kernel_info["output_c_type"],
+                'weight_dtype': weight_c_type,
+                'bias_dtype': kernel_info["bias_c_type"],
+                'kernel_fn': kernel_info["kernel_fn"],
+                'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+                'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
+                'call_style': kernel_info.get("call_style", "baseline"),
+                'buffer_size_max': buffer_size_max,
+                'float_kernel': True,
+                'dw_conv_params_type': 'cmsis_nn_dw_conv_params_f32',
+                'dw_activation_min_literal': builder.format_float_literal(dw_conv_params['activation_min']),
+                'dw_activation_max_literal': builder.format_float_literal(dw_conv_params['activation_max']),
+            }
+            includes_api_dir = output_dir / "includes"
+            includes_api_dir.mkdir(parents=True, exist_ok=True)
+
+            h_content = self.render_template("ConvolutionFunctions/depthwise_conv/depthwise_conv.h.j2", context)
+            h_path = includes_api_dir / f"{name}_depthwise_conv.h"
+            with open(h_path, 'w') as f:
+                f.write(h_content)
+
+            c_content = self.render_template("ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2", context)
+            c_path = output_dir / f"{name}_depthwise_conv.c"
+            with open(c_path, 'w') as f:
+                f.write(c_content)
+
+            cmake_context = {
+                'name': name,
+                'operator': self.desc.get('operator', 'DepthwiseConv'),
+                'operator_name': 'depthwise_conv'
+            }
+            cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
+            cmake_path = output_dir / "CMakeLists.txt"
+            with open(cmake_path, 'w') as f:
+                f.write(cmake_content)
+            return
         
         # Build quantization parameters (same as Conv2D)
         input_quant = quant_params['input']
@@ -660,13 +748,13 @@ class OpDepthwiseConv(OperationBase):
             input_scale = float(input_scale[0])
         else:
             input_scale = float(input_scale)
-        
+
         output_scale = output_quant.get('scale', 1.0)
         if isinstance(output_scale, (list, np.ndarray)):
             output_scale = float(output_scale[0])
         else:
             output_scale = float(output_scale)
-        
+
         weight_scale = weight_quant.get('scale', 1.0)
         per_channel = bool(weight_quant.get('per_channel', False))
         
@@ -883,6 +971,7 @@ class OpDepthwiseConv(OperationBase):
             'expected_output_array': expected_output_array_str,
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': kernel_info["output_c_type"],
+            'weight_dtype': weight_c_type,
             'bias_dtype': bias_dtype,
             'kernel_fn': kernel_info["kernel_fn"],
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],

@@ -1,0 +1,29 @@
+#ifndef {{ prefix|upper }}_BATCH_NORM_H
+#define {{ prefix|upper }}_BATCH_NORM_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+static const cmsis_nn_dims {{ name }}_input_dims = {
+    .n = {{ input_dims.n }}, .h = {{ input_dims.h }},
+    .w = {{ input_dims.w }}, .c = {{ input_dims.c }}
+};
+
+static const {{ input_dtype }} {{ name }}_input[] = {
+{{ input_data_array }}
+};
+
+static const {{ input_dtype }} {{ name }}_scale[] = {
+{{ scale_array }}
+};
+
+static const {{ input_dtype }} {{ name }}_bias[] = {
+{{ bias_array }}
+};
+
+static const {{ output_dtype }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

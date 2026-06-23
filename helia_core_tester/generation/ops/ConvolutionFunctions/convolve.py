@@ -188,19 +188,48 @@ class OpConvolve(OperationBase):
 
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_convolve_kernel()
+        float_kernel = kernel_info["input_c_type"] == "float"
+        weight_c_type = kernel_info.get("weight_c_type")
+        if weight_c_type is None:
+            raise ValueError(
+                f"Kernel dispatch missing weight_c_type for Convolve descriptor '{name}' "
+                f"({self.desc.get('activation_dtype', 'S8')} x {self.desc.get('weight_dtype', 'S8')})"
+            )
 
         # Load LiteRT model for tensor extraction
         from helia_core_tester.generation.utils.litert_utils import (
-            load_litert_model, get_operator_tensors_from_litert
+            load_litert_model,
+            get_operator_tensors_from_litert,
+            get_tensor_shape_from_litert,
+            get_tensor_quantization_from_litert,
         )
         
         model, subgraph = load_litert_model(str(tflite_path))
         
-        # Get operator tensors (first operator)
+        # Get operator tensors from the actual CONV_2D op.
+        # Dilated graphs can be lowered as SpaceToBatch -> Conv2D -> BatchToSpace,
+        # so selecting op index 0 can bind to the wrong tensors.
         if len(subgraph.operators) == 0:
             raise ValueError("No operators found in model")
         
-        op_tensors = get_operator_tensors_from_litert(model, subgraph, 0)
+        conv_op_index = 0
+        bts_op_index = None
+        try:
+            from ai_edge_litert import schema_py_generated as litert
+
+            found_conv = False
+            for i, op in enumerate(subgraph.operators):
+                opcode = model.operatorCodes[op.opcodeIndex]
+                if not found_conv and opcode.builtinCode == litert.BuiltinOperator.CONV_2D:
+                    conv_op_index = i
+                    found_conv = True
+                if opcode.builtinCode == litert.BuiltinOperator.BATCH_TO_SPACE_ND:
+                    bts_op_index = i
+        except Exception:
+            conv_op_index = 0
+            bts_op_index = None
+
+        op_tensors = get_operator_tensors_from_litert(model, subgraph, conv_op_index)
         
         # Extract shapes from LiteRT
         if not op_tensors['inputs']:
@@ -208,12 +237,47 @@ class OpConvolve(OperationBase):
         if not op_tensors['outputs']:
             raise ValueError("No output tensors found")
         
-        input_shape = op_tensors['inputs'][0]['shape']
-        output_shape = op_tensors['outputs'][0]['shape']
+        input_tensor = None
+        output_tensor = None
+        if subgraph.inputs is not None and len(subgraph.inputs) > 0:
+            input_tensor = subgraph.tensors[int(subgraph.inputs[0])]
+        if subgraph.outputs is not None and len(subgraph.outputs) > 0:
+            output_tensor = subgraph.tensors[int(subgraph.outputs[0])]
+
+        expected_tensor = None
+        if bts_op_index is not None:
+            bts_outs = subgraph.operators[bts_op_index].outputs
+            if bts_outs is not None and len(bts_outs) > 0:
+                expected_tensor = subgraph.tensors[int(bts_outs[0])]
+
+        input_shape = get_tensor_shape_from_litert(input_tensor) if input_tensor is not None else None
+        output_shape = (
+            get_tensor_shape_from_litert(expected_tensor)
+            if expected_tensor is not None
+            else (get_tensor_shape_from_litert(output_tensor) if output_tensor is not None else None)
+        )
+        if input_shape is None:
+            input_shape = op_tensors['inputs'][0]['shape']
+        if output_shape is None:
+            output_shape = op_tensors['outputs'][0]['shape']
+
+        input_shape = tuple(input_shape)
+        output_shape = tuple(output_shape)
         
         # Extract quantization parameters from LiteRT
-        input_quant = op_tensors['inputs'][0]['quantization']
-        output_quant = op_tensors['outputs'][0]['quantization']
+        if expected_tensor is not None:
+            input_quant = (
+                get_tensor_quantization_from_litert(input_tensor)
+                if input_tensor is not None
+                else op_tensors['inputs'][0]['quantization']
+            )
+            output_quant = get_tensor_quantization_from_litert(expected_tensor)
+        elif input_tensor is not None and output_tensor is not None:
+            input_quant = get_tensor_quantization_from_litert(input_tensor)
+            output_quant = get_tensor_quantization_from_litert(output_tensor)
+        else:
+            input_quant = op_tensors['inputs'][0]['quantization']
+            output_quant = op_tensors['outputs'][0]['quantization']
         
         # Find weight quantization (from weight tensor in inputs)
         weight_quant = None
@@ -249,8 +313,7 @@ class OpConvolve(OperationBase):
             filter_shape = (fs[3], fs[0], fs[1], fs[2])  # OHWI
         elif weights is not None:
             filter_shape = tuple(weights.shape)
-            # Ensure weights are int8 in generated C
-            if weights.dtype != np.int8:
+            if not float_kernel and weights.dtype != np.int8:
                 weights = weights.astype(np.int8)
         else:
             # Fallback: descriptor is HWIO (kh, kw, in, out)
@@ -286,108 +349,111 @@ class OpConvolve(OperationBase):
             quant_params['output']
         )
 
-        # Build quantization parameters
-        # CRITICAL: The effective scale for multiplier/shift is NOT output_scale directly!
-        # It should be: effective_scale = (input_scale * weight_scale) / output_scale
-        # This matches CMSIS-NN test code in op_utils.py line 194
-        input_quant = quant_params['input']
-        output_quant = quant_params['output']
-        weight_quant = quant_params.get('weight', output_quant)
-        
-        input_scale = input_quant.get('scale', 1.0)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = float(input_scale[0])
-        else:
-            input_scale = float(input_scale)
-        
-        output_scale = output_quant.get('scale', 1.0)
-        if isinstance(output_scale, (list, np.ndarray)):
-            output_scale = float(output_scale[0])
-        else:
-            output_scale = float(output_scale)
-        
-        weight_scale = weight_quant.get('scale', 1.0)
-        per_channel = bool(weight_quant.get('per_channel', False))
-        
-        # Calculate effective scales: (input_scale * weight_scale) / output_scale
-        if per_channel and isinstance(weight_scale, np.ndarray):
-            # Per-channel: effective_scale[i] = (input_scale * weight_scale[i]) / output_scale
-            effective_scales = (input_scale * weight_scale) / output_scale
-            # Create a temporary quant_params dict with effective scales
-            effective_quant = {
-                'scale': effective_scales,
-                'zero_point': output_quant.get('zero_point', 0),
-                'per_channel': True
-            }
-            quant_params_dict = builder.build_quant_params(effective_quant, per_channel=True)
-            # Store effective scales for logging
-            quant_params_dict['effective_scales'] = effective_scales
-            # Store raw multiplier and shift arrays for logging (before formatting)
-            from helia_core_tester.generation.utils.tflite_utils import calculate_per_channel_multiplier_shift
-            multipliers_raw, shifts_raw = calculate_per_channel_multiplier_shift(effective_scales)
-            quant_params_dict['multiplier_array_raw'] = multipliers_raw
-            quant_params_dict['shift_array_raw'] = shifts_raw
-        else:
-            # Per-tensor: effective_scale = (input_scale * weight_scale) / output_scale
-            if isinstance(weight_scale, (list, np.ndarray)):
-                weight_scale = float(weight_scale[0])
+        quant_params_dict = None
+        if not float_kernel:
+            # Build quantization parameters
+            # CRITICAL: The effective scale for multiplier/shift is NOT output_scale directly!
+            # It should be: effective_scale = (input_scale * weight_scale) / output_scale
+            # This matches CMSIS-NN test code in op_utils.py line 194
+            input_quant = quant_params['input']
+            output_quant = quant_params['output']
+            weight_quant = quant_params.get('weight', output_quant)
+            
+            input_scale = input_quant.get('scale', 1.0)
+            if isinstance(input_scale, (list, np.ndarray)):
+                input_scale = float(input_scale[0])
             else:
-                weight_scale = float(weight_scale)
-            effective_scale = (input_scale * weight_scale) / output_scale
-            # Ensure effective_scale is a Python float, not numpy scalar
-            effective_scale = float(effective_scale)
-            effective_quant = {
-                'scale': effective_scale,
-                'zero_point': output_quant.get('zero_point', 0),
-                'per_channel': False
-            }
-            quant_params_dict = builder.build_quant_params(effective_quant, per_channel=False)
-            # Store effective scale for logging
-            quant_params_dict['effective_scale'] = effective_scale
-            # Store raw multiplier and shift for logging (before formatting)
-            from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
-            multiplier_raw, shift_raw = calculate_multiplier_shift(effective_scale)
-            quant_params_dict['multiplier_raw'] = multiplier_raw
-            quant_params_dict['shift_raw'] = shift_raw
-        
-        quant_params_dict['per_channel'] = per_channel
+                input_scale = float(input_scale)
+
+            output_scale = output_quant.get('scale', 1.0)
+            if isinstance(output_scale, (list, np.ndarray)):
+                output_scale = float(output_scale[0])
+            else:
+                output_scale = float(output_scale)
+
+            weight_scale = weight_quant.get('scale', 1.0)
+            per_channel = bool(weight_quant.get('per_channel', False))
+            
+            # Calculate effective scales: (input_scale * weight_scale) / output_scale
+            if per_channel and isinstance(weight_scale, np.ndarray):
+                effective_scales = (input_scale * weight_scale) / output_scale
+                effective_quant = {
+                    'scale': effective_scales,
+                    'zero_point': output_quant.get('zero_point', 0),
+                    'per_channel': True
+                }
+                quant_params_dict = builder.build_quant_params(effective_quant, per_channel=True)
+                quant_params_dict['effective_scales'] = effective_scales
+                from helia_core_tester.generation.utils.tflite_utils import calculate_per_channel_multiplier_shift
+                multipliers_raw, shifts_raw = calculate_per_channel_multiplier_shift(effective_scales)
+                quant_params_dict['multiplier_array_raw'] = multipliers_raw
+                quant_params_dict['shift_array_raw'] = shifts_raw
+            else:
+                if isinstance(weight_scale, (list, np.ndarray)):
+                    weight_scale = float(weight_scale[0])
+                else:
+                    weight_scale = float(weight_scale)
+                effective_scale = float((input_scale * weight_scale) / output_scale)
+                effective_quant = {
+                    'scale': effective_scale,
+                    'zero_point': output_quant.get('zero_point', 0),
+                    'per_channel': False
+                }
+                quant_params_dict = builder.build_quant_params(effective_quant, per_channel=False)
+                quant_params_dict['effective_scale'] = effective_scale
+                from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
+                multiplier_raw, shift_raw = calculate_multiplier_shift(effective_scale)
+                quant_params_dict['multiplier_raw'] = multiplier_raw
+                quant_params_dict['shift_raw'] = shift_raw
+            
+            quant_params_dict['per_channel'] = per_channel
 
         # Generate input data and quantize to the interpreter's real input dtype
         # IMPORTANT: Reset RNG to seed to ensure input data matches what was used
         # during TFLite conversion (representative dataset generation may have advanced RNG)
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        input_data = self.generate_input_data()
-        self.rng.__setstate__(rng_state)
-        
-        input_scale = quant_params['input'].get('scale', 1.0)
-        input_zp = quant_params['input'].get('zero_point', 0)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = input_scale[0]
-
-        if kernel_info["input_c_type"] == "int8_t":
-            qmin, qmax = -128, 127
-            np_in_dtype = np.int8
-        elif kernel_info["input_c_type"] == "int16_t":
-            qmin, qmax = -32768, 32767
-            np_in_dtype = np.int16
+        if float_kernel:
+            input_data = self._sample_uniform(input_shape)
         else:
-            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
+            input_data = self.generate_input_data()
+        self.rng.__setstate__(rng_state)
+        if float_kernel:
+            input_q = np.asarray(input_data, dtype=np.float32)
+            output_data = self.run_inference(str(tflite_path), input_q).astype(np.float32)
+        else:
+            input_scale = quant_params['input'].get('scale', 1.0)
+            input_zp = quant_params['input'].get('zero_point', 0)
+            if isinstance(input_scale, (list, np.ndarray)):
+                input_scale = input_scale[0]
 
-        input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-        input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+            if kernel_info["input_c_type"] == "int8_t":
+                qmin, qmax = -128, 127
+                np_in_dtype = np.int8
+            elif kernel_info["input_c_type"] == "int16_t":
+                qmin, qmax = -32768, 32767
+                np_in_dtype = np.int16
+            else:
+                raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
 
-        # Run inference (dtype must match interpreter input)
-        output_data = self.run_inference(str(tflite_path), input_q)
+            input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
+            input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+
+            # Run inference (dtype must match interpreter input)
+            output_data = self.run_inference(str(tflite_path), input_q)
 
         # Bias handling (S16 wrapper expects int64 bias)
         has_biases = biases is not None and getattr(biases, "size", 0) > 0
         bias_dtype = kernel_info["bias_c_type"]
         if has_biases:
-            if bias_dtype == "int64_t" and biases.dtype != np.int64:
+            if float_kernel and biases.dtype != np.float32:
+                biases = biases.astype(np.float32)
+            elif bias_dtype == "int64_t" and biases.dtype != np.int64:
                 biases = biases.astype(np.int64)
             elif bias_dtype == "int32_t" and biases.dtype != np.int32:
                 biases = biases.astype(np.int32)
+        if float_kernel and weights is not None and weights.dtype != np.float32:
+            weights = weights.astype(np.float32)
 
         # Format arrays
         weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
@@ -398,10 +464,20 @@ class OpConvolve(OperationBase):
         # Calculate buffer size max (conservative estimate)
         # Use activation_dtype to determine if this is S8 or S16 convolution
         activation_dtype = self.desc.get('activation_dtype', 'S8')
-        buffer_size_max = builder.calculate_buffer_size_max(
-            input_dims, filter_dims, output_dims, 
-            output_dtype=activation_dtype
-        )
+        if float_kernel:
+            buffer_size_max = max(
+                1024,
+                int(
+                    (input_dims['n'] * input_dims['h'] * input_dims['w'] * input_dims['c']
+                     + filter_dims['n'] * filter_dims['h'] * filter_dims['w'] * max(filter_dims['c'], 1)
+                     + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * 4
+                ),
+            )
+        else:
+            buffer_size_max = builder.calculate_buffer_size_max(
+                input_dims, filter_dims, output_dims, 
+                output_dtype=activation_dtype
+            )
 
         # Build template context
         context = {
@@ -411,7 +487,6 @@ class OpConvolve(OperationBase):
             'filter_dims': filter_dims,
             'output_dims': output_dims,
             'conv_params': conv_params,
-            'quant_params': quant_params_dict,
             'weights_array': weights_array_str,
             'biases_array': biases_array_str,
             'has_biases': has_biases,
@@ -419,12 +494,21 @@ class OpConvolve(OperationBase):
             'expected_output_array': expected_output_array_str,
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': kernel_info["output_c_type"],
+            'weight_dtype': weight_c_type,
             'bias_dtype': bias_dtype,
             'kernel_fn': kernel_info["kernel_fn"],
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
             'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
+            'float_kernel': float_kernel,
+            'conv_params_type': 'cmsis_nn_conv_params_f32' if float_kernel else 'cmsis_nn_conv_params',
+            'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
         }
+        if float_kernel:
+            context['conv_activation_min_literal'] = builder.format_float_literal(conv_params['activation_min'])
+            context['conv_activation_max_literal'] = builder.format_float_literal(conv_params['activation_max'])
+        else:
+            context['quant_params'] = quant_params_dict
 
         # Render templates
         includes_api_dir = output_dir / "includes"

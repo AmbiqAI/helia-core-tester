@@ -147,7 +147,7 @@ class OpMinMax(BinaryBasicMathBase):
         """Convert Keras model to TFLite with quantization."""
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
 
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input")
         if activation_dtype == 'S8':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_types = [tf.int8]
@@ -253,6 +253,18 @@ class OpMinMax(BinaryBasicMathBase):
                 'input_c_type': 'int16_t',
                 'output_c_type': 'int16_t'
             }
+        elif activation_dtype == 'FP32':
+            if op_name == 'Minimum':
+                kernel_fn = 'arm_minimum_f32'
+            elif op_name == 'Maximum':
+                kernel_fn = 'arm_maximum_f32'
+            else:
+                raise ValueError(f"Unsupported operator: {op_name}")
+            return {
+                'kernel_fn': kernel_fn,
+                'input_c_type': 'float',
+                'output_c_type': 'float'
+            }
         else:
             raise NotImplementedError(f"Unsupported MinMax dtype: {activation_dtype}")
     
@@ -289,30 +301,6 @@ class OpMinMax(BinaryBasicMathBase):
         if output_shape is not None:
             output_shape = tuple(output_shape)
         
-        # Extract quantization from LiteRT
-        input1_quant = op_tensors['inputs'][0]['quantization']
-        input2_quant = op_tensors['inputs'][1]['quantization'] if len(op_tensors['inputs']) > 1 else input1_quant
-        
-        input1_scale = input1_quant.get('scale', 1.0)
-        input1_zp = input1_quant.get('zero_point', 0)
-        input2_scale = input2_quant.get('scale', 1.0)
-        input2_zp = input2_quant.get('zero_point', 0)
-        
-        # Handle per-channel quantization (convert to scalar)
-        if isinstance(input1_scale, (list, np.ndarray)):
-            input1_scale = float(input1_scale[0])
-        if isinstance(input1_zp, (list, np.ndarray)):
-            input1_zp = int(input1_zp[0])
-        if isinstance(input2_scale, (list, np.ndarray)):
-            input2_scale = float(input2_scale[0])
-        if isinstance(input2_zp, (list, np.ndarray)):
-            input2_zp = int(input2_zp[0])
-        
-        input1_scale = float(input1_scale)
-        input1_zp = int(input1_zp)
-        input2_scale = float(input2_scale)
-        input2_zp = int(input2_zp)
-        
         builder = TemplateContextBuilder()
         
         # Convert shapes to CMSIS dims
@@ -320,64 +308,67 @@ class OpMinMax(BinaryBasicMathBase):
         input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         
-        # Generate input data and quantize
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-        
-        input1_data = self.rng.uniform(-1.0, 1.0, size=input1_shape).astype(np.float32)
-        input2_data = self.rng.uniform(-1.0, 1.0, size=input2_shape).astype(np.float32)
-        
-        self.rng.__setstate__(rng_state)
-        
-        # Quantize inputs
-        if kernel_info["input_c_type"] == "int8_t":
-            np_in_dtype = np.int8
-            qmin, qmax = -128, 127
-        elif kernel_info["input_c_type"] == "int16_t":
-            np_in_dtype = np.int16
-            qmin, qmax = -32768, 32767
-        else:
-            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        
-        input1_q = np.round(input1_data / float(input1_scale) + float(input1_zp)).astype(np.int32)
-        input1_q = np.clip(input1_q, qmin, qmax).astype(np_in_dtype)
-        
-        input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
-        input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
-        
-        # Run inference using LiteRT interpreter when shapes match and no broadcast requested.
-        # LiteRT broadcasting can fail for some shapes, so fallback to numpy.
-        desc_input1_shape = tuple(self.desc.get("input_1_shape", input1_shape))
-        desc_input2_shape = tuple(self.desc.get("input_2_shape", input2_shape))
-        if input1_shape == input2_shape and desc_input1_shape == desc_input2_shape:
+        input1_data = self._sample_uniform(input1_shape)
+        input2_data = self._sample_uniform(input2_shape)
+
+        if kernel_info["input_c_type"] == "float":
+            input1_q = input1_data.astype(np.float32)
+            input2_q = input2_data.astype(np.float32)
             interpreter = self.load_litert_interpreter(str(tflite_path))
             input_details = interpreter.get_input_details()
             output_details = interpreter.get_output_details()
-            in0_shape = tuple(input_details[0].get('shape', input1_q.shape))
-            in1_shape = tuple(input_details[1].get('shape', input2_q.shape))
-
-            if in0_shape == input1_q.shape and in1_shape == input2_q.shape:
-                try:
-                    interpreter.set_tensor(input_details[0]['index'], input1_q)
-                    interpreter.set_tensor(input_details[1]['index'], input2_q)
-                    interpreter.invoke()
-                    output_data = interpreter.get_tensor(output_details[0]['index'])
-                    output_data = np.array(output_data)
-                except (ValueError, RuntimeError):
-                    if op_name == "Maximum":
-                        output_data = np.maximum(input1_q, input2_q)
-                    else:
-                        output_data = np.minimum(input1_q, input2_q)
-            else:
-                if op_name == "Maximum":
-                    output_data = np.maximum(input1_q, input2_q)
-                else:
-                    output_data = np.minimum(input1_q, input2_q)
+            interpreter.set_tensor(input_details[0]['index'], input1_q)
+            interpreter.set_tensor(input_details[1]['index'], input2_q)
+            interpreter.invoke()
+            output_data = np.array(interpreter.get_tensor(output_details[0]['index']), dtype=np.float32)
+        elif kernel_info["input_c_type"] == "int8_t":
+            np_in_dtype = np.int8
+            qmin, qmax = -128, 127
+            input1_quant = op_tensors['inputs'][0]['quantization']
+            input2_quant = op_tensors['inputs'][1]['quantization'] if len(op_tensors['inputs']) > 1 else input1_quant
+            input1_scale = self._quant_param_scalar(input1_quant, "scale", 1.0)
+            input1_zp = self._quant_param_scalar(input1_quant, "zero_point", 0)
+            input2_scale = self._quant_param_scalar(input2_quant, "scale", 1.0)
+            input2_zp = self._quant_param_scalar(input2_quant, "zero_point", 0)
+        elif kernel_info["input_c_type"] == "int16_t":
+            np_in_dtype = np.int16
+            qmin, qmax = -32768, 32767
+            input1_quant = op_tensors['inputs'][0]['quantization']
+            input2_quant = op_tensors['inputs'][1]['quantization'] if len(op_tensors['inputs']) > 1 else input1_quant
+            input1_scale = self._quant_param_scalar(input1_quant, "scale", 1.0)
+            input1_zp = self._quant_param_scalar(input1_quant, "zero_point", 0)
+            input2_scale = self._quant_param_scalar(input2_quant, "scale", 1.0)
+            input2_zp = self._quant_param_scalar(input2_quant, "zero_point", 0)
         else:
-            if op_name == "Maximum":
-                output_data = np.maximum(input1_q, input2_q)
+            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
+        if kernel_info["input_c_type"] != "float":
+            input1_q = np.round(input1_data / float(input1_scale) + float(input1_zp)).astype(np.int32)
+            input1_q = np.clip(input1_q, qmin, qmax).astype(np_in_dtype)
+
+            input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
+            input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
+
+            desc_input1_shape = tuple(self.desc.get("input_1_shape", input1_shape))
+            desc_input2_shape = tuple(self.desc.get("input_2_shape", input2_shape))
+            if input1_shape == input2_shape and desc_input1_shape == desc_input2_shape:
+                interpreter = self.load_litert_interpreter(str(tflite_path))
+                input_details = interpreter.get_input_details()
+                output_details = interpreter.get_output_details()
+                in0_shape = tuple(input_details[0].get('shape', input1_q.shape))
+                in1_shape = tuple(input_details[1].get('shape', input2_q.shape))
+
+                if in0_shape == input1_q.shape and in1_shape == input2_q.shape:
+                    try:
+                        interpreter.set_tensor(input_details[0]['index'], input1_q)
+                        interpreter.set_tensor(input_details[1]['index'], input2_q)
+                        interpreter.invoke()
+                        output_data = np.array(interpreter.get_tensor(output_details[0]['index']))
+                    except (ValueError, RuntimeError):
+                        output_data = np.maximum(input1_q, input2_q) if op_name == "Maximum" else np.minimum(input1_q, input2_q)
+                else:
+                    output_data = np.maximum(input1_q, input2_q) if op_name == "Maximum" else np.minimum(input1_q, input2_q)
             else:
-                output_data = np.minimum(input1_q, input2_q)
+                output_data = np.maximum(input1_q, input2_q) if op_name == "Maximum" else np.minimum(input1_q, input2_q)
         
         # Format arrays
         input1_array_str = builder.format_array_as_c_literal(input1_q)

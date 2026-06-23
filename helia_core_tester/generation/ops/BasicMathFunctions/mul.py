@@ -22,11 +22,13 @@ class OpMul(BinaryBasicMathBase):
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         from helia_core_tester.generation.utils.litert_builder import build_mul_op
 
-        activation_dtype = self.desc.get("activation_dtype", "S8")
+        activation_dtype = self.tensor_dtype("input")
         if activation_dtype == "S8":
             dtype = "int8"
         elif activation_dtype == "S16":
             dtype = "int16"
+        elif activation_dtype == "FP32":
+            dtype = "float32"
         else:
             raise NotImplementedError(f"Unsupported Mul dtype: {activation_dtype}")
 
@@ -47,19 +49,28 @@ class OpMul(BinaryBasicMathBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input")
         
         if activation_dtype == 'S8':
             return {
                 'kernel_fn': 'arm_mul_s8',
                 'input_c_type': 'int8_t',
-                'output_c_type': 'int8_t'
+                'output_c_type': 'int8_t',
+                'float_kernel': False,
             }
         elif activation_dtype == 'S16':
             return {
                 'kernel_fn': 'arm_mul_s16',
                 'input_c_type': 'int16_t',
-                'output_c_type': 'int16_t'
+                'output_c_type': 'int16_t',
+                'float_kernel': False,
+            }
+        elif activation_dtype == 'FP32':
+            return {
+                'kernel_fn': 'arm_elementwise_mul_f32',
+                'input_c_type': 'float',
+                'output_c_type': 'float',
+                'float_kernel': True,
             }
         else:
             raise NotImplementedError(f"Unsupported Mul dtype: {activation_dtype}")
@@ -94,68 +105,69 @@ class OpMul(BinaryBasicMathBase):
         )
         output_shape = self._ensure_shape_tuple(op_tensors['outputs'][0]['shape'])
         
-        input1_quant = op_tensors['inputs'][0]['quantization']
-        input2_quant = op_tensors['inputs'][1]['quantization'] if len(op_tensors['inputs']) > 1 else input1_quant
-        output_quant = op_tensors['outputs'][0]['quantization']
-        
-        input1_scale, input1_zp = scalar_scale_zp(input1_quant)
-        input2_scale, input2_zp = scalar_scale_zp(input2_quant)
-        output_scale, output_zp = scalar_scale_zp(output_quant)
-        
         builder = TemplateContextBuilder()
         input1_dims = builder.nhwc_to_cmsis_dims(input1_shape)
         input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-        
-        effective_scale = (float(input1_scale) * float(input2_scale)) / float(output_scale)
-        output_mult, output_shift = calculate_multiplier_shift(effective_scale)
-        
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        activation_min, activation_max = activation_bounds(activation_dtype)
-        
-        # Generate input data and quantize
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-        
-        input1_data = self.rng.uniform(-1.0, 1.0, size=input1_shape).astype(np.float32)
-        input2_data = self.rng.uniform(-1.0, 1.0, size=input2_shape).astype(np.float32)
-        
-        self.rng.__setstate__(rng_state)
-        
-        qmin, qmax = activation_bounds(activation_dtype)
-        np_in_dtype = np.int16 if activation_dtype == "S16" else np.int8
-        input1_q = np.round(input1_data / float(input1_scale) + float(input1_zp)).astype(np.int32)
-        input1_q = np.clip(input1_q, qmin, qmax).astype(np_in_dtype)
-        
-        input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
-        input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
-        
-        # Run inference using LiteRT interpreter when shapes match (no broadcast).
-        # LiteRT broadcasting can abort in some runtimes, so fall back to a local
-        # quantized simulation for broadcasted shapes.
-        if input1_shape == input2_shape:
+        activation_dtype = self.tensor_dtype("input")
+        if kernel_info["float_kernel"]:
+            input1_q = self._sample_uniform(input1_shape)
+            input2_q = self._sample_uniform(input2_shape)
             interpreter = self.load_litert_interpreter(str(tflite_path))
             input_details = interpreter.get_input_details()
             output_details = interpreter.get_output_details()
-
             interpreter.set_tensor(input_details[0]['index'], input1_q)
             interpreter.set_tensor(input_details[1]['index'], input2_q)
             interpreter.invoke()
-            output_data = interpreter.get_tensor(output_details[0]['index'])
-            output_data = np.array(output_data)
+            output_data = np.array(interpreter.get_tensor(output_details[0]['index']), dtype=np.float32)
+            activation_min = float(self.desc.get("act_min", -1.0e30))
+            activation_max = float(self.desc.get("act_max", 1.0e30))
+            activation_min_literal = builder.format_float_literal(activation_min)
+            activation_max_literal = builder.format_float_literal(activation_max)
+            input1_zp = input2_zp = output_zp = output_mult = output_shift = 0
         else:
-            output_data = self._simulate_mul_quantized(
-                input1_q,
-                input2_q,
-                input1_offset=-int(input1_zp),
-                input2_offset=-int(input2_zp),
-                out_offset=int(output_zp),
-                out_mult=int(output_mult),
-                out_shift=int(output_shift),
-                out_activation_min=int(activation_min),
-                out_activation_max=int(activation_max),
-                out_dtype=np_in_dtype,
-            )
+            input1_quant = op_tensors['inputs'][0]['quantization']
+            input2_quant = op_tensors['inputs'][1]['quantization'] if len(op_tensors['inputs']) > 1 else input1_quant
+            output_quant = op_tensors['outputs'][0]['quantization']
+
+            input1_scale, input1_zp = scalar_scale_zp(input1_quant)
+            input2_scale, input2_zp = scalar_scale_zp(input2_quant)
+            output_scale, output_zp = scalar_scale_zp(output_quant)
+
+            effective_scale = (float(input1_scale) * float(input2_scale)) / float(output_scale)
+            output_mult, output_shift = calculate_multiplier_shift(effective_scale)
+            activation_min, activation_max = activation_bounds(activation_dtype)
+            input1_data = self._sample_uniform(input1_shape)
+            input2_data = self._sample_uniform(input2_shape)
+            qmin, qmax = activation_bounds(activation_dtype)
+            np_in_dtype = np.int16 if activation_dtype == "S16" else np.int8
+            input1_q = np.round(input1_data / float(input1_scale) + float(input1_zp)).astype(np.int32)
+            input1_q = np.clip(input1_q, qmin, qmax).astype(np_in_dtype)
+
+            input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
+            input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
+
+            if input1_shape == input2_shape:
+                interpreter = self.load_litert_interpreter(str(tflite_path))
+                input_details = interpreter.get_input_details()
+                output_details = interpreter.get_output_details()
+                interpreter.set_tensor(input_details[0]['index'], input1_q)
+                interpreter.set_tensor(input_details[1]['index'], input2_q)
+                interpreter.invoke()
+                output_data = np.array(interpreter.get_tensor(output_details[0]['index']))
+            else:
+                output_data = self._simulate_mul_quantized(
+                    input1_q,
+                    input2_q,
+                    input1_offset=-int(input1_zp),
+                    input2_offset=-int(input2_zp),
+                    out_offset=int(output_zp),
+                    out_mult=int(output_mult),
+                    out_shift=int(output_shift),
+                    out_activation_min=int(activation_min),
+                    out_activation_max=int(activation_max),
+                    out_dtype=np_in_dtype,
+                )
         
         # Format arrays
         input1_array_str = builder.format_array_as_c_literal(input1_q)
@@ -188,7 +200,11 @@ class OpMul(BinaryBasicMathBase):
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
+            'float_kernel': kernel_info["float_kernel"],
         }
+        if kernel_info["float_kernel"]:
+            context["out_activation_min_literal"] = activation_min_literal
+            context["out_activation_max_literal"] = activation_max_literal
         
         cmake_context = {
             'name': name,

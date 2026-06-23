@@ -100,6 +100,91 @@ def test_template_context_formats_float16_literals() -> None:
     assert "(float16_t)-1.250000f" in rendered
 
 
+def test_template_context_formats_standalone_float_literals_for_c() -> None:
+    assert TemplateContextBuilder.format_float_literal(1.0e30) == "1.0e+30f"
+    assert TemplateContextBuilder.format_float_literal(-1.0e30) == "-1.0e+30f"
+    assert TemplateContextBuilder.format_float_literal(0.125) == "0.125f"
+    assert TemplateContextBuilder.format_float_literal(0.0) == "0.0f"
+
+
+def test_build_pool_params_uses_float_activation_defaults_for_fp32() -> None:
+    params = TemplateContextBuilder.build_pool_params(
+        {
+            "tensor_dtypes": {"input": "FP32", "output": "FP32"},
+            "padding": "same",
+            "strides": [2, 2],
+        },
+        (1, 6, 6, 3),
+        (2, 2),
+        (1, 3, 3, 3),
+        {},
+    )
+
+    assert params["pad_h"] == 0
+    assert params["pad_w"] == 0
+    assert params["activation_min"] == -1.0e30
+    assert params["activation_max"] == 1.0e30
+
+
+def test_build_pool_params_keeps_quantized_activation_defaults() -> None:
+    s8_params = TemplateContextBuilder.build_pool_params(
+        {"activation_dtype": "S8", "padding": "valid", "strides": [1, 1]},
+        (1, 6, 6, 3),
+        (2, 2),
+        (1, 5, 5, 3),
+        {},
+    )
+    s16_params = TemplateContextBuilder.build_pool_params(
+        {"activation_dtype": "S16", "padding": "valid", "strides": [1, 1]},
+        (1, 6, 6, 3),
+        (2, 2),
+        (1, 5, 5, 3),
+        {},
+    )
+
+    assert s8_params["activation_min"] == -128
+    assert s8_params["activation_max"] == 127
+    assert s16_params["activation_min"] == -32768
+    assert s16_params["activation_max"] == 32767
+
+
+def test_float_param_builders_use_public_float_activation_defaults() -> None:
+    conv = TemplateContextBuilder.build_conv_params(
+        {"tensor_dtypes": {"input": "FP32", "output": "FP32"}, "padding": "same", "strides": [1, 1]},
+        (1, 6, 6, 3),
+        (3, 3),
+        (1, 6, 6, 5),
+        {},
+        {},
+    )
+    dw = TemplateContextBuilder.build_dw_conv_params(
+        {"tensor_dtypes": {"input": "FP32", "output": "FP32"}, "padding": "same", "strides": [1, 1], "depth_multiplier": 1},
+        (1, 6, 6, 3),
+        (3, 3),
+        (1, 6, 6, 3),
+        {},
+        {},
+    )
+    fc = TemplateContextBuilder.build_fc_params(
+        {"tensor_dtypes": {"input": "FP32", "output": "FP32"}},
+        {},
+        {},
+        {},
+    )
+    tconv = TemplateContextBuilder.build_transpose_conv_params(
+        {"tensor_dtypes": {"input": "FP32", "output": "FP32"}, "padding": "same", "strides": [2, 2]},
+        (1, 4, 4, 2),
+        (3, 3),
+        (1, 8, 8, 3),
+        {},
+        {},
+    )
+
+    for params in (conv, dw, fc, tconv):
+        assert params["activation_min"] == -1.0e30
+        assert params["activation_max"] == 1.0e30
+
+
 @pytest.mark.skipif(not LITERT_AVAILABLE, reason="ai_edge_litert is required for float LiteRT round-trips")
 @pytest.mark.parametrize(
     ("dtype", "expected_tensor_type_name"),

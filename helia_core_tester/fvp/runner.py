@@ -22,6 +22,9 @@ from .coverage import CoverageContext, process_coverage_output
 from .env import REPO_ROOT
 
 
+_TERMINAL_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
 @dataclass
 class ProcessRecord:
     elf: Path
@@ -101,11 +104,22 @@ def _signal_process_group(proc: subprocess.Popen, sig: int) -> None:
     if proc.poll() is not None:
         return
     try:
-        os.killpg(proc.pid, sig)
+        pgid = os.getpgid(proc.pid)
+        own_pgid = os.getpgrp()
+        # Safety: never signal our own process group via killpg, which could
+        # propagate to the interactive shell and surface as a spurious ^C.
+        if pgid == own_pgid:
+            proc.send_signal(sig)
+            return
+        os.killpg(pgid, sig)
     except ProcessLookupError:
         pass
     except Exception:
         pass
+
+
+def _sanitize_terminal_text(raw_output: str) -> str:
+    return _TERMINAL_CONTROL_CHARS.sub(lambda m: f"\\x{ord(m.group(0)):02x}", raw_output)
 
 
 def _terminate_process(proc: subprocess.Popen, grace_seconds: float = 1.0) -> None:
@@ -298,7 +312,7 @@ def _emit_reporting_result_output(result: TestResult, elf: Path, verbosity: int,
     if result.status == TestStatus.PASS:
         print(f"\n\nPASS: {elf}")
         if verbosity >= 3:
-            sys.stdout.write(raw_output)
+            sys.stdout.write(_sanitize_terminal_text(raw_output))
             sys.stdout.flush()
         return
 

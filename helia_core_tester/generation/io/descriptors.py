@@ -33,6 +33,7 @@ OPERATOR_DESCRIPTOR_PROFILES = {'Abs': 'single_input_unary',
  'ArgMin': 'arg_reduction',
  'AvgPool': 'pool',
  'BatchMatMul': 'dual_input_elementwise',
+ 'BatchNorm': 'single_input_unary',
  'BatchToSpaceND': 'shape_transform',
  'BroadcastTo': 'shape_transform',
  'Clamp': 'single_input_unary',
@@ -58,6 +59,7 @@ OPERATOR_DESCRIPTOR_PROFILES = {'Abs': 'single_input_unary',
  'Minimum': 'dual_input_elementwise',
  'MirrorPad': 'custom',
  'Mul': 'dual_input_elementwise',
+ 'NNActivationFloat': 'single_input_unary',
  'NNActivationS16': 'single_input_unary',
  'PReLU': 'single_input_unary',
  'Pad': 'single_input_unary',
@@ -106,12 +108,15 @@ PROFILE_ONE_OF_REQUIRED_FIELDS = {
 }
 
 OPERATOR_EXTRA_REQUIRED_FIELDS = {'BroadcastTo': ('output_shape',),
+ 'BatchNorm': ('layout',),
  'Clamp': ('act_min', 'act_max'),
  'Comparison': ('operation',),
  'DynamicUpdateSlice': ('operand_shape', 'update_shape', 'start_indices'),
  'Gather': ('indices_shape',),
  'GatherND': ('indices_shape',),
  'MirrorPad': ('paddings',),
+ 'Reshape': ('target_shape',),
+ 'NNActivationFloat': ('activation_type',),
  'NNActivationS16': ('activation_type',),
  'Requantize': ('effective_scale_multiplier',
                 'effective_scale_shift',
@@ -186,15 +191,16 @@ def _annotate_descriptor_source(
     source_rel = Path(source_relpath)
     spec = get_operator_spec(str(annotated["operator"]))
 
-    if spec.descriptor_relpath is not None and source_relpath != spec.descriptor_relpath:
+    if spec.descriptor_relpaths and source_relpath not in spec.descriptor_relpaths:
         raise ValueError(
             f"Descriptor path mismatch for {annotated['operator']}: "
-            f"expected {spec.descriptor_relpath}, found {source_relpath}"
+            f"expected one of {spec.descriptor_relpaths}, found {source_relpath}"
         )
 
     annotated["_source_family"] = source_rel.parts[0] if len(source_rel.parts) > 1 else ""
     annotated["_source_stem"] = source_rel.stem
     annotated["_source_relpath"] = source_relpath
+    annotated["_descriptor_suite"] = str(annotated.get("suite") or ("float" if source_rel.stem.endswith("_float") else "default"))
     annotated["_family"] = spec.family
     annotated["_parity_kind"] = spec.parity_kind
     return annotated

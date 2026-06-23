@@ -170,6 +170,385 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
     assert "split_smoke_out1_output" in rendered["split"]
 
 
+def test_basic_math_float_templates_render_preformatted_activation_literals() -> None:
+    add_text = _render(
+        "BasicMathFunctions/add/add.c.j2",
+        {
+            "name": "add_float_default_f32",
+            "prefix": "add_float_default_f32",
+            "input_dtype": "float",
+            "output_dtype": "float",
+            "float_kernel": True,
+            "kernel_fn": "arm_elementwise_add_f32",
+            "block_size": 128,
+            "out_activation_min_literal": "-1.0e+30f",
+            "out_activation_max_literal": "1.0e+30f",
+            "output_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+        },
+    )
+    mul_text = _render(
+        "BasicMathFunctions/mul/mul.c.j2",
+        {
+            "name": "mul_float_default_f32",
+            "prefix": "mul_float_default_f32",
+            "input_dtype": "float",
+            "output_dtype": "float",
+            "float_kernel": True,
+            "kernel_fn": "arm_elementwise_mul_f32",
+            "block_size": 128,
+            "out_activation_min_literal": "-1.0e+30f",
+            "out_activation_max_literal": "1.0e+30f",
+            "output_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+        },
+    )
+    activation_text = _render(
+        "ActivationFunctions/nn_activation_float/nn_activation_float.c.j2",
+        {
+            "name": "nn_activation_float_leaky_relu_f32",
+            "prefix": "nn_activation_float_leaky_relu_f32",
+            "input_dtype": "float",
+            "output_dtype": "float",
+            "kernel_fn": "arm_nn_activation_f32",
+            "size": 4,
+            "activation_symbol": "ARM_NN_FLT_ACT_LEAKY_RELU",
+            "act_param_literal": "0.125f",
+        },
+    )
+
+    for text in (add_text, mul_text):
+        assert "1000000000000000019884624838656f" not in text
+        assert "-1.0e+30f" in text
+        assert "1.0e+30f" in text
+
+    assert "0.125f" in activation_text
+    assert "{{ act_param }}f" not in activation_text
+
+
+def test_pooling_float_header_templates_render_public_float_params() -> None:
+    avg_text = _render(
+        "PoolingFunctions/avg_pool/avg_pool.h.j2",
+        {
+            "name": "avg_pool_float_default_f32",
+            "prefix": "avg_pool_float_default_f32",
+            "input_dtype": "float",
+            "output_dtype": "float",
+            "pool_params_type": "cmsis_nn_pool_params_f32",
+            "float_kernel": True,
+            "pool_activation_min_literal": "-1.0e+30f",
+            "pool_activation_max_literal": "1.0e+30f",
+            "pool_params": {
+                "stride_w": 2,
+                "stride_h": 2,
+                "pad_w": 0,
+                "pad_h": 0,
+                "activation_min": -1.0e30,
+                "activation_max": 1.0e30,
+            },
+            "input_dims": {"n": 1, "h": 6, "w": 6, "c": 3},
+            "filter_dims": {"n": 1, "h": 2, "w": 2, "c": 1},
+            "output_dims": {"n": 1, "h": 3, "w": 3, "c": 3},
+            "input_data_array": "    0.0f",
+            "expected_output_array": "    0.0f",
+        },
+    )
+    max_text = _render(
+        "PoolingFunctions/max_pool/max_pool.h.j2",
+        {
+            "name": "max_pool_float_default_f32",
+            "prefix": "max_pool_float_default_f32",
+            "input_dtype": "float",
+            "output_dtype": "float",
+            "pool_params_type": "cmsis_nn_pool_params_f32",
+            "float_kernel": True,
+            "pool_activation_min_literal": "-1.0e+30f",
+            "pool_activation_max_literal": "1.0e+30f",
+            "pool_params": {
+                "stride_w": 2,
+                "stride_h": 2,
+                "pad_w": 0,
+                "pad_h": 0,
+                "activation_min": -1.0e30,
+                "activation_max": 1.0e30,
+            },
+            "input_dims": {"n": 1, "h": 6, "w": 6, "c": 3},
+            "filter_dims": {"n": 1, "h": 2, "w": 2, "c": 1},
+            "output_dims": {"n": 1, "h": 3, "w": 3, "c": 3},
+            "input_data_array": "    0.0f",
+            "expected_output_array": "    0.0f",
+        },
+    )
+
+    assert "cmsis_nn_pool_params_f32" in avg_text
+    assert "cmsis_nn_pool_params_f32" in max_text
+    for text in (avg_text, max_text):
+        assert "-128f" not in text
+        assert "127f" not in text
+        assert "-1.0e+30f" in text
+        assert "1.0e+30f" in text
+
+
+def test_complex_float_templates_render_public_f32_signatures() -> None:
+    conv_h = _render(
+        "ConvolutionFunctions/convolve/convolve.h.j2",
+        {
+            "name": "convolve_float_default_f32",
+            "prefix": "convolve_float_default_f32",
+            "input_dims": {"n": 1, "h": 6, "w": 6, "c": 3},
+            "filter_dims": {"n": 5, "h": 3, "w": 3, "c": 3},
+            "output_dims": {"n": 1, "h": 6, "w": 6, "c": 5},
+            "conv_params": {"stride_w": 1, "stride_h": 1, "dilation_w": 1, "dilation_h": 1, "pad_w": 1, "pad_h": 1},
+            "weights_array": "    0.0f",
+            "biases_array": "    0.0f",
+            "has_biases": True,
+            "input_data_array": "    0.0f",
+            "expected_output_array": "    0.0f",
+            "input_dtype": "float",
+            "output_dtype": "float",
+            "weight_dtype": "float",
+            "bias_dtype": "float",
+            "float_kernel": True,
+            "conv_params_type": "cmsis_nn_conv_params_f32",
+            "conv_activation_min_literal": "-1.0e+30f",
+            "conv_activation_max_literal": "1.0e+30f",
+        },
+    )
+    fc_h = _render(
+        "FullyConnectedFunctions/fully_connected/fully_connected.h.j2",
+        {
+            "name": "fully_connected_float_default_f32",
+            "prefix": "fully_connected_float_default_f32",
+            "input_dims": {"n": 1, "h": 1, "w": 1, "c": 12},
+            "filter_dims": {"n": 12, "h": 1, "w": 1, "c": 5},
+            "output_dims": {"n": 1, "h": 1, "w": 1, "c": 5},
+            "fc_params": {},
+            "weights_array": "    0.0f",
+            "biases_array": "    0.0f",
+            "has_biases": True,
+            "input_data_array": "    0.0f",
+            "expected_output_array": "    0.0f",
+            "input_dtype": "float",
+            "output_dtype": "float",
+            "weight_dtype": "float",
+            "bias_dtype": "float",
+            "kernel_fn": "arm_fully_connected_f32",
+            "kernel_get_buffer_size_fn": "arm_fully_connected_f32_get_buffer_size",
+            "buffer_size_max": 1024,
+            "has_weight_sum": False,
+            "weight_sum_array": "",
+            "float_kernel": True,
+            "fc_params_type": "cmsis_nn_fc_params_f32",
+            "fc_activation_min_literal": "-1.0e+30f",
+            "fc_activation_max_literal": "1.0e+30f",
+        },
+    )
+    fc_c = _render(
+        "FullyConnectedFunctions/fully_connected/fully_connected.c.j2",
+        {
+            "name": "fully_connected_float_default_f32",
+            "prefix": "fully_connected_float_default_f32",
+            "input_dims": {"n": 1, "h": 1, "w": 1, "c": 12},
+            "filter_dims": {"n": 12, "h": 1, "w": 1, "c": 5},
+            "output_dims": {"n": 1, "h": 1, "w": 1, "c": 5},
+            "fc_params": {},
+            "weights_array": "    0.0f",
+            "biases_array": "    0.0f",
+            "has_biases": True,
+            "input_data_array": "    0.0f",
+            "expected_output_array": "    0.0f",
+            "input_dtype": "float",
+            "output_dtype": "float",
+            "weight_dtype": "float",
+            "bias_dtype": "float",
+            "kernel_fn": "arm_fully_connected_f32",
+            "kernel_get_buffer_size_fn": "arm_fully_connected_f32_get_buffer_size",
+            "buffer_size_max": 1024,
+            "has_weight_sum": False,
+            "weight_sum_array": "",
+            "float_kernel": True,
+            "fc_params_type": "cmsis_nn_fc_params_f32",
+            "fc_activation_min_literal": "-1.0e+30f",
+            "fc_activation_max_literal": "1.0e+30f",
+        },
+    )
+    bmm_c = _render(
+        "FullyConnectedFunctions/batch_matmul/batch_matmul.c.j2",
+        {
+            "name": "batch_matmul_float_default_f32",
+            "prefix": "batch_matmul_float_default_f32",
+            "input_lhs_dims": {"n": 1, "h": 1, "w": 4, "c": 3},
+            "input_rhs_dims": {"n": 1, "h": 1, "w": 3, "c": 2},
+            "output_dims": {"n": 1, "h": 1, "w": 4, "c": 2},
+            "bmm_params": {"adj_x": False, "adj_y": False},
+            "input_lhs_array": "    0.0f",
+            "input_rhs_array": "    0.0f",
+            "expected_output_array": "    0.0f",
+            "input_dtype": "float",
+            "input_rhs_dtype": "float",
+            "output_dtype": "float",
+            "kernel_fn": "arm_batch_matmul_f32",
+            "kernel_get_buffer_size_fn": "arm_batch_matmul_f32_get_buffer_size",
+            "buffer_size_max": 1024,
+            "float_kernel": True,
+            "bmm_params_type": "cmsis_nn_bmm_params_f32",
+            "bmm_activation_min_literal": "-1.0e+30f",
+            "bmm_activation_max_literal": "1.0e+30f",
+        },
+    )
+    tconv_c = _render(
+        "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2",
+        {
+            "name": "transpose_conv_float_default_f32",
+            "prefix": "transpose_conv_float_default_f32",
+            "input_dims": {"n": 1, "h": 4, "w": 4, "c": 2},
+            "filter_dims": {"n": 3, "h": 3, "w": 3, "c": 2},
+            "output_dims": {"n": 1, "h": 8, "w": 8, "c": 3},
+            "transpose_conv_params": {"stride_w": 2, "stride_h": 2, "dilation_w": 1, "dilation_h": 1, "pad_w": 1, "pad_h": 1, "pad_offset_w": 1, "pad_offset_h": 1},
+            "weights_array": "    0.0f",
+            "biases_array": "    0.0f",
+            "has_biases": True,
+            "has_weight_sum": False,
+            "weight_sum_size": 0,
+            "input_data_array": "    0.0f",
+            "expected_output_array": "    0.0f",
+            "input_dtype": "float",
+            "output_dtype": "float",
+            "weight_dtype": "float",
+            "bias_dtype": "float",
+            "kernel_fn": "arm_transpose_conv_f32",
+            "kernel_get_buffer_size_fn": "arm_transpose_conv_f32_get_buffer_size",
+            "buffer_size_max": 1024,
+            "reverse_conv_ctx_size": 1024,
+            "float_kernel": True,
+            "kernel_layout": "ARM_NN_LAYOUT_NHWC",
+            "transpose_conv_params_type": "cmsis_nn_transpose_conv_params_f32",
+            "transpose_activation_min_literal": "-1.0e+30f",
+            "transpose_activation_max_literal": "1.0e+30f",
+        },
+    )
+
+    assert "cmsis_nn_conv_params_f32" in conv_h
+    assert "ARM_NN_WEIGHT_FORMAT_STANDARD" in conv_h
+    assert "arm_fully_connected_f32" in fc_c
+    assert "cmsis_nn_fc_params_f32" in fc_h
+    assert "arm_batch_matmul_f32" in bmm_c
+    assert "arm_batch_matmul_f32_get_buffer_size" in bmm_c
+    assert "arm_transpose_conv_f32" in tconv_c
+    assert "ARM_NN_LAYOUT_NHWC" in tconv_c
+
+
+def test_s16_conv_templates_render_int8_weights_for_public_wrapper_signatures() -> None:
+    conv_h = _render(
+        "ConvolutionFunctions/convolve/convolve.h.j2",
+        {
+            "name": "convolve_int16xint8xint32_case_04_s16",
+            "prefix": "convolve_int16xint8xint32_case_04_s16",
+            "input_dims": {"n": 1, "h": 32, "w": 32, "c": 2},
+            "filter_dims": {"n": 2, "h": 2, "w": 2, "c": 2},
+            "output_dims": {"n": 1, "h": 30, "w": 30, "c": 2},
+            "conv_params": {"input_offset": 0, "output_offset": 0, "stride_w": 1, "stride_h": 1, "dilation_w": 2, "dilation_h": 2, "pad_w": 0, "pad_h": 0, "activation_min": -32768, "activation_max": 32767},
+            "quant_params": {"per_channel": False, "multiplier": 1, "shift": 0},
+            "weights_array": "    1",
+            "biases_array": "    0",
+            "has_biases": True,
+            "input_data_array": "    0",
+            "expected_output_array": "    0",
+            "input_dtype": "int16_t",
+            "output_dtype": "int16_t",
+            "weight_dtype": "int8_t",
+            "bias_dtype": "int64_t",
+            "kernel_fn": "arm_convolve_wrapper_s16",
+            "kernel_get_buffer_size_fn": "arm_convolve_wrapper_s16_get_buffer_size",
+            "buffer_size_max": 1024,
+        },
+    )
+    conv_c = _render(
+        "ConvolutionFunctions/convolve/convolve.c.j2",
+        {
+            "name": "convolve_int16xint8xint32_case_04_s16",
+            "prefix": "convolve_int16xint8xint32_case_04_s16",
+            "input_dims": {"n": 1, "h": 32, "w": 32, "c": 2},
+            "filter_dims": {"n": 2, "h": 2, "w": 2, "c": 2},
+            "output_dims": {"n": 1, "h": 30, "w": 30, "c": 2},
+            "conv_params": {"input_offset": 0, "output_offset": 0, "stride_w": 1, "stride_h": 1, "dilation_w": 2, "dilation_h": 2, "pad_w": 0, "pad_h": 0, "activation_min": -32768, "activation_max": 32767},
+            "quant_params": {"per_channel": False, "multiplier": 1, "shift": 0},
+            "weights_array": "    1",
+            "biases_array": "    0",
+            "has_biases": True,
+            "input_data_array": "    0",
+            "expected_output_array": "    0",
+            "input_dtype": "int16_t",
+            "output_dtype": "int16_t",
+            "weight_dtype": "int8_t",
+            "bias_dtype": "int64_t",
+            "kernel_fn": "arm_convolve_wrapper_s16",
+            "kernel_get_buffer_size_fn": "arm_convolve_wrapper_s16_get_buffer_size",
+            "buffer_size_max": 1024,
+        },
+    )
+    dw_h = _render(
+        "ConvolutionFunctions/depthwise_conv/depthwise_conv.h.j2",
+        {
+            "name": "depthwise_conv_s16",
+            "prefix": "depthwise_conv_s16",
+            "input_dims": {"n": 1, "h": 8, "w": 8, "c": 4},
+            "filter_dims": {"n": 1, "h": 3, "w": 3, "c": 4},
+            "output_dims": {"n": 1, "h": 6, "w": 6, "c": 4},
+            "dw_conv_params": {"input_offset": 0, "output_offset": 0, "ch_mult": 1, "stride_w": 1, "stride_h": 1, "dilation_w": 1, "dilation_h": 1, "pad_w": 0, "pad_h": 0, "activation_min": -32768, "activation_max": 32767},
+            "quant_params": {"per_channel": False, "multiplier": 1, "shift": 0},
+            "weights_array": "    1",
+            "biases_array": "    0",
+            "has_biases": True,
+            "weight_sum_array": "",
+            "has_weight_sum": False,
+            "input_data_array": "    0",
+            "expected_output_array": "    0",
+            "input_dtype": "int16_t",
+            "output_dtype": "int16_t",
+            "weight_dtype": "int8_t",
+            "bias_dtype": "int64_t",
+            "kernel_fn": "arm_depthwise_conv_wrapper_s16",
+            "kernel_get_buffer_size_fn": "arm_depthwise_conv_wrapper_s16_get_buffer_size",
+            "buffer_size_max": 1024,
+        },
+    )
+    dw_c = _render(
+        "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2",
+        {
+            "name": "depthwise_conv_s16",
+            "prefix": "depthwise_conv_s16",
+            "input_dims": {"n": 1, "h": 8, "w": 8, "c": 4},
+            "filter_dims": {"n": 1, "h": 3, "w": 3, "c": 4},
+            "output_dims": {"n": 1, "h": 6, "w": 6, "c": 4},
+            "dw_conv_params": {"input_offset": 0, "output_offset": 0, "ch_mult": 1, "stride_w": 1, "stride_h": 1, "dilation_w": 1, "dilation_h": 1, "pad_w": 0, "pad_h": 0, "activation_min": -32768, "activation_max": 32767},
+            "quant_params": {"per_channel": False, "multiplier": 1, "shift": 0},
+            "weights_array": "    1",
+            "biases_array": "    0",
+            "has_biases": True,
+            "weight_sum_array": "",
+            "has_weight_sum": False,
+            "input_data_array": "    0",
+            "expected_output_array": "    0",
+            "input_dtype": "int16_t",
+            "output_dtype": "int16_t",
+            "weight_dtype": "int8_t",
+            "bias_dtype": "int64_t",
+            "kernel_fn": "arm_depthwise_conv_wrapper_s16",
+            "kernel_get_buffer_size_fn": "arm_depthwise_conv_wrapper_s16_get_buffer_size",
+            "buffer_size_max": 1024,
+        },
+    )
+
+    assert "static const int8_t convolve_int16xint8xint32_case_04_s16_weights[]" in conv_h
+    assert "static const int64_t convolve_int16xint8xint32_case_04_s16_biases[]" in conv_h
+    assert "static const int16_t convolve_int16xint8xint32_case_04_s16_weights[]" not in conv_h
+    assert "arm_convolve_wrapper_s16" in conv_c
+
+    assert "static const int8_t depthwise_conv_s16_weights[]" in dw_h
+    assert "static const int64_t depthwise_conv_s16_biases[]" in dw_h
+    assert "static const int16_t depthwise_conv_s16_weights[]" not in dw_h
+    assert "arm_depthwise_conv_wrapper_s16" in dw_c
+
+
 def test_gather_nd_invalid_status_render_uses_expected_status_helper() -> None:
     text = _render(
         "GatherFunctions/gather_nd/gather_nd.c.j2",
@@ -212,6 +591,54 @@ def test_transpose_invalid_status_render_uses_expected_status_helper() -> None:
     assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
     assert "ARM_CMSIS_NN_ARG_ERROR" in text
     assert "{{ name }}_expected_output" not in text
+
+
+def test_transpose_header_float_uses_inline_perm_array() -> None:
+    text = _render(
+        "TransposeFunctions/transpose/transpose.h.j2",
+        {
+            "name": "transpose_float_smoke",
+            "prefix": "transpose",
+            "input_dims": {"n": 1, "h": 2, "w": 3, "c": 4},
+            "output_dims": {"n": 1, "h": 3, "w": 2, "c": 4},
+            "num_dims": 4,
+            "permutation_array": "    0, 2, 1, 3",
+            "input_data_array": "    0.0f",
+            "expected_output_array": "    0.0f",
+            "input_dtype": "float",
+            "output_dtype": "float",
+            "transpose_params_type": "cmsis_nn_transpose_params_f32",
+            "float_kernel": True,
+        },
+    )
+
+    assert "static const int32_t transpose_float_smoke_perm[]" in text
+    assert ".perm = {" in text
+    assert ".permutations =" not in text
+
+
+def test_transpose_header_int_uses_permutations_pointer() -> None:
+    text = _render(
+        "TransposeFunctions/transpose/transpose.h.j2",
+        {
+            "name": "transpose_int_smoke",
+            "prefix": "transpose",
+            "input_dims": {"n": 1, "h": 2, "w": 3, "c": 4},
+            "output_dims": {"n": 1, "h": 3, "w": 2, "c": 4},
+            "num_dims": 4,
+            "permutation_array": "    0, 2, 1, 3",
+            "input_data_array": "    0",
+            "expected_output_array": "    0",
+            "input_dtype": "int8_t",
+            "output_dtype": "int8_t",
+            "transpose_params_type": "cmsis_nn_transpose_params",
+            "float_kernel": False,
+        },
+    )
+
+    assert "static const uint32_t transpose_int_smoke_permutations[]" in text
+    assert ".permutations = transpose_int_smoke_permutations" in text
+    assert ".perm = {" not in text
 
 
 def test_rsqrt_invalid_status_render_uses_expected_status_helper() -> None:

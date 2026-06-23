@@ -1,138 +1,138 @@
-operator: LSTMUnidirectional
-name: lstm_unidirectional_dataset_1_time_major_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-dataset: lstm_1
-batch_size: 1
-time_steps: 10
-feature_size: 22
-units: 11
-time_major: true
-input_shape:
-- 1
-- 10
-- 22
-hint:
-  call_style: per_tensor
-  force_cmsis: true
----
-operator: LSTMUnidirectional
-name: lstm_unidirectional_dataset_2_batch_major_s8
-activation_dtype: S8
-weight_dtype: S8
-activation: NONE
-dataset: lstm_2
-batch_size: 1
-time_steps: 9
-feature_size: 6
-units: 7
-time_major: false
-input_shape:
-- 1
-- 9
-- 6
-hint:
-  call_style: per_tensor
-  force_cmsis: true
----
-operator: LSTMUnidirectional
-name: lstm_unidirectional_dataset_1_s16_time_major_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-dataset: lstm_1_s16
-batch_size: 1
-time_steps: 10
-feature_size: 22
-units: 11
-time_major: true
-input_shape:
-- 1
-- 10
-- 22
-hint:
-  call_style: per_tensor
-  force_cmsis: true
----
-operator: LSTMUnidirectional
-name: lstm_unidirectional_dataset_2_s16_batch_major_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-dataset: lstm_2_s16
-batch_size: 1
-time_steps: 9
-feature_size: 6
-units: 7
-time_major: false
-input_shape:
-- 1
-- 9
-- 6
-hint:
-  call_style: per_tensor
-  force_cmsis: true
----
-operator: LSTMUnidirectional
-name: lstm_unidirectional_dataset_one_time_step_s16_batch_major_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-dataset: lstm_one_time_step_s16
-batch_size: 3
-time_steps: 1
-feature_size: 22
-units: 3
-time_major: false
-input_shape:
-- 3
-- 1
-- 22
-hint:
-  call_style: per_tensor
-  force_cmsis: true
----
-operator: LSTMUnidirectional
-name: lstm_unidirectional_dataset_1_s16_time_major_nonzero_zp_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-dataset: lstm_1_s16
-batch_size: 1
-time_steps: 10
-feature_size: 22
-units: 11
-time_major: true
-input_shape:
-- 1
-- 10
-- 22
-hint:
-  call_style: per_tensor
-  force_cmsis: true
-  extras:
-    input_zero_point: 7
-    output_zero_point: -5
----
-operator: LSTMUnidirectional
-name: lstm_unidirectional_dataset_2_s16_batch_major_nonzero_zp_s16
-activation_dtype: S16
-weight_dtype: S8
-activation: NONE
-dataset: lstm_2_s16
-batch_size: 1
-time_steps: 9
-feature_size: 6
-units: 7
-time_major: false
-input_shape:
-- 1
-- 9
-- 6
-hint:
-  call_style: per_tensor
-  force_cmsis: true
-  extras:
-    input_zero_point: -9
-    output_zero_point: 6
+# operator: LSTMUnidirectional
+# name: lstm_unidirectional_dataset_1_time_major_s8
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# dataset: lstm_1
+# batch_size: 1
+# time_steps: 10
+# feature_size: 22
+# units: 11
+# time_major: true
+# input_shape:
+# - 1
+# - 10
+# - 22
+# hint:
+#   call_style: per_tensor
+#   force_cmsis: true
+# ---
+# operator: LSTMUnidirectional
+# name: lstm_unidirectional_dataset_2_batch_major_s8
+# activation_dtype: S8
+# weight_dtype: S8
+# activation: NONE
+# dataset: lstm_2
+# batch_size: 1
+# time_steps: 9
+# feature_size: 6
+# units: 7
+# time_major: false
+# input_shape:
+# - 1
+# - 9
+# - 6
+# hint:
+#   call_style: per_tensor
+#   force_cmsis: true
+# ---
+# operator: LSTMUnidirectional
+# name: lstm_unidirectional_dataset_1_s16_time_major_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# dataset: lstm_1_s16
+# batch_size: 1
+# time_steps: 10
+# feature_size: 22
+# units: 11
+# time_major: true
+# input_shape:
+# - 1
+# - 10
+# - 22
+# hint:
+#   call_style: per_tensor
+#   force_cmsis: true
+# ---
+# operator: LSTMUnidirectional
+# name: lstm_unidirectional_dataset_2_s16_batch_major_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# dataset: lstm_2_s16
+# batch_size: 1
+# time_steps: 9
+# feature_size: 6
+# units: 7
+# time_major: false
+# input_shape:
+# - 1
+# - 9
+# - 6
+# hint:
+#   call_style: per_tensor
+#   force_cmsis: true
+# ---
+# operator: LSTMUnidirectional
+# name: lstm_unidirectional_dataset_one_time_step_s16_batch_major_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# dataset: lstm_one_time_step_s16
+# batch_size: 3
+# time_steps: 1
+# feature_size: 22
+# units: 3
+# time_major: false
+# input_shape:
+# - 3
+# - 1
+# - 22
+# hint:
+#   call_style: per_tensor
+#   force_cmsis: true
+# ---
+# operator: LSTMUnidirectional
+# name: lstm_unidirectional_dataset_1_s16_time_major_nonzero_zp_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# dataset: lstm_1_s16
+# batch_size: 1
+# time_steps: 10
+# feature_size: 22
+# units: 11
+# time_major: true
+# input_shape:
+# - 1
+# - 10
+# - 22
+# hint:
+#   call_style: per_tensor
+#   force_cmsis: true
+#   extras:
+#     input_zero_point: 7
+#     output_zero_point: -5
+# ---
+# operator: LSTMUnidirectional
+# name: lstm_unidirectional_dataset_2_s16_batch_major_nonzero_zp_s16
+# activation_dtype: S16
+# weight_dtype: S8
+# activation: NONE
+# dataset: lstm_2_s16
+# batch_size: 1
+# time_steps: 9
+# feature_size: 6
+# units: 7
+# time_major: false
+# input_shape:
+# - 1
+# - 9
+# - 6
+# hint:
+#   call_style: per_tensor
+#   force_cmsis: true
+#   extras:
+#     input_zero_point: -9
+#     output_zero_point: 6

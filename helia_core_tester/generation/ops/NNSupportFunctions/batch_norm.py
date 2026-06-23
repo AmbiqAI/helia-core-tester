@@ -1,0 +1,66 @@
+"""Float batch normalization operation implementation."""
+
+from pathlib import Path
+
+import numpy as np
+import tensorflow as tf
+
+from helia_core_tester.generation.ops._shared.base import OperationBase
+
+
+class OpBatchNorm(OperationBase):
+    """Generate float batch normalization parity tests."""
+
+    def build_keras_model(self) -> tf.keras.Model:
+        input_shape = tuple(self.desc["input_shape"])
+        channels = int(input_shape[-1])
+
+        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name="input")
+        scale = np.linspace(0.5, 1.5, num=channels, dtype=np.float32)
+        bias = np.linspace(-0.25, 0.25, num=channels, dtype=np.float32)
+        scale_tensor = tf.constant(scale.reshape((1, 1, 1, channels)))
+        bias_tensor = tf.constant(bias.reshape((1, 1, 1, channels)))
+        outputs = tf.keras.layers.Lambda(lambda x: x * scale_tensor + bias_tensor)(inputs)
+        return tf.keras.Model(inputs=inputs, outputs=outputs)
+
+    def generate_c_files(self, output_dir: Path) -> None:
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        name = self.desc["name"]
+        input_shape = tuple(self.desc["input_shape"])
+        channels = int(input_shape[-1])
+
+        input_data = self._sample_uniform(input_shape)
+        scale = np.linspace(0.5, 1.5, num=channels, dtype=np.float32)
+        bias = np.linspace(-0.25, 0.25, num=channels, dtype=np.float32)
+        output_data = input_data * scale.reshape((1, 1, 1, channels)) + bias.reshape((1, 1, 1, channels))
+
+        builder = TemplateContextBuilder()
+        context = {
+            "name": name,
+            "prefix": name,
+            "input_dims": builder.nhwc_to_cmsis_dims(input_shape),
+            "input_data_array": builder.format_array_as_c_literal(input_data),
+            "scale_array": builder.format_array_as_c_literal(scale),
+            "bias_array": builder.format_array_as_c_literal(bias),
+            "expected_output_array": builder.format_array_as_c_literal(output_data),
+            "channels": channels,
+            "layout": str(self.desc.get("layout", "ARM_NN_LAYOUT_NHWC")),
+            "input_dtype": "float",
+            "output_dtype": "float",
+            "kernel_fn": "arm_batch_norm_f32",
+        }
+
+        cmake_context = {
+            "name": name,
+            "operator": self.desc.get("operator", "BatchNorm"),
+            "operator_name": "batch_norm",
+        }
+        self._write_op_outputs(
+            output_dir,
+            "batch_norm",
+            "NNSupportFunctions/batch_norm/batch_norm.h.j2",
+            "NNSupportFunctions/batch_norm/batch_norm.c.j2",
+            context,
+            cmake_context,
+        )

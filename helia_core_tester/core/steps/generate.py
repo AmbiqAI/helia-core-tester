@@ -32,14 +32,21 @@ class GenerateStep(StepBase):
             return f"Generation directory not found: {self.config.generation_dir}"
         return None
 
-    def _cpu_generated_tests_dir(self, cpu: str) -> Path:
-        return self.config.generated_tests_dir_for(cpu)
+    def _cpu_generated_tests_dir(self, cpu: str, suite: str) -> Path:
+        return self.config.generated_tests_dir_for(cpu, suite=suite)
 
-    def _build_cmd(self, cpu: str, include_seed: bool = True) -> list:
+    def _build_cmd(
+        self,
+        cpu: str,
+        suite: str,
+        include_seed: bool = True,
+        float_precision: str | None = None,
+    ) -> list:
         """Build pytest command list. include_seed=False for dry-run preview."""
         cmd = ["pytest", "test_ops.py::test_generation", "-v"]
         cmd.extend(["--cpu", cpu])
-        cmd.extend(["--generated-tests-dir", str(self._cpu_generated_tests_dir(cpu))])
+        cmd.extend(["--suite", suite])
+        cmd.extend(["--generated-tests-dir", str(self._cpu_generated_tests_dir(cpu, suite=suite))])
         if self.config.op_filter:
             cmd.extend(["--op", self.config.op_filter])
         if self.config.dtype_filter:
@@ -48,6 +55,12 @@ class GenerateStep(StepBase):
             cmd.extend(["--name", self.config.name_filter])
         if self.config.limit:
             cmd.extend(["--limit", str(self.config.limit)])
+        if suite == "float":
+            effective_float_precision = float_precision or self.config.effective_float_precision_for_cpu(
+                cpu, suite=suite
+            )
+            if effective_float_precision:
+                cmd.extend(["--float-precision", effective_float_precision])
         if include_seed and self.config.seed is not None:
             cmd.extend(["--seed", str(self.config.seed)])
         return cmd
@@ -58,8 +71,14 @@ class GenerateStep(StepBase):
             self.logger.info("Generating TensorFlow Lite models using pytest")
         try:
             commands = []
-            for cpu in self.config.cpus:
-                cmd = self._build_cmd(cpu=cpu, include_seed=True)
+            generation_targets = self.config.iter_generation_targets()
+            for cpu, suite, float_precision in generation_targets:
+                cmd = self._build_cmd(
+                    cpu=cpu,
+                    suite=suite,
+                    include_seed=True,
+                    float_precision=float_precision,
+                )
                 commands.append(cmd)
                 if self.config.verbosity >= 2:
                     self.logger.info(f"Running command: {' '.join(cmd)}")
@@ -69,7 +88,9 @@ class GenerateStep(StepBase):
                     verbosity=self.config.verbosity
                 )
             if self.config.verbosity >= 1:
-                self.logger.info(f"TFLite models generated successfully for {', '.join(self.config.cpus)}")
+                self.logger.info(
+                    f"TFLite models generated successfully for targets={len(generation_targets)} cpus={','.join(self.config.cpus)}"
+                )
             return StepResult(
                 name=self.name,
                 status=StepStatus.SUCCESS,
@@ -106,7 +127,15 @@ class GenerateStep(StepBase):
     
     def dry_run(self) -> StepResult:
         """Dry run of generation step."""
-        cmd_preview = [self._build_cmd(cpu=cpu, include_seed=False) for cpu in self.config.cpus]
+        cmd_preview = [
+            self._build_cmd(
+                cpu=cpu,
+                suite=suite,
+                include_seed=False,
+                float_precision=float_precision,
+            )
+            for cpu, suite, float_precision in self.config.iter_generation_targets()
+        ]
         return StepResult(
             name=self.name,
             status=StepStatus.SKIPPED,
@@ -118,7 +147,15 @@ class GenerateStep(StepBase):
         )
 
     def _plan_details(self) -> StepPlan:
-        cmd_preview = [self._build_cmd(cpu=cpu, include_seed=True) for cpu in self.config.cpus]
+        cmd_preview = [
+            self._build_cmd(
+                cpu=cpu,
+                suite=suite,
+                include_seed=True,
+                float_precision=float_precision,
+            )
+            for cpu, suite, float_precision in self.config.iter_generation_targets()
+        ]
         return StepPlan(
             name=self.name,
             will_run=True,

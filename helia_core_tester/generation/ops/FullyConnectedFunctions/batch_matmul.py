@@ -52,6 +52,8 @@ class OpBatchMatMul(OperationBase):
             return 'int8_t'
         elif np_dtype == np.int16:
             return 'int16_t'
+        elif np_dtype == np.float32:
+            return 'float'
         else:
             raise ValueError(f"Unsupported numpy dtype: {np_dtype}")
     
@@ -73,6 +75,14 @@ class OpBatchMatMul(OperationBase):
         output_c_type = self._numpy_dtype_to_c_type(output_dtype)
         
         # Select kernel based on LHS dtype (output should match LHS)
+        if input_lhs_c_type == 'float':
+            return {
+                'kernel_fn': 'arm_batch_matmul_f32',
+                'kernel_get_buffer_size_fn': 'arm_batch_matmul_f32_get_buffer_size',
+                'input_lhs_c_type': input_lhs_c_type,
+                'input_rhs_c_type': input_rhs_c_type,
+                'output_c_type': output_c_type
+            }
         if input_lhs_c_type == 'int8_t':
             return {
                 'kernel_fn': 'arm_batch_matmul_s8',
@@ -127,6 +137,7 @@ class OpBatchMatMul(OperationBase):
         
         # Select CMSIS kernel + types based on actual dtypes from TFLite
         kernel_info = self._select_cmsis_matmul_kernel(input_lhs_dtype, input_rhs_dtype, output_dtype)
+        float_kernel = kernel_info["input_lhs_c_type"] == "float"
         
         # Extract quantization parameters from interpreter (more reliable than LiteRT)
         # LiteRT sometimes returns incorrect scales (e.g., 1.0 instead of actual scale)
@@ -161,82 +172,88 @@ class OpBatchMatMul(OperationBase):
         adj_x = self.desc.get('adj_x', False)
         adj_y = self.desc.get('adj_y', False)
         
-        # Convert shapes to CMSIS dims
-        # For batch matmul: [batch, M, K] @ [batch, K, N] -> [batch, M, N]
-        # CMSIS-NN expects RHS to be transposed: [batch, N, K]
-        # For adj_x == True, CMSIS expects LHS already transposed: [batch, K, M]
-        if len(input_lhs_shape) == 3 and adj_x:
-            transposed_lhs_shape = (input_lhs_shape[0], input_lhs_shape[2], input_lhs_shape[1])
-            input_lhs_dims = builder.nhwc_to_cmsis_dims(transposed_lhs_shape)
-        else:
+        # Convert shapes to CMSIS dims.
+        # Quantized BMM keeps the legacy transposed-RHS contract, while float BMM follows
+        # the public API and passes the stored tensor shapes directly with adj flags.
+        if float_kernel:
             input_lhs_dims = builder.nhwc_to_cmsis_dims(input_lhs_shape)
-        
-        # For RHS: if adj_y is False, CMSIS-NN expects transposed RHS
-        # TFLite has [batch, K, N], CMSIS-NN expects [batch, N, K]
-        # nhwc_to_cmsis_dims maps 3D [batch, H, W] to n=1, h=batch, w=H, c=W
-        # So for transposed RHS [batch, N, K], we need: n=1, h=batch, w=N, c=K
-        if len(input_rhs_shape) == 3:
-            if not adj_y:
-                # RHS needs to be transposed for CMSIS-NN
-                # Original: [batch, K, N] -> Transposed: [batch, N, K]
-                # Use nhwc_to_cmsis_dims mapping: n=1, h=batch, w=N, c=K
-                transposed_rhs_shape = (input_rhs_shape[0], input_rhs_shape[2], input_rhs_shape[1])
-                input_rhs_dims = builder.nhwc_to_cmsis_dims(transposed_rhs_shape)
-            else:
-                # RHS is already transposed in TFLite, use as-is
-                input_rhs_dims = builder.nhwc_to_cmsis_dims(input_rhs_shape)
-        else:
             input_rhs_dims = builder.nhwc_to_cmsis_dims(input_rhs_shape)
+        else:
+            if len(input_lhs_shape) == 3 and adj_x:
+                transposed_lhs_shape = (input_lhs_shape[0], input_lhs_shape[2], input_lhs_shape[1])
+                input_lhs_dims = builder.nhwc_to_cmsis_dims(transposed_lhs_shape)
+            else:
+                input_lhs_dims = builder.nhwc_to_cmsis_dims(input_lhs_shape)
+            
+            if len(input_rhs_shape) == 3:
+                if not adj_y:
+                    transposed_rhs_shape = (input_rhs_shape[0], input_rhs_shape[2], input_rhs_shape[1])
+                    input_rhs_dims = builder.nhwc_to_cmsis_dims(transposed_rhs_shape)
+                else:
+                    input_rhs_dims = builder.nhwc_to_cmsis_dims(input_rhs_shape)
+            else:
+                input_rhs_dims = builder.nhwc_to_cmsis_dims(input_rhs_shape)
         
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         
-        # Build FC parameters for BMM
-        # LHS is treated as "input", RHS is treated as "weights"
-        fc_params = builder.build_fc_params(
-            self.desc,
-            input_lhs_quant,  # LHS quantization
-            input_rhs_quant,  # RHS quantization (always S8)
-            output_quant     # Output quantization
-        )
-        
-        # Build BMM params
-        # Note: CMSIS-NN's adj_y is inverted compared to TFLite's adj_y
-        # This is because CMSIS-NN expects RHS to be transposed when adj_y is True
-        bmm_params = {
-            'adj_x': bool(adj_x),
-            'adj_y': bool(not adj_y),  # Invert adj_y to match CMSIS-NN convention
-            'fc_params': fc_params
-        }
+        if float_kernel:
+            bmm_params = {
+                'adj_x': bool(adj_x),
+                'adj_y': bool(adj_y),
+                'activation_min': float(self.desc.get("activation_min", -1.0e30)),
+                'activation_max': float(self.desc.get("activation_max", 1.0e30)),
+            }
+        else:
+            # Build FC parameters for BMM
+            # LHS is treated as "input", RHS is treated as "weights"
+            fc_params = builder.build_fc_params(
+                self.desc,
+                input_lhs_quant,  # LHS quantization
+                input_rhs_quant,  # RHS quantization (always S8)
+                output_quant     # Output quantization
+            )
+            
+            # Build BMM params
+            # Note: CMSIS-NN's adj_y is inverted compared to TFLite's adj_y
+            # This is because CMSIS-NN expects RHS to be transposed when adj_y is True
+            bmm_params = {
+                'adj_x': bool(adj_x),
+                'adj_y': bool(not adj_y),  # Invert adj_y to match CMSIS-NN convention
+                'fc_params': fc_params
+            }
         
         # Extract scales and zero points for effective scale calculation
-        input_lhs_scale = input_lhs_quant.get('scale', 1.0)
-        if isinstance(input_lhs_scale, (list, np.ndarray)):
-            input_lhs_scale = float(input_lhs_scale[0])
+        if float_kernel:
+            quant_params_dict = None
         else:
-            input_lhs_scale = float(input_lhs_scale)
-        
-        input_rhs_scale = input_rhs_quant.get('scale', 1.0)
-        if isinstance(input_rhs_scale, (list, np.ndarray)):
-            input_rhs_scale = float(input_rhs_scale[0])
-        else:
-            input_rhs_scale = float(input_rhs_scale)
-        
-        output_scale = output_quant.get('scale', 1.0)
-        if isinstance(output_scale, (list, np.ndarray)):
-            output_scale = float(output_scale[0])
-        else:
-            output_scale = float(output_scale)
-        
-        # Effective scale: (input_lhs_scale * input_rhs_scale) / output_scale
-        effective_scale = (input_lhs_scale * input_rhs_scale) / output_scale
-        effective_scale = float(effective_scale)
-        
-        effective_quant = {
-            'scale': effective_scale,
-            'zero_point': output_quant.get('zero_point', 0),
-            'per_channel': False
-        }
-        quant_params_dict = builder.build_quant_params(effective_quant, per_channel=False)
+            input_lhs_scale = input_lhs_quant.get('scale', 1.0)
+            if isinstance(input_lhs_scale, (list, np.ndarray)):
+                input_lhs_scale = float(input_lhs_scale[0])
+            else:
+                input_lhs_scale = float(input_lhs_scale)
+            
+            input_rhs_scale = input_rhs_quant.get('scale', 1.0)
+            if isinstance(input_rhs_scale, (list, np.ndarray)):
+                input_rhs_scale = float(input_rhs_scale[0])
+            else:
+                input_rhs_scale = float(input_rhs_scale)
+            
+            output_scale = output_quant.get('scale', 1.0)
+            if isinstance(output_scale, (list, np.ndarray)):
+                output_scale = float(output_scale[0])
+            else:
+                output_scale = float(output_scale)
+            
+            # Effective scale: (input_lhs_scale * input_rhs_scale) / output_scale
+            effective_scale = (input_lhs_scale * input_rhs_scale) / output_scale
+            effective_scale = float(effective_scale)
+            
+            effective_quant = {
+                'scale': effective_scale,
+                'zero_point': output_quant.get('zero_point', 0),
+                'per_channel': False
+            }
+            quant_params_dict = builder.build_quant_params(effective_quant, per_channel=False)
         
         # NOTE: Do NOT reduce multiplier here for S16 batch matmul.
         # arm_batch_matmul_s16 internally applies REDUCE_MULTIPLIER on the Q31 multiplier.
@@ -251,6 +268,67 @@ class OpBatchMatMul(OperationBase):
         
         self.rng.__setstate__(rng_state)
         
+        if float_kernel:
+            interpreter.set_tensor(input_details[0]['index'], input_lhs_data.astype(np.float32))
+            interpreter.set_tensor(input_details[1]['index'], input_rhs_data.astype(np.float32))
+            interpreter.invoke()
+            output_data = np.array(interpreter.get_tensor(output_details[0]['index']), dtype=np.float32)
+
+            input_lhs_array_str = builder.format_array_as_c_literal(input_lhs_data)
+            input_rhs_array_str = builder.format_array_as_c_literal(input_rhs_data)
+            expected_output_array_str = builder.format_array_as_c_literal(output_data)
+            buffer_size_max = max(
+                1024,
+                int(
+                    (np.prod(input_lhs_shape) + np.prod(input_rhs_shape) + np.prod(output_shape)) * 4
+                ),
+            )
+
+            context = {
+                'name': name,
+                'prefix': name,
+                'input_lhs_dims': input_lhs_dims,
+                'input_rhs_dims': input_rhs_dims,
+                'output_dims': output_dims,
+                'bmm_params': bmm_params,
+                'input_lhs_array': input_lhs_array_str,
+                'input_rhs_array': input_rhs_array_str,
+                'expected_output_array': expected_output_array_str,
+                'input_dtype': kernel_info["input_lhs_c_type"],
+                'input_rhs_dtype': kernel_info["input_rhs_c_type"],
+                'output_dtype': kernel_info["output_c_type"],
+                'kernel_fn': kernel_info["kernel_fn"],
+                'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+                'buffer_size_max': buffer_size_max,
+                'float_kernel': True,
+                'bmm_params_type': 'cmsis_nn_bmm_params_f32',
+                'bmm_activation_min_literal': builder.format_float_literal(bmm_params['activation_min']),
+                'bmm_activation_max_literal': builder.format_float_literal(bmm_params['activation_max']),
+            }
+            includes_api_dir = output_dir / "includes"
+            includes_api_dir.mkdir(parents=True, exist_ok=True)
+            
+            h_content = self.render_template("FullyConnectedFunctions/batch_matmul/batch_matmul.h.j2", context)
+            h_path = includes_api_dir / f"{name}_batch_matmul.h"
+            with open(h_path, 'w') as f:
+                f.write(h_content)
+            
+            c_content = self.render_template("FullyConnectedFunctions/batch_matmul/batch_matmul.c.j2", context)
+            c_path = output_dir / f"{name}_batch_matmul.c"
+            with open(c_path, 'w') as f:
+                f.write(c_content)
+            
+            cmake_context = {
+                'name': name,
+                'operator': self.desc.get('operator', 'BatchMatMul'),
+                'operator_name': 'batch_matmul'
+            }
+            cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
+            cmake_path = output_dir / "CMakeLists.txt"
+            with open(cmake_path, 'w') as f:
+                f.write(cmake_content)
+            return
+
         # Extract LHS quantization parameters
         input_lhs_scale_val = input_lhs_quant.get('scale', 1.0)
         input_lhs_zp_val = input_lhs_quant.get('zero_point', 0)

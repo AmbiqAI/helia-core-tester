@@ -38,7 +38,7 @@ def test_loaded_descriptors_carry_grouped_catalog_metadata() -> None:
 
     for desc in descriptors:
         spec = get_operator_spec(desc["operator"])
-        assert desc["_source_relpath"] == spec.descriptor_relpath
+        assert desc["_source_relpath"] in spec.descriptor_relpaths
         assert desc["_source_family"] == spec.family
         assert desc["_family"] == spec.family
         assert desc["_parity_kind"] == spec.parity_kind

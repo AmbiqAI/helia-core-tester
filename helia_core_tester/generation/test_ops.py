@@ -32,6 +32,18 @@ def _descriptor_test_dir(root_dir: Path, desc: Dict[str, Any]) -> Path:
     return root_dir / _descriptor_family(desc) / str(desc["name"])
 
 
+def _descriptor_suite(desc: Dict[str, Any]) -> str:
+    return str(desc.get("_descriptor_suite") or desc.get("suite") or "default")
+
+
+def _suite_mode(filters: Dict[str, Any]) -> str:
+    return str(filters.get("suite") or "int").strip().lower()
+
+
+def _float_precision_mode(filters: Dict[str, Any]) -> str:
+    return str(filters.get("float_precision") or "both").strip().lower()
+
+
 def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     """
     Determine if test should run based on filters.
@@ -67,6 +79,24 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     # Filter by activation dtype
     if filters.get('dtype') and not descriptor_matches_dtype_filter(desc, str(filters['dtype'])):
         return False
+
+    descriptor_suite = _descriptor_suite(desc).strip().lower()
+    suite_mode = _suite_mode(filters)
+    is_float_descriptor = descriptor_suite == "float"
+    if suite_mode == "int" and is_float_descriptor:
+        return False
+    if suite_mode == "float" and not is_float_descriptor:
+        return False
+
+    if suite_mode == "float":
+        float_precision = _float_precision_mode(filters)
+        resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or resolve_tensor_dtypes(desc)
+        has_f16 = any(dtype == "FP16" for dtype in resolved_tensor_dtypes.values())
+        has_f32 = any(dtype == "FP32" for dtype in resolved_tensor_dtypes.values())
+        if float_precision == "f16" and not has_f16:
+            return False
+        if float_precision == "f32" and not has_f32:
+            return False
         
     # Filter by weight dtype
     resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or resolve_tensor_dtypes(desc)
@@ -77,12 +107,28 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
 
 
 def _required_capabilities(desc: Dict[str, Any]) -> list[str]:
+    required: list[str] = []
     raw = desc.get("required_capabilities")
-    if raw is None:
-        return []
-    if isinstance(raw, str):
-        return [raw]
-    return [str(capability) for capability in raw if str(capability).strip()]
+    if raw is not None:
+        if isinstance(raw, str):
+            required.append(raw)
+        else:
+            required.extend(str(capability) for capability in raw if str(capability).strip())
+
+    resolved = _resolved_tensor_dtypes(desc)
+    if any(dtype == "FP32" for dtype in resolved.values()):
+        required.append("fp32_execution")
+    if any(dtype == "FP16" for dtype in resolved.values()):
+        required.append("fp16_execution")
+
+    normalized: list[str] = []
+    seen = set()
+    for capability in required:
+        capability_name = str(capability).strip()
+        if capability_name and capability_name not in seen:
+            normalized.append(capability_name)
+            seen.add(capability_name)
+    return normalized
 
 
 def _resolved_tensor_dtypes(desc: Dict[str, Any]) -> Dict[str, str]:
@@ -104,6 +150,7 @@ def _skip_manifest_entry(desc: Dict[str, Any], *, cpu: str, missing_capabilities
         "resolved_tensor_dtypes": _resolved_tensor_dtypes(desc),
         "resolved_comparison": _resolved_comparison(desc),
         "descriptor_relpath": desc.get("_source_relpath"),
+        "suite": _descriptor_suite(desc),
         "cpu": cpu,
         "status": "skipped_capability",
         "missing_capabilities": missing_capabilities,
@@ -251,18 +298,19 @@ def test_generation(test_filters):
 
     start_time = datetime.now(timezone.utc)
     target_cpu = normalize_cpu(test_filters.get('cpu') or "cortex-m55")
+    suite_mode = _suite_mode(test_filters)
         
     # Generate TFLite models for each descriptor.
     generated_override = test_filters.get("generated_tests_dir")
     top_generated = (
         Path(generated_override).resolve()
         if generated_override
-        else find_generated_tests_dir(cpu=target_cpu, create=True)
+        else find_generated_tests_dir(cpu=target_cpu, suite=suite_mode, create=True)
     )
     top_generated.mkdir(parents=True, exist_ok=True)
     print(f"Generated tests output dir: {top_generated}")
     repo_root = find_repo_root()
-    report_dir = generation_report_dir(repo_root, target_cpu)
+    report_dir = generation_report_dir(repo_root, target_cpu, suite=suite_mode)
     report_dir.mkdir(parents=True, exist_ok=True)
 
     # Place models in generated tests root
@@ -309,6 +357,7 @@ def test_generation(test_filters):
                 "resolved_tensor_dtypes": _resolved_tensor_dtypes(desc),
                 "resolved_comparison": _resolved_comparison(desc),
                 "descriptor_relpath": desc.get("_source_relpath"),
+                "suite": _descriptor_suite(desc),
                 "path": str(test_dir),
                 "relative_test_dir": relative_test_dir,
                 "tflite": str(tflite_path),
@@ -421,6 +470,8 @@ def test_generation(test_filters):
             "name": test_filters.get("name"),
             "limit": test_filters.get("limit"),
             "seed": test_filters.get("seed"),
+            "suite": suite_mode,
+            "float_precision": _float_precision_mode(test_filters),
         },
         "counts": {
             "descriptors_total": len(descriptors),
@@ -464,6 +515,8 @@ def _write_manifest_and_cmake(
             "limit": test_filters.get("limit"),
             "seed": test_filters.get("seed"),
             "cpu": cpu,
+            "suite": _suite_mode(test_filters),
+            "float_precision": _float_precision_mode(test_filters),
         },
         "tests": entries,
         "skipped": skipped_entries,
@@ -493,10 +546,11 @@ def test_generated_files_exist(test_filters):
     # Don't generate, just validate what test_generation() created
     generated_override = test_filters.get("generated_tests_dir")
     target_cpu = normalize_cpu(test_filters.get('cpu') or "cortex-m55")
+    suite_mode = _suite_mode(test_filters)
     generated_tests_dir = (
         Path(generated_override).resolve()
         if generated_override
-        else find_generated_tests_dir(cpu=target_cpu, create=False)
+        else find_generated_tests_dir(cpu=target_cpu, suite=suite_mode, create=False)
     )
     if not generated_tests_dir.exists():
         pytest.skip("No generated tests found")

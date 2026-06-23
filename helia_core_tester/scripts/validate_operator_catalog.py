@@ -13,11 +13,11 @@ def validate_operator_contracts(repo_root: Path) -> list[str]:
     """Validate grouped catalog contracts for modules, descriptors, and templates."""
     errors = list(validate_catalog_paths(Path(repo_root)))
     for spec in iter_operator_specs():
-        if spec.descriptor_relpath is not None:
-            descriptor_rel = Path(spec.descriptor_relpath)
+        for descriptor_relpath in spec.descriptor_relpaths:
+            descriptor_rel = Path(descriptor_relpath)
             if not descriptor_rel.parts or descriptor_rel.parts[0] != spec.family:
                 errors.append(
-                    f"Descriptor path for {spec.operator} must live under {spec.family}: {spec.descriptor_relpath}"
+                    f"Descriptor path for {spec.operator} must live under {spec.family}: {descriptor_relpath}"
                 )
         if spec.template_relpath is not None:
             template_rel = Path(spec.template_relpath)

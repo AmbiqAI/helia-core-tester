@@ -67,6 +67,7 @@ def run_main(argv: List[str]) -> int:
         if enable_reporting:
             _, success = run_tests_with_reporting(
                 cpus=cpus,
+                suite=args.suite,
                 source_dir=source_dir,
                 toolchain_file=toolchain_file,
                 cmsis5=cmsis5,
@@ -85,9 +86,9 @@ def run_main(argv: List[str]) -> int:
         any_fail = False
         for cpu in cpus:
             if verbosity >= 1:
-                print(f"\nTarget: {cpu} ({compiler_tag})")
-            build_dir = canonical_build_dir(REPO_ROOT, cpu, compiler_tag)
-            cpu_generated_tests_dir = resolve_generated_tests_dir(source_dir, cpu)
+                print(f"\nTarget: {cpu} ({compiler_tag}, suite={args.suite})")
+            build_dir = canonical_build_dir(REPO_ROOT, cpu, compiler_tag, suite=args.suite)
+            cpu_generated_tests_dir = resolve_generated_tests_dir(source_dir, cpu, suite=args.suite)
             coverage_ctx = new_coverage_context(build_dir, getattr(args, "_gcov_tool", None)) if args.coverage else None
 
             if not args.no_build:
@@ -139,10 +140,11 @@ def run_main(argv: List[str]) -> int:
         if any_fail:
             return 1
 
-        generate_coverage_reports(cpus, args, env, source_dir, compiler_tag, verbosity)
+        generate_coverage_reports(cpus, args.suite, args, env, source_dir, compiler_tag, verbosity)
 
         if verbosity >= 1:
             print("\nAll requested builds/runs completed successfully.")
         return 0
     finally:
-        supervisor.terminate_all("shutdown")
+        if supervisor.active_count() > 0:
+            supervisor.terminate_all("shutdown")

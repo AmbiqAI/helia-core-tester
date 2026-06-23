@@ -149,8 +149,24 @@ def _format_ratio(covered: int, total: int) -> str:
     return f"{covered}/{total} ({pct:.1f}%)"
 
 
-def build_rows(artifacts_root: Path, cpus: Iterable[str]) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
+def _normalize_suites(suite: str) -> List[str]:
+    normalized = str(suite).strip().lower()
+    if normalized == "both":
+        return ["int", "float"]
+    if normalized in {"int", "float"}:
+        return [normalized]
+    raise ValueError(f"Invalid suite: {suite!r} (expected int, float, or both)")
+
+
+def build_rows(
+    artifacts_root: Path,
+    cpus: Iterable[str],
+    suites: Iterable[str] = ("int", "float"),
+) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
     cpu_list = list(cpus)
+    suite_list = [str(item).strip().lower() for item in suites if str(item).strip()]
+    if not suite_list:
+        suite_list = ["int", "float"]
     rows: List[Dict[str, object]] = []
     project_root = artifacts_root.parent
     union_lines: Dict[Tuple[str, int], bool] = {}
@@ -160,28 +176,64 @@ def build_rows(artifacts_root: Path, cpus: Iterable[str]) -> Tuple[List[Dict[str
     total_tests = {"number_of_tests": 0, "passed": 0, "failed": 0, "skipped": 0}
 
     for cpu in cpu_list:
-        coverage_path = coverage_report_dir(project_root, cpu) / "coverage.info"
-        cpu_tests_report_dir = tests_report_dir(project_root, cpu)
-        coverage_totals, line_hits, function_hits, branch_hits = _parse_lcov(coverage_path)
-        test_totals = _parse_test_report(cpu_tests_report_dir, cpu)
+        cpu_lines: Dict[Tuple[str, int], bool] = {}
+        cpu_functions: Dict[Tuple[str, str], bool] = {}
+        cpu_branches: Dict[Tuple[str, int, str, str], bool] = {}
+        cpu_tests = {"number_of_tests": 0, "passed": 0, "failed": 0, "skipped": 0}
+        found_suite_coverage = False
 
-        for key, hits in line_hits.items():
-            union_lines[key] = union_lines.get(key, False) or (hits > 0)
-        for key, hits in function_hits.items():
-            union_functions[key] = union_functions.get(key, False) or (hits > 0)
-        for key, hits in branch_hits.items():
-            union_branches[key] = union_branches.get(key, False) or (hits > 0)
+        for suite in suite_list:
+            coverage_path = coverage_report_dir(project_root, cpu, suite=suite) / "coverage.info"
+            if not coverage_path.exists():
+                continue
 
-        total_tests["number_of_tests"] += int(test_totals["number_of_tests"])
-        total_tests["passed"] += int(test_totals["passed"])
-        total_tests["failed"] += int(test_totals["failed"])
-        total_tests["skipped"] += int(test_totals["skipped"])
+            found_suite_coverage = True
+            _, line_hits, function_hits, branch_hits = _parse_lcov(coverage_path)
+
+            for key, hits in line_hits.items():
+                covered = hits > 0
+                cpu_lines[key] = cpu_lines.get(key, False) or covered
+                union_lines[key] = union_lines.get(key, False) or covered
+
+            for key, hits in function_hits.items():
+                covered = hits > 0
+                cpu_functions[key] = cpu_functions.get(key, False) or covered
+                union_functions[key] = union_functions.get(key, False) or covered
+
+            for key, hits in branch_hits.items():
+                covered = hits > 0
+                cpu_branches[key] = cpu_branches.get(key, False) or covered
+                union_branches[key] = union_branches.get(key, False) or covered
+
+            test_totals = _parse_test_report(tests_report_dir(project_root, cpu, suite=suite), cpu)
+            cpu_tests["number_of_tests"] += int(test_totals["number_of_tests"])
+            cpu_tests["passed"] += int(test_totals["passed"])
+            cpu_tests["failed"] += int(test_totals["failed"])
+            cpu_tests["skipped"] += int(test_totals["skipped"])
+
+        if not found_suite_coverage:
+            checked = ", ".join(
+                str(coverage_report_dir(project_root, cpu, suite=suite) / "coverage.info") for suite in suite_list
+            )
+            raise FileNotFoundError(f"coverage.info not found for {cpu} in suites [{', '.join(suite_list)}]: {checked}")
+
+        total_tests["number_of_tests"] += int(cpu_tests["number_of_tests"])
+        total_tests["passed"] += int(cpu_tests["passed"])
+        total_tests["failed"] += int(cpu_tests["failed"])
+        total_tests["skipped"] += int(cpu_tests["skipped"])
 
         rows.append(
             {
                 "cpu": cpu,
-                "coverage": coverage_totals,
-                "tests": test_totals,
+                "coverage": {
+                    "lf": len(cpu_lines),
+                    "lh": sum(1 for covered in cpu_lines.values() if covered),
+                    "fnf": len(cpu_functions),
+                    "fnh": sum(1 for covered in cpu_functions.values() if covered),
+                    "brf": len(cpu_branches),
+                    "brh": sum(1 for covered in cpu_branches.values() if covered),
+                },
+                "tests": cpu_tests,
             }
         )
 
@@ -255,6 +307,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Comma-separated CPU list (e.g. cortex-m0,cortex-m4,cortex-m55)",
     )
     parser.add_argument(
+        "--suite",
+        default="both",
+        choices=["int", "float", "both"],
+        help="Coverage/test suite selection for summary (default: both)",
+    )
+    parser.add_argument(
         "--summary-file",
         type=Path,
         default=Path(os.environ["GITHUB_STEP_SUMMARY"]) if os.environ.get("GITHUB_STEP_SUMMARY") else None,
@@ -270,7 +328,8 @@ def main(argv: List[str] | None = None) -> int:
 
     try:
         cpus = parse_cpu_list(args.cpus)
-        rows, total = build_rows(args.artifacts_root, cpus)
+        suites = _normalize_suites(args.suite)
+        rows, total = build_rows(args.artifacts_root, cpus, suites=suites)
         table = render_markdown_table(rows, total)
         publish_table(table, args.summary_file, args.heading)
         return 0

@@ -32,10 +32,12 @@ class RunStep(StepBase):
         if not script_path.exists():
             return f"FVP script not found: {script_path}"
         missing_builds = []
-        for cpu in self.config.cpus:
-            build_dir = self.config.build_dir_for(cpu)
-            if not build_dir.exists():
-                missing_builds.append(str(build_dir))
+        for suite in self.config.suites:
+            for group in self.config.cpu_groups_for_suite(suite):
+                for cpu in group["cpus"]:
+                    build_dir = self.config.build_dir_for(cpu, suite=suite)
+                    if not build_dir.exists():
+                        missing_builds.append(str(build_dir))
         if missing_builds:
             return f"Build directory not found: {', '.join(missing_builds)}. Run 'build' step first."
         return None
@@ -47,49 +49,63 @@ class RunStep(StepBase):
             return f"FVP script not found: {script_path}"
         return None
 
+    def _run_commands(self) -> list[list[str]]:
+        commands: list[list[str]] = []
+        for suite in self.config.suites:
+            for group in self.config.cpu_groups_for_suite(suite):
+                cpu_csv = ",".join(group["cpus"])
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "helia_core_tester.fvp.build_and_run_fvp",
+                    "--cpu",
+                    cpu_csv,
+                    "--suite",
+                    suite,
+                    "--no-build",
+                ]
+                if getattr(self.config, "coverage", False):
+                    cmd.append("--coverage")
+
+                if self.config.timeout > 0:
+                    cmd.extend(["--timeout-run", str(self.config.timeout)])
+                if self.config.fail_fast:
+                    cmd.append("--fail-fast")
+                else:
+                    cmd.append("--no-fail-fast")
+                cmd.extend(["--run-jobs", str(self.config.run_jobs)])
+
+                # Pass verbosity
+                cmd.extend(["--verbosity", str(self.config.verbosity)])
+
+                # Reporting options
+                if not self.config.enable_reporting:
+                    cmd.append("--no-report")
+                if self.config.report_formats:
+                    cmd.extend(["--report-formats"] + self.config.report_formats)
+                commands.append(cmd)
+        return commands
+
     def _do_execute(self) -> StepResult:
         """Execute FVP test execution."""
-        cpu_csv = ",".join(self.config.cpus)
         if self.config.verbosity >= 1:
-            self.logger.info(f"Running tests on FVP ({cpu_csv})")
-        cmd = [
-            sys.executable, "-m", "helia_core_tester.fvp.build_and_run_fvp",
-            "--cpu", cpu_csv,
-            "--no-build",
-        ]
-        if getattr(self.config, "coverage", False):
-            cmd.append("--coverage")
-        
-        if self.config.timeout > 0:
-            cmd.extend(["--timeout-run", str(self.config.timeout)])
-        if self.config.fail_fast:
-            cmd.append("--fail-fast")
-        else:
-            cmd.append("--no-fail-fast")
-        cmd.extend(["--run-jobs", str(self.config.run_jobs)])
-        
-        # Pass verbosity
-        cmd.extend(["--verbosity", str(self.config.verbosity)])
-        
-        # Reporting options
-        if not self.config.enable_reporting:
-            cmd.append("--no-report")
-        if self.config.report_formats:
-            cmd.extend(["--report-formats"] + self.config.report_formats)
+            self.logger.info(f"Running tests on FVP suites={','.join(self.config.suites)} cpus={','.join(self.config.cpus)}")
+        commands = self._run_commands()
         
         try:
-            if self.config.verbosity >= 2:
-                self.logger.info(f"Running command: {' '.join(cmd)}")
-                self.logger.info("=" * 60)
-            
-            # Use subprocess.run directly for better output handling
-            result = subprocess.run(
-                cmd,
-                cwd=self.config.project_root,
-                check=True,
-                text=True,
-                bufsize=1,
-            )
+            for cmd in commands:
+                if self.config.verbosity >= 2:
+                    self.logger.info(f"Running command: {' '.join(cmd)}")
+                    self.logger.info("=" * 60)
+
+                # Use subprocess.run directly for better output handling
+                subprocess.run(
+                    cmd,
+                    cwd=self.config.project_root,
+                    check=True,
+                    text=True,
+                    bufsize=1,
+                )
             
             if self.config.verbosity >= 2:
                 self.logger.info("=" * 60)
@@ -105,7 +121,7 @@ class RunStep(StepBase):
                     "build_dir": str(self.config.project_root / "artifacts"),
                     "reports_root": str(self.config.reports_root),
                 },
-                details={"command": cmd},
+                details={"commands": commands},
             )
         except subprocess.CalledProcessError as e:
             if self.config.verbosity >= 2:
@@ -124,7 +140,7 @@ class RunStep(StepBase):
                     "build_dir": str(self.config.project_root / "artifacts"),
                     "reports_root": str(self.config.reports_root),
                 },
-                details={"command": cmd},
+                details={"commands": commands},
             )
         except FileNotFoundError as e:
             error_msg = f"Failed to run tests: {e}"
@@ -140,63 +156,31 @@ class RunStep(StepBase):
                     "build_dir": str(self.config.project_root / "artifacts"),
                     "reports_root": str(self.config.reports_root),
                 },
-                details={"command": cmd},
+                details={"commands": commands},
             )
 
     def dry_run(self) -> StepResult:
         """Dry run of run step."""
-        cpu_csv = ",".join(self.config.cpus)
-        cmd_preview = [
-            sys.executable, "-m", "helia_core_tester.fvp.build_and_run_fvp",
-            "--cpu", cpu_csv,
-            "--no-build",
-        ]
-        if getattr(self.config, "coverage", False):
-            cmd_preview.append("--coverage")
-        if self.config.timeout > 0:
-            cmd_preview.extend(["--timeout-run", str(self.config.timeout)])
-        if self.config.fail_fast:
-            cmd_preview.append("--fail-fast")
-        else:
-            cmd_preview.append("--no-fail-fast")
-        cmd_preview.extend(["--run-jobs", str(self.config.run_jobs)])
+        cmd_preview = self._run_commands()
         
         return StepResult(
             name=self.name,
             status=StepStatus.SKIPPED,
-            message=f"DRY RUN: Would run: {' '.join(cmd_preview)}",
+            message=f"DRY RUN: Would run {len(cmd_preview)} FVP command(s)",
             outputs={
                 "build_dir": str(self.config.project_root / "artifacts"),
                 "reports_root": str(self.config.reports_root),
             },
+            details={"commands": cmd_preview},
         )
 
     def _plan_details(self) -> StepPlan:
-        cpu_csv = ",".join(self.config.cpus)
-        cmd = [
-            sys.executable, "-m", "helia_core_tester.fvp.build_and_run_fvp",
-            "--cpu", cpu_csv,
-            "--no-build",
-        ]
-        if getattr(self.config, "coverage", False):
-            cmd.append("--coverage")
-        if self.config.timeout > 0:
-            cmd.extend(["--timeout-run", str(self.config.timeout)])
-        if self.config.fail_fast:
-            cmd.append("--fail-fast")
-        else:
-            cmd.append("--no-fail-fast")
-        cmd.extend(["--run-jobs", str(self.config.run_jobs)])
-        cmd.extend(["--verbosity", str(self.config.verbosity)])
-        if not self.config.enable_reporting:
-            cmd.append("--no-report")
-        if self.config.report_formats:
-            cmd.extend(["--report-formats"] + self.config.report_formats)
+        commands = self._run_commands()
         return StepPlan(
             name=self.name,
             will_run=True,
             reason="ready",
-            commands=[cmd],
+            commands=commands,
             outputs={
                 "build_dir": str(self.config.project_root / "artifacts"),
                 "reports_root": str(self.config.reports_root),

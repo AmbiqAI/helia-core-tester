@@ -81,6 +81,31 @@ class OpQuantize(QuantizationFamilyBase):
                 'output_c_type': self.tensor_c_type("output"),
             }
         raise NotImplementedError(f"Unsupported Quantize output dtype: {output_dtype}")
+
+    def _extract_per_tensor_output_quantization(self, output_qp: dict) -> tuple[float, int]:
+        """Return per-tensor output quantization from LiteRT metadata."""
+        output_scale = 1.0
+        output_zp = 0
+
+        if output_qp:
+            scales = output_qp.get("scales", None)
+            zero_points = output_qp.get("zero_points", None)
+
+            # Some LiteRT paths emit empty quant metadata for identity-style models.
+            # Fall back to safe defaults so codegen can proceed.
+            if isinstance(scales, (list, tuple, np.ndarray)):
+                if len(scales) > 0:
+                    output_scale = float(scales[0])
+            elif scales is not None:
+                output_scale = float(scales)
+
+            if isinstance(zero_points, (list, tuple, np.ndarray)):
+                if len(zero_points) > 0:
+                    output_zp = int(zero_points[0])
+            elif zero_points is not None:
+                output_zp = int(zero_points)
+
+        return output_scale, output_zp
     
     def generate_c_files(self, output_dir: Path) -> None:
         """
@@ -113,10 +138,7 @@ class OpQuantize(QuantizationFamilyBase):
             
             # Extract quantization from output (quantized tensor)
             output_qp = output_details[0].get('quantization_parameters', {})
-            output_scale = output_qp.get('scales', [1.0])
-            output_zp = output_qp.get('zero_points', [0])
-            output_scale = float(output_scale[0] if isinstance(output_scale, list) else output_scale)
-            output_zp = int(output_zp[0] if isinstance(output_zp, list) else output_zp)
+            output_scale, output_zp = self._extract_per_tensor_output_quantization(output_qp)
             
             # Generate input data (float32)
             input_data = self._sample_uniform(input_shape)

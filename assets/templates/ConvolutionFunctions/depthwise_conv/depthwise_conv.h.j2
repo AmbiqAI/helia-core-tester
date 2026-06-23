@@ -24,7 +24,14 @@ static const cmsis_nn_dims {{ name }}_output_dims = {
 };
 
 // Depthwise convolution parameters
-static const cmsis_nn_dw_conv_params {{ name }}_dw_conv_params = {
+static const {{ dw_conv_params_type | default("cmsis_nn_dw_conv_params") }} {{ name }}_dw_conv_params = {
+{% if float_kernel %}
+    .ch_mult = {{ dw_conv_params.ch_mult }},
+    .stride = {.w = {{ dw_conv_params.stride_w }}, .h = {{ dw_conv_params.stride_h }}},
+    .dilation = {.w = {{ dw_conv_params.dilation_w }}, .h = {{ dw_conv_params.dilation_h }}},
+    .padding = {.w = {{ dw_conv_params.pad_w }}, .h = {{ dw_conv_params.pad_h }}},
+    .activation = {.min = {{ dw_activation_min_literal }}, .max = {{ dw_activation_max_literal }}}
+{% else %}
     .input_offset = {{ dw_conv_params.input_offset }},
     .output_offset = {{ dw_conv_params.output_offset }},
     .ch_mult = {{ dw_conv_params.ch_mult }},
@@ -32,8 +39,10 @@ static const cmsis_nn_dw_conv_params {{ name }}_dw_conv_params = {
     .dilation = {.w = {{ dw_conv_params.dilation_w }}, .h = {{ dw_conv_params.dilation_h }}},
     .padding = {.w = {{ dw_conv_params.pad_w }}, .h = {{ dw_conv_params.pad_h }}},
     .activation = {.min = {{ dw_conv_params.activation_min }}, .max = {{ dw_conv_params.activation_max }}}
+{% endif %}
 };
 
+{% if not float_kernel %}
 // Quantization parameters (per-channel)
 {% if quant_params.per_channel %}
 static int32_t {{ name }}_multiplier[] = {
@@ -58,9 +67,10 @@ static const cmsis_nn_per_channel_quant_params {{ name }}_quant_params = {
     .shift = {{ name }}_shift
 };
 {% endif %}
+{% endif %}
 
 // Weights
-static const int8_t {{ name }}_weights[] = {
+static const {{ weight_dtype | default("int8_t") }} {{ name }}_weights[] = {
 {{ weights_array }}
 };
 

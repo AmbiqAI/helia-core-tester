@@ -11,6 +11,16 @@ int32_t {{ prefix }}_{{ name }}_run(
     {{ output_dtype }}* __restrict output
 ) {
     // Call add kernel (handles broadcast + scalar)
+    {% if float_kernel %}
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        input1,
+        input2,
+        output,
+        {{ out_activation_min_literal }},
+        {{ out_activation_max_literal }},
+        {{ block_size }}
+    );
+    {% else %}
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         input1,
         &{{ name }}_input1_dims,
@@ -31,6 +41,7 @@ int32_t {{ prefix }}_{{ name }}_run(
         {{ out_activation_min }},  // out_activation_min
         {{ out_activation_max }}   // out_activation_max
     );
+    {% endif %}
     
     return kernel_status;
 }

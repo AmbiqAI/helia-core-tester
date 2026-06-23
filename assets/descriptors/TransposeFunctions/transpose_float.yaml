@@ -1,0 +1,27 @@
+operator: Transpose
+name: transpose_float_default_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 2, 3, 4]
+---
+operator: Transpose
+name: transpose_float_rank3_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 4, 5]
+hint:
+  force_permutation: [0, 2, 1]
+---
+operator: Transpose
+name: transpose_float_perm_0312_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 2, 3, 4]
+hint:
+  force_permutation: [0, 3, 1, 2]

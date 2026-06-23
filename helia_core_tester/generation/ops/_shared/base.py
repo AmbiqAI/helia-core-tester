@@ -93,6 +93,13 @@ class OperationBase(ABC):
         """Return the resolved comparison configuration for descriptor outputs."""
         return resolve_comparison(self.desc, self.resolved_tensor_dtypes())
 
+    def primary_execution_dtype(self) -> str:
+        """Return the primary execution dtype for unary ops and activation-like kernels."""
+        resolved = self.resolved_tensor_dtypes()
+        if "input" in resolved:
+            return resolved["input"]
+        return str(self.desc.get("activation_dtype", "S8")).upper()
+
     def _write_tflite_bytes(self, out_path: str | Path, model_bytes: bytes) -> None:
         """Write converted LiteRT bytes to disk."""
         Path(out_path).write_bytes(model_bytes)
@@ -140,7 +147,14 @@ class OperationBase(ABC):
         """Set converter for activation-only quantization (S8 or S16) from descriptor."""
         if tf is None:
             raise ImportError("tensorflow is required for TFLite conversion")
-        activation_dtype = self.desc.get("activation_dtype", "S8")
+        activation_dtype = self.primary_execution_dtype()
+        if activation_dtype == "FP32":
+            converter.optimizations = []
+            return
+        if activation_dtype == "FP16":
+            converter.optimizations = []
+            converter.target_spec.supported_types = [tf.float16]
+            return
         if activation_dtype == "S8":
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_types = [tf.int8]
@@ -206,8 +220,21 @@ class OperationBase(ABC):
             raise ImportError("tensorflow is required for TFLite conversion")
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
 
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        if activation_dtype == "S8":
+        activation_dtype = self.primary_execution_dtype()
+        if activation_dtype == "FP32":
+            converter.optimizations = []
+            if input_type is not None:
+                converter.inference_input_type = input_type
+            if output_type is not None:
+                converter.inference_output_type = output_type
+        elif activation_dtype == "FP16":
+            converter.optimizations = []
+            converter.target_spec.supported_types = [tf.float16]
+            if input_type is not None:
+                converter.inference_input_type = input_type
+            if output_type is not None:
+                converter.inference_output_type = output_type
+        elif activation_dtype == "S8":
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_types = [tf.int8]
             converter.inference_input_type = input_type or tf.int8
@@ -220,14 +247,11 @@ class OperationBase(ABC):
             converter.inference_input_type = input_type or tf.int16
             converter.inference_output_type = output_type or tf.int16
         else:
-            # Fallback: no quantization, keep float32 I/O unless overridden
-            converter.optimizations = []
-            if input_type is not None:
-                converter.inference_input_type = input_type
-            if output_type is not None:
-                converter.inference_output_type = output_type
+            raise NotImplementedError(f"Unsupported activation dtype for conversion: {activation_dtype}")
 
         def representative_data_gen():
+            if activation_dtype in {"FP32", "FP16"}:
+                return
             for _ in range(100):
                 if "input_shape" in self.desc:
                     inputs = self.rng.uniform(-1.0, 1.0, size=self.desc["input_shape"]).astype(np.float32)
@@ -239,8 +263,8 @@ class OperationBase(ABC):
                 else:
                     shape = self.desc.get("input_shape", [1, 1, 1, 1])
                     yield [self.rng.uniform(-1.0, 1.0, size=shape).astype(np.float32)]
-
-        converter.representative_dataset = representative_data_gen
+        if activation_dtype not in {"FP32", "FP16"}:
+            converter.representative_dataset = representative_data_gen
 
         tflite_model = converter.convert()
         self._write_tflite_bytes(out_path, tflite_model)

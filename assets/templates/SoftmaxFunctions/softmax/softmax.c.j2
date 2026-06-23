@@ -9,7 +9,14 @@ int32_t {{ prefix }}_{{ name }}_run(
     const {{ input_dtype }}* __restrict input,
     {{ output_dtype }}* __restrict output
 ) {
-    {% if returns_status %}
+    {% if float_kernel %}
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        input,
+        {{ num_rows }},
+        {{ row_size }},
+        output
+    );
+    {% elif returns_status %}
     // Call Softmax s16 kernel (requires LUTs)
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         input,

@@ -68,7 +68,7 @@ def get_cpu_profile(cpu: str) -> CpuProfile:
             cpu=canon,
             has_dsp=True,
             has_mve=True,
-            capabilities=frozenset({"dsp", "mve", "fp32_execution"}),
+            capabilities=frozenset({"dsp", "mve", "fp32_execution", "fp16_execution"}),
         )
     if canon == "cortex-m4":
         return CpuProfile(
@@ -82,7 +82,7 @@ def get_cpu_profile(cpu: str) -> CpuProfile:
             cpu=canon,
             has_dsp=False,
             has_mve=False,
-            capabilities=frozenset({"fp32_execution"}),
+            capabilities=frozenset(),
         )
     raise ValueError(f"Unsupported CPU target: {cpu}")
 

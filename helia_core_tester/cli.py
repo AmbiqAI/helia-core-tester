@@ -112,6 +112,8 @@ def generate(
     limit: Optional[int] = typer.Option(None, help="Limit number of models to generate"),
     seed: Optional[int] = typer.Option(None, help="Random seed for test generation"),
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
+    suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
+    float_precision: str = typer.Option("both", "--float-precision", help="Float precision filter: f16, f32, or both"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -129,6 +131,8 @@ def generate(
         name_filter=name,
         limit=limit,
         seed=seed,
+        suite=suite,
+        float_precision=float_precision,
     )
     if config.plan:
         _print_plan_item(GenerateStep(config).plan())
@@ -147,6 +151,8 @@ def build(
     opt: str = typer.Option("-Ofast", help="Optimization level"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn code coverage instrumentation"),
+    suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
+    float_precision: str = typer.Option("both", "--float-precision", help="Float precision selection for float suite: f16, f32, or both"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -162,6 +168,8 @@ def build(
         optimization=opt,
         jobs=jobs,
         coverage=coverage,
+        suite=suite,
+        float_precision=float_precision,
     )
     if config.plan:
         _print_plan_item(BuildStep(config).plan())
@@ -181,6 +189,7 @@ def run(
     run_jobs: int = typer.Option(1, "--run-jobs", help="Parallel FVP run jobs (0 = auto/use all host cores)"),
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Do not stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Collect and merge ns-cmsis-nn gcov streams"),
+    suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
     report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
@@ -201,6 +210,7 @@ def run(
         report_formats=report_formats,
         coverage=coverage,
         run_jobs=run_jobs,
+        suite=suite,
     )
     if config.plan:
         _print_plan_item(RunStep(config).plan())
@@ -221,6 +231,8 @@ def full(
     limit: Optional[int] = typer.Option(None, help="Limit number of models to generate"),
     seed: Optional[int] = typer.Option(None, help="Random seed for test generation"),
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
+    suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
+    float_precision: str = typer.Option("both", "--float-precision", help="Float precision selection for float suite: f16, f32, or both"),
     opt: str = typer.Option("-Ofast", help="Optimization level"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     timeout: float = typer.Option(0.0, help="Per-test timeout in seconds (0 = none)"),
@@ -249,6 +261,8 @@ def full(
         name_filter=name,
         limit=limit,
         seed=seed,
+        suite=suite,
+        float_precision=float_precision,
         optimization=opt,
         jobs=jobs,
         timeout=timeout,
@@ -279,13 +293,14 @@ def full(
 @app.command()
 def clean(
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
+    suite: str = typer.Option("both", "--suite", help="Suite(s) to clean: int, float, or both"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
 ):
     """Remove generated tests + reports + build outputs for selected CPU(s)."""
-    config = get_config(cpu=cpu, verbosity=verbosity, dry_run=dry_run, plan=plan, project_root=project_root)
+    config = get_config(cpu=cpu, suite=suite, verbosity=verbosity, dry_run=dry_run, plan=plan, project_root=project_root)
     if config.plan:
         _print_plan_item(CleanStep(config).plan())
         sys.exit(0)
@@ -305,7 +320,9 @@ def clean_all(
         config.generated_tests_root,
         config.reports_root,
     ]
-    targets.extend([p for p in art_root.glob("build-*") if p.is_dir()])
+    # Collect build dirs for both suites (build-int-<cpu>-<compiler> and build-float-<cpu>-<compiler>)
+    for pattern in ("build-int-*", "build-float-*"):
+        targets.extend([p for p in art_root.glob(pattern) if p.is_dir()])
 
     existing = [p for p in targets if p.exists()]
     if not existing:
@@ -378,6 +395,7 @@ def doctor(
 @app.command(name="coverage-merge")
 def coverage_merge(
     cpu: str = typer.Option("cortex-m0,cortex-m4,cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
+    suite: str = typer.Option("both", "--suite", help="Coverage suite selection: int, float, or both"),
     expected_zero_config: Optional[Path] = typer.Option(
         None,
         help="Path to expected-zero JSON config (default: assets/coverage_expected_zero.json)",
@@ -385,12 +403,13 @@ def coverage_merge(
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
 ):
     """Merge per-CPU coverage.info files and classify zero-hit files."""
-    config = get_config(cpu=cpu, project_root=project_root)
+    config = get_config(cpu=cpu, suite=suite, project_root=project_root)
     expected_zero_path = Path(expected_zero_config).resolve() if expected_zero_config else None
 
     exit_code, report = run_coverage_merge(
         project_root=config.project_root,
         cpus=config.cpus,
+        suites=config.suites,
         report_dir=config.coverage_merged_report_dir(),
         expected_zero_config=expected_zero_path,
     )

@@ -38,7 +38,7 @@ class OpSoftmax(OperationBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input")
         
         if activation_dtype == 'S8':
             return {
@@ -51,6 +51,12 @@ class OpSoftmax(OperationBase):
                 'kernel_fn': 'arm_softmax_s16',
                 'input_c_type': 'int16_t',
                 'output_c_type': 'int16_t'
+            }
+        elif activation_dtype == 'FP32':
+            return {
+                'kernel_fn': 'arm_softmax_f32',
+                'input_c_type': 'float',
+                'output_c_type': 'float'
             }
         else:
             raise NotImplementedError(f"Unsupported Softmax dtype: {activation_dtype}")
@@ -289,7 +295,7 @@ class OpSoftmax(OperationBase):
         if output_shape is not None:
             output_shape = tuple(output_shape)
         
-        if not force_cmsis:
+        if not force_cmsis and kernel_info["input_c_type"] != "float":
             # Extract quantization from LiteRT
             input_quant = op_tensors['inputs'][0]['quantization']
             output_quant = op_tensors['outputs'][0]['quantization']
@@ -299,20 +305,20 @@ class OpSoftmax(OperationBase):
             output_scale = output_quant.get('scale', 1.0)
             output_zp = output_quant.get('zero_point', 0)
         
-        # Handle per-channel quantization (convert to scalar)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = float(input_scale[0])
-        if isinstance(input_zp, (list, np.ndarray)):
-            input_zp = int(input_zp[0])
-        if isinstance(output_scale, (list, np.ndarray)):
-            output_scale = float(output_scale[0])
-        if isinstance(output_zp, (list, np.ndarray)):
-            output_zp = int(output_zp[0])
-        
-        input_scale = float(input_scale)
-        input_zp = int(input_zp)
-        output_scale = float(output_scale)
-        output_zp = int(output_zp)
+        if kernel_info["input_c_type"] != "float":
+            if isinstance(input_scale, (list, np.ndarray)):
+                input_scale = float(input_scale[0])
+            if isinstance(input_zp, (list, np.ndarray)):
+                input_zp = int(input_zp[0])
+            if isinstance(output_scale, (list, np.ndarray)):
+                output_scale = float(output_scale[0])
+            if isinstance(output_zp, (list, np.ndarray)):
+                output_zp = int(output_zp[0])
+
+            input_scale = float(input_scale)
+            input_zp = int(input_zp)
+            output_scale = float(output_scale)
+            output_zp = int(output_zp)
         
         builder = TemplateContextBuilder()
         
@@ -326,7 +332,9 @@ class OpSoftmax(OperationBase):
         softmax_input_integer_bits = 5  # scaled_diff_integer_bits, matches ns-cmsis-nn
         beta = 1.0  # softmax beta parameter (typically 1.0)
         
-        if kernel_info["input_c_type"] == "int8_t":
+        if kernel_info["input_c_type"] == "float":
+            mult = shift = diff_min = 0
+        elif kernel_info["input_c_type"] == "int8_t":
             # S8: preprocess_softmax_scaling
             # input_beta_real_multiplier = min(beta * input_scale * (1 << (31 - scaled_diff_integer_bits)), max)
             max_real_multiplier = (1 << 31) - 1
@@ -369,7 +377,9 @@ class OpSoftmax(OperationBase):
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
 
-        if kernel_info["input_c_type"] == "int8_t":
+        if kernel_info["input_c_type"] == "float":
+            input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+        elif kernel_info["input_c_type"] == "int8_t":
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
             input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
@@ -382,7 +392,14 @@ class OpSoftmax(OperationBase):
 
         self.rng.__setstate__(rng_state)
 
-        if force_cmsis:
+        if kernel_info["input_c_type"] == "float":
+            interpreter = self.load_litert_interpreter(str(tflite_path))
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+            interpreter.set_tensor(input_details[0]['index'], input_q)
+            interpreter.invoke()
+            output_data = np.array(interpreter.get_tensor(output_details[0]['index']), dtype=np.float32)
+        elif force_cmsis:
             hint = self.desc.get("hint", {})
             if isinstance(hint, dict) and "diff_min" in hint:
                 diff_min = int(hint["diff_min"])
@@ -419,16 +436,24 @@ class OpSoftmax(OperationBase):
         extras = hint.get("extras", {}) if isinstance(hint, dict) else {}
         output_dtype_hint = str(hint.get("output_dtype", extras.get("output_dtype", ""))).upper()
         is_s8_s16 = force_cmsis and output_dtype_hint == "S16" and kernel_info["input_c_type"] == "int8_t"
-        if is_s8_s16:
+        if kernel_info["input_c_type"] == "float":
+            kernel_fn = kernel_info["kernel_fn"]
+            output_c_type = kernel_info["output_c_type"]
+            returns_status = True
+            uses_lut = False
+            float_kernel = True
+        elif is_s8_s16:
             kernel_fn = "arm_softmax_s8_s16"
             output_c_type = "int16_t"
             returns_status = False
             uses_lut = False
+            float_kernel = False
         else:
             kernel_fn = kernel_info["kernel_fn"]
             output_c_type = kernel_info["output_c_type"]
             returns_status = kernel_info["input_c_type"] == "int16_t"
             uses_lut = kernel_info["input_c_type"] == "int16_t"
+            float_kernel = False
 
         context = {
             'name': name,
@@ -447,6 +472,7 @@ class OpSoftmax(OperationBase):
             'kernel_fn': kernel_fn,
             'returns_status': returns_status,
             'uses_lut': uses_lut,
+            'float_kernel': float_kernel,
         }
         
         # Render templates

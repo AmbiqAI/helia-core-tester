@@ -101,6 +101,16 @@ class OpTransposeConv(OperationBase):
         activation_dtype = self.desc.get('activation_dtype', 'S8').upper()
         weight_dtype = self.desc.get('weight_dtype', 'S8').upper()
         
+        if activation_dtype == 'FP32' and weight_dtype == 'FP32':
+            return {
+                'kernel_fn': 'arm_transpose_conv_f32',
+                'kernel_get_buffer_size_fn': 'arm_transpose_conv_f32_get_buffer_size',
+                'input_c_type': 'float',
+                'output_c_type': 'float',
+                'weight_c_type': 'float',
+                'bias_c_type': 'float',
+                'layout': 'ARM_NN_LAYOUT_NHWC',
+            }
         if activation_dtype == 'S8' and weight_dtype == 'S8':
             return {
                 'kernel_fn': 'arm_transpose_conv_wrapper_s8',
@@ -128,6 +138,7 @@ class OpTransposeConv(OperationBase):
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_transpose_conv_kernel()
+        float_kernel = kernel_info["input_c_type"] == "float"
         
         # Load LiteRT model for tensor extraction
         from helia_core_tester.generation.utils.litert_utils import (
@@ -305,8 +316,7 @@ class OpTransposeConv(OperationBase):
                 }
             else:
                 raise ValueError(f"Unsupported filter shape: {filter_shape}")
-            # Ensure weights are int8 in generated C
-            if weights.dtype != np.int8:
+            if not float_kernel and weights.dtype != np.int8:
                 weights = weights.astype(np.int8)
         else:
             # Fallback: descriptor format [KH, KW, OutCh, InCh]
@@ -331,6 +341,85 @@ class OpTransposeConv(OperationBase):
             quant_params['input'],
             quant_params['output']
         )
+        if float_kernel:
+            has_biases = biases is not None and biases.size > 0
+            if weights is not None and weights.dtype != np.float32:
+                weights = weights.astype(np.float32)
+            if has_biases and biases.dtype != np.float32:
+                biases = biases.astype(np.float32)
+
+            input_data = self._sample_uniform(input_shape)
+            output_data = self.run_inference(str(tflite_path), input_data.astype(np.float32)).astype(np.float32)
+
+            weights_array_str = builder.format_array_as_c_literal(weights)
+            biases_array_str = builder.format_array_as_c_literal(biases) if has_biases else ""
+            input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=np.float32))
+            expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=np.float32))
+
+            buffer_size_max = max(
+                1024,
+                int(
+                    (input_dims['n'] * input_dims['h'] * input_dims['w'] * input_dims['c']
+                     + filter_dims['n'] * filter_dims['h'] * filter_dims['w'] * max(filter_dims['c'], 1)
+                     + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * 4
+                ),
+            )
+            reverse_conv_ctx_size = max(
+                1024,
+                int(output_dims['w'] * output_dims['h'] * output_dims['c'] * 4),
+            )
+
+            context = {
+                'name': name,
+                'prefix': name,
+                'input_dims': input_dims,
+                'filter_dims': filter_dims,
+                'output_dims': output_dims,
+                'transpose_conv_params': transpose_conv_params,
+                'weights_array': weights_array_str,
+                'biases_array': biases_array_str,
+                'has_biases': has_biases,
+                'has_weight_sum': False,
+                'weight_sum_size': 0,
+                'input_data_array': input_data_array_str,
+                'expected_output_array': expected_output_array_str,
+                'input_dtype': kernel_info["input_c_type"],
+                'output_dtype': kernel_info["output_c_type"],
+                'weight_dtype': kernel_info.get("weight_c_type", kernel_info["input_c_type"]),
+                'bias_dtype': kernel_info["bias_c_type"],
+                'kernel_fn': kernel_info["kernel_fn"],
+                'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+                'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
+                'buffer_size_max': buffer_size_max,
+                'reverse_conv_ctx_size': reverse_conv_ctx_size,
+                'float_kernel': True,
+                'transpose_conv_params_type': 'cmsis_nn_transpose_conv_params_f32',
+                'transpose_activation_min_literal': builder.format_float_literal(transpose_conv_params['activation_min']),
+                'transpose_activation_max_literal': builder.format_float_literal(transpose_conv_params['activation_max']),
+            }
+            includes_api_dir = output_dir / "includes"
+            includes_api_dir.mkdir(parents=True, exist_ok=True)
+            
+            h_content = self.render_template("ConvolutionFunctions/transpose_conv/transpose_conv.h.j2", context)
+            h_path = includes_api_dir / f"{name}_transpose_conv.h"
+            with open(h_path, 'w') as f:
+                f.write(h_content)
+            
+            c_content = self.render_template("ConvolutionFunctions/transpose_conv/transpose_conv.c.j2", context)
+            c_path = output_dir / f"{name}_transpose_conv.c"
+            with open(c_path, 'w') as f:
+                f.write(c_content)
+            
+            cmake_context = {
+                'name': name,
+                'operator': self.desc.get('operator', 'TransposeConv'),
+                'operator_name': 'transpose_conv'
+            }
+            cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
+            cmake_path = output_dir / "CMakeLists.txt"
+            with open(cmake_path, 'w') as f:
+                f.write(cmake_content)
+            return
         
         # Build quantization parameters
         # The effective scale for multiplier/shift is NOT output_scale directly!

@@ -10,6 +10,7 @@ from pathlib import Path
 def build_arg_parser(default_downloads_dir: Path, default_source_dir: Path) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Build and run helia-core kernels unit tests on FVP Corstone-300 (Python).")
     ap.add_argument("-c", "--cpu", default="cortex-m55", help="Comma-separated cores, e.g. m0,m4,m55")
+    ap.add_argument("--suite", choices=["int", "float"], default="int", help="Suite selector for artifact partitioning")
     ap.add_argument("-o", "--opt", default="-Ofast", help="Optimization level passed via CMSIS_OPTIMIZATION_LEVEL")
     ap.add_argument("--verbosity", type=int, choices=[0, 1, 2, 3], default=0,
                    help="Output verbosity level (0=minimal, 1=progress, 2=commands, 3=debug)")

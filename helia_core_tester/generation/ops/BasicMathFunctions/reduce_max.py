@@ -7,6 +7,7 @@ import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.utils.tflite_utils import qp_scalar
 
 
 class OpReduceMax(OperationBase):
@@ -112,10 +113,8 @@ class OpReduceMax(OperationBase):
         
         # Extract quantization
         input_qp = input_details[0].get('quantization_parameters', {})
-        input_scale = input_qp.get('scales', [1.0])
-        input_zp = input_qp.get('zero_points', [0])
-        input_scale = float(input_scale[0] if isinstance(input_scale, list) else input_scale)
-        input_zp = int(input_zp[0] if isinstance(input_zp, list) else input_zp)
+        input_scale = float(qp_scalar(input_qp, 'scales', [1.0]))
+        input_zp = int(qp_scalar(input_qp, 'zero_points', [0]))
         
         # Quantize inputs
         if kernel_info["input_c_type"] == "int8_t":

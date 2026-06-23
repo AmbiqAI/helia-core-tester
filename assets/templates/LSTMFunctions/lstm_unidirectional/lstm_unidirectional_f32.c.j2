@@ -1,0 +1,72 @@
+#include "{{ name }}_lstm_unidirectional.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+static float {{ name }}_output[{{ dst_size }}];
+static float {{ name }}_temp1[{{ cell_state_size }}];
+static float {{ name }}_temp2[{{ cell_state_size }}];
+static float {{ name }}_cell_state[{{ cell_state_size }}];
+
+static int32_t run_lstm(void)
+{
+    const cmsis_nn_lstm_params_f32 params = {
+        .time_major = {{ time_major_literal }},
+        .batch_size = {{ batch_size }},
+        .time_steps = {{ time_steps }},
+        .input_size = {{ input_size }},
+        .hidden_size = {{ hidden_size }},
+        .cell_clip = {{ cell_clip_literal }},
+        .forget_gate = {
+            .input_weights = {{ name }}_forget_gate_input_weights,
+            .hidden_weights = {{ name }}_forget_gate_hidden_weights,
+            .bias = {{ name }}_forget_gate_bias,
+            .activation_type = ARM_NN_FLT_ACT_SIGMOID,
+        },
+        .input_gate = {
+            .input_weights = {{ name }}_input_gate_input_weights,
+            .hidden_weights = {{ name }}_input_gate_hidden_weights,
+            .bias = {{ name }}_input_gate_bias,
+            .activation_type = ARM_NN_FLT_ACT_SIGMOID,
+        },
+        .cell_gate = {
+            .input_weights = {{ name }}_cell_gate_input_weights,
+            .hidden_weights = {{ name }}_cell_gate_hidden_weights,
+            .bias = {{ name }}_cell_gate_bias,
+            .activation_type = ARM_NN_FLT_ACT_TANH,
+        },
+        .output_gate = {
+            .input_weights = {{ name }}_output_gate_input_weights,
+            .hidden_weights = {{ name }}_output_gate_hidden_weights,
+            .bias = {{ name }}_output_gate_bias,
+            .activation_type = ARM_NN_FLT_ACT_SIGMOID,
+        },
+    };
+    cmsis_nn_lstm_context_f32 buffers = {
+        .temp1 = {{ name }}_temp1,
+        .temp2 = {{ name }}_temp2,
+        .cell_state = {{ name }}_cell_state,
+    };
+
+    return arm_lstm_unidirectional_f32({{ name }}_input_tensor, {{ name }}_output, &params, &buffers);
+}
+
+int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+{
+    int32_t status = run_lstm();
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);
+
+    int failures = 0;
+    HELIA_VALIDATE_OUTPUTS(
+        {{ validation_mode_token | default("FLOAT") }},
+        {{ name }}_output,
+        {{ name }}_expected_output,
+        {{ dst_size }},
+        {{ validation_tolerance | default(1) }},
+        {{ validation_atol | default(0.01) }}f,
+        {{ validation_rtol | default(0.001) }}f,
+        {{ validation_report_limit | default(8) }},
+        failures
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
+}
+
+{% include "common/standalone/main.j2" %}

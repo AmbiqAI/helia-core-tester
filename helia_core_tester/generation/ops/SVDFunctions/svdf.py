@@ -163,6 +163,45 @@ class OpSVDF(OperationBase):
         out = np.clip(out, out_act_min, out_act_max).astype(np.int8)
         return out
 
+    def _generate_svdf_expected_f32(
+        self,
+        input_sequence: np.ndarray,
+        state_init: np.ndarray,
+        weights_feature: np.ndarray,
+        weights_time: np.ndarray,
+        bias: Optional[np.ndarray],
+        params: Dict[str, Any],
+    ) -> np.ndarray:
+        input_batches = int(params["input_batches"])
+        input_height = int(params["input_height"])
+        feature_batches = int(params["feature_batches"])
+        time_batches = int(params["time_batches"])
+        rank = int(params["rank"])
+        unit_count = feature_batches // rank
+        input_act_min = float(params["input_activation_min"])
+        input_act_max = float(params["input_activation_max"])
+        output_act_min = float(params["output_activation_min"])
+        output_act_max = float(params["output_activation_max"])
+
+        state = np.asarray(state_init, dtype=np.float32).reshape(input_batches, feature_batches, time_batches).copy()
+        output = np.zeros((input_batches, unit_count), dtype=np.float32)
+
+        for step_input in np.asarray(input_sequence, dtype=np.float32):
+            if time_batches > 1:
+                state[:, :, : time_batches - 1] = state[:, :, 1:]
+
+            projected = np.einsum("bi,fi->bf", step_input.reshape(input_batches, input_height), weights_feature)
+            projected = np.clip(projected, input_act_min, input_act_max)
+            state[:, :, time_batches - 1] = projected
+
+            buffer_a = np.einsum("bft,ft->bf", state, weights_time)
+            reduced = buffer_a.reshape(input_batches, unit_count, rank).sum(axis=2)
+            if bias is not None:
+                reduced = reduced + bias.reshape(1, unit_count)
+            output = np.clip(reduced, output_act_min, output_act_max).astype(np.float32)
+
+        return output.flatten()
+
     def generate_c_files(self, output_dir: Path) -> None:
         """
         Generate C and H files for SVDF operation.
@@ -173,6 +212,93 @@ class OpSVDF(OperationBase):
         force_cmsis = self.desc.get("hint", {}).get("force_cmsis", False)
         if not force_cmsis:
             # TFLite-based SVDF not supported for C test generation
+            return
+
+        if str(self.desc.get("activation_dtype", "S8")).upper() == "FP32":
+            hint = self.desc.get("hint", {})
+            input_batches = int(hint.get("input_batches", 1))
+            input_height = int(hint.get("input_height", 4))
+            feature_batches = int(hint.get("feature_batches", 4))
+            time_batches = int(hint.get("time_batches", 3))
+            rank = int(hint.get("rank", 1))
+            sequence_steps = int(hint.get("sequence_steps", 2))
+            unit_count = feature_batches // rank
+            use_bias = bool(hint.get("use_bias", True))
+            input_activation_min = float(hint.get("input_activation_min", -1.0e30))
+            input_activation_max = float(hint.get("input_activation_max", 1.0e30))
+            output_activation_min = float(hint.get("output_activation_min", -1.0e30))
+            output_activation_max = float(hint.get("output_activation_max", 1.0e30))
+
+            rng_state = self.rng.__getstate__()
+            self.rng = np.random.default_rng(self.seed)
+            input_sequence = self.rng.uniform(-1.0, 1.0, size=(sequence_steps, input_batches, input_height)).astype(np.float32)
+            state_init = self.rng.uniform(-0.5, 0.5, size=(input_batches, feature_batches, time_batches)).astype(np.float32)
+            weights_feature = self.rng.uniform(-1.0, 1.0, size=(feature_batches, input_height)).astype(np.float32)
+            weights_time = self.rng.uniform(-1.0, 1.0, size=(feature_batches, time_batches)).astype(np.float32)
+            bias = self.rng.uniform(-0.5, 0.5, size=(unit_count,)).astype(np.float32) if use_bias else None
+            self.rng.__setstate__(rng_state)
+
+            params = {
+                "input_batches": input_batches,
+                "input_height": input_height,
+                "feature_batches": feature_batches,
+                "time_batches": time_batches,
+                "rank": rank,
+                "input_activation_min": input_activation_min,
+                "input_activation_max": input_activation_max,
+                "output_activation_min": output_activation_min,
+                "output_activation_max": output_activation_max,
+            }
+            expected_output = self._generate_svdf_expected_f32(
+                input_sequence=input_sequence,
+                state_init=state_init,
+                weights_feature=weights_feature,
+                weights_time=weights_time,
+                bias=bias,
+                params=params,
+            )
+
+            builder = TemplateContextBuilder()
+            context = {
+                "name": name,
+                "prefix": name,
+                "kernel_fn": "arm_svdf_f32",
+                "input_batches": input_batches,
+                "input_height": input_height,
+                "feature_batches": feature_batches,
+                "time_batches": time_batches,
+                "rank": rank,
+                "unit_count": unit_count,
+                "sequence_steps": sequence_steps,
+                "input_size": int(input_batches * input_height),
+                "state_size": int(input_batches * feature_batches * time_batches),
+                "scratch_input_size": int(input_batches * feature_batches),
+                "scratch_output_size": int(input_batches * unit_count),
+                "output_size": int(input_batches * unit_count),
+                "use_bias": use_bias,
+                "input_data_array": builder.format_array_as_c_literal(input_sequence),
+                "weights_feature_array": builder.format_array_as_c_literal(weights_feature),
+                "weights_time_array": builder.format_array_as_c_literal(weights_time),
+                "state_init_array": builder.format_array_as_c_literal(state_init),
+                "output_ref_array": builder.format_array_as_c_literal(expected_output.astype(np.float32)),
+                "bias_array": builder.format_array_as_c_literal(bias) if bias is not None else "",
+                "input_activation_min_literal": builder.format_float_literal(input_activation_min),
+                "input_activation_max_literal": builder.format_float_literal(input_activation_max),
+                "output_activation_min_literal": builder.format_float_literal(output_activation_min),
+                "output_activation_max_literal": builder.format_float_literal(output_activation_max),
+            }
+            self._write_op_outputs(
+                output_dir,
+                "svdf",
+                "SVDFunctions/svdf/svdf_f32.h.j2",
+                "SVDFunctions/svdf/svdf_f32.c.j2",
+                context,
+                {
+                    "name": name,
+                    "operator": self.desc.get("operator", "SVDF"),
+                    "operator_name": "svdf",
+                },
+            )
             return
 
         hint = self.desc.get("hint", {})

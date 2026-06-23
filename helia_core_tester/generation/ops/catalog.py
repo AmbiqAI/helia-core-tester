@@ -17,10 +17,16 @@ class OperatorSpec:
     parity_kind: ParityKind
     module_path: str
     class_name: str
-    descriptor_relpath: Optional[str]
+    descriptor_relpaths: tuple[str, ...]
     template_relpath: Optional[str]
     artifact_family_dir: str
     rationale: Optional[str] = None
+
+    @property
+    def descriptor_relpath(self) -> Optional[str]:
+        if not self.descriptor_relpaths:
+            return None
+        return self.descriptor_relpaths[0]
 
     @property
     def descriptor_stem(self) -> Optional[str]:
@@ -34,9 +40,10 @@ def _spec(
     family: str,
     module_basename: str,
     class_name: str,
-    descriptor_relpath: Optional[str],
-    template_relpath: Optional[str],
+    descriptor_relpath: Optional[str] = None,
+    template_relpath: Optional[str] = None,
     *,
+    descriptor_relpaths: Optional[tuple[str, ...]] = None,
     parity_kind: ParityKind = "cmsis",
     rationale: Optional[str] = None,
 ) -> OperatorSpec:
@@ -46,7 +53,7 @@ def _spec(
         parity_kind=parity_kind,
         module_path=f"helia_core_tester.generation.ops.{family}.{module_basename}",
         class_name=class_name,
-        descriptor_relpath=descriptor_relpath,
+        descriptor_relpaths=descriptor_relpaths or ((descriptor_relpath,) if descriptor_relpath else ()),
         template_relpath=template_relpath,
         artifact_family_dir=family,
         rationale=rationale,
@@ -87,11 +94,39 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "ActivationFunctions/hard_swish",
     ),
     "Abs": _spec("Abs", "BasicMathFunctions", "abs", "OpAbs", "BasicMathFunctions/abs.yaml", "BasicMathFunctions/abs"),
-    "Add": _spec("Add", "BasicMathFunctions", "add", "OpAdd", "BasicMathFunctions/add.yaml", "BasicMathFunctions/add"),
+    "Add": _spec(
+        "Add",
+        "BasicMathFunctions",
+        "add",
+        "OpAdd",
+        descriptor_relpaths=("BasicMathFunctions/add.yaml", "BasicMathFunctions/add_float.yaml"),
+        template_relpath="BasicMathFunctions/add",
+    ),
     "Sub": _spec("Sub", "BasicMathFunctions", "sub", "OpSub", "BasicMathFunctions/sub.yaml", "BasicMathFunctions/sub"),
-    "Mul": _spec("Mul", "BasicMathFunctions", "mul", "OpMul", "BasicMathFunctions/mul.yaml", "BasicMathFunctions/mul"),
-    "Maximum": _spec("Maximum", "BasicMathFunctions", "minmax", "OpMinMax", "BasicMathFunctions/maximum.yaml", "BasicMathFunctions/minmax"),
-    "Minimum": _spec("Minimum", "BasicMathFunctions", "minmax", "OpMinMax", "BasicMathFunctions/minimum.yaml", "BasicMathFunctions/minmax"),
+    "Mul": _spec(
+        "Mul",
+        "BasicMathFunctions",
+        "mul",
+        "OpMul",
+        descriptor_relpaths=("BasicMathFunctions/mul.yaml", "BasicMathFunctions/mul_float.yaml"),
+        template_relpath="BasicMathFunctions/mul",
+    ),
+    "Maximum": _spec(
+        "Maximum",
+        "BasicMathFunctions",
+        "minmax",
+        "OpMinMax",
+        descriptor_relpaths=("BasicMathFunctions/maximum.yaml", "BasicMathFunctions/maximum_float.yaml"),
+        template_relpath="BasicMathFunctions/minmax",
+    ),
+    "Minimum": _spec(
+        "Minimum",
+        "BasicMathFunctions",
+        "minmax",
+        "OpMinMax",
+        descriptor_relpaths=("BasicMathFunctions/minimum.yaml", "BasicMathFunctions/minimum_float.yaml"),
+        template_relpath="BasicMathFunctions/minmax",
+    ),
     "Mean": _spec("Mean", "BasicMathFunctions", "mean", "OpMean", "BasicMathFunctions/mean.yaml", "BasicMathFunctions/mean"),
     "ReduceMax": _spec("ReduceMax", "BasicMathFunctions", "reduce_max", "OpReduceMax", "BasicMathFunctions/reduce_max.yaml", "BasicMathFunctions/reduce_max"),
     "ReduceMin": _spec("ReduceMin", "BasicMathFunctions", "reduce_min", "OpReduceMin", "BasicMathFunctions/reduce_min.yaml", "BasicMathFunctions/reduce_min"),
@@ -102,21 +137,99 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
     "Comparison": _spec("Comparison", "ComparisonFunctions", "comparison", "OpComparison", "ComparisonFunctions/comparison.yaml", "ComparisonFunctions/comparison"),
     "Concatenation": _spec("Concatenation", "ConcatenationFunctions", "concatenation", "OpConcatenation", "ConcatenationFunctions/concatenation.yaml", "ConcatenationFunctions/concatenation"),
     "Split": _spec("Split", "ConcatenationFunctions", "split", "OpSplit", "ConcatenationFunctions/split.yaml", "ConcatenationFunctions/split"),
-    "Convolve": _spec("Convolve", "ConvolutionFunctions", "convolve", "OpConvolve", "ConvolutionFunctions/convolve.yaml", "ConvolutionFunctions/convolve"),
-    "DepthwiseConv": _spec("DepthwiseConv", "ConvolutionFunctions", "depthwise_conv", "OpDepthwiseConv", "ConvolutionFunctions/depthwise_conv.yaml", "ConvolutionFunctions/depthwise_conv"),
-    "TransposeConv": _spec("TransposeConv", "ConvolutionFunctions", "transpose_conv", "OpTransposeConv", "ConvolutionFunctions/transpose_conv.yaml", "ConvolutionFunctions/transpose_conv"),
-    "FullyConnected": _spec("FullyConnected", "FullyConnectedFunctions", "fully_connected", "OpFullyConnected", "FullyConnectedFunctions/fully_connected.yaml", "FullyConnectedFunctions/fully_connected"),
-    "BatchMatMul": _spec("BatchMatMul", "FullyConnectedFunctions", "batch_matmul", "OpBatchMatMul", "FullyConnectedFunctions/batch_matmul.yaml", "FullyConnectedFunctions/batch_matmul"),
+    "Convolve": _spec(
+        "Convolve",
+        "ConvolutionFunctions",
+        "convolve",
+        "OpConvolve",
+        descriptor_relpaths=("ConvolutionFunctions/convolve.yaml", "ConvolutionFunctions/convolve_float.yaml"),
+        template_relpath="ConvolutionFunctions/convolve",
+    ),
+    "DepthwiseConv": _spec(
+        "DepthwiseConv",
+        "ConvolutionFunctions",
+        "depthwise_conv",
+        "OpDepthwiseConv",
+        descriptor_relpaths=("ConvolutionFunctions/depthwise_conv.yaml", "ConvolutionFunctions/depthwise_conv_float.yaml"),
+        template_relpath="ConvolutionFunctions/depthwise_conv",
+    ),
+    "TransposeConv": _spec(
+        "TransposeConv",
+        "ConvolutionFunctions",
+        "transpose_conv",
+        "OpTransposeConv",
+        descriptor_relpaths=("ConvolutionFunctions/transpose_conv.yaml", "ConvolutionFunctions/transpose_conv_float.yaml"),
+        template_relpath="ConvolutionFunctions/transpose_conv",
+    ),
+    "FullyConnected": _spec(
+        "FullyConnected",
+        "FullyConnectedFunctions",
+        "fully_connected",
+        "OpFullyConnected",
+        descriptor_relpaths=("FullyConnectedFunctions/fully_connected.yaml", "FullyConnectedFunctions/fully_connected_float.yaml"),
+        template_relpath="FullyConnectedFunctions/fully_connected",
+    ),
+    "BatchMatMul": _spec(
+        "BatchMatMul",
+        "FullyConnectedFunctions",
+        "batch_matmul",
+        "OpBatchMatMul",
+        descriptor_relpaths=("FullyConnectedFunctions/batch_matmul.yaml", "FullyConnectedFunctions/batch_matmul_float.yaml"),
+        template_relpath="FullyConnectedFunctions/batch_matmul",
+    ),
     "Gather": _spec("Gather", "GatherFunctions", "gather", "OpGather", "GatherFunctions/gather.yaml", "GatherFunctions/gather"),
     "GatherND": _spec("GatherND", "GatherFunctions", "gather_nd", "OpGatherND", "GatherFunctions/gather_nd.yaml", "GatherFunctions/gather_nd"),
-    "LSTMUnidirectional": _spec("LSTMUnidirectional", "LSTMFunctions", "lstm_unidirectional", "OpLSTMUnidirectional", "LSTMFunctions/lstm_unidirectional.yaml", "LSTMFunctions/lstm_unidirectional"),
+    "LSTMUnidirectional": _spec(
+        "LSTMUnidirectional",
+        "LSTMFunctions",
+        "lstm_unidirectional",
+        "OpLSTMUnidirectional",
+        descriptor_relpaths=("LSTMFunctions/lstm_unidirectional.yaml", "LSTMFunctions/lstm_unidirectional_float.yaml"),
+        template_relpath="LSTMFunctions/lstm_unidirectional",
+    ),
     "Requantize": _spec("Requantize", "NNSupportFunctions", "requantize", "OpRequantize", "NNSupportFunctions/requantize.yaml", "NNSupportFunctions/requantize"),
-    "Pad": _spec("Pad", "PadFunctions", "pad", "OpPad", "PadFunctions/pad.yaml", "PadFunctions/pad"),
-    "AvgPool": _spec("AvgPool", "PoolingFunctions", "avg_pool", "OpAvgPool", "PoolingFunctions/avg_pool.yaml", "PoolingFunctions/avg_pool"),
-    "MaxPool": _spec("MaxPool", "PoolingFunctions", "max_pool", "OpMaxPool", "PoolingFunctions/max_pool.yaml", "PoolingFunctions/max_pool"),
+    "BatchNorm": _spec(
+        "BatchNorm",
+        "NNSupportFunctions",
+        "batch_norm",
+        "OpBatchNorm",
+        "NNSupportFunctions/batch_norm.yaml",
+        "NNSupportFunctions/batch_norm",
+    ),
+    "Pad": _spec(
+        "Pad",
+        "PadFunctions",
+        "pad",
+        "OpPad",
+        descriptor_relpaths=("PadFunctions/pad.yaml", "PadFunctions/pad_float.yaml"),
+        template_relpath="PadFunctions/pad",
+    ),
+    "AvgPool": _spec(
+        "AvgPool",
+        "PoolingFunctions",
+        "avg_pool",
+        "OpAvgPool",
+        descriptor_relpaths=("PoolingFunctions/avg_pool.yaml", "PoolingFunctions/avg_pool_float.yaml"),
+        template_relpath="PoolingFunctions/avg_pool",
+    ),
+    "MaxPool": _spec(
+        "MaxPool",
+        "PoolingFunctions",
+        "max_pool",
+        "OpMaxPool",
+        descriptor_relpaths=("PoolingFunctions/max_pool.yaml", "PoolingFunctions/max_pool_float.yaml"),
+        template_relpath="PoolingFunctions/max_pool",
+    ),
     "Quantize": _spec("Quantize", "QuantizationFunctions", "quantize", "OpQuantize", "QuantizationFunctions/quantize.yaml", "QuantizationFunctions/quantize"),
     "Dequantize": _spec("Dequantize", "QuantizationFunctions", "dequantize", "OpDequantize", "QuantizationFunctions/dequantize.yaml", "QuantizationFunctions/dequantize"),
-    "Reshape": _spec("Reshape", "ReshapeFunctions", "reshape", "OpReshape", "ReshapeFunctions/reshape.yaml", "ReshapeFunctions/reshape"),
+    "Reshape": _spec(
+        "Reshape",
+        "ReshapeFunctions",
+        "reshape",
+        "OpReshape",
+        descriptor_relpaths=("ReshapeFunctions/reshape.yaml", "ReshapeFunctions/reshape_float.yaml"),
+        template_relpath="ReshapeFunctions/reshape",
+    ),
     "ResizeNearestNeighbor": _spec(
         "ResizeNearestNeighbor",
         "ReshapeFunctions",
@@ -130,10 +243,39 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
     "DepthToSpace": _spec("DepthToSpace", "ReshapeFunctions", "depth_to_space", "OpDepthToSpace", "ReshapeFunctions/depth_to_space.yaml", "ReshapeFunctions/depth_to_space"),
     "SpaceToBatchND": _spec("SpaceToBatchND", "ReshapeFunctions", "space_to_batch_nd", "OpSpaceToBatchND", "ReshapeFunctions/space_to_batch_nd.yaml", "ReshapeFunctions/space_to_batch_nd"),
     "BatchToSpaceND": _spec("BatchToSpaceND", "ReshapeFunctions", "batch_to_space_nd", "OpBatchToSpaceND", "ReshapeFunctions/batch_to_space_nd.yaml", "ReshapeFunctions/batch_to_space_nd"),
-    "SVDF": _spec("SVDF", "SVDFunctions", "svdf", "OpSVDF", "SVDFunctions/svdf.yaml", "SVDFunctions/svdf"),
-    "Softmax": _spec("Softmax", "SoftmaxFunctions", "softmax", "OpSoftmax", "SoftmaxFunctions/softmax.yaml", "SoftmaxFunctions/softmax"),
+    "SVDF": _spec(
+        "SVDF",
+        "SVDFunctions",
+        "svdf",
+        "OpSVDF",
+        descriptor_relpaths=("SVDFunctions/svdf.yaml", "SVDFunctions/svdf_float.yaml"),
+        template_relpath="SVDFunctions/svdf",
+    ),
+    "Softmax": _spec(
+        "Softmax",
+        "SoftmaxFunctions",
+        "softmax",
+        "OpSoftmax",
+        descriptor_relpaths=("SoftmaxFunctions/softmax.yaml", "SoftmaxFunctions/softmax_float.yaml"),
+        template_relpath="SoftmaxFunctions/softmax",
+    ),
     "StridedSlice": _spec("StridedSlice", "StridedSliceFunctions", "strided_slice", "OpStridedSlice", "StridedSliceFunctions/strided_slice.yaml", "StridedSliceFunctions/strided_slice"),
-    "Transpose": _spec("Transpose", "TransposeFunctions", "transpose", "OpTranspose", "TransposeFunctions/transpose.yaml", "TransposeFunctions/transpose"),
+    "Transpose": _spec(
+        "Transpose",
+        "TransposeFunctions",
+        "transpose",
+        "OpTranspose",
+        descriptor_relpaths=("TransposeFunctions/transpose.yaml", "TransposeFunctions/transpose_float.yaml"),
+        template_relpath="TransposeFunctions/transpose",
+    ),
+    "NNActivationFloat": _spec(
+        "NNActivationFloat",
+        "ActivationFunctions",
+        "nn_activation_float",
+        "OpNNActivationFloat",
+        "ActivationFunctions/nn_activation_float.yaml",
+        "ActivationFunctions/nn_activation_float",
+    ),
     "Fill": _spec(
         "Fill",
         "TesterExtensions",
@@ -212,8 +354,9 @@ def validate_catalog_paths(repo_root: Path) -> list[str]:
         module_relpath = Path(*spec.module_path.split(".")[-2:]).with_suffix(".py")
         if not (ops_root / module_relpath).exists():
             errors.append(f"Missing module for {spec.operator}: {module_relpath}")
-        if spec.descriptor_relpath is not None and not (descriptors_root / spec.descriptor_relpath).exists():
-            errors.append(f"Missing descriptor for {spec.operator}: {spec.descriptor_relpath}")
+        for descriptor_relpath in spec.descriptor_relpaths:
+            if not (descriptors_root / descriptor_relpath).exists():
+                errors.append(f"Missing descriptor for {spec.operator}: {descriptor_relpath}")
         if spec.template_relpath is not None and not (templates_root / spec.template_relpath).exists():
             errors.append(f"Missing template directory for {spec.operator}: {spec.template_relpath}")
 

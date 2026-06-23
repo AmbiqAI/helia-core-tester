@@ -35,46 +35,72 @@ class BuildStep(StepBase):
             return f"FVP script not found: {script_path}"
         return None
 
+    def _build_commands(self) -> list[list[str]]:
+        commands: list[list[str]] = []
+        for suite in self.config.suites:
+            for group in self.config.cpu_groups_for_suite(suite):
+                cpu_csv = ",".join(group["cpus"])
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "helia_core_tester.fvp.build_and_run_fvp",
+                    "--cpu",
+                    cpu_csv,
+                    "--suite",
+                    suite,
+                    "--cmake-def",
+                    f"CMSIS_OPTIMIZATION_LEVEL={self.config.optimization}",
+                    "--no-run",
+                    "--no-report",
+                ]
+
+                if suite == "float":
+                    float_precision = group.get("float_precision")
+                    if float_precision in {"both", "f32"}:
+                        cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F32=ON"])
+                    else:
+                        cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F32=OFF"])
+                    if float_precision in {"both", "f16"}:
+                        cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F16=ON"])
+                    else:
+                        cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F16=OFF"])
+                else:
+                    cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F32=OFF"])
+                    cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F16=OFF"])
+
+                if getattr(self.config, "coverage", False):
+                    cmd.append("--coverage")
+                if self.config.jobs:
+                    cmd.extend(["--jobs", str(self.config.jobs)])
+                if self.config.verbosity <= 1:
+                    cmd.append("--quiet")
+                else:
+                    cmd.extend(["--verbosity", str(self.config.verbosity)])
+                commands.append(cmd)
+
+        return commands
+
     def _do_execute(self) -> StepResult:
         """Execute CMake build for FVP."""
-        cpu_csv = ",".join(self.config.cpus)
         if self.config.verbosity >= 1:
-            self.logger.info(f"Building for FVP ({cpu_csv})")
-        script_path = find_fvp_script_path(self.config.project_root)
-        cmd = [
-            sys.executable, "-m", "helia_core_tester.fvp.build_and_run_fvp",
-            "--cpu", cpu_csv,
-            "--cmake-def", f"CMSIS_OPTIMIZATION_LEVEL={self.config.optimization}",
-            "--no-run",
-            "--no-report",
-        ]
-        if getattr(self.config, "coverage", False):
-            cmd.append("--coverage")
-        
-        if self.config.jobs:
-            cmd.extend(["--jobs", str(self.config.jobs)])
-
-        # Map verbosity: 0-1 = quiet, 2-3 = verbose
-        if self.config.verbosity <= 1:
-            cmd.append("--quiet")
-        else:
-            cmd.extend(["--verbosity", str(self.config.verbosity)])
+            self.logger.info(f"Building for FVP suites={','.join(self.config.suites)} cpus={','.join(self.config.cpus)}")
+        commands = self._build_commands()
         
         try:
-            if self.config.verbosity >= 2:
-                self.logger.info(f"Running command: {' '.join(cmd)}")
-            
-            run_command(cmd, cwd=self.config.project_root, verbosity=self.config.verbosity)
+            for cmd in commands:
+                if self.config.verbosity >= 2:
+                    self.logger.info(f"Running command: {' '.join(cmd)}")
+                run_command(cmd, cwd=self.config.project_root, verbosity=self.config.verbosity)
             
             if self.config.verbosity >= 1:
-                self.logger.info(f"Successfully built for {cpu_csv}")
+                self.logger.info(f"Successfully built for cpus={','.join(self.config.cpus)}")
             
             return StepResult(
                 name=self.name,
                 status=StepStatus.SUCCESS,
-                message=f"Successfully built for {cpu_csv}",
+                message=f"Successfully built suites={','.join(self.config.suites)} for cpus={','.join(self.config.cpus)}",
                 outputs={"build_dir": str(self.config.project_root / "artifacts")},
-                details={"command": cmd},
+                details={"commands": commands},
             )
         except subprocess.CalledProcessError as e:
             error_msg = f"Failed to build for FVP (exit code {e.returncode})"
@@ -102,7 +128,7 @@ class BuildStep(StepBase):
                 message=error_msg,
                 error=BuildError(error_msg),
                 outputs={"build_dir": str(self.config.project_root / "artifacts")},
-                details={"command": cmd},
+                details={"commands": commands},
             )
         except FileNotFoundError as e:
             error_msg = f"Failed to build for FVP: {e}"
@@ -115,51 +141,26 @@ class BuildStep(StepBase):
                 message=error_msg,
                 error=build_error,
                 outputs={"build_dir": str(self.config.project_root / "artifacts")},
-                details={"command": cmd},
+                details={"commands": commands},
             )
 
     def dry_run(self) -> StepResult:
         """Dry run of build step."""
-        cpu_csv = ",".join(self.config.cpus)
-        cmd_preview = [
-            sys.executable, "-m", "helia_core_tester.fvp.build_and_run_fvp",
-            "--cpu", cpu_csv,
-            "--cmake-def", f"CMSIS_OPTIMIZATION_LEVEL={self.config.optimization}",
-            "--no-run",
-            "--no-report",
-        ]
-        if getattr(self.config, "coverage", False):
-            cmd_preview.append("--coverage")
-        if self.config.jobs:
-            cmd_preview.extend(["--jobs", str(self.config.jobs)])
+        cmd_previews = self._build_commands()
         return StepResult(
             name=self.name,
             status=StepStatus.SKIPPED,
-            message=f"DRY RUN: Would run: {' '.join(cmd_preview)}",
+            message=f"DRY RUN: Would run {len(cmd_previews)} build command(s)",
             outputs={"build_dir": str(self.config.project_root / "artifacts")},
+            details={"commands": cmd_previews},
         )
 
     def _plan_details(self) -> StepPlan:
-        cpu_csv = ",".join(self.config.cpus)
-        cmd = [
-            sys.executable, "-m", "helia_core_tester.fvp.build_and_run_fvp",
-            "--cpu", cpu_csv,
-            "--cmake-def", f"CMSIS_OPTIMIZATION_LEVEL={self.config.optimization}",
-            "--no-run",
-            "--no-report",
-        ]
-        if getattr(self.config, "coverage", False):
-            cmd.append("--coverage")
-        if self.config.jobs:
-            cmd.extend(["--jobs", str(self.config.jobs)])
-        if self.config.verbosity <= 1:
-            cmd.append("--quiet")
-        else:
-            cmd.extend(["--verbosity", str(self.config.verbosity)])
+        commands = self._build_commands()
         return StepPlan(
             name=self.name,
             will_run=True,
             reason="ready",
-            commands=[cmd],
+            commands=commands,
             outputs={"build_dir": str(self.config.project_root / "artifacts")}
         )

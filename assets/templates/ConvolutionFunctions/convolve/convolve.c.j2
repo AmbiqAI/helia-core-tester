@@ -27,7 +27,8 @@ static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
 static const cmsis_nn_dims {{ name }}_bias_dims = {
     .n = 0, .h = 0, .w = 0, .c = {{ filter_dims.n }}
 };
-{% if kernel_fn == 'arm_convolve_wrapper_s16' %}
+{% if float_kernel %}
+{% elif kernel_fn == 'arm_convolve_wrapper_s16' %}
 // s16 requires cmsis_nn_bias_data struct wrapper
 static const cmsis_nn_bias_data {{ name }}_bias_data = {
     .data = {{ name }}_biases,
@@ -41,12 +42,22 @@ int32_t {{ prefix }}_{{ name }}_run(
     {{ output_dtype }}* __restrict output
 ) {
     // Calculate required buffer size
+    {% if float_kernel %}
+    int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
+        &{{ name }}_conv_params,
+        &{{ name }}_input_dims,
+        &{{ name }}_filter_dims,
+        &{{ name }}_output_dims,
+        {{ kernel_layout }}
+    );
+    {% else %}
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
         &{{ name }}_conv_params,
         &{{ name }}_input_dims,
         &{{ name }}_filter_dims,
         &{{ name }}_output_dims
     );
+    {% endif %}
 
     if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
         return ARM_CMSIS_NN_ARG_ERROR;
@@ -57,7 +68,26 @@ int32_t {{ prefix }}_{{ name }}_run(
     {{ name }}_ctx.size = required_buffer_size;
 
     // Run convolution - different signatures for s8 vs s16
-    {% if kernel_fn == 'arm_convolve_wrapper_s8' %}
+    {% if float_kernel %}
+    return {{ kernel_fn }}(
+        &{{ name }}_ctx,
+        &{{ name }}_conv_params,
+        &{{ name }}_input_dims,
+        input,
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        {% if has_biases %}
+        &{{ name }}_bias_dims,
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        output,
+        {{ kernel_layout }}
+    );
+    {% elif kernel_fn == 'arm_convolve_wrapper_s8' %}
     // Initialize weight sum context and buffer
     {{ name }}_weight_sum_ctx.buf = {{ name }}_weight_sum_buffer;
     {{ name }}_weight_sum_ctx.size = {{ name|upper }}_WEIGHT_SUM_BUFFER_SIZE;
