@@ -13,3 +13,35 @@ filter_shape: [3, 3, 3, 5]
 strides: [1, 1]
 padding: SAME
 use_bias: true
+---
+operator: Convolve
+name: convolve_float_stride2_valid_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 9, 9, 3]
+filter_shape: [3, 3, 3, 4]
+strides: [2, 2]
+padding: VALID
+use_bias: false
+---
+operator: Convolve
+name: convolve_float_1x1_same_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 5, 5, 4]
+filter_shape: [1, 1, 4, 6]
+strides: [1, 1]
+padding: SAME
+use_bias: true
