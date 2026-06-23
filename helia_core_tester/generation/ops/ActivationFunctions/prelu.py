@@ -92,8 +92,10 @@ class OpPReLU(OperationBase):
         from helia_core_tester.generation.utils.litert_builder import build_prelu_op
 
         activation_dtype = self.desc.get("activation_dtype", "S8")
-        if activation_dtype != "S8":
-            raise NotImplementedError(f"Unsupported PReLU dtype: {activation_dtype} (only S8 supported)")
+        dtype_map = {"S8": "int8", "S16": "int16"}
+        if activation_dtype not in dtype_map:
+            raise NotImplementedError(f"Unsupported PReLU dtype: {activation_dtype} (only S8/S16 supported)")
+        litert_dtype = dtype_map[activation_dtype]
 
         input_shape = tuple(self.desc["input_shape"])
         alpha_shape = self._resolved_alpha_shape()
@@ -125,7 +127,7 @@ class OpPReLU(OperationBase):
             input_shape=input_shape,
             alpha_shape=alpha_shape,
             alpha_values=alpha_values,
-            dtype="int8",
+            dtype=litert_dtype,
         )
         with open(out_path, "wb") as f:
             f.write(model_bytes)
@@ -145,8 +147,14 @@ class OpPReLU(OperationBase):
                 'input_c_type': 'int8_t',
                 'output_c_type': 'int8_t'
             }
+        elif activation_dtype == 'S16':
+            return {
+                'kernel_fn': 'arm_prelu_s16',
+                'input_c_type': 'int16_t',
+                'output_c_type': 'int16_t'
+            }
         else:
-            raise NotImplementedError(f"Unsupported PReLU dtype: {activation_dtype} (only S8 supported)")
+            raise NotImplementedError(f"Unsupported PReLU dtype: {activation_dtype} (only S8/S16 supported)")
     
     def _generate_arg_error_c_files(self, output_dir: Path) -> None:
         """
@@ -222,6 +230,47 @@ class OpPReLU(OperationBase):
         cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
         with open(output_dir / "CMakeLists.txt", 'w') as f:
             f.write(cmake_content)
+
+    @staticmethod
+    def _reference_prelu_s16(
+        *,
+        input_q: np.ndarray,
+        alpha_q: np.ndarray,
+        input_dims: Dict[str, int],
+        alpha_dims: Dict[str, int],
+        input_offset: int,
+        alpha_offset: int,
+        output_offset: int,
+        mult_identity: int,
+        shift_identity: int,
+        mult_alpha: int,
+        shift_alpha: int,
+    ) -> np.ndarray:
+        """
+        Compute the golden output for arm_prelu_s16 using exact CMSIS-NN fixed-point math.
+
+        Mirrors arm_elementwise_prelu_s16: for each element, the identity path is taken
+        when (input + input_offset) >= 0, otherwise the alpha path is used. Alpha is
+        broadcast across the input following the NHWC PReLU broadcast rules.
+        """
+        from helia_core_tester.generation.utils.tflite_utils import requantize_np
+
+        in_shape = (input_dims['n'], input_dims['h'], input_dims['w'], input_dims['c'])
+        a_shape = (alpha_dims['n'], alpha_dims['h'], alpha_dims['w'], alpha_dims['c'])
+
+        inp = input_q.reshape(in_shape).astype(np.int64)
+        alp = alpha_q.reshape(a_shape).astype(np.int64)
+        alp = np.broadcast_to(alp, in_shape)
+
+        input_value = inp + int(input_offset)
+        alpha_value = alp + int(alpha_offset)
+
+        identity = requantize_np(input_value, int(mult_identity), int(shift_identity))
+        alpha_path = requantize_np(input_value * alpha_value, int(mult_alpha), int(shift_alpha))
+
+        out = np.where(input_value >= 0, identity, alpha_path).astype(np.int64) + int(output_offset)
+        out = np.clip(out, -32768, 32767).astype(np.int16)
+        return out
 
     def generate_c_files(self, output_dir: Path) -> None:
         """
@@ -362,13 +411,22 @@ class OpPReLU(OperationBase):
         
         # Quantize alpha weights
         # Check if alpha_weights are already quantized (int8/int16) or float
+        if kernel_info["input_c_type"] == "int16_t":
+            np_alpha_dtype = np.int16
+            alpha_qmin, alpha_qmax = -32768, 32767
+            alpha_c_type = "int16_t"
+        else:
+            np_alpha_dtype = np.int8
+            alpha_qmin, alpha_qmax = -128, 127
+            alpha_c_type = "int8_t"
+
         if alpha_weights.dtype in [np.int8, np.int16, np.uint8]:
             # Alpha weights are already quantized, use them directly
-            alpha_q = alpha_weights.astype(np.int8) if alpha_weights.dtype == np.uint8 else alpha_weights
+            alpha_q = alpha_weights.astype(np_alpha_dtype) if alpha_weights.dtype == np.uint8 else alpha_weights
         else:
             # Alpha weights are float, need to quantize them
             alpha_q = np.round(alpha_weights / float(alpha_scale) + float(alpha_zp)).astype(np.int32)
-            alpha_q = np.clip(alpha_q, -128, 127).astype(np.int8)
+            alpha_q = np.clip(alpha_q, alpha_qmin, alpha_qmax).astype(np_alpha_dtype)
         
         # Generate input data and quantize
         rng_state = self.rng.__getstate__()
@@ -395,26 +453,42 @@ class OpPReLU(OperationBase):
         if kernel_info["input_c_type"] == "int8_t":
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
+        elif kernel_info["input_c_type"] == "int16_t":
+            np_in_dtype = np.int16
+            qmin, qmax = -32768, 32767
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
         
         input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
         input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
         
-        # Load LiteRT interpreter for inference
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        # Run inference using LiteRT interpreter
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        interpreter.set_tensor(input_details[0]['index'], input_q)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
+        if kernel_info["input_c_type"] == "int16_t":
+            # The LiteRT reference interpreter does not support int16 PReLU, so the
+            # golden output is computed here using the exact arm_prelu_s16 fixed-point
+            # math (see arm_elementwise_prelu_s16 in CMSIS-NN).
+            output_data = self._reference_prelu_s16(
+                input_q=input_q,
+                alpha_q=alpha_q,
+                input_dims=input_dims,
+                alpha_dims=alpha_dims,
+                input_offset=-int(input_zp),
+                alpha_offset=-int(alpha_zp),
+                output_offset=int(output_zp),
+                mult_identity=int(mult_identity),
+                shift_identity=int(shift_identity),
+                mult_alpha=int(mult_alpha),
+                shift_alpha=int(shift_alpha),
+            )
+        else:
+            # Run inference using LiteRT interpreter (int8 reference)
+            interpreter = self.load_litert_interpreter(str(tflite_path))
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+
+            interpreter.set_tensor(input_details[0]['index'], input_q)
+            interpreter.invoke()
+            output_data = interpreter.get_tensor(output_details[0]['index'])
+            output_data = np.array(output_data)
         
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)
@@ -440,6 +514,7 @@ class OpPReLU(OperationBase):
             'expected_output_array': expected_output_array_str,
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': kernel_info["output_c_type"],
+            'alpha_dtype': alpha_c_type,
             'kernel_fn': kernel_info["kernel_fn"],
         }
         

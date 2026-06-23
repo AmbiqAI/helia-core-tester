@@ -24,7 +24,7 @@ static const cmsis_nn_dims {{ name }}_output_dims = {
 };
 
 // Alpha weights
-static const int8_t {{ name }}_alpha[] = {
+static const {{ alpha_dtype | default("int8_t") }} {{ name }}_alpha[] = {
 {{ alpha_array }}
 };
 
