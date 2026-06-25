@@ -130,6 +130,8 @@ class OpMul(BinaryBasicMathBase):
                 activation_min,
                 activation_max,
             ).astype(float_dtype)
+            input1_q = np.broadcast_to(input1_q, output_shape).astype(float_dtype, copy=True)
+            input2_q = np.broadcast_to(input2_q, output_shape).astype(float_dtype, copy=True)
             activation_min_literal = builder.format_float_literal(activation_min)
             activation_max_literal = builder.format_float_literal(activation_max)
             input1_zp = input2_zp = output_zp = output_mult = output_shift = 0
@@ -213,6 +215,7 @@ class OpMul(BinaryBasicMathBase):
         if kernel_info["float_kernel"]:
             context["out_activation_min_literal"] = activation_min_literal
             context["out_activation_max_literal"] = activation_max_literal
+            context["validation_mode"] = "float"
         
         cmake_context = {
             'name': name,

@@ -63,3 +63,21 @@ input_shape:
 - 2
 - 8
 layout: ARM_NN_LAYOUT_NHWC
+---
+operator: BatchNorm
+name: batch_norm_9_channel_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 2, 2, 9]
+layout: ARM_NN_LAYOUT_NHWC
+---
+operator: BatchNorm
+name: batch_norm_9_channel_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 2, 2, 9]
+layout: ARM_NN_LAYOUT_NHWC

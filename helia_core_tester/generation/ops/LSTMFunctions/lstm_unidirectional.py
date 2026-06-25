@@ -1,5 +1,6 @@
 """LSTMUnidirectional operation implementation."""
 
+from pathlib import Path
 from typing import Dict, Any
 import numpy as np
 import tensorflow as tf
@@ -303,7 +304,6 @@ class OpLSTMUnidirectional(OperationBase):
         if not self.desc.get("hint", {}).get("force_cmsis", False):
             return
 
-        from pathlib import Path
         from helia_core_tester.generation.utils.lstm_data import generate_lstm_data, build_lstm_context
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         from helia_core_tester.core.discovery import find_tester_templates_dir

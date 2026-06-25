@@ -613,6 +613,7 @@ class OpFullyConnected(OperationBase):
                 'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
                 'fc_activation_min_literal': builder.format_float_literal(fc_params['activation_min']),
                 'fc_activation_max_literal': builder.format_float_literal(fc_params['activation_max']),
+                'validation_mode': 'float',
             }
 
             includes_api_dir = output_dir / "includes"

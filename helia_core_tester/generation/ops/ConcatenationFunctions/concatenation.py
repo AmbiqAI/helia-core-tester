@@ -22,13 +22,17 @@ class OpConcatenation(OperationBase):
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         from helia_core_tester.generation.utils.litert_builder import build_concat_op
 
-        activation_dtype = self.desc.get("activation_dtype", "S8")
+        activation_dtype = self.tensor_dtype("input", default=str(self.desc.get("activation_dtype", "S8")))
         if activation_dtype == "S8":
             dtype = "int8"
         elif activation_dtype == "S16":
             dtype = "int16"
         elif activation_dtype == "S32":
             dtype = "int32"
+        elif activation_dtype == "FP32":
+            dtype = "float32"
+        elif activation_dtype == "FP16":
+            dtype = "float16"
         else:
             raise NotImplementedError(f"Unsupported Concatenation dtype: {activation_dtype}")
 
@@ -51,14 +55,27 @@ class OpConcatenation(OperationBase):
         with open(out_path, "wb") as f:
             f.write(model_bytes)
     
-    def _select_cmsis_concatenation_kernel(self) -> Dict[str, str]:
+    def _axis_call_style(self, axis: int, input_rank: int) -> str:
+        if axis < 0:
+            axis += input_rank
+        axis_map = {
+            2: "axis_x",
+            1: "axis_y",
+            3: "axis_z",
+            0: "axis_w",
+        }
+        if input_rank != 4 or axis not in axis_map:
+            raise NotImplementedError("Float Concatenation descriptors require rank-4 NHWC shapes")
+        return axis_map[axis]
+
+    def _select_cmsis_concatenation_kernel(self, input_rank: int) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Concatenation operation.
         
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input", default=str(self.desc.get('activation_dtype', 'S8')))
         
         if activation_dtype == 'S8':
             call_style = str(self.desc.get("hint", {}).get("call_style", "")).lower()
@@ -103,6 +120,18 @@ class OpConcatenation(OperationBase):
                 'input_c_type': 'int32_t',
                 'output_c_type': 'int32_t'
             }
+        elif activation_dtype in {'FP32', 'FP16'}:
+            call_style = str(self.desc.get("hint", {}).get("call_style", "")).lower()
+            if call_style not in {"axis_x", "axis_y", "axis_z", "axis_w"}:
+                call_style = self._axis_call_style(int(self.desc.get("axis", -1)), input_rank)
+            suffix = "f16" if activation_dtype == "FP16" else "f32"
+            c_type = "float16_t" if activation_dtype == "FP16" else "float"
+            return {
+                'kernel_fn': f'arm_concatenation_{suffix}_{call_style[-1]}',
+                'input_c_type': c_type,
+                'output_c_type': c_type,
+                'call_style': call_style,
+            }
         else:
             raise NotImplementedError(f"Unsupported Concatenation dtype: {activation_dtype}")
     
@@ -117,9 +146,6 @@ class OpConcatenation(OperationBase):
         if not tflite_path.exists():
             raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
         
-        # Select CMSIS kernel + types
-        kernel_info = self._select_cmsis_concatenation_kernel()
-        
         # Build input shapes from descriptor
         input_shapes = []
         if "input_1_shape" in self.desc:
@@ -131,6 +157,10 @@ class OpConcatenation(OperationBase):
             input_shapes.append(tuple(self.desc["input_shape"]))
         num_inputs = len(input_shapes)
         output_shape = None
+
+        # Select CMSIS kernel + types
+        input_rank = len(input_shapes[0]) if input_shapes else 0
+        kernel_info = self._select_cmsis_concatenation_kernel(input_rank)
         
         is_const_variant = 'const' in name.lower()
         
@@ -187,7 +217,7 @@ class OpConcatenation(OperationBase):
             else:
                 input_concat_dims.append(1)
         
-        call_style = str(self.desc.get("hint", {}).get("call_style", "")).lower()
+        call_style = kernel_info.get("call_style") or str(self.desc.get("hint", {}).get("call_style", "")).lower()
 
         # Generate input data
         rng_state = self.rng.__getstate__()
@@ -205,6 +235,12 @@ class OpConcatenation(OperationBase):
         elif kernel_info["input_c_type"] == "int32_t":
             np_in_dtype = np.int32
             qmin, qmax = -2147483648, 2147483647
+        elif kernel_info["input_c_type"] == "float":
+            np_in_dtype = np.float32
+            qmin, qmax = None, None
+        elif kernel_info["input_c_type"] == "float16_t":
+            np_in_dtype = np.float16
+            qmin, qmax = None, None
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
         
@@ -215,11 +251,15 @@ class OpConcatenation(OperationBase):
                 wzyx_shape = (input_shape[0], input_shape[3], input_shape[1], input_shape[2])
                 if np_in_dtype == np.int32:
                     input_q = self.rng.integers(-32, 32, size=wzyx_shape, dtype=np.int32)
+                elif np.issubdtype(np.dtype(np_in_dtype), np.floating):
+                    input_q = self.rng.uniform(-2.0, 2.0, size=wzyx_shape).astype(np_in_dtype)
                 else:
                     input_q = self.rng.integers(qmin, qmax + 1, size=wzyx_shape, dtype=np_in_dtype)
             else:
                 if np_in_dtype == np.int32:
                     input_q = self.rng.integers(-32, 32, size=input_shape, dtype=np.int32)
+                elif np.issubdtype(np.dtype(np_in_dtype), np.floating):
+                    input_q = self.rng.uniform(-2.0, 2.0, size=input_shape).astype(np_in_dtype)
                 else:
                     input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
             input_q_list.append(input_q)
@@ -286,6 +326,8 @@ class OpConcatenation(OperationBase):
                 np.array(np.cumsum([0] + [int(s[axis]) for s in input_shapes[:-1]]), dtype=np.int32)
             ),
         }
+        if kernel_info["output_c_type"] in {"float", "float16_t"}:
+            context["validation_mode"] = "float"
         
         # Render templates
         includes_api_dir = output_dir / "includes"
