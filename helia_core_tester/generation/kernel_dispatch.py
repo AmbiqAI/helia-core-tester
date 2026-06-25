@@ -34,6 +34,18 @@ def resolve_convolve_kernel(activation_dtype: str, weight_dtype: str, cpu: str) 
             "layout": "ARM_NN_LAYOUT_NHWC",
         }
 
+    if act == "FP16" and w == "FP16":
+        return {
+            "kernel_fn": "arm_convolve_f16",
+            "kernel_get_buffer_size_fn": "arm_convolve_f16_get_buffer_size",
+            "input_c_type": "float16_t",
+            "output_c_type": "float16_t",
+            "weight_c_type": "float16_t",
+            "bias_c_type": "float16_t",
+            "call_style": "baseline",
+            "layout": "ARM_NN_LAYOUT_NHWC",
+        }
+
     if w == "S4":
         if act != "S8":
             raise NotImplementedError(f"Unsupported Convolve dtype combo: {act} x {w}")
@@ -84,6 +96,18 @@ def resolve_depthwise_conv_kernel(activation_dtype: str, weight_dtype: str, cpu:
             "output_c_type": "float",
             "weight_c_type": "float",
             "bias_c_type": "float",
+            "call_style": "baseline",
+            "layout": "ARM_NN_LAYOUT_NHWC",
+        }
+
+    if act == "FP16" and w == "FP16":
+        return {
+            "kernel_fn": "arm_depthwise_conv_f16",
+            "kernel_get_buffer_size_fn": "arm_depthwise_conv_f16_get_buffer_size",
+            "input_c_type": "float16_t",
+            "output_c_type": "float16_t",
+            "weight_c_type": "float16_t",
+            "bias_c_type": "float16_t",
             "call_style": "baseline",
             "layout": "ARM_NN_LAYOUT_NHWC",
         }

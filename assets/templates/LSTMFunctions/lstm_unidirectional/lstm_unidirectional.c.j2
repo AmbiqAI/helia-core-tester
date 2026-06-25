@@ -251,8 +251,8 @@ int32_t {{ prefix }}_{{ name }}_test_case_run(void)
         &{{ data_prefix }}output[0],
         LSTM_OUTPUT_SIZE,
         {{ validation_tolerance | default(1) }},
-        {{ validation_atol | default(0.01) }}f,
-        {{ validation_rtol | default(0.001) }}f,
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
         {{ validation_report_limit | default(8) }},
         failures
     );

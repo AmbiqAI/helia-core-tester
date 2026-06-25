@@ -45,8 +45,8 @@ def _dequantize_desc(name: str, activation: str, dtype: str) -> dict:
         },
         "resolved_comparison": {
             "mode": "float",
-            "atol": 0.01,
-            "rtol": 0.001,
+            "atol": 1.0e-5,
+            "rtol": 1.0e-5,
         },
     }
 

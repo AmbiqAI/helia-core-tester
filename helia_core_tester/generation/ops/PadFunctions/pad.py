@@ -28,6 +28,8 @@ class OpPad(OperationBase):
             dtype = "int16"
         elif activation_dtype == "FP32":
             dtype = "float32"
+        elif activation_dtype == "FP16":
+            dtype = "float16"
         else:
             dtype = "int8"
 
@@ -71,6 +73,12 @@ class OpPad(OperationBase):
                 'input_c_type': 'float',
                 'output_c_type': 'float'
             }
+        elif activation_dtype == 'FP16':
+            return {
+                'kernel_fn': 'arm_pad_f16',
+                'input_c_type': 'float16_t',
+                'output_c_type': 'float16_t'
+            }
         else:
             raise NotImplementedError(f"Unsupported Pad dtype: {activation_dtype}")
     
@@ -107,15 +115,17 @@ class OpPad(OperationBase):
         pre_pad_dims = builder.nhwc_to_cmsis_dims(pre_pad)
         post_pad_dims = builder.nhwc_to_cmsis_dims(post_pad)
 
-        pad_value = float(self.desc.get('pad_value', 0.0)) if kernel_info["input_c_type"] == "float" else int(self.desc.get('pad_value', 0))
+        float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
+        pad_value = float(self.desc.get('pad_value', 0.0)) if float_kernel else int(self.desc.get('pad_value', 0))
 
         # Generate input data
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
 
         # Generate input values
-        if kernel_info["input_c_type"] == "float":
-            input_q = self._sample_uniform(input_shape)
+        if float_kernel:
+            float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+            input_q = self._sample_uniform(input_shape, dtype=float_dtype)
         elif kernel_info["input_c_type"] == "int8_t":
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
@@ -157,7 +167,7 @@ class OpPad(OperationBase):
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
-            'float_kernel': kernel_info["input_c_type"] == "float",
+            'float_kernel': float_kernel,
         }
         
         # Render templates

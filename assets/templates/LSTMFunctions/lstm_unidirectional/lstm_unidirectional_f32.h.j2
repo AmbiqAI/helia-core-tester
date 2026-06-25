@@ -4,59 +4,59 @@
 #include <stdint.h>
 #include "arm_nnfunctions.h"
 
-static const float {{ name }}_input_tensor[] = {
+static const {{ data_dtype }} {{ name }}_input_tensor[] = {
 {{ input_tensor_array }}
 };
 
-static const float {{ name }}_expected_output[] = {
+static const {{ data_dtype }} {{ name }}_expected_output[] = {
 {{ output_array }}
 };
 
-static const float {{ name }}_forget_gate_input_weights[] = {
+static const {{ data_dtype }} {{ name }}_forget_gate_input_weights[] = {
 {{ forget_gate_input_weights_array }}
 };
 
-static const float {{ name }}_input_gate_input_weights[] = {
+static const {{ data_dtype }} {{ name }}_input_gate_input_weights[] = {
 {{ input_gate_input_weights_array }}
 };
 
-static const float {{ name }}_cell_gate_input_weights[] = {
+static const {{ data_dtype }} {{ name }}_cell_gate_input_weights[] = {
 {{ cell_gate_input_weights_array }}
 };
 
-static const float {{ name }}_output_gate_input_weights[] = {
+static const {{ data_dtype }} {{ name }}_output_gate_input_weights[] = {
 {{ output_gate_input_weights_array }}
 };
 
-static const float {{ name }}_forget_gate_hidden_weights[] = {
+static const {{ data_dtype }} {{ name }}_forget_gate_hidden_weights[] = {
 {{ forget_gate_hidden_weights_array }}
 };
 
-static const float {{ name }}_input_gate_hidden_weights[] = {
+static const {{ data_dtype }} {{ name }}_input_gate_hidden_weights[] = {
 {{ input_gate_hidden_weights_array }}
 };
 
-static const float {{ name }}_cell_gate_hidden_weights[] = {
+static const {{ data_dtype }} {{ name }}_cell_gate_hidden_weights[] = {
 {{ cell_gate_hidden_weights_array }}
 };
 
-static const float {{ name }}_output_gate_hidden_weights[] = {
+static const {{ data_dtype }} {{ name }}_output_gate_hidden_weights[] = {
 {{ output_gate_hidden_weights_array }}
 };
 
-static const float {{ name }}_forget_gate_bias[] = {
+static const {{ data_dtype }} {{ name }}_forget_gate_bias[] = {
 {{ forget_gate_bias_array }}
 };
 
-static const float {{ name }}_input_gate_bias[] = {
+static const {{ data_dtype }} {{ name }}_input_gate_bias[] = {
 {{ input_gate_bias_array }}
 };
 
-static const float {{ name }}_cell_gate_bias[] = {
+static const {{ data_dtype }} {{ name }}_cell_gate_bias[] = {
 {{ cell_gate_bias_array }}
 };
 
-static const float {{ name }}_output_gate_bias[] = {
+static const {{ data_dtype }} {{ name }}_output_gate_bias[] = {
 {{ output_gate_bias_array }}
 };
 

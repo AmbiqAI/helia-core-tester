@@ -1,10 +1,10 @@
 #include "{{ name }}_svdf.h"
 {% include "common/standalone/runtime_common.j2" %}
 
-static float {{ name }}_state[{{ state_size }}];
-static float {{ name }}_scratch_input[{{ scratch_input_size }}];
-static float {{ name }}_scratch_output[{{ scratch_output_size }}];
-static float {{ name }}_output[{{ output_size }}];
+static {{ data_dtype }} {{ name }}_state[{{ state_size }}];
+static {{ data_dtype }} {{ name }}_scratch_input[{{ scratch_input_size }}];
+static {{ data_dtype }} {{ name }}_scratch_output[{{ scratch_output_size }}];
+static {{ data_dtype }} {{ name }}_output[{{ output_size }}];
 
 static int32_t run_svdf(void)
 {
@@ -20,7 +20,7 @@ static int32_t run_svdf(void)
     arm_cmsis_nn_status status = ARM_CMSIS_NN_SUCCESS;
     for (int step = 0; step < {{ sequence_steps }}; ++step)
     {
-        const float *step_input = {{ name }}_input_sequence + (step * {{ input_size }});
+        const {{ data_dtype }} *step_input = {{ name }}_input_sequence + (step * {{ input_size }});
         status = {{ kernel_fn }}(
             &ctx,
             &input_ctx,
@@ -60,8 +60,8 @@ int32_t {{ prefix }}_{{ name }}_test_case_run(void)
         {{ name }}_expected_output,
         {{ output_size }},
         {{ validation_tolerance | default(1) }},
-        {{ validation_atol | default(0.01) }}f,
-        {{ validation_rtol | default(0.001) }}f,
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
         {{ validation_report_limit | default(8) }},
         failures
     );

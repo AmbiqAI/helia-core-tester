@@ -6,3 +6,98 @@ tensor_dtypes:
   output: FP32
 input_1_shape: [1, 4, 4, 8]
 input_2_shape: [1, 4, 4, 8]
+---
+operator: Minimum
+name: minimum_float_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 2, 2, 5]
+input_2_shape: [1, 2, 2, 5]
+---
+operator: Minimum
+name: minimum_float_channel_broadcast_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 1, 1, 4]
+---
+operator: Minimum
+name: minimum_float_scalar_broadcast_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 1, 1, 1]
+---
+operator: Minimum
+name: minimum_float_default_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 1
+- 4
+- 4
+- 8
+input_2_shape:
+- 1
+- 4
+- 4
+- 8
+---
+operator: Minimum
+name: minimum_float_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 1
+- 2
+- 2
+- 5
+input_2_shape:
+- 1
+- 2
+- 2
+- 5
+---
+operator: Minimum
+name: minimum_float_channel_broadcast_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 1
+- 2
+- 3
+- 4
+input_2_shape:
+- 1
+- 1
+- 1
+- 4
+---
+operator: Minimum
+name: minimum_float_scalar_broadcast_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape:
+- 1
+- 2
+- 3
+- 4
+input_2_shape:
+- 1
+- 1
+- 1
+- 1

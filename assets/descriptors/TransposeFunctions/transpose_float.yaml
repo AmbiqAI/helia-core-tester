@@ -25,3 +25,101 @@ tensor_dtypes:
 input_shape: [1, 2, 3, 4]
 hint:
   force_permutation: [0, 3, 1, 2]
+---
+operator: Transpose
+name: transpose_float_rank2_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [3, 5]
+hint:
+  force_permutation: [1, 0]
+---
+operator: Transpose
+name: transpose_float_spatial_swap_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 2, 3, 4]
+hint:
+  force_permutation: [0, 2, 1, 3]
+---
+operator: Transpose
+name: transpose_float_default_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 2
+- 3
+- 4
+---
+operator: Transpose
+name: transpose_float_rank3_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 4
+- 5
+hint:
+  force_permutation:
+  - 0
+  - 2
+  - 1
+---
+operator: Transpose
+name: transpose_float_perm_0312_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 2
+- 3
+- 4
+hint:
+  force_permutation:
+  - 0
+  - 3
+  - 1
+  - 2
+---
+operator: Transpose
+name: transpose_float_rank2_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 3
+- 5
+hint:
+  force_permutation:
+  - 1
+  - 0
+---
+operator: Transpose
+name: transpose_float_spatial_swap_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 2
+- 3
+- 4
+hint:
+  force_permutation:
+  - 0
+  - 2
+  - 1
+  - 3

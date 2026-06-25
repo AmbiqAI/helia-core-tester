@@ -57,7 +57,7 @@ class OpTransposeConv(OperationBase):
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
         # Apply quantization based on activation_dtype
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
         
         if activation_dtype == 'S8':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
@@ -71,6 +71,11 @@ class OpTransposeConv(OperationBase):
             ]
             converter.inference_input_type = tf.int16
             converter.inference_output_type = tf.int16
+        elif activation_dtype == 'FP16':
+            converter.optimizations = []
+            converter.target_spec.supported_types = [tf.float16]
+        elif activation_dtype == 'FP32':
+            converter.optimizations = []
         
         # Generate representative dataset
         def representative_data_gen():
@@ -105,16 +110,29 @@ class OpTransposeConv(OperationBase):
             return {
                 'kernel_fn': 'arm_transpose_conv_f32',
                 'kernel_get_buffer_size_fn': 'arm_transpose_conv_f32_get_buffer_size',
+                'kernel_get_reverse_buffer_size_fn': 'arm_transpose_conv_f32_get_reverse_conv_buffer_size',
                 'input_c_type': 'float',
                 'output_c_type': 'float',
                 'weight_c_type': 'float',
                 'bias_c_type': 'float',
                 'layout': 'ARM_NN_LAYOUT_NHWC',
             }
+        if activation_dtype == 'FP16' and weight_dtype == 'FP16':
+            return {
+                'kernel_fn': 'arm_transpose_conv_f16',
+                'kernel_get_buffer_size_fn': 'arm_transpose_conv_f16_get_buffer_size',
+                'kernel_get_reverse_buffer_size_fn': 'arm_transpose_conv_f16_get_reverse_conv_buffer_size',
+                'input_c_type': 'float16_t',
+                'output_c_type': 'float16_t',
+                'weight_c_type': 'float16_t',
+                'bias_c_type': 'float16_t',
+                'layout': 'ARM_NN_LAYOUT_NHWC',
+            }
         if activation_dtype == 'S8' and weight_dtype == 'S8':
             return {
                 'kernel_fn': 'arm_transpose_conv_wrapper_s8',
                 'kernel_get_buffer_size_fn': 'arm_transpose_conv_s8_get_buffer_size',
+                'kernel_get_reverse_buffer_size_fn': 'arm_transpose_conv_s8_get_reverse_conv_buffer_size',
                 'input_c_type': 'int8_t',
                 'output_c_type': 'int8_t',
                 'weight_c_type': 'int8_t',
@@ -138,7 +156,8 @@ class OpTransposeConv(OperationBase):
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_transpose_conv_kernel()
-        float_kernel = kernel_info["input_c_type"] == "float"
+        float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
+        float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
         
         # Load LiteRT model for tensor extraction
         from helia_core_tester.generation.utils.litert_utils import (
@@ -343,30 +362,32 @@ class OpTransposeConv(OperationBase):
         )
         if float_kernel:
             has_biases = biases is not None and biases.size > 0
-            if weights is not None and weights.dtype != np.float32:
-                weights = weights.astype(np.float32)
-            if has_biases and biases.dtype != np.float32:
-                biases = biases.astype(np.float32)
+            if weights is not None and weights.dtype != float_dtype:
+                weights = weights.astype(float_dtype)
+            if has_biases and biases.dtype != float_dtype:
+                biases = biases.astype(float_dtype)
 
-            input_data = self._sample_uniform(input_shape)
-            output_data = self.run_inference(str(tflite_path), input_data.astype(np.float32)).astype(np.float32)
+            input_data = self._sample_uniform(input_shape, dtype=float_dtype)
+            interpreter_input_dtype = interpreter.get_input_details()[0]['dtype']
+            output_data = self.run_inference(str(tflite_path), input_data.astype(interpreter_input_dtype)).astype(float_dtype)
 
             weights_array_str = builder.format_array_as_c_literal(weights)
             biases_array_str = builder.format_array_as_c_literal(biases) if has_biases else ""
-            input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=np.float32))
-            expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=np.float32))
+            input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=float_dtype))
+            expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=float_dtype))
 
+            element_size = np.dtype(float_dtype).itemsize
             buffer_size_max = max(
                 1024,
                 int(
                     (input_dims['n'] * input_dims['h'] * input_dims['w'] * input_dims['c']
                      + filter_dims['n'] * filter_dims['h'] * filter_dims['w'] * max(filter_dims['c'], 1)
-                     + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * 4
+                     + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * element_size
                 ),
             )
             reverse_conv_ctx_size = max(
                 1024,
-                int(output_dims['w'] * output_dims['h'] * output_dims['c'] * 4),
+                int(output_dims['w'] * output_dims['h'] * output_dims['c'] * element_size),
             )
 
             context = {
@@ -389,11 +410,16 @@ class OpTransposeConv(OperationBase):
                 'bias_dtype': kernel_info["bias_c_type"],
                 'kernel_fn': kernel_info["kernel_fn"],
                 'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+                'kernel_get_reverse_buffer_size_fn': kernel_info["kernel_get_reverse_buffer_size_fn"],
                 'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
                 'buffer_size_max': buffer_size_max,
                 'reverse_conv_ctx_size': reverse_conv_ctx_size,
                 'float_kernel': True,
-                'transpose_conv_params_type': 'cmsis_nn_transpose_conv_params_f32',
+                'transpose_conv_params_type': (
+                    'cmsis_nn_transpose_conv_params_f16'
+                    if kernel_info["input_c_type"] == "float16_t"
+                    else 'cmsis_nn_transpose_conv_params_f32'
+                ),
                 'transpose_activation_min_literal': builder.format_float_literal(transpose_conv_params['activation_min']),
                 'transpose_activation_max_literal': builder.format_float_literal(transpose_conv_params['activation_max']),
             }
@@ -580,6 +606,7 @@ class OpTransposeConv(OperationBase):
             'bias_dtype': kernel_info["bias_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+            'kernel_get_reverse_buffer_size_fn': kernel_info["kernel_get_reverse_buffer_size_fn"],
             'buffer_size_max': buffer_size_max,
             'reverse_conv_ctx_size': reverse_conv_ctx_size,
         }

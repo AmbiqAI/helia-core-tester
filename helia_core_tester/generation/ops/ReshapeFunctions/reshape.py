@@ -27,6 +27,8 @@ class OpReshape(OperationBase):
             dtype = "int8"
         elif activation_dtype == 'FP32':
             dtype = "float32"
+        elif activation_dtype == 'FP16':
+            dtype = "float16"
         else:
             raise NotImplementedError(f"Unsupported Reshape dtype: {activation_dtype}")
 
@@ -64,6 +66,12 @@ class OpReshape(OperationBase):
                 'input_c_type': 'float',
                 'output_c_type': 'float'
             }
+        elif activation_dtype == 'FP16':
+            return {
+                'kernel_fn': 'arm_reshape_f16',
+                'input_c_type': 'float16_t',
+                'output_c_type': 'float16_t'
+            }
         else:
             raise NotImplementedError(f"Unsupported Reshape dtype: {activation_dtype}")
     
@@ -98,8 +106,9 @@ class OpReshape(OperationBase):
         # Generate input data
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        if kernel_info["input_c_type"] == "float":
-            input_q = self._sample_uniform(input_shape)
+        if kernel_info["input_c_type"] in {"float", "float16_t"}:
+            float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+            input_q = self._sample_uniform(input_shape, dtype=float_dtype)
         else:
             input_q = self.rng.integers(-128, 128, size=input_shape, dtype=np.int8)
         self.rng.__setstate__(rng_state)

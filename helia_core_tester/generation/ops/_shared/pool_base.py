@@ -80,6 +80,13 @@ class PoolFamilyBase(OperationBase):
                     'input_c_type': 'float',
                     'output_c_type': 'float',
                 }
+            elif activation_dtype == 'FP16':
+                return {
+                    'kernel_fn': 'arm_max_pool_f16',
+                    'kernel_get_buffer_size_fn': None,
+                    'input_c_type': 'float16_t',
+                    'output_c_type': 'float16_t',
+                }
             else:
                 raise NotImplementedError(f"Unsupported MaxPool dtype: {activation_dtype}")
         elif self.POOL_KIND == 'AVERAGE':
@@ -103,6 +110,13 @@ class PoolFamilyBase(OperationBase):
                     'kernel_get_buffer_size_fn': None,
                     'input_c_type': 'float',
                     'output_c_type': 'float',
+                }
+            elif activation_dtype == 'FP16':
+                return {
+                    'kernel_fn': 'arm_avg_pool_f16',
+                    'kernel_get_buffer_size_fn': None,
+                    'input_c_type': 'float16_t',
+                    'output_c_type': 'float16_t',
                 }
             else:
                 raise NotImplementedError(f"Unsupported AvgPool dtype: {activation_dtype}")
@@ -172,9 +186,11 @@ class PoolFamilyBase(OperationBase):
         )
         
         input_data = self.generate_input_data()
+        float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
         
-        if kernel_info["input_c_type"] == "float":
-            input_q = input_data.astype(np.float32)
+        if float_kernel:
+            float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+            input_q = input_data.astype(float_dtype)
         else:
             input_scale = float(self._quant_param_scalar(quant_params['input'], 'scale', 1.0))
             input_zp = int(self._quant_param_scalar(quant_params['input'], 'zero_point', 0))
@@ -185,14 +201,18 @@ class PoolFamilyBase(OperationBase):
         elif kernel_info["input_c_type"] == "int16_t":
             qmin, qmax = -32768, 32767
             np_in_dtype = np.int16
-        elif kernel_info["input_c_type"] != "float":
+        elif not float_kernel:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
         
-        if kernel_info["input_c_type"] != "float":
+        if not float_kernel:
             input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
             input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
         
-        output_data = self.run_inference(str(tflite_path), input_q)
+        if float_kernel:
+            interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
+            output_data = self.run_inference(str(tflite_path), input_q.astype(interpreter_input_dtype)).astype(float_dtype)
+        else:
+            output_data = self.run_inference(str(tflite_path), input_q)
         
         # Format input and output arrays
         input_data_array_str = builder.format_array_as_c_literal(input_q)
@@ -223,10 +243,14 @@ class PoolFamilyBase(OperationBase):
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
             'buffer_size_max': buffer_size_max,
             'pooling_type': pooling_type,
-            'pool_params_type': 'cmsis_nn_pool_params_f32' if kernel_info["input_c_type"] == "float" else 'cmsis_nn_pool_params',
-            'float_kernel': kernel_info["input_c_type"] == "float",
+            'pool_params_type': (
+                'cmsis_nn_pool_params_f16'
+                if kernel_info["input_c_type"] == "float16_t"
+                else ('cmsis_nn_pool_params_f32' if kernel_info["input_c_type"] == "float" else 'cmsis_nn_pool_params')
+            ),
+            'float_kernel': float_kernel,
         }
-        if kernel_info["input_c_type"] == "float":
+        if float_kernel:
             context["pool_activation_min_literal"] = builder.format_float_literal(pool_params["activation_min"])
             context["pool_activation_max_literal"] = builder.format_float_literal(pool_params["activation_max"])
         

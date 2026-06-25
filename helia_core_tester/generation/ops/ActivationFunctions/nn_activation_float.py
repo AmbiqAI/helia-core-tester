@@ -14,6 +14,19 @@ _ACTIVATION_LAYERS = {
 }
 
 
+def _activation_reference(input_data: np.ndarray, activation_type: str, act_param: float) -> np.ndarray:
+    data = input_data.astype(np.float32)
+    if activation_type == "ARM_NN_FLT_ACT_SIGMOID":
+        return 1.0 / (1.0 + np.exp(-data))
+    if activation_type == "ARM_NN_FLT_ACT_TANH":
+        return np.tanh(data)
+    if activation_type == "ARM_NN_FLT_ACT_HARDSWISH":
+        return data * np.clip(data + 3.0, 0.0, 6.0) / 6.0
+    if activation_type == "ARM_NN_FLT_ACT_LEAKY_RELU":
+        return np.where(data >= 0.0, data, data * float(act_param))
+    raise ValueError(f"Unsupported float activation type: {activation_type}")
+
+
 class OpNNActivationFloat(OperationBase):
     """Generate float activation parity tests."""
 
@@ -46,14 +59,25 @@ class OpNNActivationFloat(OperationBase):
             raise FileNotFoundError(f"TFLite file not found: {tflite_path}")
 
         input_shape = tuple(self.desc["input_shape"])
-        input_data = self._sample_uniform(input_shape)
+        activation_dtype = self.tensor_dtype("input", default="FP32")
+        if activation_dtype == "FP16":
+            float_dtype = np.float16
+            input_dtype = output_dtype = "float16_t"
+            kernel_fn = "arm_nn_activation_f16"
+        elif activation_dtype == "FP32":
+            float_dtype = np.float32
+            input_dtype = output_dtype = "float"
+            kernel_fn = "arm_nn_activation_f32"
+        else:
+            raise NotImplementedError(f"Unsupported NNActivationFloat dtype: {activation_dtype}")
 
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        interpreter.set_tensor(input_details[0]["index"], input_data)
-        interpreter.invoke()
-        output_data = np.array(interpreter.get_tensor(output_details[0]["index"]), dtype=np.float32)
+        input_data = self._sample_uniform(input_shape, dtype=float_dtype)
+        activation_type = self._activation_symbol()
+        output_data = _activation_reference(
+            input_data,
+            activation_type,
+            float(self.desc.get("act_param", 0.0)),
+        ).astype(float_dtype)
 
         builder = TemplateContextBuilder()
         context = {
@@ -62,11 +86,11 @@ class OpNNActivationFloat(OperationBase):
             "size": int(np.prod(input_shape)),
             "input_data_array": builder.format_array_as_c_literal(input_data),
             "expected_output_array": builder.format_array_as_c_literal(output_data),
-            "activation_symbol": self._activation_symbol(),
+            "activation_symbol": activation_type,
             "act_param_literal": builder.format_float_literal(self.desc.get("act_param", 0.0)),
-            "input_dtype": "float",
-            "output_dtype": "float",
-            "kernel_fn": "arm_nn_activation_f32",
+            "input_dtype": input_dtype,
+            "output_dtype": output_dtype,
+            "kernel_fn": kernel_fn,
         }
 
         cmake_context = {

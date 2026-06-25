@@ -37,3 +37,139 @@ tensor_dtypes:
 input_shape: [1, 16]
 activation_type: ARM_NN_FLT_ACT_LEAKY_RELU
 act_param: 0.125
+---
+operator: NNActivationFloat
+name: nn_activation_float_sigmoid_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 17]
+activation_type: ARM_NN_FLT_ACT_SIGMOID
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 17]
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_hardswish_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 17]
+activation_type: ARM_NN_FLT_ACT_HARDSWISH
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_leaky_relu_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 17]
+activation_type: ARM_NN_FLT_ACT_LEAKY_RELU
+act_param: 0.25
+---
+operator: NNActivationFloat
+name: nn_activation_float_sigmoid_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 16
+activation_type: ARM_NN_FLT_ACT_SIGMOID
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 16
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_hardswish_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 16
+activation_type: ARM_NN_FLT_ACT_HARDSWISH
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_leaky_relu_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 16
+activation_type: ARM_NN_FLT_ACT_LEAKY_RELU
+act_param: 0.125
+---
+operator: NNActivationFloat
+name: nn_activation_float_sigmoid_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 17
+activation_type: ARM_NN_FLT_ACT_SIGMOID
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 17
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_hardswish_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 17
+activation_type: ARM_NN_FLT_ACT_HARDSWISH
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_leaky_relu_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 17
+activation_type: ARM_NN_FLT_ACT_LEAKY_RELU
+act_param: 0.25

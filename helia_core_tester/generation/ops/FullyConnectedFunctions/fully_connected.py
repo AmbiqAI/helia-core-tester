@@ -123,7 +123,7 @@ class OpFullyConnected(OperationBase):
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
         # Apply quantization based on activation_dtype
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
         
         if activation_dtype == 'S8':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
@@ -135,6 +135,11 @@ class OpFullyConnected(OperationBase):
             converter.target_spec.supported_ops = [tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8]
             converter.inference_input_type = tf.int16
             converter.inference_output_type = tf.int16
+        elif activation_dtype == 'FP16':
+            converter.optimizations = []
+            converter.target_spec.supported_types = [tf.float16]
+        elif activation_dtype == 'FP32':
+            converter.optimizations = []
         
         # Force per-tensor quantization when requested
         force_per_tensor = bool(self.desc.get("hint", {}).get("force_per_tensor", False))
@@ -558,15 +563,27 @@ class OpFullyConnected(OperationBase):
 
             input_data = np.asarray(self._sample_uniform(input_shape), dtype=float_dtype)
             from helia_core_tester.generation.utils.litert_utils import run_inference_litert
-            output_data = run_inference_litert(str(tflite_path), input_data, subgraph_index=0)
+            interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
+            output_data = run_inference_litert(
+                str(tflite_path),
+                input_data.astype(interpreter_input_dtype),
+                subgraph_index=0,
+            )
 
             weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
             biases_array_str = builder.format_array_as_c_literal(biases) if has_biases else ""
             input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=float_dtype).flatten())
             expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=float_dtype).flatten())
+            element_size = np.dtype(float_dtype).itemsize
             buffer_size_max = max(
                 1024,
-                int((input_dims['n'] * input_dims['c'] + filter_dims['n'] * filter_dims['c'] + output_dims['n'] * output_dims['c']) * 4),
+                int(
+                    (
+                        input_dims['n'] * input_dims['c']
+                        + filter_dims['n'] * filter_dims['c']
+                        + output_dims['n'] * output_dims['c']
+                    ) * element_size
+                ),
             )
 
             context = {
