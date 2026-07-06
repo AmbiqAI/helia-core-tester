@@ -1,0 +1,35 @@
+operator: PReLUScalar
+name: prelu_scalar_input_true_positive_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: scalar_input_true
+input_shape: [1, 1, 1, 1]
+alpha_shape: [1, 1, 1, 4]
+scalar_input_value: 0.75
+alpha_values: [0.05, 0.10, 0.15, 0.20]
+---
+operator: PReLUScalar
+name: prelu_scalar_input_true_negative_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: scalar_input_true
+input_shape: [1, 1, 1, 1]
+alpha_shape: [1, 1, 1, 4]
+scalar_input_value: -0.75
+alpha_values: [0.05, 0.10, 0.15, 0.20]
+---
+operator: PReLUScalar
+name: prelu_scalar_input_true_zero_boundary_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: scalar_input_true
+input_shape: [1, 1, 1, 1]
+alpha_shape: [1, 1, 1, 4]
+scalar_input_value: 0.0
+alpha_values: [0.05, 0.10, 0.15, 0.20]

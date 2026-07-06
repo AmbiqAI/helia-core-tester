@@ -1,0 +1,19 @@
+#ifndef {{ prefix|upper }}_PRELU_SCALAR_H
+#define {{ prefix|upper }}_PRELU_SCALAR_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+
+static const {{ input_dtype }} {{ name }}_scalar_input[] = {
+{{ scalar_array }}
+};
+
+static const {{ input_dtype }} {{ name }}_alpha[] = {
+{{ alpha_array }}
+};
+
+static const {{ output_dtype }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

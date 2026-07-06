@@ -51,6 +51,7 @@
         "NNActivationFloat",
         "NNActivationS16",
         "PReLU",
+        "PReLUScalar",
         "Pad",
         "Quantize",
         "ReduceMax",
@@ -490,6 +491,7 @@
               "HardSwishPrecise",
               "HardSwishCompat",
               "PReLU",
+              "PReLUScalar",
               "Fill",
               "Reshape",
               "Squeeze",
@@ -562,6 +564,22 @@
       "then": {
         "required": [
           "indices_shape"
+        ]
+      }
+    },
+    {
+      "$comment": "operator_required_fields:PReLUScalar",
+      "if": {
+        "properties": {
+          "operator": {
+            "const": "PReLUScalar"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "alpha_shape",
+          "scalar_input_value"
         ]
       }
     },
