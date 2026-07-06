@@ -15,9 +15,12 @@ import numpy as np
 
 try:
     import tensorflow as tf
-    from tensorflow.lite.python.interpreter import Interpreter, OpResolverType
 except ImportError:  # pragma: no cover - handled by caller
     tf = None
+
+try:
+    from ai_edge_litert.interpreter import Interpreter, OpResolverType
+except ImportError:  # pragma: no cover - handled by caller
     Interpreter = None
     OpResolverType = None
 
@@ -131,8 +134,8 @@ def _convert_keras_to_tflite(
 
 
 def _invoke_tflite(tflite_path: Path, input_tensor: np.ndarray) -> np.ndarray:
-    if tf is None or Interpreter is None:
-        raise ImportError("tensorflow is required for LSTM generation")
+    if Interpreter is None:
+        raise ImportError("ai_edge_litert is required for LSTM generation")
     interpreter = Interpreter(str(tflite_path), experimental_op_resolver_type=OpResolverType.BUILTIN_REF)
     interpreter.allocate_tensors()
     input_detail = interpreter.get_input_details()[0]
@@ -153,8 +156,8 @@ def _calc_scale_from_details(details, idx, time_major_offset):
 
 
 def _generate_data_tflite(tflite_path: Path, time_major: bool) -> LstmGeneratedData:
-    if tf is None or Interpreter is None:
-        raise ImportError("tensorflow is required for LSTM generation")
+    if Interpreter is None:
+        raise ImportError("ai_edge_litert is required for LSTM generation")
     interpreter = Interpreter(str(tflite_path), experimental_op_resolver_type=OpResolverType.BUILTIN_REF)
     interpreter.allocate_tensors()
     tensor_details = interpreter.get_tensor_details()

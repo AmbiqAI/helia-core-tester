@@ -854,10 +854,8 @@ class OpDepthwiseConv(OperationBase):
         input_data = self.generate_input_data()
         self.rng.__setstate__(rng_state)
         
-        input_scale = quant_params['input'].get('scale', 1.0)
-        input_zp = quant_params['input'].get('zero_point', 0)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = input_scale[0]
+        input_scale = float(self._quant_param_scalar(quant_params['input'], 'scale', 1.0))
+        input_zp = int(self._quant_param_scalar(quant_params['input'], 'zero_point', 0))
         
         if kernel_info["input_c_type"] == "int8_t":
             qmin, qmax = -128, 127

@@ -81,6 +81,21 @@ class TemplateContextBuilder:
         "LSTMFunctions/lstm_unidirectional/lstm_unidirectional.c.j2": 8,
         "SVDFunctions/svdf/svdf.c.j2": 8,
     }
+    
+    @staticmethod
+    def _quant_param_scalar(quant_params: Dict[str, Any] | None, key: str, default: float | int) -> float | int:
+        """Extract a scalar quantization value from LiteRT metadata."""
+        if not quant_params:
+            return default
+
+        value = quant_params.get(key, default)
+        if isinstance(value, np.ndarray):
+            if value.size == 0:
+                return default
+            return value.reshape(-1)[0].item()
+        if isinstance(value, (list, tuple)):
+            return default if len(value) == 0 else value[0]
+        return value
 
     _TOLERANCE_OVERRIDES = {
         "ActivationFunctions/prelu/prelu.c.j2": 2,
@@ -501,13 +516,13 @@ class TemplateContextBuilder:
         elif act_dtype == 'S16':
             activation_min = int(desc.get('activation_min', -32768))
             activation_max = int(desc.get('activation_max', 32767))
-            in_zp = int(input_quant.get('zero_point', 0))
-            out_zp = int(output_quant.get('zero_point', 0))
+            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
+            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
         else:
             activation_min = int(desc.get('activation_min', -128))
             activation_max = int(desc.get('activation_max', 127))
-            in_zp = int(input_quant.get('zero_point', 0))
-            out_zp = int(output_quant.get('zero_point', 0))
+            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
+            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
 
         return {
             # CMSIS-NN convention: input_offset = -input_zero_point
@@ -601,13 +616,13 @@ class TemplateContextBuilder:
         elif act_dtype == 'S16':
             activation_min = int(desc.get('activation_min', -32768))
             activation_max = int(desc.get('activation_max', 32767))
-            in_zp = int(input_quant.get('zero_point', 0))
-            out_zp = int(output_quant.get('zero_point', 0))
+            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
+            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
         else:
             activation_min = int(desc.get('activation_min', -128))
             activation_max = int(desc.get('activation_max', 127))
-            in_zp = int(input_quant.get('zero_point', 0))
-            out_zp = int(output_quant.get('zero_point', 0))
+            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
+            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
         
         # Calculate channel multiplier: output_channels / input_channels
         ch_mult = out_c // in_c if in_c > 0 else 1
@@ -845,13 +860,13 @@ class TemplateContextBuilder:
         elif act_dtype == 'S16':
             activation_min = int(desc.get('activation_min', -32768))
             activation_max = int(desc.get('activation_max', 32767))
-            in_zp = int(input_quant.get('zero_point', 0))
-            out_zp = int(output_quant.get('zero_point', 0))
+            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
+            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
         else:
             activation_min = int(desc.get('activation_min', -128))
             activation_max = int(desc.get('activation_max', 127))
-            in_zp = int(input_quant.get('zero_point', 0))
-            out_zp = int(output_quant.get('zero_point', 0))
+            in_zp = int(TemplateContextBuilder._quant_param_scalar(input_quant, 'zero_point', 0))
+            out_zp = int(TemplateContextBuilder._quant_param_scalar(output_quant, 'zero_point', 0))
         
         return {
             'input_offset': int(-in_zp),

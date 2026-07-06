@@ -13,23 +13,28 @@ class OpTranspose(OperationBase):
     """
     Transpose operation.
     """
+
+    def _resolved_permutation(self) -> list[int]:
+        input_shape = self.desc['input_shape']
+        perm = self.desc.get('hint', {}).get('force_permutation')
+        if perm is not None:
+            return [int(dim) for dim in perm]
+
+        rank = len(input_shape)
+        if rank == 4:
+            return [0, 2, 1, 3]
+        if rank == 3:
+            return [0, 2, 1]
+        if rank == 2:
+            return [1, 0]
+        if rank == 1:
+            return [0]
+        raise ValueError(f"Unsupported input rank for Transpose: {rank}")
     
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for Transpose operation."""
         input_shape = self.desc['input_shape']
-        perm = self.desc.get('hint', {}).get('force_permutation')
-        if perm is None:
-            rank = len(input_shape)
-            if rank == 4:
-                perm = [0, 2, 1, 3]
-            elif rank == 3:
-                perm = [0, 2, 1]
-            elif rank == 2:
-                perm = [1, 0]
-            elif rank == 1:
-                perm = [0]
-            else:
-                raise ValueError(f"Unsupported input rank for Transpose: {rank}")
+        perm = self._resolved_permutation()
         inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
         x = tf.keras.layers.Lambda(lambda x: tf.transpose(x, perm=perm))(inputs)
         model = tf.keras.Model(inputs=inputs, outputs=x)
@@ -72,11 +77,7 @@ class OpTranspose(OperationBase):
             raise NotImplementedError(f"Unsupported Transpose dtype: {activation_dtype}")
 
     def needs_keras_model(self) -> bool:
-        if self.desc.get("hint", {}).get("force_cmsis", False):
-            return False
-        if self.desc.get("expected_status") == "ARM_CMSIS_NN_ARG_ERROR":
-            return False
-        return True
+        return False
 
     def allow_no_tflite(self) -> bool:
         if self.desc.get("hint", {}).get("force_cmsis", False):
@@ -90,7 +91,15 @@ class OpTranspose(OperationBase):
             raise RuntimeError("Transpose CMSIS-only test; skip TFLite generation.")
         if self.desc.get("expected_status") == "ARM_CMSIS_NN_ARG_ERROR":
             raise RuntimeError("Transpose expected error; skip TFLite generation.")
-        super().convert_to_tflite(model, out_path, rep_seed)
+
+        from helia_core_tester.generation.utils.litert_builder import build_transpose_op
+
+        model_bytes = build_transpose_op(
+            input_shape=tuple(self.desc['input_shape']),
+            permutation=self._resolved_permutation(),
+            dtype=self.tensor_litert_dtype("input"),
+        )
+        self._write_tflite_bytes(out_path, model_bytes)
     
     def generate_c_files(self, output_dir: Path) -> None:
         """
@@ -159,31 +168,7 @@ class OpTranspose(OperationBase):
         
         builder = TemplateContextBuilder()
         # Resolve permutation
-        if force_perm is not None:
-            permutation = list(force_perm)
-        else:
-            if not force_cmsis and expected_status == "ARM_CMSIS_NN_SUCCESS":
-                interpreter = self.load_litert_interpreter(str(tflite_path))
-                permutation = [0, 2, 1, 3]
-                tensor_details = interpreter.get_tensor_details()
-                for tensor in tensor_details:
-                    if tensor['name'] and 'perm' in tensor['name'].lower():
-                        perm_data = interpreter.get_tensor(tensor['index'])
-                        if perm_data is not None and len(perm_data) >= 1:
-                            permutation = [int(x) for x in perm_data]
-                        break
-            else:
-                rank = len(input_shape)
-                if rank == 4:
-                    permutation = [0, 2, 1, 3]
-                elif rank == 3:
-                    permutation = [0, 2, 1]
-                elif rank == 2:
-                    permutation = [1, 0]
-                elif rank == 1:
-                    permutation = [0]
-                else:
-                    raise ValueError(f"Unsupported input rank for Transpose: {rank}")
+        permutation = list(force_perm) if force_perm is not None else self._resolved_permutation()
 
         num_dims = len(input_shape)
 

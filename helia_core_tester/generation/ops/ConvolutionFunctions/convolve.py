@@ -487,10 +487,8 @@ class OpConvolve(OperationBase):
             interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
             output_data = self.run_inference(str(tflite_path), input_q.astype(interpreter_input_dtype)).astype(float_dtype)
         else:
-            input_scale = quant_params['input'].get('scale', 1.0)
-            input_zp = quant_params['input'].get('zero_point', 0)
-            if isinstance(input_scale, (list, np.ndarray)):
-                input_scale = input_scale[0]
+            input_scale = float(self._quant_param_scalar(quant_params['input'], 'scale', 1.0))
+            input_zp = int(self._quant_param_scalar(quant_params['input'], 'zero_point', 0))
 
             if kernel_info["input_c_type"] == "int8_t":
                 qmin, qmax = -128, 127

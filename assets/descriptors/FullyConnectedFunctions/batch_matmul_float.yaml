@@ -223,3 +223,59 @@ input_1_shape: [1, 5, 9]
 input_2_shape: [1, 9, 7]
 adj_x: false
 adj_y: false
+---
+operator: BatchMatMul
+name: batch_matmul_float_batched_adj_x_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+input_1_shape: [2, 3, 4]
+input_2_shape: [2, 3, 5]
+adj_x: true
+adj_y: false
+---
+operator: BatchMatMul
+name: batch_matmul_float_batched_adj_y_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+input_1_shape: [2, 4, 3]
+input_2_shape: [2, 5, 3]
+adj_x: false
+adj_y: true
+---
+operator: BatchMatMul
+name: batch_matmul_float_batched_adj_x_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+input_1_shape: [2, 3, 4]
+input_2_shape: [2, 3, 5]
+adj_x: true
+adj_y: false
+---
+operator: BatchMatMul
+name: batch_matmul_float_batched_adj_y_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+input_1_shape: [2, 4, 3]
+input_2_shape: [2, 5, 3]
+adj_x: false
+adj_y: true

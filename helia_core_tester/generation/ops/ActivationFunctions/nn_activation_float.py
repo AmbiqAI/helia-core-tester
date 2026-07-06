@@ -11,6 +11,7 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 _ACTIVATION_LAYERS = {
     "ARM_NN_FLT_ACT_SIGMOID": tf.keras.activations.sigmoid,
     "ARM_NN_FLT_ACT_TANH": tf.keras.activations.tanh,
+    "ARM_NN_FLT_ACT_NONE": tf.keras.activations.linear,
 }
 
 
@@ -52,6 +53,8 @@ def _activation_reference(
         return np.maximum(data, 0.0)
     if activation_type == "ARM_NN_FLT_ACT_RELU6":
         return np.clip(data, 0.0, 6.0)
+    if activation_type == "ARM_NN_FLT_ACT_NONE":
+        return data
     raise ValueError(f"Unsupported float activation type: {activation_type}")
 
 
