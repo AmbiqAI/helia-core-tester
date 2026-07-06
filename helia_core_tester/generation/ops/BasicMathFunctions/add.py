@@ -48,6 +48,8 @@ class OpAdd(BinaryBasicMathBase):
             dtype = "int16"
         elif activation_dtype == "FP32":
             dtype = "float32"
+        elif activation_dtype == "FP16":
+            dtype = "float16"
         else:
             raise NotImplementedError(f"Unsupported Add dtype: {activation_dtype}")
 
@@ -91,6 +93,23 @@ class OpAdd(BinaryBasicMathBase):
                 'output_c_type': 'float',
                 'float_kernel': True,
             }
+        elif activation_dtype == 'FP16':
+            hint = self.desc.get("hint", {})
+            if str(hint.get("kernel_variant", "")).lower() == "legacy_fp16":
+                return {
+                    'kernel_fn': 'arm_elementwise_add_fp16',
+                    'input_c_type': 'float16_t',
+                    'output_c_type': 'float16_t',
+                    'float_kernel': True,
+                    'legacy_fp16_kernel': True,
+                }
+            return {
+                'kernel_fn': 'arm_elementwise_add_f16',
+                'input_c_type': 'float16_t',
+                'output_c_type': 'float16_t',
+                'float_kernel': True,
+                'legacy_fp16_kernel': False,
+            }
         else:
             raise NotImplementedError(f"Unsupported Add dtype: {activation_dtype}")
     
@@ -131,17 +150,18 @@ class OpAdd(BinaryBasicMathBase):
         activation_dtype = self.tensor_dtype("input")
 
         if kernel_info["float_kernel"]:
-            input1_q = self._sample_uniform(input1_shape)
-            input2_q = self._sample_uniform(input2_shape)
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            interpreter.set_tensor(input_details[0]['index'], input1_q)
-            interpreter.set_tensor(input_details[1]['index'], input2_q)
-            interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]['index']), dtype=np.float32)
+            float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+            input1_q = self._sample_uniform(input1_shape, dtype=float_dtype)
+            input2_q = self._sample_uniform(input2_shape, dtype=float_dtype)
             activation_min = float(self.desc.get("act_min", -1.0e30))
             activation_max = float(self.desc.get("act_max", 1.0e30))
+            output_data = np.clip(
+                input1_q.astype(np.float32) + input2_q.astype(np.float32),
+                activation_min,
+                activation_max,
+            ).astype(float_dtype)
+            input1_q = np.broadcast_to(input1_q, output_shape).astype(float_dtype, copy=True)
+            input2_q = np.broadcast_to(input2_q, output_shape).astype(float_dtype, copy=True)
             activation_min_literal = builder.format_float_literal(activation_min)
             activation_max_literal = builder.format_float_literal(activation_max)
             mult1 = shift1 = mult2 = shift2 = output_mult = output_shift = left_shift = 0
@@ -242,10 +262,12 @@ class OpAdd(BinaryBasicMathBase):
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
             'float_kernel': kernel_info["float_kernel"],
+            'legacy_fp16_kernel': kernel_info.get("legacy_fp16_kernel", False),
         }
         if kernel_info["float_kernel"]:
             context["out_activation_min_literal"] = activation_min_literal
             context["out_activation_max_literal"] = activation_max_literal
+            context["validation_mode"] = "float"
         
         cmake_context = {
             'name': name,

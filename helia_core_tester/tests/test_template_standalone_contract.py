@@ -775,6 +775,8 @@ def test_lstm_and_svdf_keep_specialized_shared_validation_contracts() -> None:
 
     assert '{{ validation_report_limit | default(8) }}' in lstm
     assert "HELIA_VALIDATE_OUTPUTS(" in lstm
+    assert "cmsis_nn_lstm_context buffers = {0};" in lstm
+    assert "buffers.hidden_state = NULL;" in lstm
 
     assert '{{ validation_report_limit | default(8) }}' in svdf
     assert "HELIA_VALIDATE_SCALAR_EQ_INT(" in svdf
@@ -817,8 +819,8 @@ def test_quantize_and_dequantize_render_only_requested_validation_helpers() -> N
             "kernel_fn": "arm_dequantize_s8_f32",
             "has_activation": False,
             "activation_type": "NONE",
-            "comparison_atol": 0.01,
-            "comparison_rtol": 0.001,
+            "comparison_atol": 1.0e-5,
+            "comparison_rtol": 1.0e-5,
             "validation_helpers": ["float"],
         },
     )
@@ -834,6 +836,73 @@ def test_quantize_and_dequantize_render_only_requested_validation_helpers() -> N
     assert "#define HELIA_VALIDATE_EXACT_INTS" not in dequantize
     assert "#define HELIA_VALIDATE_BOOLEANS" not in dequantize
     assert "FLOAT" in dequantize
+
+
+def test_rendered_float_validator_uses_additive_tolerance() -> None:
+    rendered = _render(
+        "QuantizationFunctions/dequantize/dequantize.c.j2",
+        {
+            "name": "dequantize_tolerance_smoke",
+            "prefix": "dequantize",
+            "input_size": 4,
+            "zero_point": 0,
+            "scale": 0.125,
+            "input_data_array": "    0",
+            "expected_output_array": "    0.000000f",
+            "input_dtype": "int8_t",
+            "output_dtype": "float",
+            "kernel_fn": "arm_dequantize_s8_f32",
+            "has_activation": False,
+            "activation_type": "NONE",
+            "comparison_atol": 1.0e-5,
+            "comparison_rtol": 1.0e-5,
+            "validation_helpers": ["float"],
+        },
+    )
+
+    assert "return (atol + (rtol * fabs(expected)));" in rendered
+    assert "helia_test_max_double" not in rendered
+
+
+def test_build_validation_context_derives_dtype_specific_float_defaults() -> None:
+    fp32_context = TemplateContextBuilder.build_validation_context(
+        "ActivationFunctions/nn_activation_float/nn_activation_float.c.j2",
+        {
+            "name": "activation_fp32_smoke",
+            "output_dtype": "float",
+        },
+        {
+            "operator": "Abs",
+            "tensor_dtypes": {
+                "input": "FP32",
+                "output": "FP32",
+            },
+        },
+    )
+    fp16_context = TemplateContextBuilder.build_validation_context(
+        "ActivationFunctions/nn_activation_float/nn_activation_float.c.j2",
+        {
+            "name": "activation_fp16_smoke",
+            "output_dtype": "float16_t",
+        },
+        {
+            "operator": "Abs",
+            "tensor_dtypes": {
+                "input": "FP16",
+                "output": "FP16",
+            },
+        },
+    )
+
+    assert fp32_context["validation_atol"] == 5.0e-5
+    assert fp32_context["validation_rtol"] == 2.0e-5
+    assert fp32_context["comparison_atol"] == 5.0e-5
+    assert fp32_context["comparison_rtol"] == 2.0e-5
+
+    assert fp16_context["validation_atol"] == 1.0e-3
+    assert fp16_context["validation_rtol"] == 1.0e-3
+    assert fp16_context["comparison_atol"] == 1.0e-3
+    assert fp16_context["comparison_rtol"] == 1.0e-3
 
 
 def test_top_level_cmake_no_longer_uses_unity() -> None:

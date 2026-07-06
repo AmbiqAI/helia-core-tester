@@ -1,5 +1,6 @@
 """LSTMUnidirectional operation implementation."""
 
+from pathlib import Path
 from typing import Dict, Any
 import numpy as np
 import tensorflow as tf
@@ -194,11 +195,17 @@ class OpLSTMUnidirectional(OperationBase):
         """
         if (
             self.desc.get("hint", {}).get("force_cmsis", False)
-            and str(self.desc.get("activation_dtype", "S8")).upper() == "FP32"
+            and str(self.desc.get("activation_dtype", "S8")).upper() in {"FP32", "FP16"}
         ):
             from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
             name = self.desc['name']
+            activation_dtype = str(self.desc.get("activation_dtype", "S8")).upper()
+            float_dtype = np.float16 if activation_dtype == "FP16" else np.float32
+            data_dtype = "float16_t" if activation_dtype == "FP16" else "float"
+            kernel_fn = "arm_lstm_unidirectional_f16" if activation_dtype == "FP16" else "arm_lstm_unidirectional_f32"
+            lstm_params_type = "cmsis_nn_lstm_params_f16" if activation_dtype == "FP16" else "cmsis_nn_lstm_params_f32"
+            lstm_context_type = "cmsis_nn_lstm_context_f16" if activation_dtype == "FP16" else "cmsis_nn_lstm_context_f32"
             batch_size = int(self.desc.get("batch_size", 1))
             time_steps = int(self.desc.get("time_steps", 1))
             input_size = int(self.desc.get("feature_size", self.desc.get("input_size", 1)))
@@ -209,21 +216,21 @@ class OpLSTMUnidirectional(OperationBase):
             rng_state = self.rng.__getstate__()
             self.rng = np.random.default_rng(self.seed)
             if time_major:
-                input_tensor = self.rng.uniform(-1.0, 1.0, size=(time_steps, batch_size, input_size)).astype(np.float32)
+                input_tensor = self.rng.uniform(-1.0, 1.0, size=(time_steps, batch_size, input_size)).astype(float_dtype)
             else:
-                input_tensor = self.rng.uniform(-1.0, 1.0, size=(batch_size, time_steps, input_size)).astype(np.float32)
-            forget_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(np.float32)
-            input_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(np.float32)
-            cell_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(np.float32)
-            output_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(np.float32)
-            forget_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(np.float32)
-            input_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(np.float32)
-            cell_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(np.float32)
-            output_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(np.float32)
-            forget_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(np.float32)
-            input_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(np.float32)
-            cell_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(np.float32)
-            output_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(np.float32)
+                input_tensor = self.rng.uniform(-1.0, 1.0, size=(batch_size, time_steps, input_size)).astype(float_dtype)
+            forget_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(float_dtype)
+            input_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(float_dtype)
+            cell_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(float_dtype)
+            output_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(float_dtype)
+            forget_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(float_dtype)
+            input_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(float_dtype)
+            cell_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(float_dtype)
+            output_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(float_dtype)
+            forget_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
+            input_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
+            cell_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
+            output_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
             self.rng.__setstate__(rng_state)
 
             output_ref = self._generate_lstm_expected_f32(
@@ -252,6 +259,10 @@ class OpLSTMUnidirectional(OperationBase):
             context = {
                 "name": name,
                 "prefix": name,
+                "data_dtype": data_dtype,
+                "kernel_fn": kernel_fn,
+                "lstm_params_type": lstm_params_type,
+                "lstm_context_type": lstm_context_type,
                 "time_major_literal": "1" if time_major else "0",
                 "batch_size": batch_size,
                 "time_steps": time_steps,
@@ -259,7 +270,7 @@ class OpLSTMUnidirectional(OperationBase):
                 "hidden_size": hidden_size,
                 "cell_clip_literal": builder.format_float_literal(cell_clip),
                 "input_tensor_array": builder.format_array_as_c_literal(input_tensor),
-                "output_array": builder.format_array_as_c_literal(output_ref),
+                "output_array": builder.format_array_as_c_literal(output_ref.astype(float_dtype)),
                 "forget_gate_input_weights_array": builder.format_array_as_c_literal(forget_w_in),
                 "input_gate_input_weights_array": builder.format_array_as_c_literal(input_w_in),
                 "cell_gate_input_weights_array": builder.format_array_as_c_literal(cell_w_in),
@@ -293,7 +304,6 @@ class OpLSTMUnidirectional(OperationBase):
         if not self.desc.get("hint", {}).get("force_cmsis", False):
             return
 
-        from pathlib import Path
         from helia_core_tester.generation.utils.lstm_data import generate_lstm_data, build_lstm_context
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         from helia_core_tester.core.discovery import find_tester_templates_dir

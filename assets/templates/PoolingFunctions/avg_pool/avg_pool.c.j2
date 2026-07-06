@@ -2,6 +2,16 @@
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
 
+{% if requires_kernel_prototype | default(false) %}
+arm_cmsis_nn_status {{ kernel_fn }}(const cmsis_nn_context *ctx,
+                                    const {{ pool_params_type }} *pool_params,
+                                    const cmsis_nn_dims *input_dims,
+                                    const {{ input_dtype }} *src,
+                                    const cmsis_nn_dims *filter_dims,
+                                    const cmsis_nn_dims *output_dims,
+                                    {{ output_dtype }} *dst);
+
+{% endif %}
 // Context for buffer allocation
 static cmsis_nn_context {{ name }}_ctx;
 
@@ -69,8 +79,8 @@ int32_t {{ prefix }}_{{ name }}_test_case_run(void)
         {{ name }}_expected_output,
         {{ name|upper }}_OUTPUT_SIZE,
         {{ validation_tolerance | default(1) }},
-        {{ validation_atol | default(0.01) }}f,
-        {{ validation_rtol | default(0.001) }}f,
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
         {{ validation_report_limit | default(20) }},
         failures
     );

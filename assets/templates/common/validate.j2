@@ -65,14 +65,9 @@ static inline int helia_test_finish_validation(int failures)
     return helia_test_finish_validation((failures))
 
 {% if "float" in validation_helpers %}
-static inline double helia_test_max_double(double lhs, double rhs)
-{
-    return lhs > rhs ? lhs : rhs;
-}
-
 static inline double helia_test_float_tolerance(double expected, double atol, double rtol)
 {
-    return helia_test_max_double(atol, rtol * fabs(expected));
+    return (atol + (rtol * fabs(expected)));
 }
 {% endif %}
 

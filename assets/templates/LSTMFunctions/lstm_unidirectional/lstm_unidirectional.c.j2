@@ -225,10 +225,11 @@ static int32_t run_lstm(void)
                                           gate_cell,
                                           gate_output };
 
-    cmsis_nn_lstm_context buffers;
+    cmsis_nn_lstm_context buffers = {0};
     buffers.temp1 = buffer1;
     buffers.temp2 = buffer2;
     buffers.cell_state = buffer3;
+    buffers.hidden_state = NULL;
 
 {% if dtype == "s8" %}
     arm_cmsis_nn_status result = arm_lstm_unidirectional_s8({{ data_prefix }}input_tensor, {{ name }}_output, &params, &buffers);
@@ -251,8 +252,8 @@ int32_t {{ prefix }}_{{ name }}_test_case_run(void)
         &{{ data_prefix }}output[0],
         LSTM_OUTPUT_SIZE,
         {{ validation_tolerance | default(1) }},
-        {{ validation_atol | default(0.01) }}f,
-        {{ validation_rtol | default(0.001) }}f,
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
         {{ validation_report_limit | default(8) }},
         failures
     );

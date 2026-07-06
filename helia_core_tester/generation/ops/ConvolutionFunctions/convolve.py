@@ -11,6 +11,33 @@ from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel
 class OpConvolve(OperationBase):
     """Convolve operation."""
 
+    def _hint(self) -> Dict[str, Any]:
+        hint = self.desc.get("hint", {})
+        return hint if isinstance(hint, dict) else {}
+
+    @staticmethod
+    def _pack_nt_n_weights(weights: np.ndarray, block_cols: int) -> np.ndarray:
+        """Pack OHWI weights into CMSIS-NN `[K][N-block]` FP RHS layout."""
+        if weights is None:
+            raise ValueError("Cannot pack missing convolution weights")
+        if len(weights.shape) != 4:
+            raise ValueError(f"NT_N_PACKED convolution weights must be OHWI rank-4, got {weights.shape}")
+
+        out_ch = int(weights.shape[0])
+        rhs_cols = int(np.prod(weights.shape[1:]))
+        rhs_rows_rounded = ((out_ch + block_cols - 1) // block_cols) * block_cols
+        weights_matrix = weights.reshape(out_ch, rhs_cols)
+        packed = np.zeros((rhs_rows_rounded // block_cols, rhs_cols, block_cols), dtype=weights.dtype)
+
+        for block_idx, out_base in enumerate(range(0, rhs_rows_rounded, block_cols)):
+            for k in range(rhs_cols):
+                for lane in range(block_cols):
+                    out_ch_idx = out_base + lane
+                    if out_ch_idx < out_ch:
+                        packed[block_idx, k, lane] = weights_matrix[out_ch_idx, k]
+
+        return packed.reshape(-1)
+
     def needs_keras_model(self) -> bool:
         return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
     
@@ -136,7 +163,7 @@ class OpConvolve(OperationBase):
 
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
         
         if activation_dtype == 'S8':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
@@ -150,6 +177,11 @@ class OpConvolve(OperationBase):
             ]
             converter.inference_input_type = tf.int16
             converter.inference_output_type = tf.int16
+        elif activation_dtype == 'FP16':
+            converter.optimizations = []
+            converter.target_spec.supported_types = [tf.float16]
+        elif activation_dtype == 'FP32':
+            converter.optimizations = []
         
         def representative_data_gen():
             rep_rng = np.random.default_rng(42)
@@ -169,11 +201,42 @@ class OpConvolve(OperationBase):
             f.write(tflite_model)
             
     def _select_cmsis_convolve_kernel(self) -> Dict[str, str]:
-        return resolve_convolve_kernel(
+        info = resolve_convolve_kernel(
             activation_dtype=self.desc.get("activation_dtype", "S8"),
             weight_dtype=self.desc.get("weight_dtype", "S8"),
             cpu=self.target_cpu,
         )
+        info.setdefault("kernel_needs_layout", info["input_c_type"] in {"float", "float16_t"})
+        info.setdefault("buffer_size_needs_layout", info["input_c_type"] in {"float", "float16_t"})
+
+        hint = self._hint()
+        variant = str(hint.get("kernel_variant", "")).lower()
+        if not variant:
+            return info
+
+        if info["input_c_type"] not in {"float", "float16_t"}:
+            raise ValueError(f"Convolve kernel_variant hints are only supported for FP descriptors, got {variant}")
+
+        suffix = "f16" if info["input_c_type"] == "float16_t" else "f32"
+        if variant == "wrapper":
+            info["kernel_fn"] = f"arm_convolve_wrapper_{suffix}"
+            info["kernel_get_buffer_size_fn"] = f"arm_convolve_wrapper_{suffix}_get_buffer_size"
+            info["kernel_needs_layout"] = False
+            info["buffer_size_needs_layout"] = False
+        elif variant == "direct_1x1":
+            info["kernel_fn"] = f"arm_convolve_1x1_{suffix}"
+            info["kernel_get_buffer_size_fn"] = f"arm_convolve_1x1_{suffix}_get_buffer_size"
+            info["kernel_needs_layout"] = True
+            info["buffer_size_needs_layout"] = True
+        elif variant == "direct_1_x_n":
+            info["kernel_fn"] = f"arm_convolve_1_x_n_{suffix}"
+            info["kernel_get_buffer_size_fn"] = f"arm_convolve_1_x_n_{suffix}_get_buffer_size"
+            info["kernel_needs_layout"] = True
+            info["buffer_size_needs_layout"] = True
+        else:
+            raise ValueError(f"Unsupported Convolve kernel_variant hint: {variant}")
+
+        return info
 
     def generate_c_files(self, output_dir: Path) -> None:
         """
@@ -188,7 +251,8 @@ class OpConvolve(OperationBase):
 
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_convolve_kernel()
-        float_kernel = kernel_info["input_c_type"] == "float"
+        float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
+        float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
         weight_c_type = kernel_info.get("weight_c_type")
         if weight_c_type is None:
             raise ValueError(
@@ -419,8 +483,9 @@ class OpConvolve(OperationBase):
             input_data = self.generate_input_data()
         self.rng.__setstate__(rng_state)
         if float_kernel:
-            input_q = np.asarray(input_data, dtype=np.float32)
-            output_data = self.run_inference(str(tflite_path), input_q).astype(np.float32)
+            input_q = np.asarray(input_data, dtype=float_dtype)
+            interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
+            output_data = self.run_inference(str(tflite_path), input_q.astype(interpreter_input_dtype)).astype(float_dtype)
         else:
             input_scale = quant_params['input'].get('scale', 1.0)
             input_zp = quant_params['input'].get('zero_point', 0)
@@ -446,14 +511,24 @@ class OpConvolve(OperationBase):
         has_biases = biases is not None and getattr(biases, "size", 0) > 0
         bias_dtype = kernel_info["bias_c_type"]
         if has_biases:
-            if float_kernel and biases.dtype != np.float32:
-                biases = biases.astype(np.float32)
+            if float_kernel and biases.dtype != float_dtype:
+                biases = biases.astype(float_dtype)
             elif bias_dtype == "int64_t" and biases.dtype != np.int64:
                 biases = biases.astype(np.int64)
             elif bias_dtype == "int32_t" and biases.dtype != np.int32:
                 biases = biases.astype(np.int32)
-        if float_kernel and weights is not None and weights.dtype != np.float32:
-            weights = weights.astype(np.float32)
+        if float_kernel and weights is not None and weights.dtype != float_dtype:
+            weights = weights.astype(float_dtype)
+
+        weight_format_macro = "ARM_NN_WEIGHT_FORMAT_STANDARD"
+        if float_kernel:
+            weight_format = str(self._hint().get("weight_format", "STANDARD")).upper()
+            if weight_format in {"NT_N_PACKED", "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"}:
+                block_cols = 8 if kernel_info["input_c_type"] == "float16_t" else 4
+                weights = self._pack_nt_n_weights(weights, block_cols)
+                weight_format_macro = "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"
+            elif weight_format not in {"STANDARD", "ARM_NN_WEIGHT_FORMAT_STANDARD"}:
+                raise ValueError(f"Unsupported Convolve weight_format hint: {weight_format}")
 
         # Format arrays
         weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
@@ -465,12 +540,13 @@ class OpConvolve(OperationBase):
         # Use activation_dtype to determine if this is S8 or S16 convolution
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         if float_kernel:
+            element_size = np.dtype(float_dtype).itemsize
             buffer_size_max = max(
                 1024,
                 int(
                     (input_dims['n'] * input_dims['h'] * input_dims['w'] * input_dims['c']
                      + filter_dims['n'] * filter_dims['h'] * filter_dims['w'] * max(filter_dims['c'], 1)
-                     + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * 4
+                     + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * element_size
                 ),
             )
         else:
@@ -498,10 +574,17 @@ class OpConvolve(OperationBase):
             'bias_dtype': bias_dtype,
             'kernel_fn': kernel_info["kernel_fn"],
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+            'kernel_needs_layout': bool(kernel_info.get("kernel_needs_layout", False)),
+            'buffer_size_needs_layout': bool(kernel_info.get("buffer_size_needs_layout", False)),
             'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
             'float_kernel': float_kernel,
-            'conv_params_type': 'cmsis_nn_conv_params_f32' if float_kernel else 'cmsis_nn_conv_params',
+            'weight_format_macro': weight_format_macro,
+            'conv_params_type': (
+                'cmsis_nn_conv_params_f16'
+                if kernel_info["input_c_type"] == "float16_t"
+                else ('cmsis_nn_conv_params_f32' if float_kernel else 'cmsis_nn_conv_params')
+            ),
             'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
         }
         if float_kernel:

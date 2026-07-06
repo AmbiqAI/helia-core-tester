@@ -58,6 +58,12 @@ class OpSoftmax(OperationBase):
                 'input_c_type': 'float',
                 'output_c_type': 'float'
             }
+        elif activation_dtype == 'FP16':
+            return {
+                'kernel_fn': 'arm_softmax_f16',
+                'input_c_type': 'float16_t',
+                'output_c_type': 'float16_t'
+            }
         else:
             raise NotImplementedError(f"Unsupported Softmax dtype: {activation_dtype}")
 
@@ -269,6 +275,7 @@ class OpSoftmax(OperationBase):
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_softmax_kernel()
+        float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
         if force_cmsis and kernel_info["input_c_type"] != "int8_t":
             raise ValueError("CMSIS-only softmax currently supports int8 input only.")
         
@@ -295,7 +302,7 @@ class OpSoftmax(OperationBase):
         if output_shape is not None:
             output_shape = tuple(output_shape)
         
-        if not force_cmsis and kernel_info["input_c_type"] != "float":
+        if not force_cmsis and not float_kernel:
             # Extract quantization from LiteRT
             input_quant = op_tensors['inputs'][0]['quantization']
             output_quant = op_tensors['outputs'][0]['quantization']
@@ -305,7 +312,7 @@ class OpSoftmax(OperationBase):
             output_scale = output_quant.get('scale', 1.0)
             output_zp = output_quant.get('zero_point', 0)
         
-        if kernel_info["input_c_type"] != "float":
+        if not float_kernel:
             if isinstance(input_scale, (list, np.ndarray)):
                 input_scale = float(input_scale[0])
             if isinstance(input_zp, (list, np.ndarray)):
@@ -332,7 +339,7 @@ class OpSoftmax(OperationBase):
         softmax_input_integer_bits = 5  # scaled_diff_integer_bits, matches ns-cmsis-nn
         beta = 1.0  # softmax beta parameter (typically 1.0)
         
-        if kernel_info["input_c_type"] == "float":
+        if float_kernel:
             mult = shift = diff_min = 0
         elif kernel_info["input_c_type"] == "int8_t":
             # S8: preprocess_softmax_scaling
@@ -345,7 +352,8 @@ class OpSoftmax(OperationBase):
             input_scale_beta_rescale = beta * input_scale / (10.0 / 65535.0)
             input_real_multiplier = input_scale_beta_rescale
         
-        mult, shift = calculate_multiplier_shift(input_real_multiplier)
+        if not float_kernel:
+            mult, shift = calculate_multiplier_shift(input_real_multiplier)
         
         # Calculate diff_min for s8 softmax
         # diff_min = -1.0 * calculate_input_radius(input_integer_bits, input_left_shift, total_signed_bits=31)
@@ -377,8 +385,9 @@ class OpSoftmax(OperationBase):
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
 
-        if kernel_info["input_c_type"] == "float":
-            input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+        if float_kernel:
+            float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+            input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(float_dtype)
         elif kernel_info["input_c_type"] == "int8_t":
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
@@ -392,13 +401,10 @@ class OpSoftmax(OperationBase):
 
         self.rng.__setstate__(rng_state)
 
-        if kernel_info["input_c_type"] == "float":
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            interpreter.set_tensor(input_details[0]['index'], input_q)
-            interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]['index']), dtype=np.float32)
+        if float_kernel:
+            shifted = input_q.astype(np.float32) - np.max(input_q.astype(np.float32), axis=-1, keepdims=True)
+            exp_vals = np.exp(shifted)
+            output_data = (exp_vals / np.sum(exp_vals, axis=-1, keepdims=True)).astype(input_q.dtype)
         elif force_cmsis:
             hint = self.desc.get("hint", {})
             if isinstance(hint, dict) and "diff_min" in hint:
@@ -436,7 +442,7 @@ class OpSoftmax(OperationBase):
         extras = hint.get("extras", {}) if isinstance(hint, dict) else {}
         output_dtype_hint = str(hint.get("output_dtype", extras.get("output_dtype", ""))).upper()
         is_s8_s16 = force_cmsis and output_dtype_hint == "S16" and kernel_info["input_c_type"] == "int8_t"
-        if kernel_info["input_c_type"] == "float":
+        if float_kernel:
             kernel_fn = kernel_info["kernel_fn"]
             output_c_type = kernel_info["output_c_type"]
             returns_status = True

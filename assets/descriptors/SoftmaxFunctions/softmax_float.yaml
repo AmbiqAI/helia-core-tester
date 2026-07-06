@@ -5,3 +5,71 @@ tensor_dtypes:
   input: FP32
   output: FP32
 input_shape: [1, 4, 4, 3]
+---
+operator: Softmax
+name: softmax_float_row_size_2_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 1, 1, 2]
+---
+operator: Softmax
+name: softmax_float_wide_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 2, 3, 7]
+---
+operator: Softmax
+name: softmax_float_default_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 4
+- 4
+- 3
+---
+operator: Softmax
+name: softmax_float_row_size_2_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 1
+- 1
+- 2
+---
+operator: Softmax
+name: softmax_float_wide_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 2
+- 3
+- 7
+---
+operator: Softmax
+name: softmax_float_vector4_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 2, 2, 4]
+---
+operator: Softmax
+name: softmax_float_vector8_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 2, 2, 8]

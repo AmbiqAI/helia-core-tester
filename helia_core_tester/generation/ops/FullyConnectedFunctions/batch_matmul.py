@@ -54,6 +54,8 @@ class OpBatchMatMul(OperationBase):
             return 'int16_t'
         elif np_dtype == np.float32:
             return 'float'
+        elif np_dtype == np.float16:
+            return 'float16_t'
         else:
             raise ValueError(f"Unsupported numpy dtype: {np_dtype}")
     
@@ -79,6 +81,14 @@ class OpBatchMatMul(OperationBase):
             return {
                 'kernel_fn': 'arm_batch_matmul_f32',
                 'kernel_get_buffer_size_fn': 'arm_batch_matmul_f32_get_buffer_size',
+                'input_lhs_c_type': input_lhs_c_type,
+                'input_rhs_c_type': input_rhs_c_type,
+                'output_c_type': output_c_type
+            }
+        if input_lhs_c_type == 'float16_t':
+            return {
+                'kernel_fn': 'arm_batch_matmul_f16',
+                'kernel_get_buffer_size_fn': 'arm_batch_matmul_f16_get_buffer_size',
                 'input_lhs_c_type': input_lhs_c_type,
                 'input_rhs_c_type': input_rhs_c_type,
                 'output_c_type': output_c_type
@@ -130,6 +140,11 @@ class OpBatchMatMul(OperationBase):
         input_lhs_dtype = input_details[0]['dtype']
         input_rhs_dtype = input_details[1]['dtype']
         output_dtype = output_details[0]['dtype']
+        execution_dtype = self.tensor_dtype("input", default=self.desc.get("activation_dtype", "S8"))
+        if execution_dtype == "FP16":
+            input_lhs_dtype = input_rhs_dtype = output_dtype = np.float16
+        elif execution_dtype == "FP32":
+            input_lhs_dtype = input_rhs_dtype = output_dtype = np.float32
         
         input_lhs_shape = tuple(input_details[0]['shape'])
         input_rhs_shape = tuple(input_details[1]['shape'])
@@ -137,7 +152,8 @@ class OpBatchMatMul(OperationBase):
         
         # Select CMSIS kernel + types based on actual dtypes from TFLite
         kernel_info = self._select_cmsis_matmul_kernel(input_lhs_dtype, input_rhs_dtype, output_dtype)
-        float_kernel = kernel_info["input_lhs_c_type"] == "float"
+        float_kernel = kernel_info["input_lhs_c_type"] in {"float", "float16_t"}
+        float_dtype = np.float16 if kernel_info["input_lhs_c_type"] == "float16_t" else np.float32
         
         # Extract quantization parameters from interpreter (more reliable than LiteRT)
         # LiteRT sometimes returns incorrect scales (e.g., 1.0 instead of actual scale)
@@ -173,11 +189,24 @@ class OpBatchMatMul(OperationBase):
         adj_y = self.desc.get('adj_y', False)
         
         # Convert shapes to CMSIS dims.
-        # Quantized BMM keeps the legacy transposed-RHS contract, while float BMM follows
-        # the public API and passes the stored tensor shapes directly with adj flags.
+        # For float BMM, CMSIS dims use .c as matrix rows and .w as the inner dimension.
+        # The CMSIS adj_y flag is inverted relative to the LiteRT descriptor flag:
+        # adj_y=false consumes RHS as [K, N] with strided column access, while
+        # adj_y=true consumes RHS already stored as [N, K].
         if float_kernel:
-            input_lhs_dims = builder.nhwc_to_cmsis_dims(input_lhs_shape)
-            input_rhs_dims = builder.nhwc_to_cmsis_dims(input_rhs_shape)
+            if len(input_lhs_shape) == 3 and not adj_x:
+                input_lhs_dims = builder.nhwc_to_cmsis_dims(
+                    (input_lhs_shape[0], input_lhs_shape[2], input_lhs_shape[1])
+                )
+            else:
+                input_lhs_dims = builder.nhwc_to_cmsis_dims(input_lhs_shape)
+
+            if len(input_rhs_shape) == 3 and adj_y:
+                input_rhs_dims = builder.nhwc_to_cmsis_dims(
+                    (input_rhs_shape[0], input_rhs_shape[2], input_rhs_shape[1])
+                )
+            else:
+                input_rhs_dims = builder.nhwc_to_cmsis_dims(input_rhs_shape)
         else:
             if len(input_lhs_shape) == 3 and adj_x:
                 transposed_lhs_shape = (input_lhs_shape[0], input_lhs_shape[2], input_lhs_shape[1])
@@ -199,7 +228,7 @@ class OpBatchMatMul(OperationBase):
         if float_kernel:
             bmm_params = {
                 'adj_x': bool(adj_x),
-                'adj_y': bool(adj_y),
+                'adj_y': bool(not adj_y),
                 'activation_min': float(self.desc.get("activation_min", -1.0e30)),
                 'activation_max': float(self.desc.get("activation_max", 1.0e30)),
             }
@@ -263,24 +292,25 @@ class OpBatchMatMul(OperationBase):
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
         
-        input_lhs_data = self.rng.uniform(-1.0, 1.0, size=input_lhs_shape).astype(np.float32)
-        input_rhs_data = self.rng.uniform(-1.0, 1.0, size=input_rhs_shape).astype(np.float32)
+        input_lhs_data = self.rng.uniform(-1.0, 1.0, size=input_lhs_shape).astype(float_dtype if float_kernel else np.float32)
+        input_rhs_data = self.rng.uniform(-1.0, 1.0, size=input_rhs_shape).astype(float_dtype if float_kernel else np.float32)
         
         self.rng.__setstate__(rng_state)
         
         if float_kernel:
-            interpreter.set_tensor(input_details[0]['index'], input_lhs_data.astype(np.float32))
-            interpreter.set_tensor(input_details[1]['index'], input_rhs_data.astype(np.float32))
+            interpreter.set_tensor(input_details[0]['index'], input_lhs_data.astype(input_details[0]['dtype']))
+            interpreter.set_tensor(input_details[1]['index'], input_rhs_data.astype(input_details[1]['dtype']))
             interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]['index']), dtype=np.float32)
+            output_data = np.array(interpreter.get_tensor(output_details[0]['index']), dtype=float_dtype)
 
             input_lhs_array_str = builder.format_array_as_c_literal(input_lhs_data)
             input_rhs_array_str = builder.format_array_as_c_literal(input_rhs_data)
             expected_output_array_str = builder.format_array_as_c_literal(output_data)
+            element_size = np.dtype(float_dtype).itemsize
             buffer_size_max = max(
                 1024,
                 int(
-                    (np.prod(input_lhs_shape) + np.prod(input_rhs_shape) + np.prod(output_shape)) * 4
+                    (np.prod(input_lhs_shape) + np.prod(input_rhs_shape) + np.prod(output_shape)) * element_size
                 ),
             )
 
@@ -301,9 +331,14 @@ class OpBatchMatMul(OperationBase):
                 'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
                 'buffer_size_max': buffer_size_max,
                 'float_kernel': True,
-                'bmm_params_type': 'cmsis_nn_bmm_params_f32',
+                'bmm_params_type': (
+                    'cmsis_nn_bmm_params_f16'
+                    if kernel_info["input_lhs_c_type"] == "float16_t"
+                    else 'cmsis_nn_bmm_params_f32'
+                ),
                 'bmm_activation_min_literal': builder.format_float_literal(bmm_params['activation_min']),
                 'bmm_activation_max_literal': builder.format_float_literal(bmm_params['activation_max']),
+                'validation_mode': 'float',
             }
             includes_api_dir = output_dir / "includes"
             includes_api_dir.mkdir(parents=True, exist_ok=True)

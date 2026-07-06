@@ -29,6 +29,8 @@ class OpMul(BinaryBasicMathBase):
             dtype = "int16"
         elif activation_dtype == "FP32":
             dtype = "float32"
+        elif activation_dtype == "FP16":
+            dtype = "float16"
         else:
             raise NotImplementedError(f"Unsupported Mul dtype: {activation_dtype}")
 
@@ -72,6 +74,13 @@ class OpMul(BinaryBasicMathBase):
                 'output_c_type': 'float',
                 'float_kernel': True,
             }
+        elif activation_dtype == 'FP16':
+            return {
+                'kernel_fn': 'arm_elementwise_mul_f16',
+                'input_c_type': 'float16_t',
+                'output_c_type': 'float16_t',
+                'float_kernel': True,
+            }
         else:
             raise NotImplementedError(f"Unsupported Mul dtype: {activation_dtype}")
     
@@ -111,17 +120,18 @@ class OpMul(BinaryBasicMathBase):
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         activation_dtype = self.tensor_dtype("input")
         if kernel_info["float_kernel"]:
-            input1_q = self._sample_uniform(input1_shape)
-            input2_q = self._sample_uniform(input2_shape)
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            interpreter.set_tensor(input_details[0]['index'], input1_q)
-            interpreter.set_tensor(input_details[1]['index'], input2_q)
-            interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]['index']), dtype=np.float32)
+            float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+            input1_q = self._sample_uniform(input1_shape, dtype=float_dtype)
+            input2_q = self._sample_uniform(input2_shape, dtype=float_dtype)
             activation_min = float(self.desc.get("act_min", -1.0e30))
             activation_max = float(self.desc.get("act_max", 1.0e30))
+            output_data = np.clip(
+                input1_q.astype(np.float32) * input2_q.astype(np.float32),
+                activation_min,
+                activation_max,
+            ).astype(float_dtype)
+            input1_q = np.broadcast_to(input1_q, output_shape).astype(float_dtype, copy=True)
+            input2_q = np.broadcast_to(input2_q, output_shape).astype(float_dtype, copy=True)
             activation_min_literal = builder.format_float_literal(activation_min)
             activation_max_literal = builder.format_float_literal(activation_max)
             input1_zp = input2_zp = output_zp = output_mult = output_shift = 0
@@ -205,6 +215,7 @@ class OpMul(BinaryBasicMathBase):
         if kernel_info["float_kernel"]:
             context["out_activation_min_literal"] = activation_min_literal
             context["out_activation_max_literal"] = activation_max_literal
+            context["validation_mode"] = "float"
         
         cmake_context = {
             'name': name,

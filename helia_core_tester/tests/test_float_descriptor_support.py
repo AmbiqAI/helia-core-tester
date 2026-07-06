@@ -62,7 +62,28 @@ def test_tensor_dtypes_only_descriptor_derives_legacy_quantized_side(tmp_path: P
     assert desc["activation_dtype"] == "S8"
     assert desc.get("weight_dtype") is None
     assert desc["resolved_tensor_dtypes"] == {"input": "S8", "output": "FP32"}
-    assert desc["resolved_comparison"] == {"mode": "float", "atol": 0.01, "rtol": 0.001}
+    assert desc["resolved_comparison"] == {"mode": "float", "atol": 5.0e-5, "rtol": 2.0e-5}
+
+
+def test_tensor_dtypes_only_descriptor_uses_fp16_default_comparison(tmp_path: Path) -> None:
+    path = _write_descriptor(
+        tmp_path,
+        {
+            "name": "abs_fp16_default_contract",
+            "operator": "Abs",
+            "tensor_dtypes": {
+                "input": "FP16",
+                "output": "FP16",
+            },
+            "input_shape": [1, 4],
+        },
+    )
+
+    desc = load_descriptor(str(path))[0]
+
+    assert desc["activation_dtype"] == "FP16"
+    assert desc["resolved_tensor_dtypes"] == {"input": "FP16", "output": "FP16"}
+    assert desc["resolved_comparison"] == {"mode": "float", "atol": 1.0e-3, "rtol": 1.0e-3}
 
 
 def test_tensor_dtypes_accept_fp16_and_comparison_override(tmp_path: Path) -> None:
@@ -105,6 +126,86 @@ def test_template_context_formats_standalone_float_literals_for_c() -> None:
     assert TemplateContextBuilder.format_float_literal(-1.0e30) == "-1.0e+30f"
     assert TemplateContextBuilder.format_float_literal(0.125) == "0.125f"
     assert TemplateContextBuilder.format_float_literal(0.0) == "0.0f"
+
+
+def _load_nn_activation_float_module(monkeypatch):
+    import importlib.util
+    import sys
+    from types import SimpleNamespace
+
+    fake_tf = SimpleNamespace(
+        keras=SimpleNamespace(
+            Model=object,
+            activations=SimpleNamespace(sigmoid=lambda x: x, tanh=lambda x: x),
+        ),
+        nn=SimpleNamespace(),
+    )
+    monkeypatch.setitem(sys.modules, "tensorflow", fake_tf)
+
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "generation"
+        / "ops"
+        / "ActivationFunctions"
+        / "nn_activation_float.py"
+    )
+    spec = importlib.util.spec_from_file_location("nn_activation_float_test_module", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_nn_activation_float_fp16_tanh_reference_matches_scalar_fallback(monkeypatch) -> None:
+    module = _load_nn_activation_float_module(monkeypatch)
+
+    inputs = np.array(
+        [
+            0.708008,
+            0.642578,
+            -0.375000,
+            0.572266,
+            -0.504883,
+            0.793945,
+            -0.447998,
+            0.749512,
+            -0.481689,
+            3.500000,
+            -4.000000,
+        ],
+        dtype=np.float16,
+    )
+    expected = np.array(
+        [
+            0.617676,
+            0.573242,
+            -0.360107,
+            0.521973,
+            -0.469482,
+            0.670898,
+            -0.423096,
+            0.644043,
+            -0.450928,
+            1.000000,
+            -1.000000,
+        ],
+        dtype=np.float16,
+    )
+
+    actual = module._activation_reference(inputs, "ARM_NN_FLT_ACT_TANH", 0.0, "FP16")
+
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_nn_activation_float_fp32_tanh_reference_uses_numpy_tanh(monkeypatch) -> None:
+    module = _load_nn_activation_float_module(monkeypatch)
+    inputs = np.array([-0.75, -0.1, 0.0, 0.5, 0.8], dtype=np.float32)
+
+    actual = module._activation_reference(inputs, "ARM_NN_FLT_ACT_TANH", 0.0, "FP32")
+
+    assert actual.dtype == np.float32
+    np.testing.assert_array_equal(actual, np.tanh(inputs.astype(np.float32)))
 
 
 def test_build_pool_params_uses_float_activation_defaults_for_fp32() -> None:

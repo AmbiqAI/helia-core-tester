@@ -1,6 +1,14 @@
 #include "{{ name }}_add.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% if legacy_fp16_kernel %}
+extern arm_cmsis_nn_status arm_elementwise_add_fp16(const float16_t *input_1_vect,
+                                                    const float16_t *input_2_vect,
+                                                    float16_t *output,
+                                                    const float16_t out_activation_min,
+                                                    const float16_t out_activation_max,
+                                                    const int32_t block_size);
+{% endif %}
 
 #define {{ name|upper }}_OUTPUT_SIZE ({{ output_dims.n }} * {{ output_dims.h }} * {{ output_dims.w }} * {{ output_dims.c }})
 static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
@@ -58,8 +66,8 @@ int32_t {{ prefix }}_{{ name }}_test_case_run(void)
         {{ name }}_expected_output,
         {{ name|upper }}_OUTPUT_SIZE,
         {{ validation_tolerance | default(1) }},
-        {{ validation_atol | default(0.01) }}f,
-        {{ validation_rtol | default(0.001) }}f,
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
         {{ validation_report_limit | default(20) }},
         failures
     );

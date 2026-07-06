@@ -7,6 +7,8 @@ import numpy as np
 from pathlib import PurePosixPath
 from typing import Dict, Any, List, Tuple
 
+from helia_core_tester.generation.io.dtypes import default_comparison_for_dtype, resolve_comparison
+
 class TemplateContextBuilder:
     """
     Builds context dictionaries for Jinja templates.
@@ -198,6 +200,39 @@ class TemplateContextBuilder:
         return list(cls._VALIDATION_HELPERS_BY_MODE.get(mode, []))
 
     @classmethod
+    def infer_float_comparison_defaults(
+        cls,
+        context: Dict[str, Any],
+        desc: Dict[str, Any] | None = None,
+    ) -> Dict[str, float]:
+        comparison: Dict[str, Any] | None = None
+        if desc is not None:
+            resolved_comparison = desc.get("resolved_comparison")
+            if isinstance(resolved_comparison, dict):
+                comparison = resolved_comparison
+            else:
+                comparison = resolve_comparison(desc)
+
+        if comparison and comparison.get("mode") == "float":
+            return {
+                "atol": float(comparison["atol"]),
+                "rtol": float(comparison["rtol"]),
+            }
+
+        output_dtype = str(context.get("output_dtype", "")).strip().lower()
+        if output_dtype == "float16_t":
+            comparison = default_comparison_for_dtype("FP16")
+        elif "float" in output_dtype:
+            comparison = default_comparison_for_dtype("FP32")
+        else:
+            return {}
+
+        return {
+            "atol": float(comparison["atol"]),
+            "rtol": float(comparison["rtol"]),
+        }
+
+    @classmethod
     def build_validation_context(
         cls,
         template_path: str,
@@ -220,13 +255,14 @@ class TemplateContextBuilder:
             "validation_tolerance",
             cls.infer_validation_tolerance(template_path, resolved, mode),
         )
+        float_defaults = cls.infer_float_comparison_defaults(resolved, desc)
         resolved.setdefault(
             "validation_atol",
-            float(resolved.get("comparison_atol", 0.01)),
+            float(resolved.get("comparison_atol", float_defaults.get("atol", 0.0))),
         )
         resolved.setdefault(
             "validation_rtol",
-            float(resolved.get("comparison_rtol", 0.001)),
+            float(resolved.get("comparison_rtol", float_defaults.get("rtol", 0.0))),
         )
         resolved.setdefault("comparison_tolerance", resolved["validation_tolerance"])
         resolved.setdefault("comparison_atol", resolved["validation_atol"])
@@ -457,7 +493,7 @@ class TemplateContextBuilder:
 
         # Activation clamp defaults depend on activation dtype
         act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
-        if act_dtype == 'FP32':
+        if act_dtype in {'FP32', 'FP16'}:
             activation_min = float(desc.get('activation_min', -1.0e30))
             activation_max = float(desc.get('activation_max', 1.0e30))
             in_zp = 0
@@ -483,8 +519,8 @@ class TemplateContextBuilder:
             'dilation_w': int(dil_w),
             'pad_h': int(pad_h),
             'pad_w': int(pad_w),
-            'activation_min': int(activation_min) if act_dtype != 'FP32' else activation_min,
-            'activation_max': int(activation_max) if act_dtype != 'FP32' else activation_max,
+            'activation_min': int(activation_min) if act_dtype not in {'FP32', 'FP16'} else activation_min,
+            'activation_max': int(activation_max) if act_dtype not in {'FP32', 'FP16'} else activation_max,
         }
     
     @staticmethod
@@ -557,7 +593,7 @@ class TemplateContextBuilder:
         
         # Activation clamp defaults depend on activation dtype
         act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
-        if act_dtype == 'FP32':
+        if act_dtype in {'FP32', 'FP16'}:
             activation_min = float(desc.get('activation_min', -1.0e30))
             activation_max = float(desc.get('activation_max', 1.0e30))
             in_zp = 0
@@ -589,8 +625,8 @@ class TemplateContextBuilder:
             'dilation_w': int(dil_w),
             'pad_h': int(pad_h),
             'pad_w': int(pad_w),
-            'activation_min': int(activation_min) if act_dtype != 'FP32' else activation_min,
-            'activation_max': int(activation_max) if act_dtype != 'FP32' else activation_max,
+            'activation_min': int(activation_min) if act_dtype not in {'FP32', 'FP16'} else activation_min,
+            'activation_max': int(activation_max) if act_dtype not in {'FP32', 'FP16'} else activation_max,
         }
 
     
@@ -801,7 +837,7 @@ class TemplateContextBuilder:
         
         # Activation clamp defaults depend on activation dtype
         act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
-        if act_dtype == 'FP32':
+        if act_dtype in {'FP32', 'FP16'}:
             activation_min = float(desc.get('activation_min', -1.0e30))
             activation_max = float(desc.get('activation_max', 1.0e30))
             in_zp = 0
@@ -828,8 +864,8 @@ class TemplateContextBuilder:
             'pad_w': int(pad_w),
             'pad_offset_h': int(pad_offset_h),
             'pad_offset_w': int(pad_offset_w),
-            'activation_min': int(activation_min) if act_dtype != 'FP32' else activation_min,
-            'activation_max': int(activation_max) if act_dtype != 'FP32' else activation_max,
+            'activation_min': int(activation_min) if act_dtype not in {'FP32', 'FP16'} else activation_min,
+            'activation_max': int(activation_max) if act_dtype not in {'FP32', 'FP16'} else activation_max,
         }
     
     @staticmethod
@@ -880,8 +916,9 @@ class TemplateContextBuilder:
                 output_ctx_size = input_c * filter_w * filter_h * filter_dims['n']
             else:
                 buf_x = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_w)) * output_c
+                buf_x_mve = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_h)) * output_c
                 buf_y = max(filter_h, stride_h)
-                ctx_size = buf_x * buf_y * 4  # int32 scratch
+                ctx_size = max(buf_x, buf_x_mve) * buf_y * 4  # int32 scratch
                 output_ctx_size = 0
         
         # Return maximum of ctx and output_ctx
@@ -910,7 +947,7 @@ class TemplateContextBuilder:
                 tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
             )
         ).upper()
-        if act_dtype == 'FP32':
+        if act_dtype in {'FP32', 'FP16'}:
             activation_min = float(desc.get('activation_min', -1.0e30))
             activation_max = float(desc.get('activation_max', 1.0e30))
         elif act_dtype == 'S16':
@@ -940,7 +977,7 @@ class TemplateContextBuilder:
         
         # For S16 fully connected, CMSIS-NN requires offsets to be 0
         # (S16 quantization typically uses symmetric quantization with zero_point=0)
-        if act_dtype == 'FP32':
+        if act_dtype in {'FP32', 'FP16'}:
             input_offset = 0
             filter_offset = 0
             output_offset = 0
@@ -1046,7 +1083,7 @@ class TemplateContextBuilder:
                 tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
             )
         ).upper()
-        if act_dtype == 'FP32':
+        if act_dtype in {'FP32', 'FP16'}:
             activation_min = float(desc.get('activation_min', -1.0e30))
             activation_max = float(desc.get('activation_max', 1.0e30))
         elif act_dtype == 'S16':

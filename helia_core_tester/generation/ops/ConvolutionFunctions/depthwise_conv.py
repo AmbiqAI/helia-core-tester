@@ -49,6 +49,10 @@ def vector_sum_s8(
 class OpDepthwiseConv(OperationBase):
     """DepthwiseConv operation."""
 
+    def _hint(self) -> Dict[str, Any]:
+        hint = self.desc.get("hint", {})
+        return hint if isinstance(hint, dict) else {}
+
     def needs_keras_model(self) -> bool:
         return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
     
@@ -171,7 +175,7 @@ class OpDepthwiseConv(OperationBase):
 
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
         
         if activation_dtype == 'S8':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
@@ -185,6 +189,11 @@ class OpDepthwiseConv(OperationBase):
             ]
             converter.inference_input_type = tf.int16
             converter.inference_output_type = tf.int16
+        elif activation_dtype == 'FP16':
+            converter.optimizations = []
+            converter.target_spec.supported_types = [tf.float16]
+        elif activation_dtype == 'FP32':
+            converter.optimizations = []
 
         
         def representative_data_gen():
@@ -205,11 +214,31 @@ class OpDepthwiseConv(OperationBase):
             f.write(tflite_model)
     
     def _select_cmsis_depthwise_conv_kernel(self) -> Dict[str, str]:
-        return resolve_depthwise_conv_kernel(
+        info = resolve_depthwise_conv_kernel(
             activation_dtype=self.desc.get("activation_dtype", "S8"),
             weight_dtype=self.desc.get("weight_dtype", "S8"),
             cpu=self.target_cpu,
         )
+        info.setdefault("kernel_needs_layout", info["input_c_type"] in {"float", "float16_t"})
+        info.setdefault("buffer_size_needs_layout", info["input_c_type"] in {"float", "float16_t"})
+
+        variant = str(self._hint().get("kernel_variant", "")).lower()
+        if not variant:
+            return info
+
+        if info["input_c_type"] not in {"float", "float16_t"}:
+            raise ValueError(f"DepthwiseConv kernel_variant hints are only supported for FP descriptors, got {variant}")
+
+        suffix = "f16" if info["input_c_type"] == "float16_t" else "f32"
+        if variant == "wrapper":
+            info["kernel_fn"] = f"arm_depthwise_conv_wrapper_{suffix}"
+            info["kernel_get_buffer_size_fn"] = f"arm_depthwise_conv_wrapper_{suffix}_get_buffer_size"
+            info["kernel_needs_layout"] = False
+            info["buffer_size_needs_layout"] = False
+        else:
+            raise ValueError(f"Unsupported DepthwiseConv kernel_variant hint: {variant}")
+
+        return info
     
     def generate_c_files(self, output_dir: Path) -> None:
         """
@@ -251,6 +280,8 @@ class OpDepthwiseConv(OperationBase):
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_depthwise_conv_kernel()
+        float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
+        float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
         weight_c_type = kernel_info.get("weight_c_type")
         if weight_c_type is None:
             raise ValueError(
@@ -497,7 +528,7 @@ class OpDepthwiseConv(OperationBase):
             except:
                 pass
             # #endregion
-            if kernel_info["input_c_type"] != "float" and weights.dtype != np.int8:
+            if not float_kernel and weights.dtype != np.int8:
                 weights = weights.astype(np.int8)
         else:
             # Fallback: descriptor is [H, W, I, M]
@@ -654,15 +685,14 @@ class OpDepthwiseConv(OperationBase):
             quant_params['input'],
             quant_params['output']
         )
-        float_kernel = kernel_info["input_c_type"] == "float"
         if float_kernel:
-            if weights is not None and weights.dtype != np.float32:
-                weights = weights.astype(np.float32)
+            if weights is not None and weights.dtype != float_dtype:
+                weights = weights.astype(float_dtype)
             has_biases = biases is not None and getattr(biases, "size", 0) > 0
-            if has_biases and biases.dtype != np.float32:
-                biases = biases.astype(np.float32)
+            if has_biases and biases.dtype != float_dtype:
+                biases = biases.astype(float_dtype)
 
-            input_data = self._sample_uniform(input_shape)
+            input_data = self._sample_uniform(input_shape, dtype=float_dtype)
 
             dw_out_tensor_idx = int(subgraph.operators[dw_op_index].outputs[0])
             if bts_op_index is not None:
@@ -670,19 +700,25 @@ class OpDepthwiseConv(OperationBase):
                 out_tensor_idx = int(bts_outs[0]) if bts_outs is not None and len(bts_outs) > 0 else dw_out_tensor_idx
             else:
                 out_tensor_idx = dw_out_tensor_idx
-            output_data = run_inference_litert_tensor(str(tflite_path), input_data.astype(np.float32), out_tensor_idx)
+            interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
+            output_data = run_inference_litert_tensor(
+                str(tflite_path),
+                input_data.astype(interpreter_input_dtype),
+                out_tensor_idx,
+            ).astype(float_dtype)
 
             weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
             biases_array_str = builder.format_array_as_c_literal(biases) if has_biases else ""
-            input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=np.float32))
-            expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=np.float32))
+            input_data_array_str = builder.format_array_as_c_literal(np.asarray(input_data, dtype=float_dtype))
+            expected_output_array_str = builder.format_array_as_c_literal(np.asarray(output_data, dtype=float_dtype))
 
+            element_size = np.dtype(float_dtype).itemsize
             buffer_size_max = max(
                 1024,
                 int(
                     (input_dims['n'] * input_dims['h'] * input_dims['w'] * input_dims['c']
                      + filter_dims['n'] * filter_dims['h'] * filter_dims['w'] * max(filter_dims['c'], 1)
-                     + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * 4
+                     + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * element_size
                 ),
             )
 
@@ -706,11 +742,18 @@ class OpDepthwiseConv(OperationBase):
                 'bias_dtype': kernel_info["bias_c_type"],
                 'kernel_fn': kernel_info["kernel_fn"],
                 'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+                'kernel_needs_layout': bool(kernel_info.get("kernel_needs_layout", False)),
+                'buffer_size_needs_layout': bool(kernel_info.get("buffer_size_needs_layout", False)),
                 'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
                 'call_style': kernel_info.get("call_style", "baseline"),
                 'buffer_size_max': buffer_size_max,
+                'force_no_scratch': bool(self._hint().get("force_no_scratch", False)),
                 'float_kernel': True,
-                'dw_conv_params_type': 'cmsis_nn_dw_conv_params_f32',
+                'dw_conv_params_type': (
+                    'cmsis_nn_dw_conv_params_f16'
+                    if kernel_info["input_c_type"] == "float16_t"
+                    else 'cmsis_nn_dw_conv_params_f32'
+                ),
                 'dw_activation_min_literal': builder.format_float_literal(dw_conv_params['activation_min']),
                 'dw_activation_max_literal': builder.format_float_literal(dw_conv_params['activation_max']),
             }

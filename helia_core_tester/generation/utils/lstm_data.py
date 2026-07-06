@@ -475,9 +475,15 @@ def generate_lstm_data(
                 return False
         return True
 
+    def _load_validated_unit_test_data() -> LstmGeneratedData:
+        data = _load_unit_test_data(dataset=dataset)
+        if not _validate_data(data):
+            raise ValueError(f"UnitTest fallback data for {dataset} does not match descriptor sizes")
+        return data
+
     if activation_dtype == "S8":
         if tf is None:
-            raise ImportError("tensorflow is required for LSTM generation")
+            return _load_validated_unit_test_data()
         input_dtype = "int8_t"
         output_dtype = "int8_t"
         bias_dtype = "int32_t"
@@ -502,21 +508,27 @@ def generate_lstm_data(
         model.layers[1 + time_major_offset].weights[2].assign(biases)
 
         tflite_path = work_dir / "lstm_s8.tflite"
-        _convert_keras_to_tflite(tflite_path, model, rng, shapes, input_dtype, bias_dtype, output_dtype)
+        try:
+            _convert_keras_to_tflite(tflite_path, model, rng, shapes, input_dtype, bias_dtype, output_dtype)
+        except Exception:
+            return _load_validated_unit_test_data()
         try:
             data = _generate_data_tflite(tflite_path, time_major)
         except Exception:
-            return _load_unit_test_data(dataset=dataset)
+            return _load_validated_unit_test_data()
         if not _validate_data(data):
-            return _load_unit_test_data(dataset=dataset)
+            return _load_validated_unit_test_data()
 
         # Generate input tensor and run model for output
         input_min, input_max = -128, 127
         input_tensor = rng.integers(input_min, input_max + 1, size=shapes["input_tensor"], dtype=np.int8)
         data.tensors["input_tensor"] = input_tensor
-        data.tensors["output"] = _invoke_tflite(tflite_path, input_tensor).astype(np.int8)
+        try:
+            data.tensors["output"] = _invoke_tflite(tflite_path, input_tensor).astype(np.int8)
+        except Exception:
+            return _load_validated_unit_test_data()
         if not _validate_data(data):
-            return _load_unit_test_data(dataset=dataset)
+            return _load_validated_unit_test_data()
 
         return data
 
@@ -562,7 +574,7 @@ def generate_lstm_data(
         try:
             _convert_json_to_tflite(json_template_fpath, json_output_fpath, data.tensors, params, schema_path)
         except Exception:
-            return _load_unit_test_data(dataset=dataset)
+            return _load_validated_unit_test_data()
 
         input_min, input_max = -32768, 32767
         input_tensor = rng.integers(input_min, input_max + 1, size=shapes["input_tensor"], dtype=np.int16)
@@ -570,9 +582,9 @@ def generate_lstm_data(
         try:
             data.tensors["output"] = _invoke_tflite(json_output_fpath.with_suffix(".tflite"), input_tensor).astype(np.int16)
         except Exception:
-            return _load_unit_test_data(dataset=dataset)
+            return _load_validated_unit_test_data()
         if not _validate_data(data):
-            return _load_unit_test_data(dataset=dataset)
+            return _load_validated_unit_test_data()
 
         return data
 

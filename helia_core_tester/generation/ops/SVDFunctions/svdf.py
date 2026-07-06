@@ -214,7 +214,12 @@ class OpSVDF(OperationBase):
             # TFLite-based SVDF not supported for C test generation
             return
 
-        if str(self.desc.get("activation_dtype", "S8")).upper() == "FP32":
+        activation_dtype = str(self.desc.get("activation_dtype", "S8")).upper()
+        if activation_dtype in {"FP32", "FP16"}:
+            float_dtype = np.float16 if activation_dtype == "FP16" else np.float32
+            data_dtype = "float16_t" if activation_dtype == "FP16" else "float"
+            kernel_fn = "arm_svdf_f16" if activation_dtype == "FP16" else "arm_svdf_f32"
+            svdf_params_type = "cmsis_nn_svdf_params_f16" if activation_dtype == "FP16" else "cmsis_nn_svdf_params_f32"
             hint = self.desc.get("hint", {})
             input_batches = int(hint.get("input_batches", 1))
             input_height = int(hint.get("input_height", 4))
@@ -231,11 +236,11 @@ class OpSVDF(OperationBase):
 
             rng_state = self.rng.__getstate__()
             self.rng = np.random.default_rng(self.seed)
-            input_sequence = self.rng.uniform(-1.0, 1.0, size=(sequence_steps, input_batches, input_height)).astype(np.float32)
-            state_init = self.rng.uniform(-0.5, 0.5, size=(input_batches, feature_batches, time_batches)).astype(np.float32)
-            weights_feature = self.rng.uniform(-1.0, 1.0, size=(feature_batches, input_height)).astype(np.float32)
-            weights_time = self.rng.uniform(-1.0, 1.0, size=(feature_batches, time_batches)).astype(np.float32)
-            bias = self.rng.uniform(-0.5, 0.5, size=(unit_count,)).astype(np.float32) if use_bias else None
+            input_sequence = self.rng.uniform(-1.0, 1.0, size=(sequence_steps, input_batches, input_height)).astype(float_dtype)
+            state_init = self.rng.uniform(-0.5, 0.5, size=(input_batches, feature_batches, time_batches)).astype(float_dtype)
+            weights_feature = self.rng.uniform(-1.0, 1.0, size=(feature_batches, input_height)).astype(float_dtype)
+            weights_time = self.rng.uniform(-1.0, 1.0, size=(feature_batches, time_batches)).astype(float_dtype)
+            bias = self.rng.uniform(-0.5, 0.5, size=(unit_count,)).astype(float_dtype) if use_bias else None
             self.rng.__setstate__(rng_state)
 
             params = {
@@ -262,7 +267,9 @@ class OpSVDF(OperationBase):
             context = {
                 "name": name,
                 "prefix": name,
-                "kernel_fn": "arm_svdf_f32",
+                "kernel_fn": kernel_fn,
+                "data_dtype": data_dtype,
+                "svdf_params_type": svdf_params_type,
                 "input_batches": input_batches,
                 "input_height": input_height,
                 "feature_batches": feature_batches,
@@ -280,7 +287,7 @@ class OpSVDF(OperationBase):
                 "weights_feature_array": builder.format_array_as_c_literal(weights_feature),
                 "weights_time_array": builder.format_array_as_c_literal(weights_time),
                 "state_init_array": builder.format_array_as_c_literal(state_init),
-                "output_ref_array": builder.format_array_as_c_literal(expected_output.astype(np.float32)),
+                "output_ref_array": builder.format_array_as_c_literal(expected_output.astype(float_dtype)),
                 "bias_array": builder.format_array_as_c_literal(bias) if bias is not None else "",
                 "input_activation_min_literal": builder.format_float_literal(input_activation_min),
                 "input_activation_max_literal": builder.format_float_literal(input_activation_max),

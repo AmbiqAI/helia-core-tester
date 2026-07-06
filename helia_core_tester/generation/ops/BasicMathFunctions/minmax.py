@@ -160,6 +160,11 @@ class OpMinMax(BinaryBasicMathBase):
             ]
             converter.inference_input_type = tf.int16
             converter.inference_output_type = tf.int16
+        elif activation_dtype == 'FP32':
+            converter.optimizations = []
+        elif activation_dtype == 'FP16':
+            converter.optimizations = []
+            converter.target_spec.supported_types = [tf.float16]
         else:
             raise ValueError(f"Unsupported activation_dtype: {activation_dtype}")
 
@@ -213,7 +218,8 @@ class OpMinMax(BinaryBasicMathBase):
                     x1, x2 = _gen_pair()
                     yield [x1, x2]
 
-        converter.representative_dataset = representative_data_gen
+        if activation_dtype not in {'FP32', 'FP16'}:
+            converter.representative_dataset = representative_data_gen
 
         # Convert & save
         tflite_model = converter.convert()
@@ -226,7 +232,7 @@ class OpMinMax(BinaryBasicMathBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input", default=self.desc.get('activation_dtype', 'S8'))
         op_name = self.desc.get('operator', 'Maximum')
         
         if activation_dtype == 'S8':
@@ -264,6 +270,18 @@ class OpMinMax(BinaryBasicMathBase):
                 'kernel_fn': kernel_fn,
                 'input_c_type': 'float',
                 'output_c_type': 'float'
+            }
+        elif activation_dtype == 'FP16':
+            if op_name == 'Minimum':
+                kernel_fn = 'arm_minimum_f16'
+            elif op_name == 'Maximum':
+                kernel_fn = 'arm_maximum_f16'
+            else:
+                raise ValueError(f"Unsupported operator: {op_name}")
+            return {
+                'kernel_fn': kernel_fn,
+                'input_c_type': 'float16_t',
+                'output_c_type': 'float16_t'
             }
         else:
             raise NotImplementedError(f"Unsupported MinMax dtype: {activation_dtype}")
@@ -311,16 +329,15 @@ class OpMinMax(BinaryBasicMathBase):
         input1_data = self._sample_uniform(input1_shape)
         input2_data = self._sample_uniform(input2_shape)
 
-        if kernel_info["input_c_type"] == "float":
-            input1_q = input1_data.astype(np.float32)
-            input2_q = input2_data.astype(np.float32)
-            interpreter = self.load_litert_interpreter(str(tflite_path))
-            input_details = interpreter.get_input_details()
-            output_details = interpreter.get_output_details()
-            interpreter.set_tensor(input_details[0]['index'], input1_q)
-            interpreter.set_tensor(input_details[1]['index'], input2_q)
-            interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]['index']), dtype=np.float32)
+        float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
+        if float_kernel:
+            float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+            input1_q = input1_data.astype(float_dtype)
+            input2_q = input2_data.astype(float_dtype)
+            if op_name == "Maximum":
+                output_data = np.maximum(input1_q, input2_q).astype(float_dtype)
+            else:
+                output_data = np.minimum(input1_q, input2_q).astype(float_dtype)
         elif kernel_info["input_c_type"] == "int8_t":
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
@@ -341,7 +358,7 @@ class OpMinMax(BinaryBasicMathBase):
             input2_zp = self._quant_param_scalar(input2_quant, "zero_point", 0)
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        if kernel_info["input_c_type"] != "float":
+        if not float_kernel:
             input1_q = np.round(input1_data / float(input1_scale) + float(input1_zp)).astype(np.int32)
             input1_q = np.clip(input1_q, qmin, qmax).astype(np_in_dtype)
 
