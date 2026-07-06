@@ -47,8 +47,9 @@ int32_t {{ prefix }}_{{ name }}_run(
         &{{ name }}_conv_params,
         &{{ name }}_input_dims,
         &{{ name }}_filter_dims,
-        &{{ name }}_output_dims,
+        &{{ name }}_output_dims{% if buffer_size_needs_layout %},
         {{ kernel_layout }}
+        {% endif %}
     );
     {% else %}
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
@@ -84,8 +85,9 @@ int32_t {{ prefix }}_{{ name }}_run(
         NULL,
         {% endif %}
         &{{ name }}_output_dims,
-        output,
+        output{% if kernel_needs_layout %},
         {{ kernel_layout }}
+        {% endif %}
     );
     {% elif kernel_fn == 'arm_convolve_wrapper_s8' %}
     // Initialize weight sum context and buffer

@@ -57,6 +57,12 @@ class PoolFamilyBase(OperationBase):
             Dictionary with kernel function name, C types, and buffer size function
         """
         activation_dtype = self.tensor_dtype("input").upper()
+        hint = self.desc.get("hint", {})
+        hint = hint if isinstance(hint, dict) else {}
+        variant = str(hint.get("kernel_variant", "")).lower()
+        use_nhwc_alias = variant == "nhwc_alias"
+        if variant and not use_nhwc_alias:
+            raise ValueError(f"Unsupported {self.OPERATOR_NAME} kernel_variant hint: {variant}")
         
         if self.POOL_KIND == 'MAX':
             if activation_dtype == 'S8':
@@ -75,14 +81,14 @@ class PoolFamilyBase(OperationBase):
                 }
             elif activation_dtype == 'FP32':
                 return {
-                    'kernel_fn': 'arm_max_pool_f32',
+                    'kernel_fn': 'arm_max_pool_nhwc_f32' if use_nhwc_alias else 'arm_max_pool_f32',
                     'kernel_get_buffer_size_fn': None,
                     'input_c_type': 'float',
                     'output_c_type': 'float',
                 }
             elif activation_dtype == 'FP16':
                 return {
-                    'kernel_fn': 'arm_max_pool_f16',
+                    'kernel_fn': 'arm_max_pool_nhwc_f16' if use_nhwc_alias else 'arm_max_pool_f16',
                     'kernel_get_buffer_size_fn': None,
                     'input_c_type': 'float16_t',
                     'output_c_type': 'float16_t',
@@ -106,14 +112,14 @@ class PoolFamilyBase(OperationBase):
                 }
             elif activation_dtype == 'FP32':
                 return {
-                    'kernel_fn': 'arm_avg_pool_f32',
+                    'kernel_fn': 'arm_avg_pool_nhwc_f32' if use_nhwc_alias else 'arm_avg_pool_f32',
                     'kernel_get_buffer_size_fn': None,
                     'input_c_type': 'float',
                     'output_c_type': 'float',
                 }
             elif activation_dtype == 'FP16':
                 return {
-                    'kernel_fn': 'arm_avg_pool_f16',
+                    'kernel_fn': 'arm_avg_pool_nhwc_f16' if use_nhwc_alias else 'arm_avg_pool_f16',
                     'kernel_get_buffer_size_fn': None,
                     'input_c_type': 'float16_t',
                     'output_c_type': 'float16_t',
@@ -241,6 +247,9 @@ class PoolFamilyBase(OperationBase):
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+            'requires_kernel_prototype': kernel_info["kernel_fn"].startswith(
+                ("arm_avg_pool_nhwc_", "arm_max_pool_nhwc_")
+            ),
             'buffer_size_max': buffer_size_max,
             'pooling_type': pooling_type,
             'pool_params_type': (

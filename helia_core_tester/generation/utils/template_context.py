@@ -916,8 +916,9 @@ class TemplateContextBuilder:
                 output_ctx_size = input_c * filter_w * filter_h * filter_dims['n']
             else:
                 buf_x = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_w)) * output_c
+                buf_x_mve = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_h)) * output_c
                 buf_y = max(filter_h, stride_h)
-                ctx_size = buf_x * buf_y * 4  # int32 scratch
+                ctx_size = max(buf_x, buf_x_mve) * buf_y * 4  # int32 scratch
                 output_ctx_size = 0
         
         # Return maximum of ctx and output_ctx

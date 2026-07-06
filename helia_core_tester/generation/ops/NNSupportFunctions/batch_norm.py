@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import numpy as np
-import tensorflow as tf
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
 
@@ -11,17 +10,17 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 class OpBatchNorm(OperationBase):
     """Generate float batch normalization parity tests."""
 
-    def build_keras_model(self) -> tf.keras.Model:
-        input_shape = tuple(self.desc["input_shape"])
-        channels = int(input_shape[-1])
+    def allow_no_tflite(self) -> bool:
+        return True
 
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name="input")
-        scale = np.linspace(0.5, 1.5, num=channels, dtype=np.float32)
-        bias = np.linspace(-0.25, 0.25, num=channels, dtype=np.float32)
-        scale_tensor = tf.constant(scale.reshape((1, 1, 1, channels)))
-        bias_tensor = tf.constant(bias.reshape((1, 1, 1, channels)))
-        outputs = tf.keras.layers.Lambda(lambda x: x * scale_tensor + bias_tensor)(inputs)
-        return tf.keras.Model(inputs=inputs, outputs=outputs)
+    def needs_keras_model(self) -> bool:
+        return False
+
+    def build_keras_model(self):
+        raise NotImplementedError("BatchNorm uses direct CMSIS-NN generated tests.")
+
+    def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
+        raise NotImplementedError("BatchNorm does not produce a TFLite model.")
 
     def generate_c_files(self, output_dir: Path) -> None:
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder

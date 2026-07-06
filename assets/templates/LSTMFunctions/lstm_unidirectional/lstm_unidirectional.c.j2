@@ -225,10 +225,11 @@ static int32_t run_lstm(void)
                                           gate_cell,
                                           gate_output };
 
-    cmsis_nn_lstm_context buffers;
+    cmsis_nn_lstm_context buffers = {0};
     buffers.temp1 = buffer1;
     buffers.temp2 = buffer2;
     buffers.cell_state = buffer3;
+    buffers.hidden_state = NULL;
 
 {% if dtype == "s8" %}
     arm_cmsis_nn_status result = arm_lstm_unidirectional_s8({{ data_prefix }}input_tensor, {{ name }}_output, &params, &buffers);

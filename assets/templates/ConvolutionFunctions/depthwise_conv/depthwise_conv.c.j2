@@ -36,8 +36,9 @@ int32_t {{ prefix }}_{{ name }}_run(
         &{{ name }}_dw_conv_params,
         &{{ name }}_input_dims,
         &{{ name }}_filter_dims,
-        &{{ name }}_output_dims,
+        &{{ name }}_output_dims{% if buffer_size_needs_layout %},
         {{ kernel_layout }}
+        {% endif %}
     );
     {% else %}
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
@@ -53,8 +54,13 @@ int32_t {{ prefix }}_{{ name }}_run(
     }
 
     // Initialize context buffer
+    {% if force_no_scratch | default(false) %}
+    {{ name }}_ctx.buf = NULL;
+    {{ name }}_ctx.size = 0;
+    {% else %}
     {{ name }}_ctx.buf = {{ name }}_buffer;
     {{ name }}_ctx.size = required_buffer_size;
+    {% endif %}
 
     {% if kernel_fn == 'arm_depthwise_conv_wrapper_s8' and has_weight_sum %}
     // Compute weight sums at runtime when supported; fallback to precomputed values.
@@ -97,8 +103,9 @@ int32_t {{ prefix }}_{{ name }}_run(
         NULL,
         {% endif %}
         &{{ name }}_output_dims,
-        output,
+        output{% if kernel_needs_layout %},
         {{ kernel_layout }}
+        {% endif %}
     );
     {% else %}
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(

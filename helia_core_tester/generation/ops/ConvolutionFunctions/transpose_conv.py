@@ -105,10 +105,15 @@ class OpTransposeConv(OperationBase):
         """
         activation_dtype = self.desc.get('activation_dtype', 'S8').upper()
         weight_dtype = self.desc.get('weight_dtype', 'S8').upper()
+        hint = self.desc.get("hint", {})
+        hint = hint if isinstance(hint, dict) else {}
+        variant = str(hint.get("kernel_variant", "")).lower()
+        if variant and variant != "wrapper":
+            raise ValueError(f"Unsupported TransposeConv kernel_variant hint: {variant}")
         
         if activation_dtype == 'FP32' and weight_dtype == 'FP32':
             return {
-                'kernel_fn': 'arm_transpose_conv_f32',
+                'kernel_fn': 'arm_transpose_conv_wrapper_f32' if variant == "wrapper" else 'arm_transpose_conv_f32',
                 'kernel_get_buffer_size_fn': 'arm_transpose_conv_f32_get_buffer_size',
                 'kernel_get_reverse_buffer_size_fn': 'arm_transpose_conv_f32_get_reverse_conv_buffer_size',
                 'input_c_type': 'float',
@@ -119,7 +124,7 @@ class OpTransposeConv(OperationBase):
             }
         if activation_dtype == 'FP16' and weight_dtype == 'FP16':
             return {
-                'kernel_fn': 'arm_transpose_conv_f16',
+                'kernel_fn': 'arm_transpose_conv_wrapper_f16' if variant == "wrapper" else 'arm_transpose_conv_f16',
                 'kernel_get_buffer_size_fn': 'arm_transpose_conv_f16_get_buffer_size',
                 'kernel_get_reverse_buffer_size_fn': 'arm_transpose_conv_f16_get_reverse_conv_buffer_size',
                 'input_c_type': 'float16_t',

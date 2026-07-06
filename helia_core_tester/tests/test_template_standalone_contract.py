@@ -775,6 +775,8 @@ def test_lstm_and_svdf_keep_specialized_shared_validation_contracts() -> None:
 
     assert '{{ validation_report_limit | default(8) }}' in lstm
     assert "HELIA_VALIDATE_OUTPUTS(" in lstm
+    assert "cmsis_nn_lstm_context buffers = {0};" in lstm
+    assert "buffers.hidden_state = NULL;" in lstm
 
     assert '{{ validation_report_limit | default(8) }}' in svdf
     assert "HELIA_VALIDATE_SCALAR_EQ_INT(" in svdf

@@ -49,6 +49,10 @@ def vector_sum_s8(
 class OpDepthwiseConv(OperationBase):
     """DepthwiseConv operation."""
 
+    def _hint(self) -> Dict[str, Any]:
+        hint = self.desc.get("hint", {})
+        return hint if isinstance(hint, dict) else {}
+
     def needs_keras_model(self) -> bool:
         return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
     
@@ -210,11 +214,31 @@ class OpDepthwiseConv(OperationBase):
             f.write(tflite_model)
     
     def _select_cmsis_depthwise_conv_kernel(self) -> Dict[str, str]:
-        return resolve_depthwise_conv_kernel(
+        info = resolve_depthwise_conv_kernel(
             activation_dtype=self.desc.get("activation_dtype", "S8"),
             weight_dtype=self.desc.get("weight_dtype", "S8"),
             cpu=self.target_cpu,
         )
+        info.setdefault("kernel_needs_layout", info["input_c_type"] in {"float", "float16_t"})
+        info.setdefault("buffer_size_needs_layout", info["input_c_type"] in {"float", "float16_t"})
+
+        variant = str(self._hint().get("kernel_variant", "")).lower()
+        if not variant:
+            return info
+
+        if info["input_c_type"] not in {"float", "float16_t"}:
+            raise ValueError(f"DepthwiseConv kernel_variant hints are only supported for FP descriptors, got {variant}")
+
+        suffix = "f16" if info["input_c_type"] == "float16_t" else "f32"
+        if variant == "wrapper":
+            info["kernel_fn"] = f"arm_depthwise_conv_wrapper_{suffix}"
+            info["kernel_get_buffer_size_fn"] = f"arm_depthwise_conv_wrapper_{suffix}_get_buffer_size"
+            info["kernel_needs_layout"] = False
+            info["buffer_size_needs_layout"] = False
+        else:
+            raise ValueError(f"Unsupported DepthwiseConv kernel_variant hint: {variant}")
+
+        return info
     
     def generate_c_files(self, output_dir: Path) -> None:
         """
@@ -718,9 +742,12 @@ class OpDepthwiseConv(OperationBase):
                 'bias_dtype': kernel_info["bias_c_type"],
                 'kernel_fn': kernel_info["kernel_fn"],
                 'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
+                'kernel_needs_layout': bool(kernel_info.get("kernel_needs_layout", False)),
+                'buffer_size_needs_layout': bool(kernel_info.get("buffer_size_needs_layout", False)),
                 'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
                 'call_style': kernel_info.get("call_style", "baseline"),
                 'buffer_size_max': buffer_size_max,
+                'force_no_scratch': bool(self._hint().get("force_no_scratch", False)),
                 'float_kernel': True,
                 'dw_conv_params_type': (
                     'cmsis_nn_dw_conv_params_f16'

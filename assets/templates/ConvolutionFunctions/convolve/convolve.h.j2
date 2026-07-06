@@ -30,7 +30,7 @@ static const {{ conv_params_type | default("cmsis_nn_conv_params") }} {{ name }}
     .dilation = {.w = {{ conv_params.dilation_w }}, .h = {{ conv_params.dilation_h }}},
     .padding = {.w = {{ conv_params.pad_w }}, .h = {{ conv_params.pad_h }}},
     .activation = {.min = {{ conv_activation_min_literal }}, .max = {{ conv_activation_max_literal }}},
-    .weight_format = ARM_NN_WEIGHT_FORMAT_STANDARD
+    .weight_format = {{ weight_format_macro | default("ARM_NN_WEIGHT_FORMAT_STANDARD") }}
 {% else %}
     .input_offset = {{ conv_params.input_offset }},
     .output_offset = {{ conv_params.output_offset }},

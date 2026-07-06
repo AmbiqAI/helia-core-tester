@@ -2,6 +2,16 @@
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
 
+{% if requires_kernel_prototype | default(false) %}
+arm_cmsis_nn_status {{ kernel_fn }}(const cmsis_nn_context *ctx,
+                                    const {{ pool_params_type }} *pool_params,
+                                    const cmsis_nn_dims *input_dims,
+                                    const {{ input_dtype }} *src,
+                                    const cmsis_nn_dims *filter_dims,
+                                    const cmsis_nn_dims *output_dims,
+                                    {{ output_dtype }} *dst);
+
+{% endif %}
 // Context for buffer allocation
 static cmsis_nn_context {{ name }}_ctx;
 

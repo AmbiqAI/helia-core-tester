@@ -1,0 +1,21 @@
+operator: Quantize
+name: quantize_float_f32_s8_vec17
+suite: float
+activation_dtype: S8
+tensor_dtypes:
+  input: FP32
+  output: S8
+input_shape: [1, 17]
+hint:
+  call_style: per_tensor
+---
+operator: Quantize
+name: quantize_float_f32_s16_vec33
+suite: float
+activation_dtype: S16
+tensor_dtypes:
+  input: FP32
+  output: S16
+input_shape: [1, 33]
+hint:
+  call_style: per_tensor

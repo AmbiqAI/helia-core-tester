@@ -94,11 +94,21 @@ class OpAdd(BinaryBasicMathBase):
                 'float_kernel': True,
             }
         elif activation_dtype == 'FP16':
+            hint = self.desc.get("hint", {})
+            if str(hint.get("kernel_variant", "")).lower() == "legacy_fp16":
+                return {
+                    'kernel_fn': 'arm_elementwise_add_fp16',
+                    'input_c_type': 'float16_t',
+                    'output_c_type': 'float16_t',
+                    'float_kernel': True,
+                    'legacy_fp16_kernel': True,
+                }
             return {
                 'kernel_fn': 'arm_elementwise_add_f16',
                 'input_c_type': 'float16_t',
                 'output_c_type': 'float16_t',
                 'float_kernel': True,
+                'legacy_fp16_kernel': False,
             }
         else:
             raise NotImplementedError(f"Unsupported Add dtype: {activation_dtype}")
@@ -252,6 +262,7 @@ class OpAdd(BinaryBasicMathBase):
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
             'float_kernel': kernel_info["float_kernel"],
+            'legacy_fp16_kernel': kernel_info.get("legacy_fp16_kernel", False),
         }
         if kernel_info["float_kernel"]:
             context["out_activation_min_literal"] = activation_min_literal
