@@ -4,7 +4,9 @@ FVP test execution step.
 
 import subprocess
 import sys
+from typing import Optional
 
+from helia_core_tester.core.runtime_env import RuntimeEnvContext, bootstrap_runtime_env, build_locked_fvp_flags
 from helia_core_tester.core.steps.base import StepBase, StepPlan, StepResult, StepStatus
 from helia_core_tester.core.errors import FVPRunError
 from helia_core_tester.core.logging import get_logger
@@ -14,9 +16,21 @@ from helia_core_tester.core.discovery import find_fvp_script_path
 class RunStep(StepBase):
     """Step for running tests on FVP."""
     
-    def __init__(self, config):
+    def __init__(self, config, runtime_env: Optional[RuntimeEnvContext] = None):
         super().__init__(config)
         self.logger = get_logger(__name__)
+        self.runtime_env = runtime_env
+
+    def _ensure_runtime_env(self) -> RuntimeEnvContext:
+        if self.runtime_env is None:
+            self.runtime_env = bootstrap_runtime_env(
+                downloads_dir=self.config.downloads_dir,
+                ensure_setup=True,
+            )
+        return self.runtime_env
+
+    def _locked_fvp_flags(self) -> list[str]:
+        return build_locked_fvp_flags(self.runtime_env, self.config.downloads_dir)
     
     @property
     def name(self) -> str:
@@ -58,6 +72,7 @@ class RunStep(StepBase):
                     sys.executable,
                     "-m",
                     "helia_core_tester.fvp.build_and_run_fvp",
+                    *self._locked_fvp_flags(),
                     "--cpu",
                     cpu_csv,
                     "--suite",
@@ -66,6 +81,8 @@ class RunStep(StepBase):
                 ]
                 if getattr(self.config, "coverage", False):
                     cmd.append("--coverage")
+                    if suite == "float" and getattr(self.config, "coverage_mve_float", False):
+                        cmd.extend(["--coverage-report-suite", "float-mve"])
 
                 if self.config.timeout > 0:
                     cmd.extend(["--timeout-run", str(self.config.timeout)])
@@ -93,6 +110,8 @@ class RunStep(StepBase):
         commands = self._run_commands()
         
         try:
+            runtime_env = self._ensure_runtime_env()
+            commands = self._run_commands()
             for cmd in commands:
                 if self.config.verbosity >= 2:
                     self.logger.info(f"Running command: {' '.join(cmd)}")
@@ -105,6 +124,7 @@ class RunStep(StepBase):
                     check=True,
                     text=True,
                     bufsize=1,
+                    env=runtime_env.child_env,
                 )
             
             if self.config.verbosity >= 2:

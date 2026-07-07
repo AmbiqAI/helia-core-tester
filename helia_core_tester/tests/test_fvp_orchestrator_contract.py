@@ -60,6 +60,7 @@ def test_fvp_parser_option_surface_unchanged() -> None:
         "-C", "--cmsis5-path",
         "-D", "--cmake-def",
         "--coverage",
+        "--coverage-report-suite",
         "--downloads-dir",
         "--source-dir",
         "--generator",

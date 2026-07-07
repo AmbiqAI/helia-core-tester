@@ -528,7 +528,13 @@ def _write_manifest_and_cmake(
         rel_root = generated_tests_dir.relative_to(repo_root)
     except ValueError:
         rel_root = generated_tests_dir
-    test_dirs = sorted({str(Path(rel_root) / Path(str(e["relative_test_dir"]))) for e in entries})
+    runnable_entries = [entry for entry in entries if entry.get("c_sources")]
+    test_dirs = sorted(
+        {
+            str(Path(rel_root) / Path(str(entry["relative_test_dir"])))
+            for entry in runnable_entries
+        }
+    )
     cmake_lines = ["set(GENERATED_TEST_DIRS"]
     for d in test_dirs:
         cmake_lines.append(f"  \"{d}\"")

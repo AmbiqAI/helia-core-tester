@@ -25,6 +25,7 @@ def build_arg_parser(default_downloads_dir: Path, default_source_dir: Path) -> a
     ap.add_argument("-C", "--cmsis5-path", type=Path, help="Override CMSIS_5 path")
     ap.add_argument("-D", "--cmake-def", action="append", default=[], help="Extra -DVAR=VAL for CMake (repeatable)")
     ap.add_argument("--coverage", action="store_true", help="Enable ns-cmsis-nn coverage instrumentation and gcda merge")
+    ap.add_argument("--coverage-report-suite", choices=["int", "float", "float-mve"], help="Override coverage report suite label")
     ap.add_argument("--downloads-dir", type=Path, default=default_downloads_dir, help="Downloads directory (default: ./artifacts/downloads)")
     ap.add_argument("--source-dir", type=Path, default=default_source_dir, help="CMake source dir (UnitTest root)")
     ap.add_argument("--generator", help="CMake generator (e.g. Ninja)")

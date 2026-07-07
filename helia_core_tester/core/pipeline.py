@@ -8,6 +8,7 @@ import time
 
 from helia_core_tester.core.config import Config
 from helia_core_tester.core.logging import get_logger
+from helia_core_tester.core.runtime_env import RuntimeEnvContext, bootstrap_runtime_env
 from helia_core_tester.core.steps import (
     GenerateStep,
     BuildStep,
@@ -46,6 +47,15 @@ class FullTestPipeline:
         """
         self.config = config
         self.logger = get_logger(__name__)
+        self._runtime_env: RuntimeEnvContext | None = None
+
+    def _ensure_runtime_env(self) -> RuntimeEnvContext:
+        if self._runtime_env is None:
+            self._runtime_env = bootstrap_runtime_env(
+                downloads_dir=self.config.downloads_dir,
+                ensure_setup=True,
+            )
+        return self._runtime_env
     
     def run(self) -> bool:
         """
@@ -89,8 +99,9 @@ class FullTestPipeline:
                 if self.config.verbosity >= 1:
                     self.logger.info("Skipping FVP build")
             elif overall_success:
+                runtime_env = self._ensure_runtime_env()
                 success, stop = _run_step(
-                    BuildStep(self.config), self.logger,
+                    BuildStep(self.config, runtime_env=runtime_env), self.logger,
                     self.config.verbosity, self.config.fail_fast
                 )
                 overall_success = success
@@ -101,8 +112,9 @@ class FullTestPipeline:
                 if self.config.verbosity >= 1:
                     self.logger.info("Skipping FVP test execution")
             elif overall_success:
+                runtime_env = self._ensure_runtime_env()
                 success, stop = _run_step(
-                    RunStep(self.config), self.logger,
+                    RunStep(self.config, runtime_env=runtime_env), self.logger,
                     self.config.verbosity, self.config.fail_fast
                 )
                 overall_success = success

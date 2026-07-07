@@ -198,6 +198,47 @@ def test_nn_activation_float_fp16_tanh_reference_matches_scalar_fallback(monkeyp
     np.testing.assert_array_equal(actual, expected)
 
 
+def test_nn_activation_float_fp16_tanh_reference_mve_matches_helium_lut(monkeypatch) -> None:
+    module = _load_nn_activation_float_module(monkeypatch)
+
+    # Inputs paired with the exact float16 output of the Cortex-M55 MVE tanh kernel
+    # (arm_nn_vtanh_lut_direct_mve_f16), captured from FVP.
+    inputs = np.array(
+        [
+            0.708008,
+            0.642578,
+            -0.375000,
+            0.572266,
+            -0.504883,
+            0.793945,
+            -0.447998,
+            0.749512,
+            -0.481689,
+        ],
+        dtype=np.float16,
+    )
+    expected = np.array(
+        [
+            0.609375,
+            0.566895,
+            -0.358398,
+            0.517090,
+            -0.466064,
+            0.660645,
+            -0.420410,
+            0.634766,
+            -0.447510,
+        ],
+        dtype=np.float16,
+    )
+
+    actual = module._activation_reference(
+        inputs, "ARM_NN_FLT_ACT_TANH", 0.0, "FP16", use_mve_tanh=True
+    )
+
+    np.testing.assert_array_equal(actual, expected)
+
+
 def test_nn_activation_float_fp32_tanh_reference_uses_numpy_tanh(monkeypatch) -> None:
     module = _load_nn_activation_float_module(monkeypatch)
     inputs = np.array([-0.75, -0.1, 0.0, 0.5, 0.8], dtype=np.float32)
