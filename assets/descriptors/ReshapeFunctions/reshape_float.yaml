@@ -89,3 +89,21 @@ tensor_dtypes:
   output: FP16
 input_shape: [1, 2, 3, 4]
 target_shape: [1, 2, 3, 4]
+---
+operator: Reshape
+name: reshape_float_zero_size_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [0]
+target_shape: [0]
+---
+operator: Reshape
+name: reshape_float_zero_size_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [0]
+target_shape: [0]
