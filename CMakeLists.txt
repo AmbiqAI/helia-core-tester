@@ -10,6 +10,7 @@ set(CMSIS_NN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "ns-cmsis-nn re
 set(FVP_CORSTONE_300_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Corstone-300" CACHE PATH "FVP startup/retarget files")
 set(GENERATED_TESTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/generated_tests" CACHE PATH "Path to generated tests")
 option(ENABLE_COVERAGE "Enable GCC freestanding coverage for ns-cmsis-nn" OFF)
+option(ENABLE_COVERAGE_MVE_FLOAT "Enable float MVE paths during coverage builds" OFF)
 
 function(_strip_all_optimizations)
   foreach(lang C CXX ASM)
@@ -80,10 +81,41 @@ if(ENABLE_COVERAGE)
   if(NOT TARGET cmsis-nn)
     message(FATAL_ERROR "ENABLE_COVERAGE requested but target cmsis-nn was not created")
   endif()
+  if(ENABLE_COVERAGE_MVE_FLOAT AND NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "cortex-m55")
+    message(FATAL_ERROR "ENABLE_COVERAGE_MVE_FLOAT is only supported for cortex-m55")
+  endif()
   # Instrument ns-cmsis-nn only; keep harness sources uninstrumented.
   target_compile_options(cmsis-nn PRIVATE --coverage -fprofile-info-section -O0 -g)
-   # Avoid inline MVE asm paths that can fail register allocation under gcov instrumentation.
-   target_compile_definitions(cmsis-nn PRIVATE ARM_MATH_AUTOVECTORIZE)
+  if(NOT ENABLE_COVERAGE_MVE_FLOAT)
+    # Avoid inline MVE asm paths that can fail register allocation under gcov instrumentation.
+    target_compile_definitions(cmsis-nn PRIVATE ARM_MATH_AUTOVECTORIZE)
+  else()
+    # Float MVE coverage requested. ARM_MATH_AUTOVECTORIZE keeps ARM_MATH_MVEI defined
+    # (integer inline asm with a C fallback) but suppresses ARM_MATH_MVEF, so a
+    # target-wide define would erase the float MVE paths we want to measure. Scope the
+    # define to the non-float (integer) sources only: their register-heavy inline asm
+    # falls back to C (avoiding gcov register-allocation failures), while the float
+    # sources keep ARM_MATH_MVEF and compile their real MVE paths for coverage.
+    if(CMAKE_VERSION VERSION_LESS "3.18")
+      message(FATAL_ERROR
+        "ENABLE_COVERAGE_MVE_FLOAT requires CMake >= 3.18 "
+        "(set_source_files_properties TARGET_DIRECTORY); found ${CMAKE_VERSION}")
+    endif()
+    get_target_property(_nn_srcs cmsis-nn SOURCES)
+    set(_nn_int_srcs "")
+    foreach(_s IN LISTS _nn_srcs)
+      # Classify by filename suffix; anchor to end so float-output integer-input
+      # files (e.g. arm_dequantize_s8_f32.c) are correctly treated as float.
+      if(NOT _s MATCHES "_(f16|f32|fp16|flt)\\.c$")
+        list(APPEND _nn_int_srcs "${_s}")
+      endif()
+    endforeach()
+    if(_nn_int_srcs)
+      set_source_files_properties(${_nn_int_srcs}
+        TARGET_DIRECTORY cmsis-nn
+        PROPERTIES COMPILE_DEFINITIONS ARM_MATH_AUTOVECTORIZE)
+    endif()
+  endif()
 endif()
 
 # ---------- FVP retarget + startup ----------

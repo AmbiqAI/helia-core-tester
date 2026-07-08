@@ -113,3 +113,25 @@ strides:
 - 1
 - 2
 padding: VALID
+---
+operator: AvgPool
+name: avg_pool_float_1d_k2s2_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 1, 8, 3]
+pool_size: [1, 2]
+strides: [1, 2]
+padding: VALID
+---
+operator: AvgPool
+name: avg_pool_float_1d_k2s2_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 1, 8, 3]
+pool_size: [1, 2]
+strides: [1, 2]
+padding: VALID

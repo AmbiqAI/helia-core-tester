@@ -151,6 +151,7 @@ def build(
     opt: str = typer.Option("-Ofast", help="Optimization level"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn code coverage instrumentation"),
+    coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Enable Cortex-M55 float MVE paths during coverage builds"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision selection for float suite: f16, f32, or both"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
@@ -168,6 +169,7 @@ def build(
         optimization=opt,
         jobs=jobs,
         coverage=coverage,
+        coverage_mve_float=coverage_mve_float,
         suite=suite,
         float_precision=float_precision,
     )
@@ -189,6 +191,7 @@ def run(
     run_jobs: int = typer.Option(1, "--run-jobs", help="Parallel FVP run jobs (0 = auto/use all host cores)"),
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Do not stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Collect and merge ns-cmsis-nn gcov streams"),
+    coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Write MVE float coverage to the float-mve report lane"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
     report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
@@ -209,6 +212,7 @@ def run(
         enable_reporting=not no_report,
         report_formats=report_formats,
         coverage=coverage,
+        coverage_mve_float=coverage_mve_float,
         run_jobs=run_jobs,
         suite=suite,
     )
@@ -239,6 +243,7 @@ def full(
     run_jobs: int = typer.Option(1, "--run-jobs", help="Parallel FVP run jobs (0 = auto/use all host cores)"),
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Do not stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn coverage collection/reporting"),
+    coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Enable Cortex-M55 float MVE paths during coverage builds"),
     skip_generation: bool = typer.Option(False, "--skip-generation", help="Skip TFLite generation"),
     skip_build: bool = typer.Option(False, "--skip-build", help="Skip FVP build"),
     skip_run: bool = typer.Option(False, "--skip-run", help="Skip FVP test execution"),
@@ -269,6 +274,7 @@ def full(
         run_jobs=run_jobs,
         fail_fast=not no_fail_fast,
         coverage=coverage,
+        coverage_mve_float=coverage_mve_float,
         skip_generation=skip_generation,
         skip_build=skip_build,
         skip_run=skip_run,
@@ -396,6 +402,11 @@ def doctor(
 def coverage_merge(
     cpu: str = typer.Option("cortex-m0,cortex-m4,cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     suite: str = typer.Option("both", "--suite", help="Coverage suite selection: int, float, or both"),
+    include_mve_float: bool = typer.Option(
+        False,
+        "--include-mve-float",
+        help="Also merge cortex-m55 MVE float coverage (reports/coverage/float-mve).",
+    ),
     expected_zero_config: Optional[Path] = typer.Option(
         None,
         help="Path to expected-zero JSON config (default: assets/coverage_expected_zero.json)",
@@ -406,10 +417,14 @@ def coverage_merge(
     config = get_config(cpu=cpu, suite=suite, project_root=project_root)
     expected_zero_path = Path(expected_zero_config).resolve() if expected_zero_config else None
 
+    merge_suites = list(config.suites)
+    if include_mve_float and "float-mve" not in merge_suites:
+        merge_suites.append("float-mve")
+
     exit_code, report = run_coverage_merge(
         project_root=config.project_root,
         cpus=config.cpus,
-        suites=config.suites,
+        suites=merge_suites,
         report_dir=config.coverage_merged_report_dir(),
         expected_zero_config=expected_zero_path,
     )

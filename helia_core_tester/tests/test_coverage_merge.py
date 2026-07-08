@@ -120,3 +120,65 @@ def test_coverage_merge_fails_when_any_requested_input_missing(tmp_path: Path) -
     assert exit_code == 1
     assert "int:cortex-m55" in report.coverage_inputs
     assert "int:cortex-m0" in report.missing_coverage_inputs
+
+
+def test_coverage_merge_includes_optional_float_mve_for_m55(tmp_path: Path) -> None:
+    project_root = tmp_path
+    file_a = project_root / "Source" / "ConvolutionFunctions" / "a.c"
+    file_mve = project_root / "Source" / "ConvolutionFunctions" / "mve.c"
+    file_a.parent.mkdir(parents=True, exist_ok=True)
+    file_a.write_text("// a\n")
+    file_mve.write_text("// mve\n")
+
+    for cpu in ("cortex-m0", "cortex-m4", "cortex-m55"):
+        _write_lcov(
+            project_root / "artifacts" / "reports" / "coverage" / "int" / cpu / "coverage.info",
+            [(str(file_a), [(10, 1)])],
+        )
+    _write_lcov(
+        project_root / "artifacts" / "reports" / "coverage" / "float" / "cortex-m55" / "coverage.info",
+        [(str(file_a), [(10, 0)])],
+    )
+    _write_lcov(
+        project_root / "artifacts" / "reports" / "coverage" / "float-mve" / "cortex-m55" / "coverage.info",
+        [(str(file_mve), [(7, 2)])],
+    )
+
+    exit_code, report = run_coverage_merge(
+        project_root=project_root,
+        cpus="cortex-m0,cortex-m4,cortex-m55",
+        suites=["int", "float", "float-mve"],
+        report_dir=project_root / "artifacts" / "reports" / "coverage" / "merged",
+        expected_zero_config=project_root / "assets" / "coverage_expected_zero.json",
+    )
+
+    assert exit_code == 0
+    # float-mve coverage is merged in for cortex-m55.
+    assert "float-mve:cortex-m55" in report.coverage_inputs
+    assert "Source/ConvolutionFunctions/mve.c" in report.covered_files
+    # float-mve is only probed for cortex-m55; other CPUs are never treated as missing.
+    assert "float-mve:cortex-m0" not in report.missing_coverage_inputs
+    assert "float-mve:cortex-m4" not in report.missing_coverage_inputs
+
+
+def test_coverage_merge_optional_float_mve_absent_does_not_fail(tmp_path: Path) -> None:
+    project_root = tmp_path
+    file_a = project_root / "Source" / "ConvolutionFunctions" / "a.c"
+    file_a.parent.mkdir(parents=True, exist_ok=True)
+    file_a.write_text("// a\n")
+    _write_lcov(
+        project_root / "artifacts" / "reports" / "coverage" / "int" / "cortex-m55" / "coverage.info",
+        [(str(file_a), [(10, 1)])],
+    )
+
+    # float-mve coverage is requested but not produced; it must be treated as optional.
+    exit_code, report = run_coverage_merge(
+        project_root=project_root,
+        cpus="cortex-m55",
+        suites=["int", "float-mve"],
+        report_dir=project_root / "artifacts" / "reports" / "coverage" / "merged",
+        expected_zero_config=project_root / "assets" / "coverage_expected_zero.json",
+    )
+
+    assert exit_code == 0
+    assert "float-mve:cortex-m55" not in report.missing_coverage_inputs

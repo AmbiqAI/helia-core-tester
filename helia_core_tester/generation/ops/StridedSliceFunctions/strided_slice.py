@@ -17,7 +17,14 @@ class OpStridedSlice(OperationBase):
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for StridedSlice operation."""
         input_shape = self.desc['input_shape']
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
+        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
+        input_dtype = tf.int32 if activation_dtype == 'S32' else tf.float32
+        inputs = tf.keras.Input(
+            shape=input_shape[1:],
+            batch_size=input_shape[0],
+            dtype=input_dtype,
+            name='input',
+        )
         
         # Get begin, end, and strides from descriptor
         begin = self.desc.get('begin', [0, 0, 0, 0])
@@ -50,7 +57,7 @@ class OpStridedSlice(OperationBase):
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
         # Apply quantization based on activation_dtype
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
         
         if activation_dtype == 'S8':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
@@ -66,6 +73,10 @@ class OpStridedSlice(OperationBase):
             ]
             converter.inference_input_type = tf.int16
             converter.inference_output_type = tf.int16
+        elif activation_dtype == 'S32':
+            converter.optimizations = []
+        else:
+            raise NotImplementedError(f"Unsupported StridedSlice dtype: {activation_dtype}")
         
         # Generate representative dataset
         def representative_data_gen():
@@ -78,7 +89,8 @@ class OpStridedSlice(OperationBase):
                     inputs2 = self.rng.uniform(-1.0, 1.0, size=self.desc['input_2_shape']).astype(np.float32)
                     yield [inputs1, inputs2]
         
-        converter.representative_dataset = representative_data_gen
+        if activation_dtype in {'S8', 'S16'}:
+            converter.representative_dataset = representative_data_gen
         
         # Convert and save
         tflite_model = converter.convert()
@@ -92,7 +104,7 @@ class OpStridedSlice(OperationBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
         
         if activation_dtype == 'S8':
             return {
@@ -105,6 +117,12 @@ class OpStridedSlice(OperationBase):
                 'kernel_fn': 'arm_strided_slice_s16',
                 'input_c_type': 'int16_t',
                 'output_c_type': 'int16_t'
+            }
+        elif activation_dtype == 'S32':
+            return {
+                'kernel_fn': 'arm_strided_slice_s32',
+                'input_c_type': 'int32_t',
+                'output_c_type': 'int32_t'
             }
         else:
             raise NotImplementedError(f"Unsupported StridedSlice dtype: {activation_dtype}")
@@ -201,40 +219,43 @@ class OpStridedSlice(OperationBase):
         begin_dims = builder.nhwc_to_cmsis_dims(begin_normalized[:4])
         stride_dims = builder.nhwc_to_cmsis_dims(strides[:4])
         
-        # Generate input data and quantize
+        # Generate input data and quantize when required.
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        
-        input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-        
-        self.rng.__setstate__(rng_state)
-        
-        # Extract quantization from LiteRT
-        input_quant = op_tensors['inputs'][0]['quantization']
-        input_scale = input_quant.get('scale', 1.0)
-        input_zp = input_quant.get('zero_point', 0)
-        
-        # Handle per-channel quantization (convert to scalar)
-        if isinstance(input_scale, (list, np.ndarray)):
-            input_scale = float(input_scale[0]) if len(input_scale) > 0 else 1.0
-        if isinstance(input_zp, (list, np.ndarray)):
-            input_zp = int(input_zp[0]) if len(input_zp) > 0 else 0
-        
-        input_scale = float(input_scale)
-        input_zp = int(input_zp)
-        
-        # Quantize inputs
-        if kernel_info["input_c_type"] == "int8_t":
-            np_in_dtype = np.int8
-            qmin, qmax = -128, 127
-        elif kernel_info["input_c_type"] == "int16_t":
-            np_in_dtype = np.int16
-            qmin, qmax = -32768, 32767
+
+        if kernel_info["input_c_type"] == "int32_t":
+            input_q = self.rng.integers(-1000, 1001, size=input_shape, dtype=np.int32)
         else:
-            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        
-        input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-        input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+            input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+
+            # Extract quantization from LiteRT
+            input_quant = op_tensors['inputs'][0]['quantization']
+            input_scale = input_quant.get('scale', 1.0)
+            input_zp = input_quant.get('zero_point', 0)
+
+            # Handle per-channel quantization (convert to scalar)
+            if isinstance(input_scale, (list, np.ndarray)):
+                input_scale = float(input_scale[0]) if len(input_scale) > 0 else 1.0
+            if isinstance(input_zp, (list, np.ndarray)):
+                input_zp = int(input_zp[0]) if len(input_zp) > 0 else 0
+
+            input_scale = float(input_scale)
+            input_zp = int(input_zp)
+
+            # Quantize inputs
+            if kernel_info["input_c_type"] == "int8_t":
+                np_in_dtype = np.int8
+                qmin, qmax = -128, 127
+            elif kernel_info["input_c_type"] == "int16_t":
+                np_in_dtype = np.int16
+                qmin, qmax = -32768, 32767
+            else:
+                raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
+
+            input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
+            input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+
+        self.rng.__setstate__(rng_state)
         
         # Run inference using LiteRT interpreter
         interpreter = self.load_litert_interpreter(str(tflite_path))
@@ -246,8 +267,10 @@ class OpStridedSlice(OperationBase):
         output_data = interpreter.get_tensor(output_details[0]['index'])
         output_data = np.array(output_data)
         
-        # Convert output_data to the expected dtype (int8 or int16) before formatting
-        if kernel_info["output_c_type"] == "int16_t":
+        # Convert output_data to the expected dtype before formatting.
+        if kernel_info["output_c_type"] == "int32_t":
+            output_data = output_data.astype(np.int32)
+        elif kernel_info["output_c_type"] == "int16_t":
             output_data = output_data.astype(np.int16)
         else:  # int8_t
             output_data = output_data.astype(np.int8)

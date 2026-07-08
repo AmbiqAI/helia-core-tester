@@ -119,3 +119,67 @@ def test_float_f16_allowed_for_fp16_capable_cpu(tmp_path: Path) -> None:
     assert cfg.cpus == ["cortex-m55"]
     assert cfg.suite == "float"
     assert cfg.float_precision == "f16"
+
+
+def test_coverage_mve_float_requires_coverage(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+
+    with pytest.raises(ConfigurationError, match="requires --coverage"):
+        Config(
+            project_root=root,
+            cpu="cortex-m55",
+            suite="float",
+            coverage_mve_float=True,
+            _explicit_overrides={"project_root", "cpu", "suite", "coverage_mve_float"},
+        )
+
+
+def test_coverage_mve_float_requires_float_suite(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+
+    with pytest.raises(ConfigurationError, match="requires --suite float"):
+        Config(
+            project_root=root,
+            cpu="cortex-m55",
+            suite="int",
+            coverage=True,
+            coverage_mve_float=True,
+            _explicit_overrides={"project_root", "cpu", "suite", "coverage", "coverage_mve_float"},
+        )
+
+
+def test_coverage_mve_float_requires_cortex_m55(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+
+    with pytest.raises(ConfigurationError, match="only supported for cortex-m55"):
+        Config(
+            project_root=root,
+            cpu="cortex-m4",
+            suite="float",
+            float_precision="f32",
+            coverage=True,
+            coverage_mve_float=True,
+            _explicit_overrides={
+                "project_root",
+                "cpu",
+                "suite",
+                "float_precision",
+                "coverage",
+                "coverage_mve_float",
+            },
+        )
+
+
+def test_coverage_mve_float_allowed_for_m55_float_coverage(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+
+    cfg = Config(
+        project_root=root,
+        cpu="cortex-m55",
+        suite="float",
+        coverage=True,
+        coverage_mve_float=True,
+        _explicit_overrides={"project_root", "cpu", "suite", "coverage", "coverage_mve_float"},
+    )
+
+    assert cfg.coverage_mve_float is True

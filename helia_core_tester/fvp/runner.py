@@ -119,7 +119,9 @@ def _signal_process_group(proc: subprocess.Popen, sig: int) -> None:
 
 
 def _sanitize_terminal_text(raw_output: str) -> str:
-    return _TERMINAL_CONTROL_CHARS.sub(lambda m: f"\\x{ord(m.group(0)):02x}", raw_output)
+    # FVP often emits EOT (0x04) on UART shutdown; drop it to avoid noisy per-test output.
+    sanitized = raw_output.replace("\x04", "")
+    return _TERMINAL_CONTROL_CHARS.sub(lambda m: f"\\x{ord(m.group(0)):02x}", sanitized)
 
 
 def _terminate_process(proc: subprocess.Popen, grace_seconds: float = 1.0) -> None:

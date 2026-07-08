@@ -5,6 +5,8 @@ from helia_core_tester.generation.ops._shared.binary_basic_math_base import Bina
 from helia_core_tester.generation.utils.litert_builder import build_binary_broadcast_op
 from typing import Dict
 import numpy as np
+import tensorflow as tf
+from tensorflow.keras import layers
 
 
 SQUARED_DIFFERENCE_QUANT_PRESETS = {
@@ -19,6 +21,31 @@ SQUARED_DIFFERENCE_QUANT_PRESETS = {
         "output_quant": ([1.0 / 32768.0], [0]),
     },
 }
+
+
+class QuantizedSquaredDifference(layers.Layer):
+    """SquaredDifference followed by int16 fake-quant simulation."""
+
+    def __init__(self, min_val: float = -32768.0, max_val: float = 32767.0, **kwargs):
+        super().__init__(**kwargs)
+        self.min_val = float(min_val)
+        self.max_val = float(max_val)
+
+    def call(self, inputs):
+        tensor_a, tensor_b = inputs
+        sq_diff = tf.math.squared_difference(tensor_a, tensor_b)
+        return tf.quantization.fake_quant_with_min_max_vars(
+            sq_diff,
+            min=self.min_val,
+            max=self.max_val,
+            num_bits=16,
+            narrow_range=False,
+        )
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"min_val": self.min_val, "max_val": self.max_val})
+        return config
 
 
 def build_squared_difference_op(*, input_1_shape, input_2_shape, dtype: str = "int8") -> bytes:
@@ -38,10 +65,56 @@ class OpSquaredDifference(BinaryBasicMathBase):
     """SquaredDifference operation."""
 
     def needs_keras_model(self) -> bool:
-        return False
+        return self._use_s16_fake_quant_keras_path()
 
     def build_keras_model(self):
-        raise NotImplementedError("SquaredDifference uses LiteRT-only model generation.")
+        if not self._use_s16_fake_quant_keras_path():
+            raise NotImplementedError("SquaredDifference uses LiteRT-only model generation.")
+
+        input_1_shape = tuple(self.desc["input_1_shape"])
+        input_2_shape = tuple(self.desc["input_2_shape"])
+        min_val, max_val = self._s16_fake_quant_range()
+
+        input_a = tf.keras.Input(shape=input_1_shape[1:], dtype=tf.float32, name="input1")
+        input_b = tf.keras.Input(shape=input_2_shape[1:], dtype=tf.float32, name="input2")
+
+        output = QuantizedSquaredDifference(min_val=min_val, max_val=max_val, name="squared_difference")(
+            [input_a, input_b]
+        )
+        return tf.keras.Model(inputs=[input_a, input_b], outputs=output, name="SquaredDifferenceS16FakeQuant")
+
+    def _use_s16_fake_quant_keras_path(self) -> bool:
+        if self.desc.get("activation_dtype", "S8") != "S16":
+            return False
+
+        hint = self.desc.get("hint", {}) or {}
+        mode = str(hint.get("s16_builder", hint.get("generation_mode", ""))).strip().lower()
+        if mode in {"keras_fake_quant", "fake_quant", "keras"}:
+            return True
+
+        return bool(self.desc.get("s16_use_fake_quant", False))
+
+    def _s16_fake_quant_range(self) -> tuple[float, float]:
+        hint = self.desc.get("hint", {}) or {}
+        min_val = hint.get("s16_fake_quant_min", self.desc.get("s16_fake_quant_min", -32768.0))
+        max_val = hint.get("s16_fake_quant_max", self.desc.get("s16_fake_quant_max", 32767.0))
+        return float(min_val), float(max_val)
+
+    def _convert_with_litert_builder(self, out_path: str) -> None:
+        activation_dtype = self.desc.get("activation_dtype", "S8")
+        if activation_dtype == "S8":
+            dtype = "int8"
+        elif activation_dtype == "S16":
+            dtype = "int16"
+        else:
+            raise NotImplementedError(f"Unsupported SquaredDifference dtype: {activation_dtype}")
+
+        model_bytes = build_squared_difference_op(
+            input_1_shape=tuple(self.desc["input_1_shape"]),
+            input_2_shape=tuple(self.desc["input_2_shape"]),
+            dtype=dtype,
+        )
+        self._write_tflite_bytes(out_path, model_bytes)
 
     def _select_cmsis_squared_difference_kernel(self) -> Dict[str, str]:
         """
@@ -75,19 +148,43 @@ class OpSquaredDifference(BinaryBasicMathBase):
             raise NotImplementedError(f"Unsupported SquaredDifference dtype: {activation_dtype}")
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        activation_dtype = self.desc.get("activation_dtype", "S8")
-        if activation_dtype == "S8":
-            dtype = "int8"
-        elif activation_dtype == "S16":
-            dtype = "int16"
-        else:
-            raise NotImplementedError(f"Unsupported SquaredDifference dtype: {activation_dtype}")
-        model_bytes = build_squared_difference_op(
-            input_1_shape=tuple(self.desc["input_1_shape"]),
-            input_2_shape=tuple(self.desc["input_2_shape"]),
-            dtype=dtype,
-        )
-        self._write_tflite_bytes(out_path, model_bytes)
+        if self._use_s16_fake_quant_keras_path():
+            if model is None:
+                raise ValueError("Expected Keras model for S16 FakeQuant SquaredDifference path.")
+
+            try:
+                converter = tf.lite.TFLiteConverter.from_keras_model(model)
+                converter.optimizations = [tf.lite.Optimize.DEFAULT]
+                converter.target_spec.supported_ops = [
+                    tf.lite.OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8
+                ]
+                converter.inference_input_type = tf.int16
+                converter.inference_output_type = tf.int16
+
+                rng = np.random.default_rng(rep_seed)
+                in1_shape = tuple(self.desc["input_1_shape"])
+                in2_shape = tuple(self.desc["input_2_shape"])
+
+                def representative_data_gen():
+                    for _ in range(100):
+                        x1 = rng.uniform(-1.0, 1.0, size=in1_shape).astype(np.float32)
+                        x2 = rng.uniform(-1.0, 1.0, size=in2_shape).astype(np.float32)
+                        yield [x1, x2]
+
+                converter.representative_dataset = representative_data_gen
+                tflite_model = converter.convert()
+                self._write_tflite_bytes(out_path, tflite_model)
+                return
+            except Exception:
+                hint = self.desc.get("hint", {}) or {}
+                if bool(hint.get("s16_builder_strict", self.desc.get("s16_builder_strict", False))):
+                    raise
+                # Converter support for 16x8 FakeQuant graphs can be incomplete.
+                # Fall back to explicit LiteRT construction to keep generation robust.
+                self._convert_with_litert_builder(out_path)
+                return
+
+        self._convert_with_litert_builder(out_path)
 
     def generate_c_files(self, output_dir: Path) -> None:
         """

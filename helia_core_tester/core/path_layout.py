@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-VALID_SUITES = {"int", "float"}
+VALID_SUITES = {"int", "float", "float-mve"}
 
 
 def normalize_suite(suite: str) -> str:

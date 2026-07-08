@@ -4,8 +4,9 @@ CMake build step for FVP.
 
 import subprocess
 import sys
-from pathlib import Path
+from typing import Optional
 
+from helia_core_tester.core.runtime_env import RuntimeEnvContext, bootstrap_runtime_env, build_locked_fvp_flags
 from helia_core_tester.core.steps.base import StepBase, StepPlan, StepResult, StepStatus
 from helia_core_tester.core.errors import BuildError
 from helia_core_tester.core.logging import get_logger
@@ -16,9 +17,21 @@ from helia_core_tester.utils.command_runner import run_command
 class BuildStep(StepBase):
     """Step for building FVP executables."""
     
-    def __init__(self, config):
+    def __init__(self, config, runtime_env: Optional[RuntimeEnvContext] = None):
         super().__init__(config)
         self.logger = get_logger(__name__)
+        self.runtime_env = runtime_env
+
+    def _ensure_runtime_env(self) -> RuntimeEnvContext:
+        if self.runtime_env is None:
+            self.runtime_env = bootstrap_runtime_env(
+                downloads_dir=self.config.downloads_dir,
+                ensure_setup=True,
+            )
+        return self.runtime_env
+
+    def _locked_fvp_flags(self) -> list[str]:
+        return build_locked_fvp_flags(self.runtime_env, self.config.downloads_dir)
     
     @property
     def name(self) -> str:
@@ -44,6 +57,7 @@ class BuildStep(StepBase):
                     sys.executable,
                     "-m",
                     "helia_core_tester.fvp.build_and_run_fvp",
+                    *self._locked_fvp_flags(),
                     "--cpu",
                     cpu_csv,
                     "--suite",
@@ -64,6 +78,8 @@ class BuildStep(StepBase):
                         cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F16=ON"])
                     else:
                         cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F16=OFF"])
+                    if getattr(self.config, "coverage_mve_float", False):
+                        cmd.extend(["--cmake-def", "ENABLE_COVERAGE_MVE_FLOAT=ON"])
                 else:
                     cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F32=OFF"])
                     cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F16=OFF"])
@@ -87,10 +103,17 @@ class BuildStep(StepBase):
         commands = self._build_commands()
         
         try:
+            runtime_env = self._ensure_runtime_env()
+            commands = self._build_commands()
             for cmd in commands:
                 if self.config.verbosity >= 2:
                     self.logger.info(f"Running command: {' '.join(cmd)}")
-                run_command(cmd, cwd=self.config.project_root, verbosity=self.config.verbosity)
+                run_command(
+                    cmd,
+                    cwd=self.config.project_root,
+                    verbosity=self.config.verbosity,
+                    env=runtime_env.child_env,
+                )
             
             if self.config.verbosity >= 1:
                 self.logger.info(f"Successfully built for cpus={','.join(self.config.cpus)}")

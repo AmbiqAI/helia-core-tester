@@ -140,6 +140,7 @@ def generate_coverage_reports(
 ) -> None:
     if not getattr(args, "coverage", False):
         return
+    report_suite = getattr(args, "coverage_report_suite", None) or suite
 
     gcovr = shutil.which("gcovr", path=env.get("PATH"))
     gcov_exe = resolve_gcov_executable(env)
@@ -155,7 +156,7 @@ def generate_coverage_reports(
         return
 
     for cpu in cpus:
-        cpu_dir = _coverage_report_dir(cpu, suite)
+        cpu_dir = _coverage_report_dir(cpu, report_suite)
         if cpu_dir.exists():
             shutil.rmtree(cpu_dir, ignore_errors=True)
         cpu_dir.mkdir(parents=True, exist_ok=True)

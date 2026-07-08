@@ -314,3 +314,60 @@ def test_build_rows_includes_float_variations_for_m4_and_m55(tmp_path: Path) -> 
     assert m4["tests"]["number_of_tests"] == 7
     assert m55["tests"]["number_of_tests"] == 11
     assert total["tests"]["number_of_tests"] == 20
+
+
+def test_build_rows_unions_float_mve_coverage_without_double_counting_tests(tmp_path: Path) -> None:
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m55",
+        "ActivationFunctions/int_m55.c",
+        {
+            "da": [(30, 1)],
+            "fns": [(30, "fn_int_m55", 1)],
+            "branches": [(30, "3", "0", "1")],
+            "total_tests": 5,
+            "passed": 5,
+            "failed": 0,
+            "skipped": 0,
+        },
+        suite="int",
+    )
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m55",
+        "ActivationFunctions/float_m55.c",
+        {
+            "da": [(40, 1)],
+            "fns": [(40, "fn_float_m55", 1)],
+            "branches": [(40, "4", "0", "1")],
+            "total_tests": 6,
+            "passed": 6,
+            "failed": 0,
+            "skipped": 0,
+        },
+        suite="float",
+    )
+    # float-mve provides coverage only (CI artifact is scoped to coverage/float-mve);
+    # no test report is present for this suite.
+    _write_lcov(
+        tmp_path / "artifacts" / "reports" / "coverage" / "float-mve" / "cortex-m55" / "coverage.info",
+        sf=str(tmp_path / "Source" / "ActivationFunctions" / "mve_m55.c"),
+        da=[(50, 2)],
+        fns=[(50, "fn_mve_m55", 2)],
+        branches=[(50, "5", "0", "1")],
+    )
+
+    rows, total = build_rows(
+        tmp_path / "artifacts",
+        ["cortex-m55"],
+        suites=["int", "float", "float-mve"],
+    )
+
+    m55 = next(r for r in rows if r["cpu"] == "cortex-m55")
+    # int + float + float-mve coverage lines are unioned together.
+    assert m55["coverage"]["lf"] == 3
+    assert m55["coverage"]["fnf"] == 3
+    # float-mve tests are not counted (duplicate of the float suite).
+    assert m55["tests"]["number_of_tests"] == 11
+    assert total["tests"]["number_of_tests"] == 11
+

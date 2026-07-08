@@ -413,6 +413,66 @@ def build_shape_transform_op(
     return builder.build()
 
 
+def build_transpose_op(
+    *,
+    input_shape: Iterable[int],
+    permutation: Iterable[int],
+    dtype: str = "int8",
+) -> bytes:
+    _require_litert()
+
+    tensor_type = _resolve_tensor_type(dtype)
+    input_shape = _normalize_shape(input_shape, op_label="TRANSPOSE")
+    permutation = tuple(int(dim) for dim in permutation)
+    rank = len(input_shape)
+    if len(permutation) != rank or sorted(permutation) != list(range(rank)):
+        raise ValueError(
+            f"TRANSPOSE permutation must be a permutation of rank {rank}, got {permutation}."
+        )
+    output_shape = tuple(input_shape[dim] for dim in permutation)
+
+    builder = LiteRtSingleOpBuilder(op_name="TRANSPOSE")
+
+    input_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="input",
+            shape=input_shape,
+            tensor_type=tensor_type,
+            is_input=True,
+            quantization=_default_quant(tensor_type),
+        )
+    )
+
+    permutation_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="perm",
+            shape=(rank,),
+            tensor_type=litert.TensorType.INT32,
+            data=np.array(permutation, dtype=np.int32),
+        )
+    )
+
+    output_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="output",
+            shape=output_shape,
+            tensor_type=tensor_type,
+            is_output=True,
+            quantization=_default_quant(tensor_type),
+        )
+    )
+
+    builder.add_operator(
+        "TRANSPOSE",
+        inputs=[input_tensor_idx, permutation_tensor_idx],
+        outputs=[output_tensor_idx],
+        options=None,
+        options_type=litert.BuiltinOptions.NONE,
+    )
+
+    return builder.build()
+
+
 def build_arg_reduction_op(
     *,
     op_name: str,

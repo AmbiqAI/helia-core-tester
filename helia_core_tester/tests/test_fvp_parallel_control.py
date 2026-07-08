@@ -1,10 +1,12 @@
 import subprocess
 import time
 from pathlib import Path
+import os
 
 import pytest
 
 from helia_core_tester.core.config import Config
+from helia_core_tester.core.runtime_env import RuntimeEnvContext
 from helia_core_tester.core.steps.run import RunStep
 from helia_core_tester.fvp.build_and_run_fvp import (
     ProcessRecord,
@@ -18,6 +20,18 @@ from helia_core_tester.fvp.runner import _sanitize_terminal_text, _signal_proces
 def _make_config_root(tmp_path: Path) -> Path:
     (tmp_path / "helia_core_tester" / "generation").mkdir(parents=True, exist_ok=True)
     return tmp_path
+
+
+def _runtime_env(root: Path) -> RuntimeEnvContext:
+    return RuntimeEnvContext(
+        downloads_dir=root / "artifacts" / "downloads",
+        ethos_path=root / "artifacts" / "downloads" / "ethos-u-core-platform",
+        cmsis5_path=root / "artifacts" / "downloads" / "CMSIS_5",
+        toolchain_file=root / "artifacts" / "downloads" / "ethos-u-core-platform" / "cmake" / "toolchain" / "arm-none-eabi-gcc.cmake",
+        compiler_tag="gcc",
+        fvp_exe=root / "artifacts" / "downloads" / "corstone300_download" / "models" / "Linux64_GCC-9.3" / "FVP_Corstone_SSE-300_Ethos-U55",
+        child_env={"PATH": os.environ.get("PATH", "")},
+    )
 
 
 def test_config_run_jobs_default_and_auto(tmp_path: Path, monkeypatch) -> None:
@@ -39,7 +53,7 @@ def test_config_run_jobs_negative_rejected(tmp_path: Path) -> None:
 def test_run_step_passes_fail_fast_and_run_jobs(tmp_path: Path, monkeypatch) -> None:
     captured = {}
 
-    def fake_run(cmd, cwd, check, text, bufsize):
+    def fake_run(cmd, cwd, check, text, bufsize, env=None):
         captured["cmd"] = cmd
         return subprocess.CompletedProcess(args=cmd, returncode=0)
 
@@ -47,10 +61,13 @@ def test_run_step_passes_fail_fast_and_run_jobs(tmp_path: Path, monkeypatch) -> 
 
     root = _make_config_root(tmp_path)
     cfg = Config(project_root=root, run_jobs=4, fail_fast=True, enable_reporting=False)
-    result = RunStep(cfg)._do_execute()
+    result = RunStep(cfg, runtime_env=_runtime_env(root))._do_execute()
 
     assert result.success
     cmd = result.details["commands"][0]
+    assert "--no-setup" in cmd
+    assert "--no-gcc-from-download" in cmd
+    assert "--no-fvp-from-download" in cmd
     assert "--fail-fast" in cmd
     assert "--run-jobs" in cmd
     assert "4" in cmd
@@ -60,7 +77,7 @@ def test_run_step_passes_fail_fast_and_run_jobs(tmp_path: Path, monkeypatch) -> 
 def test_run_step_routes_suite_both_into_cpu_groups(tmp_path: Path, monkeypatch) -> None:
     seen = []
 
-    def fake_run(cmd, cwd, check, text, bufsize):
+    def fake_run(cmd, cwd, check, text, bufsize, env=None):
         seen.append(cmd)
         return subprocess.CompletedProcess(args=cmd, returncode=0)
 
@@ -77,7 +94,7 @@ def test_run_step_routes_suite_both_into_cpu_groups(tmp_path: Path, monkeypatch)
         _explicit_overrides={"project_root", "cpu", "suite", "float_precision"},
     )
 
-    result = RunStep(cfg)._do_execute()
+    result = RunStep(cfg, runtime_env=_runtime_env(root))._do_execute()
 
     assert result.success
     assert len(result.details["commands"]) == 3
@@ -85,6 +102,35 @@ def test_run_step_routes_suite_both_into_cpu_groups(tmp_path: Path, monkeypatch)
     assert any("--suite int" in cmd and "--cpu cortex-m0,cortex-m4,cortex-m55" in cmd for cmd in rendered)
     assert any("--suite float" in cmd and "--cpu cortex-m4" in cmd for cmd in rendered)
     assert any("--suite float" in cmd and "--cpu cortex-m55" in cmd for cmd in rendered)
+
+
+def test_run_step_routes_mve_float_coverage_to_float_mve_report_lane(tmp_path: Path, monkeypatch) -> None:
+    captured = {}
+
+    def fake_run(cmd, cwd, check, text, bufsize, env=None):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr("helia_core_tester.core.steps.run.subprocess.run", fake_run)
+
+    root = _make_config_root(tmp_path)
+    cfg = Config(
+        project_root=root,
+        cpu="cortex-m55",
+        suite="float",
+        coverage=True,
+        coverage_mve_float=True,
+        enable_reporting=False,
+        _explicit_overrides={"project_root", "cpu", "suite", "coverage", "coverage_mve_float"},
+    )
+
+    result = RunStep(cfg, runtime_env=_runtime_env(root))._do_execute()
+
+    assert result.success
+    cmd = captured["cmd"]
+    assert "--coverage" in cmd
+    assert "--coverage-report-suite" in cmd
+    assert "float-mve" in cmd
 
 
 def test_resolve_run_jobs_caps_to_test_count() -> None:

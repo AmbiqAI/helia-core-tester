@@ -59,6 +59,7 @@ class Config:
     optimization: str = "-Ofast"
     jobs: Optional[int] = None
     coverage: bool = False
+    coverage_mve_float: bool = False
     suite: str = "int"
     suites: list[str] = field(default_factory=list)
     float_precision: str = "both"
@@ -200,6 +201,7 @@ class Config:
             return float(value)
         if key in {
             "coverage",
+            "coverage_mve_float",
             "fail_fast",
             "dry_run",
             "plan",
@@ -247,6 +249,7 @@ class Config:
         self.float_precision = self._normalize_float_precision(self.float_precision)
         self.suites = ["int", "float"] if self.suite == "both" else [self.suite]
         self._validate_float_precision_cpu_compatibility()
+        self._validate_coverage_mve_float()
 
         if not 0 <= self.verbosity <= 3:
             raise ValueError(f"verbosity must be between 0 and 3, got {self.verbosity}")
@@ -315,6 +318,23 @@ class Config:
                 "Invalid float configuration: float_precision "
                 f"{self.float_precision!r} requires FP16 execution support, but these CPUs do not support it: "
                 f"{cpu_list}. Selected CPUs: {selected}. Use --float-precision f32 or remove unsupported CPUs."
+            )
+
+    def _validate_coverage_mve_float(self) -> None:
+        if not self.coverage_mve_float:
+            return
+
+        if not self.coverage:
+            raise ConfigurationError("--coverage-mve-float requires --coverage")
+        if "float" not in self.suites:
+            raise ConfigurationError("--coverage-mve-float requires --suite float or --suite both")
+
+        unsupported = [cpu for cpu in self.cpus if cpu != "cortex-m55"]
+        if unsupported:
+            cpu_list = ", ".join(unsupported)
+            raise ConfigurationError(
+                "--coverage-mve-float is only supported for cortex-m55; "
+                f"unsupported CPUs: {cpu_list}"
             )
 
     def effective_float_precision_for_cpu(self, cpu: str, suite: str = "float") -> Optional[str]:
@@ -406,6 +426,7 @@ class Config:
             "optimization": self.optimization,
             "jobs": self.jobs,
             "coverage": self.coverage,
+            "coverage_mve_float": self.coverage_mve_float,
             "suite": self.suite,
             "suites": list(self.suites),
             "float_precision": self.float_precision,

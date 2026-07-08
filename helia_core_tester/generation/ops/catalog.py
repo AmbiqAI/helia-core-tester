@@ -71,6 +71,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "ActivationFunctions/hard_swish",
     ),
     "PReLU": _spec("PReLU", "ActivationFunctions", "prelu", "OpPReLU", "ActivationFunctions/prelu.yaml", "ActivationFunctions/prelu"),
+    "PReLUScalar": _spec(
+        "PReLUScalar",
+        "ActivationFunctions",
+        "prelu_scalar",
+        "OpPReLUScalar",
+        "ActivationFunctions/prelu_scalar.yaml",
+        "ActivationFunctions/prelu_scalar",
+    ),
     "Clamp": _spec("Clamp", "ActivationFunctions", "clamp", "OpClamp", "ActivationFunctions/clamp.yaml", "ActivationFunctions/clamp"),
     "NNActivationS16": _spec(
         "NNActivationS16",

@@ -27,6 +27,7 @@ def test_path_layout_matches_config_helpers(tmp_path: Path) -> None:
     assert cfg.generation_report_dir_for(cpu) == layout.generation_report_dir(root, cpu, suite="int")
     assert cfg.tests_report_dir_for(cpu) == layout.tests_report_dir(root, cpu, suite="int")
     assert cfg.coverage_report_dir_for(cpu) == layout.coverage_report_dir(root, cpu, suite="int")
+    assert layout.coverage_report_dir(root, cpu, suite="float-mve") == root / "artifacts" / "reports" / "coverage" / "float-mve" / cpu
     assert cfg.coverage_merged_report_dir() == layout.coverage_merged_dir(root)
     assert layout.build_tests_family_dir(root, cpu, "PoolingFunctions", suite="int") == root / "artifacts" / f"build-int-{cpu}-gcc" / "tests" / "PoolingFunctions"
     assert layout.build_test_elf_path(root, cpu, "PoolingFunctions", "avg_pool_case_s8", suite="int") == root / "artifacts" / f"build-int-{cpu}-gcc" / "tests" / "PoolingFunctions" / "avg_pool_case_s8.elf"
