@@ -7,6 +7,7 @@ import pytest
 
 from helia_core_tester.scripts.publish_cpu_coverage_summary import (
     _parse_lcov,
+    _parse_profile_spec,
     _parse_test_report,
     build_rows,
     main,
@@ -54,8 +55,15 @@ def _write_test_report(path: Path, *, cpu: str, total: int, passed: int, failed:
     path.write_text(json.dumps(payload, indent=2))
 
 
-def _setup_cpu_artifacts(root: Path, cpu: str, sf_suffix: str, counts: dict, suite: str = "int") -> None:
-    reports_dir = root / "artifacts" / "reports"
+def _setup_cpu_artifacts(
+    root: Path,
+    cpu: str,
+    sf_suffix: str,
+    counts: dict,
+    suite: str = "int",
+    reports_dir: Path | None = None,
+) -> None:
+    reports_dir = reports_dir or (root / "artifacts" / "reports")
     coverage_info = reports_dir / "coverage" / suite / cpu / "coverage.info"
     tests_dir = reports_dir / "tests" / suite / cpu
     sf = str(root / "Source" / sf_suffix)
@@ -370,4 +378,130 @@ def test_build_rows_unions_float_mve_coverage_without_double_counting_tests(tmp_
     # float-mve tests are not counted (duplicate of the float suite).
     assert m55["tests"]["number_of_tests"] == 11
     assert total["tests"]["number_of_tests"] == 11
+
+
+def test_parse_profile_spec_supports_suite_lists() -> None:
+    profile = _parse_profile_spec(
+        "m55-mvef|cortex-m55|artifacts/reports-mvef/m55|float-mve|float"
+    )
+
+    assert profile.label == "m55-mvef"
+    assert profile.cpu == "cortex-m55"
+    assert str(profile.reports_root) == "artifacts/reports-mvef/m55"
+    assert profile.coverage_suites == ["float-mve"]
+    assert profile.test_suites == ["float"]
+
+
+def test_build_rows_appends_profile_rows_from_separate_roots(tmp_path: Path) -> None:
+    # Baseline rows (default reports root).
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m4",
+        "ActivationFunctions/base_m4.c",
+        {
+            "da": [(10, 1)],
+            "fns": [(10, "fn_base_m4", 1)],
+            "branches": [(10, "1", "0", "1")],
+            "total_tests": 3,
+            "passed": 3,
+            "failed": 0,
+            "skipped": 0,
+        },
+        suite="float",
+    )
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m55",
+        "ActivationFunctions/base_m55.c",
+        {
+            "da": [(20, 1)],
+            "fns": [(20, "fn_base_m55", 1)],
+            "branches": [(20, "2", "0", "1")],
+            "total_tests": 4,
+            "passed": 4,
+            "failed": 0,
+            "skipped": 0,
+        },
+        suite="float",
+    )
+
+    # Fallback profile roots.
+    fallback_m4_root = tmp_path / "artifacts" / "reports-fallback" / "m4"
+    fallback_m55_root = tmp_path / "artifacts" / "reports-fallback" / "m55"
+    mvef_m55_root = tmp_path / "artifacts" / "reports-mvef" / "m55"
+
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m4",
+        "ActivationFunctions/fallback_m4.c",
+        {
+            "da": [(30, 1)],
+            "fns": [(30, "fn_fallback_m4", 1)],
+            "branches": [(30, "3", "0", "1")],
+            "total_tests": 5,
+            "passed": 5,
+            "failed": 0,
+            "skipped": 0,
+        },
+        suite="float",
+        reports_dir=fallback_m4_root,
+    )
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m55",
+        "ActivationFunctions/fallback_m55.c",
+        {
+            "da": [(40, 1)],
+            "fns": [(40, "fn_fallback_m55", 1)],
+            "branches": [(40, "4", "0", "1")],
+            "total_tests": 6,
+            "passed": 6,
+            "failed": 0,
+            "skipped": 0,
+        },
+        suite="float",
+        reports_dir=fallback_m55_root,
+    )
+    # MVEF profile: coverage from float-mve, tests from float.
+    _write_lcov(
+        mvef_m55_root / "coverage" / "float-mve" / "cortex-m55" / "coverage.info",
+        sf=str(tmp_path / "Source" / "ActivationFunctions" / "mvef_m55.c"),
+        da=[(50, 2)],
+        fns=[(50, "fn_mvef_m55", 2)],
+        branches=[(50, "5", "0", "1")],
+    )
+    _write_test_report(
+        mvef_m55_root / "tests" / "float" / "cortex-m55" / "test_report_cortex-m55_profile.json",
+        cpu="cortex-m55",
+        total=7,
+        passed=7,
+        failed=0,
+        skipped=0,
+    )
+
+    profiles = [
+        _parse_profile_spec("m4-fallback|cortex-m4|artifacts/reports-fallback/m4|float|float"),
+        _parse_profile_spec("m55-fallback|cortex-m55|artifacts/reports-fallback/m55|float|float"),
+        _parse_profile_spec("m55-mvef|cortex-m55|artifacts/reports-mvef/m55|float-mve|float"),
+    ]
+    rows, total = build_rows(
+        tmp_path / "artifacts",
+        ["cortex-m4", "cortex-m55"],
+        suites=["float"],
+        profiles=profiles,
+    )
+
+    labels = [str(row["cpu"]) for row in rows]
+    assert "cortex-m4" in labels
+    assert "cortex-m55" in labels
+    assert "m4-fallback" in labels
+    assert "m55-fallback" in labels
+    assert "m55-mvef" in labels
+
+    profile_mvef = next(row for row in rows if row["cpu"] == "m55-mvef")
+    assert profile_mvef["coverage"]["lf"] == 1
+    assert profile_mvef["tests"]["number_of_tests"] == 7
+
+    # Sum across rendered rows: baseline m4/m55 + three profile rows.
+    assert total["tests"]["number_of_tests"] == (3 + 4 + 5 + 6 + 7)
 

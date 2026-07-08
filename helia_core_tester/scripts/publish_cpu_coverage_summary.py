@@ -5,6 +5,7 @@ Publish multi-CPU coverage and test summary table for CI.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 import os
 import sys
@@ -12,7 +13,18 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 from helia_core_tester.core.cpu_targets import parse_cpu_list
-from helia_core_tester.core.path_layout import coverage_report_dir, tests_report_dir
+
+
+VALID_SUITES = {"int", "float", "float-mve"}
+
+
+@dataclass
+class ProfileRow:
+    label: str
+    cpu: str
+    reports_root: Path
+    coverage_suites: List[str]
+    test_suites: List[str]
 
 
 def _to_int(value: object) -> int:
@@ -158,36 +170,109 @@ def _normalize_suites(suite: str) -> List[str]:
     raise ValueError(f"Invalid suite: {suite!r} (expected int, float, or both)")
 
 
+def _normalize_suite_list(raw: Iterable[str]) -> List[str]:
+    suite_list: List[str] = []
+    for suite in raw:
+        normalized = str(suite).strip().lower()
+        if not normalized:
+            continue
+        if normalized not in VALID_SUITES:
+            raise ValueError(f"Invalid suite value: {suite!r} (expected one of int,float,float-mve)")
+        if normalized not in suite_list:
+            suite_list.append(normalized)
+    return suite_list
+
+
+def _parse_profile_spec(spec: str) -> ProfileRow:
+    # Format: label|cpu|reports_root|coverage_suites|test_suites
+    # Example: m55-mvef|cortex-m55|artifacts/reports-mvef/m55|float-mve|float
+    parts = [item.strip() for item in str(spec).split("|")]
+    if len(parts) != 5:
+        raise ValueError(
+            "Invalid --profile spec. Expected format: "
+            "label|cpu|reports_root|coverage_suites|test_suites"
+        )
+
+    label, cpu, reports_root_raw, coverage_raw, test_raw = parts
+    if not label:
+        raise ValueError("Invalid --profile spec: label is required")
+    if not cpu:
+        raise ValueError("Invalid --profile spec: cpu is required")
+    if not reports_root_raw:
+        raise ValueError("Invalid --profile spec: reports_root is required")
+
+    coverage_suites = _normalize_suite_list(coverage_raw.split(","))
+    test_suites = _normalize_suite_list(test_raw.split(","))
+    if not coverage_suites:
+        raise ValueError("Invalid --profile spec: coverage_suites cannot be empty")
+
+    return ProfileRow(
+        label=label,
+        cpu=cpu,
+        reports_root=Path(reports_root_raw),
+        coverage_suites=coverage_suites,
+        test_suites=test_suites,
+    )
+
+
+def _coverage_info_path(reports_root: Path, cpu: str, suite: str) -> Path:
+    return reports_root / "coverage" / suite / cpu / "coverage.info"
+
+
+def _tests_report_path(reports_root: Path, cpu: str, suite: str) -> Path:
+    return reports_root / "tests" / suite / cpu
+
+
 def build_rows(
     artifacts_root: Path,
     cpus: Iterable[str],
     suites: Iterable[str] = ("int", "float"),
+    profiles: Iterable[ProfileRow] | None = None,
 ) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
     cpu_list = list(cpus)
-    suite_list = [str(item).strip().lower() for item in suites if str(item).strip()]
+    suite_list = _normalize_suite_list(suites)
     if not suite_list:
         suite_list = ["int", "float"]
     rows: List[Dict[str, object]] = []
-    project_root = artifacts_root.parent
+    default_reports_root = Path(artifacts_root) / "reports"
     union_lines: Dict[Tuple[str, int], bool] = {}
     union_functions: Dict[Tuple[str, str], bool] = {}
     union_branches: Dict[Tuple[str, int, str, str], bool] = {}
 
     total_tests = {"number_of_tests": 0, "passed": 0, "failed": 0, "skipped": 0}
 
-    for cpu in cpu_list:
+    row_specs: List[ProfileRow] = [
+        ProfileRow(
+            label=cpu,
+            cpu=cpu,
+            reports_root=default_reports_root,
+            coverage_suites=list(suite_list),
+            test_suites=[item for item in suite_list if item != "float-mve"],
+        )
+        for cpu in cpu_list
+    ]
+    if profiles:
+        row_specs.extend(profiles)
+
+    for row_spec in row_specs:
+        cpu = row_spec.cpu
+        reports_root = Path(row_spec.reports_root)
+        if not reports_root.is_absolute():
+            reports_root = Path(artifacts_root).parent / reports_root
         cpu_lines: Dict[Tuple[str, int], bool] = {}
         cpu_functions: Dict[Tuple[str, str], bool] = {}
         cpu_branches: Dict[Tuple[str, int, str, str], bool] = {}
         cpu_tests = {"number_of_tests": 0, "passed": 0, "failed": 0, "skipped": 0}
         found_suite_coverage = False
+        available_coverage_suites: set[str] = set()
 
-        for suite in suite_list:
-            coverage_path = coverage_report_dir(project_root, cpu, suite=suite) / "coverage.info"
+        for suite in row_spec.coverage_suites:
+            coverage_path = _coverage_info_path(reports_root, cpu, suite=suite)
             if not coverage_path.exists():
                 continue
 
             found_suite_coverage = True
+            available_coverage_suites.add(suite)
             _, line_hits, function_hits, branch_hits = _parse_lcov(coverage_path)
 
             for key, hits in line_hits.items():
@@ -205,20 +290,26 @@ def build_rows(
                 cpu_branches[key] = cpu_branches.get(key, False) or covered
                 union_branches[key] = union_branches.get(key, False) or covered
 
-            # float-mve contributes additional MVE coverage only; its tests duplicate
-            # the float suite, so skip test accounting to avoid double counting.
-            if suite != "float-mve":
-                test_totals = _parse_test_report(tests_report_dir(project_root, cpu, suite=suite), cpu)
-                cpu_tests["number_of_tests"] += int(test_totals["number_of_tests"])
-                cpu_tests["passed"] += int(test_totals["passed"])
-                cpu_tests["failed"] += int(test_totals["failed"])
-                cpu_tests["skipped"] += int(test_totals["skipped"])
+        for suite in row_spec.test_suites:
+            # For default CPU rows, count tests only for suites that produced
+            # coverage on that CPU. Profile rows may intentionally map tests to
+            # a different suite (for example float-mve coverage + float tests).
+            if suite in row_spec.coverage_suites and suite not in available_coverage_suites:
+                continue
+            test_totals = _parse_test_report(_tests_report_path(reports_root, cpu, suite=suite), cpu)
+            cpu_tests["number_of_tests"] += int(test_totals["number_of_tests"])
+            cpu_tests["passed"] += int(test_totals["passed"])
+            cpu_tests["failed"] += int(test_totals["failed"])
+            cpu_tests["skipped"] += int(test_totals["skipped"])
 
         if not found_suite_coverage:
             checked = ", ".join(
-                str(coverage_report_dir(project_root, cpu, suite=suite) / "coverage.info") for suite in suite_list
+                str(_coverage_info_path(reports_root, cpu, suite=suite)) for suite in row_spec.coverage_suites
             )
-            raise FileNotFoundError(f"coverage.info not found for {cpu} in suites [{', '.join(suite_list)}]: {checked}")
+            raise FileNotFoundError(
+                f"coverage.info not found for {row_spec.label} ({cpu}) "
+                f"in suites [{', '.join(row_spec.coverage_suites)}]: {checked}"
+            )
 
         total_tests["number_of_tests"] += int(cpu_tests["number_of_tests"])
         total_tests["passed"] += int(cpu_tests["passed"])
@@ -227,7 +318,8 @@ def build_rows(
 
         rows.append(
             {
-                "cpu": cpu,
+                "cpu": row_spec.label,
+                "target_cpu": cpu,
                 "coverage": {
                     "lf": len(cpu_lines),
                     "lh": sum(1 for covered in cpu_lines.values() if covered),
@@ -321,6 +413,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Also include cortex-m55 MVE float coverage (reports/coverage/float-mve) in the summary.",
     )
     parser.add_argument(
+        "--profile",
+        action="append",
+        default=[],
+        help=(
+            "Add profile row: label|cpu|reports_root|coverage_suites|test_suites "
+            "(suites are comma-separated)."
+        ),
+    )
+    parser.add_argument(
         "--summary-file",
         type=Path,
         default=Path(os.environ["GITHUB_STEP_SUMMARY"]) if os.environ.get("GITHUB_STEP_SUMMARY") else None,
@@ -339,7 +440,8 @@ def main(argv: List[str] | None = None) -> int:
         suites = _normalize_suites(args.suite)
         if args.include_mve_float and "float-mve" not in suites:
             suites.append("float-mve")
-        rows, total = build_rows(args.artifacts_root, cpus, suites=suites)
+        profiles = [_parse_profile_spec(item) for item in args.profile]
+        rows, total = build_rows(args.artifacts_root, cpus, suites=suites, profiles=profiles)
         table = render_markdown_table(rows, total)
         publish_table(table, args.summary_file, args.heading)
         return 0
