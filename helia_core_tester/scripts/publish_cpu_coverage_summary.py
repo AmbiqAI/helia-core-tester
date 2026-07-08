@@ -205,11 +205,14 @@ def build_rows(
                 cpu_branches[key] = cpu_branches.get(key, False) or covered
                 union_branches[key] = union_branches.get(key, False) or covered
 
-            test_totals = _parse_test_report(tests_report_dir(project_root, cpu, suite=suite), cpu)
-            cpu_tests["number_of_tests"] += int(test_totals["number_of_tests"])
-            cpu_tests["passed"] += int(test_totals["passed"])
-            cpu_tests["failed"] += int(test_totals["failed"])
-            cpu_tests["skipped"] += int(test_totals["skipped"])
+            # float-mve contributes additional MVE coverage only; its tests duplicate
+            # the float suite, so skip test accounting to avoid double counting.
+            if suite != "float-mve":
+                test_totals = _parse_test_report(tests_report_dir(project_root, cpu, suite=suite), cpu)
+                cpu_tests["number_of_tests"] += int(test_totals["number_of_tests"])
+                cpu_tests["passed"] += int(test_totals["passed"])
+                cpu_tests["failed"] += int(test_totals["failed"])
+                cpu_tests["skipped"] += int(test_totals["skipped"])
 
         if not found_suite_coverage:
             checked = ", ".join(
@@ -313,6 +316,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Coverage/test suite selection for summary (default: both)",
     )
     parser.add_argument(
+        "--include-mve-float",
+        action="store_true",
+        help="Also include cortex-m55 MVE float coverage (reports/coverage/float-mve) in the summary.",
+    )
+    parser.add_argument(
         "--summary-file",
         type=Path,
         default=Path(os.environ["GITHUB_STEP_SUMMARY"]) if os.environ.get("GITHUB_STEP_SUMMARY") else None,
@@ -329,6 +337,8 @@ def main(argv: List[str] | None = None) -> int:
     try:
         cpus = parse_cpu_list(args.cpus)
         suites = _normalize_suites(args.suite)
+        if args.include_mve_float and "float-mve" not in suites:
+            suites.append("float-mve")
         rows, total = build_rows(args.artifacts_root, cpus, suites=suites)
         table = render_markdown_table(rows, total)
         publish_table(table, args.summary_file, args.heading)

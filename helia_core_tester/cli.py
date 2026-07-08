@@ -402,6 +402,11 @@ def doctor(
 def coverage_merge(
     cpu: str = typer.Option("cortex-m0,cortex-m4,cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     suite: str = typer.Option("both", "--suite", help="Coverage suite selection: int, float, or both"),
+    include_mve_float: bool = typer.Option(
+        False,
+        "--include-mve-float",
+        help="Also merge cortex-m55 MVE float coverage (reports/coverage/float-mve).",
+    ),
     expected_zero_config: Optional[Path] = typer.Option(
         None,
         help="Path to expected-zero JSON config (default: assets/coverage_expected_zero.json)",
@@ -412,10 +417,14 @@ def coverage_merge(
     config = get_config(cpu=cpu, suite=suite, project_root=project_root)
     expected_zero_path = Path(expected_zero_config).resolve() if expected_zero_config else None
 
+    merge_suites = list(config.suites)
+    if include_mve_float and "float-mve" not in merge_suites:
+        merge_suites.append("float-mve")
+
     exit_code, report = run_coverage_merge(
         project_root=config.project_root,
         cpus=config.cpus,
-        suites=config.suites,
+        suites=merge_suites,
         report_dir=config.coverage_merged_report_dir(),
         expected_zero_config=expected_zero_path,
     )
