@@ -187,6 +187,8 @@ def generate_coverage_reports(
             source_filter,
             "--gcov-ignore-parse-errors",
             "suspicious_hits.warn_once_per_file",
+            "--gcov-ignore-errors=no_working_dir_found",
+            "--decisions",
             "--object-directory",
             str(cpu_build_dir),
             "--txt-summary",
