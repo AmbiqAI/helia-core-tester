@@ -111,8 +111,13 @@ class OpDequantize(QuantizationFamilyBase):
             # Handle array/list scales (take first element for per-tensor assumption)
             if isinstance(input_scale, (list, np.ndarray)):
                 if len(input_scale) > 1:
-                    print(f"Warning: Input has per-channel quantization with {len(input_scale)} scales. Using first scale.")
-                    input_scale = input_scale[0]
+                    raise ValueError(
+                        f"Dequantize descriptor '{name}' has per-channel input "
+                        f"quantization with {len(input_scale)} scales, but "
+                        "arm_dequantize_s8_f32/arm_dequantize_s16_f32 are "
+                        "per-tensor kernels; using channel-0's scale for all "
+                        "channels would silently corrupt the golden output"
+                    )
                 elif len(input_scale) == 1:
                     input_scale = input_scale[0]
                 else:
@@ -121,8 +126,13 @@ class OpDequantize(QuantizationFamilyBase):
                 
             if isinstance(input_zp, (list, np.ndarray)):
                 if len(input_zp) > 1:
-                    print(f"Warning: Input has per-channel quantization with {len(input_zp)} zero points. Using first zero point.")
-                    input_zp = input_zp[0]
+                    raise ValueError(
+                        f"Dequantize descriptor '{name}' has per-channel input "
+                        f"quantization with {len(input_zp)} zero points, but "
+                        "arm_dequantize_s8_f32/arm_dequantize_s16_f32 are "
+                        "per-tensor kernels; using channel-0's zero point for all "
+                        "channels would silently corrupt the golden output"
+                    )
                 elif len(input_zp) == 1:
                     input_zp = input_zp[0]
                 else:
@@ -170,31 +180,17 @@ class OpDequantize(QuantizationFamilyBase):
                 else:
                     output_data = np.clip(output_data, 0.0, 6.0)
         else:
-            input_shape = tuple(self.desc['input_shape'])
-            if kernel_info["input_c_type"] == "int8_t":
-                np_in_dtype = np.int8
-                qmin, qmax = -128, 127
-                input_scale = 1.0 / 128.0
-                input_zp = 0
-            elif kernel_info["input_c_type"] == "int16_t":
-                np_in_dtype = np.int16
-                qmin, qmax = -32768, 32767
-                input_scale = 1.0 / 32768.0
-                input_zp = 0
-            else:
-                raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-
-            input_data_float = self._sample_uniform(input_shape)
-
-            input_q = np.round(input_data_float / float(input_scale) + float(input_zp)).astype(np.int32)
-            input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
-
-            output_data = (input_q.astype(np.float32) - float(input_zp)) * float(input_scale)
-            if has_activation:
-                if activation_str == 'RELU':
-                    output_data = np.maximum(output_data, 0.0)
-                else:
-                    output_data = np.clip(output_data, 0.0, 6.0)
+            # No converted TFLite model is available to source real quantization
+            # parameters from. Dequantize is allow_no_tflite(), but silently
+            # substituting hardcoded default scale/zero-point (unrelated to the
+            # descriptor or converter) would produce a golden vector quantized
+            # with the wrong parameters. Fail loudly instead.
+            raise RuntimeError(
+                f"Dequantize descriptor '{name}' has no converted TFLite model "
+                "(conversion unavailable or failed) and no explicit descriptor "
+                "quantization parameters; refusing to substitute hardcoded "
+                "default input scale/zero-point"
+            )
         
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)

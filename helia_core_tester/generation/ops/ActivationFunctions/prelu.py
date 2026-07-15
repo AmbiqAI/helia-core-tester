@@ -44,8 +44,51 @@ class OpPReLU(OperationBase):
     def build_keras_model(self):
         raise NotImplementedError("PReLU uses LiteRT-only model generation.")
 
+    def _expected_status(self) -> str:
+        return self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS")
+
+    def _is_arg_error_case(self) -> bool:
+        return self._expected_status() != "ARM_CMSIS_NN_SUCCESS"
+
+    def _resolved_alpha_shape(self) -> tuple:
+        input_shape = tuple(self.desc["input_shape"])
+        alpha_shape = self.desc.get("alpha_shape")
+        if alpha_shape is not None:
+            return tuple(alpha_shape)
+        return input_shape[1:]
+
+    def _validate_broadcast_support(self, input_shape: tuple, alpha_shape: tuple) -> None:
+        """
+        Reject scalar-input + multi-element-alpha broadcasts at load/convert time.
+
+        LiteRT's PRELU op preparation cannot handle a scalar (single-element)
+        input broadcasting against a multi-element alpha (fails with
+        "HaveSameShapes input/output" during graph preparation). Rather than
+        letting that surface as an opaque LiteRT prepare failure, fail fast
+        with an actionable message pointing at the supported direct-kernel
+        path (operator: PReLUScalar) for this broadcast shape.
+        """
+        if int(np.prod(input_shape)) == 1 and int(np.prod(alpha_shape)) > 1:
+            raise ValueError(
+                "PReLU with a scalar (single-element) input and a multi-element alpha "
+                "broadcast is not supported via LiteRT (known PRELU prepare failure: "
+                "'HaveSameShapes input/output'). Use operator: PReLUScalar instead, which "
+                "implements this broadcast directly against arm_prelu_scalar_s8 without "
+                "requiring LiteRT model preparation."
+            )
+
+    def allow_no_tflite(self) -> bool:
+        return self._is_arg_error_case()
+
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Generate LiteRT model for PReLU."""
+        if self._is_arg_error_case():
+            raise RuntimeError(
+                "PReLU expected-error test case; skip TFLite generation and exercise "
+                "the CMSIS kernel directly with the descriptor's (deliberately "
+                "mismatched) shapes."
+            )
+
         from helia_core_tester.generation.utils.litert_builder import build_prelu_op
 
         activation_dtype = self.desc.get("activation_dtype", "S8")
@@ -53,11 +96,8 @@ class OpPReLU(OperationBase):
             raise NotImplementedError(f"Unsupported PReLU dtype: {activation_dtype} (only S8 supported)")
 
         input_shape = tuple(self.desc["input_shape"])
-        alpha_shape = self.desc.get("alpha_shape")
-        if alpha_shape is not None:
-            alpha_shape = tuple(alpha_shape)
-        else:
-            alpha_shape = input_shape[1:]
+        alpha_shape = self._resolved_alpha_shape()
+        self._validate_broadcast_support(input_shape, alpha_shape)
 
         # Get alpha values from descriptor
         alpha_values = None
@@ -108,10 +148,89 @@ class OpPReLU(OperationBase):
         else:
             raise NotImplementedError(f"Unsupported PReLU dtype: {activation_dtype} (only S8 supported)")
     
+    def _generate_arg_error_c_files(self, output_dir: Path) -> None:
+        """
+        Generate a CMSIS-direct harness for a deliberately-mismatched-shape
+        PReLU test case, expecting arm_prelu_s8 to return ARM_CMSIS_NN_ARG_ERROR
+        (input_dims != output_dims is rejected up front by the kernel, before
+        any TFLite model is needed).
+        """
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+        from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
+
+        name = self.desc['name']
+        kernel_info = self._select_cmsis_prelu_kernel()
+
+        input_shape = tuple(self.desc['input_shape'])
+        alpha_shape = self._resolved_alpha_shape()
+        output_shape = tuple(self.desc.get('output_shape', input_shape))
+
+        builder = TemplateContextBuilder()
+        input_dims = builder.nhwc_to_cmsis_dims(input_shape)
+        alpha_dims = builder.nhwc_to_cmsis_dims(alpha_shape)
+        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
+
+        mult_identity, shift_identity = calculate_multiplier_shift(1.0)
+        mult_alpha, shift_alpha = calculate_multiplier_shift(1.0)
+
+        rng = self._seeded_rng()
+        input_q = rng.integers(-128, 128, size=input_shape, dtype=np.int32).astype(np.int8)
+        alpha_q = rng.integers(-128, 128, size=alpha_shape, dtype=np.int32).astype(np.int8)
+
+        # Kernel is expected to reject before producing real output; a single
+        # placeholder element is sufficient (mirrors Transpose's ARG_ERROR path).
+        expected_output = np.zeros((1,), dtype=np.int8)
+
+        context = {
+            'name': name,
+            'prefix': name,
+            'input_dims': input_dims,
+            'alpha_dims': alpha_dims,
+            'output_dims': output_dims,
+            'input_offset': 0,
+            'alpha_offset': 0,
+            'output_offset': 0,
+            'output_mult_alpha': int(mult_alpha),
+            'output_shift_alpha': int(shift_alpha),
+            'output_mult_identity': int(mult_identity),
+            'output_shift_identity': int(shift_identity),
+            'input_data_array': builder.format_array_as_c_literal(input_q),
+            'alpha_array': builder.format_array_as_c_literal(alpha_q),
+            'expected_output_array': builder.format_array_as_c_literal(expected_output),
+            'input_dtype': kernel_info["input_c_type"],
+            'output_dtype': kernel_info["output_c_type"],
+            'kernel_fn': kernel_info["kernel_fn"],
+            'expected_status': self._expected_status(),
+        }
+
+        includes_api_dir = output_dir / "includes"
+        includes_api_dir.mkdir(parents=True, exist_ok=True)
+
+        h_content = self.render_template("ActivationFunctions/prelu/prelu.h.j2", context)
+        with open(includes_api_dir / f"{name}_prelu.h", 'w') as f:
+            f.write(h_content)
+
+        c_content = self.render_template("ActivationFunctions/prelu/prelu.c.j2", context)
+        with open(output_dir / f"{name}_prelu.c", 'w') as f:
+            f.write(c_content)
+
+        cmake_context = {
+            'name': name,
+            'operator': self.desc.get('operator', 'PReLU'),
+            'operator_name': 'prelu',
+        }
+        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
+        with open(output_dir / "CMakeLists.txt", 'w') as f:
+            f.write(cmake_content)
+
     def generate_c_files(self, output_dir: Path) -> None:
         """
         Generate C and H files from templates for PReLU operation.
         """
+        if self._is_arg_error_case():
+            self._generate_arg_error_c_files(output_dir)
+            return
+
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
         from helia_core_tester.generation.utils.litert_utils import (

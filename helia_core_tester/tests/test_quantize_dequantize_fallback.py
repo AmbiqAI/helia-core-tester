@@ -51,25 +51,24 @@ def _dequantize_desc(name: str, activation: str, dtype: str) -> dict:
     }
 
 
-def _assert_generated(output_dir: Path, name: str, suffix: str) -> None:
-    header = output_dir / "includes" / f"{name}_{suffix}.h"
-    source = output_dir / f"{name}_{suffix}.c"
-    assert header.exists()
-    assert source.exists()
-
-
-def test_quantize_generates_without_tflite(tmp_path: Path) -> None:
+def test_quantize_fails_without_tflite(tmp_path: Path) -> None:
+    """Quantize has no explicit descriptor quant params, so when no converted
+    TFLite model is available, generation must fail loudly (COR-008) rather
+    than silently substitute a hardcoded default output scale/zero-point."""
     desc = _quantize_desc("quantize_fp32_to_s8_basic", "NONE", "S8")
     op = OpQuantize(desc, seed=1, target_cpu="cortex-m55")
-    op.generate_c_files(tmp_path)
-    _assert_generated(tmp_path, desc["name"], "quantize")
+    with pytest.raises(RuntimeError, match="no converted TFLite model"):
+        op.generate_c_files(tmp_path)
 
 
-def test_dequantize_generates_without_tflite(tmp_path: Path) -> None:
+def test_dequantize_fails_without_tflite(tmp_path: Path) -> None:
+    """Dequantize has no explicit descriptor quant params, so when no converted
+    TFLite model is available, generation must fail loudly (COR-008) rather
+    than silently substitute a hardcoded default input scale/zero-point."""
     desc = _dequantize_desc("dequantize_s8_to_fp32_basic", "NONE", "S8")
     op = OpDequantize(desc, seed=1, target_cpu="cortex-m55")
-    op.generate_c_files(tmp_path)
-    _assert_generated(tmp_path, desc["name"], "dequantize")
+    with pytest.raises(RuntimeError, match="no converted TFLite model"):
+        op.generate_c_files(tmp_path)
 
 
 def test_dequantize_name_does_not_drive_activation() -> None:

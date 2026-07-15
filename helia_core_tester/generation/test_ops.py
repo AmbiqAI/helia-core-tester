@@ -275,7 +275,10 @@ def generate_test(
                 "exception": repr(e),
                 "traceback": traceback.format_exc(),
             })
-        # Continue anyway - C generation is optional during transition
+        # Do not silently continue: an unexpected failure to generate C/H files
+        # must fail this descriptor's generation (and therefore the overall
+        # generation run) rather than being counted as successfully generated.
+        raise
 
 
 def test_generation(test_filters):
@@ -491,6 +494,14 @@ def test_generation(test_filters):
     }
     (report_dir / "generation_summary.json").write_text(json.dumps(summary, indent=2))
     assert generated_count > 0 or skipped_entries, "No TFLite models were generated"
+    assert not conversion_failures, (
+        f"Conversion failures occurred for {len(conversion_failures)} descriptor(s): "
+        f"{', '.join(str(f.get('name')) for f in conversion_failures)}"
+    )
+    assert not generation_failures, (
+        f"Generation failures occurred for {len(generation_failures)} descriptor(s): "
+        f"{', '.join(str(f.get('name')) for f in generation_failures)}"
+    )
 
 
 def _write_manifest_and_cmake(
