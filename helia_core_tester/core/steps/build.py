@@ -129,14 +129,18 @@ class BuildStep(StepBase):
             error_msg = f"Failed to build for FVP (exit code {e.returncode})"
             self.logger.error(error_msg)
             
-            # Try to capture more error details
+            # Try to capture more error details. Reuse the same runtime
+            # environment as the real build invocation so this diagnostic
+            # rerun can actually reproduce (and report on) the original
+            # failure instead of running under a different environment.
             try:
                 result = subprocess.run(
                     cmd,
                     cwd=self.config.project_root,
                     capture_output=True,
                     text=True,
-                    check=False
+                    check=False,
+                    env=runtime_env.child_env,
                 )
                 if result.stdout:
                     self.logger.error(f"stdout: {result.stdout}")

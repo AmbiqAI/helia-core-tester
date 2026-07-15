@@ -53,7 +53,11 @@ class CleanStep(StepBase):
                     continue
                 if self.config.verbosity >= 1:
                     self.logger.info(f"Removing: {path}")
-                shutil.rmtree(path, ignore_errors=True)
+                # Do not use ignore_errors=True: a failed removal (permissions,
+                # open file handles, read-only files) must surface as a step
+                # failure instead of being silently reported as cleaned, which
+                # would let later stages consume stale artifacts.
+                shutil.rmtree(path)
                 cleaned_items.append(str(path))
 
             message = (

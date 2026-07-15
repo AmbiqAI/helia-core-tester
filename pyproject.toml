@@ -41,6 +41,7 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+testpaths = ["helia_core_tester/tests"]
 filterwarnings = [
     'ignore:In the future `np.object` will be defined as the corresponding NumPy scalar\.:FutureWarning:keras\.src\.export\.tf2onnx_lib',
     'ignore:Statistics for quantized inputs were expected, but not specified; continuing anyway\.:UserWarning:tensorflow\.lite\.python\.convert',

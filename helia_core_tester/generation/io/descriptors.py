@@ -119,7 +119,7 @@ OPERATOR_EXTRA_REQUIRED_FIELDS = {'BroadcastTo': ('output_shape',),
  'Reshape': ('target_shape',),
  'NNActivationFloat': ('activation_type',),
  'NNActivationS16': ('activation_type',),
- 'PReLUScalar': ('alpha_shape', 'scalar_input_value'),
+ 'PReLUScalar': ('alpha_shape',),
  'Requantize': ('effective_scale_multiplier',
                 'effective_scale_shift',
                 'input_zeropoint',
@@ -174,6 +174,15 @@ def _validate_profile_requirements(
     for field in OPERATOR_EXTRA_REQUIRED_FIELDS.get(operator, ()):
         if field not in desc:
             raise ValueError(f"{operator}{suffix} requires {field}")
+
+    if operator == 'PReLUScalar':
+        has_scalar_field = 'scalar_input_value' in desc
+        has_extras_values = bool(desc.get('hint', {}).get('extras', {}).get('input_values'))
+        if not has_scalar_field and not has_extras_values:
+            raise ValueError(
+                f"{operator}{suffix} requires 'scalar_input_value' (single pixel) or "
+                "hint.extras.input_values (one value per pixel, multi-pixel)"
+            )
 
     for field, expected in OPERATOR_FIELD_CONSTRAINTS.get(operator, {}).items():
         if str(desc.get(field, "")).upper() != str(expected).upper():

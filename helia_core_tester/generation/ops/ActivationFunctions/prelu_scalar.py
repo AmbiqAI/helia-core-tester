@@ -84,23 +84,49 @@ class OpPReLUScalar(OperationBase):
         name = self.desc["name"]
 
         input_shape = tuple(int(dim) for dim in self.desc.get("input_shape", [1, 1, 1, 1]))
-        if int(np.prod(input_shape)) != 1:
-            raise ValueError("PReLUScalar requires input_shape with exactly one scalar element.")
+        num_pixels = int(np.prod(input_shape))
+        if num_pixels <= 0:
+            raise ValueError("input_shape must contain positive dimensions.")
 
         alpha_shape = tuple(int(dim) for dim in self.desc["alpha_shape"])
-        block_size = int(np.prod(alpha_shape))
-        if block_size <= 0:
+        total_alpha = int(np.prod(alpha_shape))
+        if total_alpha <= 0:
             raise ValueError("alpha_shape must contain positive dimensions.")
+        if total_alpha % num_pixels != 0:
+            raise ValueError(
+                f"alpha_shape total element count ({total_alpha}) must be a multiple of "
+                f"num_pixels ({num_pixels}) derived from input_shape {input_shape}."
+            )
+        block_size = total_alpha // num_pixels
 
-        scalar_value = float(self.desc["scalar_input_value"])
+        # Scalar input values: a single value per pixel. Single-pixel descriptors
+        # (num_pixels == 1) use the original 'scalar_input_value' field; multi-pixel
+        # descriptors provide one value per pixel via hint.extras.input_values.
+        if "scalar_input_value" in self.desc:
+            scalar_values = [float(self.desc["scalar_input_value"])]
+        else:
+            extras = self.desc.get("hint", {}).get("extras", {})
+            input_values = extras.get("input_values")
+            if input_values is None:
+                raise ValueError(
+                    "PReLUScalar requires 'scalar_input_value' (single pixel) or "
+                    "hint.extras.input_values (one value per pixel, multi-pixel)."
+                )
+            scalar_values = [float(v) for v in input_values]
+
+        if len(scalar_values) != num_pixels:
+            raise ValueError(
+                f"Number of scalar input values ({len(scalar_values)}) must match "
+                f"num_pixels ({num_pixels}) derived from input_shape {input_shape}."
+            )
+        scalar_float = np.asarray(scalar_values, dtype=np.float32)
 
         alpha_values = self.desc.get("alpha_values")
         if alpha_values is None:
             extras = self.desc.get("hint", {}).get("extras", {})
             alpha_values = extras.get("alpha_values")
 
-        alpha_float = self._resolve_alpha_values(alpha_shape, alpha_values)
-        scalar_float = np.full(input_shape, scalar_value, dtype=np.float32)
+        alpha_float = self._resolve_alpha_values(alpha_shape, alpha_values).reshape(num_pixels, block_size)
 
         input_scale = float(self.desc.get("input_scale", 0.125))
         alpha_scale = float(self.desc.get("alpha_scale", 0.125))
@@ -111,7 +137,7 @@ class OpPReLUScalar(OperationBase):
         output_zero_point = int(self.desc.get("output_zero_point", 0))
 
         scalar_q = self._quantize_s8(scalar_float, input_scale, input_zero_point)
-        alpha_q = self._quantize_s8(alpha_float, alpha_scale, alpha_zero_point)
+        alpha_q = self._quantize_s8(alpha_float, alpha_scale, alpha_zero_point).reshape(num_pixels, block_size)
 
         output_multiplier_identity, output_shift_identity = calculate_multiplier_shift(input_scale / output_scale)
         output_multiplier_alpha, output_shift_alpha = calculate_multiplier_shift((input_scale * alpha_scale) / output_scale)
@@ -120,38 +146,42 @@ class OpPReLUScalar(OperationBase):
         alpha_offset = -alpha_zero_point
         output_offset = output_zero_point
 
-        input_value = int(scalar_q.reshape(-1)[0]) + input_offset
-        expected = np.zeros((block_size,), dtype=np.int32)
-        if input_value >= 0:
-            out = self._requantize_np(
-                np.array([input_value], dtype=np.int32),
-                output_multiplier_identity,
-                output_shift_identity,
-            )[0] + output_offset
-            expected.fill(int(out))
-        else:
-            alpha_centered = alpha_q.reshape(-1).astype(np.int32) + alpha_offset
-            prod = alpha_centered * int(input_value)
-            expected = self._requantize_np(prod, output_multiplier_alpha, output_shift_alpha) + output_offset
-
-        expected_q = np.clip(expected, -128, 127).astype(np.int8)
+        expected_q = np.zeros((num_pixels, block_size), dtype=np.int8)
+        for pixel in range(num_pixels):
+            input_value = int(scalar_q[pixel]) + input_offset
+            if input_value >= 0:
+                out = self._requantize_np(
+                    np.array([input_value], dtype=np.int32),
+                    output_multiplier_identity,
+                    output_shift_identity,
+                )[0] + output_offset
+                pixel_expected = np.full(block_size, int(out), dtype=np.int32)
+            else:
+                alpha_centered = alpha_q[pixel].astype(np.int32) + alpha_offset
+                prod = alpha_centered * int(input_value)
+                pixel_expected = self._requantize_np(prod, output_multiplier_alpha, output_shift_alpha) + output_offset
+            expected_q[pixel] = np.clip(pixel_expected, -128, 127).astype(np.int8)
 
         # Keep Keras-based reference generation in place for parity diagnostics.
-        scalar_input = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name="scalar")
-        alpha_input = tf.keras.Input(shape=alpha_shape[1:], dtype=tf.float32, name="alpha")
+        scalar_input = tf.keras.Input(shape=(1,), dtype=tf.float32, name="scalar")
+        alpha_input = tf.keras.Input(shape=(block_size,), dtype=tf.float32, name="alpha")
         reference_layer = _ScalarInputPreluReference(name="prelu_scalar_reference")
         ref_model = tf.keras.Model([scalar_input, alpha_input], reference_layer([scalar_input, alpha_input]))
         ref_float = ref_model(
-            [tf.constant(scalar_float, dtype=tf.float32), tf.constant(alpha_float, dtype=tf.float32)],
+            [
+                tf.constant(scalar_float.reshape(num_pixels, 1), dtype=tf.float32),
+                tf.constant(alpha_float, dtype=tf.float32),
+            ],
             training=False,
         ).numpy()
         ref_q = self._quantize_s8(ref_float, output_scale, output_zero_point).reshape(-1)
-        reference_delta = int(np.max(np.abs(ref_q.astype(np.int16) - expected_q.astype(np.int16)))) if ref_q.size else 0
+        reference_delta = int(np.max(np.abs(ref_q.astype(np.int16) - expected_q.reshape(-1).astype(np.int16)))) if ref_q.size else 0
 
         builder = TemplateContextBuilder()
         context = {
             "name": name,
             "prefix": name,
+            "num_pixels": num_pixels,
             "scalar_array": builder.format_array_as_c_literal(scalar_q.reshape(-1)),
             "alpha_array": builder.format_array_as_c_literal(alpha_q.reshape(-1)),
             "expected_output_array": builder.format_array_as_c_literal(expected_q.reshape(-1)),

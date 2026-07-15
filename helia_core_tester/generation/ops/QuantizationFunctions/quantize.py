@@ -17,21 +17,44 @@ class OpQuantize(QuantizationFamilyBase):
 
     def allow_no_tflite(self) -> bool:
         return True
+
+    def primary_execution_dtype(self) -> str:
+        """Quantize converts an FP32 input to a quantized output, so the
+        conversion/quantization target dtype is the *output* dtype, not the
+        input. The shared base implementation defaults to the input dtype
+        (correct for unary/activation-like ops), which for Quantize is always
+        FP32 -- this previously caused the shared TFLite converter to skip
+        int8/int16 quantization entirely and emit a fully float32 model.
+        """
+        resolved = self.resolved_tensor_dtypes()
+        if "output" in resolved:
+            return resolved["output"]
+        return super().primary_execution_dtype()
     
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for Quantize operation.
         
         Creates a model that can be quantized by TFLite converter.
-        Uses an identity operation (Lambda layer) to preserve input values.
+        Uses an identity-weight Dense layer to preserve input values.
         """
         input_shape = self.desc['input_shape']
         
         # Build model with float32 inputs (will be quantized later)
         inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
-        
-        # Use Lambda layer to create an identity operation
-        # This will be quantized by TFLite converter
-        x = tf.keras.layers.Lambda(lambda x: x, name='identity')(inputs)
+
+        # A pure identity (Lambda) op has no real computation, so the TFLite
+        # converter fully constant-folds it away into a single float32
+        # passthrough tensor before quantization can be inserted -- even when
+        # inference_output_type=int8/int16 is explicitly requested. Following
+        # the reference CMSIS-NN test generator
+        # (RefactoredTestGen/Lib/op_quantize.py:generate_keras_model), use an
+        # identity-weight Dense layer instead: a real op the converter must
+        # actually quantize.
+        flat = tf.keras.layers.Flatten(name='flatten')(inputs)
+        num_features = int(flat.shape[-1])
+        dense = tf.keras.layers.Dense(units=num_features, use_bias=False, activation=None, name='identity')
+        x = dense(flat)
+        dense.set_weights([np.eye(num_features, dtype=np.float32)])
         
         # Apply activation if specified
         activation_str = self.desc.get('activation', 'NONE')
@@ -84,26 +107,44 @@ class OpQuantize(QuantizationFamilyBase):
 
     def _extract_per_tensor_output_quantization(self, output_qp: dict) -> tuple[float, int]:
         """Return per-tensor output quantization from LiteRT metadata."""
-        output_scale = 1.0
-        output_zp = 0
+        scales = output_qp.get("scales", None) if output_qp else None
+        zero_points = output_qp.get("zero_points", None) if output_qp else None
 
-        if output_qp:
-            scales = output_qp.get("scales", None)
-            zero_points = output_qp.get("zero_points", None)
+        # Some LiteRT paths emit empty quant metadata for identity-style models.
+        # Silently falling back to a default scale/zero-point would produce a
+        # golden vector quantized with parameters unrelated to what the
+        # converter actually chose. Fail loudly instead.
+        if isinstance(scales, (list, tuple, np.ndarray)):
+            if len(scales) == 0:
+                raise ValueError(
+                    "Quantize output quantization metadata is missing per-tensor "
+                    "scale (empty scales array); refusing to substitute a default "
+                    "output scale"
+                )
+            output_scale = float(scales[0])
+        elif scales is not None:
+            output_scale = float(scales)
+        else:
+            raise ValueError(
+                "Quantize output quantization metadata is missing per-tensor "
+                "scale; refusing to substitute a default output scale"
+            )
 
-            # Some LiteRT paths emit empty quant metadata for identity-style models.
-            # Fall back to safe defaults so codegen can proceed.
-            if isinstance(scales, (list, tuple, np.ndarray)):
-                if len(scales) > 0:
-                    output_scale = float(scales[0])
-            elif scales is not None:
-                output_scale = float(scales)
-
-            if isinstance(zero_points, (list, tuple, np.ndarray)):
-                if len(zero_points) > 0:
-                    output_zp = int(zero_points[0])
-            elif zero_points is not None:
-                output_zp = int(zero_points)
+        if isinstance(zero_points, (list, tuple, np.ndarray)):
+            if len(zero_points) == 0:
+                raise ValueError(
+                    "Quantize output quantization metadata is missing per-tensor "
+                    "zero point (empty zero_points array); refusing to substitute "
+                    "a default output zero point"
+                )
+            output_zp = int(zero_points[0])
+        elif zero_points is not None:
+            output_zp = int(zero_points)
+        else:
+            raise ValueError(
+                "Quantize output quantization metadata is missing per-tensor "
+                "zero point; refusing to substitute a default output zero point"
+            )
 
         return output_scale, output_zp
     
@@ -149,32 +190,17 @@ class OpQuantize(QuantizationFamilyBase):
             output_data = interpreter.get_tensor(output_details[0]['index'])
             output_data = np.array(output_data)
         else:
-            input_shape = tuple(self.desc['input_shape'])
-            output_shape = input_shape
-
-            if kernel_info["output_c_type"] == "int8_t":
-                output_scale = 1.0 / 128.0
-                output_zp = 0
-                qmin, qmax = -128, 127
-                out_dtype = np.int8
-            else:
-                output_scale = 1.0 / 32768.0
-                output_zp = 0
-                qmin, qmax = -32768, 32767
-                out_dtype = np.int16
-
-            input_data = self._sample_uniform(input_shape)
-
-            if has_activation:
-                if activation_str == 'RELU':
-                    activated = np.maximum(input_data, 0.0)
-                else:
-                    activated = np.clip(input_data, 0.0, 6.0)
-            else:
-                activated = input_data
-
-            output_q = np.rint(activated / float(output_scale) + float(output_zp)).astype(np.int32)
-            output_data = np.clip(output_q, qmin, qmax).astype(out_dtype)
+            # No converted TFLite model is available to source real quantization
+            # parameters from. Quantize is allow_no_tflite(), but silently
+            # substituting hardcoded default scale/zero-point (unrelated to the
+            # descriptor or converter) would produce a golden vector quantized
+            # with the wrong parameters. Fail loudly instead.
+            raise RuntimeError(
+                f"Quantize descriptor '{name}' has no converted TFLite model "
+                "(conversion unavailable or failed) and no explicit descriptor "
+                "quantization parameters; refusing to substitute hardcoded "
+                "default output scale/zero-point"
+            )
         
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_data)

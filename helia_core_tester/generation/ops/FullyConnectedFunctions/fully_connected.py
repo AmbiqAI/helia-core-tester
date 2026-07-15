@@ -431,7 +431,16 @@ class OpFullyConnected(OperationBase):
         
         # Prepare weight quantization dict
         if weight_quant is None:
-            weight_quant = output_quant  # Fallback to output quantization
+            # No weight-tensor quantization could be recovered from the
+            # converted model. Silently substituting the output tensor's
+            # quantization would produce incorrect per-channel/per-tensor
+            # weight scales and a wrong multiplier, potentially masking a real
+            # kernel/golden mismatch. Fail loudly instead.
+            raise RuntimeError(
+                f"FullyConnected descriptor '{name}' weight quantization could "
+                "not be recovered from the converted TFLite model; refusing to "
+                "substitute unrelated output quantization"
+            )
         
         weight_quant_dict = {
             'scale': weight_quant.get('scale', 1.0),
@@ -526,15 +535,26 @@ class OpFullyConnected(OperationBase):
         elif weights is not None and len(weights.shape) == 2:
             correct_output_units = int(weights.shape[0])
             batch_size = int(output_shape[0]) if len(output_shape) >= 1 else int(input_shape[0])
-            
+
+            if len(output_shape) == 2 and output_shape[1] != correct_output_units:
+                # The converter/LiteRT-reported output shape disagrees with the
+                # weight tensor's output-unit dimension. Silently rewriting
+                # output_dims from the weight shape would hide a real
+                # converter/kernel contract error behind an auto-corrected
+                # harness. Fail loudly instead.
+                raise RuntimeError(
+                    f"FullyConnected descriptor '{name}' has LiteRT "
+                    f"output_shape[1] ({output_shape[1]}) that disagrees with "
+                    f"weights.shape[0] ({correct_output_units}); refusing to "
+                    "silently override output dims"
+                )
+
             output_dims = {
                 'n': batch_size,
                 'h': 1,
                 'w': 1,
                 'c': correct_output_units
             }
-            if len(output_shape) == 2 and output_shape[1] != correct_output_units:
-                print(f"Warning: LiteRT output_shape[1] ({output_shape[1]}) != weights.shape[0] ({correct_output_units}). Using weights shape.")
         elif len(output_shape) == 2:
             output_dims = {
                 'n': int(output_shape[0]),
