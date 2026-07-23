@@ -13,7 +13,14 @@ class OpStridedSlice(OperationBase):
     """
     StridedSlice operation.
     """
-    
+
+    def needs_keras_model(self) -> bool:
+        # FP16 uses a LiteRT-only single-op model (Keras/TFLiteConverter has no
+        # reliable FP16 activation path); quantized dtypes keep the existing
+        # Keras-based pipeline.
+        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
+        return activation_dtype != 'FP16'
+
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for StridedSlice operation."""
         input_shape = self.desc['input_shape']
@@ -53,12 +60,35 @@ class OpStridedSlice(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
+
+        if activation_dtype == 'FP16':
+            from helia_core_tester.generation.utils.litert_builder import build_strided_slice_op
+
+            input_shape = tuple(self.desc['input_shape'])
+            begin = self.desc.get('begin', [0, 0, 0, 0])
+            end = self.desc.get('end', None)
+            strides = self.desc.get('strides', [1, 1, 1, 1])
+            shrink_axis_mask = int(self.desc.get('shrink_axis_mask', 0))
+            if end is None:
+                end = list(input_shape)
+
+            model_bytes = build_strided_slice_op(
+                input_shape=input_shape,
+                begin=begin,
+                end=end,
+                strides=strides,
+                shrink_axis_mask=shrink_axis_mask,
+                dtype="float16",
+            )
+            with open(out_path, "wb") as f:
+                f.write(model_bytes)
+            return
+
         # Create converter
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
         # Apply quantization based on activation_dtype
-        activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-        
         if activation_dtype == 'S8':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_types = [tf.int8]
@@ -123,6 +153,12 @@ class OpStridedSlice(OperationBase):
                 'kernel_fn': 'arm_strided_slice_s32',
                 'input_c_type': 'int32_t',
                 'output_c_type': 'int32_t'
+            }
+        elif activation_dtype == 'FP16':
+            return {
+                'kernel_fn': 'arm_strided_slice_f16',
+                'input_c_type': 'float16_t',
+                'output_c_type': 'float16_t'
             }
         else:
             raise NotImplementedError(f"Unsupported StridedSlice dtype: {activation_dtype}")
@@ -223,7 +259,12 @@ class OpStridedSlice(OperationBase):
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
 
-        if kernel_info["input_c_type"] == "int32_t":
+        if kernel_info["input_c_type"] == "float16_t":
+            # StridedSlice is pure data movement, so the golden output can be
+            # computed directly via numpy slicing without invoking a TFLite
+            # interpreter (which has no reliable FP16 activation path).
+            input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float16)
+        elif kernel_info["input_c_type"] == "int32_t":
             input_q = self.rng.integers(-1000, 1001, size=input_shape, dtype=np.int32)
         else:
             input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
@@ -256,24 +297,40 @@ class OpStridedSlice(OperationBase):
             input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
 
         self.rng.__setstate__(rng_state)
-        
-        # Run inference using LiteRT interpreter
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        interpreter.set_tensor(input_details[0]['index'], input_q)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]['index'])
-        output_data = np.array(output_data)
-        
-        # Convert output_data to the expected dtype before formatting.
-        if kernel_info["output_c_type"] == "int32_t":
-            output_data = output_data.astype(np.int32)
-        elif kernel_info["output_c_type"] == "int16_t":
-            output_data = output_data.astype(np.int16)
-        else:  # int8_t
-            output_data = output_data.astype(np.int8)
+
+        if kernel_info["input_c_type"] == "float16_t":
+            end_resolved = list(end) if end is not None else list(input_shape)
+            while len(end_resolved) < len(input_shape):
+                end_resolved.append(input_shape[len(end_resolved)])
+            slices = tuple(
+                slice(begin_normalized[i], end_resolved[i], strides[i])
+                for i in range(len(input_shape))
+            )
+            output_data = input_q[slices]
+            if shrink_axis_mask:
+                squeeze_axes = tuple(
+                    i for i in range(len(input_shape)) if shrink_axis_mask & (1 << i)
+                )
+                output_data = np.squeeze(output_data, axis=squeeze_axes)
+            output_data = np.array(output_data).astype(np.float16)
+        else:
+            # Run inference using LiteRT interpreter
+            interpreter = self.load_litert_interpreter(str(tflite_path))
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+
+            interpreter.set_tensor(input_details[0]['index'], input_q)
+            interpreter.invoke()
+            output_data = interpreter.get_tensor(output_details[0]['index'])
+            output_data = np.array(output_data)
+
+            # Convert output_data to the expected dtype before formatting.
+            if kernel_info["output_c_type"] == "int32_t":
+                output_data = output_data.astype(np.int32)
+            elif kernel_info["output_c_type"] == "int16_t":
+                output_data = output_data.astype(np.int16)
+            else:  # int8_t
+                output_data = output_data.astype(np.int8)
         
         # Format arrays
         input_array_str = builder.format_array_as_c_literal(input_q)
@@ -293,6 +350,8 @@ class OpStridedSlice(OperationBase):
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
         }
+        if kernel_info["input_c_type"] == "float16_t":
+            context["validation_mode"] = "float"
         
         # Render templates
         includes_api_dir = output_dir / "includes"

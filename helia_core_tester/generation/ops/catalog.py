@@ -110,7 +110,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("BasicMathFunctions/add.yaml", "BasicMathFunctions/add_float.yaml"),
         template_relpath="BasicMathFunctions/add",
     ),
-    "Sub": _spec("Sub", "BasicMathFunctions", "sub", "OpSub", "BasicMathFunctions/sub.yaml", "BasicMathFunctions/sub"),
+    "Sub": _spec(
+        "Sub",
+        "BasicMathFunctions",
+        "sub",
+        "OpSub",
+        descriptor_relpaths=("BasicMathFunctions/sub.yaml", "BasicMathFunctions/sub_float.yaml"),
+        template_relpath="BasicMathFunctions/sub",
+    ),
     "Mul": _spec(
         "Mul",
         "BasicMathFunctions",
@@ -151,7 +158,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("ConcatenationFunctions/concatenation.yaml", "ConcatenationFunctions/concatenation_float.yaml"),
         template_relpath="ConcatenationFunctions/concatenation",
     ),
-    "Split": _spec("Split", "ConcatenationFunctions", "split", "OpSplit", "ConcatenationFunctions/split.yaml", "ConcatenationFunctions/split"),
+    "Split": _spec(
+        "Split",
+        "ConcatenationFunctions",
+        "split",
+        "OpSplit",
+        descriptor_relpaths=("ConcatenationFunctions/split.yaml", "ConcatenationFunctions/split_float.yaml"),
+        template_relpath="ConcatenationFunctions/split",
+    ),
     "Convolve": _spec(
         "Convolve",
         "ConvolutionFunctions",
@@ -288,7 +302,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("SoftmaxFunctions/softmax.yaml", "SoftmaxFunctions/softmax_float.yaml"),
         template_relpath="SoftmaxFunctions/softmax",
     ),
-    "StridedSlice": _spec("StridedSlice", "StridedSliceFunctions", "strided_slice", "OpStridedSlice", "StridedSliceFunctions/strided_slice.yaml", "StridedSliceFunctions/strided_slice"),
+    "StridedSlice": _spec(
+        "StridedSlice",
+        "StridedSliceFunctions",
+        "strided_slice",
+        "OpStridedSlice",
+        descriptor_relpaths=("StridedSliceFunctions/strided_slice.yaml", "StridedSliceFunctions/strided_slice_float.yaml"),
+        template_relpath="StridedSliceFunctions/strided_slice",
+    ),
     "Transpose": _spec(
         "Transpose",
         "TransposeFunctions",

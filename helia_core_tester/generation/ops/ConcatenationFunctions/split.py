@@ -27,6 +27,8 @@ class OpSplit(OperationBase):
             dtype = "int8"
         elif activation_dtype == "S16":
             dtype = "int16"
+        elif activation_dtype == "FP16":
+            dtype = "float16"
         else:
             raise NotImplementedError(f"Unsupported Split dtype: {activation_dtype}")
 
@@ -65,6 +67,12 @@ class OpSplit(OperationBase):
                 'kernel_fn': 'arm_split_s16',
                 'input_c_type': 'int16_t',
                 'output_c_type': 'int16_t'
+            }
+        elif activation_dtype == 'FP16':
+            return {
+                'kernel_fn': 'arm_split_f16',
+                'input_c_type': 'float16_t',
+                'output_c_type': 'float16_t'
             }
         else:
             raise NotImplementedError(f"Unsupported Split dtype: {activation_dtype}")
@@ -123,6 +131,9 @@ class OpSplit(OperationBase):
             np_in_dtype = np.int16
             qmin, qmax = -32768, 32767
             input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
+        elif kernel_info["input_c_type"] == "float16_t":
+            np_in_dtype = np.float16
+            input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np_in_dtype)
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
 
@@ -164,6 +175,8 @@ class OpSplit(OperationBase):
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
         }
+        if kernel_info["input_c_type"] == "float16_t":
+            context["validation_mode"] = "float"
         
         # Render templates
         includes_api_dir = output_dir / "includes"

@@ -1,0 +1,134 @@
+operator: StridedSlice
+name: strided_slice_float_whole_slab_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 2
+- 3
+- 4
+- 2
+begin:
+- 1
+- 0
+- 0
+- 0
+end:
+- 2
+- 3
+- 4
+- 2
+strides:
+- 1
+- 1
+- 1
+- 1
+---
+operator: StridedSlice
+name: strided_slice_float_batch_slice_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 3
+- 4
+- 3
+- 2
+begin:
+- 0
+- 1
+- 0
+- 0
+end:
+- 3
+- 3
+- 3
+- 2
+strides:
+- 2
+- 1
+- 1
+- 1
+---
+operator: StridedSlice
+name: strided_slice_float_crop_width_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 3
+- 4
+- 2
+begin:
+- 0
+- 0
+- 0
+- 0
+end:
+- 1
+- 3
+- 2
+- 2
+strides:
+- 1
+- 1
+- 1
+- 1
+---
+operator: StridedSlice
+name: strided_slice_float_stride2_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 3
+- 4
+- 2
+begin:
+- 0
+- 0
+- 0
+- 0
+end:
+- 1
+- 3
+- 4
+- 2
+strides:
+- 1
+- 1
+- 2
+- 1
+---
+operator: StridedSlice
+name: strided_slice_float_general_neg_stride_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 3
+- 4
+- 4
+begin:
+- 0
+- 2
+- 3
+- 3
+end:
+- 1
+- 0
+- 0
+- 0
+strides:
+- 1
+- -1
+- -1
+- -2
