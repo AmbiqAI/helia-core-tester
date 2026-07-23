@@ -1,0 +1,63 @@
+#ifndef {{ prefix|upper }}_GRU_UNIDIRECTIONAL_H
+#define {{ prefix|upper }}_GRU_UNIDIRECTIONAL_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+
+static const {{ data_dtype }} {{ name }}_input_tensor[] = {
+{{ input_tensor_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_expected_output[] = {
+{{ output_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_update_gate_input_weights[] = {
+{{ update_gate_input_weights_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_update_gate_hidden_weights[] = {
+{{ update_gate_hidden_weights_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_update_gate_input_bias[] = {
+{{ update_gate_input_bias_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_update_gate_hidden_bias[] = {
+{{ update_gate_hidden_bias_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_reset_gate_input_weights[] = {
+{{ reset_gate_input_weights_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_reset_gate_hidden_weights[] = {
+{{ reset_gate_hidden_weights_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_reset_gate_input_bias[] = {
+{{ reset_gate_input_bias_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_reset_gate_hidden_bias[] = {
+{{ reset_gate_hidden_bias_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_candidate_gate_input_weights[] = {
+{{ candidate_gate_input_weights_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_candidate_gate_hidden_weights[] = {
+{{ candidate_gate_hidden_weights_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_candidate_gate_input_bias[] = {
+{{ candidate_gate_input_bias_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_candidate_gate_hidden_bias[] = {
+{{ candidate_gate_hidden_bias_array }}
+};
+
+#endif
