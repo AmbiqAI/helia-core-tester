@@ -1577,6 +1577,98 @@ def build_split_op(
     return builder.build()
 
 
+def build_strided_slice_op(
+    *,
+    input_shape: Iterable[int],
+    begin: Sequence[int],
+    end: Sequence[int],
+    strides: Sequence[int],
+    shrink_axis_mask: int = 0,
+    dtype: str = "int8",
+) -> bytes:
+    """Build a single-op STRIDED_SLICE model, mainly to unlock float (FP16)
+    dtypes not reachable via the Keras/TFLiteConverter path used for the
+    quantized variants. Output shape is derived directly from Python slicing
+    semantics rather than TF's op resolver, so masks other than
+    ``shrink_axis_mask`` are intentionally unsupported.
+    """
+    if not LITERT_AVAILABLE:
+        raise ImportError("ai_edge_litert is not available. Install it with: pip install ai-edge-litert")
+
+    tensor_type = _DTYPE_MAP.get(dtype.lower())
+    if tensor_type is None:
+        raise ValueError(f"Unsupported dtype '{dtype}'.")
+
+    input_shape = tuple(int(dim) for dim in input_shape)
+    rank = len(input_shape)
+    begin = [int(v) for v in begin]
+    end = [int(v) for v in end]
+    strides = [int(v) for v in strides]
+    if not (len(begin) == len(end) == len(strides) == rank):
+        raise ValueError("begin/end/strides must match input rank.")
+
+    output_shape = []
+    for i in range(rank):
+        dim = input_shape[i]
+        if shrink_axis_mask & (1 << i):
+            output_shape.append(1)
+        else:
+            output_shape.append(len(range(dim)[begin[i]:end[i]:strides[i]]))
+
+    kept_axes = [i for i in range(rank) if not (shrink_axis_mask & (1 << i))]
+    squeezed_output_shape = tuple(output_shape[i] for i in kept_axes) or (1,)
+
+    builder = LiteRtSingleOpBuilder(op_name="STRIDED_SLICE")
+
+    input_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="input",
+            shape=input_shape,
+            tensor_type=tensor_type,
+            is_input=True,
+            quantization=_default_quant(tensor_type),
+        )
+    )
+
+    begin_tensor_idx = builder.add_tensor(
+        TensorSpec(name="begin", shape=(rank,), tensor_type=litert.TensorType.INT32, data=begin)
+    )
+    end_tensor_idx = builder.add_tensor(
+        TensorSpec(name="end", shape=(rank,), tensor_type=litert.TensorType.INT32, data=end)
+    )
+    strides_tensor_idx = builder.add_tensor(
+        TensorSpec(name="strides", shape=(rank,), tensor_type=litert.TensorType.INT32, data=strides)
+    )
+
+    output_tensor_idx = builder.add_tensor(
+        TensorSpec(
+            name="output",
+            shape=squeezed_output_shape,
+            tensor_type=tensor_type,
+            is_output=True,
+            quantization=_default_quant(tensor_type),
+        )
+    )
+
+    options = litert.StridedSliceOptionsT()
+    options.beginMask = 0
+    options.endMask = 0
+    options.ellipsisMask = 0
+    options.newAxisMask = 0
+    options.shrinkAxisMask = int(shrink_axis_mask)
+    options.offset = False
+
+    builder.add_operator(
+        "STRIDED_SLICE",
+        inputs=[input_tensor_idx, begin_tensor_idx, end_tensor_idx, strides_tensor_idx],
+        outputs=[output_tensor_idx],
+        options=options,
+        options_type=litert.BuiltinOptions.StridedSliceOptions,
+    )
+
+    return builder.build()
+
+
 def build_prelu_op(
     *,
     input_shape: Iterable[int],

@@ -1,0 +1,44 @@
+operator: Split
+name: split_float_channels_pairs_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 2
+- 2
+- 4
+axis: -1
+num_splits: 2
+---
+operator: Split
+name: split_float_height_triple_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 6
+- 4
+- 2
+axis: 1
+num_splits: 3
+---
+operator: Split
+name: split_float_v_channels_mixed_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+- 2
+- 2
+- 6
+axis: -1
+size_splits:
+- 2
+- 1
+- 3

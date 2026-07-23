@@ -11,6 +11,16 @@ int32_t {{ prefix }}_{{ name }}_run(
     {{ output_dtype }}* __restrict output
 ) {
     // Call subtract kernel
+    {% if float_kernel %}
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        input1,
+        input2,
+        output,
+        {{ out_activation_min_literal }},
+        {{ out_activation_max_literal }},
+        {{ block_size }}
+    );
+    {% else %}
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
 {% if call_style and call_style|lower == 'elementwise' %}
         input1,
@@ -50,6 +60,7 @@ int32_t {{ prefix }}_{{ name }}_run(
         {{ out_activation_max }}  // out_activation_max
 {% endif %}
     );
+    {% endif %}
     
     return kernel_status;
 }
