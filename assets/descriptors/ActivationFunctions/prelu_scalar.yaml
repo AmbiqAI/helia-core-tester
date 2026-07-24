@@ -58,3 +58,64 @@ hint:
     alpha_values: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
 input_shape: [1, 1, 2, 1]
 alpha_shape: [1, 1, 2, 3]
+---
+operator: PReLUScalar
+name: prelu_scalar_input_true_positive_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: scalar_input_true
+input_shape: [1, 1, 1, 1]
+alpha_shape: [1, 1, 1, 4]
+scalar_input_value: 0.75
+alpha_values: [0.05, 0.10, 0.15, 0.20]
+---
+operator: PReLUScalar
+name: prelu_scalar_input_true_negative_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: scalar_input_true
+input_shape: [1, 1, 1, 1]
+alpha_shape: [1, 1, 1, 4]
+scalar_input_value: -0.75
+alpha_values: [0.05, 0.10, 0.15, 0.20]
+---
+operator: PReLUScalar
+name: prelu_scalar_input_true_zero_boundary_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: scalar_input_true
+input_shape: [1, 1, 1, 1]
+alpha_shape: [1, 1, 1, 4]
+scalar_input_value: 0.0
+alpha_values: [0.05, 0.10, 0.15, 0.20]
+---
+operator: PReLUScalar
+name: prelu_scalar_input_clamp_pressure_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 1, 1, 1]
+alpha_shape: [1, 1, 1, 4]
+scalar_input_value: -1.0
+alpha_values: [0.25, 0.5, 0.75, 1.0]
+---
+operator: PReLUScalar
+name: prelu_pixel_scalar_input_broadcast_c_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_values: [0.8, -0.8]
+    alpha_values: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+input_shape: [1, 1, 2, 1]
+alpha_shape: [1, 1, 2, 3]

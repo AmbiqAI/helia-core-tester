@@ -1,4 +1,4 @@
-"""Direct scalar-input PReLU test generation for arm_prelu_scalar_s8."""
+"""Direct scalar-input PReLU test generation for arm_prelu_scalar_s8/arm_prelu_scalar_s16."""
 
 from __future__ import annotations
 
@@ -9,7 +9,19 @@ import tensorflow as tf
 from pathlib import Path
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
+from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift, requantize_np
+
+# Per-dtype quantization parameters: C type name, numpy dtype, and clamp range.
+_DTYPE_INFO = {
+    "S8": {"c_type": "int8_t", "np_dtype": np.int8, "qmin": -128, "qmax": 127, "kernel_fn": "arm_prelu_scalar_s8"},
+    "S16": {
+        "c_type": "int16_t",
+        "np_dtype": np.int16,
+        "qmin": -32768,
+        "qmax": 32767,
+        "kernel_fn": "arm_prelu_scalar_s16",
+    },
+}
 
 
 class _ScalarInputPreluReference(tf.keras.layers.Layer):
@@ -23,7 +35,7 @@ class _ScalarInputPreluReference(tf.keras.layers.Layer):
 
 
 class OpPReLUScalar(OperationBase):
-    """Generate direct scalar-input arm_prelu_scalar_s8 tests."""
+    """Generate direct scalar-input arm_prelu_scalar_s8/arm_prelu_scalar_s16 tests."""
 
     def allow_no_tflite(self) -> bool:
         return True
@@ -36,23 +48,6 @@ class OpPReLUScalar(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         raise NotImplementedError("PReLUScalar does not require a .tflite model.")
-
-    @staticmethod
-    def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
-        left_shift = shift if shift > 0 else 0
-        right_shift = -shift if shift < 0 else 0
-        prod = values.astype(np.int64) * (1 << left_shift)
-        mult = (1 << 30) + (prod * int(multiplier))
-        res = (mult >> 31).astype(np.int64)
-        if right_shift == 0:
-            return res.astype(np.int32)
-        remainder_mask = (1 << right_shift) - 1
-        remainder = res & remainder_mask
-        result = res >> right_shift
-        threshold = remainder_mask >> 1
-        threshold = threshold + (result < 0)
-        result = result + (remainder > threshold)
-        return result.astype(np.int32)
 
     @staticmethod
     def _resolve_alpha_values(alpha_shape: tuple[int, ...], values: Iterable[float] | None) -> np.ndarray:
@@ -73,15 +68,24 @@ class OpPReLUScalar(OperationBase):
         return data.reshape(alpha_shape)
 
     @staticmethod
-    def _quantize_s8(values: np.ndarray, scale: float, zero_point: int) -> np.ndarray:
+    def _quantize(values: np.ndarray, scale: float, zero_point: int, qmin: int, qmax: int, np_dtype) -> np.ndarray:
         quant = np.round(values / float(scale) + int(zero_point)).astype(np.int32)
-        quant = np.clip(quant, -128, 127)
-        return quant.astype(np.int8)
+        quant = np.clip(quant, qmin, qmax)
+        return quant.astype(np_dtype)
 
     def generate_c_files(self, output_dir: Path) -> None:
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
         name = self.desc["name"]
+
+        activation_dtype = self.desc.get("activation_dtype", "S8")
+        if activation_dtype not in _DTYPE_INFO:
+            raise NotImplementedError(
+                f"Unsupported PReLUScalar dtype: {activation_dtype} (only S8/S16 supported)"
+            )
+        dtype_info = _DTYPE_INFO[activation_dtype]
+        np_dtype = dtype_info["np_dtype"]
+        qmin, qmax = dtype_info["qmin"], dtype_info["qmax"]
 
         input_shape = tuple(int(dim) for dim in self.desc.get("input_shape", [1, 1, 1, 1]))
         num_pixels = int(np.prod(input_shape))
@@ -136,8 +140,10 @@ class OpPReLUScalar(OperationBase):
         alpha_zero_point = int(self.desc.get("alpha_zero_point", 0))
         output_zero_point = int(self.desc.get("output_zero_point", 0))
 
-        scalar_q = self._quantize_s8(scalar_float, input_scale, input_zero_point)
-        alpha_q = self._quantize_s8(alpha_float, alpha_scale, alpha_zero_point).reshape(num_pixels, block_size)
+        scalar_q = self._quantize(scalar_float, input_scale, input_zero_point, qmin, qmax, np_dtype)
+        alpha_q = self._quantize(alpha_float, alpha_scale, alpha_zero_point, qmin, qmax, np_dtype).reshape(
+            num_pixels, block_size
+        )
 
         output_multiplier_identity, output_shift_identity = calculate_multiplier_shift(input_scale / output_scale)
         output_multiplier_alpha, output_shift_alpha = calculate_multiplier_shift((input_scale * alpha_scale) / output_scale)
@@ -146,11 +152,11 @@ class OpPReLUScalar(OperationBase):
         alpha_offset = -alpha_zero_point
         output_offset = output_zero_point
 
-        expected_q = np.zeros((num_pixels, block_size), dtype=np.int8)
+        expected_q = np.zeros((num_pixels, block_size), dtype=np_dtype)
         for pixel in range(num_pixels):
             input_value = int(scalar_q[pixel]) + input_offset
             if input_value >= 0:
-                out = self._requantize_np(
+                out = requantize_np(
                     np.array([input_value], dtype=np.int32),
                     output_multiplier_identity,
                     output_shift_identity,
@@ -159,8 +165,8 @@ class OpPReLUScalar(OperationBase):
             else:
                 alpha_centered = alpha_q[pixel].astype(np.int32) + alpha_offset
                 prod = alpha_centered * int(input_value)
-                pixel_expected = self._requantize_np(prod, output_multiplier_alpha, output_shift_alpha) + output_offset
-            expected_q[pixel] = np.clip(pixel_expected, -128, 127).astype(np.int8)
+                pixel_expected = requantize_np(prod, output_multiplier_alpha, output_shift_alpha) + output_offset
+            expected_q[pixel] = np.clip(pixel_expected, qmin, qmax).astype(np_dtype)
 
         # Keep Keras-based reference generation in place for parity diagnostics.
         scalar_input = tf.keras.Input(shape=(1,), dtype=tf.float32, name="scalar")
@@ -174,8 +180,16 @@ class OpPReLUScalar(OperationBase):
             ],
             training=False,
         ).numpy()
-        ref_q = self._quantize_s8(ref_float, output_scale, output_zero_point).reshape(-1)
-        reference_delta = int(np.max(np.abs(ref_q.astype(np.int16) - expected_q.reshape(-1).astype(np.int16)))) if ref_q.size else 0
+        # NOTE: for S16 this Keras/float reference is a diagnostic-only signal, since the
+        # LiteRT int16 PReLU reference (and its float-emulation path here) is known to be
+        # inaccurate on the negative branch (see PR description); expected_q above (computed
+        # directly from the CMSIS-NN fixed-point math) is the authoritative golden output.
+        ref_q = self._quantize(ref_float, output_scale, output_zero_point, qmin, qmax, np_dtype).reshape(-1)
+        reference_delta = (
+            int(np.max(np.abs(ref_q.astype(np.int32) - expected_q.reshape(-1).astype(np.int32))))
+            if ref_q.size
+            else 0
+        )
 
         builder = TemplateContextBuilder()
         context = {
@@ -185,8 +199,9 @@ class OpPReLUScalar(OperationBase):
             "scalar_array": builder.format_array_as_c_literal(scalar_q.reshape(-1)),
             "alpha_array": builder.format_array_as_c_literal(alpha_q.reshape(-1)),
             "expected_output_array": builder.format_array_as_c_literal(expected_q.reshape(-1)),
-            "input_dtype": "int8_t",
-            "output_dtype": "int8_t",
+            "input_dtype": dtype_info["c_type"],
+            "output_dtype": dtype_info["c_type"],
+            "kernel_fn": dtype_info["kernel_fn"],
             "block_size": block_size,
             "input_offset": int(input_offset),
             "alpha_offset": int(alpha_offset),

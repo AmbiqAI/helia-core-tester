@@ -12,7 +12,7 @@ int32_t {{ prefix }}_{{ name }}_run(
 ) {
     arm_cmsis_nn_status kernel_status = ARM_CMSIS_NN_SUCCESS;
 {% for pixel in range(num_pixels | default(1)) %}
-    kernel_status = arm_prelu_scalar_s8(
+    kernel_status = {{ kernel_fn | default("arm_prelu_scalar_s8") }}(
         scalar_input + {{ pixel }},
         alpha + {{ pixel * block_size }},
         true,

@@ -181,13 +181,20 @@ class OpPReLU(OperationBase):
         mult_identity, shift_identity = calculate_multiplier_shift(1.0)
         mult_alpha, shift_alpha = calculate_multiplier_shift(1.0)
 
+        if kernel_info["input_c_type"] == "int16_t":
+            np_dtype = np.int16
+            qmin, qmax = -32768, 32768
+        else:
+            np_dtype = np.int8
+            qmin, qmax = -128, 128
+
         rng = self._seeded_rng()
-        input_q = rng.integers(-128, 128, size=input_shape, dtype=np.int32).astype(np.int8)
-        alpha_q = rng.integers(-128, 128, size=alpha_shape, dtype=np.int32).astype(np.int8)
+        input_q = rng.integers(qmin, qmax, size=input_shape, dtype=np.int32).astype(np_dtype)
+        alpha_q = rng.integers(qmin, qmax, size=alpha_shape, dtype=np.int32).astype(np_dtype)
 
         # Kernel is expected to reject before producing real output; a single
         # placeholder element is sufficient (mirrors Transpose's ARG_ERROR path).
-        expected_output = np.zeros((1,), dtype=np.int8)
+        expected_output = np.zeros((1,), dtype=np_dtype)
 
         context = {
             'name': name,
@@ -207,6 +214,7 @@ class OpPReLU(OperationBase):
             'expected_output_array': builder.format_array_as_c_literal(expected_output),
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': kernel_info["output_c_type"],
+            'alpha_dtype': kernel_info["input_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
             'expected_status': self._expected_status(),
         }
