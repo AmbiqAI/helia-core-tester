@@ -1,0 +1,226 @@
+operator: GRUUnidirectional
+name: gru_unidirectional_float_reset_after_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 4
+feature_size: 3
+units: 4
+time_major: false
+reset_after: true
+input_shape: [1, 4, 3]
+comparison:
+  atol: 0.05
+  rtol: 0.05
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_pre_reset_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 3
+feature_size: 4
+units: 3
+time_major: false
+reset_after: false
+input_shape: [1, 3, 4]
+comparison:
+  atol: 0.05
+  rtol: 0.05
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_time_major_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 2
+time_steps: 3
+feature_size: 3
+units: 4
+time_major: true
+reset_after: true
+input_shape: [3, 2, 3]
+comparison:
+  atol: 0.05
+  rtol: 0.05
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_batch_major_multi_batch_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 3
+time_steps: 4
+feature_size: 5
+units: 4
+time_major: false
+reset_after: true
+input_shape: [3, 4, 5]
+comparison:
+  atol: 0.05
+  rtol: 0.05
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_error_null_input_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: true
+input_shape: [1, 2, 2]
+fault: null_input
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_error_null_output_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: true
+input_shape: [1, 2, 2]
+fault: null_output
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_error_null_params_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: true
+input_shape: [1, 2, 2]
+fault: null_params
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_error_missing_temp1_prereset_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: false
+input_shape: [1, 2, 2]
+fault: missing_temp1_prereset
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_error_stateful_batch_gt1_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 2
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: true
+input_shape: [2, 2, 2]
+fault: stateful_batch_gt1
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_stream_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 4
+feature_size: 3
+units: 4
+time_major: false
+reset_after: true
+input_shape: [1, 4, 3]
+stream_chunk_lengths: [2, 2]
+comparison:
+  atol: 0.05
+  rtol: 0.05
+hint:
+  force_cmsis: true
+  stream: true

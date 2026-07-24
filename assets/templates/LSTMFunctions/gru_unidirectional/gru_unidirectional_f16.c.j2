@@ -1,0 +1,63 @@
+#include "{{ name }}_gru_unidirectional.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
+static {{ data_dtype }} {{ name }}_temp1[{{ hidden_state_size }}];
+
+static int32_t run_gru(void)
+{
+    const {{ gru_params_type }} params = {
+        .time_major = {{ time_major_literal }},
+        .batch_size = {{ batch_size }},
+        .time_steps = {{ time_steps }},
+        .input_size = {{ input_size }},
+        .hidden_size = {{ hidden_size }},
+        .reset_after = {{ reset_after_literal }},
+        .update_gate = {
+            .input_weights = {{ name }}_update_gate_input_weights,
+            .hidden_weights = {{ name }}_update_gate_hidden_weights,
+            .input_bias = {{ name }}_update_gate_input_bias,
+            .hidden_bias = {{ name }}_update_gate_hidden_bias,
+        },
+        .reset_gate = {
+            .input_weights = {{ name }}_reset_gate_input_weights,
+            .hidden_weights = {{ name }}_reset_gate_hidden_weights,
+            .input_bias = {{ name }}_reset_gate_input_bias,
+            .hidden_bias = {{ name }}_reset_gate_hidden_bias,
+        },
+        .candidate_gate = {
+            .input_weights = {{ name }}_candidate_gate_input_weights,
+            .hidden_weights = {{ name }}_candidate_gate_hidden_weights,
+            .input_bias = {{ name }}_candidate_gate_input_bias,
+            .hidden_bias = {{ name }}_candidate_gate_hidden_bias,
+        },
+    };
+    {{ gru_context_type }} buffers = {
+        .temp1 = {{ name }}_temp1,
+        .hidden_state = NULL,
+    };
+
+    return {{ kernel_fn }}({{ name }}_input_tensor, {{ name }}_output, &params, &buffers);
+}
+
+int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+{
+    int32_t status = run_gru();
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("GRU") }}", status);
+
+    int failures = 0;
+    HELIA_VALIDATE_OUTPUTS(
+        {{ validation_mode_token | default("FLOAT") }},
+        {{ name }}_output,
+        {{ name }}_expected_output,
+        {{ dst_size }},
+        {{ validation_tolerance | default(1) }},
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
+        {{ validation_report_limit | default(8) }},
+        failures
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
+}
+
+{% include "common/standalone/main.j2" %}

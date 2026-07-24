@@ -216,6 +216,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("LSTMFunctions/lstm_unidirectional.yaml", "LSTMFunctions/lstm_unidirectional_float.yaml"),
         template_relpath="LSTMFunctions/lstm_unidirectional",
     ),
+    "GRUUnidirectional": _spec(
+        "GRUUnidirectional",
+        "LSTMFunctions",
+        "gru_unidirectional",
+        "OpGRUUnidirectional",
+        descriptor_relpaths=("LSTMFunctions/gru_unidirectional_float.yaml",),
+        template_relpath="LSTMFunctions/gru_unidirectional",
+    ),
     "Requantize": _spec("Requantize", "NNSupportFunctions", "requantize", "OpRequantize", "NNSupportFunctions/requantize.yaml", "NNSupportFunctions/requantize"),
     "BatchNorm": _spec(
         "BatchNorm",
