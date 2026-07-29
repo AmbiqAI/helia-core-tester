@@ -288,3 +288,27 @@ alpha_shape: [1, 2, 2, 3]
 output_shape: [1, 2, 2, 2]
 alpha: 0.2
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: PReLU
+name: prelu_row_scalar_channel_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    alpha_values: [-0.9, 0.0, 0.9]
+input_shape: [1, 3, 1, 4]
+alpha_shape: [1, 3, 1, 1]
+---
+operator: PReLU
+name: prelu_row_scalar_channel_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    alpha_values: [-0.9, 0.0, 0.9]
+input_shape: [1, 3, 1, 4]
+alpha_shape: [1, 3, 1, 1]
