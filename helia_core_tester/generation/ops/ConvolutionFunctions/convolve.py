@@ -210,6 +210,13 @@ class OpConvolve(OperationBase):
         info.setdefault("buffer_size_needs_layout", info["input_c_type"] in {"float", "float16_t"})
 
         hint = self._hint()
+
+        # Opt-in precomputed weight-sum (kernel_sum) route. Currently only the s4 conv
+        # wrapper has a distinct `_with_weight_sum` entry point; s8 already always runs
+        # through its weight-sum-aware wrapper (see convolve.c.j2).
+        if info["kernel_fn"] == "arm_convolve_wrapper_s4":
+            info["use_weight_sum"] = bool(hint.get("kernel_sum", False))
+
         variant = str(hint.get("kernel_variant", "")).lower()
         if not variant:
             return info
@@ -584,6 +591,7 @@ class OpConvolve(OperationBase):
                 else ('cmsis_nn_conv_params_f32' if float_kernel else 'cmsis_nn_conv_params')
             ),
             'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
+            'use_weight_sum': bool(kernel_info.get("use_weight_sum", False)),
         }
         if float_kernel:
             context['conv_activation_min_literal'] = builder.format_float_literal(conv_params['activation_min'])
