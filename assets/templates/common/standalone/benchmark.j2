@@ -1,0 +1,27 @@
+{#
+  Benchmark harness dispatcher -- the single include point op templates use
+  (e.g. `{% include "common/standalone/benchmark.j2" %}` in
+  ConvolutionFunctions/convolve/convolve.c.j2). Op templates stay agnostic to
+  which physical/simulated target is active; they only need to define
+  `{{name}}_bench_init()` / `{{name}}_bench_op()` and set
+  `supports_benchmark = true` before including common/standalone/main.j2.
+
+  Selects between the two interchangeable backends based on the
+  `benchmark_target` context variable, set at generation time:
+    - "fvp" (default)  -> benchmark_fvp.j2 (DWT cycle counter only, works on
+                           cortex-m4/m55 under FVP or hardware, not cycle
+                           accurate on FVP)
+    - "hardware"        -> benchmark_hw.j2  (DWT + ARMv8.1-M PMU event
+                           counters, Cortex-M55/Apollo510 only)
+
+  Both backends expose the identical `helia_benchmark_run(name, op)` entry
+  point and [BENCH]/[PERF] output lines (the hardware backend additionally
+  emits [PMU] lines), so main.j2's `{{prefix}}_{{name}}_benchmark_run()` call
+  site needs no target-specific logic either.
+#}
+{% set benchmark_target = benchmark_target | default("fvp") %}
+{% if benchmark_target == "hardware" %}
+{% include "common/standalone/benchmark_hw.j2" %}
+{% else %}
+{% include "common/standalone/benchmark_fvp.j2" %}
+{% endif %}

@@ -2,6 +2,7 @@
 
 from typing import Dict, Any, Optional
 from pathlib import Path
+import os
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
@@ -592,6 +593,12 @@ class OpConvolve(OperationBase):
             ),
             'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
             'use_weight_sum': bool(kernel_info.get("use_weight_sum", False)),
+            # Selects common/standalone/benchmark.j2's backend: "fvp" (default,
+            # DWT-only) or "hardware" (DWT + PMU, Apollo510/Cortex-M55 real
+            # silicon). No CLI flag exists yet for this -- set via env var so
+            # scripts (e.g. scripts/test_s4_conv_benchmark.sh --hardware) can
+            # select it without deeper Config/CLI plumbing.
+            'benchmark_target': os.environ.get("HELIA_BENCH_TARGET", "fvp"),
         }
         if float_kernel:
             context['conv_activation_min_literal'] = builder.format_float_literal(conv_params['activation_min'])

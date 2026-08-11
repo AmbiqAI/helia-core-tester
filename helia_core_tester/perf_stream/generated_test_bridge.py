@@ -1,0 +1,867 @@
+"""Bridge real generated CMSIS-NN kernel tests (descriptor.yaml + golden C arrays
+produced by `helia_core_tester generate`) into perf-stream CaseBundles so they can
+be streamed to and executed on real hardware over HCTP/RTT, instead of only the
+hand-authored synthetic demo cases in case_bundle.py.
+
+Bridged (family, operator) pairs are registered in `_BUILDERS` below; each builder is
+responsible for extracting its own header/source format and producing a CaseBundle. The
+kernel_id sent to firmware for each is looked up from the shared registry in
+`assets/kernel_registry.yaml` via `kernel_registry.py` -- see that file's header comment
+for the full list of currently-bridged kernels and how to add new ones.
+
+Anything not in `_BUILDERS` (or that fails dtype/shape preconditions inside a builder)
+raises UnsupportedGeneratedTestError with a clear reason so callers can skip/report it
+instead of silently fabricating results.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+import numpy as np
+import yaml
+
+from .case_bundle import BlobInfo, CaseBundle, _blob_info, _case_root, _manifest_blob_entry, _write_blob, _write_manifest
+from .kernel_registry import lookup_kernel_id
+from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+
+class UnsupportedGeneratedTestError(Exception):
+    """Raised when a generated test's operator/dtype isn't bridgeable to real firmware dispatch yet."""
+
+
+# Must match HCT_SERVER_MAX_ARENA_BYTES in cmake/perf_stream/benchmark_server_session.h.
+# The firmware's `session->case_arena` is a single fixed-size buffer shared by every
+# streamed (non-host-only) blob *and* any scratch/weight-sum buffer for the case; a case
+# whose total footprint exceeds this will fail `allocate_blob()` inside `handle_case_meta()`
+# with HCTP_STATUS_INVALID_ARGUMENT (surfaced to the host as a CASE_META ERROR frame) --
+# so it must be rejected here at bridge time with a clear skip reason instead of silently
+# producing a CaseBundle the firmware will reject at runtime.
+_ARENA_CAPACITY_BYTES = 8192
+
+
+def _align_up(value: int, alignment: int) -> int:
+    if alignment <= 1:
+        return value
+    return (value + alignment - 1) // alignment * alignment
+
+
+def _check_case_arena_capacity(generated_test: GeneratedTestCase, manifest: dict, blobs: tuple[BlobInfo, ...]) -> None:
+    """Simulate the firmware's `allocate_blob()` bump-allocator over every streamed
+    (non-host-only) blob, plus any scratch buffer, plus (for ConvolutionFunctions/Convolve
+    specifically) the extra weight-sum buffer `arm_convolve_weight_sum()` needs -- and raise
+    UnsupportedGeneratedTestError if the simulated total would exceed the firmware's fixed
+    `HCT_SERVER_MAX_ARENA_BYTES` case arena.
+    """
+    used = 0
+    for blob in blobs:
+        if blob.host_only:
+            continue
+        used = _align_up(used, max(int(blob.required_alignment), 1)) + int(blob.byte_length)
+    scratch_bytes = int(manifest.get("scratch_buffer", {}).get("bytes", 0))
+    if scratch_bytes > 0:
+        used = _align_up(used, 16) + scratch_bytes
+    if manifest.get("family") == "ConvolutionFunctions" and manifest.get("operator") == "Convolve":
+        output_c = int(manifest.get("serialized_scalar_parameters", {}).get("output_c", 0))
+        used = _align_up(used, 16) + output_c * 4
+    if used > _ARENA_CAPACITY_BYTES:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: estimated case-arena footprint ({used} bytes) exceeds the "
+            f"firmware's fixed HCT_SERVER_MAX_ARENA_BYTES ({_ARENA_CAPACITY_BYTES} bytes) -- this "
+            f"case's blobs/scratch would not fit in a single hardware session and would be "
+            f"rejected by allocate_blob() at CASE_META time."
+        )
+
+
+@dataclass(frozen=True)
+class GeneratedTestCase:
+    """A discovered generated-test directory paired with its parsed descriptor."""
+
+    name: str
+    cpu: str
+    family: str
+    directory: Path
+    descriptor: dict
+
+
+_INT_ARRAY_RE = re.compile(r"=\s*\{([^}]*)\}")
+
+
+def _find_header_file(directory: Path) -> Path:
+    includes_dir = directory / "includes"
+    candidates = sorted(includes_dir.glob("*.h")) if includes_dir.is_dir() else []
+    if not candidates:
+        candidates = sorted(directory.glob("*.h"))
+    if not candidates:
+        raise UnsupportedGeneratedTestError(f"No generated header (.h) found under {directory}")
+    return candidates[0]
+
+
+def _find_source_file(directory: Path) -> Path:
+    candidates = sorted(directory.glob("*.c"))
+    if not candidates:
+        raise UnsupportedGeneratedTestError(f"No generated source (.c) found under {directory}")
+    return candidates[0]
+
+
+def _extract_call_args(source_text: str, function_name: str, *, expected_count: int) -> list[str]:
+    """Extract the positional argument expressions from the first `function_name(...)` call
+    in `source_text` (as generated by the standalone test-harness templates).
+
+    Elementwise ops (unlike Convolve's `cmsis_nn_conv_params` struct) don't have a named
+    scalar-params struct in the generated header -- their quant scalars are inlined directly
+    as call arguments (with `// name` comments) in the generated `.c` file. This is
+    positional/fragile by nature (relies on the generator's fixed CMSIS-NN argument order),
+    so callers must pass `expected_count` to fail loudly on any drift instead of silently
+    misreading arguments.
+    """
+    pattern = re.compile(rf"\b{re.escape(function_name)}\s*\((.*?)\);", re.DOTALL)
+    match = pattern.search(source_text)
+    if match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find call to `{function_name}(...)` in generated source")
+    body = re.sub(r"//[^\n]*", "", match.group(1))
+    args = [a.strip() for a in body.split(",") if a.strip() != ""]
+    if len(args) != expected_count:
+        raise UnsupportedGeneratedTestError(
+            f"Call to `{function_name}(...)` has {len(args)} arguments, expected {expected_count} -- "
+            f"the generator's argument order/signature may have changed; positional extraction is unsafe."
+        )
+    return args
+
+
+def _extract_array(header_text: str, array_name: str) -> list[int]:
+    pattern = re.compile(rf"\b{re.escape(array_name)}\s*(?:\[[^\]]*\])?\s*=\s*\{{(.*?)\}}\s*;", re.DOTALL)
+    match = pattern.search(header_text)
+    if match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find array `{array_name}` in generated header")
+    raw = match.group(1)
+    values = [v.strip() for v in raw.replace("\n", " ").split(",") if v.strip() != ""]
+    return [int(v) for v in values]
+
+
+def _extract_scalar(header_text: str, struct_name: str, field: str) -> int:
+    struct_pattern = re.compile(rf"\b{re.escape(struct_name)}\s*=\s*\{{(.*?)\}}\s*;", re.DOTALL)
+    struct_match = struct_pattern.search(header_text)
+    if struct_match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find struct `{struct_name}` in generated header")
+    body = struct_match.group(1)
+    field_pattern = re.compile(rf"\.{re.escape(field)}\s*=\s*(-?\d+)")
+    field_match = field_pattern.search(body)
+    if field_match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find field `.{field}` on struct `{struct_name}`")
+    return int(field_match.group(1))
+
+
+def _extract_dims(header_text: str, struct_name: str) -> dict[str, int]:
+    struct_pattern = re.compile(rf"\b{re.escape(struct_name)}\s*=\s*\{{(.*?)\}}\s*;", re.DOTALL)
+    match = struct_pattern.search(header_text)
+    if match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find dims struct `{struct_name}` in generated header")
+    body = match.group(1)
+    dims: dict[str, int] = {}
+    for field in ("n", "h", "w", "c"):
+        field_match = re.search(rf"\.{field}\s*=\s*(-?\d+)", body)
+        if field_match is None:
+            raise UnsupportedGeneratedTestError(f"Dims struct `{struct_name}` missing field `.{field}`")
+        dims[field] = int(field_match.group(1))
+    return dims
+
+
+def _extract_nested_scalar(header_text: str, struct_name: str, nested_field: str, field: str) -> int:
+    """Extract `.field` from a nested sub-struct (e.g. `.padding = {.w = 0, .h = 0}`)
+    inside `struct_name`. Needed because `struct_name` (e.g. cmsis_nn_conv_params) has
+    multiple nested `{w, h}` sub-structs (stride/dilation/padding/activation), so a
+    flat search for `.h`/`.w` across the whole struct body could match the wrong one.
+    """
+    struct_pattern = re.compile(rf"\b{re.escape(struct_name)}\s*=\s*\{{(.*?)\}}\s*;", re.DOTALL)
+    struct_match = struct_pattern.search(header_text)
+    if struct_match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find struct `{struct_name}` in generated header")
+    body = struct_match.group(1)
+    nested_pattern = re.compile(rf"\.{re.escape(nested_field)}\s*=\s*\{{([^}}]*)\}}")
+    nested_match = nested_pattern.search(body)
+    if nested_match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find nested field `.{nested_field}` on struct `{struct_name}`")
+    nested_body = nested_match.group(1)
+    field_pattern = re.compile(rf"\.{re.escape(field)}\s*=\s*(-?\d+)")
+    field_match = field_pattern.search(nested_body)
+    if field_match is None:
+        raise UnsupportedGeneratedTestError(
+            f"Could not find field `.{field}` on nested `.{nested_field}` of struct `{struct_name}`"
+        )
+    return int(field_match.group(1))
+
+
+def discover_generated_tests(
+    project_root: Path,
+    *,
+    cpu: str = "cortex-m55",
+    family: str = "ConvolutionFunctions",
+    name_filter: str | None = None,
+    limit: int | None = None,
+) -> list[GeneratedTestCase]:
+    """Discover generated-test directories with a parseable descriptor.yaml under artifacts/generated_tests."""
+    root = project_root / "artifacts" / "generated_tests" / "int" / cpu / family
+    if not root.is_dir():
+        return []
+    results: list[GeneratedTestCase] = []
+    for directory in sorted(p for p in root.iterdir() if p.is_dir()):
+        descriptor_path = directory / "descriptor.yaml"
+        if not descriptor_path.is_file():
+            continue
+        name = directory.name
+        if name_filter is not None and name_filter not in name:
+            continue
+        descriptor = yaml.safe_load(descriptor_path.read_text(encoding="utf-8"))
+        results.append(GeneratedTestCase(name=name, cpu=cpu, family=family, directory=directory, descriptor=descriptor))
+        if limit is not None and len(results) >= limit:
+            break
+    return results
+
+
+def build_case_bundle_from_generated_test(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    """Convert one real generated CMSIS-NN kernel test (with its real golden data) into a
+    streamable perf-stream CaseBundle. Dispatches to a per-(family, operator) builder
+    registered in `_BUILDERS` -- each builder owns its own header/source extraction logic.
+    """
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    builder = _BUILDERS.get((generated_test.family, operator))
+    if builder is None:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: family/operator '{generated_test.family}/{operator}' has no real "
+            f"perf-stream firmware dispatch yet (bridged today: "
+            f"{sorted(f'{fam}/{op}' for fam, op in _BUILDERS)})."
+        )
+    bundle = builder(project_root, generated_test, output_root=output_root)
+    _check_case_arena_capacity(generated_test, bundle.manifest, bundle.blobs)
+    return bundle
+
+
+def _build_convolve_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    """Convert one real generated CMSIS-NN Convolve test (with its real golden data) into a
+    streamable perf-stream CaseBundle, reusing the actual generator-produced input/weights/
+    bias/expected_output arrays rather than fabricating new ones.
+    """
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    weight_dtype = str(descriptor.get("weight_dtype", descriptor.get("resolved_tensor_dtypes", {}).get("weights", "")))
+    activation_dtype = str(descriptor.get("activation_dtype", ""))
+
+    if weight_dtype != "S8" or activation_dtype != "S8":
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} "
+            f"is not bridgeable -- perf-stream firmware only dispatches arm_convolve_s8 (S8 activation + S8 weight)."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    prefix = generated_test.name
+
+    input_dims = _extract_dims(header_text, f"{prefix}_input_dims")
+    filter_dims = _extract_dims(header_text, f"{prefix}_filter_dims")
+    output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
+    if input_dims["n"] != 1:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: batch size {input_dims['n']} > 1 is not yet supported by the "
+            f"perf-stream hardware bridge (firmware dispatches a single arm_convolve_s8 invocation per case)."
+        )
+    input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
+    filter_shape = (filter_dims["h"], filter_dims["w"], filter_dims["c"], filter_dims["n"])
+    output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
+    output_channels = filter_dims["n"]
+
+    weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=np.int8)
+    biases = np.array(_extract_array(header_text, f"{prefix}_biases"), dtype=np.int32)
+    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=np.int8)
+    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=np.int8)
+    multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
+    shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
+
+    if input_flat.size != int(np.prod(input_shape)) or weights_flat.size != int(np.prod(filter_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: generated array sizes (input={input_flat.size}, weights={weights_flat.size}) "
+            f"don't match header dims (input_shape={input_shape}, filter_shape={filter_shape}) -- the standalone "
+            f"test harness likely loops over an outer batch/tiling dimension not reflected in these dims structs, "
+            f"which the perf-stream single-invocation bridge doesn't replicate yet."
+        )
+    weights = weights_flat.reshape(filter_shape)
+    input_data = input_flat.reshape(input_shape)
+
+    input_offset = _extract_scalar(header_text, f"{prefix}_conv_params", "input_offset")
+    output_offset = _extract_scalar(header_text, f"{prefix}_conv_params", "output_offset")
+    activation_min = _extract_scalar(header_text, f"{prefix}_conv_params", "min")
+    activation_max = _extract_scalar(header_text, f"{prefix}_conv_params", "max")
+    strides = tuple(int(v) for v in descriptor["strides"])
+    padding = str(descriptor["padding"])
+    # Ground-truth padding actually used to generate the reference output, read directly
+    # from the generated header rather than re-derived from the VALID/SAME keyword above.
+    # Firmware must use these (and output_dims below) verbatim -- re-deriving them from a
+    # SAME/VALID formula can silently diverge from the real generator's padding/output-size
+    # convention (asymmetric splits, rounding, etc.), corrupting both output size and values.
+    pad_h = _extract_nested_scalar(header_text, f"{prefix}_conv_params", "padding", "h")
+    pad_w = _extract_nested_scalar(header_text, f"{prefix}_conv_params", "padding", "w")
+    # Ground-truth dilation, likewise read directly from the generated header rather than
+    # assumed to be 1 -- firmware previously hardcoded dilation.w/h=1 unconditionally, which
+    # silently produced wrong output for any real generated test with dilation != 1.
+    dilation_h = _extract_nested_scalar(header_text, f"{prefix}_conv_params", "dilation", "h")
+    dilation_w = _extract_nested_scalar(header_text, f"{prefix}_conv_params", "dilation", "w")
+
+    if expected_flat.size != int(np.prod(output_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: expected_output size ({expected_flat.size}) does not match header "
+            f"output_dims product ({int(np.prod(output_shape))})"
+        )
+    expected_output = expected_flat.reshape(output_shape)
+
+    input_dims_dict = input_dims
+    filter_dims_dict = {"h": filter_dims["h"], "w": filter_dims["w"], "c": filter_dims["c"], "n": filter_dims["n"]}
+    output_dims_dict = output_dims
+    scratch_bytes = TemplateContextBuilder.calculate_buffer_size_max(input_dims_dict, filter_dims_dict, output_dims_dict, output_dtype="S8")
+
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+
+    arrays = [
+        (1, "input_0", "S8", input_shape, input_data, False, False),
+        (2, "weights", "S8", filter_shape, weights, False, False),
+        (3, "bias", "S32", (output_channels,), biases, False, False),
+        (4, "multiplier", "S32", (output_channels,), multiplier, False, False),
+        (5, "shift", "S32", (output_channels,), shift, False, False),
+        (6, "expected_output", "S8", tuple(int(v) for v in expected_output.shape), expected_output, False, True),
+    ]
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": operator,
+        "family": "ConvolutionFunctions",
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family="ConvolutionFunctions", operator="Convolve", dtype="S8"),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": {
+            "stride_h": strides[0],
+            "stride_w": strides[1],
+            "padding": padding,
+            "pad_h": pad_h,
+            "pad_w": pad_w,
+            "dilation_h": dilation_h,
+            "dilation_w": dilation_w,
+            "output_h": output_dims["h"],
+            "output_w": output_dims["w"],
+            "output_c": output_dims["c"],
+            "input_offset": input_offset,
+            "output_offset": output_offset,
+            "activation_min": activation_min,
+            "activation_max": activation_max,
+        },
+        "tensor_dtypes": {"input": "S8", "weights": "S8", "bias": "S32", "output": "S8"},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": "S8", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        "scratch_buffer": {"bytes": int(scratch_bytes)},
+        "required_target_capabilities": ["convolve_s8"],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
+def _build_depthwise_conv_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    """Convert one real generated CMSIS-NN DepthwiseConv S8 test into a streamable
+    perf-stream CaseBundle. Uses the low-level `arm_depthwise_conv_s8` (not the
+    `_wrapper_s8` variant) since it needs no scratch buffer at all (`ctx` is unused --
+    see `Source/ConvolutionFunctions/arm_depthwise_conv_s8.c`'s `(void)ctx;`) and no
+    weight-sum precomputation, unlike Convolve's `arm_convolve_s8`. Filter dims are kept
+    in the header's native (N, H, W, C_OUT) order (unlike Convolve's builder, which
+    reorders filter dims to (H, W, C, N) to match `cmsis_nn_dims` filter-dims convention
+    for the full-conv kernel -- depthwise's `cmsis_nn_dw_conv_params`-based filter format
+    is already (1, H, W, C_OUT), so no reordering is needed).
+    """
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    weight_dtype = str(descriptor.get("weight_dtype", descriptor.get("resolved_tensor_dtypes", {}).get("weights", "")))
+    activation_dtype = str(descriptor.get("activation_dtype", ""))
+
+    if weight_dtype != "S8" or activation_dtype != "S8":
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} "
+            f"is not bridgeable -- perf-stream firmware only dispatches arm_depthwise_conv_s8 "
+            f"(S8 activation + S8 weight)."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    prefix = generated_test.name
+
+    input_dims = _extract_dims(header_text, f"{prefix}_input_dims")
+    filter_dims = _extract_dims(header_text, f"{prefix}_filter_dims")
+    output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
+    if input_dims["n"] != 1:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: batch size {input_dims['n']} > 1 is not yet supported by the "
+            f"perf-stream hardware bridge (firmware dispatches a single arm_depthwise_conv_s8 "
+            f"invocation per case)."
+        )
+    input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
+    # Native (N, H, W, C_OUT) order, per arm_depthwise_conv_s8's filter_dims docstring.
+    filter_shape = (filter_dims["n"], filter_dims["h"], filter_dims["w"], filter_dims["c"])
+    output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
+    output_channels = output_dims["c"]
+
+    weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=np.int8)
+    biases = np.array(_extract_array(header_text, f"{prefix}_biases"), dtype=np.int32)
+    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=np.int8)
+    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=np.int8)
+    multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
+    shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
+
+    if input_flat.size != int(np.prod(input_shape)) or weights_flat.size != int(np.prod(filter_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: generated array sizes (input={input_flat.size}, weights={weights_flat.size}) "
+            f"don't match header dims (input_shape={input_shape}, filter_shape={filter_shape})."
+        )
+    weights = weights_flat.reshape(filter_shape)
+    input_data = input_flat.reshape(input_shape)
+
+    if expected_flat.size != int(np.prod(output_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: expected_output size ({expected_flat.size}) does not match header "
+            f"output_dims product ({int(np.prod(output_shape))})"
+        )
+    expected_output = expected_flat.reshape(output_shape)
+
+    params_struct = f"{prefix}_dw_conv_params"
+    input_offset = _extract_scalar(header_text, params_struct, "input_offset")
+    output_offset = _extract_scalar(header_text, params_struct, "output_offset")
+    ch_mult = _extract_scalar(header_text, params_struct, "ch_mult")
+    activation_min = _extract_nested_scalar(header_text, params_struct, "activation", "min")
+    activation_max = _extract_nested_scalar(header_text, params_struct, "activation", "max")
+    stride_h = _extract_nested_scalar(header_text, params_struct, "stride", "h")
+    stride_w = _extract_nested_scalar(header_text, params_struct, "stride", "w")
+    pad_h = _extract_nested_scalar(header_text, params_struct, "padding", "h")
+    pad_w = _extract_nested_scalar(header_text, params_struct, "padding", "w")
+    dilation_h = _extract_nested_scalar(header_text, params_struct, "dilation", "h")
+    dilation_w = _extract_nested_scalar(header_text, params_struct, "dilation", "w")
+
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+
+    arrays = [
+        (1, "input_0", "S8", input_shape, input_data, False, False),
+        (2, "weights", "S8", filter_shape, weights, False, False),
+        (3, "bias", "S32", (output_channels,), biases, False, False),
+        (4, "multiplier", "S32", (output_channels,), multiplier, False, False),
+        (5, "shift", "S32", (output_channels,), shift, False, False),
+        (6, "expected_output", "S8", tuple(int(v) for v in expected_output.shape), expected_output, False, True),
+    ]
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": operator,
+        "family": "ConvolutionFunctions",
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family="ConvolutionFunctions", operator="DepthwiseConv", dtype="S8"),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": {
+            "stride_h": stride_h,
+            "stride_w": stride_w,
+            "pad_h": pad_h,
+            "pad_w": pad_w,
+            "dilation_h": dilation_h,
+            "dilation_w": dilation_w,
+            "output_h": output_dims["h"],
+            "output_w": output_dims["w"],
+            "output_c": output_dims["c"],
+            "input_offset": input_offset,
+            "output_offset": output_offset,
+            "activation_min": activation_min,
+            "activation_max": activation_max,
+            "ch_mult": ch_mult,
+        },
+        "tensor_dtypes": {"input": "S8", "weights": "S8", "bias": "S32", "output": "S8"},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": "S8", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        "scratch_buffer": {"bytes": 0},
+        "required_target_capabilities": ["depthwise_conv_s8"],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
+# arm_add_s8/arm_sub_s8 share an identical CMSIS-NN signature and argument order:
+#   (input1, &input1_dims, input2, &input2_dims,
+#    input1_offset, input1_mult, input1_shift,
+#    input2_offset, input2_mult, input2_shift,
+#    left_shift,
+#    output, &output_dims,
+#    out_offset, out_mult, out_shift,
+#    out_activation_min, out_activation_max)
+_ELEMENTWISE_BINARY_ARG_COUNT = 18
+_ELEMENTWISE_BINARY_CMSIS_FUNCTION = {"Add": "arm_add_s8", "Sub": "arm_sub_s8"}
+
+# arm_mul_s8(input1_data, &input1_dims, input2_data, &input2_dims,
+#    input1_offset, input2_offset,
+#    output_data, &output_dims,
+#    out_offset, out_mult, out_shift,
+#    out_activation_min, out_activation_max)
+# Unlike Add/Sub, Mul has no per-input mult/shift or left_shift arguments.
+_MUL_ARG_COUNT = 13
+
+
+def _extract_elementwise_binary_tensors(
+    header_text: str,
+    prefix: str,
+    generated_test: GeneratedTestCase,
+    operator: str,
+) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int], np.ndarray, np.ndarray, np.ndarray, dict]:
+    """Shared dims/array extraction for BasicMathFunctions binary elementwise ops
+    (Add/Sub/Mul all share the same input1/input2/output_dims + input1/input2/expected_output
+    array naming convention in the generated header)."""
+    input1_dims = _extract_dims(header_text, f"{prefix}_input1_dims")
+    input2_dims = _extract_dims(header_text, f"{prefix}_input2_dims")
+    output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
+    if input1_dims["n"] != 1 or input2_dims["n"] != 1:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: batch size > 1 is not yet supported by the perf-stream "
+            f"hardware bridge (firmware dispatches a single {operator} invocation per case)."
+        )
+    input1_shape = (input1_dims["n"], input1_dims["h"], input1_dims["w"], input1_dims["c"])
+    input2_shape = (input2_dims["n"], input2_dims["h"], input2_dims["w"], input2_dims["c"])
+    output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
+
+    input1_flat = np.array(_extract_array(header_text, f"{prefix}_input1"), dtype=np.int8)
+    input2_flat = np.array(_extract_array(header_text, f"{prefix}_input2"), dtype=np.int8)
+    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=np.int8)
+    if input1_flat.size != int(np.prod(input1_shape)) or input2_flat.size != int(np.prod(input2_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: generated array sizes (input1={input1_flat.size}, "
+            f"input2={input2_flat.size}) don't match header dims (input1_shape={input1_shape}, "
+            f"input2_shape={input2_shape})."
+        )
+    if expected_flat.size != int(np.prod(output_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: expected_output size ({expected_flat.size}) does not match "
+            f"header output_dims product ({int(np.prod(output_shape))})"
+        )
+    input1_data = input1_flat.reshape(input1_shape)
+    input2_data = input2_flat.reshape(input2_shape)
+    expected_output = expected_flat.reshape(output_shape)
+    return input1_shape, input2_shape, input1_data, input2_data, expected_output, output_dims
+
+
+def _write_elementwise_binary_bundle(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    operator: str,
+    cmsis_function: str,
+    output_dims: dict,
+    input1_shape: tuple[int, int, int, int],
+    input2_shape: tuple[int, int, int, int],
+    input1_data: np.ndarray,
+    input2_data: np.ndarray,
+    expected_output: np.ndarray,
+    scalar_parameters: dict[str, int],
+    output_root: Path | None,
+) -> CaseBundle:
+    """Shared CaseBundle assembly for BasicMathFunctions binary elementwise ops (Add/Sub/Mul)."""
+    descriptor = generated_test.descriptor
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+
+    arrays = [
+        (1, "input_0", "S8", input1_shape, input1_data, False, False),
+        (2, "input_1", "S8", input2_shape, input2_data, False, False),
+        (3, "expected_output", "S8", tuple(int(v) for v in expected_output.shape), expected_output, False, True),
+    ]
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": operator,
+        "family": generated_test.family,
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype="S8"),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": {
+            **scalar_parameters,
+            "output_h": output_dims["h"],
+            "output_w": output_dims["w"],
+            "output_c": output_dims["c"],
+        },
+        "tensor_dtypes": {"input": "S8", "output": "S8"},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": "S8", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        "scratch_buffer": {"bytes": 0},
+        "required_target_capabilities": [f"{cmsis_function}"],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
+def _build_elementwise_binary_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    """Bridge a BasicMathFunctions Add/Sub S8 generated test. Unlike Convolve's
+    `cmsis_nn_conv_params` struct, these ops have no named scalar-params struct in the
+    generated header -- their quant scalars are inlined as call arguments in the generated
+    `.c` file, so they're extracted positionally via `_extract_call_args` instead of
+    `_extract_scalar`/`_extract_nested_scalar`.
+    """
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    activation_dtype = str(descriptor.get("activation_dtype", ""))
+    if activation_dtype != "S8":
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: activation_dtype={activation_dtype!r} is not bridgeable -- "
+            f"perf-stream firmware only dispatches the S8 {operator} kernel."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    source_path = _find_source_file(generated_test.directory)
+    source_text = source_path.read_text(encoding="utf-8")
+    prefix = generated_test.name
+
+    input1_shape, input2_shape, input1_data, input2_data, expected_output, output_dims = (
+        _extract_elementwise_binary_tensors(header_text, prefix, generated_test, operator)
+    )
+
+    cmsis_function = _ELEMENTWISE_BINARY_CMSIS_FUNCTION[operator]
+    args = _extract_call_args(source_text, cmsis_function, expected_count=_ELEMENTWISE_BINARY_ARG_COUNT)
+    input1_offset, input1_mult, input1_shift = (int(args[4]), int(args[5]), int(args[6]))
+    input2_offset, input2_mult, input2_shift = (int(args[7]), int(args[8]), int(args[9]))
+    left_shift = int(args[10])
+    out_offset, out_mult, out_shift = (int(args[13]), int(args[14]), int(args[15]))
+    activation_min, activation_max = (int(args[16]), int(args[17]))
+
+    scalar_parameters = {
+        "input1_offset": input1_offset,
+        "input1_mult": input1_mult,
+        "input1_shift": input1_shift,
+        "input2_offset": input2_offset,
+        "input2_mult": input2_mult,
+        "input2_shift": input2_shift,
+        "left_shift": left_shift,
+        "output_offset": out_offset,
+        "out_mult": out_mult,
+        "out_shift": out_shift,
+        "activation_min": activation_min,
+        "activation_max": activation_max,
+    }
+    return _write_elementwise_binary_bundle(
+        project_root,
+        generated_test,
+        operator=operator,
+        cmsis_function=cmsis_function,
+        output_dims=output_dims,
+        input1_shape=input1_shape,
+        input2_shape=input2_shape,
+        input1_data=input1_data,
+        input2_data=input2_data,
+        expected_output=expected_output,
+        scalar_parameters=scalar_parameters,
+        output_root=output_root,
+    )
+
+
+def _build_mul_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    """Bridge a BasicMathFunctions Mul S8 generated test. `arm_mul_s8` has a different (shorter)
+    signature than Add/Sub -- no per-input mult/shift, no left_shift -- so it gets its own
+    positional-argument mapping while sharing the tensor-extraction and bundle-assembly helpers.
+    """
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    activation_dtype = str(descriptor.get("activation_dtype", ""))
+    if activation_dtype != "S8":
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: activation_dtype={activation_dtype!r} is not bridgeable -- "
+            f"perf-stream firmware only dispatches the S8 {operator} kernel."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    source_path = _find_source_file(generated_test.directory)
+    source_text = source_path.read_text(encoding="utf-8")
+    prefix = generated_test.name
+
+    input1_shape, input2_shape, input1_data, input2_data, expected_output, output_dims = (
+        _extract_elementwise_binary_tensors(header_text, prefix, generated_test, operator)
+    )
+
+    cmsis_function = "arm_mul_s8"
+    args = _extract_call_args(source_text, cmsis_function, expected_count=_MUL_ARG_COUNT)
+    input1_offset, input2_offset = (int(args[4]), int(args[5]))
+    out_offset, out_mult, out_shift = (int(args[8]), int(args[9]), int(args[10]))
+    activation_min, activation_max = (int(args[11]), int(args[12]))
+
+    scalar_parameters = {
+        "input1_offset": input1_offset,
+        "input2_offset": input2_offset,
+        "output_offset": out_offset,
+        "out_mult": out_mult,
+        "out_shift": out_shift,
+        "activation_min": activation_min,
+        "activation_max": activation_max,
+    }
+    return _write_elementwise_binary_bundle(
+        project_root,
+        generated_test,
+        operator=operator,
+        cmsis_function=cmsis_function,
+        output_dims=output_dims,
+        input1_shape=input1_shape,
+        input2_shape=input2_shape,
+        input1_data=input1_data,
+        input2_data=input2_data,
+        expected_output=expected_output,
+        scalar_parameters=scalar_parameters,
+        output_root=output_root,
+    )
+
+
+def _build_min_max_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    """Bridge a BasicMathFunctions Maximum/Minimum S8 generated test. Unlike Add/Sub/Mul,
+    these ops have NO quantization scalar parameters at all -- `arm_maximum_s8`/
+    `arm_minimum_s8` take only a scratch `cmsis_nn_context` (always `{NULL, 0}` in the
+    generated tests; no buffer-sizing helper exists for these ops) plus the two input
+    tensors and dims. No `_extract_call_args` positional extraction is needed since there
+    are no scalars to read.
+    """
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    activation_dtype = str(descriptor.get("activation_dtype", ""))
+    if activation_dtype != "S8":
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: activation_dtype={activation_dtype!r} is not bridgeable -- "
+            f"perf-stream firmware only dispatches the S8 {operator} kernel."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    prefix = generated_test.name
+
+    input1_shape, input2_shape, input1_data, input2_data, expected_output, output_dims = (
+        _extract_elementwise_binary_tensors(header_text, prefix, generated_test, operator)
+    )
+
+    cmsis_function = "arm_maximum_s8" if operator == "Maximum" else "arm_minimum_s8"
+    return _write_elementwise_binary_bundle(
+        project_root,
+        generated_test,
+        operator=operator,
+        cmsis_function=cmsis_function,
+        output_dims=output_dims,
+        input1_shape=input1_shape,
+        input2_shape=input2_shape,
+        input1_data=input1_data,
+        input2_data=input2_data,
+        expected_output=expected_output,
+        scalar_parameters={},
+        output_root=output_root,
+    )
+
+
+# Dispatch table: (family, operator) -> builder. Add new bridged ops here (and a matching
+# entry in assets/kernel_registry.yaml + a firmware handler) to extend hardware coverage.
+_BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
+    ("ConvolutionFunctions", "Convolve"): _build_convolve_case,
+    ("ConvolutionFunctions", "DepthwiseConv"): _build_depthwise_conv_case,
+    ("BasicMathFunctions", "Add"): _build_elementwise_binary_case,
+    ("BasicMathFunctions", "Sub"): _build_elementwise_binary_case,
+    ("BasicMathFunctions", "Mul"): _build_mul_case,
+    ("BasicMathFunctions", "Maximum"): _build_min_max_case,
+    ("BasicMathFunctions", "Minimum"): _build_min_max_case,
+}
+
+
+def bridged_families() -> list[str]:
+    """Distinct operator families with at least one bridged (family, operator) builder
+    registered in `_BUILDERS`, in stable sorted order. Used by callers (e.g.
+    `hardware_run.build_generated_test_case_bundles`) that want to bridge every family
+    with real firmware dispatch support instead of a single hardcoded family."""
+    return sorted({family for family, _operator in _BUILDERS})
+

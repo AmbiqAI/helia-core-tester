@@ -129,7 +129,13 @@ def detect_paths(args) -> dict:
     if not toolchain_file.exists():
         raise FvpScriptError(f"Toolchain file missing: {toolchain_file}")
 
-    if not args.no_fvp_from_download:
+    # The FVP binaries are Linux-only prebuilt executables. When the caller
+    # passes --no-run (e.g. a cross-compile-only or real-hardware build),
+    # nothing downstream actually runs the FVP, so skip resolving/requiring
+    # it entirely -- this lets --no-run builds work on non-Linux hosts too.
+    if getattr(args, "no_run", False):
+        fvp_exe = None
+    elif not args.no_fvp_from_download:
         fvp_exe_candidate, checked_paths = _resolve_downloaded_fvp_executable(dl, arch)
         if fvp_exe_candidate is None:
             checked = ", ".join(str(path) for path in checked_paths)

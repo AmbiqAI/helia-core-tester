@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from helia_core_tester.core.discovery import find_descriptors_dir
+from helia_core_tester.core.cpu_targets import target_cpu_cmake_value
 from helia_core_tester.core.path_layout import build_dir as canonical_build_dir
 from helia_core_tester.core.path_layout import generated_tests_dir as canonical_generated_tests_dir
 from helia_core_tester.core.path_layout import tests_report_dir as canonical_tests_report_dir
@@ -72,7 +73,7 @@ def run_tests_with_reporting(
                 source_dir=source_dir,
                 build_dir=build_dir,
                 toolchain_file=toolchain_file,
-                cpu=cpu,
+                cpu=target_cpu_cmake_value(cpu),
                 cmsis5=cmsis5,
                 optimization=args.opt,
                 extra_defs=args.cmake_def,

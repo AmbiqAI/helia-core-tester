@@ -1,0 +1,86 @@
+[
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_abs_s8",
+    "kernel_id": 1,
+    "mutates_input": false,
+    "operator_family": "BasicMathFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "S8"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_convolve_s8",
+    "kernel_id": 2,
+    "mutates_input": false,
+    "operator_family": "ConvolutionFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 64,
+    "stateless": true,
+    "supported_dtype": "S8"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_add_s8",
+    "kernel_id": 3,
+    "mutates_input": false,
+    "operator_family": "BasicMathFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "S8"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_sub_s8",
+    "kernel_id": 4,
+    "mutates_input": false,
+    "operator_family": "BasicMathFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "S8"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_mul_s8",
+    "kernel_id": 5,
+    "mutates_input": false,
+    "operator_family": "BasicMathFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "S8"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_minimum_s8",
+    "kernel_id": 6,
+    "mutates_input": false,
+    "operator_family": "BasicMathFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "S8"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_maximum_s8",
+    "kernel_id": 7,
+    "mutates_input": false,
+    "operator_family": "BasicMathFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "S8"
+  }
+]

@@ -1,0 +1,170 @@
+{#
+  Real-hardware (Apollo510 / Cortex-M55) PMU + cycle-accurate op-level
+  benchmarking harness (benchmark_target == "hardware").
+
+  This is one of two interchangeable benchmark backends selected by
+  common/standalone/benchmark.j2 (the dispatcher) based on the
+  `benchmark_target` context variable ("fvp" [default] or "hardware" -- see
+  benchmark_fvp.j2 for the FVP/DWT backend). Op templates never include this
+  file directly -- they always include benchmark.j2 and stay agnostic to
+  which physical/simulated target is active.
+
+  Included by op templates that have split their kernel invocation into
+  `{{name}}_bench_init()` (one-time buffer/context/weight-sum setup, untimed)
+  and `{{name}}_bench_op()` (only the kernel call, timed). Templates opt in by
+  setting `supports_benchmark = true` before including common/standalone/main.j2
+  (see ConvolutionFunctions/convolve/convolve.c.j2 for the reference pattern).
+
+  Entirely compiled out unless HELIA_BENCHMARK_MODE is defined (wired via
+  `helia_core_tester build/run/full --benchmark --hardware`), so templates
+  that include this file are unaffected when --benchmark is not requested.
+
+  Uses the ARMv8.1-M PMU (pmu_armv8.h, Cortex-M55/Apollo510 only) for a fixed
+  default event set alongside the DWT cycle counter, since the PMU cycle
+  counter and DWT->CYCCNT measure the same clock but the PMU additionally
+  exposes micro-architectural event counters DWT does not. Default events
+  (fixed per run -- M55 exposes a small number of programmable counters, so
+  all four are captured in a single pass rather than multiple passes):
+    - counter 0: ARM_PMU_INST_RETIRED       (instructions retired)
+    - counter 1: ARM_PMU_L1D_CACHE_REFILL   (L1 data cache refills / misses)
+    - counter 2: ARM_PMU_STALL              (cycles stalled)
+    - counter 3: ARM_PMU_BR_MIS_PRED        (branch mispredicts)
+
+  Output format is consumed by helia_core_tester.reporting.parser.TestResultParser
+  (same [BENCH]/[PERF] lines as the FVP backend, plus additional [PMU] lines):
+    [BENCH] <name> warmup_runs=<W> measured_runs=<M>
+    [PERF] <name>: <cycles> cycles
+    [PMU] <name>: inst_retired=<N> l1d_refill=<N> stall=<N> br_mispred=<N>
+
+  IMPORTANT (verified against modules/nsx-ambiq-sdk/modules/nsx-core/src/nsx_retarget.c
+  and modules/nsx-ambiq-sdk/modules/nsx-core/src/apollo510/nsx_system_platform.c):
+  on the NSX Apollo510 bring-up, plain C `printf()` is a NO-OP -- the newlib
+  `__wrap__write_r` retarget stub swallows it without producing any output.
+  Only `am_util_stdio_printf()` is wired to a real sink: nsx-core's platform
+  init calls `am_util_stdio_printf_init((am_util_stdio_print_char_t)am_hal_itm_print)`,
+  so its output goes out over ITM/SWO. That means this harness MUST use
+  `am_util_stdio_printf`, not `printf`, for any output to be observable on
+  real hardware -- and capture on the host must go through SWO (e.g.
+  JLinkSWOViewerCL / the `<target>_view` CMake target), not RTT.
+#}
+#ifdef HELIA_BENCHMARK_MODE
+
+#if defined(HELIA_HARDWARE_BUILD)
+/* am_mcu_apollo.h (-> apollo510.h -> core_cm55.h) declares DWT/CoreDebug/
+ * DWT_CTRL_CYCCNTENA_Msk on real hardware. Unlike the FVP toolchain path,
+ * HELIA_HARDWARE_BUILD's cmake wiring (nsx::board/nsx::core) does not
+ * force-include a CMSIS device header via `-include`, so pull it in
+ * explicitly here before DWT/CoreDebug/pmu_armv8.h are used below. */
+#include "am_mcu_apollo.h"
+#include "am_util_stdio.h"
+#define HELIA_BENCH_PRINTF am_util_stdio_printf
+#else
+#define HELIA_BENCH_PRINTF printf
+#endif
+
+#ifndef HELIA_BENCHMARK_WARMUP_RUNS
+#define HELIA_BENCHMARK_WARMUP_RUNS 3
+#endif
+#ifndef HELIA_BENCHMARK_MEASURED_RUNS
+#define HELIA_BENCHMARK_MEASURED_RUNS 10
+#endif
+
+#if !defined(__CORTEX_M) || (__CORTEX_M < 4)
+#error "HELIA_BENCHMARK_MODE requires a Cortex-M4/M55 target with a DWT cycle counter; cortex-m0 has none (see Config._validate_hardware_benchmark)."
+#endif
+
+#include "pmu_armv8.h"
+
+typedef int32_t (*helia_bench_op_fn)(void);
+
+#define HELIA_PMU_NUM_COUNTERS 4
+#define HELIA_PMU_COUNTER_INST_RETIRED 0
+#define HELIA_PMU_COUNTER_L1D_REFILL   1
+#define HELIA_PMU_COUNTER_STALL        2
+#define HELIA_PMU_COUNTER_BR_MISPRED   3
+
+static inline void helia_dwt_enable(void)
+{
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+static inline uint32_t helia_dwt_cycles(void)
+{
+    return DWT->CYCCNT;
+}
+
+static inline void helia_pmu_setup(void)
+{
+    ARM_PMU_Disable();
+    ARM_PMU_CYCCNT_Reset();
+    ARM_PMU_EVCNTR_ALL_Reset();
+
+    ARM_PMU_Set_EVTYPER(HELIA_PMU_COUNTER_INST_RETIRED, ARM_PMU_INST_RETIRED);
+    ARM_PMU_Set_EVTYPER(HELIA_PMU_COUNTER_L1D_REFILL, ARM_PMU_L1D_CACHE_REFILL);
+    ARM_PMU_Set_EVTYPER(HELIA_PMU_COUNTER_STALL, ARM_PMU_STALL);
+    ARM_PMU_Set_EVTYPER(HELIA_PMU_COUNTER_BR_MISPRED, ARM_PMU_BR_MIS_PRED);
+
+    ARM_PMU_Enable();
+}
+
+static inline void helia_pmu_start(void)
+{
+    ARM_PMU_CNTR_Disable(0xFFFFFFFFu);
+    ARM_PMU_CYCCNT_Reset();
+    ARM_PMU_EVCNTR_ALL_Reset();
+    ARM_PMU_CNTR_Enable((1UL << HELIA_PMU_COUNTER_INST_RETIRED) |
+                         (1UL << HELIA_PMU_COUNTER_L1D_REFILL) |
+                         (1UL << HELIA_PMU_COUNTER_STALL) |
+                         (1UL << HELIA_PMU_COUNTER_BR_MISPRED));
+}
+
+static inline void helia_pmu_stop(void)
+{
+    ARM_PMU_CNTR_Disable(0xFFFFFFFFu);
+}
+
+/*
+ * Runs `op` HELIA_BENCHMARK_WARMUP_RUNS times untimed (cache/branch-predictor
+ * warmup, no counting), then HELIA_BENCHMARK_MEASURED_RUNS times timed via
+ * both the DWT cycle counter and the fixed PMU event set. Only the op call
+ * itself is measured -- never `_bench_init()` (buffer setup / weight-sum
+ * precompute) and never output validation/compare, which happen separately
+ * in the non-benchmark path.
+ */
+static inline void helia_benchmark_run(const char *name, helia_bench_op_fn op)
+{
+    helia_dwt_enable();
+    helia_pmu_setup();
+
+    for (int i = 0; i < HELIA_BENCHMARK_WARMUP_RUNS; i++) {
+        (void)op();
+    }
+
+    HELIA_BENCH_PRINTF("[BENCH] %s warmup_runs=%d measured_runs=%d\r\n",
+           name, HELIA_BENCHMARK_WARMUP_RUNS, HELIA_BENCHMARK_MEASURED_RUNS);
+
+    for (int i = 0; i < HELIA_BENCHMARK_MEASURED_RUNS; i++) {
+        helia_pmu_start();
+        uint32_t start = helia_dwt_cycles();
+        (void)op();
+        uint32_t end = helia_dwt_cycles();
+        helia_pmu_stop();
+
+        uint32_t inst_retired = ARM_PMU_Get_EVCNTR(HELIA_PMU_COUNTER_INST_RETIRED);
+        uint32_t l1d_refill = ARM_PMU_Get_EVCNTR(HELIA_PMU_COUNTER_L1D_REFILL);
+        uint32_t stall = ARM_PMU_Get_EVCNTR(HELIA_PMU_COUNTER_STALL);
+        uint32_t br_mispred = ARM_PMU_Get_EVCNTR(HELIA_PMU_COUNTER_BR_MISPRED);
+
+        HELIA_BENCH_PRINTF("[PERF] %s: %lu cycles\r\n", name, (unsigned long)(end - start));
+        HELIA_BENCH_PRINTF("[PMU] %s: inst_retired=%lu l1d_refill=%lu stall=%lu br_mispred=%lu\r\n",
+               name,
+               (unsigned long)inst_retired,
+               (unsigned long)l1d_refill,
+               (unsigned long)stall,
+               (unsigned long)br_mispred);
+    }
+}
+
+#endif // HELIA_BENCHMARK_MODE

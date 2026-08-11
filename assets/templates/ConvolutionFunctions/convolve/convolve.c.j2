@@ -2,6 +2,10 @@
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
 
+{% include "common/standalone/benchmark.j2" %}
+
+{% set supports_benchmark = true %}
+
 // Context for buffer allocation
 static cmsis_nn_context {{ name }}_ctx;
 
@@ -37,10 +41,17 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
 {% endif %}
 {% endif %}
 
-int32_t {{ prefix }}_{{ name }}_run(
-    const {{ input_dtype }}* __restrict input,
-    {{ output_dtype }}* __restrict output
-) {
+{#
+  Shared logic for both the plain correctness path ({{prefix}}_{{name}}_run,
+  used by _test_case_run) and the --benchmark path ({{name}}_bench_init /
+  {{name}}_bench_op, used by _benchmark_run). Defined once as macros so the
+  two paths can never drift out of sync -- only the timing boundary differs
+  (init vs. the timed kernel call), not the logic itself. The s4 branch
+  respects `use_weight_sum` so both the "before" (plain arm_convolve_wrapper_s4)
+  and "after" (arm_convolve_wrapper_s4_with_weight_sum) routes can be
+  benchmarked and compared -- see scripts/test_s4_conv_weight_sum.sh.
+#}
+{% macro conv_bench_init() %}
     // Calculate required buffer size
     {% if float_kernel %}
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
@@ -68,37 +79,16 @@ int32_t {{ prefix }}_{{ name }}_run(
     {{ name }}_ctx.buf = {{ name }}_buffer;
     {{ name }}_ctx.size = required_buffer_size;
 
-    // Run convolution - different signatures for s8 vs s16
-    {% if float_kernel %}
-    return {{ kernel_fn }}(
-        &{{ name }}_ctx,
-        &{{ name }}_conv_params,
-        &{{ name }}_input_dims,
-        input,
-        &{{ name }}_filter_dims,
-        {{ name }}_weights,
-        {% if has_biases %}
-        &{{ name }}_bias_dims,
-        {{ name }}_biases,
-        {% else %}
-        NULL,
-        NULL,
-        {% endif %}
-        &{{ name }}_output_dims,
-        output{% if kernel_needs_layout %},
-        {{ kernel_layout }}
-        {% endif %}
-    );
-    {% elif kernel_fn == 'arm_convolve_wrapper_s8' %}
+    {% if kernel_fn == 'arm_convolve_wrapper_s8' %}
     // Initialize weight sum context and buffer
     {{ name }}_weight_sum_ctx.buf = {{ name }}_weight_sum_buffer;
     {{ name }}_weight_sum_ctx.size = {{ name|upper }}_WEIGHT_SUM_BUFFER_SIZE;
-    
+
     // Calculate weight sum (required for s8 convolutions)
     // This pre-computes weight * input_offset + bias for optimization
     int32_t lhs_offset = (int32_t){{ name }}_conv_params.input_offset;
     {% if has_biases %}
-    arm_convolve_weight_sum((int32_t*){{ name }}_weight_sum_ctx.buf, 
+    arm_convolve_weight_sum((int32_t*){{ name }}_weight_sum_ctx.buf,
                             {{ name }}_weights,
                             &{{ name }}_input_dims,
                             &{{ name }}_filter_dims,
@@ -106,7 +96,7 @@ int32_t {{ prefix }}_{{ name }}_run(
                             lhs_offset,
                             {{ name }}_biases);
     {% else %}
-    arm_convolve_weight_sum((int32_t*){{ name }}_weight_sum_ctx.buf, 
+    arm_convolve_weight_sum((int32_t*){{ name }}_weight_sum_ctx.buf,
                             {{ name }}_weights,
                             &{{ name }}_input_dims,
                             &{{ name }}_filter_dims,
@@ -114,29 +104,7 @@ int32_t {{ prefix }}_{{ name }}_run(
                             lhs_offset,
                             NULL);
     {% endif %}
-    
-    // s8 signature: (ctx, weight_sum_ctx, conv_params, quant_params, input_dims, input_data, filter_dims, filter_data, bias_dims, bias_data, output_dims, output_data)
-    return arm_convolve_wrapper_s8(
-        &{{ name }}_ctx,
-        &{{ name }}_weight_sum_ctx,
-        &{{ name }}_conv_params,
-        &{{ name }}_quant_params,
-        &{{ name }}_input_dims,
-        input,
-        &{{ name }}_filter_dims,
-        {{ name }}_weights,
-        {% if has_biases %}
-        &{{ name }}_bias_dims,
-        {{ name }}_biases,
-        {% else %}
-        NULL,  // bias_dims
-        NULL,  // bias_data
-        {% endif %}
-        &{{ name }}_output_dims,
-        output
-    );
-    {% elif kernel_fn == 'arm_convolve_wrapper_s4' %}
-    {% if use_weight_sum %}
+    {% elif kernel_fn == 'arm_convolve_wrapper_s4' and use_weight_sum %}
     // Initialize weight sum context and buffer
     {{ name }}_weight_sum_ctx.buf = {{ name }}_weight_sum_buffer;
     {{ name }}_weight_sum_ctx.size = {{ name|upper }}_WEIGHT_SUM_BUFFER_SIZE;
@@ -150,7 +118,52 @@ int32_t {{ prefix }}_{{ name }}_run(
                                &{{ name }}_output_dims,
                                lhs_offset,
                                {% if has_biases %}{{ name }}_biases{% else %}NULL{% endif %});
-
+    {% endif %}
+{% endmacro %}
+{% macro conv_kernel_call(input_expr, output_expr) %}
+    // Run convolution - different signatures for s8 vs s16
+    {% if float_kernel %}
+    return {{ kernel_fn }}(
+        &{{ name }}_ctx,
+        &{{ name }}_conv_params,
+        &{{ name }}_input_dims,
+        {{ input_expr }},
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        {% if has_biases %}
+        &{{ name }}_bias_dims,
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        {{ output_expr }}{% if kernel_needs_layout %},
+        {{ kernel_layout }}
+        {% endif %}
+    );
+    {% elif kernel_fn == 'arm_convolve_wrapper_s8' %}
+    // s8 signature: (ctx, weight_sum_ctx, conv_params, quant_params, input_dims, input_data, filter_dims, filter_data, bias_dims, bias_data, output_dims, output_data)
+    return arm_convolve_wrapper_s8(
+        &{{ name }}_ctx,
+        &{{ name }}_weight_sum_ctx,
+        &{{ name }}_conv_params,
+        &{{ name }}_quant_params,
+        &{{ name }}_input_dims,
+        {{ input_expr }},
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        {% if has_biases %}
+        &{{ name }}_bias_dims,
+        {{ name }}_biases,
+        {% else %}
+        NULL,  // bias_dims
+        NULL,  // bias_data
+        {% endif %}
+        &{{ name }}_output_dims,
+        {{ output_expr }}
+    );
+    {% elif kernel_fn == 'arm_convolve_wrapper_s4' and use_weight_sum %}
     // s4 weight-sum signature: (ctx, weight_sum_ctx, conv_params, quant_params, input_dims, input_data,
     // filter_dims, filter_data, bias_dims, bias_data, output_dims, output_data)
     return arm_convolve_wrapper_s4_with_weight_sum(
@@ -159,7 +172,7 @@ int32_t {{ prefix }}_{{ name }}_run(
         &{{ name }}_conv_params,
         &{{ name }}_quant_params,
         &{{ name }}_input_dims,
-        input,
+        {{ input_expr }},
         &{{ name }}_filter_dims,
         {{ name }}_weights,
         {% if has_biases %}
@@ -170,16 +183,16 @@ int32_t {{ prefix }}_{{ name }}_run(
         NULL,  // bias_data
         {% endif %}
         &{{ name }}_output_dims,
-        output
+        {{ output_expr }}
     );
-    {% else %}
+    {% elif kernel_fn == 'arm_convolve_wrapper_s4' %}
     // s4 signature: (ctx, conv_params, quant_params, input_dims, input_data, filter_dims, filter_data, bias_dims, bias_data, output_dims, output_data)
     return arm_convolve_wrapper_s4(
         &{{ name }}_ctx,
         &{{ name }}_conv_params,
         &{{ name }}_quant_params,
         &{{ name }}_input_dims,
-        input,
+        {{ input_expr }},
         &{{ name }}_filter_dims,
         {{ name }}_weights,
         {% if has_biases %}
@@ -190,9 +203,8 @@ int32_t {{ prefix }}_{{ name }}_run(
         NULL,  // bias_data
         {% endif %}
         &{{ name }}_output_dims,
-        output
+        {{ output_expr }}
     );
-    {% endif %}
     {% elif kernel_fn == 'arm_convolve_wrapper_s16' %}
     // s16 signature: (ctx, conv_params, quant_params, input_dims, input_data, filter_dims, filter_data, bias_dims, bias_data, output_dims, output_data)
     // Note: s16 uses cmsis_nn_bias_data struct, not raw pointer (defined at file scope above)
@@ -201,7 +213,7 @@ int32_t {{ prefix }}_{{ name }}_run(
         &{{ name }}_conv_params,
         &{{ name }}_quant_params,
         &{{ name }}_input_dims,
-        input,
+        {{ input_expr }},
         &{{ name }}_filter_dims,
         {{ name }}_weights,
         {% if has_biases %}
@@ -212,12 +224,56 @@ int32_t {{ prefix }}_{{ name }}_run(
         NULL,  // bias_data
         {% endif %}
         &{{ name }}_output_dims,
-        output
+        {{ output_expr }}
     );
     {% else %}
     #error "Unsupported kernel function: {{ kernel_fn }}"
     {% endif %}
+{% endmacro %}
+int32_t {{ prefix }}_{{ name }}_run(
+    const {{ input_dtype }}* __restrict input,
+    {{ output_dtype }}* __restrict output
+) {
+    {{ conv_bench_init() }}
+    {{ conv_kernel_call('input', 'output') }}
 }
+
+#ifdef HELIA_BENCHMARK_MODE
+// --benchmark support: {{name}}_bench_init() is the one-time buffer/context/
+// weight-sum setup (untimed); {{name}}_bench_op() is *only* the kernel call
+// (timed, 3 warmup + 10 measured runs by default -- see common/standalone/benchmark.j2).
+{% if use_batch_harness %}
+// Non-static: HELIA_BATCH_BENCHMARK links every generated test's .c file into a
+// single executable (see scripts/gen_batch_harness.py), so a shared
+// batch_runner.c calls these via plain extern declarations instead of each
+// test carrying its own main(). Function names are unique per test (prefixed
+// by {{name}}), so no separate header wiring is needed.
+int32_t {{ name }}_bench_init(void)
+{% else %}
+static int32_t {{ name }}_bench_init(void)
+{% endif %}
+{
+    {{ conv_bench_init() }}
+    return ARM_CMSIS_NN_SUCCESS;
+}
+
+{% if use_batch_harness %}
+int32_t {{ name }}_bench_op(void)
+{% else %}
+static int32_t {{ name }}_bench_op(void)
+{% endif %}
+{
+    {{ conv_kernel_call(name ~ '_input', name ~ '_output') }}
+}
+
+{% if not use_batch_harness %}
+static void {{ prefix }}_{{ name }}_benchmark_run(void)
+{
+    {{ name }}_bench_init();
+    helia_benchmark_run("{{ name }}", {{ name }}_bench_op);
+}
+{% endif %}
+#endif // HELIA_BENCHMARK_MODE
 
 int32_t {{ prefix }}_{{ name }}_test_case_run(void)
 {

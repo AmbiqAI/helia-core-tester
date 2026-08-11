@@ -18,12 +18,15 @@ from helia_core_tester.core.path_layout import artifacts_root
 from helia_core_tester.core.pipeline import FullTestPipeline
 from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, RunStep
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
+from helia_core_tester.perf_stream.cli import app as perf_stream_app
 
 app = typer.Typer(
     name="helia_core_tester",
     help="CMSIS-NN testing toolkit - generate, build, and run tests for CMSIS-NN kernels",
     add_completion=False,
 )
+
+app.add_typer(perf_stream_app, name="perf-stream")
 
 
 def _print_plan_item(plan_item) -> None:

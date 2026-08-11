@@ -1,0 +1,69 @@
+# Shared kernel-id registry for the perf_stream hardware bridge.
+#
+# This is the single source of truth mapping a bridged (family, operator, dtype) tuple to
+# the numeric `kernel_id` sent over HCTP in CASE_META and dispatched by firmware in
+# `cmake/perf_stream/benchmark_server_session.c`'s `run_kernel_once()`. Host
+# (`helia_core_tester/perf_stream/kernel_registry.py`) and firmware
+# (`cmake/perf_stream/benchmark_server_session.h`'s `HCT_KERNEL_ID_*` defines) must agree on
+# these numbers -- `test_kernel_registry.py` cross-checks the Python side against this file,
+# and a comment in benchmark_server_session.h points back here.
+#
+# When adding a new bridged kernel:
+#   1. Reserve the next kernel_id here.
+#   2. Add a matching `HCT_KERNEL_ID_*` #define in benchmark_server_session.h.
+#   3. Add a `run_<kernel>_once()` firmware handler + a case in `run_kernel_once()`'s switch.
+#   4. Add a builder function in generated_test_bridge.py's `_BUILDERS` dispatch table.
+
+kernels:
+  - kernel_id: 1
+    family: null           # synthetic demo-only kernel, not bridged from generated tests
+    operator: Abs
+    dtype: S8
+    cmsis_function: arm_abs_s8
+    note: "Demo/vertical-slice kernel only (case_bundle.py's build_abs_s8_case_bundle)."
+
+  - kernel_id: 2
+    family: ConvolutionFunctions
+    operator: Convolve
+    dtype: S8
+    cmsis_function: arm_convolve_s8
+
+  - kernel_id: 3
+    family: BasicMathFunctions
+    operator: Add
+    dtype: S8
+    cmsis_function: arm_add_s8
+
+  - kernel_id: 4
+    family: BasicMathFunctions
+    operator: Sub
+    dtype: S8
+    cmsis_function: arm_sub_s8
+
+  - kernel_id: 5
+    family: BasicMathFunctions
+    operator: Mul
+    dtype: S8
+    cmsis_function: arm_mul_s8
+
+  - kernel_id: 6
+    family: BasicMathFunctions
+    operator: Maximum
+    dtype: S8
+    cmsis_function: arm_maximum_s8
+
+  - kernel_id: 7
+    family: BasicMathFunctions
+    operator: Minimum
+    dtype: S8
+    cmsis_function: arm_minimum_s8
+
+  - kernel_id: 8
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: S8
+    cmsis_function: arm_depthwise_conv_s8
+
+  # Reserved for future clusters (see helia_core_tester perf_stream expansion plan):
+  #   9: PoolingFunctions/AvgPool     -> arm_avgpool_s8
+  #  10: PoolingFunctions/MaxPool     -> arm_max_pool_s8
