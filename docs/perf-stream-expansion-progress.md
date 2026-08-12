@@ -911,3 +911,36 @@ already in both functions), matching the template-side fix.
   `leaky_relu_nhwc_s8`, `leaky_relu_vector_s8`, `depthwise_conv_buf_nonopt_dil2_s8`,
   `depthwise_conv_dilation_s8`) now pass, zero regressions.
 - `pytest`: 289 passed, 11 failed (same pre-existing unrelated baseline, unchanged).
+
+### Policy correction: +-1 LSB for approximate/rounding ops, exact match for convolution (2026-08-12)
+
+Per explicit direction: tolerance should be +-1 LSB (not +-2) for approximate/rounding
+activations, and exactly 0 (exact match) for convolution -- convolution correctness
+should not be "papered over" with a tolerance band, even though the underlying
+MVE-vs-scalar rounding divergence is a real, documented CMSIS-NN kernel characteristic.
+Updated both the template-level and bridge-level overrides accordingly:
+
+- `generation/utils/template_context.py` `_TOLERANCE_OVERRIDES`: `leaky_relu.c.j2` and
+  `hard_swish_compat.c.j2` set back to `1`; `depthwise_conv.c.j2` set to `0` (still
+  `tolerant_int` mode with a zero bound, functionally an exact match, so it keeps the
+  same generated-call shape as other convolution templates).
+- `perf_stream/generated_test_bridge.py`: `_build_activation_case`'s `LeakyRelu`/
+  `HardSwishCompat` special case reverted to `tolerance=1`; `_build_depthwise_conv_case`'s
+  special case changed to `{"mode": "exact_int"}`.
+
+**Re-verified on hardware (board `1160002276`)** after the policy correction:
+- `ActivationFunctions`: **64/64 passed** at +-1 LSB (session
+  `policy-tolerance-verify-activations`) -- LeakyRelu/HardSwishCompat's actual observed
+  divergence on this hardware/input space is only ever 1 LSB (per-case
+  `mismatch_count=1` in the original root-cause investigation), so +-1 is sufficient.
+- `ConvolutionFunctions`: **74/76 passed, 2 failed** at exact match (session
+  `policy-tolerance-verify-conv`) -- `depthwise_conv_dilation_s8_hw_generated` and
+  `depthwise_conv_buf_nonopt_dil2_s8_hw_generated` fail again, as expected: their
+  documented 1-2 LSB MVE-vs-scalar divergence in `arm_depthwise_conv_s8.c`'s
+  dilation/non-optimized path exceeds an exact-match bound. This is the intended,
+  accepted outcome of the "0 tolerance for convolution" policy -- these 2 cases remain a
+  known, real, hardware-only (non-FVP) CMSIS-NN kernel rounding discrepancy, not a
+  test-harness or golden-data bug (see the root-cause investigation above). No further
+  tolerance change was made to hide this; fixing it for real would require correcting
+  the MVE rounding math in shared CMSIS-NN kernel source, out of this session's scope.
+- `pytest`: unchanged baseline (289 passed, 11 pre-existing unrelated failures).

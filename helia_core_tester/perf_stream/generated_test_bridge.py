@@ -710,14 +710,13 @@ def _build_depthwise_conv_case(
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    # DepthwiseConv S8 (dilation/non-optimized accumulation path): real MVE-vectorized
-    # hardware execution diverges from the scalar/golden reference by up to 2 LSB at
-    # specific fixed-point rounding boundaries (see
-    # docs/perf-stream-expansion-progress.md's root-cause investigation and its
-    # "FVP-vs-hardware tolerance gap closed" follow-up) -- matches the +-2 bound already
-    # applied to the depthwise_conv.c.j2 template in
-    # `generation/utils/template_context.py`'s `_TOLERANCE_OVERRIDES`.
-    comparison = {"mode": "tolerant_int", "tolerance": 2}
+    # Policy: convolution operators require an exact (0 tolerance) match. Real hardware
+    # has been observed to diverge from the scalar/golden reference by up to 2 LSB on the
+    # dilation/non-optimized accumulation path (see
+    # docs/perf-stream-expansion-progress.md's root-cause investigation), but that is a
+    # known CMSIS-NN kernel-level MVE-vs-scalar rounding issue, not something to be
+    # papered over with test tolerance for a convolution op.
+    comparison = {"mode": "exact_int"}
     manifest = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,
@@ -1211,16 +1210,12 @@ def _build_activation_case(
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    # LeakyRelu/HardSwishCompat S8: real MVE-vectorized hardware execution diverges from
-    # the scalar/golden reference by up to 2 LSB at specific fixed-point rounding
-    # boundaries (see docs/perf-stream-expansion-progress.md's root-cause investigation
-    # and its "FVP-vs-hardware tolerance gap closed" follow-up) -- matches the +-2 bound
-    # already applied to their generated-test .c.j2 templates in
+    # Policy: approximate/rounding activations get +-1 LSB tolerance; everything else
+    # falls back to the descriptor-resolved comparison (exact_int by default). Matches
+    # the +-1 bound applied to leaky_relu.c.j2/hard_swish_compat.c.j2 in
     # `generation/utils/template_context.py`'s `_TOLERANCE_OVERRIDES`.
-    if operator == "Mean":
+    if operator in ("Mean", "LeakyRelu", "HardSwishCompat"):
         comparison = {"mode": "tolerant_int", "tolerance": 1}
-    elif operator in ("LeakyRelu", "HardSwishCompat"):
-        comparison = {"mode": "tolerant_int", "tolerance": 2}
     else:
         comparison = dict(descriptor.get("resolved_comparison", {"mode": "exact_int"}))
     manifest = {

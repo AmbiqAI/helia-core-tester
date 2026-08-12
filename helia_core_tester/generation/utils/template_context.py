@@ -99,19 +99,22 @@ class TemplateContextBuilder:
 
     _TOLERANCE_OVERRIDES = {
         "ActivationFunctions/prelu/prelu.c.j2": 2,
-        # These three templates exhibit a genuine, documented 1-2 LSB MVE-vs-scalar
-        # rounding divergence in the underlying CMSIS-NN kernels (arm_leaky_relu_s8,
-        # arm_hard_swish_compat_s8, arm_depthwise_conv_s8's dilation/non-opt path) when
-        # run on real Cortex-M55 hardware, vs. the scalar reference used to generate the
-        # golden data. FVP's MVE model doesn't happen to produce the 2-LSB outlier for
-        # these generated cases, but real Apollo510 silicon does, so the default +-1
-        # tolerant_int bound is too tight for real-hardware runs. See
-        # docs/perf-stream-expansion-progress.md ("Root-cause investigation: the 6
-        # pre-existing failures") for the full analysis.
-        "ActivationFunctions/leaky_relu/leaky_relu.c.j2": 2,
-        "ActivationFunctions/hard_swish/hard_swish_compat.c.j2": 2,
-        "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2": 2,
+        # LeakyRelu/HardSwishCompat are approximate/rounding activations (LUT-style
+        # requantization with a scalar-vs-MVE rounding-path divergence on real hardware --
+        # see docs/perf-stream-expansion-progress.md's root-cause investigation) --
+        # policy: +-1 LSB tolerance for approximate/rounding operators.
+        "ActivationFunctions/leaky_relu/leaky_relu.c.j2": 1,
+        "ActivationFunctions/hard_swish/hard_swish_compat.c.j2": 1,
+        # DepthwiseConv is a convolution op -- policy: exact (0 tolerance) match required,
+        # even though real hardware has been observed to diverge by up to 2 LSB on the
+        # dilation/non-optimized accumulation path (see docs/perf-stream-expansion-progress.md).
+        # Kept as an explicit 0 override (rather than switching validation_mode to
+        # exact_int) so it stays in `_TOLERANT_INT_VALIDATION_TEMPLATES`/uses the same
+        # HELIA_VALIDATE_OUTPUTS(TOLERANT_INT, ...) call shape as other convolution
+        # templates; tolerance=0 is functionally equivalent to an exact match.
+        "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2": 0,
     }
+
 
     _INT16_TOLERANCE_OVERRIDES = {
         "BasicMathFunctions/abs/abs.c.j2": 2,
