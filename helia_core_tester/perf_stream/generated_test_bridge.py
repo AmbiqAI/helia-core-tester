@@ -710,9 +710,14 @@ def _build_depthwise_conv_case(
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    comparison = {"mode": "tolerant_int", "tolerance": 1} if operator == "Mean" else dict(
-        descriptor.get("resolved_comparison", {"mode": "exact_int"})
-    )
+    # DepthwiseConv S8 (dilation/non-optimized accumulation path): real MVE-vectorized
+    # hardware execution diverges from the scalar/golden reference by up to 2 LSB at
+    # specific fixed-point rounding boundaries (see
+    # docs/perf-stream-expansion-progress.md's root-cause investigation and its
+    # "FVP-vs-hardware tolerance gap closed" follow-up) -- matches the +-2 bound already
+    # applied to the depthwise_conv.c.j2 template in
+    # `generation/utils/template_context.py`'s `_TOLERANCE_OVERRIDES`.
+    comparison = {"mode": "tolerant_int", "tolerance": 2}
     manifest = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,
@@ -1206,9 +1211,18 @@ def _build_activation_case(
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    comparison = {"mode": "tolerant_int", "tolerance": 1} if operator == "Mean" else dict(
-        descriptor.get("resolved_comparison", {"mode": "exact_int"})
-    )
+    # LeakyRelu/HardSwishCompat S8: real MVE-vectorized hardware execution diverges from
+    # the scalar/golden reference by up to 2 LSB at specific fixed-point rounding
+    # boundaries (see docs/perf-stream-expansion-progress.md's root-cause investigation
+    # and its "FVP-vs-hardware tolerance gap closed" follow-up) -- matches the +-2 bound
+    # already applied to their generated-test .c.j2 templates in
+    # `generation/utils/template_context.py`'s `_TOLERANCE_OVERRIDES`.
+    if operator == "Mean":
+        comparison = {"mode": "tolerant_int", "tolerance": 1}
+    elif operator in ("LeakyRelu", "HardSwishCompat"):
+        comparison = {"mode": "tolerant_int", "tolerance": 2}
+    else:
+        comparison = dict(descriptor.get("resolved_comparison", {"mode": "exact_int"}))
     manifest = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,
