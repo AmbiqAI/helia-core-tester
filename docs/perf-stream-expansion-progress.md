@@ -305,6 +305,55 @@ before encoding them into the plan.**
   - real hardware: `scripts/run_hardware_perf_suite.sh --serial-no 1160002276 --family ConvolutionFunctions --test-name transpose_conv --session-id phase3d-transpose-conv-pass2 --skip-generate`
     -> **10/10 passed** on Apollo510/Cortex-M55
 
+### Phase 3e — Generic data-movement/indexing bridge (COMPLETE for all discoverable int generated cases)
+
+- Bridged **135 generated int cases** end-to-end with one shared host builder
+  and one shared firmware dispatcher covering:
+  `Reshape`, `Squeeze`, `Transpose`, `Pad`, `MirrorPad`, `Concatenation`,
+  `Split`, `Tile`, `BatchToSpaceND`, `SpaceToBatchND`, `SpaceToDepth`,
+  `DepthToSpace`, `ResizeNearestNeighbor`, `Gather`, `GatherND`, `Where`,
+  `SelectV2`, `ReverseSequence`, `ScatterNd`, `BroadcastTo`,
+  `DynamicUpdateSlice`, and `StridedSlice`.
+- Host bridge:
+  - added one parameterized `_build_data_movement_case()` path plus shared
+    helpers for typed/bool array extraction, comparison-mode discovery, and
+    generic shape/meta packing
+  - added new streamed blob roles `input_2` / `meta_0`, `BOOL` dtype support,
+    S32/S64 output support where needed (`StridedSlice` S32, `Where` S64)
+  - fixed `Gather` extraction to read `cmsis_nn_gather_params` from the
+    generated source file (where those params are actually emitted)
+  - explicitly skips generated invalid-input harnesses whose standalone
+    contract expects `ARM_CMSIS_NN_ARG_ERROR`, and skips the one inconsistent
+    artifact `strided_slice_case1_whole_slab_s8` whose header declares a
+    non-empty output shape but an empty expected-output array
+- Firmware:
+  - added one shared `run_data_movement_once()` adapter that dispatches every
+    Phase 3e kernel from streamed blobs + one packed `meta_0` S32 blob,
+    avoiding 20+ bespoke per-op switch bodies
+  - added kernel ids `80..123`, `BOOL` dtype recognition, and the new
+    `input_2` / `meta_0` blob-role mapping in the benchmark server
+- Verification:
+  - targeted pytest: `16 passed`
+  - full pytest baseline: `289 passed, 11 failed` (same unrelated-failure
+    baseline count)
+  - real hardware, board `1160002276`, all families:
+    - `ReshapeFunctions`: **33/33 passed**
+    - `TesterExtensions`: **2/2 passed**
+    - `TransposeFunctions`: **11/11 passed** (`2` invalid-permutation cases skipped by design)
+    - `PadFunctions`: **10/10 passed**
+    - `ConcatenationFunctions`: **19/19 passed**
+    - `TileFunctions`: **4/4 passed**
+    - `GatherFunctions`: **12/12 passed** (`4` invalid-index/batch-dims cases skipped by design)
+    - `SelectFunctions`: **8/8 passed**
+    - `StridedSliceFunctions`: **14/14 passed** (`1` inconsistent generated artifact skipped)
+    - `ReverseSequenceFunctions`: **4/4 passed**
+    - `ScatterFunctions`: **4/4 passed**
+    - `BroadcastFunctions`: **8/8 passed** (`10` invalid/null/rank cases skipped by design)
+    - `DynamicUpdateSliceFunctions`: **6/6 passed** (`14` invalid/null/rank cases skipped by design)
+- Net result for the currently discoverable generated **int** corpus in these
+  families: **135 bridged hardware passes + 31 explicit skips = 166/166
+  accounted for**.
+
 ### Hardware toolchain unblocked (2nd session segment)
 The user cloned the vendor NSX SDK to
 `/Users/mohammed.abuhussein/workspace/nsx-ambiq-sdk`. Wired it into this repo

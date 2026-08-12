@@ -157,7 +157,7 @@ def _extract_array(header_text: str, array_name: str) -> list[int]:
     match = pattern.search(header_text)
     if match is None:
         raise UnsupportedGeneratedTestError(f"Could not find array `{array_name}` in generated header")
-    raw = match.group(1)
+    raw = re.sub(r"//[^\n]*", "", match.group(1))
     values = [v.strip() for v in raw.replace("\n", " ").split(",") if v.strip() != ""]
     return [int(v) for v in values]
 
@@ -170,9 +170,107 @@ def _extract_float_array(header_text: str, array_name: str) -> list[float]:
     match = pattern.search(header_text)
     if match is None:
         raise UnsupportedGeneratedTestError(f"Could not find array `{array_name}` in generated header")
-    raw = match.group(1)
+    raw = re.sub(r"//[^\n]*", "", match.group(1))
     values = [v.strip() for v in raw.replace("\n", " ").split(",") if v.strip() != ""]
     return [float(v.rstrip("fF")) for v in values]
+
+
+def _extract_bool_array(header_text: str, array_name: str) -> list[bool]:
+    pattern = re.compile(rf"\b{re.escape(array_name)}\s*(?:\[[^\]]*\])?\s*=\s*\{{(.*?)\}}\s*;", re.DOTALL)
+    match = pattern.search(header_text)
+    if match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find array `{array_name}` in generated header")
+    raw = re.sub(r"//[^\n]*", "", match.group(1))
+    values = [v.strip() for v in raw.replace("\n", " ").split(",") if v.strip() != ""]
+    result: list[bool] = []
+    for value in values:
+        lowered = value.lower()
+        if lowered == "true":
+            result.append(True)
+        elif lowered == "false":
+            result.append(False)
+        else:
+            raise UnsupportedGeneratedTestError(f"Array `{array_name}` contains non-bool value {value!r}")
+    return result
+
+
+def _extract_typed_array(header_text: str, array_name: str, dtype: str) -> np.ndarray:
+    if dtype == "BOOL":
+        return np.array(_extract_bool_array(header_text, array_name), dtype=np.bool_)
+    if dtype == "FP32":
+        return np.array(_extract_float_array(header_text, array_name), dtype=np.float32)
+    numpy_dtype = {
+        "S8": np.int8,
+        "S16": np.int16,
+        "S32": np.int32,
+        "S64": np.int64,
+    }.get(dtype)
+    if numpy_dtype is None:
+        raise UnsupportedGeneratedTestError(f"Unsupported array dtype {dtype!r} for `{array_name}`")
+    return np.array(_extract_array(header_text, array_name), dtype=numpy_dtype)
+
+
+def _extract_array_if_present(header_text: str, array_name: str, dtype: str) -> np.ndarray | None:
+    try:
+        return _extract_typed_array(header_text, array_name, dtype)
+    except UnsupportedGeneratedTestError:
+        return None
+
+
+def _extract_all_call_args(source_text: str, function_name: str, *, expected_count: int) -> list[list[str]]:
+    pattern = re.compile(rf"\b{re.escape(function_name)}\s*\((.*?)\);", re.DOTALL)
+    matches = list(pattern.finditer(source_text))
+    if not matches:
+        raise UnsupportedGeneratedTestError(f"Could not find call to `{function_name}(...)` in generated source")
+    parsed: list[list[str]] = []
+    for match in matches:
+        body = re.sub(r"//[^\n]*", "", match.group(1))
+        args = [a.strip() for a in body.split(",") if a.strip() != ""]
+        if len(args) != expected_count:
+            continue
+        parsed.append(args)
+    if not parsed:
+        raise UnsupportedGeneratedTestError(
+            f"Could not find a concrete call to `{function_name}(...)` with {expected_count} arguments in generated source"
+        )
+    return parsed
+
+
+def _extract_first_cmsis_function_name(source_text: str) -> str:
+    match = re.search(r"\b(arm_[A-Za-z0-9_]+)\s*\(", source_text)
+    if match is None:
+        raise UnsupportedGeneratedTestError("Could not find a CMSIS-NN `arm_*` call in generated source")
+    return str(match.group(1))
+
+
+def _comparison_from_generated_source(source_text: str) -> dict[str, int | float | str]:
+    for args in _extract_all_call_args(source_text, "HELIA_VALIDATE_OUTPUTS", expected_count=9):
+        mode = args[0].strip()
+        if mode not in {"EXACT_INT", "TOLERANT_INT", "BOOL", "FLOAT", "NONE"}:
+            continue
+        tolerance = int(str(args[4]).rstrip("fF"))
+        atol = float(str(args[5]).rstrip("fF"))
+        rtol = float(str(args[6]).rstrip("fF"))
+        if mode == "EXACT_INT":
+            return {"mode": "exact_int"}
+        if mode == "TOLERANT_INT":
+            return {"mode": "tolerant_int", "tolerance": tolerance}
+        if mode == "BOOL":
+            return {"mode": "bool"}
+        if mode == "FLOAT":
+            return {"mode": "float", "atol": atol, "rtol": rtol}
+        if mode == "NONE":
+            return {"mode": "none"}
+    raise UnsupportedGeneratedTestError("Could not find a concrete HELIA_VALIDATE_OUTPUTS(...) call in generated source")
+
+
+def _extract_expected_status_from_source(source_text: str) -> str | None:
+    match = re.search(
+        r'HELIA_VALIDATE_EXPECTED_STATUS\(\s*"[^"]+"\s*,\s*status\s*,\s*(ARM_CMSIS_NN_[A-Z_]+)\s*\)',
+        source_text,
+        re.DOTALL,
+    )
+    return None if match is None else str(match.group(1))
 
 
 def _extract_scalar(header_text: str, struct_name: str, field: str) -> int:
@@ -261,6 +359,24 @@ def _extract_nested_scalar(header_text: str, struct_name: str, nested_field: str
             f"Could not find field `.{field}` on nested `.{nested_field}` of struct `{struct_name}`"
         )
     return int(field_match.group(1))
+
+
+def _shape_to_padded_nhwc(shape: tuple[int, ...]) -> tuple[int, int, int, int]:
+    if len(shape) > 4:
+        raise UnsupportedGeneratedTestError(f"Only ranks up to 4 are bridgeable, got shape {shape}.")
+    padded = list(int(x) for x in shape) + [1] * (4 - len(shape))
+    return int(padded[0]), int(padded[1]), int(padded[2]), int(padded[3])
+
+
+def _dims_dict_to_shape(dims: dict[str, int], rank: int = 4) -> tuple[int, ...]:
+    ordered = (int(dims["n"]), int(dims["h"]), int(dims["w"]), int(dims["c"]))
+    if rank < 1 or rank > 4:
+        raise UnsupportedGeneratedTestError(f"Only ranks in [1, 4] are bridgeable, got rank={rank}.")
+    return ordered[:rank]
+
+
+def _shape_product(shape: tuple[int, ...]) -> int:
+    return int(np.prod(shape, dtype=np.int64))
 
 
 def discover_generated_tests(
@@ -3039,6 +3155,512 @@ def _build_batch_matmul_case(
     return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
 
 
+def _build_data_movement_bundle(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    lookup_dtype: str,
+    cmsis_function: str,
+    arrays: list[tuple[int, str, str, tuple[int, ...], np.ndarray, bool, bool]],
+    tensor_dtypes: dict[str, str],
+    comparison: dict[str, int | float | str],
+    scalar_parameters: dict[str, int],
+    scratch_bytes: int = 0,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": str(generated_test.descriptor.get("operator", "")),
+        "family": generated_test.family,
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=str(generated_test.descriptor.get("operator", "")), dtype=lookup_dtype),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": scalar_parameters,
+        "tensor_dtypes": tensor_dtypes,
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": blobs[-1].dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": comparison,
+        "scratch_buffer": {"bytes": int(scratch_bytes)},
+        "required_target_capabilities": [cmsis_function],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
+def _build_data_movement_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    activation_dtype = str(descriptor.get("activation_dtype", descriptor.get("resolved_tensor_dtypes", {}).get("input", "S8")))
+    if activation_dtype not in {"S8", "S16", "S32"}:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: activation_dtype={activation_dtype!r} is not bridgeable -- phase 3e only dispatches "
+            "the int generated-test variants."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    source_path = _find_source_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    source_text = source_path.read_text(encoding="utf-8")
+    prefix = generated_test.name
+    try:
+        comparison = _comparison_from_generated_source(source_text)
+    except UnsupportedGeneratedTestError as exc:
+        expected_status = _extract_expected_status_from_source(source_text)
+        if expected_status is not None and expected_status != "ARM_CMSIS_NN_SUCCESS":
+            raise UnsupportedGeneratedTestError(
+                f"{generated_test.name}: standalone harness expects {expected_status} (invalid/null-argument coverage), "
+                "which the perf-stream hardware bridge does not model as a streamed correctness-output case."
+            ) from exc
+        raise
+    cmsis_function = _extract_first_cmsis_function_name(source_text)
+    arrays: list[tuple[int, str, str, tuple[int, ...], np.ndarray, bool, bool]] = []
+    tensor_dtypes: dict[str, str] = {}
+    scalar_parameters: dict[str, int] = {}
+    meta: list[int] | None = None
+    scratch_bytes = 0
+
+    def add_output_scalars(shape: tuple[int, ...]) -> None:
+        n, h, w, c = _shape_to_padded_nhwc(shape)
+        scalar_parameters.update({"output_n": n, "output_h": h, "output_w": w, "output_c": c})
+
+    def add_meta(values: list[int]) -> None:
+        nonlocal meta
+        meta = [int(v) for v in values]
+
+    if operator in {"Reshape", "Squeeze"}:
+        input_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_input_dims"))
+        output_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_output_dims"))
+        input_data = _extract_typed_array(header_text, f"{prefix}_input", "S8").reshape(input_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", "S8").reshape(output_shape)
+        arrays.extend([
+            (1, "input_0", "S8", input_shape, input_data, False, False),
+            (2, "expected_output", "S8", output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"input": "S8", "output": "S8"}
+        add_output_scalars(output_shape)
+        return _build_data_movement_bundle(
+            project_root,
+            generated_test,
+            lookup_dtype="S8",
+            cmsis_function="arm_reshape_s8",
+            arrays=arrays,
+            tensor_dtypes=tensor_dtypes,
+            comparison=comparison,
+            scalar_parameters=scalar_parameters,
+            scratch_bytes=0,
+            output_root=output_root,
+        )
+
+    if operator == "Transpose":
+        params_struct = f"{prefix}_transpose_params"
+        rank = _extract_scalar(header_text, params_struct, "num_dims")
+        input_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_input_dims"), rank=rank)
+        output_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_output_dims"), rank=rank)
+        permutations = _extract_array(header_text, f"{prefix}_permutations")
+        input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        add_meta([rank, *permutations])
+        arrays.extend([
+            (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+            (2, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+            (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"input": activation_dtype, "meta": "S32", "output": activation_dtype}
+        add_output_scalars(output_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "Pad":
+        input_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_input_dims"))
+        output_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_output_dims"))
+        pre_pad = _extract_dims(header_text, f"{prefix}_pre_pad")
+        post_pad = _extract_dims(header_text, f"{prefix}_post_pad")
+        call_args = _extract_call_args(source_text, cmsis_function, expected_count=6)
+        pad_value = int(call_args[2])
+        input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        add_meta([pad_value, pre_pad["n"], pre_pad["h"], pre_pad["w"], pre_pad["c"], post_pad["n"], post_pad["h"], post_pad["w"], post_pad["c"]])
+        arrays.extend([
+            (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+            (2, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+            (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"input": activation_dtype, "meta": "S32", "output": activation_dtype}
+        add_output_scalars(output_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "MirrorPad":
+        input_shape = tuple(_extract_array(header_text, f"{prefix}_input_shape"))
+        output_shape = tuple(_extract_array(header_text, f"{prefix}_output_shape"))
+        pad_before = _extract_array(header_text, f"{prefix}_pad_before")
+        rank = _extract_scalar(header_text, f"{prefix}_params", "rank")
+        mode = _extract_scalar(header_text, f"{prefix}_params", "mode")
+        input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        add_meta([rank, mode, *pad_before])
+        arrays.extend([
+            (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+            (2, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+            (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"input": activation_dtype, "meta": "S32", "output": activation_dtype}
+        add_output_scalars(output_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "Concatenation":
+        output_shape = tuple(_extract_array(header_text, f"{prefix}_output_shape"))
+        input_x = _extract_array(header_text, f"{prefix}_input_x")
+        input_y = _extract_array(header_text, f"{prefix}_input_y")
+        input_z = _extract_array(header_text, f"{prefix}_input_z")
+        input_w = _extract_array(header_text, f"{prefix}_input_w")
+        input_shapes = [(int(input_w[i]), int(input_y[i]), int(input_x[i]), int(input_z[i])) for i in range(len(input_x))]
+        if len(input_shapes) != 2:
+            raise UnsupportedGeneratedTestError(f"{generated_test.name}: only up to 2 Concatenation inputs are bridgeable today.")
+        input1 = _extract_typed_array(header_text, f"{prefix}_input1", activation_dtype).reshape(input_shapes[0])
+        input2 = _extract_typed_array(header_text, f"{prefix}_input2", activation_dtype).reshape(input_shapes[1])
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        style_code = 0
+        axis = 0
+        if cmsis_function.endswith("_x"):
+            style_code = 1
+            axis = 2
+        elif cmsis_function.endswith("_y"):
+            style_code = 2
+            axis = 1
+        elif cmsis_function.endswith("_z"):
+            style_code = 3
+            axis = 3
+        elif cmsis_function.endswith("_w"):
+            style_code = 4
+            axis = 0
+        else:
+            axis = int(_extract_call_args(source_text, cmsis_function, expected_count=7)[3])
+        add_meta([style_code, len(output_shape), axis, len(input_shapes)])
+        arrays.extend([
+            (1, "input_0", activation_dtype, input_shapes[0], input1, False, False),
+            (2, "input_1", activation_dtype, input_shapes[1], input2, False, False),
+            (3, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+            (4, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"input_0": activation_dtype, "input_1": activation_dtype, "meta": "S32", "output": activation_dtype}
+        add_output_scalars(output_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "Split":
+        input_shape = tuple(_extract_array(header_text, f"{prefix}_input_shape"))
+        split_dims = _extract_array(header_text, f"{prefix}_split_dims")
+        call_args = _extract_call_args(source_text, cmsis_function, expected_count=7)
+        axis = int(call_args[3])
+        input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
+        expected_parts: list[np.ndarray] = []
+        output_index = 0
+        while True:
+            next_part = _extract_array_if_present(header_text, f"{prefix}_out_{output_index}_expected_output", activation_dtype)
+            if next_part is None:
+                break
+            expected_parts.append(next_part.reshape((-1,)))
+            output_index += 1
+        if not expected_parts:
+            raise UnsupportedGeneratedTestError(f"{generated_test.name}: no split expected outputs were found in the generated header.")
+        expected_output = np.concatenate(expected_parts, axis=0)
+        add_meta([len(input_shape), axis, len(split_dims), *split_dims])
+        arrays.extend([
+            (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+            (2, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+            (3, "expected_output", activation_dtype, (expected_output.size,), expected_output, False, True),
+        ])
+        tensor_dtypes = {"input": activation_dtype, "meta": "S32", "output": activation_dtype}
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator in {"BatchToSpaceND", "SpaceToBatchND"}:
+        input_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_input_dims"))
+        output_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_output_dims"))
+        tile_name = f"{prefix}_block_shape"
+        block_h = _extract_scalar(header_text, tile_name, "h")
+        block_w = _extract_scalar(header_text, tile_name, "w")
+        dims_name = f"{prefix}_{'crop_dims' if operator == 'BatchToSpaceND' else 'pad_dims'}"
+        extra_dims = _extract_dims(header_text, dims_name)
+        input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        meta_values = [block_h, block_w, extra_dims["n"], extra_dims["h"], extra_dims["w"], extra_dims["c"]]
+        if operator == "SpaceToBatchND":
+            call_args = _extract_call_args(source_text, cmsis_function, expected_count=7)
+            meta_values.append(int(call_args[6]))
+        add_meta(meta_values)
+        arrays.extend([
+            (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+            (2, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+            (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"input": activation_dtype, "meta": "S32", "output": activation_dtype}
+        add_output_scalars(output_shape)
+        if operator == "SpaceToBatchND" and len(meta_values) >= 7:
+            scalar_parameters["output_offset"] = meta_values[6]
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator in {"SpaceToDepth", "DepthToSpace"}:
+        input_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_input_dims"))
+        output_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_output_dims"))
+        block_size = _extract_bare_scalar(header_text, f"{prefix}_block_size")
+        if block_size is None:
+            raise UnsupportedGeneratedTestError(f"{generated_test.name}: missing `{prefix}_block_size` scalar in generated header.")
+        input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        add_meta([block_size])
+        arrays.extend([
+            (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+            (2, "meta_0", "S32", (1,), np.array(meta, dtype=np.int32), False, False),
+            (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"input": activation_dtype, "meta": "S32", "output": activation_dtype}
+        add_output_scalars(output_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "ResizeNearestNeighbor":
+        input_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_input_dims"))
+        output_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_output_dims"))
+        params_struct = f"{prefix}_params"
+        align_corners = _extract_scalar(source_text, params_struct, "align_corners")
+        half_pixel_centers = _extract_scalar(source_text, params_struct, "half_pixel_centers")
+        input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        add_meta([align_corners, half_pixel_centers])
+        scratch_bytes = int((output_shape[1] + output_shape[2]) * 4)
+        arrays.extend([
+            (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+            (2, "meta_0", "S32", (2,), np.array(meta, dtype=np.int32), False, False),
+            (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"input": activation_dtype, "meta": "S32", "output": activation_dtype}
+        add_output_scalars(output_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, scratch_bytes=scratch_bytes, output_root=output_root)
+
+    if operator == "Tile":
+        input_shape = tuple(_extract_array(header_text, f"{prefix}_input_shape"))
+        multiples = _extract_array(header_text, f"{prefix}_multiples")
+        rank = _extract_scalar(header_text, f"{prefix}_params", "rank")
+        output_shape = tuple(int(a) * int(b) for a, b in zip(input_shape, multiples))
+        input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        add_meta([rank, *multiples])
+        arrays.extend([
+            (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+            (2, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+            (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"input": activation_dtype, "meta": "S32", "output": activation_dtype}
+        add_output_scalars(output_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "Gather":
+        params_struct = f"{prefix}_params"
+        input_rank = _extract_scalar(source_text, params_struct, "input_rank")
+        coords_rank = _extract_scalar(source_text, params_struct, "coords_rank")
+        axis = _extract_scalar(source_text, params_struct, "axis")
+        batch_dims = _extract_scalar(source_text, params_struct, "batch_dims")
+        input_shape = tuple(_extract_array(header_text, f"{prefix}_input_shape"))
+        indices_shape = tuple(_extract_array(header_text, f"{prefix}_indices_shape"))
+        output_shape = tuple(_extract_array(header_text, f"{prefix}_output_shape"))
+        input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
+        indices_data = _extract_typed_array(header_text, f"{prefix}_indices", "S32").reshape(indices_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        add_meta([axis, batch_dims, input_rank, coords_rank])
+        arrays.extend([
+            (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+            (2, "input_1", "S32", indices_shape, indices_data, False, False),
+            (3, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+            (4, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"input": activation_dtype, "indices": "S32", "meta": "S32", "output": activation_dtype}
+        add_output_scalars(output_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "GatherND":
+        params_struct = f"{prefix}_params"
+        params_rank = _extract_scalar(source_text, params_struct, "params_rank")
+        indices_rank = _extract_scalar(source_text, params_struct, "indices_rank")
+        batch_dims = _extract_scalar(source_text, params_struct, "batch_dims")
+        params_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_params_dims"), rank=params_rank)
+        indices_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_indices_dims"), rank=indices_rank)
+        output_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_output_dims"))
+        params_data = _extract_typed_array(header_text, f"{prefix}_params_data", activation_dtype).reshape(params_shape)
+        indices_data = _extract_typed_array(header_text, f"{prefix}_indices", "S32").reshape(indices_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        add_meta([params_rank, indices_rank, batch_dims])
+        arrays.extend([
+            (1, "input_0", activation_dtype, params_shape, params_data, False, False),
+            (2, "input_1", "S32", indices_shape, indices_data, False, False),
+            (3, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+            (4, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"params": activation_dtype, "indices": "S32", "meta": "S32", "output": activation_dtype}
+        add_output_scalars(output_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "Where":
+        rank = _extract_scalar(header_text, f"{prefix}_params", "rank")
+        condition_shape = tuple(_extract_array(header_text, f"{prefix}_shape"))
+        condition_data = _extract_typed_array(header_text, f"{prefix}_condition", activation_dtype).reshape(condition_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", "S64").reshape((-1,))
+        add_meta([rank])
+        arrays.extend([
+            (1, "input_0", activation_dtype, condition_shape, condition_data, False, False),
+            (2, "meta_0", "S32", (1,), np.array(meta, dtype=np.int32), False, False),
+            (3, "expected_output", "S64", (expected_output.size,), expected_output, False, True),
+        ])
+        tensor_dtypes = {"condition": activation_dtype, "meta": "S32", "output": "S64"}
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "SelectV2":
+        rank = _extract_scalar(header_text, f"{prefix}_params", "rank")
+        output_shape = tuple(_extract_array(header_text, f"{prefix}_output_shape"))
+        cond_strides = _extract_array(header_text, f"{prefix}_cond_strides")
+        x_strides = _extract_array(header_text, f"{prefix}_x_strides")
+        y_strides = _extract_array(header_text, f"{prefix}_y_strides")
+        cond_shape = tuple(1 if cond_strides[i] == 0 else output_shape[i] for i in range(rank))
+        x_shape = tuple(1 if x_strides[i] == 0 else output_shape[i] for i in range(rank))
+        y_shape = tuple(1 if y_strides[i] == 0 else output_shape[i] for i in range(rank))
+        condition = _extract_typed_array(header_text, f"{prefix}_condition", "BOOL").reshape(cond_shape)
+        x_data = _extract_typed_array(header_text, f"{prefix}_x", activation_dtype).reshape(x_shape)
+        y_data = _extract_typed_array(header_text, f"{prefix}_y", activation_dtype).reshape(y_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        add_meta([rank])
+        arrays.extend([
+            (1, "input_0", "BOOL", cond_shape, condition, False, False),
+            (2, "input_1", activation_dtype, x_shape, x_data, False, False),
+            (3, "input_2", activation_dtype, y_shape, y_data, False, False),
+            (4, "meta_0", "S32", (1,), np.array(meta, dtype=np.int32), False, False),
+            (5, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"condition": "BOOL", "x": activation_dtype, "y": activation_dtype, "meta": "S32", "output": activation_dtype}
+        add_output_scalars(output_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "ReverseSequence":
+        rank = _extract_scalar(header_text, f"{prefix}_params", "rank")
+        seq_dim = _extract_scalar(header_text, f"{prefix}_params", "seq_dim")
+        batch_dim = _extract_scalar(header_text, f"{prefix}_params", "batch_dim")
+        input_shape = tuple(_extract_array(header_text, f"{prefix}_shape"))
+        input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
+        seq_lengths = _extract_typed_array(header_text, f"{prefix}_seq_lengths", "S32")
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(input_shape)
+        add_meta([rank, seq_dim, batch_dim])
+        arrays.extend([
+            (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+            (2, "input_1", "S32", (seq_lengths.size,), seq_lengths, False, False),
+            (3, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+            (4, "expected_output", activation_dtype, input_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"input": activation_dtype, "seq_lengths": "S32", "meta": "S32", "output": activation_dtype}
+        add_output_scalars(input_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "ScatterNd":
+        params_struct = f"{prefix}_params"
+        num_updates = _extract_scalar(header_text, params_struct, "num_updates")
+        index_depth = _extract_scalar(header_text, params_struct, "index_depth")
+        slice_size = _extract_scalar(header_text, params_struct, "slice_size")
+        output_size = _extract_scalar(header_text, params_struct, "output_size")
+        output_strides = _extract_array(header_text, f"{prefix}_output_strides")
+        indices_data = _extract_typed_array(header_text, f"{prefix}_indices", "S32").reshape((num_updates, index_depth))
+        updates_data = _extract_typed_array(header_text, f"{prefix}_updates", activation_dtype).reshape((num_updates, slice_size))
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape((output_size,))
+        add_meta([num_updates, index_depth, slice_size, output_size, *output_strides])
+        arrays.extend([
+            (1, "input_0", "S32", (num_updates, index_depth), indices_data, False, False),
+            (2, "input_1", activation_dtype, (num_updates, slice_size), updates_data, False, False),
+            (3, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+            (4, "expected_output", activation_dtype, (output_size,), expected_output, False, True),
+        ])
+        tensor_dtypes = {"indices": "S32", "updates": activation_dtype, "meta": "S32", "output": activation_dtype}
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "BroadcastTo":
+        rank = _extract_scalar(header_text, f"{prefix}_params", "rank")
+        input_shape = tuple(_extract_array(header_text, f"{prefix}_input_shape"))
+        output_shape = tuple(_extract_array(header_text, f"{prefix}_output_shape"))
+        input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        add_meta([rank])
+        arrays.extend([
+            (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+            (2, "meta_0", "S32", (1,), np.array(meta, dtype=np.int32), False, False),
+            (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"input": activation_dtype, "meta": "S32", "output": activation_dtype}
+        add_output_scalars(output_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "DynamicUpdateSlice":
+        rank = _extract_scalar(header_text, f"{prefix}_params", "rank")
+        operand_shape = tuple(_extract_array(header_text, f"{prefix}_operand_shape"))
+        update_shape = tuple(_extract_array(header_text, f"{prefix}_update_shape"))
+        start_indices = _extract_typed_array(header_text, f"{prefix}_start_indices", "S32")
+        operand = _extract_typed_array(header_text, f"{prefix}_operand", activation_dtype).reshape(operand_shape)
+        update = _extract_typed_array(header_text, f"{prefix}_update", activation_dtype).reshape(update_shape)
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(operand_shape)
+        add_meta([rank])
+        arrays.extend([
+            (1, "input_0", activation_dtype, operand_shape, operand, False, False),
+            (2, "input_1", activation_dtype, update_shape, update, False, False),
+            (3, "input_2", "S32", (start_indices.size,), start_indices, False, False),
+            (4, "meta_0", "S32", (1,), np.array(meta, dtype=np.int32), False, False),
+            (5, "expected_output", activation_dtype, operand_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"operand": activation_dtype, "update": activation_dtype, "start_indices": "S32", "meta": "S32", "output": activation_dtype}
+        add_output_scalars(operand_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    if operator == "StridedSlice":
+        input_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_input_dims"))
+        output_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_output_dims"))
+        begin_dims = _extract_dims(header_text, f"{prefix}_begin_dims")
+        stride_dims = _extract_dims(header_text, f"{prefix}_stride_dims")
+        input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
+        if _shape_product(output_shape) > 0 and re.search(rf"\b{re.escape(prefix)}_expected_output\b\s*\[\]\s*=\s*\{{\s*\}}", header_text, re.DOTALL):
+            raise UnsupportedGeneratedTestError(
+                f"{generated_test.name}: generated header declares a non-empty output shape {output_shape} but an empty "
+                "expected_output array, so the standalone artifact is internally inconsistent and cannot be bridged safely."
+            )
+        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        add_meta([begin_dims["n"], begin_dims["h"], begin_dims["w"], begin_dims["c"], stride_dims["n"], stride_dims["h"], stride_dims["w"], stride_dims["c"]])
+        arrays.extend([
+            (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+            (2, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+            (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        ])
+        tensor_dtypes = {"input": activation_dtype, "meta": "S32", "output": activation_dtype}
+        add_output_scalars(output_shape)
+        return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
+
+    raise UnsupportedGeneratedTestError(f"{generated_test.name}: unsupported phase 3e operator {operator!r}.")
+
+
 # Dispatch table: (family, operator) -> builder. Add new bridged ops here (and a matching
 # entry in assets/kernel_registry.yaml + a firmware handler) to extend hardware coverage.
 _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
@@ -3078,6 +3700,28 @@ _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
     ("SoftmaxFunctions", "Softmax"): _build_softmax_case,
     ("FullyConnectedFunctions", "FullyConnected"): _build_fully_connected_case,
     ("FullyConnectedFunctions", "BatchMatMul"): _build_batch_matmul_case,
+    ("ReshapeFunctions", "Reshape"): _build_data_movement_case,
+    ("TesterExtensions", "Squeeze"): _build_data_movement_case,
+    ("TransposeFunctions", "Transpose"): _build_data_movement_case,
+    ("PadFunctions", "Pad"): _build_data_movement_case,
+    ("PadFunctions", "MirrorPad"): _build_data_movement_case,
+    ("ConcatenationFunctions", "Concatenation"): _build_data_movement_case,
+    ("ConcatenationFunctions", "Split"): _build_data_movement_case,
+    ("ReshapeFunctions", "BatchToSpaceND"): _build_data_movement_case,
+    ("ReshapeFunctions", "SpaceToBatchND"): _build_data_movement_case,
+    ("ReshapeFunctions", "SpaceToDepth"): _build_data_movement_case,
+    ("ReshapeFunctions", "DepthToSpace"): _build_data_movement_case,
+    ("ReshapeFunctions", "ResizeNearestNeighbor"): _build_data_movement_case,
+    ("TileFunctions", "Tile"): _build_data_movement_case,
+    ("GatherFunctions", "Gather"): _build_data_movement_case,
+    ("GatherFunctions", "GatherND"): _build_data_movement_case,
+    ("SelectFunctions", "Where"): _build_data_movement_case,
+    ("SelectFunctions", "SelectV2"): _build_data_movement_case,
+    ("ReverseSequenceFunctions", "ReverseSequence"): _build_data_movement_case,
+    ("ScatterFunctions", "ScatterNd"): _build_data_movement_case,
+    ("BroadcastFunctions", "BroadcastTo"): _build_data_movement_case,
+    ("DynamicUpdateSliceFunctions", "DynamicUpdateSlice"): _build_data_movement_case,
+    ("StridedSliceFunctions", "StridedSlice"): _build_data_movement_case,
 }
 
 

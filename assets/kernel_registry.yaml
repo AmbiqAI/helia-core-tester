@@ -491,5 +491,266 @@ kernels:
     dtype: S8
     cmsis_function: arm_transpose_conv_wrapper_s8
 
-  # Reserved for future clusters (see helia_core_tester perf_stream expansion plan):
-  #  48+: no further int operator families remain unbridged as of this writing.
+  - kernel_id: 80
+    family: ReshapeFunctions
+    operator: Reshape
+    dtype: S8
+    cmsis_function: arm_reshape_s8
+
+  - kernel_id: 81
+    family: TesterExtensions
+    operator: Squeeze
+    dtype: S8
+    cmsis_function: arm_reshape_s8
+
+  - kernel_id: 82
+    family: TransposeFunctions
+    operator: Transpose
+    dtype: S8
+    cmsis_function: arm_transpose_s8
+
+  - kernel_id: 83
+    family: TransposeFunctions
+    operator: Transpose
+    dtype: S16
+    cmsis_function: arm_transpose_s16
+
+  - kernel_id: 84
+    family: PadFunctions
+    operator: Pad
+    dtype: S8
+    cmsis_function: arm_pad_s8
+
+  - kernel_id: 85
+    family: PadFunctions
+    operator: Pad
+    dtype: S16
+    cmsis_function: arm_pad_s16
+
+  - kernel_id: 86
+    family: PadFunctions
+    operator: MirrorPad
+    dtype: S8
+    cmsis_function: arm_mirror_pad_s8
+
+  - kernel_id: 87
+    family: PadFunctions
+    operator: MirrorPad
+    dtype: S16
+    cmsis_function: arm_mirror_pad_s16
+
+  - kernel_id: 88
+    family: ConcatenationFunctions
+    operator: Concatenation
+    dtype: S8
+    cmsis_function: arm_concatenation_s8
+
+  - kernel_id: 89
+    family: ConcatenationFunctions
+    operator: Concatenation
+    dtype: S16
+    cmsis_function: arm_concatenation_s16
+
+  - kernel_id: 90
+    family: ConcatenationFunctions
+    operator: Concatenation
+    dtype: S32
+    cmsis_function: arm_concatenation_s32
+
+  - kernel_id: 91
+    family: ConcatenationFunctions
+    operator: Split
+    dtype: S8
+    cmsis_function: arm_split_s8
+
+  - kernel_id: 92
+    family: ConcatenationFunctions
+    operator: Split
+    dtype: S16
+    cmsis_function: arm_split_s16
+
+  - kernel_id: 93
+    family: ReshapeFunctions
+    operator: BatchToSpaceND
+    dtype: S8
+    cmsis_function: arm_batch_to_space_nd_s8
+
+  - kernel_id: 94
+    family: ReshapeFunctions
+    operator: BatchToSpaceND
+    dtype: S16
+    cmsis_function: arm_batch_to_space_nd_s16
+
+  - kernel_id: 95
+    family: ReshapeFunctions
+    operator: SpaceToBatchND
+    dtype: S8
+    cmsis_function: arm_space_to_batch_nd_s8
+
+  - kernel_id: 96
+    family: ReshapeFunctions
+    operator: SpaceToBatchND
+    dtype: S16
+    cmsis_function: arm_space_to_batch_nd_s16
+
+  - kernel_id: 97
+    family: ReshapeFunctions
+    operator: SpaceToDepth
+    dtype: S8
+    cmsis_function: arm_space_to_depth_s8
+
+  - kernel_id: 98
+    family: ReshapeFunctions
+    operator: SpaceToDepth
+    dtype: S16
+    cmsis_function: arm_space_to_depth_s16
+
+  - kernel_id: 99
+    family: ReshapeFunctions
+    operator: DepthToSpace
+    dtype: S8
+    cmsis_function: arm_depth_to_space_s8
+
+  - kernel_id: 100
+    family: ReshapeFunctions
+    operator: DepthToSpace
+    dtype: S16
+    cmsis_function: arm_depth_to_space_s16
+
+  - kernel_id: 101
+    family: ReshapeFunctions
+    operator: ResizeNearestNeighbor
+    dtype: S8
+    cmsis_function: arm_resize_nearest_neighbor_s8
+
+  - kernel_id: 102
+    family: ReshapeFunctions
+    operator: ResizeNearestNeighbor
+    dtype: S16
+    cmsis_function: arm_resize_nearest_neighbor_s16
+
+  - kernel_id: 103
+    family: TileFunctions
+    operator: Tile
+    dtype: S8
+    cmsis_function: arm_tile_s8
+
+  - kernel_id: 104
+    family: TileFunctions
+    operator: Tile
+    dtype: S16
+    cmsis_function: arm_tile_s16
+
+  - kernel_id: 105
+    family: GatherFunctions
+    operator: Gather
+    dtype: S8
+    cmsis_function: arm_gather_s8
+
+  - kernel_id: 106
+    family: GatherFunctions
+    operator: Gather
+    dtype: S16
+    cmsis_function: arm_gather_s16
+
+  - kernel_id: 107
+    family: GatherFunctions
+    operator: GatherND
+    dtype: S8
+    cmsis_function: arm_gather_nd_s8
+
+  - kernel_id: 108
+    family: GatherFunctions
+    operator: GatherND
+    dtype: S16
+    cmsis_function: arm_gather_nd_s16
+
+  - kernel_id: 109
+    family: SelectFunctions
+    operator: Where
+    dtype: S8
+    cmsis_function: arm_where_s8
+
+  - kernel_id: 110
+    family: SelectFunctions
+    operator: Where
+    dtype: S16
+    cmsis_function: arm_where_s16
+
+  - kernel_id: 111
+    family: SelectFunctions
+    operator: SelectV2
+    dtype: S8
+    cmsis_function: arm_select_v2_s8
+
+  - kernel_id: 112
+    family: SelectFunctions
+    operator: SelectV2
+    dtype: S16
+    cmsis_function: arm_select_v2_s16
+
+  - kernel_id: 113
+    family: ReverseSequenceFunctions
+    operator: ReverseSequence
+    dtype: S8
+    cmsis_function: arm_reverse_sequence_s8
+
+  - kernel_id: 114
+    family: ReverseSequenceFunctions
+    operator: ReverseSequence
+    dtype: S16
+    cmsis_function: arm_reverse_sequence_s16
+
+  - kernel_id: 115
+    family: ScatterFunctions
+    operator: ScatterNd
+    dtype: S8
+    cmsis_function: arm_scatter_nd_s8
+
+  - kernel_id: 116
+    family: ScatterFunctions
+    operator: ScatterNd
+    dtype: S16
+    cmsis_function: arm_scatter_nd_s16
+
+  - kernel_id: 117
+    family: BroadcastFunctions
+    operator: BroadcastTo
+    dtype: S8
+    cmsis_function: arm_broadcast_to_s8
+
+  - kernel_id: 118
+    family: BroadcastFunctions
+    operator: BroadcastTo
+    dtype: S16
+    cmsis_function: arm_broadcast_to_s16
+
+  - kernel_id: 119
+    family: DynamicUpdateSliceFunctions
+    operator: DynamicUpdateSlice
+    dtype: S8
+    cmsis_function: arm_dynamic_update_slice_s8
+
+  - kernel_id: 120
+    family: DynamicUpdateSliceFunctions
+    operator: DynamicUpdateSlice
+    dtype: S16
+    cmsis_function: arm_dynamic_update_slice_s16
+
+  - kernel_id: 121
+    family: StridedSliceFunctions
+    operator: StridedSlice
+    dtype: S8
+    cmsis_function: arm_strided_slice_s8
+
+  - kernel_id: 122
+    family: StridedSliceFunctions
+    operator: StridedSlice
+    dtype: S16
+    cmsis_function: arm_strided_slice_s16
+
+  - kernel_id: 123
+    family: StridedSliceFunctions
+    operator: StridedSlice
+    dtype: S32
+    cmsis_function: arm_strided_slice_s32
