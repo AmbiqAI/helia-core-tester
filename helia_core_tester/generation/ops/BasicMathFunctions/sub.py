@@ -153,8 +153,11 @@ class OpSub(BinaryBasicMathBase):
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
             activation_min = float(self.desc.get("act_min", -1.0e30))
             activation_max = float(self.desc.get("act_max", 1.0e30))
-            input1_q = self._sample_uniform(input1_shape, dtype=float_dtype)
-            input2_q = self._sample_uniform(input2_shape, dtype=float_dtype)
+            # Draw both operands from one RNG stream: reseeding per call would
+            # make input1 == input2 and the golden identically zero.
+            input1_f32, input2_f32 = self._sample_dual_uniform_inputs(input1_shape, input2_shape)
+            input1_q = input1_f32.astype(float_dtype)
+            input2_q = input2_f32.astype(float_dtype)
             output_data = np.clip(
                 input1_q.astype(np.float32) - input2_q.astype(np.float32),
                 activation_min,
