@@ -814,6 +814,233 @@ static arm_cmsis_nn_status run_requantize_once(hct_server_session_t *session)
                                 session->output_offset);
 }'''
 
+_RUN_COMPARISON_ONCE = '''\
+static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input_1 = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+    hct_server_blob_t *input_2 = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_1);
+    cmsis_nn_dims input_1_dims;
+    cmsis_nn_dims input_2_dims;
+    cmsis_nn_dims output_dims;
+    int32_t output_size;
+
+    if (input_1 == NULL || input_2 == NULL)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    input_1_dims.n = (int32_t)input_1->dimensions[0];
+    input_1_dims.h = (int32_t)input_1->dimensions[1];
+    input_1_dims.w = (int32_t)input_1->dimensions[2];
+    input_1_dims.c = (int32_t)input_1->dimensions[3];
+
+    input_2_dims.n = (int32_t)input_2->dimensions[0];
+    input_2_dims.h = (int32_t)input_2->dimensions[1];
+    input_2_dims.w = (int32_t)input_2->dimensions[2];
+    input_2_dims.c = (int32_t)input_2->dimensions[3];
+
+    output_dims.n = session->output_n;
+    output_dims.h = session->output_h;
+    output_dims.w = session->output_w;
+    output_dims.c = session->output_c;
+    output_size = output_dims.n * output_dims.h * output_dims.w * output_dims.c;
+    if (output_size <= 0)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    session->output_length = (uint32_t)output_size;
+    if (session->output_length > sizeof(session->output_buffer))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    switch (session->expected_kernel_id)
+    {
+        case HCT_KERNEL_ID_EQUAL_S8:
+            return arm_equal_s8(NULL,
+                                (const int8_t *)blob_ptr(session, input_1),
+                                &input_1_dims,
+                                (const int8_t *)blob_ptr(session, input_2),
+                                &input_2_dims,
+                                (bool *)session->output_buffer,
+                                &output_dims,
+                                session->input1_offset,
+                                session->input1_mult,
+                                session->input1_shift,
+                                session->input2_offset,
+                                session->input2_mult,
+                                session->input2_shift,
+                                session->left_shift);
+        case HCT_KERNEL_ID_NOT_EQUAL_S8:
+            return arm_not_equal_s8(NULL,
+                                    (const int8_t *)blob_ptr(session, input_1),
+                                    &input_1_dims,
+                                    (const int8_t *)blob_ptr(session, input_2),
+                                    &input_2_dims,
+                                    (bool *)session->output_buffer,
+                                    &output_dims,
+                                    session->input1_offset,
+                                    session->input1_mult,
+                                    session->input1_shift,
+                                    session->input2_offset,
+                                    session->input2_mult,
+                                    session->input2_shift,
+                                    session->left_shift);
+        case HCT_KERNEL_ID_GREATER_S8:
+            return arm_greater_s8(NULL,
+                                  (const int8_t *)blob_ptr(session, input_1),
+                                  &input_1_dims,
+                                  (const int8_t *)blob_ptr(session, input_2),
+                                  &input_2_dims,
+                                  (bool *)session->output_buffer,
+                                  &output_dims,
+                                  session->input1_offset,
+                                  session->input1_mult,
+                                  session->input1_shift,
+                                  session->input2_offset,
+                                  session->input2_mult,
+                                  session->input2_shift,
+                                  session->left_shift);
+        case HCT_KERNEL_ID_GREATER_EQUAL_S8:
+            return arm_greater_equal_s8(NULL,
+                                        (const int8_t *)blob_ptr(session, input_1),
+                                        &input_1_dims,
+                                        (const int8_t *)blob_ptr(session, input_2),
+                                        &input_2_dims,
+                                        (bool *)session->output_buffer,
+                                        &output_dims,
+                                        session->input1_offset,
+                                        session->input1_mult,
+                                        session->input1_shift,
+                                        session->input2_offset,
+                                        session->input2_mult,
+                                        session->input2_shift,
+                                        session->left_shift);
+        case HCT_KERNEL_ID_LESS_S8:
+            return arm_less_s8(NULL,
+                               (const int8_t *)blob_ptr(session, input_1),
+                               &input_1_dims,
+                               (const int8_t *)blob_ptr(session, input_2),
+                               &input_2_dims,
+                               (bool *)session->output_buffer,
+                               &output_dims,
+                               session->input1_offset,
+                               session->input1_mult,
+                               session->input1_shift,
+                               session->input2_offset,
+                               session->input2_mult,
+                               session->input2_shift,
+                               session->left_shift);
+        case HCT_KERNEL_ID_LESS_EQUAL_S8:
+            return arm_less_equal_s8(NULL,
+                                     (const int8_t *)blob_ptr(session, input_1),
+                                     &input_1_dims,
+                                     (const int8_t *)blob_ptr(session, input_2),
+                                     &input_2_dims,
+                                     (bool *)session->output_buffer,
+                                     &output_dims,
+                                     session->input1_offset,
+                                     session->input1_mult,
+                                     session->input1_shift,
+                                     session->input2_offset,
+                                     session->input2_mult,
+                                     session->input2_shift,
+                                     session->left_shift);
+        case HCT_KERNEL_ID_EQUAL_S16:
+            return arm_equal_s16(NULL,
+                                 (const int16_t *)blob_ptr(session, input_1),
+                                 &input_1_dims,
+                                 (const int16_t *)blob_ptr(session, input_2),
+                                 &input_2_dims,
+                                 (bool *)session->output_buffer,
+                                 &output_dims,
+                                 session->input1_offset,
+                                 session->input1_mult,
+                                 session->input1_shift,
+                                 session->input2_offset,
+                                 session->input2_mult,
+                                 session->input2_shift,
+                                 session->left_shift);
+        case HCT_KERNEL_ID_NOT_EQUAL_S16:
+            return arm_not_equal_s16(NULL,
+                                     (const int16_t *)blob_ptr(session, input_1),
+                                     &input_1_dims,
+                                     (const int16_t *)blob_ptr(session, input_2),
+                                     &input_2_dims,
+                                     (bool *)session->output_buffer,
+                                     &output_dims,
+                                     session->input1_offset,
+                                     session->input1_mult,
+                                     session->input1_shift,
+                                     session->input2_offset,
+                                     session->input2_mult,
+                                     session->input2_shift,
+                                     session->left_shift);
+        case HCT_KERNEL_ID_GREATER_S16:
+            return arm_greater_s16(NULL,
+                                   (const int16_t *)blob_ptr(session, input_1),
+                                   &input_1_dims,
+                                   (const int16_t *)blob_ptr(session, input_2),
+                                   &input_2_dims,
+                                   (bool *)session->output_buffer,
+                                   &output_dims,
+                                   session->input1_offset,
+                                   session->input1_mult,
+                                   session->input1_shift,
+                                   session->input2_offset,
+                                   session->input2_mult,
+                                   session->input2_shift,
+                                   session->left_shift);
+        case HCT_KERNEL_ID_GREATER_EQUAL_S16:
+            return arm_greater_equal_s16(NULL,
+                                         (const int16_t *)blob_ptr(session, input_1),
+                                         &input_1_dims,
+                                         (const int16_t *)blob_ptr(session, input_2),
+                                         &input_2_dims,
+                                         (bool *)session->output_buffer,
+                                         &output_dims,
+                                         session->input1_offset,
+                                         session->input1_mult,
+                                         session->input1_shift,
+                                         session->input2_offset,
+                                         session->input2_mult,
+                                         session->input2_shift,
+                                         session->left_shift);
+        case HCT_KERNEL_ID_LESS_S16:
+            return arm_less_s16(NULL,
+                                (const int16_t *)blob_ptr(session, input_1),
+                                &input_1_dims,
+                                (const int16_t *)blob_ptr(session, input_2),
+                                &input_2_dims,
+                                (bool *)session->output_buffer,
+                                &output_dims,
+                                session->input1_offset,
+                                session->input1_mult,
+                                session->input1_shift,
+                                session->input2_offset,
+                                session->input2_mult,
+                                session->input2_shift,
+                                session->left_shift);
+        case HCT_KERNEL_ID_LESS_EQUAL_S16:
+            return arm_less_equal_s16(NULL,
+                                      (const int16_t *)blob_ptr(session, input_1),
+                                      &input_1_dims,
+                                      (const int16_t *)blob_ptr(session, input_2),
+                                      &input_2_dims,
+                                      (bool *)session->output_buffer,
+                                      &output_dims,
+                                      session->input1_offset,
+                                      session->input1_mult,
+                                      session->input1_shift,
+                                      session->input2_offset,
+                                      session->input2_mult,
+                                      session->input2_shift,
+                                      session->left_shift);
+        default:
+            return ARM_CMSIS_NN_ARG_ERROR;
+    }
+}'''
+
 
 _RUN_SOFTMAX_ONCE = '''\
 /* Fixed CMSIS-NN reference lookup tables required by arm_softmax_s16() -- identical bit
@@ -1656,6 +1883,18 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         guard="HCT_HOST_ABS_ONLY",
         scalar_fields=("input_offset", "output_offset", "out_mult", "out_shift"),
         c_body=_RUN_REQUANTIZE_ONCE,
+    ),
+    FirmwareAdapterSpec(
+        label="ComparisonFunctions/Equal,NotEqual,Greater,GreaterEqual,Less,LessEqual",
+        function_name="run_comparison_once",
+        guard="HCT_HOST_ABS_ONLY",
+        scalar_fields=(
+            "output_n", "output_h", "output_w", "output_c",
+            "input1_offset", "input1_mult", "input1_shift",
+            "input2_offset", "input2_mult", "input2_shift",
+            "left_shift",
+        ),
+        c_body=_RUN_COMPARISON_ONCE,
     ),
     FirmwareAdapterSpec(
         label="SoftmaxFunctions/Softmax,SoftmaxS8S16",

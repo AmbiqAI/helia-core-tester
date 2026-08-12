@@ -255,6 +255,29 @@ before encoding them into the plan.**
   - real hardware: `scripts/run_hardware_perf_suite.sh --serial-no 1160002276 --family NNSupportFunctions --session-id phase3b-requantize --skip-generate`
     -> **2/2 passed** on Apollo510/Cortex-M55
 
+### Phase 3c — ComparisonFunctions bridge (COMPLETE)
+
+- Bridged **38 generated-test cases** for `Equal`, `NotEqual`, `Greater`,
+  `GreaterEqual`, `Less`, and `LessEqual` across S8/S16.
+- Host bridge:
+  - added one shared Comparison builder that reads NHWC dims plus the
+    per-input offset/mult/shift and `left_shift` call arguments from the
+    generated C wrapper
+  - emits `BOOL` expected-output blobs and enables batch-aware `output_n`
+    streaming for the batch-broadcast comparison descriptors
+- Firmware:
+  - added one shared `run_comparison_once()` adapter that switches on the
+    streamed kernel id and dispatches the matching `arm_*_{s8,s16}` compare
+    kernel
+  - reuses the existing elementwise scalar fields (`input1_*`, `input2_*`,
+    `left_shift`, `output_n/h/w/c`) so no new wire fields were needed
+- Verification:
+  - targeted pytest: `21 passed`
+  - full pytest baseline: `282 passed, 11 failed` (same unrelated-failure
+    baseline count)
+  - real hardware: `scripts/run_hardware_perf_suite.sh --serial-no 1160002276 --family ComparisonFunctions --session-id phase3c-comparison --skip-generate`
+    -> **38/38 passed** on Apollo510/Cortex-M55
+
 ### Hardware toolchain unblocked (2nd session segment)
 The user cloned the vendor NSX SDK to
 `/Users/mohammed.abuhussein/workspace/nsx-ambiq-sdk`. Wired it into this repo

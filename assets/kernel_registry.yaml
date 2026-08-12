@@ -413,5 +413,77 @@ kernels:
     dtype: S16
     cmsis_function: arm_requantize_s16_s16
 
+  - kernel_id: 67
+    family: ComparisonFunctions
+    operator: Equal
+    dtype: S8
+    cmsis_function: arm_equal_s8
+
+  - kernel_id: 68
+    family: ComparisonFunctions
+    operator: Equal
+    dtype: S16
+    cmsis_function: arm_equal_s16
+
+  - kernel_id: 69
+    family: ComparisonFunctions
+    operator: NotEqual
+    dtype: S8
+    cmsis_function: arm_not_equal_s8
+
+  - kernel_id: 70
+    family: ComparisonFunctions
+    operator: NotEqual
+    dtype: S16
+    cmsis_function: arm_not_equal_s16
+
+  - kernel_id: 71
+    family: ComparisonFunctions
+    operator: Greater
+    dtype: S8
+    cmsis_function: arm_greater_s8
+
+  - kernel_id: 72
+    family: ComparisonFunctions
+    operator: Greater
+    dtype: S16
+    cmsis_function: arm_greater_s16
+
+  - kernel_id: 73
+    family: ComparisonFunctions
+    operator: GreaterEqual
+    dtype: S8
+    cmsis_function: arm_greater_equal_s8
+
+  - kernel_id: 74
+    family: ComparisonFunctions
+    operator: GreaterEqual
+    dtype: S16
+    cmsis_function: arm_greater_equal_s16
+
+  - kernel_id: 75
+    family: ComparisonFunctions
+    operator: Less
+    dtype: S8
+    cmsis_function: arm_less_s8
+
+  - kernel_id: 76
+    family: ComparisonFunctions
+    operator: Less
+    dtype: S16
+    cmsis_function: arm_less_s16
+
+  - kernel_id: 77
+    family: ComparisonFunctions
+    operator: LessEqual
+    dtype: S8
+    cmsis_function: arm_less_equal_s8
+
+  - kernel_id: 78
+    family: ComparisonFunctions
+    operator: LessEqual
+    dtype: S16
+    cmsis_function: arm_less_equal_s16
+
   # Reserved for future clusters (see helia_core_tester perf_stream expansion plan):
   #  48+: no further int operator families remain unbridged as of this writing.

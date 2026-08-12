@@ -1095,6 +1095,29 @@ def _build_quantize_case(
 # and _RUN_DEQUANTIZE_ONCE in adapter_specs.py) rather than folded into an input blob.
 _DEQUANTIZE_ARG_COUNT = 5
 _REQUANTIZE_ARG_COUNT = 7
+_COMPARISON_ARG_COUNT = 14
+_COMPARISON_FUNCTIONS = {
+    ("equal", "S8"): "arm_equal_s8",
+    ("equal", "S16"): "arm_equal_s16",
+    ("not_equal", "S8"): "arm_not_equal_s8",
+    ("not_equal", "S16"): "arm_not_equal_s16",
+    ("greater", "S8"): "arm_greater_s8",
+    ("greater", "S16"): "arm_greater_s16",
+    ("greater_equal", "S8"): "arm_greater_equal_s8",
+    ("greater_equal", "S16"): "arm_greater_equal_s16",
+    ("less", "S8"): "arm_less_s8",
+    ("less", "S16"): "arm_less_s16",
+    ("less_equal", "S8"): "arm_less_equal_s8",
+    ("less_equal", "S16"): "arm_less_equal_s16",
+}
+_COMPARISON_OPERATOR_NAMES = {
+    "equal": "Equal",
+    "not_equal": "NotEqual",
+    "greater": "Greater",
+    "greater_equal": "GreaterEqual",
+    "less": "Less",
+    "less_equal": "LessEqual",
+}
 
 
 def _build_dequantize_case(
@@ -1280,6 +1303,114 @@ def _build_requantize_case(
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        "scratch_buffer": {"bytes": 0},
+        "required_target_capabilities": [cmsis_function],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
+def _build_comparison_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    descriptor = generated_test.descriptor
+    activation_dtype = str(descriptor.get("activation_dtype", ""))
+    operation = str(descriptor.get("operation", "")).lower()
+    registry_operator = _COMPARISON_OPERATOR_NAMES.get(operation)
+    cmsis_function = _COMPARISON_FUNCTIONS.get((operation, activation_dtype))
+    if registry_operator is None or cmsis_function is None:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: operation={operation!r} activation_dtype={activation_dtype!r} is not "
+            "bridgeable by the ComparisonFunctions adapter."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    source_path = _find_source_file(generated_test.directory)
+    source_text = source_path.read_text(encoding="utf-8")
+    prefix = generated_test.name
+
+    input_1_dims = _extract_dims(header_text, f"{prefix}_input_1_dims")
+    input_2_dims = _extract_dims(header_text, f"{prefix}_input_2_dims")
+    output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
+    input_1_shape = (input_1_dims["n"], input_1_dims["h"], input_1_dims["w"], input_1_dims["c"])
+    input_2_shape = (input_2_dims["n"], input_2_dims["h"], input_2_dims["w"], input_2_dims["c"])
+    output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
+
+    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
+    input_1_flat = np.array(_extract_array(header_text, f"{prefix}_input_1"), dtype=numpy_dtype)
+    input_2_flat = np.array(_extract_array(header_text, f"{prefix}_input_2"), dtype=numpy_dtype)
+    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=np.bool_)
+    if input_1_flat.size != int(np.prod(input_1_shape)) or input_2_flat.size != int(np.prod(input_2_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: generated array sizes (input_1={input_1_flat.size}, input_2={input_2_flat.size}) "
+            f"don't match header dims (input_1_shape={input_1_shape}, input_2_shape={input_2_shape})."
+        )
+    if expected_flat.size != int(np.prod(output_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: expected_output size ({expected_flat.size}) does not match output dims ({output_shape})."
+        )
+
+    args = _extract_call_args(source_text, cmsis_function, expected_count=_COMPARISON_ARG_COUNT)
+    scalar_parameters = {
+        "output_n": output_dims["n"],
+        "output_h": output_dims["h"],
+        "output_w": output_dims["w"],
+        "output_c": output_dims["c"],
+        "input1_offset": int(args[7]),
+        "input1_mult": int(args[8]),
+        "input1_shift": int(args[9]),
+        "input2_offset": int(args[10]),
+        "input2_mult": int(args[11]),
+        "input2_shift": int(args[12]),
+        "left_shift": int(args[13]),
+    }
+
+    input_1_data = input_1_flat.reshape(input_1_shape)
+    input_2_data = input_2_flat.reshape(input_2_shape)
+    expected_output = expected_flat.reshape(output_shape)
+
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+
+    arrays = [
+        (1, "input_0", activation_dtype, input_1_shape, input_1_data, False, False),
+        (2, "input_1", activation_dtype, input_2_shape, input_2_data, False, False),
+        (3, "expected_output", "BOOL", output_shape, expected_output, False, True),
+    ]
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": registry_operator,
+        "family": generated_test.family,
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=registry_operator, dtype=activation_dtype),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": scalar_parameters,
+        "tensor_dtypes": {"input": activation_dtype, "output": "BOOL"},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": "BOOL", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": {"mode": "bool"},
         "scratch_buffer": {"bytes": 0},
         "required_target_capabilities": [cmsis_function],
         "repeated_invocation_safe": True,
@@ -2763,6 +2894,7 @@ _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
     ("QuantizationFunctions", "Quantize"): _build_quantize_case,
     ("QuantizationFunctions", "Dequantize"): _build_dequantize_case,
     ("NNSupportFunctions", "Requantize"): _build_requantize_case,
+    ("ComparisonFunctions", "Comparison"): _build_comparison_case,
     ("SoftmaxFunctions", "Softmax"): _build_softmax_case,
     ("FullyConnectedFunctions", "FullyConnected"): _build_fully_connected_case,
     ("FullyConnectedFunctions", "BatchMatMul"): _build_batch_matmul_case,
