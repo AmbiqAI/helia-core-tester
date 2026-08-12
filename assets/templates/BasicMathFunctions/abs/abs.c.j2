@@ -10,6 +10,13 @@ int32_t {{ prefix }}_{{ name }}_run(
     {{ output_dtype }}* __restrict output
 ) {
     // Call abs kernel
+    {% if float_kernel %}
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        input,
+        output,
+        {{ block_size }}           // block_size
+    );
+    {% else %}
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         input,
         {{ input_offset }},        // input_offset (negated zero point)
@@ -22,6 +29,7 @@ int32_t {{ prefix }}_{{ name }}_run(
         {{ out_activation_max }},  // out_activation_max
         {{ block_size }}           // block_size
     );
+    {% endif %}
 
     return kernel_status;
 }

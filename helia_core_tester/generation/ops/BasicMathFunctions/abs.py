@@ -38,6 +38,10 @@ class OpAbs(OperationBase):
             dtype = "int8"
         elif activation_dtype == "S16":
             dtype = "int16"
+        elif activation_dtype == "FP32":
+            dtype = "float32"
+        elif activation_dtype == "FP16":
+            dtype = "float16"
         else:
             raise NotImplementedError(f"Unsupported Abs dtype: {activation_dtype}")
 
@@ -53,12 +57,28 @@ class OpAbs(OperationBase):
                 "kernel_fn": "arm_abs_s8",
                 "input_c_type": "int8_t",
                 "output_c_type": "int8_t",
+                "float_kernel": False,
             }
         if activation_dtype == "S16":
             return {
                 "kernel_fn": "arm_abs_s16",
                 "input_c_type": "int16_t",
                 "output_c_type": "int16_t",
+                "float_kernel": False,
+            }
+        if activation_dtype == "FP32":
+            return {
+                "kernel_fn": "arm_abs_f32",
+                "input_c_type": "float",
+                "output_c_type": "float",
+                "float_kernel": True,
+            }
+        if activation_dtype == "FP16":
+            return {
+                "kernel_fn": "arm_abs_f16",
+                "input_c_type": "float16_t",
+                "output_c_type": "float16_t",
+                "float_kernel": True,
             }
         raise NotImplementedError(f"Unsupported Abs dtype: {activation_dtype}")
 
@@ -84,43 +104,56 @@ class OpAbs(OperationBase):
         input_shape = self._ensure_shape_tuple(op_tensors["inputs"][0]["shape"])
         output_shape = self._ensure_shape_tuple(op_tensors["outputs"][0]["shape"])
 
-        input_quant = op_tensors["inputs"][0]["quantization"]
-        output_quant = op_tensors["outputs"][0]["quantization"]
-
-        input_scale, input_zp = scalar_scale_zp(input_quant)
-        output_scale, output_zp = scalar_scale_zp(output_quant)
-
         builder = TemplateContextBuilder()
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
 
         activation_dtype = self.desc.get("activation_dtype", "S8")
-        activation_min, activation_max = activation_bounds(activation_dtype)
 
-        effective_scale = float(input_scale) / float(output_scale)
-        output_mult, output_shift = calculate_multiplier_shift(effective_scale)
-        needs_rescale = 0 if abs(effective_scale - 1.0) < 1e-6 else 1
-        if bool(self.desc.get("hint", {}).get("force_rescale", False)):
-            needs_rescale = 1
+        if kernel_info["float_kernel"]:
+            # arm_abs_f32/f16 are pure (input, output, block_size) kernels
+            # with no quantization or activation parameters.
+            float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+            rng_state = self.rng.__getstate__()
+            self.rng = np.random.default_rng(self.seed)
+            input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(float_dtype)
+            self.rng.__setstate__(rng_state)
+            output_data = np.abs(input_q).astype(float_dtype)
+            input_zp = output_zp = output_mult = output_shift = needs_rescale = 0
+            activation_min = activation_max = 0
+        else:
+            input_quant = op_tensors["inputs"][0]["quantization"]
+            output_quant = op_tensors["outputs"][0]["quantization"]
 
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-        input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-        self.rng.__setstate__(rng_state)
+            input_scale, input_zp = scalar_scale_zp(input_quant)
+            output_scale, output_zp = scalar_scale_zp(output_quant)
 
-        qmin, qmax = activation_bounds(activation_dtype)
-        np_in_dtype = np.int16 if activation_dtype == "S16" else np.int8
-        input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-        input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+            activation_min, activation_max = activation_bounds(activation_dtype)
 
-        interpreter = self.load_litert_interpreter(str(tflite_path))
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
+            effective_scale = float(input_scale) / float(output_scale)
+            output_mult, output_shift = calculate_multiplier_shift(effective_scale)
+            needs_rescale = 0 if abs(effective_scale - 1.0) < 1e-6 else 1
+            if bool(self.desc.get("hint", {}).get("force_rescale", False)):
+                needs_rescale = 1
 
-        interpreter.set_tensor(input_details[0]["index"], input_q)
-        interpreter.invoke()
-        output_data = interpreter.get_tensor(output_details[0]["index"])
-        output_data = np.array(output_data)
+            rng_state = self.rng.__getstate__()
+            self.rng = np.random.default_rng(self.seed)
+            input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+            self.rng.__setstate__(rng_state)
+
+            qmin, qmax = activation_bounds(activation_dtype)
+            np_in_dtype = np.int16 if activation_dtype == "S16" else np.int8
+            input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
+            input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+
+            interpreter = self.load_litert_interpreter(str(tflite_path))
+            input_details = interpreter.get_input_details()
+            output_details = interpreter.get_output_details()
+
+            interpreter.set_tensor(input_details[0]["index"], input_q)
+            interpreter.invoke()
+            output_data = interpreter.get_tensor(output_details[0]["index"])
+            output_data = np.array(output_data)
 
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
@@ -145,7 +178,10 @@ class OpAbs(OperationBase):
             "input_dtype": kernel_info["input_c_type"],
             "output_dtype": kernel_info["output_c_type"],
             "kernel_fn": kernel_info["kernel_fn"],
+            "float_kernel": kernel_info["float_kernel"],
         }
+        if kernel_info["float_kernel"]:
+            context["validation_mode"] = "float"
 
         cmake_context = {
             "name": name,

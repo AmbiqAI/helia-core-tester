@@ -1709,19 +1709,23 @@ def build_prelu_op(
             )
 
     quant = _default_quant(tensor_type)
-    if quant is None:
-        raise ValueError("Missing default quantization for tensor type.")
-    scale = float(quant[0][0])
-    zero_point = int(quant[1][0])
-
     alpha_float = np.array(alpha_values, dtype=np.float32).reshape(alpha_shape)
-    alpha_q = np.round(alpha_float / scale + zero_point).astype(np.int32)
-    if tensor_type == litert.TensorType.INT8:
-        alpha_q = np.clip(alpha_q, -128, 127).astype(np.int8)
-    elif tensor_type == litert.TensorType.INT16:
-        alpha_q = np.clip(alpha_q, -32768, 32767).astype(np.int16)
+    if tensor_type == litert.TensorType.FLOAT32:
+        alpha_q = alpha_float.astype(np.float32)
+    elif tensor_type == litert.TensorType.FLOAT16:
+        alpha_q = alpha_float.astype(np.float16)
+    elif quant is None:
+        raise ValueError("Missing default quantization for tensor type.")
     else:
-        raise ValueError(f"Unsupported tensor type for alpha: {tensor_type}")
+        scale = float(quant[0][0])
+        zero_point = int(quant[1][0])
+        alpha_q = np.round(alpha_float / scale + zero_point).astype(np.int32)
+        if tensor_type == litert.TensorType.INT8:
+            alpha_q = np.clip(alpha_q, -128, 127).astype(np.int8)
+        elif tensor_type == litert.TensorType.INT16:
+            alpha_q = np.clip(alpha_q, -32768, 32767).astype(np.int16)
+        else:
+            raise ValueError(f"Unsupported tensor type for alpha: {tensor_type}")
 
     builder = LiteRtSingleOpBuilder(op_name="PRELU")
 
