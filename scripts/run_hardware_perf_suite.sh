@@ -8,12 +8,15 @@
 #   3. uv run helia_core_tester perf-stream run-generated --serial-no <SERIAL> ...
 #
 # By default (no --family given) this runs EVERY operator family with real
-# firmware dispatch support in one session -- currently ConvolutionFunctions
-# (arm_convolve_s8) and BasicMathFunctions (arm_add_s8/arm_sub_s8/arm_mul_s8);
-# see helia_core_tester/perf_stream/generated_test_bridge.py's `_BUILDERS`
-# dispatch table for the authoritative list. Pass --family to restrict to one
-# family. Kernels without a registered builder are reported as skipped (with
-# the reason) rather than silently omitted.
+# firmware dispatch support in one session -- see
+# helia_core_tester/perf_stream/generated_test_bridge.py's `_BUILDERS` dispatch
+# table for the authoritative, up-to-date list (currently: ConvolutionFunctions
+# Convolve/DepthwiseConv, PoolingFunctions AvgPool/MaxPool, BasicMathFunctions
+# Add/Sub/Mul/Maximum/Minimum, and ActivationFunctions Relu/Relu6/Clamp/LeakyRelu/
+# Logistic/Tanh/HardSwishCompat/HardSwishPrecise, all for both S8 and S16
+# activations where applicable). Pass --family to restrict to one family.
+# Kernels without a registered builder are reported
+# as skipped (with the reason) rather than silently omitted.
 #
 # If --serial-no isn't given, this auto-detects the connected J-Link probe's
 # serial number via `JLinkExe -CommanderScript ... ShowEmuList` (requires
@@ -150,10 +153,45 @@ RUN_GENERATED_ARGS=(
 uv run helia_core_tester "${RUN_GENERATED_ARGS[@]}"
 
 BUNDLE_DIR="artifacts/reports/performance_stream/${SESSION_ID}"
+CASE_SUMMARY_CSV="${BUNDLE_DIR}/case_summary.csv"
+
 echo
-echo "[run_hardware_perf_suite] Done. Performance numbers:"
-echo "  ${BUNDLE_DIR}/case_summary.csv"
+echo "=================================================================="
+echo "[run_hardware_perf_suite] Done. Reports written to:"
+echo "  ${CASE_SUMMARY_CSV}"
 echo "  ${BUNDLE_DIR}/raw_samples.csv"
-if [[ -f "${BUNDLE_DIR}/case_summary.csv" ]]; then
-    column -t -s, "${BUNDLE_DIR}/case_summary.csv"
+echo "  ${BUNDLE_DIR}/junit.xml"
+echo "=================================================================="
+
+if [[ -f "${CASE_SUMMARY_CSV}" ]]; then
+    # Colorized pass/fail summary: counts + a highlighted list of any failing
+    # cases, so the important signal isn't buried in a full-suite CSV dump.
+    awk -F',' -v red="$(tput setaf 1 2>/dev/null || true)" \
+        -v green="$(tput setaf 2 2>/dev/null || true)" \
+        -v bold="$(tput bold 2>/dev/null || true)" \
+        -v reset="$(tput sgr0 2>/dev/null || true)" '
+        NR == 1 {
+            for (i = 1; i <= NF; i++) { col[$i] = i }
+            next
+        }
+        {
+            total++
+            if ($col["comparison_passed"] == "true") {
+                passed++
+            } else {
+                failed++
+                fail_list[failed] = $col["case_id"]
+            }
+        }
+        END {
+            printf "\n%sSummary: %d/%d passed", bold, passed, total
+            if (failed > 0) { printf ", %d failed%s\n", failed, reset } else { printf "%s\n", reset }
+            if (failed > 0) {
+                printf "\n%s%sFailed cases:%s\n", bold, red, reset
+                for (i = 1; i <= failed; i++) { printf "  %s- %s%s\n", red, fail_list[i], reset }
+            } else {
+                printf "%s%sAll cases passed.%s\n", bold, green, reset
+            }
+        }
+    ' "${CASE_SUMMARY_CSV}"
 fi

@@ -13,6 +13,7 @@ docs/performance-streaming-report.md for exactly what is real vs simulated.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +32,98 @@ app = typer.Typer(
 
 _DEFAULT_BUILD_DIR = "build/perf_stream/benchmark_server_gcc2"
 _TOOLCHAIN_FILE = "cmake/nsx/toolchains/arm-none-eabi-gcc.cmake"
+
+
+def _print_case_results(cases) -> tuple[int, list[str]]:
+    """Print a readable, colorized per-case listing grouped by operator family.
+
+    Returns (passed_count, failed_case_ids) for use in a trailing summary.
+    """
+    passed_count = 0
+    failed_case_ids: list[str] = []
+    current_family: Optional[str] = None
+    id_width = max((len(c.case_bundle.case_id) for c in cases), default=0)
+
+    for case in cases:
+        family = str(case.case_bundle.manifest.get("family", "?"))
+        if family != current_family:
+            typer.echo(typer.style(f"\n[{family}]", bold=True))
+            current_family = family
+
+        passed = case.comparison.passed
+        if passed:
+            passed_count += 1
+            status = typer.style("PASS", fg=typer.colors.GREEN, bold=True)
+        else:
+            failed_case_ids.append(case.case_bundle.case_id)
+            status = typer.style("FAIL", fg=typer.colors.RED, bold=True)
+
+        line = (
+            f"  {case.case_bundle.case_id:<{id_width}}  {status}  "
+            f"median_cycles={case.statistics.median_cycles:>10.1f}"
+        )
+        if not passed:
+            line += f"  mismatches={case.comparison.mismatch_count}"
+        typer.echo(line)
+
+    return passed_count, failed_case_ids
+
+
+def _print_result_summary(total: int, passed_count: int, failed_case_ids: list[str]) -> None:
+    """Print a compact, always-visible pass/fail summary at the end of a run."""
+    typer.echo("\n" + "-" * 60)
+    if failed_case_ids:
+        typer.echo(
+            typer.style(f"Summary: {passed_count}/{total} passed, {len(failed_case_ids)} failed", fg=typer.colors.RED, bold=True)
+        )
+        typer.echo("Failed cases:")
+        for case_id in failed_case_ids:
+            typer.echo(f"  - {case_id}")
+    else:
+        typer.echo(typer.style(f"Summary: {passed_count}/{total} passed", fg=typer.colors.GREEN, bold=True))
+    typer.echo("-" * 60)
+
+
+_BRIDGED_TODAY_RE = re.compile(r"\s*\(bridged today: \[.*?\]\)\.?$")
+_NAMES_PER_LINE = 6
+
+
+def _clean_skip_reason(test_name: str, reason: str) -> str:
+    """Strip the redundant leading '{test_name}: ' (the CLI already prints the
+    name once) and collapse the ever-growing 'bridged today: [...]' family/operator
+    list -- otherwise identical for every not-yet-bridged case -- down to a
+    pointer at the authoritative source, instead of repeating it per case.
+    """
+    prefix = f"{test_name}: "
+    if reason.startswith(prefix):
+        reason = reason[len(prefix):]
+    return _BRIDGED_TODAY_RE.sub(
+        " (see generated_test_bridge.bridged_families() for the current list).", reason
+    )
+
+
+def _print_skipped_summary(skipped: list[tuple]) -> None:
+    """Print skipped generated-tests grouped by (deduplicated) reason instead of
+    repeating an identical, verbose reason string once per case -- keeps the
+    signal (why + how many + which cases) readable even with hundreds of
+    not-yet-bridged cases.
+    """
+    groups: dict[str, list[str]] = {}
+    for test, reason in skipped:
+        cleaned = _clean_skip_reason(test.name, reason)
+        groups.setdefault(cleaned, []).append(test.name)
+
+    typer.echo(
+        typer.style(
+            f"\n  Skipped {len(skipped)} generated test(s) with no real firmware dispatch support yet, grouped by reason:",
+            fg=typer.colors.YELLOW,
+        )
+    )
+    for reason, names in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        typer.echo(typer.style(f"\n  [{len(names)}x] {reason}", fg=typer.colors.YELLOW))
+        names = sorted(names)
+        for i in range(0, len(names), _NAMES_PER_LINE):
+            typer.echo("      " + ", ".join(names[i : i + _NAMES_PER_LINE]))
 
 
 def _configure(build_dir: Path, cpu: str, board: str, force: bool) -> None:
@@ -130,12 +223,8 @@ def run(
         session_id=session_id,
         build_dir=resolved_build_dir,
     )
-    for case in result.cases:
-        status = "PASS" if case.comparison.passed else "FAIL"
-        typer.echo(
-            f"  {case.case_bundle.case_id}: correctness={status} "
-            f"median_cycles={case.statistics.median_cycles}"
-        )
+    passed_count, failed_case_ids = _print_case_results(result.cases)
+    _print_result_summary(len(result.cases), passed_count, failed_case_ids)
     typer.echo(f"\n✓ Session complete. Result bundle: {bundle}")
 
 
@@ -155,8 +244,13 @@ def run_generated(
     """Stream real `helia_core_tester generate`-produced kernel tests (real golden data,
     not synthetic demo data) to already-flashed hardware over HCTP/RTT and check correctness.
 
-    Only kernels with real firmware dispatch support are bridged (arm_convolve_s8,
-    arm_add_s8, arm_sub_s8, arm_mul_s8; S8 activation + S8 weight, batch size 1).
+    Only kernels with real firmware dispatch support are bridged -- see
+    `generated_test_bridge.bridged_families()` and the `_BUILDERS` dispatch table for the
+    authoritative, up-to-date list (currently includes arm_convolve_s8/arm_convolve_wrapper_s16,
+    arm_depthwise_conv_s8/arm_depthwise_conv_wrapper_s16, arm_avgpool_s8/s16 and
+    arm_max_pool_s8/s16, the BasicMathFunctions Add/Sub/Mul/Maximum/Minimum family, and the
+    ActivationFunctions Relu/Relu6/Clamp/LeakyRelu/Logistic/Tanh/HardSwishCompat/HardSwishPrecise
+    family, all for both S8 and S16 activations where applicable; batch size 1 only).
     Everything else is reported as skipped with the reason, instead of silently
     fabricating a result. By default (no --family given) every bridged family is run,
     i.e. the complete hardware-supported suite. Run `helia_core_tester generate --cpu
@@ -191,24 +285,16 @@ def run_generated(
         typer.echo(f"✗ {exc}", err=True)
         sys.exit(1)
 
-    all_passed = True
-    for case in result.cases:
-        status = "PASS" if case.comparison.passed else "FAIL"
-        all_passed = all_passed and case.comparison.passed
-        typer.echo(
-            f"  {case.case_bundle.case_id}: correctness={status} "
-            f"median_cycles={case.statistics.median_cycles}"
-        )
+    passed_count, failed_case_ids = _print_case_results(result.cases)
     if skipped:
-        typer.echo(f"\n  Skipped {len(skipped)} generated test(s) with no real firmware dispatch support yet:")
-        for test, reason in skipped:
-            typer.echo(f"    - {test.name}: {reason}")
+        _print_skipped_summary(skipped)
 
+    _print_result_summary(len(result.cases), passed_count, failed_case_ids)
     typer.echo(f"\n✓ Result bundle: {bundle}")
-    if not all_passed:
-        typer.echo("✗ One or more generated-test cases failed correctness", err=True)
+    if failed_case_ids:
+        typer.echo(typer.style("✗ One or more generated-test cases failed correctness", fg=typer.colors.RED, bold=True), err=True)
         sys.exit(1)
-    typer.echo(f"✓ {len(result.cases)} generated test case(s) passed on real hardware")
+    typer.echo(typer.style(f"✓ {len(result.cases)} generated test case(s) passed on real hardware", fg=typer.colors.GREEN, bold=True))
 
 
 @app.command()
@@ -261,16 +347,10 @@ def full(
         session_id=session_id,
         build_dir=resolved_build_dir,
     )
-    all_passed = True
-    for case in result.cases:
-        status = "PASS" if case.comparison.passed else "FAIL"
-        all_passed = all_passed and case.comparison.passed
-        typer.echo(
-            f"  {case.case_bundle.case_id}: correctness={status} "
-            f"median_cycles={case.statistics.median_cycles}"
-        )
+    passed_count, failed_case_ids = _print_case_results(result.cases)
+    _print_result_summary(len(result.cases), passed_count, failed_case_ids)
     typer.echo(f"\n✓ Result bundle: {bundle}")
-    if not all_passed:
-        typer.echo("✗ One or more cases failed correctness", err=True)
+    if failed_case_ids:
+        typer.echo(typer.style("✗ One or more cases failed correctness", fg=typer.colors.RED, bold=True), err=True)
         sys.exit(1)
-    typer.echo("✓ perf-stream full pipeline completed successfully")
+    typer.echo(typer.style("✓ perf-stream full pipeline completed successfully", fg=typer.colors.GREEN, bold=True))

@@ -64,6 +64,239 @@ kernels:
     dtype: S8
     cmsis_function: arm_depthwise_conv_s8
 
+  - kernel_id: 9
+    family: BasicMathFunctions
+    operator: Add
+    dtype: S16
+    cmsis_function: arm_add_s16
+
+  - kernel_id: 10
+    family: BasicMathFunctions
+    operator: Sub
+    dtype: S16
+    cmsis_function: arm_sub_s16
+
+  - kernel_id: 11
+    family: BasicMathFunctions
+    operator: Mul
+    dtype: S16
+    cmsis_function: arm_mul_s16
+
+  - kernel_id: 12
+    family: BasicMathFunctions
+    operator: Maximum
+    dtype: S16
+    cmsis_function: arm_maximum_s16
+
+  - kernel_id: 13
+    family: BasicMathFunctions
+    operator: Minimum
+    dtype: S16
+    cmsis_function: arm_minimum_s16
+
+  - kernel_id: 14
+    family: ConvolutionFunctions
+    operator: Convolve
+    dtype: S16
+    cmsis_function: arm_convolve_wrapper_s16
+
+  - kernel_id: 15
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: S16
+    cmsis_function: arm_depthwise_conv_wrapper_s16
+
+  - kernel_id: 16
+    family: PoolingFunctions
+    operator: AvgPool
+    dtype: S8
+    cmsis_function: arm_avgpool_s8
+
+  - kernel_id: 17
+    family: PoolingFunctions
+    operator: MaxPool
+    dtype: S8
+    cmsis_function: arm_max_pool_s8
+
+  - kernel_id: 18
+    family: PoolingFunctions
+    operator: AvgPool
+    dtype: S16
+    cmsis_function: arm_avgpool_s16
+
+  - kernel_id: 19
+    family: PoolingFunctions
+    operator: MaxPool
+    dtype: S16
+    cmsis_function: arm_max_pool_s16
+
+  - kernel_id: 20
+    family: ActivationFunctions
+    operator: Relu
+    dtype: S8
+    cmsis_function: arm_relu_s8
+
+  - kernel_id: 21
+    family: ActivationFunctions
+    operator: Relu
+    dtype: S16
+    cmsis_function: arm_relu_s16
+
+  - kernel_id: 22
+    family: ActivationFunctions
+    operator: Relu6
+    dtype: S8
+    cmsis_function: arm_relu_generic_s8
+
+  - kernel_id: 23
+    family: ActivationFunctions
+    operator: Relu6
+    dtype: S16
+    cmsis_function: arm_relu_generic_s16
+
+  - kernel_id: 24
+    family: ActivationFunctions
+    operator: Clamp
+    dtype: S8
+    cmsis_function: arm_clamp_s8
+
+  - kernel_id: 25
+    family: ActivationFunctions
+    operator: Clamp
+    dtype: S16
+    cmsis_function: arm_clamp_s16
+
+  - kernel_id: 26
+    family: ActivationFunctions
+    operator: LeakyRelu
+    dtype: S8
+    cmsis_function: arm_leaky_relu_s8
+
+  - kernel_id: 27
+    family: ActivationFunctions
+    operator: LeakyRelu
+    dtype: S16
+    cmsis_function: arm_leaky_relu_s16
+
+  - kernel_id: 28
+    family: ActivationFunctions
+    operator: Logistic
+    dtype: S16
+    cmsis_function: arm_logistic_s16
+
+  - kernel_id: 29
+    family: ActivationFunctions
+    operator: Tanh
+    dtype: S16
+    cmsis_function: arm_tanh_s16
+
+  - kernel_id: 30
+    family: ActivationFunctions
+    operator: HardSwishCompat
+    dtype: S8
+    cmsis_function: arm_hard_swish_compat_s8
+
+  - kernel_id: 31
+    family: ActivationFunctions
+    operator: HardSwishPrecise
+    dtype: S8
+    cmsis_function: arm_hard_swish_precise_s8
+
+  - kernel_id: 32
+    family: ActivationFunctions
+    operator: HardSwishPrecise
+    dtype: S16
+    cmsis_function: arm_hard_swish_precise_s16
+
+  - kernel_id: 33
+    family: ActivationFunctions
+    operator: PReLU
+    dtype: S8
+    cmsis_function: arm_prelu_s8
+
+  - kernel_id: 34
+    family: ActivationFunctions
+    operator: PReLU
+    dtype: S16
+    cmsis_function: arm_prelu_s16
+
+  - kernel_id: 35
+    family: ActivationFunctions
+    operator: PReLUScalar
+    dtype: S8
+    cmsis_function: arm_prelu_scalar_s8
+
+  - kernel_id: 36
+    family: ActivationFunctions
+    operator: PReLUScalar
+    dtype: S16
+    cmsis_function: arm_prelu_scalar_s16
+
+  - kernel_id: 37
+    family: QuantizationFunctions
+    operator: Quantize
+    dtype: S8
+    cmsis_function: arm_quantize_f32_s8
+
+  - kernel_id: 38
+    family: QuantizationFunctions
+    operator: Quantize
+    dtype: S16
+    cmsis_function: arm_quantize_f32_s16
+
+  - kernel_id: 39
+    family: QuantizationFunctions
+    operator: Dequantize
+    dtype: S8
+    cmsis_function: arm_dequantize_s8_f32
+
+  - kernel_id: 40
+    family: QuantizationFunctions
+    operator: Dequantize
+    dtype: S16
+    cmsis_function: arm_dequantize_s16_f32
+
+  - kernel_id: 41
+    family: SoftmaxFunctions
+    operator: Softmax
+    dtype: S8
+    cmsis_function: arm_softmax_s8
+
+  - kernel_id: 42
+    family: SoftmaxFunctions
+    operator: Softmax
+    dtype: S16
+    cmsis_function: arm_softmax_s16
+
+  - kernel_id: 43
+    family: SoftmaxFunctions
+    operator: SoftmaxS8S16
+    dtype: S8
+    cmsis_function: arm_softmax_s8_s16
+
+  - kernel_id: 44
+    family: FullyConnectedFunctions
+    operator: FullyConnected
+    dtype: S8
+    cmsis_function: arm_fully_connected_wrapper_s8
+
+  - kernel_id: 45
+    family: FullyConnectedFunctions
+    operator: FullyConnected
+    dtype: S16
+    cmsis_function: arm_fully_connected_wrapper_s16
+
+  - kernel_id: 46
+    family: FullyConnectedFunctions
+    operator: BatchMatMul
+    dtype: S8
+    cmsis_function: arm_batch_matmul_s8
+
+  - kernel_id: 47
+    family: FullyConnectedFunctions
+    operator: BatchMatMul
+    dtype: S16
+    cmsis_function: arm_batch_matmul_s16
+
   # Reserved for future clusters (see helia_core_tester perf_stream expansion plan):
-  #   9: PoolingFunctions/AvgPool     -> arm_avgpool_s8
-  #  10: PoolingFunctions/MaxPool     -> arm_max_pool_s8
+  #  48+: no further int operator families remain unbridged as of this writing.

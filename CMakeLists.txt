@@ -328,7 +328,8 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
     add_dependencies(${target_name} hct_kernel_symbol_refs)
     target_include_directories(${target_name} PRIVATE
       "${HELIA_KERNEL_SYMBOL_REFS_DIR}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream")
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream"
+      "${CMSIS_PATH}/CMSIS/Core/Include")
     target_compile_definitions(${target_name} PUBLIC HELIA_HARDWARE_BUILD)
     target_compile_options(${target_name} PRIVATE -Wno-cast-function-type)
 

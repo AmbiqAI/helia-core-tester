@@ -20,6 +20,7 @@ _DTYPE_TO_NUMPY = {
     "S8": np.int8,
     "S16": np.int16,
     "S32": np.int32,
+    "S64": np.int64,
     "BOOL": np.bool_,
     "FP32": np.float32,
     "FP16": np.float16,

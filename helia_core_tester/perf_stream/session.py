@@ -123,7 +123,9 @@ class HostSession:
                     raise RuntimeError("Received OUTPUT_END without an active case.")
                 bundle = case_map[current_case_id]
                 expected_output = blob_numpy(bundle.expected_output)
-                actual = np.frombuffer(bytes(actual_output_bytes), dtype=np.int8).reshape(expected_output.shape)
+                actual = np.frombuffer(bytes(actual_output_bytes), dtype=expected_output.dtype).reshape(
+                    expected_output.shape
+                )
                 comparison_result = compare_output(actual, expected_output, bundle.comparison)
                 writer = ByteWriter()
                 writer.u8(1 if comparison_result.passed else 0)
