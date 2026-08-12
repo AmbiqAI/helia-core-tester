@@ -16,7 +16,7 @@ typedef struct
     const void *address;
 } hct_symbol_ref_t;
 
-__attribute__((aligned(16))) static uint8_t g_hct_runtime_arena[32u * 1024u];
+__attribute__((aligned(16))) static uint8_t g_hct_runtime_arena[HCT_SERVER_MAX_ARENA_BYTES];
 
 static const hct_symbol_ref_t g_hct_symbol_refs[] = {
 #include "kernel_symbol_refs.inc"

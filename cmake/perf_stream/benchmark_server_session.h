@@ -16,7 +16,7 @@ extern "C" {
 #define HCT_SERVER_MAX_GROUP_NAME 16u
 #define HCT_SERVER_MAX_BLOBS 8u
 #define HCT_SERVER_MAX_INPUT_BYTES 4096u
-#define HCT_SERVER_MAX_ARENA_BYTES 8192u
+#define HCT_SERVER_MAX_ARENA_BYTES 49152u
 #define HCT_SERVER_MAX_OUTPUT_BYTES 8192u
 #define HCT_SERVER_MAX_OUTBOX_BYTES 16384u
 #define HCT_SERVER_BLOB_CHUNK_BYTES 64u
@@ -83,6 +83,8 @@ typedef struct
      * convention (asymmetric splits, rounding, etc.) for real generated test cases. */
     int32_t pad_h;
     int32_t pad_w;
+    int32_t pad_offset_h;
+    int32_t pad_offset_w;
     int32_t output_n;
     int32_t output_h;
     int32_t output_w;
@@ -183,6 +185,8 @@ typedef struct
      * - output_n / axis{n,h,w,c} / axis are used by reduction ops (ArgMax/ArgMin/Mean/
      *   ReduceMax/ReduceMin) whose output shape is not always the implicit n=1 convention
      *   older adapters hardcode.
+     * - pad_offset_h / pad_offset_w are TransposeConv's additional padding-offset terms
+     *   (distinct from the main padding.{h,w} values already shared with Conv/Pool).
      * - needs_rescale is shared by Abs and RsqrtUniversal's bool-like requantization flag.
      */
     int32_t axis_n;

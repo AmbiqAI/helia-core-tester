@@ -74,21 +74,19 @@ def test_depthwise_conv_dilated_case_bridges(tmp_path: Path) -> None:
     assert scalars["ch_mult"] == 3
 
 
-def test_depthwise_conv_oversized_channel_count_case_is_rejected_for_arena_capacity(tmp_path: Path) -> None:
-    """depthwise_conv_eq_in_out_ch_s8 (250 channels) needs ~12.7KB of blobs, exceeding the
-    firmware's fixed 8192-byte HCT_SERVER_MAX_ARENA_BYTES case arena. Confirmed on real
-    hardware: without this gate, the firmware's allocate_blob() rejects the CASE_META frame
-    with HCTP_STATUS_INVALID_ARGUMENT, surfaced to the host as a cryptic
-    "message_type=4 status=-1" ERROR frame instead of a clean bridge-time skip.
+def test_depthwise_conv_oversized_channel_count_case_is_rejected_for_output_buffer_capacity(tmp_path: Path) -> None:
+    """depthwise_conv_eq_in_out_ch_s8 still cannot be streamed end-to-end because its
+    8750-byte output tensor exceeds the firmware's fixed 8192-byte output_buffer, even
+    though the expanded phase-3d case arena is now large enough for its input blobs.
     """
     cases = discover_generated_tests(PROJECT_ROOT, family="ConvolutionFunctions", name_filter="depthwise_conv_eq_in_out_ch_s8")
     assert cases, "expected a discoverable oversized-channel-count DepthwiseConv test"
     try:
         build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path)
     except Exception as exc:  # noqa: BLE001 - asserting on the specific bridge rejection path
-        assert "case-arena footprint" in str(exc)
+        assert "output byte-length" in str(exc)
     else:
-        raise AssertionError("expected the oversized DepthwiseConv case to be rejected for arena capacity")
+        raise AssertionError("expected the oversized DepthwiseConv case to be rejected for output-buffer capacity")
 
 
 def test_depthwise_conv_s4_weight_case_is_rejected(tmp_path: Path) -> None:

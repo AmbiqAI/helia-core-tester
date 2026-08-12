@@ -278,6 +278,33 @@ before encoding them into the plan.**
   - real hardware: `scripts/run_hardware_perf_suite.sh --serial-no 1160002276 --family ComparisonFunctions --session-id phase3c-comparison --skip-generate`
     -> **38/38 passed** on Apollo510/Cortex-M55
 
+### Phase 3d — ConvolutionFunctions TransposeConv S8 bridge (COMPLETE)
+
+- Bridged **10 generated-test cases** for `arm_transpose_conv_wrapper_s8`.
+- Host bridge:
+  - added one `TransposeConv` generated-test builder that extracts NHWC dims,
+    per-channel quant arrays, padding offsets, and optional bias blobs from
+    the generated headers
+  - mirrors the standalone harness's real behavior by truncating oversized
+    generated input/output arrays to the dims-declared payload and by forcing
+    `tolerant_int` comparison with tolerance 1
+  - computes streamed scratch size for the three required transient regions:
+    main transpose-conv context, reverse-conv context, and weight-sum buffer
+- Firmware:
+  - added kernel id 79 plus one shared `run_transpose_conv_once()` adapter
+  - added streamed `pad_offset_h/pad_offset_w` session fields and dispatch
+    wiring for `arm_transpose_conv_wrapper_s8`
+  - expanded the fixed case arena to `49152` bytes and updated
+    `benchmark_server_main.c` to actually instantiate the larger runtime arena
+  - increased output-chunk payload size so the largest 7560-byte result streams
+    reliably over RTT without stalling mid-transfer
+- Verification:
+  - targeted pytest: `19 passed`
+  - full pytest baseline: `285 passed, 11 failed` (same unrelated-failure
+    baseline count)
+  - real hardware: `scripts/run_hardware_perf_suite.sh --serial-no 1160002276 --family ConvolutionFunctions --test-name transpose_conv --session-id phase3d-transpose-conv-pass2 --skip-generate`
+    -> **10/10 passed** on Apollo510/Cortex-M55
+
 ### Hardware toolchain unblocked (2nd session segment)
 The user cloned the vendor NSX SDK to
 `/Users/mohammed.abuhussein/workspace/nsx-ambiq-sdk`. Wired it into this repo

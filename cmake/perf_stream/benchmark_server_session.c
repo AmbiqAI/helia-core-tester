@@ -113,6 +113,7 @@
 #define HCT_KERNEL_ID_LESS_S16 76u
 #define HCT_KERNEL_ID_LESS_EQUAL_S8 77u
 #define HCT_KERNEL_ID_LESS_EQUAL_S16 78u
+#define HCT_KERNEL_ID_TRANSPOSE_CONV_S8 79u
 
 static bool has_capacity(size_t payload_length, size_t offset, size_t needed)
 {
@@ -404,7 +405,7 @@ static hctp_status_t queue_correctness_output(hct_server_session_t *session)
 
     while (cursor < session->output_length)
     {
-        const uint32_t chunk_length = (uint32_t)(((session->output_length - cursor) > 32u) ? 32u : (session->output_length - cursor));
+        const uint32_t chunk_length = (uint32_t)(((session->output_length - cursor) > 224u) ? 224u : (session->output_length - cursor));
         offset = 0u;
         write_u32(payload, sizeof(payload), &offset, (uint32_t)cursor);
         write_u32(payload, sizeof(payload), &offset, chunk_length);
@@ -586,6 +587,8 @@ static void reset_case_buffers(hct_server_session_t *session)
     session->scratch_offset = 0u;
     session->case_arena_used_bytes = 0u;
     session->output_length = 0u;
+    session->pad_offset_h = 0;
+    session->pad_offset_w = 0;
     session->output_n = 0;
     session->axis_n = 0;
     session->axis_h = 0;
@@ -603,6 +606,8 @@ static hctp_status_t parse_scalar(hct_server_session_t *session, const char *nam
     else if (strcmp(name, "padding") == 0) session->padding = value;
     else if (strcmp(name, "pad_h") == 0) session->pad_h = value;
     else if (strcmp(name, "pad_w") == 0) session->pad_w = value;
+    else if (strcmp(name, "pad_offset_h") == 0) session->pad_offset_h = value;
+    else if (strcmp(name, "pad_offset_w") == 0) session->pad_offset_w = value;
     else if (strcmp(name, "output_n") == 0) session->output_n = value;
     else if (strcmp(name, "output_h") == 0) session->output_h = value;
     else if (strcmp(name, "output_w") == 0) session->output_w = value;
@@ -1690,6 +1695,140 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
     }
 }
 
+static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+    hct_server_blob_t *weights = find_blob_by_role(session, HCT_BLOB_ROLE_WEIGHTS);
+    hct_server_blob_t *bias = find_blob_by_role(session, HCT_BLOB_ROLE_BIAS);
+    hct_server_blob_t *multiplier = find_blob_by_role(session, HCT_BLOB_ROLE_MULTIPLIER);
+    hct_server_blob_t *shift = find_blob_by_role(session, HCT_BLOB_ROLE_SHIFT);
+    cmsis_nn_context ctx;
+    cmsis_nn_context output_ctx;
+    cmsis_nn_context weight_sum_ctx;
+    cmsis_nn_transpose_conv_params params;
+    cmsis_nn_per_channel_quant_params quant_params;
+    cmsis_nn_dims input_dims;
+    cmsis_nn_dims filter_dims;
+    cmsis_nn_dims bias_dims;
+    cmsis_nn_dims output_dims;
+    uint32_t local_offset = 0u;
+    uint32_t ctx_offset;
+    uint32_t output_ctx_offset;
+    uint32_t weight_sum_offset;
+    uint32_t weight_sum_bytes;
+    int32_t required_ctx;
+    int32_t required_output_ctx;
+    int32_t total_required;
+    const int32_t *bias_data = NULL;
+
+    if (input == NULL || weights == NULL || multiplier == NULL || shift == NULL)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    input_dims.n = (int32_t)input->dimensions[0];
+    input_dims.h = (int32_t)input->dimensions[1];
+    input_dims.w = (int32_t)input->dimensions[2];
+    input_dims.c = (int32_t)input->dimensions[3];
+    filter_dims.n = (int32_t)weights->dimensions[0];
+    filter_dims.h = (int32_t)weights->dimensions[1];
+    filter_dims.w = (int32_t)weights->dimensions[2];
+    filter_dims.c = (int32_t)weights->dimensions[3];
+    output_dims.n = (session->output_n > 0) ? session->output_n : 1;
+    output_dims.h = session->output_h;
+    output_dims.w = session->output_w;
+    output_dims.c = session->output_c;
+    if (input_dims.n != 1 || output_dims.n != 1 || output_dims.h <= 0 || output_dims.w <= 0 || output_dims.c <= 0)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c);
+    if (session->output_length > sizeof(session->output_buffer))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    params.input_offset = session->input_offset;
+    params.output_offset = session->output_offset;
+    params.stride.w = session->stride_w;
+    params.stride.h = session->stride_h;
+    params.dilation.w = session->dilation_w;
+    params.dilation.h = session->dilation_h;
+    params.padding.w = session->pad_w;
+    params.padding.h = session->pad_h;
+    params.padding_offsets.w = session->pad_offset_w;
+    params.padding_offsets.h = session->pad_offset_h;
+    params.activation.min = session->activation_min;
+    params.activation.max = session->activation_max;
+
+    quant_params.multiplier = (int32_t *)blob_ptr(session, multiplier);
+    quant_params.shift = (int32_t *)blob_ptr(session, shift);
+
+    bias_dims.n = 1;
+    bias_dims.h = 1;
+    bias_dims.w = 1;
+    bias_dims.c = output_dims.c;
+    if (bias != NULL)
+    {
+        bias_data = (const int32_t *)blob_ptr(session, bias);
+        if (bias->rank > 0u && bias->dimensions[0] > 0u)
+        {
+            bias_dims.c = (int32_t)bias->dimensions[0];
+        }
+    }
+
+    required_ctx = arm_transpose_conv_s8_get_buffer_size(&params, &input_dims, &filter_dims, &output_dims);
+    required_output_ctx = arm_transpose_conv_s8_get_reverse_conv_buffer_size(&params, &input_dims, &filter_dims);
+    if (required_ctx < 0 || required_output_ctx < 0)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    ctx_offset = align_up(local_offset, 16u);
+    local_offset = ctx_offset + (uint32_t)required_ctx;
+    output_ctx_offset = align_up(local_offset, 16u);
+    local_offset = output_ctx_offset + (uint32_t)required_output_ctx;
+    weight_sum_offset = align_up(local_offset, 16u);
+    weight_sum_bytes = (uint32_t)output_dims.c * (uint32_t)sizeof(int32_t);
+    total_required = (int32_t)(weight_sum_offset + weight_sum_bytes);
+    if ((uint32_t)total_required > session->scratch_bytes)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    ctx.buf = (required_ctx > 0) ? &session->case_arena[session->scratch_offset + ctx_offset] : NULL;
+    ctx.size = required_ctx;
+    output_ctx.buf = (required_output_ctx > 0) ? &session->case_arena[session->scratch_offset + output_ctx_offset] : NULL;
+    output_ctx.size = required_output_ctx;
+    weight_sum_ctx.buf = (weight_sum_bytes > 0u) ? &session->case_arena[session->scratch_offset + weight_sum_offset] : NULL;
+    weight_sum_ctx.size = (int32_t)weight_sum_bytes;
+
+    if (arm_convolve_weight_sum((int32_t *)weight_sum_ctx.buf,
+                                (const int8_t *)blob_ptr(session, weights),
+                                &input_dims,
+                                &filter_dims,
+                                &output_dims,
+                                params.input_offset,
+                                bias_data) != ARM_CMSIS_NN_SUCCESS)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    return arm_transpose_conv_wrapper_s8(&ctx,
+                                         &weight_sum_ctx,
+                                         &output_ctx,
+                                         &params,
+                                         &quant_params,
+                                         &input_dims,
+                                         (const int8_t *)blob_ptr(session, input),
+                                         &filter_dims,
+                                         (const int8_t *)blob_ptr(session, weights),
+                                         &bias_dims,
+                                         bias_data,
+                                         &output_dims,
+                                         (int8_t *)session->output_buffer);
+}
+
 /* Fixed CMSIS-NN reference lookup tables required by arm_softmax_s16() -- identical bit
  * patterns are used by every generated S16 softmax test case (see
  * Tests/helia-core-tester/assets/templates/SoftmaxFunctions/softmax/softmax.h.j2), so they
@@ -2454,6 +2593,12 @@ static arm_cmsis_nn_status run_kernel_once(hct_server_session_t *session)
         case HCT_KERNEL_ID_DEPTHWISE_CONV_S16:
 #ifndef HCT_HOST_ABS_ONLY
             return run_depthwise_conv_once(session);
+#else
+            return ARM_CMSIS_NN_ARG_ERROR;
+#endif
+        case HCT_KERNEL_ID_TRANSPOSE_CONV_S8:
+#ifndef HCT_HOST_ABS_ONLY
+            return run_transpose_conv_once(session);
 #else
             return ARM_CMSIS_NN_ARG_ERROR;
 #endif

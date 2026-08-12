@@ -42,7 +42,7 @@ class UnsupportedGeneratedTestError(Exception):
 # with HCTP_STATUS_INVALID_ARGUMENT (surfaced to the host as a CASE_META ERROR frame) --
 # so it must be rejected here at bridge time with a clear skip reason instead of silently
 # producing a CaseBundle the firmware will reject at runtime.
-_ARENA_CAPACITY_BYTES = 8192
+_ARENA_CAPACITY_BYTES = 49152
 
 # Must match HCT_SERVER_MAX_OUTPUT_BYTES in cmake/perf_stream/benchmark_server_session.h.
 # The firmware's `session->output_buffer` is a separate fixed-size buffer (not part of
@@ -199,6 +199,19 @@ def _extract_bare_scalar(header_text: str, variable_name: str) -> int | None:
     pattern = re.compile(rf"\b{re.escape(variable_name)}\s*=\s*(-?\d+)\s*;")
     match = pattern.search(header_text)
     return int(match.group(1)) if match is not None else None
+
+
+def _extract_define_int(source_text: str, name: str) -> int:
+    pattern = re.compile(rf"^\s*#define\s+{re.escape(name)}\s+\(?(-?\d+)\)?\s*$", re.MULTILINE)
+    match = pattern.search(source_text)
+    if match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find #define `{name}` in generated source")
+    return int(match.group(1))
+
+
+def _extract_null_pointer_decl(header_text: str, variable_name: str) -> bool:
+    pattern = re.compile(rf"\b{re.escape(variable_name)}\s*=\s*NULL\s*;")
+    return pattern.search(header_text) is not None
 
 
 def _extract_dims(header_text: str, struct_name: str) -> dict[str, int]:
@@ -619,6 +632,172 @@ def _build_depthwise_conv_case(
         "correctness_comparison": comparison,
         "scratch_buffer": {"bytes": int(scratch_bytes)},
         "required_target_capabilities": ["depthwise_conv_s8" if activation_dtype == "S8" else "depthwise_conv_s16"],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
+def _build_transpose_conv_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    activation_dtype = str(descriptor.get("activation_dtype", ""))
+    weight_dtype = str(descriptor.get("weight_dtype", descriptor.get("resolved_tensor_dtypes", {}).get("weights", "")))
+    if operator != "TransposeConv" or activation_dtype != "S8" or weight_dtype != "S8":
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} is not "
+            "bridgeable -- perf-stream firmware only dispatches arm_transpose_conv_wrapper_s8."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    source_path = _find_source_file(generated_test.directory)
+    source_text = source_path.read_text(encoding="utf-8")
+    prefix = generated_test.name
+    upper_prefix = prefix.upper()
+
+    input_dims = _extract_dims(header_text, f"{prefix}_input_dims")
+    filter_dims = _extract_dims(header_text, f"{prefix}_filter_dims")
+    output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
+    if input_dims["n"] != 1 or output_dims["n"] != 1:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: batch size > 1 is not yet supported by the perf-stream hardware bridge."
+        )
+    input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
+    filter_shape = (filter_dims["n"], filter_dims["h"], filter_dims["w"], filter_dims["c"])
+    output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
+    output_channels = output_dims["c"]
+
+    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=np.int8)
+    weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=np.int8)
+    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=np.int8)
+    multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
+    shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
+    expected_input_size = int(np.prod(input_shape))
+    expected_filter_size = int(np.prod(filter_shape))
+    expected_output_size = int(np.prod(output_shape))
+    if input_flat.size < expected_input_size or weights_flat.size < expected_filter_size:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: generated array sizes (input={input_flat.size}, weights={weights_flat.size}) "
+            f"don't match header dims (input_shape={input_shape}, filter_shape={filter_shape})."
+        )
+    if expected_flat.size < expected_output_size:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: expected_output size ({expected_flat.size}) does not match output dims ({output_shape})."
+        )
+    # Some generated TransposeConv headers currently emit a trailing duplicate block after the
+    # real tensor payload while still validating only the first NHWC-sized slice in the
+    # standalone harness (the output-size macros in the generated C source remain the true
+    # dims product). Mirror that real harness behavior here by truncating any oversized
+    # arrays to the dims-declared payload instead of rejecting otherwise-dispatchable cases.
+    input_flat = input_flat[:expected_input_size]
+    weights_flat = weights_flat[:expected_filter_size]
+    expected_flat = expected_flat[:expected_output_size]
+    if multiplier.size != output_channels or shift.size != output_channels:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: quant array sizes (multiplier={multiplier.size}, shift={shift.size}) do not "
+            f"match output channels ({output_channels})."
+        )
+
+    params_struct = f"{prefix}_transpose_conv_params"
+    input_offset = _extract_scalar(header_text, params_struct, "input_offset")
+    output_offset = _extract_scalar(header_text, params_struct, "output_offset")
+    stride_h = _extract_nested_scalar(header_text, params_struct, "stride", "h")
+    stride_w = _extract_nested_scalar(header_text, params_struct, "stride", "w")
+    dilation_h = _extract_nested_scalar(header_text, params_struct, "dilation", "h")
+    dilation_w = _extract_nested_scalar(header_text, params_struct, "dilation", "w")
+    pad_h = _extract_nested_scalar(header_text, params_struct, "padding", "h")
+    pad_w = _extract_nested_scalar(header_text, params_struct, "padding", "w")
+    pad_offset_h = _extract_nested_scalar(header_text, params_struct, "padding_offsets", "h")
+    pad_offset_w = _extract_nested_scalar(header_text, params_struct, "padding_offsets", "w")
+    activation_min = _extract_nested_scalar(header_text, params_struct, "activation", "min")
+    activation_max = _extract_nested_scalar(header_text, params_struct, "activation", "max")
+
+    has_bias = not _extract_null_pointer_decl(header_text, f"{prefix}_biases")
+    biases = np.array(_extract_array(header_text, f"{prefix}_biases"), dtype=np.int32) if has_bias else None
+    if has_bias and biases.size != output_channels:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: bias array size ({biases.size}) does not match output channels ({output_channels})."
+        )
+
+    ctx_upper = _extract_define_int(source_text, f"{upper_prefix}_BUFFER_SIZE_MAX")
+    reverse_upper = _extract_define_int(source_text, f"{upper_prefix}_REVERSE_CONV_CTX_SIZE")
+    weight_sum_bytes = output_channels * 4
+    scratch_bytes = int(_align_up(_align_up(ctx_upper, 16) + reverse_upper, 16) + weight_sum_bytes)
+
+    input_data = input_flat.reshape(input_shape)
+    weights = weights_flat.reshape(filter_shape)
+    expected_output = expected_flat.reshape(output_shape)
+
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+
+    arrays: list[tuple[int, str, str, tuple[int, ...], np.ndarray, bool, bool]] = [
+        (1, "input_0", "S8", input_shape, input_data, False, False),
+        (2, "weights", "S8", filter_shape, weights, False, False),
+        (3, "multiplier", "S32", (output_channels,), multiplier, False, False),
+        (4, "shift", "S32", (output_channels,), shift, False, False),
+    ]
+    if has_bias and biases is not None:
+        arrays.append((5, "bias", "S32", (output_channels,), biases, False, False))
+        expected_blob_id = 6
+    else:
+        expected_blob_id = 5
+    arrays.append((expected_blob_id, "expected_output", "S8", output_shape, expected_output, False, True))
+
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": operator,
+        "family": generated_test.family,
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype="S8"),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": {
+            "stride_h": stride_h,
+            "stride_w": stride_w,
+            "pad_h": pad_h,
+            "pad_w": pad_w,
+            "pad_offset_h": pad_offset_h,
+            "pad_offset_w": pad_offset_w,
+            "output_n": output_dims["n"],
+            "output_h": output_dims["h"],
+            "output_w": output_dims["w"],
+            "output_c": output_dims["c"],
+            "dilation_h": dilation_h,
+            "dilation_w": dilation_w,
+            "input_offset": input_offset,
+            "output_offset": output_offset,
+            "activation_min": activation_min,
+            "activation_max": activation_max,
+        },
+        "tensor_dtypes": {"input": "S8", "weights": "S8", **({"bias": "S32"} if has_bias else {}), "output": "S8"},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": "S8", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": {"mode": "tolerant_int", "tolerance": 1},
+        "scratch_buffer": {"bytes": scratch_bytes},
+        "required_target_capabilities": ["arm_transpose_conv_wrapper_s8"],
         "repeated_invocation_safe": True,
         "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
     }
@@ -2865,6 +3044,7 @@ def _build_batch_matmul_case(
 _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
     ("ConvolutionFunctions", "Convolve"): _build_convolve_case,
     ("ConvolutionFunctions", "DepthwiseConv"): _build_depthwise_conv_case,
+    ("ConvolutionFunctions", "TransposeConv"): _build_transpose_conv_case,
     ("BasicMathFunctions", "Abs"): _build_abs_case,
     ("BasicMathFunctions", "ArgMax"): _build_basic_math_reduction_case,
     ("BasicMathFunctions", "ArgMin"): _build_basic_math_reduction_case,

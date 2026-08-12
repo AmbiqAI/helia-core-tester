@@ -31,6 +31,7 @@ from helia_core_tester.perf_stream.generated_test_bridge import (
     _build_depthwise_conv_case,
     _build_requantize_case,
     _build_squared_difference_case,
+    _build_transpose_conv_case,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -166,4 +167,17 @@ def test_comparison_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fi
     bundle = _build_comparison_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
     firmware_fields = set(generated_test_bridge_scalar_fields("run_comparison_once"))
+    assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
+
+
+def test_transpose_conv_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
+    from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
+
+    cases = discover_generated_tests(
+        PROJECT_ROOT, family="ConvolutionFunctions", name_filter="transpose_conv_reverse_valid_kernel1x1_stride2x2_no_bias_s8"
+    )
+    assert cases, "expected a discoverable TransposeConv generated test"
+    bundle = _build_transpose_conv_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
+    manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
+    firmware_fields = set(generated_test_bridge_scalar_fields("run_transpose_conv_once"))
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields

@@ -485,5 +485,11 @@ kernels:
     dtype: S16
     cmsis_function: arm_less_equal_s16
 
+  - kernel_id: 79
+    family: ConvolutionFunctions
+    operator: TransposeConv
+    dtype: S8
+    cmsis_function: arm_transpose_conv_wrapper_s8
+
   # Reserved for future clusters (see helia_core_tester perf_stream expansion plan):
   #  48+: no further int operator families remain unbridged as of this writing.
