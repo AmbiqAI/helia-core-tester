@@ -944,3 +944,58 @@ Updated both the template-level and bridge-level overrides accordingly:
   tolerance change was made to hide this; fixing it for real would require correcting
   the MVE rounding math in shared CMSIS-NN kernel source, out of this session's scope.
 - `pytest`: unchanged baseline (289 passed, 11 pre-existing unrelated failures).
+
+### Correction: the 2 remaining DepthwiseConv failures were a golden-data bug, not hardware (2026-08-12)
+
+Following the "0 tolerance for convolution" policy above, a deeper investigation was
+done into `depthwise_conv_dilation_s8`/`depthwise_conv_buf_nonopt_dil2_s8` **without**
+loosening tolerance, per explicit direction to make these two tests genuinely pass by
+verifying/fixing the underlying biases/offsets/scales rather than the comparison bound.
+
+**Finding: the previous "MVE-vs-scalar hardware kernel rounding divergence" root cause
+was a misdiagnosis.** Real hardware execution of `arm_depthwise_conv_s8` is fully
+correct; the bug was in golden-data generation.
+
+- Extracted the two mismatched output elements (`depthwise_conv_dilation_s8`, indices
+  190/218 of 270) and independently re-implemented CMSIS-NN's *exact* scalar
+  `arm_nn_requantize` fixed-point algorithm (`arm_nn_doubling_high_mult_no_sat` +
+  `arm_nn_divide_by_power_of_two`, copied verbatim from
+  `Include/arm_nnsupportfunctions.h`) in Python, using the same input/weights/biases/
+  multiplier/shift/offsets/dilation/padding already present in the generated header.
+- Result: this precise CMSIS-NN-exact simulation matches **real hardware output** at
+  all 270/270 output elements -- including the 2 that mismatched the stored
+  `expected_output` golden array. The golden data itself was wrong, not hardware.
+- Root-caused the golden-generation bug: `depthwise_conv.py`'s int8 golden path calls
+  `run_inference_litert_tensor(...)`, which loads the LiteRT/TFLite interpreter with its
+  default `experimental_op_resolver_type=AUTO`. `AUTO` dispatches quantized
+  `DEPTHWISE_CONV_2D` to the **XNNPACK delegate**, whose optimized int8 kernel can
+  diverge from TFLite's own bit-exact reference kernel (and therefore from CMSIS-NN's
+  `arm_nn_requantize` semantics, which real hardware implements) by 1 LSB at specific
+  rounding-boundary accumulator values -- confirmed reproducible: re-running the exact
+  same model/input with `OpResolverType.BUILTIN_REF` instead of `AUTO` produces output
+  that exactly matches both the CMSIS-exact simulation and real hardware. This exact
+  class of AUTO-resolver-vs-reference-kernel divergence was already a known, previously
+  worked-around issue in this codebase -- `generation/utils/lstm_data.py` already forces
+  `OpResolverType.BUILTIN_REF` for LSTM golden generation for the same reason.
+- **Fix**: added an optional `op_resolver_type` passthrough parameter to
+  `load_litert_interpreter`/`run_inference_litert_tensor` in
+  `generation/utils/litert_utils.py` (default unchanged, preserving all other ops'
+  existing golden data), and set `depthwise_conv.py`'s int8/int16 golden-output call to
+  use `OpResolverType.BUILTIN_REF` explicitly. Regenerated the full `int`/`cortex-m55`
+  suite (`helia_core_tester generate --cpu cortex-m55 --suite int`) to refresh all
+  DepthwiseConv (and only DepthwiseConv, since only its generator changed) golden
+  arrays with the corrected reference-kernel values.
+- **Re-verified on hardware (board `1160002276`)**, tolerance unchanged (exact match /
+  `exact_int` for DepthwiseConv):
+  - `ConvolutionFunctions`: **76/76 passed** (session `dwc-fix-verify`) --
+    `depthwise_conv_dilation_s8_hw_generated` and
+    `depthwise_conv_buf_nonopt_dil2_s8_hw_generated` both now pass with
+    `mismatch_count=0`.
+  - Full suite: **569/569 passed** (session `full-suite-verify-final`), zero
+    regressions across any other operator family.
+  - `pytest`: 289 passed, 11 pre-existing unrelated failures (unchanged baseline).
+- This supersedes the "known, real, hardware-only (non-FVP) CMSIS-NN kernel rounding
+  discrepancy" framing in the previous section for these 2 specific cases: there is no
+  remaining hardware or CMSIS-NN kernel discrepancy for DepthwiseConv. All 569 hardware
+  tests now pass at the strict policy (+-1 LSB for approximate/rounding ops, exact match
+  for convolution) with zero known failures.

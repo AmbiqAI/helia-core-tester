@@ -396,13 +396,20 @@ def get_input_output_quantization_from_litert(model: Any, subgraph: Any, operato
     }
 
 
-def load_litert_interpreter(tflite_path: str) -> Any:
+def load_litert_interpreter(tflite_path: str, op_resolver_type: Any = None) -> Any:
     """
     Load LiteRT interpreter from .tflite file.
     Raises ImportError if LiteRT is not available.
     
     Args:
         tflite_path: Path to .tflite file
+        op_resolver_type: Optional experimental_op_resolver_type override. Defaults to
+            the interpreter's own default (AUTO, which may dispatch to the XNNPACK
+            delegate for supported ops). Pass OpResolverType.BUILTIN_REF to force the
+            pure reference-kernel implementation, which is required to bit-exactly
+            match CMSIS-NN's own fixed-point semantics for some ops (see
+            depthwise_conv.py for a documented case where XNNPACK's optimized kernel
+            diverges from the reference kernel/CMSIS-NN by 1 LSB).
         
     Returns:
         LiteRT or TFLite Interpreter instance
@@ -410,7 +417,10 @@ def load_litert_interpreter(tflite_path: str) -> Any:
     if not LITERT_AVAILABLE or LitertInterpreter is None:
         raise ImportError("ai_edge_litert is not available. Install it with: pip install ai-edge-litert")
     
-    interpreter = LitertInterpreter(model_path=tflite_path)
+    kwargs = {}
+    if op_resolver_type is not None:
+        kwargs['experimental_op_resolver_type'] = op_resolver_type
+    interpreter = LitertInterpreter(model_path=tflite_path, **kwargs)
     interpreter.allocate_tensors()
     return interpreter
 
@@ -539,7 +549,13 @@ def run_inference_litert(tflite_path: str, input_data: np.ndarray, subgraph_inde
     return run_inference_with_litert(interpreter, input_data, model=model, subgraph=subgraph, operator_index=0)
 
 
-def run_inference_litert_tensor(tflite_path: str, input_data: np.ndarray, tensor_index: int, subgraph_index: int = 0) -> np.ndarray:
+def run_inference_litert_tensor(
+    tflite_path: str,
+    input_data: np.ndarray,
+    tensor_index: int,
+    subgraph_index: int = 0,
+    op_resolver_type: Any = None,
+) -> np.ndarray:
     """
     Run inference using LiteRT interpreter and return a specific tensor by index.
 
@@ -548,6 +564,8 @@ def run_inference_litert_tensor(tflite_path: str, input_data: np.ndarray, tensor
         input_data: Input data as numpy array
         tensor_index: Tensor index to fetch (LiteRT schema tensor index)
         subgraph_index: Index of subgraph to use (default: 0)
+        op_resolver_type: Optional experimental_op_resolver_type override (see
+            load_litert_interpreter for details).
 
     Returns:
         Tensor data as numpy array
@@ -555,7 +573,7 @@ def run_inference_litert_tensor(tflite_path: str, input_data: np.ndarray, tensor
     if not LITERT_AVAILABLE:
         raise ImportError("ai_edge_litert is not available. Install it with: pip install ai-edge-litert")
 
-    interpreter = load_litert_interpreter(tflite_path)
+    interpreter = load_litert_interpreter(tflite_path, op_resolver_type=op_resolver_type)
 
     # Use LiteRT schema for shape validation if available
     model = None

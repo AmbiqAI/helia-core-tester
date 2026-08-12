@@ -881,7 +881,17 @@ class OpDepthwiseConv(OperationBase):
                 out_tensor_idx = dw_out_tensor_idx
         else:
             out_tensor_idx = dw_out_tensor_idx
-        output_data = run_inference_litert_tensor(str(tflite_path), input_q, out_tensor_idx)
+        # Force the pure reference-kernel op resolver (BUILTIN_REF) instead of the
+        # interpreter's default AUTO resolver. AUTO dispatches quantized DepthwiseConv2D
+        # to the XNNPACK delegate, whose optimized int8 kernel can diverge from the
+        # TFLite reference kernel (and therefore from CMSIS-NN's arm_nn_requantize
+        # fixed-point semantics, which real hardware implements) by 1 LSB at specific
+        # rounding-boundary accumulator values -- e.g. dilated cases with depth_multiplier
+        # > 1. Using BUILTIN_REF keeps the golden bit-exact with what CMSIS-NN computes.
+        from ai_edge_litert.interpreter import OpResolverType
+        output_data = run_inference_litert_tensor(
+            str(tflite_path), input_q, out_tensor_idx, op_resolver_type=OpResolverType.BUILTIN_REF
+        )
         
         # Bias handling
         has_biases = biases is not None and getattr(biases, "size", 0) > 0
