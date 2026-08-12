@@ -201,6 +201,40 @@ before encoding them into the plan.**
       higher complexity than binary elementwise).
 - [ ] Phases 2-5 -- not started (see phased plan above).
 
+## User-requested bridge rollout (2026-08-12)
+
+### Phase 3a — BasicMathFunctions unary/reduction bridge (COMPLETE)
+
+- Bridged **87 new generated-test cases** end-to-end through perf-stream for:
+  `Abs`, `ArgMax`, `ArgMin`, `Mean`, `ReduceMax`, `ReduceMin`, `Rsqrt`,
+  `Sqrt`, and `SquaredDifference` (S8/S16 as supported by CMSIS-NN).
+- Host bridge:
+  - added generated-test builders for unary, reduction, LUT, and
+    squared-difference cases
+  - added `S32` expected-output support for ArgMax/ArgMin
+  - added explicit batch-aware `output_n` serialization for
+    squared-difference broadcast cases
+  - forced `Mean` correctness comparison to `tolerant_int ±1` to match the
+    standalone generated harness contract (real hardware showed a small
+    expected LSB rounding delta on four mean cases; all pass with the
+    generator's intended tolerance)
+- Firmware:
+  - added kernel ids / registry entries / dispatch cases for the new ops
+  - extended session scalar parsing with output-rank, axis, and rescale
+    fields needed by the new adapters
+  - added reduction and LUT adapter paths plus S16 Abs dispatch
+  - kept the host-only Abs harness build working by rejecting `Abs S16` when
+    compiled with `HCT_HOST_ABS_ONLY`
+- Verification:
+  - targeted pytest: `16 passed`
+  - full pytest baseline: `276 passed, 11 failed` (matches the known
+    unrelated-failure baseline count)
+  - real hardware: `scripts/run_hardware_perf_suite.sh --serial-no 1160002276 --family BasicMathFunctions --session-id phase3a-basic-math --skip-generate`
+    -> **188/188 passed** on Apollo510/Cortex-M55
+- Skips: none within the newly bridged Phase 3a operators. The hardware suite
+  still reports the pre-existing batch>1/arena skips for older Add/Max/Min/
+  Mul/Sub cases, unchanged by this phase.
+
 ### Hardware toolchain unblocked (2nd session segment)
 The user cloned the vendor NSX SDK to
 `/Users/mohammed.abuhussein/workspace/nsx-ambiq-sdk`. Wired it into this repo

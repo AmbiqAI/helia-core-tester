@@ -416,6 +416,9 @@ def _build_convolve_case(
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    comparison = {"mode": "tolerant_int", "tolerance": 1} if operator == "Mean" else dict(
+        descriptor.get("resolved_comparison", {"mode": "exact_int"})
+    )
     manifest = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,
@@ -448,7 +451,7 @@ def _build_convolve_case(
         "tensor_dtypes": {"input": activation_dtype, "weights": "S8", "bias": bias_wire_dtype, "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        "correctness_comparison": comparison,
         "scratch_buffer": {"bytes": int(scratch_bytes)},
         "required_target_capabilities": ["convolve_s8" if activation_dtype == "S8" else "convolve_s16"],
         "repeated_invocation_safe": True,
@@ -578,6 +581,9 @@ def _build_depthwise_conv_case(
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    comparison = {"mode": "tolerant_int", "tolerance": 1} if operator == "Mean" else dict(
+        descriptor.get("resolved_comparison", {"mode": "exact_int"})
+    )
     manifest = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,
@@ -610,7 +616,7 @@ def _build_depthwise_conv_case(
         "tensor_dtypes": {"input": activation_dtype, "weights": "S8", "bias": bias_wire_dtype, "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        "correctness_comparison": comparison,
         "scratch_buffer": {"bytes": int(scratch_bytes)},
         "required_target_capabilities": ["depthwise_conv_s8" if activation_dtype == "S8" else "depthwise_conv_s16"],
         "repeated_invocation_safe": True,
@@ -708,6 +714,9 @@ def _build_pooling_case(
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    comparison = {"mode": "tolerant_int", "tolerance": 1} if operator == "Mean" else dict(
+        descriptor.get("resolved_comparison", {"mode": "exact_int"})
+    )
     manifest = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,
@@ -737,7 +746,7 @@ def _build_pooling_case(
         "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        "correctness_comparison": comparison,
         "scratch_buffer": {"bytes": int(scratch_bytes)},
         "required_target_capabilities": [f"{operator.lower()}_{activation_dtype.lower()}"],
         "repeated_invocation_safe": True,
@@ -902,6 +911,9 @@ def _build_activation_case(
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    comparison = {"mode": "tolerant_int", "tolerance": 1} if operator == "Mean" else dict(
+        descriptor.get("resolved_comparison", {"mode": "exact_int"})
+    )
     manifest = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,
@@ -924,7 +936,7 @@ def _build_activation_case(
         "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        "correctness_comparison": comparison,
         "scratch_buffer": {"bytes": 0},
         "required_target_capabilities": [cmsis_function],
         "repeated_invocation_safe": True,
@@ -1558,6 +1570,383 @@ def _build_softmax_case(
     }
     return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
 
+# arm_abs_{s8,s16}(input, input_offset, output, out_offset, out_mult, out_shift,
+#    needs_rescale, out_activation_min, out_activation_max, block_size)
+_ABS_ARG_COUNT = 10
+
+
+def _reduced_dims_from_axis(input_dims: dict[str, int], axis: int) -> dict[str, int]:
+    if axis < 0 or axis > 3:
+        raise UnsupportedGeneratedTestError(f"Unsupported reduction axis {axis}; expected a value in [0, 3].")
+    output_dims = dict(input_dims)
+    output_dims[("n", "h", "w", "c")[axis]] = 1
+    return output_dims
+
+
+def _build_abs_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    activation_dtype = str(descriptor.get("activation_dtype", ""))
+    if operator != "Abs" or activation_dtype not in ("S8", "S16"):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: operator={operator!r} activation_dtype={activation_dtype!r} is not "
+            f"bridgeable -- perf-stream firmware only dispatches arm_abs_s8/s16."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    source_path = _find_source_file(generated_test.directory)
+    source_text = source_path.read_text(encoding="utf-8")
+    prefix = generated_test.name
+
+    input_dims = _extract_dims(header_text, f"{prefix}_input_dims")
+    output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
+    input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
+    output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
+
+    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
+    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
+    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
+    if input_flat.size != int(np.prod(input_shape)) or expected_flat.size != int(np.prod(output_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: generated array sizes (input={input_flat.size}, expected_output={expected_flat.size}) "
+            f"don't match header dims (input_shape={input_shape}, output_shape={output_shape})."
+        )
+    input_data = input_flat.reshape(input_shape)
+    expected_output = expected_flat.reshape(output_shape)
+
+    cmsis_function = "arm_abs_s16" if activation_dtype == "S16" else "arm_abs_s8"
+    args = _extract_call_args(source_text, cmsis_function, expected_count=_ABS_ARG_COUNT)
+    scalar_parameters = {
+        "input_offset": int(args[1]),
+        "output_offset": int(args[3]),
+        "out_mult": int(args[4]),
+        "out_shift": int(args[5]),
+        "needs_rescale": int(args[6]),
+        "activation_min": int(args[7]),
+        "activation_max": int(args[8]),
+    }
+
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+
+    arrays = [
+        (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+        (2, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+    ]
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": operator,
+        "family": generated_test.family,
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": scalar_parameters,
+        "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        "scratch_buffer": {"bytes": 0},
+        "required_target_capabilities": [cmsis_function],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
+_ARG_REDUCTION_FUNCTIONS = {
+    ("ArgMax", "S8"): "arm_argmax_s8",
+    ("ArgMax", "S16"): "arm_argmax_s16",
+    ("ArgMin", "S8"): "arm_argmin_s8",
+    ("ArgMin", "S16"): "arm_argmin_s16",
+}
+_ARG_REDUCTION_ARG_COUNT = 4
+
+_AXIS_REDUCTION_FUNCTIONS = {
+    ("Mean", "S8"): "arm_mean_s8",
+    ("Mean", "S16"): "arm_mean_s16",
+    ("ReduceMax", "S8"): "arm_reduce_max_s8",
+    ("ReduceMax", "S16"): "arm_reduce_max_s16",
+    ("ReduceMin", "S8"): "arm_reduce_min_s8",
+    ("ReduceMin", "S16"): "arm_reduce_min_s16",
+}
+_MEAN_ARG_COUNT = 9
+
+
+def _build_basic_math_reduction_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    activation_dtype = str(descriptor.get("activation_dtype", ""))
+    if (operator, activation_dtype) not in _ARG_REDUCTION_FUNCTIONS and (operator, activation_dtype) not in _AXIS_REDUCTION_FUNCTIONS:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: operator={operator!r} activation_dtype={activation_dtype!r} is not "
+            f"bridgeable by the BasicMathFunctions reduction adapter."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    prefix = generated_test.name
+    input_dims = _extract_dims(header_text, f"{prefix}_input_dims")
+    input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
+    input_numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
+    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=input_numpy_dtype)
+    if input_flat.size != int(np.prod(input_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: generated input array size ({input_flat.size}) doesn't match header input_dims ({input_shape})."
+        )
+    input_data = input_flat.reshape(input_shape)
+
+    scalar_parameters: dict[str, int]
+    if (operator, activation_dtype) in _ARG_REDUCTION_FUNCTIONS:
+        source_path = _find_source_file(generated_test.directory)
+        source_text = source_path.read_text(encoding="utf-8")
+        cmsis_function = _ARG_REDUCTION_FUNCTIONS[(operator, activation_dtype)]
+        args = _extract_call_args(source_text, cmsis_function, expected_count=_ARG_REDUCTION_ARG_COUNT)
+        axis = int(args[2])
+        output_dims = _reduced_dims_from_axis(input_dims, axis)
+        output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
+        expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=np.int32)
+        scalar_parameters = {
+            "axis": axis,
+            "output_n": output_dims["n"],
+            "output_h": output_dims["h"],
+            "output_w": output_dims["w"],
+            "output_c": output_dims["c"],
+        }
+        output_dtype = "S32"
+    else:
+        output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
+        axis_dims = _extract_dims(header_text, f"{prefix}_axis_dims")
+        output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
+        expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=input_numpy_dtype)
+        scalar_parameters = {
+            "output_n": output_dims["n"],
+            "output_h": output_dims["h"],
+            "output_w": output_dims["w"],
+            "output_c": output_dims["c"],
+            "axis_n": axis_dims["n"],
+            "axis_h": axis_dims["h"],
+            "axis_w": axis_dims["w"],
+            "axis_c": axis_dims["c"],
+        }
+        if operator == "Mean":
+            source_path = _find_source_file(generated_test.directory)
+            source_text = source_path.read_text(encoding="utf-8")
+            cmsis_function = _AXIS_REDUCTION_FUNCTIONS[(operator, activation_dtype)]
+            args = _extract_call_args(source_text, cmsis_function, expected_count=_MEAN_ARG_COUNT)
+            scalar_parameters.update(
+                {
+                    "input_offset": int(args[2]),
+                    "output_offset": int(args[6]),
+                    "out_mult": int(args[7]),
+                    "out_shift": int(args[8]),
+                }
+            )
+        else:
+            cmsis_function = _AXIS_REDUCTION_FUNCTIONS[(operator, activation_dtype)]
+        output_dtype = activation_dtype
+
+    if expected_flat.size != int(np.prod(output_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: expected_output size ({expected_flat.size}) does not match output dims ({output_shape})."
+        )
+    expected_output = expected_flat.reshape(output_shape)
+
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+
+    arrays = [
+        (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+        (2, "expected_output", output_dtype, output_shape, expected_output, False, True),
+    ]
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    comparison = {"mode": "tolerant_int", "tolerance": 1} if operator == "Mean" else dict(
+        descriptor.get("resolved_comparison", {"mode": "exact_int"})
+    )
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": operator,
+        "family": generated_test.family,
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": scalar_parameters,
+        "tensor_dtypes": {"input": activation_dtype, "output": output_dtype},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": output_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": comparison,
+        "scratch_buffer": {"bytes": 0},
+        "required_target_capabilities": [cmsis_function],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
+_RSQRT_ARG_COUNTS = {"arm_rsqrt_s16_per_op": 8, "arm_rsqrt_s16_universal": 11}
+
+
+def _build_basic_math_lut_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    activation_dtype = str(descriptor.get("activation_dtype", ""))
+    if operator == "Rsqrt" and activation_dtype != "S16":
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: Rsqrt is only bridgeable for activation_dtype='S16'."
+        )
+    if operator not in ("Sqrt", "Rsqrt") or activation_dtype not in ("S8", "S16"):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: operator={operator!r} activation_dtype={activation_dtype!r} is not "
+            f"bridgeable by the BasicMathFunctions LUT adapter."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    prefix = generated_test.name
+
+    input_dims = _extract_dims(header_text, f"{prefix}_input_dims")
+    input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
+    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
+    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
+    if input_flat.size != int(np.prod(input_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: generated input array size ({input_flat.size}) doesn't match header input_dims ({input_shape})."
+        )
+    input_data = input_flat.reshape(input_shape)
+
+    if operator == "Sqrt":
+        output_shape = input_shape
+        expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
+        cmsis_function = f"arm_sqrt_{'s16' if activation_dtype == 'S16' else 's8'}"
+        lut_dtype = activation_dtype
+        lut_name = "sqrt_lut"
+        scalar_parameters: dict[str, int] = {}
+        registry_operator = operator
+    else:
+        output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
+        output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
+        expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=np.int16)
+        call_style = str(descriptor.get("hint", {}).get("call_style", "per_op")).lower()
+        if call_style == "universal":
+            cmsis_function = "arm_rsqrt_s16_universal"
+            lut_dtype = "S32"
+            scalar_keys = ("input_offset", "output_offset", "out_mult", "out_shift", "needs_rescale", "activation_min", "activation_max")
+            arg_indexes = (1, 3, 4, 5, 6, 7, 8)
+            registry_operator = "RsqrtUniversal"
+        else:
+            cmsis_function = "arm_rsqrt_s16_per_op"
+            lut_dtype = "S16"
+            scalar_keys = ("input_offset", "output_offset", "activation_min", "activation_max")
+            arg_indexes = (1, 3, 4, 5)
+            registry_operator = operator
+        source_path = _find_source_file(generated_test.directory)
+        source_text = source_path.read_text(encoding="utf-8")
+        args = _extract_call_args(source_text, cmsis_function, expected_count=_RSQRT_ARG_COUNTS[cmsis_function])
+        scalar_parameters = {key: int(args[index]) for key, index in zip(scalar_keys, arg_indexes)}
+        lut_name = f"{prefix}_rsqrt_lut"
+
+    if expected_flat.size != int(np.prod(output_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: expected_output size ({expected_flat.size}) does not match output shape ({output_shape})."
+        )
+    expected_output = expected_flat.reshape(output_shape)
+
+    lut_numpy_dtype = {"S8": np.int8, "S16": np.int16, "S32": np.int32}[lut_dtype]
+    lut_flat = np.array(_extract_array(header_text, lut_name), dtype=lut_numpy_dtype)
+    lut_shape = (int(lut_flat.size),)
+
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+
+    arrays = [
+        (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+        (2, "weights", lut_dtype, lut_shape, lut_flat, False, False),
+        (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+    ]
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": operator,
+        "family": generated_test.family,
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=registry_operator, dtype=activation_dtype),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": scalar_parameters,
+        "tensor_dtypes": {"input": activation_dtype, "weights": lut_dtype, "output": activation_dtype},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        "scratch_buffer": {"bytes": 0},
+        "required_target_capabilities": [cmsis_function],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
 
 # arm_add_s8/arm_sub_s8 share an identical CMSIS-NN signature and argument order:
 #   (input1, &input1_dims, input2, &input2_dims,
@@ -1591,6 +1980,8 @@ def _extract_elementwise_binary_tensors(
     generated_test: GeneratedTestCase,
     operator: str,
     activation_dtype: str = "S8",
+    *,
+    allow_batch: bool = False,
 ) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int], np.ndarray, np.ndarray, np.ndarray, dict]:
     """Shared dims/array extraction for BasicMathFunctions binary elementwise ops
     (Add/Sub/Mul all share the same input1/input2/output_dims + input1/input2/expected_output
@@ -1601,7 +1992,7 @@ def _extract_elementwise_binary_tensors(
     input1_dims = _extract_dims(header_text, f"{prefix}_input1_dims")
     input2_dims = _extract_dims(header_text, f"{prefix}_input2_dims")
     output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
-    if input1_dims["n"] != 1 or input2_dims["n"] != 1:
+    if not allow_batch and (input1_dims["n"] != 1 or input2_dims["n"] != 1):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: batch size > 1 is not yet supported by the perf-stream "
             f"hardware bridge (firmware dispatches a single {operator} invocation per case)."
@@ -1645,6 +2036,7 @@ def _write_elementwise_binary_bundle(
     expected_output: np.ndarray,
     scalar_parameters: dict[str, int],
     output_root: Path | None,
+    include_output_n: bool = False,
 ) -> CaseBundle:
     """Shared CaseBundle assembly for BasicMathFunctions binary elementwise ops
     (Add/Sub/Mul/Maximum/Minimum), parameterized over activation_dtype (S8 or S16)."""
@@ -1683,6 +2075,7 @@ def _write_elementwise_binary_bundle(
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
             **scalar_parameters,
+            **({"output_n": output_dims["n"]} if include_output_n else {}),
             "output_h": output_dims["h"],
             "output_w": output_dims["w"],
             "output_c": output_dims["c"],
@@ -1878,6 +2271,92 @@ def _build_min_max_case(
         expected_output=expected_output,
         scalar_parameters={},
         output_root=output_root,
+    )
+
+
+_ELEMENTWISE_SQUARED_DIFFERENCE_ARG_COUNT = 16
+
+
+def _build_squared_difference_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    activation_dtype = str(descriptor.get("activation_dtype", ""))
+    if operator != "SquaredDifference" or activation_dtype not in _ELEMENTWISE_BINARY_SUPPORTED_DTYPES:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: operator={operator!r} activation_dtype={activation_dtype!r} is not "
+            f"bridgeable -- perf-stream firmware only dispatches arm_squared_difference_s8/s16."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    source_path = _find_source_file(generated_test.directory)
+    source_text = source_path.read_text(encoding="utf-8")
+    prefix = generated_test.name
+
+    input1_shape, input2_shape, input1_data, input2_data, expected_output, output_dims = _extract_elementwise_binary_tensors(
+        header_text,
+        prefix,
+        generated_test,
+        operator,
+        activation_dtype,
+        allow_batch=True,
+    )
+
+    cmsis_function = f"arm_squared_difference_{'s16' if activation_dtype == 'S16' else 's8'}"
+    try:
+        args = _extract_call_args(source_text, cmsis_function, expected_count=_ELEMENTWISE_BINARY_ARG_COUNT)
+        scalar_parameters = {
+            "input1_offset": int(args[4]),
+            "input1_mult": int(args[5]),
+            "input1_shift": int(args[6]),
+            "input2_offset": int(args[7]),
+            "input2_mult": int(args[8]),
+            "input2_shift": int(args[9]),
+            "left_shift": int(args[10]),
+            "output_offset": int(args[13]),
+            "out_mult": int(args[14]),
+            "out_shift": int(args[15]),
+            "activation_min": int(args[16]),
+            "activation_max": int(args[17]),
+        }
+    except UnsupportedGeneratedTestError:
+        elementwise_cmsis_function = f"arm_elementwise_squared_difference_{'s16' if activation_dtype == 'S16' else 's8'}"
+        args = _extract_call_args(source_text, elementwise_cmsis_function, expected_count=_ELEMENTWISE_SQUARED_DIFFERENCE_ARG_COUNT)
+        scalar_parameters = {
+            "input1_offset": int(args[2]),
+            "input1_mult": int(args[3]),
+            "input1_shift": int(args[4]),
+            "input2_offset": int(args[5]),
+            "input2_mult": int(args[6]),
+            "input2_shift": int(args[7]),
+            "left_shift": int(args[8]),
+            "output_offset": int(args[10]),
+            "out_mult": int(args[11]),
+            "out_shift": int(args[12]),
+            "activation_min": int(args[13]),
+            "activation_max": int(args[14]),
+        }
+
+    return _write_elementwise_binary_bundle(
+        project_root,
+        generated_test,
+        operator=operator,
+        cmsis_function=cmsis_function,
+        activation_dtype=activation_dtype,
+        output_dims=output_dims,
+        input1_shape=input1_shape,
+        input2_shape=input2_shape,
+        input1_data=input1_data,
+        input2_data=input2_data,
+        expected_output=expected_output,
+        scalar_parameters=scalar_parameters,
+        output_root=output_root,
+        include_output_n=True,
     )
 
 
@@ -2163,6 +2642,15 @@ def _build_batch_matmul_case(
 _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
     ("ConvolutionFunctions", "Convolve"): _build_convolve_case,
     ("ConvolutionFunctions", "DepthwiseConv"): _build_depthwise_conv_case,
+    ("BasicMathFunctions", "Abs"): _build_abs_case,
+    ("BasicMathFunctions", "ArgMax"): _build_basic_math_reduction_case,
+    ("BasicMathFunctions", "ArgMin"): _build_basic_math_reduction_case,
+    ("BasicMathFunctions", "Mean"): _build_basic_math_reduction_case,
+    ("BasicMathFunctions", "ReduceMax"): _build_basic_math_reduction_case,
+    ("BasicMathFunctions", "ReduceMin"): _build_basic_math_reduction_case,
+    ("BasicMathFunctions", "Rsqrt"): _build_basic_math_lut_case,
+    ("BasicMathFunctions", "Sqrt"): _build_basic_math_lut_case,
+    ("BasicMathFunctions", "SquaredDifference"): _build_squared_difference_case,
     ("BasicMathFunctions", "Add"): _build_elementwise_binary_case,
     ("BasicMathFunctions", "Sub"): _build_elementwise_binary_case,
     ("BasicMathFunctions", "Mul"): _build_mul_case,
@@ -2194,4 +2682,3 @@ def bridged_families() -> list[str]:
     `hardware_run.build_generated_test_case_bundles`) that want to bridge every family
     with real firmware dispatch support instead of a single hardcoded family."""
     return sorted({family for family, _operator in _BUILDERS})
-

@@ -83,6 +83,7 @@ typedef struct
      * convention (asymmetric splits, rounding, etc.) for real generated test cases. */
     int32_t pad_h;
     int32_t pad_w;
+    int32_t output_n;
     int32_t output_h;
     int32_t output_w;
     int32_t output_c;
@@ -178,6 +179,18 @@ typedef struct
      * Convolve/DepthwiseConv never need this since their weights are always
      * symmetric-quantized (zero_point 0). */
     int32_t filter_offset;
+    /* Additional scalar params for newly-bridged BasicMathFunctions ops:
+     * - output_n / axis{n,h,w,c} / axis are used by reduction ops (ArgMax/ArgMin/Mean/
+     *   ReduceMax/ReduceMin) whose output shape is not always the implicit n=1 convention
+     *   older adapters hardcode.
+     * - needs_rescale is shared by Abs and RsqrtUniversal's bool-like requantization flag.
+     */
+    int32_t axis_n;
+    int32_t axis_h;
+    int32_t axis_w;
+    int32_t axis_c;
+    int32_t axis;
+    int32_t needs_rescale;
     /* FullyConnectedFunctions BatchMatMul scalar params -- see parse_scalar() and
      * run_batch_matmul_once() in benchmark_server_session.c. Reuses input_offset (lhs
      * zero point), filter_offset (rhs zero point), output_offset, activation_min/max,

@@ -16,11 +16,11 @@
 
 kernels:
   - kernel_id: 1
-    family: null           # synthetic demo-only kernel, not bridged from generated tests
+    family: BasicMathFunctions
     operator: Abs
     dtype: S8
     cmsis_function: arm_abs_s8
-    note: "Demo/vertical-slice kernel only (case_bundle.py's build_abs_s8_case_bundle)."
+    note: "Shared by the synthetic demo bundle and the generated-test bridge."
 
   - kernel_id: 2
     family: ConvolutionFunctions
@@ -297,6 +297,109 @@ kernels:
     operator: BatchMatMul
     dtype: S16
     cmsis_function: arm_batch_matmul_s16
+
+  - kernel_id: 48
+    family: BasicMathFunctions
+    operator: Abs
+    dtype: S16
+    cmsis_function: arm_abs_s16
+
+  - kernel_id: 49
+    family: BasicMathFunctions
+    operator: ArgMax
+    dtype: S8
+    cmsis_function: arm_argmax_s8
+
+  - kernel_id: 50
+    family: BasicMathFunctions
+    operator: ArgMax
+    dtype: S16
+    cmsis_function: arm_argmax_s16
+
+  - kernel_id: 51
+    family: BasicMathFunctions
+    operator: ArgMin
+    dtype: S8
+    cmsis_function: arm_argmin_s8
+
+  - kernel_id: 52
+    family: BasicMathFunctions
+    operator: ArgMin
+    dtype: S16
+    cmsis_function: arm_argmin_s16
+
+  - kernel_id: 53
+    family: BasicMathFunctions
+    operator: Mean
+    dtype: S8
+    cmsis_function: arm_mean_s8
+
+  - kernel_id: 54
+    family: BasicMathFunctions
+    operator: Mean
+    dtype: S16
+    cmsis_function: arm_mean_s16
+
+  - kernel_id: 55
+    family: BasicMathFunctions
+    operator: ReduceMax
+    dtype: S8
+    cmsis_function: arm_reduce_max_s8
+
+  - kernel_id: 56
+    family: BasicMathFunctions
+    operator: ReduceMax
+    dtype: S16
+    cmsis_function: arm_reduce_max_s16
+
+  - kernel_id: 57
+    family: BasicMathFunctions
+    operator: ReduceMin
+    dtype: S8
+    cmsis_function: arm_reduce_min_s8
+
+  - kernel_id: 58
+    family: BasicMathFunctions
+    operator: ReduceMin
+    dtype: S16
+    cmsis_function: arm_reduce_min_s16
+
+  - kernel_id: 59
+    family: BasicMathFunctions
+    operator: Rsqrt
+    dtype: S16
+    cmsis_function: arm_rsqrt_s16_per_op
+    note: "Covers per_op and universal generated variants; builder selects the right streamed LUT/scalars."
+
+  - kernel_id: 60
+    family: BasicMathFunctions
+    operator: RsqrtUniversal
+    dtype: S16
+    cmsis_function: arm_rsqrt_s16_universal
+
+  - kernel_id: 61
+    family: BasicMathFunctions
+    operator: Sqrt
+    dtype: S8
+    cmsis_function: arm_sqrt_s8
+
+  - kernel_id: 62
+    family: BasicMathFunctions
+    operator: Sqrt
+    dtype: S16
+    cmsis_function: arm_sqrt_s16
+
+  - kernel_id: 63
+    family: BasicMathFunctions
+    operator: SquaredDifference
+    dtype: S8
+    cmsis_function: arm_squared_difference_s8
+
+  - kernel_id: 64
+    family: BasicMathFunctions
+    operator: SquaredDifference
+    dtype: S16
+    cmsis_function: arm_squared_difference_s16
 
   # Reserved for future clusters (see helia_core_tester perf_stream expansion plan):
   #  48+: no further int operator families remain unbridged as of this writing.

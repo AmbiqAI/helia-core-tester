@@ -286,7 +286,7 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
     bias_dims.w = 0;
     bias_dims.c = (int32_t)bias->dimensions[0];
 
-    output_dims.n = 1;
+    output_dims.n = (session->output_n > 0) ? session->output_n : 1;
     output_dims.h = session->output_h;
     output_dims.w = session->output_w;
     output_dims.c = session->output_c;
@@ -394,7 +394,7 @@ static arm_cmsis_nn_status run_pooling_once(hct_server_session_t *session)
     filter_dims.w = session->pool_w;
     filter_dims.c = 1;
 
-    output_dims.n = 1;
+    output_dims.n = (session->output_n > 0) ? session->output_n : 1;
     output_dims.h = session->output_h;
     output_dims.w = session->output_w;
     output_dims.c = session->output_c;
@@ -627,7 +627,7 @@ static arm_cmsis_nn_status run_prelu_once(hct_server_session_t *session)
     alpha_dims.h = (int32_t)alpha->dimensions[1];
     alpha_dims.w = (int32_t)alpha->dimensions[2];
     alpha_dims.c = (int32_t)alpha->dimensions[3];
-    output_dims.n = 1;
+    output_dims.n = (session->output_n > 0) ? session->output_n : 1;
     output_dims.h = session->output_h;
     output_dims.w = session->output_w;
     output_dims.c = session->output_c;
@@ -1127,7 +1127,7 @@ static arm_cmsis_nn_status run_batch_matmul_once(hct_server_session_t *session)
     input_rhs_dims.h = 1;
     input_rhs_dims.w = (int32_t)input_rhs->dimensions[0];
     input_rhs_dims.c = (int32_t)input_rhs->dimensions[1];
-    output_dims.n = 1;
+    output_dims.n = (session->output_n > 0) ? session->output_n : 1;
     output_dims.h = 1;
     output_dims.w = input_lhs_dims.w;
     output_dims.c = input_rhs_dims.w;
@@ -1194,6 +1194,163 @@ static arm_cmsis_nn_status run_batch_matmul_once(hct_server_session_t *session)
     }
 }'''
 
+
+_RUN_BASIC_MATH_REDUCTION_ONCE = '''\
+static arm_cmsis_nn_status run_basic_math_reduction_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+    cmsis_nn_dims input_dims;
+    cmsis_nn_dims axis_dims;
+    cmsis_nn_dims output_dims;
+    uint32_t output_elements;
+
+    if (input == NULL)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    input_dims.n = (int32_t)input->dimensions[0];
+    input_dims.h = (int32_t)input->dimensions[1];
+    input_dims.w = (int32_t)input->dimensions[2];
+    input_dims.c = (int32_t)input->dimensions[3];
+
+    axis_dims.n = session->axis_n;
+    axis_dims.h = session->axis_h;
+    axis_dims.w = session->axis_w;
+    axis_dims.c = session->axis_c;
+
+    output_dims.n = (session->output_n > 0) ? session->output_n : 1;
+    output_dims.h = session->output_h;
+    output_dims.w = session->output_w;
+    output_dims.c = session->output_c;
+    if (output_dims.n <= 0 || output_dims.h <= 0 || output_dims.w <= 0 || output_dims.c <= 0)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    output_elements = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c);
+
+    switch (session->expected_kernel_id)
+    {
+        case HCT_KERNEL_ID_ARGMAX_S8:
+        case HCT_KERNEL_ID_ARGMIN_S8:
+        case HCT_KERNEL_ID_ARGMAX_S16:
+        case HCT_KERNEL_ID_ARGMIN_S16:
+            session->output_length = output_elements * sizeof(int32_t);
+            if (session->output_length > sizeof(session->output_buffer) || session->axis < 0 || session->axis > 3)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_ARGMAX_S8)
+            {
+                return arm_argmax_s8((const int8_t *)blob_ptr(session, input), &input_dims, session->axis, (int32_t *)session->output_buffer);
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_ARGMIN_S8)
+            {
+                return arm_argmin_s8((const int8_t *)blob_ptr(session, input), &input_dims, session->axis, (int32_t *)session->output_buffer);
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_ARGMAX_S16)
+            {
+                return arm_argmax_s16((const int16_t *)blob_ptr(session, input), &input_dims, session->axis, (int32_t *)session->output_buffer);
+            }
+            return arm_argmin_s16((const int16_t *)blob_ptr(session, input), &input_dims, session->axis, (int32_t *)session->output_buffer);
+
+        case HCT_KERNEL_ID_MEAN_S8:
+        case HCT_KERNEL_ID_REDUCE_MAX_S8:
+        case HCT_KERNEL_ID_REDUCE_MIN_S8:
+            session->output_length = output_elements;
+            if (session->output_length > sizeof(session->output_buffer))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_MEAN_S8)
+            {
+                return arm_mean_s8((const int8_t *)blob_ptr(session, input), &input_dims, session->input_offset,
+                                   &axis_dims, (int8_t *)session->output_buffer, &output_dims,
+                                   session->output_offset, session->out_mult, session->out_shift);
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_REDUCE_MAX_S8)
+            {
+                return arm_reduce_max_s8((const int8_t *)blob_ptr(session, input), &input_dims, &axis_dims,
+                                         (int8_t *)session->output_buffer, &output_dims);
+            }
+            return arm_reduce_min_s8((const int8_t *)blob_ptr(session, input), &input_dims, &axis_dims,
+                                     (int8_t *)session->output_buffer, &output_dims);
+
+        case HCT_KERNEL_ID_MEAN_S16:
+        case HCT_KERNEL_ID_REDUCE_MAX_S16:
+        case HCT_KERNEL_ID_REDUCE_MIN_S16:
+            session->output_length = output_elements * sizeof(int16_t);
+            if (session->output_length > sizeof(session->output_buffer))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_MEAN_S16)
+            {
+                return arm_mean_s16((const int16_t *)blob_ptr(session, input), &input_dims, session->input_offset,
+                                    &axis_dims, (int16_t *)session->output_buffer, &output_dims,
+                                    session->output_offset, session->out_mult, session->out_shift);
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_REDUCE_MAX_S16)
+            {
+                return arm_reduce_max_s16((const int16_t *)blob_ptr(session, input), &input_dims, &axis_dims,
+                                          (int16_t *)session->output_buffer, &output_dims);
+            }
+            return arm_reduce_min_s16((const int16_t *)blob_ptr(session, input), &input_dims, &axis_dims,
+                                      (int16_t *)session->output_buffer, &output_dims);
+
+        default:
+            return ARM_CMSIS_NN_ARG_ERROR;
+    }
+}'''
+
+_RUN_BASIC_MATH_LUT_ONCE = '''\
+static arm_cmsis_nn_status run_basic_math_lut_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+    hct_server_blob_t *lut = find_blob_by_role(session, HCT_BLOB_ROLE_WEIGHTS);
+    cmsis_nn_dims input_dims;
+    int32_t block_size;
+
+    if (input == NULL || lut == NULL)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    input_dims.n = (int32_t)input->dimensions[0];
+    input_dims.h = (int32_t)input->dimensions[1];
+    input_dims.w = (int32_t)input->dimensions[2];
+    input_dims.c = (int32_t)input->dimensions[3];
+    block_size = input_dims.n * input_dims.h * input_dims.w * input_dims.c;
+    session->output_length = input->byte_length;
+    if (session->output_length > sizeof(session->output_buffer))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    switch (session->expected_kernel_id)
+    {
+        case HCT_KERNEL_ID_SQRT_S8:
+            return arm_sqrt_s8((const int8_t *)blob_ptr(session, input), &input_dims,
+                               (int8_t *)session->output_buffer, (int8_t *)blob_ptr(session, lut));
+        case HCT_KERNEL_ID_SQRT_S16:
+            return arm_sqrt_s16((const int16_t *)blob_ptr(session, input), &input_dims,
+                                (int16_t *)session->output_buffer, (const int16_t *)blob_ptr(session, lut));
+        case HCT_KERNEL_ID_RSQRT_S16_PER_OP:
+            return arm_rsqrt_s16_per_op((const int16_t *)blob_ptr(session, input), session->input_offset,
+                                        (int16_t *)session->output_buffer, session->output_offset,
+                                        session->activation_min, session->activation_max, block_size,
+                                        (const int16_t *)blob_ptr(session, lut));
+        case HCT_KERNEL_ID_RSQRT_S16_UNIVERSAL:
+            return arm_rsqrt_s16_universal((const int16_t *)blob_ptr(session, input), session->input_offset,
+                                           (int16_t *)session->output_buffer, session->output_offset,
+                                           session->out_mult, session->out_shift, session->needs_rescale != 0,
+                                           session->activation_min, session->activation_max, block_size,
+                                           (const int32_t *)blob_ptr(session, lut));
+        default:
+            return ARM_CMSIS_NN_ARG_ERROR;
+    }
+}'''
+
 _RUN_ELEMENTWISE_BINARY_ONCE = '''\
 /* arm_add_s8/arm_sub_s8 (and their S16 counterparts arm_add_s16/arm_sub_s16) share an
  * identical signature/argument order per dtype; all are dispatched from this one wrapper,
@@ -1225,7 +1382,7 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
     input2_dims.w = (int32_t)input2->dimensions[2];
     input2_dims.c = (int32_t)input2->dimensions[3];
 
-    output_dims.n = 1;
+    output_dims.n = (session->output_n > 0) ? session->output_n : 1;
     output_dims.h = session->output_h;
     output_dims.w = session->output_w;
     output_dims.c = session->output_c;
@@ -1242,6 +1399,7 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
         case HCT_KERNEL_ID_MUL_S8:
         case HCT_KERNEL_ID_MAXIMUM_S8:
         case HCT_KERNEL_ID_MINIMUM_S8:
+        case HCT_KERNEL_ID_SQUARED_DIFFERENCE_S8:
         {
             if (session->output_length > sizeof(session->output_buffer))
             {
@@ -1280,6 +1438,16 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
                                   session->output_offset, session->out_mult, session->out_shift,
                                   session->activation_min, session->activation_max);
             }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_SQUARED_DIFFERENCE_S8)
+            {
+                return arm_squared_difference_s8(input1_data, &input1_dims, input2_data, &input2_dims,
+                                                 session->input1_offset, session->input1_mult, session->input1_shift,
+                                                 session->input2_offset, session->input2_mult, session->input2_shift,
+                                                 session->left_shift,
+                                                 output_data, &output_dims,
+                                                 session->output_offset, session->out_mult, session->out_shift,
+                                                 session->activation_min, session->activation_max);
+            }
             /* Maximum/Minimum have no quant scalars at all -- just a scratch context, always
              * {NULL, 0} per the generated tests (no buffer-sizing helper exists for these ops). */
             cmsis_nn_context ctx = {NULL, 0};
@@ -1296,6 +1464,7 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
         case HCT_KERNEL_ID_MUL_S16:
         case HCT_KERNEL_ID_MAXIMUM_S16:
         case HCT_KERNEL_ID_MINIMUM_S16:
+        case HCT_KERNEL_ID_SQUARED_DIFFERENCE_S16:
         {
             if (session->output_length * sizeof(int16_t) > sizeof(session->output_buffer))
             {
@@ -1337,6 +1506,16 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
                                    output_data, &output_dims,
                                    session->output_offset, session->out_mult, session->out_shift,
                                    session->activation_min, session->activation_max);
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_SQUARED_DIFFERENCE_S16)
+            {
+                return arm_squared_difference_s16(input1_data, &input1_dims, input2_data, &input2_dims,
+                                                  session->input1_offset, session->input1_mult, session->input1_shift,
+                                                  session->input2_offset, session->input2_mult, session->input2_shift,
+                                                  session->left_shift,
+                                                  output_data, &output_dims,
+                                                  session->output_offset, session->out_mult, session->out_shift,
+                                                  session->activation_min, session->activation_max);
             }
             /* Maximum/Minimum S16 mirror the S8 variants: scratch ctx only, no quant scalars. */
             cmsis_nn_context ctx16 = {NULL, 0};
@@ -1459,14 +1638,35 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         c_body=_RUN_BATCH_MATMUL_ONCE,
     ),
     FirmwareAdapterSpec(
-        label="BasicMathFunctions/Add,Sub,Mul,Maximum,Minimum",
+        label="BasicMathFunctions/ArgMax,ArgMin,Mean,ReduceMax,ReduceMin",
+        function_name="run_basic_math_reduction_once",
+        guard="HCT_HOST_ABS_ONLY",
+        scalar_fields=(
+            "output_n", "output_h", "output_w", "output_c",
+            "axis_n", "axis_h", "axis_w", "axis_c", "axis",
+            "input_offset", "output_offset", "out_mult", "out_shift",
+        ),
+        c_body=_RUN_BASIC_MATH_REDUCTION_ONCE,
+    ),
+    FirmwareAdapterSpec(
+        label="BasicMathFunctions/Sqrt,Rsqrt",
+        function_name="run_basic_math_lut_once",
+        guard="HCT_HOST_ABS_ONLY",
+        scalar_fields=(
+            "input_offset", "output_offset", "out_mult", "out_shift",
+            "needs_rescale", "activation_min", "activation_max",
+        ),
+        c_body=_RUN_BASIC_MATH_LUT_ONCE,
+    ),
+    FirmwareAdapterSpec(
+        label="BasicMathFunctions/Add,Sub,Mul,Maximum,Minimum,SquaredDifference",
         function_name="run_elementwise_binary_once",
         guard="HCT_HOST_ABS_ONLY",
         scalar_fields=(
-            "output_h", "output_w", "output_c",
+            "output_n", "output_h", "output_w", "output_c",
             "input1_offset", "input1_mult", "input1_shift",
             "input2_offset", "input2_mult", "input2_shift",
-            "left_shift", "out_mult", "out_shift",
+            "left_shift", "output_offset", "out_mult", "out_shift",
             "activation_min", "activation_max",
         ),
         c_body=_RUN_ELEMENTWISE_BINARY_ONCE,
