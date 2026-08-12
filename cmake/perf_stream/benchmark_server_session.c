@@ -99,6 +99,8 @@
 #define HCT_KERNEL_ID_SQRT_S16 62u
 #define HCT_KERNEL_ID_SQUARED_DIFFERENCE_S8 63u
 #define HCT_KERNEL_ID_SQUARED_DIFFERENCE_S16 64u
+#define HCT_KERNEL_ID_REQUANTIZE_S8 65u
+#define HCT_KERNEL_ID_REQUANTIZE_S16 66u
 
 static bool has_capacity(size_t payload_length, size_t offset, size_t needed)
 {
@@ -1417,6 +1419,39 @@ static arm_cmsis_nn_status run_dequantize_once(hct_server_session_t *session)
     return ARM_CMSIS_NN_SUCCESS;
 }
 
+static arm_cmsis_nn_status run_requantize_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+
+    if (input == NULL)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    session->output_length = input->byte_length;
+    if (session->output_length > sizeof(session->output_buffer))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    if (session->expected_kernel_id == HCT_KERNEL_ID_REQUANTIZE_S16)
+    {
+        return arm_requantize_s16_s16((const int16_t *)blob_ptr(session, input),
+                                      (int16_t *)session->output_buffer,
+                                      (int32_t)(input->byte_length / sizeof(int16_t)),
+                                      session->out_mult,
+                                      session->out_shift,
+                                      session->input_offset,
+                                      session->output_offset);
+    }
+    return arm_requantize_s8_s8((const int8_t *)blob_ptr(session, input),
+                                (int8_t *)session->output_buffer,
+                                (int32_t)input->byte_length,
+                                session->out_mult,
+                                session->out_shift,
+                                session->input_offset,
+                                session->output_offset);
+}
+
 /* Fixed CMSIS-NN reference lookup tables required by arm_softmax_s16() -- identical bit
  * patterns are used by every generated S16 softmax test case (see
  * Tests/helia-core-tester/assets/templates/SoftmaxFunctions/softmax/softmax.h.j2), so they
@@ -2231,6 +2266,13 @@ static arm_cmsis_nn_status run_kernel_once(hct_server_session_t *session)
         case HCT_KERNEL_ID_DEQUANTIZE_S16:
 #ifndef HCT_HOST_ABS_ONLY
             return run_dequantize_once(session);
+#else
+            return ARM_CMSIS_NN_ARG_ERROR;
+#endif
+        case HCT_KERNEL_ID_REQUANTIZE_S8:
+        case HCT_KERNEL_ID_REQUANTIZE_S16:
+#ifndef HCT_HOST_ABS_ONLY
+            return run_requantize_once(session);
 #else
             return ARM_CMSIS_NN_ARG_ERROR;
 #endif

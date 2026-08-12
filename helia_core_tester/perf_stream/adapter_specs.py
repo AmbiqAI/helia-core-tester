@@ -780,6 +780,40 @@ static arm_cmsis_nn_status run_dequantize_once(hct_server_session_t *session)
     return ARM_CMSIS_NN_SUCCESS;
 }'''
 
+_RUN_REQUANTIZE_ONCE = '''\
+static arm_cmsis_nn_status run_requantize_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+
+    if (input == NULL)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    session->output_length = input->byte_length;
+    if (session->output_length > sizeof(session->output_buffer))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    if (session->expected_kernel_id == HCT_KERNEL_ID_REQUANTIZE_S16)
+    {
+        return arm_requantize_s16_s16((const int16_t *)blob_ptr(session, input),
+                                      (int16_t *)session->output_buffer,
+                                      (int32_t)(input->byte_length / sizeof(int16_t)),
+                                      session->out_mult,
+                                      session->out_shift,
+                                      session->input_offset,
+                                      session->output_offset);
+    }
+    return arm_requantize_s8_s8((const int8_t *)blob_ptr(session, input),
+                                (int8_t *)session->output_buffer,
+                                (int32_t)input->byte_length,
+                                session->out_mult,
+                                session->out_shift,
+                                session->input_offset,
+                                session->output_offset);
+}'''
+
 
 _RUN_SOFTMAX_ONCE = '''\
 /* Fixed CMSIS-NN reference lookup tables required by arm_softmax_s16() -- identical bit
@@ -1615,6 +1649,13 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         guard="HCT_HOST_ABS_ONLY",
         scalar_fields=("output_h", "output_w", "output_c", "input_offset", "scale_bits", "activation_kind"),
         c_body=_RUN_DEQUANTIZE_ONCE,
+    ),
+    FirmwareAdapterSpec(
+        label="NNSupportFunctions/Requantize",
+        function_name="run_requantize_once",
+        guard="HCT_HOST_ABS_ONLY",
+        scalar_fields=("input_offset", "output_offset", "out_mult", "out_shift"),
+        c_body=_RUN_REQUANTIZE_ONCE,
     ),
     FirmwareAdapterSpec(
         label="SoftmaxFunctions/Softmax,SoftmaxS8S16",

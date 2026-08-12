@@ -1094,6 +1094,7 @@ def _build_quantize_case(
 # so it must be replicated in firmware (see activation_kind in benchmark_server_session.h
 # and _RUN_DEQUANTIZE_ONCE in adapter_specs.py) rather than folded into an input blob.
 _DEQUANTIZE_ARG_COUNT = 5
+_REQUANTIZE_ARG_COUNT = 7
 
 
 def _build_dequantize_case(
@@ -1188,6 +1189,97 @@ def _build_dequantize_case(
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": "FP32", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "float"})),
+        "scratch_buffer": {"bytes": 0},
+        "required_target_capabilities": [cmsis_function],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
+def _build_requantize_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    activation_dtype = str(descriptor.get("activation_dtype", ""))
+    if operator != "Requantize" or activation_dtype not in ("S8", "S16"):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: operator={operator!r} activation_dtype={activation_dtype!r} is not "
+            f"bridgeable -- perf-stream firmware only dispatches arm_requantize_s8_s8/s16_s16."
+        )
+
+    input_shape = tuple(int(v) for v in descriptor.get("input_shape", []))
+    if not input_shape or input_shape[0] != 1:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: batch size > 1 is not yet supported by the perf-stream hardware bridge."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    source_path = _find_source_file(generated_test.directory)
+    source_text = source_path.read_text(encoding="utf-8")
+    prefix = generated_test.name
+
+    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
+    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
+    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
+    size = int(np.prod(input_shape))
+    if input_flat.size != size or expected_flat.size != size:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: array sizes (input={input_flat.size}, expected_output={expected_flat.size}) "
+            f"don't match input_shape product ({size})."
+        )
+
+    cmsis_function = "arm_requantize_s16_s16" if activation_dtype == "S16" else "arm_requantize_s8_s8"
+    args = _extract_call_args(source_text, cmsis_function, expected_count=_REQUANTIZE_ARG_COUNT)
+
+    input_data = input_flat.reshape(input_shape)
+    expected_output = expected_flat.reshape(input_shape)
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+
+    arrays = [
+        (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+        (2, "expected_output", activation_dtype, input_shape, expected_output, False, True),
+    ]
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": operator,
+        "family": generated_test.family,
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": {
+            "out_mult": int(args[3]),
+            "out_shift": int(args[4]),
+            "input_offset": int(args[5]),
+            "output_offset": int(args[6]),
+        },
+        "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
         "scratch_buffer": {"bytes": 0},
         "required_target_capabilities": [cmsis_function],
         "repeated_invocation_safe": True,
@@ -2670,6 +2762,7 @@ _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
     ("ActivationFunctions", "PReLUScalar"): _build_prelu_scalar_case,
     ("QuantizationFunctions", "Quantize"): _build_quantize_case,
     ("QuantizationFunctions", "Dequantize"): _build_dequantize_case,
+    ("NNSupportFunctions", "Requantize"): _build_requantize_case,
     ("SoftmaxFunctions", "Softmax"): _build_softmax_case,
     ("FullyConnectedFunctions", "FullyConnected"): _build_fully_connected_case,
     ("FullyConnectedFunctions", "BatchMatMul"): _build_batch_matmul_case,

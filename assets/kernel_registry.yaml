@@ -401,5 +401,17 @@ kernels:
     dtype: S16
     cmsis_function: arm_squared_difference_s16
 
+  - kernel_id: 65
+    family: NNSupportFunctions
+    operator: Requantize
+    dtype: S8
+    cmsis_function: arm_requantize_s8_s8
+
+  - kernel_id: 66
+    family: NNSupportFunctions
+    operator: Requantize
+    dtype: S16
+    cmsis_function: arm_requantize_s16_s16
+
   # Reserved for future clusters (see helia_core_tester perf_stream expansion plan):
   #  48+: no further int operator families remain unbridged as of this writing.

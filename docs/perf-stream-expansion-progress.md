@@ -235,6 +235,26 @@ before encoding them into the plan.**
   still reports the pre-existing batch>1/arena skips for older Add/Max/Min/
   Mul/Sub cases, unchanged by this phase.
 
+### Phase 3b — NNSupportFunctions Requantize bridge (COMPLETE)
+
+- Bridged **2 generated-test cases** for `arm_requantize_s8_s8` and
+  `arm_requantize_s16_s16`.
+- Host bridge:
+  - added a dedicated generated-test builder that extracts the streamed
+    multiplier/shift and input/output zero-points from the generated C call
+  - reuses the existing scalar field names `out_mult`, `out_shift`,
+    `input_offset`, and `output_offset`
+- Firmware:
+  - added one `run_requantize_once()` adapter path plus kernel ids 65/66
+  - dispatch computes element count directly from the input blob byte length,
+    so no extra output-shape metadata is needed
+- Verification:
+  - targeted pytest: `12 passed`
+  - full pytest baseline: `279 passed, 11 failed` (same unrelated-failure
+    baseline count)
+  - real hardware: `scripts/run_hardware_perf_suite.sh --serial-no 1160002276 --family NNSupportFunctions --session-id phase3b-requantize --skip-generate`
+    -> **2/2 passed** on Apollo510/Cortex-M55
+
 ### Hardware toolchain unblocked (2nd session segment)
 The user cloned the vendor NSX SDK to
 `/Users/mohammed.abuhussein/workspace/nsx-ambiq-sdk`. Wired it into this repo

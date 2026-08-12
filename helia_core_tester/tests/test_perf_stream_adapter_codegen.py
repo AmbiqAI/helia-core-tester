@@ -28,6 +28,7 @@ from helia_core_tester.perf_stream.generated_test_bridge import (
     _build_basic_math_reduction_case,
     _build_convolve_case,
     _build_depthwise_conv_case,
+    _build_requantize_case,
     _build_squared_difference_case,
 )
 
@@ -142,4 +143,15 @@ def test_squared_difference_builder_scalar_keys_are_subset_of_firmware_adapter_s
     bundle = _build_squared_difference_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
     firmware_fields = set(generated_test_bridge_scalar_fields("run_elementwise_binary_once"))
+    assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
+
+
+def test_requantize_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
+    from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
+
+    cases = discover_generated_tests(PROJECT_ROOT, family="NNSupportFunctions", name_filter="requantize_default_s8")
+    assert cases, "expected a discoverable Requantize generated test"
+    bundle = _build_requantize_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
+    manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
+    firmware_fields = set(generated_test_bridge_scalar_fields("run_requantize_once"))
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
