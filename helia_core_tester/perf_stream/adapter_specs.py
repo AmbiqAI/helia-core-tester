@@ -2916,49 +2916,63 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
         case HCT_KERNEL_ID_BROADCAST_TO_S16:
         {
             cmsis_nn_broadcast_to_params params;
-            int32_t input_shape[4] = {1, 1, 1, 1};
-            int32_t output_shape[4] = {1, 1, 1, 1};
+            int32_t input_shape[9] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
+            int32_t output_shape[9] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
             int32_t rank;
+            const cmsis_nn_broadcast_to_params *params_ptr;
             if (input0 == NULL || meta == NULL)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             rank = meta[0];
-            if (rank < 1 || rank > 4)
+            if (!expects_exact_status(session) && (rank < 1 || rank > 4))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             hct_fill_shape_from_blob(input0, rank, input_shape, true);
             hct_fill_output_shape_from_session(session, rank, output_shape);
-            session->output_length = hct_shape_product(output_shape, rank) * hct_dtype_size_bytes(input0->dtype);
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!expects_exact_status(session))
             {
-                return ARM_CMSIS_NN_ARG_ERROR;
+                session->output_length = hct_shape_product(output_shape, rank) * hct_dtype_size_bytes(input0->dtype);
+                if (session->output_length > sizeof(session->output_buffer))
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
             }
             params.rank = rank;
             params.input_shape = input_shape;
             params.output_shape = output_shape;
+            params_ptr = null_arg_requested(session, HCT_NULL_ARG_PARAMS_BIT) ? NULL : &params;
             if (session->expected_kernel_id == HCT_KERNEL_ID_BROADCAST_TO_S16)
             {
-                return arm_broadcast_to_s16((const int16_t *)blob_ptr(session, input0), &params, (int16_t *)session->output_buffer);
+                return arm_broadcast_to_s16(
+                    null_arg_requested(session, HCT_NULL_ARG_INPUT0_BIT) ? NULL : (const int16_t *)blob_ptr(session, input0),
+                    params_ptr,
+                    null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int16_t *)session->output_buffer
+                );
             }
-            return arm_broadcast_to_s8((const int8_t *)blob_ptr(session, input0), &params, (int8_t *)session->output_buffer);
+            return arm_broadcast_to_s8(
+                null_arg_requested(session, HCT_NULL_ARG_INPUT0_BIT) ? NULL : (const int8_t *)blob_ptr(session, input0),
+                params_ptr,
+                null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int8_t *)session->output_buffer
+            );
         }
 
         case HCT_KERNEL_ID_DYNAMIC_UPDATE_SLICE_S8:
         case HCT_KERNEL_ID_DYNAMIC_UPDATE_SLICE_S16:
         {
             cmsis_nn_dynamic_update_slice_params params;
-            int32_t operand_shape[4] = {1, 1, 1, 1};
-            int32_t update_shape[4] = {1, 1, 1, 1};
-            int32_t operand_strides[4] = {0, 0, 0, 0};
+            int32_t operand_shape[9] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
+            int32_t update_shape[9] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
+            int32_t operand_strides[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
             int32_t rank;
+            const cmsis_nn_dynamic_update_slice_params *params_ptr;
             if (input0 == NULL || input1 == NULL || input2 == NULL || meta == NULL)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             rank = meta[0];
-            if (rank < 1 || rank > 4)
+            if (!expects_exact_status(session) && (rank < 1 || rank > 4))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -2971,24 +2985,32 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             params.operand_size = (int32_t)hct_blob_element_count(input0);
             params.update_size = (int32_t)hct_blob_element_count(input1);
             params.operand_strides = operand_strides;
-            session->output_length = input0->byte_length;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!expects_exact_status(session))
             {
-                return ARM_CMSIS_NN_ARG_ERROR;
+                session->output_length = input0->byte_length;
+                if (session->output_length > sizeof(session->output_buffer))
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
             }
+            params_ptr = null_arg_requested(session, HCT_NULL_ARG_PARAMS_BIT) ? NULL : &params;
             if (session->expected_kernel_id == HCT_KERNEL_ID_DYNAMIC_UPDATE_SLICE_S16)
             {
-                return arm_dynamic_update_slice_s16((const int16_t *)blob_ptr(session, input0),
-                                                    (const int16_t *)blob_ptr(session, input1),
-                                                    (const int32_t *)blob_ptr(session, input2),
-                                                    &params,
-                                                    (int16_t *)session->output_buffer);
+                return arm_dynamic_update_slice_s16(
+                    null_arg_requested(session, HCT_NULL_ARG_INPUT0_BIT) ? NULL : (const int16_t *)blob_ptr(session, input0),
+                    null_arg_requested(session, HCT_NULL_ARG_INPUT1_BIT) ? NULL : (const int16_t *)blob_ptr(session, input1),
+                    null_arg_requested(session, HCT_NULL_ARG_INPUT2_BIT) ? NULL : (const int32_t *)blob_ptr(session, input2),
+                    params_ptr,
+                    null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int16_t *)session->output_buffer
+                );
             }
-            return arm_dynamic_update_slice_s8((const int8_t *)blob_ptr(session, input0),
-                                               (const int8_t *)blob_ptr(session, input1),
-                                               (const int32_t *)blob_ptr(session, input2),
-                                               &params,
-                                               (int8_t *)session->output_buffer);
+            return arm_dynamic_update_slice_s8(
+                null_arg_requested(session, HCT_NULL_ARG_INPUT0_BIT) ? NULL : (const int8_t *)blob_ptr(session, input0),
+                null_arg_requested(session, HCT_NULL_ARG_INPUT1_BIT) ? NULL : (const int8_t *)blob_ptr(session, input1),
+                null_arg_requested(session, HCT_NULL_ARG_INPUT2_BIT) ? NULL : (const int32_t *)blob_ptr(session, input2),
+                params_ptr,
+                null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int8_t *)session->output_buffer
+            );
         }
 
         case HCT_KERNEL_ID_STRIDED_SLICE_S8:
@@ -3226,7 +3248,7 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         label="Phase3e data movement/indexing families",
         function_name="run_data_movement_once",
         guard="HCT_HOST_ABS_ONLY",
-        scalar_fields=("output_n", "output_h", "output_w", "output_c"),
+        scalar_fields=("output_n", "output_h", "output_w", "output_c", "null_arg_mask"),
         c_body=_RUN_DATA_MOVEMENT_ONCE,
     ),
 )

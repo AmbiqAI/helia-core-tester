@@ -9,14 +9,14 @@ from typing import Any
 import numpy as np
 
 from .case_bundle import CaseBundle, BlobInfo, blob_numpy, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
-from .comparison import ComparisonResult, compare_output
+from .comparison import ComparisonResult, compare_output, compare_status
 from .fake_target import FakeTargetTransport
 from .hctp import ByteReader, ByteWriter, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
 from .measurement import NormalizedSample, RawCounterValue, RawSample, SampleStatistics, compute_sample_statistics, normalize_samples
 from .transport import Transport
 
 
-_COMPARISON_MODE_TO_CODE = {"exact_int": 1, "tolerant_int": 2, "float": 3, "bool": 4}
+_COMPARISON_MODE_TO_CODE = {"exact_int": 1, "tolerant_int": 2, "float": 3, "bool": 4, "exact_status": 5}
 
 
 @dataclass(frozen=True)
@@ -90,6 +90,7 @@ class HostSession:
         actual_output_bytes = bytearray()
         samples: list[SampleResult] = []
         comparison_result: ComparisonResult | None = None
+        reported_status: int | None = None
         session_complete_cases = 0
 
         while True:
@@ -103,6 +104,7 @@ class HostSession:
                 samples = []
                 comparison_result = None
                 actual_output_bytes = bytearray()
+                reported_status = None
                 self._send(MessageType.CASE_META, self._encode_case_meta(bundle))
             elif frame.header.message_type == MessageType.REQUEST_BLOB:
                 if current_case_id is None:
@@ -111,7 +113,7 @@ class HostSession:
             elif frame.header.message_type == MessageType.CASE_READY:
                 self._send(MessageType.RUN_CORRECTNESS, b"")
             elif frame.header.message_type == MessageType.CORRECTNESS_RESULT:
-                pass
+                reported_status = ByteReader(frame.payload).i32()
             elif frame.header.message_type == MessageType.OUTPUT_BEGIN:
                 actual_output_bytes = bytearray()
             elif frame.header.message_type == MessageType.OUTPUT_CHUNK:
@@ -122,11 +124,16 @@ class HostSession:
                 if current_case_id is None:
                     raise RuntimeError("Received OUTPUT_END without an active case.")
                 bundle = case_map[current_case_id]
-                expected_output = blob_numpy(bundle.expected_output)
-                actual = np.frombuffer(bytes(actual_output_bytes), dtype=expected_output.dtype).reshape(
-                    expected_output.shape
-                )
-                comparison_result = compare_output(actual, expected_output, bundle.comparison)
+                if bundle.comparison["mode"] == "exact_status":
+                    if reported_status is None:
+                        raise RuntimeError("Received OUTPUT_END before CORRECTNESS_RESULT status payload.")
+                    comparison_result = compare_status(reported_status, bundle.comparison)
+                else:
+                    expected_output = blob_numpy(bundle.expected_output)
+                    actual = np.frombuffer(bytes(actual_output_bytes), dtype=expected_output.dtype).reshape(
+                        expected_output.shape
+                    )
+                    comparison_result = compare_output(actual, expected_output, bundle.comparison)
                 writer = ByteWriter()
                 writer.u8(1 if comparison_result.passed else 0)
                 self._send(MessageType.CORRECTNESS_ACK, writer.finish())

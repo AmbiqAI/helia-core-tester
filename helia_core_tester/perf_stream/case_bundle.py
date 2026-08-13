@@ -59,6 +59,13 @@ class CaseBundle:
         return dict(self.manifest["correctness_comparison"])
 
     @property
+    def expected_status_code(self) -> int | None:
+        comparison = self.comparison
+        if comparison.get("mode") != "exact_status":
+            return None
+        return int(comparison["expected_status"])
+
+    @property
     def kernel_id(self) -> int:
         return int(self.manifest["kernel_id"])
 

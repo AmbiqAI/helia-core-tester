@@ -108,6 +108,16 @@ class GeneratedTestCase:
 
 
 _INT_ARRAY_RE = re.compile(r"=\s*\{([^}]*)\}")
+_CMSIS_NN_STATUS_CODES = {
+    "ARM_CMSIS_NN_SUCCESS": 0,
+    "ARM_CMSIS_NN_ARG_ERROR": -1,
+    "ARM_CMSIS_NN_NO_IMPL_ERROR": -2,
+}
+_NULL_ARG_INPUT0_BIT = 1 << 0
+_NULL_ARG_INPUT1_BIT = 1 << 1
+_NULL_ARG_INPUT2_BIT = 1 << 2
+_NULL_ARG_PARAMS_BIT = 1 << 3
+_NULL_ARG_OUTPUT_BIT = 1 << 4
 
 
 def _find_header_file(directory: Path) -> Path:
@@ -271,6 +281,21 @@ def _extract_expected_status_from_source(source_text: str) -> str | None:
         re.DOTALL,
     )
     return None if match is None else str(match.group(1))
+
+
+def _resolve_cmsis_nn_status_code(status_name: str) -> int:
+    try:
+        return _CMSIS_NN_STATUS_CODES[status_name]
+    except KeyError as exc:
+        raise UnsupportedGeneratedTestError(f"Unsupported CMSIS-NN status name {status_name!r}.") from exc
+
+
+def _status_comparison(expected_status_name: str) -> dict[str, int | str]:
+    return {
+        "mode": "exact_status",
+        "expected_status": _resolve_cmsis_nn_status_code(expected_status_name),
+        "expected_status_name": expected_status_name,
+    }
 
 
 def _extract_scalar(header_text: str, struct_name: str, field: str) -> int:
@@ -1901,12 +1926,7 @@ def _build_prelu_case(
     operator = str(descriptor.get("operator", ""))
     activation_dtype = str(descriptor.get("activation_dtype", ""))
     expected_status = str(descriptor.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
-    if expected_status != "ARM_CMSIS_NN_SUCCESS":
-        raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: expects a non-success status ({expected_status}) -- the perf-stream "
-            f"bridge only compares golden *output* arrays, it has no infrastructure to assert on a "
-            f"kernel's returned status code, so intentional-argument-error cases are not bridgeable."
-        )
+    expects_status = expected_status != "ARM_CMSIS_NN_SUCCESS"
     if operator != "PReLU" or activation_dtype not in ("S8", "S16"):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: operator={operator!r} activation_dtype={activation_dtype!r} is not "
@@ -1929,21 +1949,29 @@ def _build_prelu_case(
     numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
     input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
     alpha_flat = np.array(_extract_array(header_text, f"{prefix}_alpha"), dtype=numpy_dtype)
-    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
     if input_flat.size != int(np.prod(input_shape)) or alpha_flat.size != int(np.prod(alpha_shape)):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: generated array sizes (input={input_flat.size}, "
             f"alpha={alpha_flat.size}) don't match header dims (input_shape={input_shape}, "
             f"alpha_shape={alpha_shape})."
         )
-    if expected_flat.size != int(np.prod(output_shape)):
-        raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: expected_output size ({expected_flat.size}) does not match header "
-            f"output_dims product ({int(np.prod(output_shape))})"
-        )
     input_data = input_flat.reshape(input_shape)
     alpha_data = alpha_flat.reshape(alpha_shape)
-    expected_output = expected_flat.reshape(output_shape)
+    comparison: dict[str, int | str]
+    if expects_status:
+        expected_output = np.array([], dtype=numpy_dtype)
+        expected_output_shape = (0,)
+        comparison = _status_comparison(expected_status)
+    else:
+        expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
+        if expected_flat.size != int(np.prod(output_shape)):
+            raise UnsupportedGeneratedTestError(
+                f"{generated_test.name}: expected_output size ({expected_flat.size}) does not match header "
+                f"output_dims product ({int(np.prod(output_shape))})"
+            )
+        expected_output = expected_flat.reshape(output_shape)
+        expected_output_shape = tuple(int(v) for v in expected_output.shape)
+        comparison = dict(descriptor.get("resolved_comparison", {"mode": "exact_int"}))
 
     cmsis_function = "arm_prelu_s16" if activation_dtype == "S16" else "arm_prelu_s8"
     args = _extract_call_args(source_text, cmsis_function, expected_count=_PRELU_ARG_COUNT)
@@ -1960,7 +1988,7 @@ def _build_prelu_case(
     arrays = [
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
         (2, "input_1", activation_dtype, alpha_shape, alpha_data, False, False),
-        (3, "expected_output", activation_dtype, tuple(int(v) for v in expected_output.shape), expected_output, False, True),
+        (3, "expected_output", activation_dtype, expected_output_shape, expected_output, False, True),
     ]
     blobs: list[BlobInfo] = []
     for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
@@ -1999,7 +2027,7 @@ def _build_prelu_case(
         "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        "correctness_comparison": comparison,
         "scratch_buffer": {"bytes": 0},
         "required_target_capabilities": [cmsis_function],
         "repeated_invocation_safe": True,
@@ -3426,16 +3454,30 @@ def _build_data_movement_case(
     header_text = header_path.read_text(encoding="utf-8")
     source_text = source_path.read_text(encoding="utf-8")
     prefix = generated_test.name
+    expected_status = str(descriptor.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
+    expects_status = expected_status != "ARM_CMSIS_NN_SUCCESS"
     try:
         comparison = _comparison_from_generated_source(source_text)
     except UnsupportedGeneratedTestError as exc:
-        expected_status = _extract_expected_status_from_source(source_text)
-        if expected_status is not None and expected_status != "ARM_CMSIS_NN_SUCCESS":
-            raise UnsupportedGeneratedTestError(
-                f"{generated_test.name}: standalone harness expects {expected_status} (invalid/null-argument coverage), "
-                "which the perf-stream hardware bridge does not model as a streamed correctness-output case."
-            ) from exc
-        raise
+        source_expected_status = _extract_expected_status_from_source(source_text)
+        if expects_status or (source_expected_status is not None and source_expected_status != "ARM_CMSIS_NN_SUCCESS"):
+            if source_expected_status is not None and source_expected_status != expected_status:
+                raise UnsupportedGeneratedTestError(
+                    f"{generated_test.name}: descriptor/source expected_status mismatch "
+                    f"({expected_status} vs {source_expected_status})."
+                ) from exc
+            comparison = _status_comparison(expected_status)
+        else:
+            raise
+    else:
+        if expects_status:
+            comparison = _status_comparison(expected_status)
+    source_expected_status = _extract_expected_status_from_source(source_text)
+    if source_expected_status is not None and source_expected_status != expected_status:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: descriptor/source expected_status mismatch "
+            f"({expected_status} vs {source_expected_status})."
+        )
     cmsis_function = _extract_first_cmsis_function_name(source_text)
     arrays: list[tuple[int, str, str, tuple[int, ...], np.ndarray, bool, bool]] = []
     tensor_dtypes: dict[str, str] = {}
@@ -3450,6 +3492,9 @@ def _build_data_movement_case(
     def add_meta(values: list[int]) -> None:
         nonlocal meta
         meta = [int(v) for v in values]
+
+    def status_placeholder_output(dtype: str) -> np.ndarray:
+        return np.array([], dtype={"S8": np.int8, "S16": np.int16, "S32": np.int32, "S64": np.int64, "BOOL": np.bool_}[dtype])
 
     if operator in {"Reshape", "Squeeze"}:
         input_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_input_dims"))
@@ -3482,12 +3527,16 @@ def _build_data_movement_case(
         output_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_output_dims"), rank=rank)
         permutations = _extract_array(header_text, f"{prefix}_permutations")
         input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
-        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        expected_output = (
+            status_placeholder_output(activation_dtype)
+            if expects_status
+            else _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        )
         add_meta([rank, *permutations])
         arrays.extend([
             (1, "input_0", activation_dtype, input_shape, input_data, False, False),
             (2, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
-            (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+            (3, "expected_output", activation_dtype, (0,) if expects_status else output_shape, expected_output, False, True),
         ])
         tensor_dtypes = {"input": activation_dtype, "meta": "S32", "output": activation_dtype}
         add_output_scalars(output_shape)
@@ -3703,18 +3752,22 @@ def _build_data_movement_case(
         params_rank = _extract_scalar(source_text, params_struct, "params_rank")
         indices_rank = _extract_scalar(source_text, params_struct, "indices_rank")
         batch_dims = _extract_scalar(source_text, params_struct, "batch_dims")
-        params_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_params_dims"), rank=params_rank)
-        indices_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_indices_dims"), rank=indices_rank)
-        output_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_output_dims"))
+        params_shape = tuple(_extract_array(header_text, f"{prefix}_params_shape"))
+        indices_shape = tuple(_extract_array(header_text, f"{prefix}_indices_shape"))
+        output_shape = tuple(_extract_array(header_text, f"{prefix}_output_shape"))
         params_data = _extract_typed_array(header_text, f"{prefix}_params_data", activation_dtype).reshape(params_shape)
         indices_data = _extract_typed_array(header_text, f"{prefix}_indices", "S32").reshape(indices_shape)
-        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        expected_output = (
+            status_placeholder_output(activation_dtype)
+            if expects_status
+            else _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        )
         add_meta([params_rank, indices_rank, batch_dims])
         arrays.extend([
             (1, "input_0", activation_dtype, params_shape, params_data, False, False),
             (2, "input_1", "S32", indices_shape, indices_data, False, False),
             (3, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
-            (4, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+            (4, "expected_output", activation_dtype, (0,) if expects_status else output_shape, expected_output, False, True),
         ])
         tensor_dtypes = {"params": activation_dtype, "indices": "S32", "meta": "S32", "output": activation_dtype}
         add_output_scalars(output_shape)
@@ -3803,12 +3856,23 @@ def _build_data_movement_case(
         input_shape = tuple(_extract_array(header_text, f"{prefix}_input_shape"))
         output_shape = tuple(_extract_array(header_text, f"{prefix}_output_shape"))
         input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
-        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        expected_output = (
+            status_placeholder_output(activation_dtype)
+            if expects_status
+            else _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+        )
+        arg_error_case = str(descriptor.get("hint", {}).get("extras", {}).get("arg_error_case", ""))
+        if arg_error_case == "input":
+            scalar_parameters["null_arg_mask"] = _NULL_ARG_INPUT0_BIT
+        elif arg_error_case == "params":
+            scalar_parameters["null_arg_mask"] = _NULL_ARG_PARAMS_BIT
+        elif arg_error_case == "output":
+            scalar_parameters["null_arg_mask"] = _NULL_ARG_OUTPUT_BIT
         add_meta([rank])
         arrays.extend([
             (1, "input_0", activation_dtype, input_shape, input_data, False, False),
             (2, "meta_0", "S32", (1,), np.array(meta, dtype=np.int32), False, False),
-            (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+            (3, "expected_output", activation_dtype, (0,) if expects_status else output_shape, expected_output, False, True),
         ])
         tensor_dtypes = {"input": activation_dtype, "meta": "S32", "output": activation_dtype}
         add_output_scalars(output_shape)
@@ -3821,14 +3885,29 @@ def _build_data_movement_case(
         start_indices = _extract_typed_array(header_text, f"{prefix}_start_indices", "S32")
         operand = _extract_typed_array(header_text, f"{prefix}_operand", activation_dtype).reshape(operand_shape)
         update = _extract_typed_array(header_text, f"{prefix}_update", activation_dtype).reshape(update_shape)
-        expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(operand_shape)
+        expected_output = (
+            status_placeholder_output(activation_dtype)
+            if expects_status
+            else _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(operand_shape)
+        )
+        arg_error_case = str(descriptor.get("hint", {}).get("extras", {}).get("arg_error_case", ""))
+        if arg_error_case == "operand":
+            scalar_parameters["null_arg_mask"] = _NULL_ARG_INPUT0_BIT
+        elif arg_error_case == "update":
+            scalar_parameters["null_arg_mask"] = _NULL_ARG_INPUT1_BIT
+        elif arg_error_case == "start_indices":
+            scalar_parameters["null_arg_mask"] = _NULL_ARG_INPUT2_BIT
+        elif arg_error_case == "params":
+            scalar_parameters["null_arg_mask"] = _NULL_ARG_PARAMS_BIT
+        elif arg_error_case == "output":
+            scalar_parameters["null_arg_mask"] = _NULL_ARG_OUTPUT_BIT
         add_meta([rank])
         arrays.extend([
             (1, "input_0", activation_dtype, operand_shape, operand, False, False),
             (2, "input_1", activation_dtype, update_shape, update, False, False),
             (3, "input_2", "S32", (start_indices.size,), start_indices, False, False),
             (4, "meta_0", "S32", (1,), np.array(meta, dtype=np.int32), False, False),
-            (5, "expected_output", activation_dtype, operand_shape, expected_output, False, True),
+            (5, "expected_output", activation_dtype, (0,) if expects_status else operand_shape, expected_output, False, True),
         ])
         tensor_dtypes = {"operand": activation_dtype, "update": activation_dtype, "start_indices": "S32", "meta": "S32", "output": activation_dtype}
         add_output_scalars(operand_shape)

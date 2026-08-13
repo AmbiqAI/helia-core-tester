@@ -58,6 +58,17 @@ def test_prelu_scalar_multi_pixel_case_bridges(tmp_path: Path) -> None:
     assert scalars["output_c"] == 3
 
 
+def test_prelu_arg_error_cases_bridge_as_status_assertions(tmp_path: Path) -> None:
+    for case_name in ("prelu_arg_error_output_mismatch_s8", "prelu_arg_error_output_mismatch_s16"):
+        manifest = _bridge(tmp_path, "ActivationFunctions", case_name)
+        assert manifest["correctness_comparison"] == {
+            "mode": "exact_status",
+            "expected_status": -1,
+            "expected_status_name": "ARM_CMSIS_NN_ARG_ERROR",
+        }
+        assert manifest["expected_output"]["byte_length"] == 0
+
+
 def test_convolve_batch_padded_case_truncates_to_header_dims(tmp_path: Path) -> None:
     manifest = _bridge(tmp_path, "ConvolutionFunctions", "convolve_kernel1x1_stride_xy_case_01_s8")
     blobs = {blob["role"]: blob for blob in manifest["blob_roles"]}

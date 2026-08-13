@@ -36,6 +36,18 @@
 #define HCT_PADDING_VALID 0
 #define HCT_PADDING_SAME 1
 
+#define HCT_COMPARISON_MODE_EXACT_INT 1u
+#define HCT_COMPARISON_MODE_TOLERANT_INT 2u
+#define HCT_COMPARISON_MODE_FLOAT 3u
+#define HCT_COMPARISON_MODE_BOOL 4u
+#define HCT_COMPARISON_MODE_EXACT_STATUS 5u
+
+#define HCT_NULL_ARG_INPUT0_BIT (1 << 0)
+#define HCT_NULL_ARG_INPUT1_BIT (1 << 1)
+#define HCT_NULL_ARG_INPUT2_BIT (1 << 2)
+#define HCT_NULL_ARG_PARAMS_BIT (1 << 3)
+#define HCT_NULL_ARG_OUTPUT_BIT (1 << 4)
+
 /* Kernel IDs sent by the host in CASE_META -- must match assets/kernel_registry.yaml
  * (the Python-side single source of truth) and helia_core_tester/perf_stream/kernel_registry.py. */
 #define HCT_KERNEL_ID_ABS_S8 1u
@@ -253,6 +265,11 @@ static hctp_status_t write_u32(uint8_t *buffer, size_t capacity, size_t *offset,
     return HCTP_STATUS_OK;
 }
 
+static hctp_status_t write_i32(uint8_t *buffer, size_t capacity, size_t *offset, int32_t value)
+{
+    return write_u32(buffer, capacity, offset, (uint32_t)value);
+}
+
 static hctp_status_t write_u64(uint8_t *buffer, size_t capacity, size_t *offset, uint64_t value)
 {
     if (*offset + 8u > capacity)
@@ -335,6 +352,23 @@ static hct_server_blob_t *find_blob_by_role(hct_server_session_t *session, uint8
 static uint8_t *blob_ptr(hct_server_session_t *session, const hct_server_blob_t *blob)
 {
     return &session->case_arena[blob->arena_offset];
+}
+
+static bool expects_exact_status(const hct_server_session_t *session)
+{
+    return session->comparison_mode == HCT_COMPARISON_MODE_EXACT_STATUS;
+}
+
+#ifndef HCT_HOST_ABS_ONLY
+static bool null_arg_requested(const hct_server_session_t *session, int32_t bit)
+{
+    return (session->null_arg_mask & bit) != 0;
+}
+#endif
+
+static bool kernel_status_is_fatal(const hct_server_session_t *session, arm_cmsis_nn_status status)
+{
+    return (status != ARM_CMSIS_NN_SUCCESS) && !expects_exact_status(session);
 }
 
 static hctp_status_t append_frame(hct_server_session_t *session, const uint8_t *frame_bytes, size_t frame_length)
@@ -447,7 +481,7 @@ static hctp_status_t queue_correctness_output(hct_server_session_t *session)
     size_t cursor = 0u;
     uint32_t checksum = 0u;
 
-    write_u32(payload, sizeof(payload), &offset, 0u);
+    write_i32(payload, sizeof(payload), &offset, session->last_kernel_status);
     if (queue_frame(session, HCTP_MSG_CORRECTNESS_RESULT, payload, offset) != HCTP_STATUS_OK) return HCTP_STATUS_TRUNCATED_FRAME;
 
     offset = 0u;
@@ -639,6 +673,7 @@ static void reset_case_buffers(hct_server_session_t *session)
     session->scratch_offset = 0u;
     session->case_arena_used_bytes = 0u;
     session->output_length = 0u;
+    session->last_kernel_status = ARM_CMSIS_NN_SUCCESS;
     session->pad_offset_h = 0;
     session->pad_offset_w = 0;
     session->output_n = 0;
@@ -648,6 +683,7 @@ static void reset_case_buffers(hct_server_session_t *session)
     session->axis_c = 0;
     session->axis = 0;
     session->needs_rescale = 0;
+    session->null_arg_mask = 0;
     memset(session->case_arena, 0, sizeof(session->case_arena));
 }
 
@@ -707,6 +743,7 @@ static hctp_status_t parse_scalar(hct_server_session_t *session, const char *nam
     else if (strcmp(name, "axis_c") == 0) session->axis_c = value;
     else if (strcmp(name, "axis") == 0) session->axis = value;
     else if (strcmp(name, "needs_rescale") == 0) session->needs_rescale = value;
+    else if (strcmp(name, "null_arg_mask") == 0) session->null_arg_mask = value;
     else return HCTP_STATUS_OK;
     return HCTP_STATUS_OK;
 }
@@ -3611,49 +3648,63 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
         case HCT_KERNEL_ID_BROADCAST_TO_S16:
         {
             cmsis_nn_broadcast_to_params params;
-            int32_t input_shape[4] = {1, 1, 1, 1};
-            int32_t output_shape[4] = {1, 1, 1, 1};
+            int32_t input_shape[9] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
+            int32_t output_shape[9] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
             int32_t rank;
+            const cmsis_nn_broadcast_to_params *params_ptr;
             if (input0 == NULL || meta == NULL)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             rank = meta[0];
-            if (rank < 1 || rank > 4)
+            if (!expects_exact_status(session) && (rank < 1 || rank > 4))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             hct_fill_shape_from_blob(input0, rank, input_shape, true);
             hct_fill_output_shape_from_session(session, rank, output_shape);
-            session->output_length = hct_shape_product(output_shape, rank) * hct_dtype_size_bytes(input0->dtype);
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!expects_exact_status(session))
             {
-                return ARM_CMSIS_NN_ARG_ERROR;
+                session->output_length = hct_shape_product(output_shape, rank) * hct_dtype_size_bytes(input0->dtype);
+                if (session->output_length > sizeof(session->output_buffer))
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
             }
             params.rank = rank;
             params.input_shape = input_shape;
             params.output_shape = output_shape;
+            params_ptr = null_arg_requested(session, HCT_NULL_ARG_PARAMS_BIT) ? NULL : &params;
             if (session->expected_kernel_id == HCT_KERNEL_ID_BROADCAST_TO_S16)
             {
-                return arm_broadcast_to_s16((const int16_t *)blob_ptr(session, input0), &params, (int16_t *)session->output_buffer);
+                return arm_broadcast_to_s16(
+                    null_arg_requested(session, HCT_NULL_ARG_INPUT0_BIT) ? NULL : (const int16_t *)blob_ptr(session, input0),
+                    params_ptr,
+                    null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int16_t *)session->output_buffer
+                );
             }
-            return arm_broadcast_to_s8((const int8_t *)blob_ptr(session, input0), &params, (int8_t *)session->output_buffer);
+            return arm_broadcast_to_s8(
+                null_arg_requested(session, HCT_NULL_ARG_INPUT0_BIT) ? NULL : (const int8_t *)blob_ptr(session, input0),
+                params_ptr,
+                null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int8_t *)session->output_buffer
+            );
         }
 
         case HCT_KERNEL_ID_DYNAMIC_UPDATE_SLICE_S8:
         case HCT_KERNEL_ID_DYNAMIC_UPDATE_SLICE_S16:
         {
             cmsis_nn_dynamic_update_slice_params params;
-            int32_t operand_shape[4] = {1, 1, 1, 1};
-            int32_t update_shape[4] = {1, 1, 1, 1};
-            int32_t operand_strides[4] = {0, 0, 0, 0};
+            int32_t operand_shape[9] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
+            int32_t update_shape[9] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
+            int32_t operand_strides[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
             int32_t rank;
+            const cmsis_nn_dynamic_update_slice_params *params_ptr;
             if (input0 == NULL || input1 == NULL || input2 == NULL || meta == NULL)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             rank = meta[0];
-            if (rank < 1 || rank > 4)
+            if (!expects_exact_status(session) && (rank < 1 || rank > 4))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3666,24 +3717,32 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             params.operand_size = (int32_t)hct_blob_element_count(input0);
             params.update_size = (int32_t)hct_blob_element_count(input1);
             params.operand_strides = operand_strides;
-            session->output_length = input0->byte_length;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!expects_exact_status(session))
             {
-                return ARM_CMSIS_NN_ARG_ERROR;
+                session->output_length = input0->byte_length;
+                if (session->output_length > sizeof(session->output_buffer))
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
             }
+            params_ptr = null_arg_requested(session, HCT_NULL_ARG_PARAMS_BIT) ? NULL : &params;
             if (session->expected_kernel_id == HCT_KERNEL_ID_DYNAMIC_UPDATE_SLICE_S16)
             {
-                return arm_dynamic_update_slice_s16((const int16_t *)blob_ptr(session, input0),
-                                                    (const int16_t *)blob_ptr(session, input1),
-                                                    (const int32_t *)blob_ptr(session, input2),
-                                                    &params,
-                                                    (int16_t *)session->output_buffer);
+                return arm_dynamic_update_slice_s16(
+                    null_arg_requested(session, HCT_NULL_ARG_INPUT0_BIT) ? NULL : (const int16_t *)blob_ptr(session, input0),
+                    null_arg_requested(session, HCT_NULL_ARG_INPUT1_BIT) ? NULL : (const int16_t *)blob_ptr(session, input1),
+                    null_arg_requested(session, HCT_NULL_ARG_INPUT2_BIT) ? NULL : (const int32_t *)blob_ptr(session, input2),
+                    params_ptr,
+                    null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int16_t *)session->output_buffer
+                );
             }
-            return arm_dynamic_update_slice_s8((const int8_t *)blob_ptr(session, input0),
-                                               (const int8_t *)blob_ptr(session, input1),
-                                               (const int32_t *)blob_ptr(session, input2),
-                                               &params,
-                                               (int8_t *)session->output_buffer);
+            return arm_dynamic_update_slice_s8(
+                null_arg_requested(session, HCT_NULL_ARG_INPUT0_BIT) ? NULL : (const int8_t *)blob_ptr(session, input0),
+                null_arg_requested(session, HCT_NULL_ARG_INPUT1_BIT) ? NULL : (const int8_t *)blob_ptr(session, input1),
+                null_arg_requested(session, HCT_NULL_ARG_INPUT2_BIT) ? NULL : (const int32_t *)blob_ptr(session, input2),
+                params_ptr,
+                null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int8_t *)session->output_buffer
+            );
         }
 
         case HCT_KERNEL_ID_STRIDED_SLICE_S8:
@@ -3985,7 +4044,9 @@ static uint32_t resolve_iterations(hct_server_session_t *session)
         const uint32_t start = dwt_cycles();
         for (index = 0u; index < iterations; ++index)
         {
-            if (run_kernel_once(session) != ARM_CMSIS_NN_SUCCESS)
+            arm_cmsis_nn_status status = run_kernel_once(session);
+            session->last_kernel_status = status;
+            if (kernel_status_is_fatal(session, status))
             {
                 return 1u;
             }
@@ -4232,9 +4293,15 @@ static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint
 
 static hctp_status_t handle_run_correctness(hct_server_session_t *session)
 {
-    if (run_kernel_once(session) != ARM_CMSIS_NN_SUCCESS)
+    arm_cmsis_nn_status status = run_kernel_once(session);
+    session->last_kernel_status = status;
+    if (kernel_status_is_fatal(session, status))
     {
         return HCTP_STATUS_INVALID_ARGUMENT;
+    }
+    if (expects_exact_status(session))
+    {
+        session->output_length = 0u;
     }
     session->state = HCT_SERVER_STATE_WAIT_CORRECTNESS_ACK;
     return queue_correctness_output(session);
@@ -4254,7 +4321,9 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
         pmu_prepare_group(group);
         for (warmup = 0u; warmup < session->planned_warmups; ++warmup)
         {
-            if (run_kernel_once(session) != ARM_CMSIS_NN_SUCCESS)
+            arm_cmsis_nn_status status = run_kernel_once(session);
+            session->last_kernel_status = status;
+            if (kernel_status_is_fatal(session, status))
             {
                 return HCTP_STATUS_INVALID_ARGUMENT;
             }
@@ -4268,7 +4337,9 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
             start = dwt_cycles();
             for (iter = 0u; iter < iterations; ++iter)
             {
-                if (run_kernel_once(session) != ARM_CMSIS_NN_SUCCESS)
+                arm_cmsis_nn_status status = run_kernel_once(session);
+                session->last_kernel_status = status;
+                if (kernel_status_is_fatal(session, status))
                 {
                     pmu_stop_group();
                     return HCTP_STATUS_INVALID_ARGUMENT;

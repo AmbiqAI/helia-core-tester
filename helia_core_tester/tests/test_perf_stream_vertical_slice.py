@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -167,6 +168,29 @@ def test_correctness_failure_still_completes_session_instead_of_deadlocking(tmp_
     assert result.cases[0].statistics.median_cycles > 0
     assert "TX:RUN_PERFORMANCE" in result.protocol_trace
     assert result.protocol_trace[-1] == "RX:SESSION_COMPLETE"
+
+
+def test_exact_status_mode_ignores_output_arrays_and_uses_kernel_status(tmp_path: Path) -> None:
+    bundle_summary = build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path)
+    manifest_path = bundle_summary.manifest_path
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["correctness_comparison"] = {
+        "mode": "exact_status",
+        "expected_status": 0,
+        "expected_status_name": "ARM_CMSIS_NN_SUCCESS",
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8", newline="\n")
+
+    expected_output_path = manifest_path.parent / "blobs" / "expected_output.bin"
+    expected_output_path.write_bytes(b"\x7f")
+
+    bundle = load_case_bundle(manifest_path)
+    result = HostSession(FakeTargetTransport()).run(bundle)
+
+    assert result.comparison.passed is True
+    assert result.comparison.mode == "exact_status"
+    assert len(result.output_bytes) > 1
+    assert "RX:CORRECTNESS_RESULT" in result.protocol_trace
 
 
 def test_deliberate_performance_regression_is_detected() -> None:

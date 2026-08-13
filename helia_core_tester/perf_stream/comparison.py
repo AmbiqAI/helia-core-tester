@@ -57,3 +57,19 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
         max_abs_diff=max_abs_diff,
         mode=mode,
     )
+
+
+def compare_status(actual_status: int, descriptor_or_comparison: dict[str, Any]) -> ComparisonResult:
+    comparison = descriptor_or_comparison
+    mode = str(comparison["mode"])
+    if mode != "exact_status":
+        raise ValueError(f"Unsupported status comparison mode: {mode}")
+
+    expected_status = int(comparison["expected_status"])
+    mismatch_count = 0 if int(actual_status) == expected_status else 1
+    return ComparisonResult(
+        passed=mismatch_count == 0,
+        mismatch_count=mismatch_count,
+        max_abs_diff=float(abs(int(actual_status) - expected_status)),
+        mode=mode,
+    )

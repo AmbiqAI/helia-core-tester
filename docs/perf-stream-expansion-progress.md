@@ -1092,3 +1092,63 @@ correct; the bug was in golden-data generation.
   **`convolve_grouped_conv_case_01_s8`** (grouped-conv-specific correctness issue after
   first-slice truncation) and **`strided_slice_case1_whole_slab_s8`** (empty
   `expected_output[]` despite a non-empty declared output shape).
+
+## Phase 7a: kernel-status ARG_ERROR bridging (COMPLETE)
+
+- Bridged **32 previously-skipped generated invalid-argument cases** whose standalone
+  contract is `HELIA_VALIDATE_EXPECTED_STATUS(..., ARM_CMSIS_NN_ARG_ERROR)` instead of a
+  golden output-array comparison:
+  - **30 data-movement/indexing cases** across BroadcastTo, DynamicUpdateSlice, GatherND,
+    and TransposeTimeBatch invalid/null/rank coverage
+  - **2 ActivationFunctions / PReLU** output-dims mismatch cases
+- **New host comparison mode:** added `exact_status` alongside `exact_int` /
+  `tolerant_int` / `float` / `bool`. The generated-test bridge now emits
+  `{"mode": "exact_status", "expected_status": -1, "expected_status_name": "ARM_CMSIS_NN_ARG_ERROR"}`
+  for these cases, and `HostSession.run_many()` compares the returned kernel status code
+  instead of a streamed output tensor when that mode is active.
+- **Wire-protocol change (semantic, no new message types):**
+  - `CORRECTNESS_RESULT`'s existing single 32-bit payload field used to be a hardcoded `0`
+    placeholder that the host ignored.
+  - It now carries the real signed `arm_cmsis_nn_status` returned by `run_kernel_once()`.
+  - The rest of the flow shape is unchanged: correctness still emits
+    `CORRECTNESS_RESULT -> OUTPUT_BEGIN -> OUTPUT_END -> CORRECTNESS_ACK -> RUN_PERFORMANCE`.
+    For `exact_status` cases, the firmware intentionally sends a zero-length output stream
+    (correctness is status-based, so no output bytes are needed).
+- **Firmware session behavior changes:**
+  - `handle_run_correctness()` no longer collapses every non-success kernel return into a
+    session-level `ERROR` when `comparison_mode == exact_status`; it reports the real status
+    as a per-case result instead.
+  - `resolve_iterations()` / `handle_run_performance()` likewise continue through
+    non-success returns in `exact_status` mode so these cases still execute the normal
+    performance cycle and produce `SAMPLE_RESULT`s.
+  - Added `null_arg_mask` plumbing for the real NULL-pointer coverage cases so the firmware
+    still streams the usual blobs/metadata but passes genuine `NULL` pointers into
+    `arm_broadcast_to_*()` / `arm_dynamic_update_slice_*()` where the standalone harness
+    does (input/update/start_indices/params/output as applicable).
+  - Rank-0 / rank-9 invalid-params coverage now reaches the real CMSIS-NN kernel call in
+    `exact_status` mode instead of being rejected early by perf-stream-side rank guards.
+- **Generated-test bridge changes:**
+  - `_build_data_movement_case()` now bridges these invalid-status cases instead of raising
+    `UnsupportedGeneratedTestError`, reusing the existing BroadcastTo / DynamicUpdateSlice /
+    GatherND / Transpose builders and only swapping in `exact_status` comparison metadata
+    plus `null_arg_mask` where needed.
+  - `_build_prelu_case()` now does the same for the 2 PReLU output-mismatch descriptors.
+  - Status-only cases emit an empty host-only `expected_output` blob (0 bytes) so the
+    manifest stays structurally consistent without pretending the standalone dummy
+    `expected_output[] = {0}` sentinel is a real golden tensor.
+
+### Verification
+
+- **Targeted host-side pytest / compile checks:** `26 passed`
+  - `test_generated_test_bridge_data_movement_phase3e.py`
+  - `test_generated_test_bridge_phase6.py`
+  - `test_perf_stream_vertical_slice.py`
+  - `test_perf_stream_firmware_session.py`
+  - `test_perf_stream_c_wire_compat.py`
+- **Bridge inventory check:** one-off Python verification confirmed **32/32** requested
+  status-assertion cases now build into CaseBundles successfully, all with
+  `correctness_comparison.mode == "exact_status"` and expected status `-1`.
+- **Full pytest baseline:** `302 passed, 11 failed` -- same 11 pre-existing unrelated
+  failures as before (`test_descriptor_naming_contract`, 4 float-descriptor-support
+  failures, `test_generation_reporting`, 4 squared-difference-generation failures, and
+  `test_template_standalone_contract`).

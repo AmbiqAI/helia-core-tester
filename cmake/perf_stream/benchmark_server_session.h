@@ -70,6 +70,7 @@ typedef struct
     uint32_t expected_kernel_id;
     char current_case_id[HCT_SERVER_MAX_CASE_ID];
     uint8_t comparison_mode;
+    int32_t last_kernel_status;
     int32_t tolerance;
     uint32_t atol_q16;
     uint32_t rtol_q16;
@@ -195,6 +196,13 @@ typedef struct
     int32_t axis_c;
     int32_t axis;
     int32_t needs_rescale;
+    /* Phase 7a invalid-argument status-assertion coverage reuses the normal streamed blobs
+     * but sometimes must still pass a real NULL pointer into the kernel, matching the
+     * standalone generated harness exactly (BroadcastTo/DynamicUpdateSlice null-input/
+     * null-update/null-params/null-output cases). null_arg_mask selects those forced-NULL
+     * pointer positions: bit0=input_0/operand, bit1=input_1/update, bit2=input_2/
+     * start_indices, bit3=params struct, bit4=output buffer pointer. */
+    int32_t null_arg_mask;
     /* FullyConnectedFunctions BatchMatMul scalar params -- see parse_scalar() and
      * run_batch_matmul_once() in benchmark_server_session.c. Reuses input_offset (lhs
      * zero point), filter_offset (rhs zero point), output_offset, activation_min/max,
