@@ -70,7 +70,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "ActivationFunctions/hard_swish_compat.yaml",
         "ActivationFunctions/hard_swish",
     ),
-    "PReLU": _spec("PReLU", "ActivationFunctions", "prelu", "OpPReLU", "ActivationFunctions/prelu.yaml", "ActivationFunctions/prelu"),
+    "PReLU": _spec(
+        "PReLU",
+        "ActivationFunctions",
+        "prelu",
+        "OpPReLU",
+        descriptor_relpaths=("ActivationFunctions/prelu.yaml", "ActivationFunctions/prelu_float.yaml"),
+        template_relpath="ActivationFunctions/prelu",
+    ),
     "PReLUScalar": _spec(
         "PReLUScalar",
         "ActivationFunctions",
@@ -101,7 +108,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "ActivationFunctions/hard_swish_precise.yaml",
         "ActivationFunctions/hard_swish",
     ),
-    "Abs": _spec("Abs", "BasicMathFunctions", "abs", "OpAbs", "BasicMathFunctions/abs.yaml", "BasicMathFunctions/abs"),
+    "Abs": _spec(
+        "Abs",
+        "BasicMathFunctions",
+        "abs",
+        "OpAbs",
+        descriptor_relpaths=("BasicMathFunctions/abs.yaml", "BasicMathFunctions/abs_float.yaml"),
+        template_relpath="BasicMathFunctions/abs",
+    ),
     "Add": _spec(
         "Add",
         "BasicMathFunctions",

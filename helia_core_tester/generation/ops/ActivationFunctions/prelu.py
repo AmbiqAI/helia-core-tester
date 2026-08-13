@@ -92,9 +92,9 @@ class OpPReLU(OperationBase):
         from helia_core_tester.generation.utils.litert_builder import build_prelu_op
 
         activation_dtype = self.desc.get("activation_dtype", "S8")
-        dtype_map = {"S8": "int8", "S16": "int16"}
+        dtype_map = {"S8": "int8", "S16": "int16", "FP32": "float32", "FP16": "float16"}
         if activation_dtype not in dtype_map:
-            raise NotImplementedError(f"Unsupported PReLU dtype: {activation_dtype} (only S8/S16 supported)")
+            raise NotImplementedError(f"Unsupported PReLU dtype: {activation_dtype}")
         litert_dtype = dtype_map[activation_dtype]
 
         input_shape = tuple(self.desc["input_shape"])
@@ -102,23 +102,7 @@ class OpPReLU(OperationBase):
         self._validate_broadcast_support(input_shape, alpha_shape)
 
         # Get alpha values from descriptor
-        alpha_values = None
-        if "alpha" in self.desc:
-            alpha_scalar = self.desc["alpha"]
-            if isinstance(alpha_scalar, (int, float)):
-                alpha_values = [float(alpha_scalar)]
-            elif isinstance(alpha_scalar, list):
-                alpha_values = alpha_scalar
-
-        if alpha_values is None and "hint" in self.desc:
-            extras = self.desc.get("hint", {}).get("extras", {})
-            if "alpha_values" in extras:
-                alpha_list = extras["alpha_values"]
-                if isinstance(alpha_list, list) and len(alpha_list) > 0:
-                    if isinstance(alpha_list[0], list):
-                        alpha_values = [item for sublist in alpha_list for item in sublist]
-                    else:
-                        alpha_values = alpha_list
+        alpha_values = self._descriptor_alpha_values()
 
         # Ensure alpha values match alpha_shape
         _ = self._prepare_alpha_values(tuple(alpha_shape), alpha_values)
@@ -145,13 +129,29 @@ class OpPReLU(OperationBase):
             return {
                 'kernel_fn': 'arm_prelu_s8',
                 'input_c_type': 'int8_t',
-                'output_c_type': 'int8_t'
+                'output_c_type': 'int8_t',
+                'float_kernel': False,
             }
         elif activation_dtype == 'S16':
             return {
                 'kernel_fn': 'arm_prelu_s16',
                 'input_c_type': 'int16_t',
-                'output_c_type': 'int16_t'
+                'output_c_type': 'int16_t',
+                'float_kernel': False,
+            }
+        elif activation_dtype == 'FP32':
+            return {
+                'kernel_fn': 'arm_prelu_f32',
+                'input_c_type': 'float',
+                'output_c_type': 'float',
+                'float_kernel': True,
+            }
+        elif activation_dtype == 'FP16':
+            return {
+                'kernel_fn': 'arm_prelu_f16',
+                'input_c_type': 'float16_t',
+                'output_c_type': 'float16_t',
+                'float_kernel': True,
             }
         else:
             raise NotImplementedError(f"Unsupported PReLU dtype: {activation_dtype} (only S8/S16 supported)")
@@ -280,12 +280,110 @@ class OpPReLU(OperationBase):
         out = np.clip(out, -32768, 32767).astype(np.int16)
         return out
 
+    def _descriptor_alpha_values(self):
+        """Alpha values as authored in the descriptor, or None for the default ramp."""
+        alpha_values = None
+        if "alpha" in self.desc:
+            alpha_scalar = self.desc["alpha"]
+            if isinstance(alpha_scalar, (int, float)):
+                alpha_values = [float(alpha_scalar)]
+            elif isinstance(alpha_scalar, list):
+                alpha_values = alpha_scalar
+        if alpha_values is None and "hint" in self.desc:
+            extras = self.desc.get("hint", {}).get("extras", {})
+            if "alpha_values" in extras:
+                alpha_list = extras["alpha_values"]
+                if isinstance(alpha_list, list) and len(alpha_list) > 0:
+                    if isinstance(alpha_list[0], list):
+                        alpha_values = [item for sublist in alpha_list for item in sublist]
+                    else:
+                        alpha_values = alpha_list
+        return alpha_values
+
+    def _generate_float_c_files(self, output_dir: Path, kernel_info: Dict[str, str]) -> None:
+        """
+        Generate C and H files for the float PReLU kernels.
+
+        arm_prelu_f32/f16 take (input_dims, input, alpha_dims, alpha,
+        output_dims, output) with no quantization parameters; alpha and the
+        golden output are derived from the descriptor with numpy (PReLU is
+        exact in the working precision, so no interpreter is needed).
+        """
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        name = self.desc['name']
+        float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+
+        input_shape = tuple(self.desc["input_shape"])
+        alpha_shape = self._resolved_alpha_shape()
+        alpha = self._prepare_alpha_values(alpha_shape, self._descriptor_alpha_values()).astype(float_dtype)
+
+        builder = TemplateContextBuilder()
+        input_dims = builder.nhwc_to_cmsis_dims(input_shape)
+        output_dims = builder.nhwc_to_cmsis_dims(input_shape)
+        if len(alpha_shape) == 1:
+            alpha_dims = {'n': 1, 'h': 1, 'w': 1, 'c': int(alpha_shape[0])}
+        else:
+            alpha_dims = builder.nhwc_to_cmsis_dims(alpha_shape)
+
+        rng_state = self.rng.__getstate__()
+        self.rng = np.random.default_rng(self.seed)
+        input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(float_dtype)
+        self.rng.__setstate__(rng_state)
+
+        alpha_bc = alpha.reshape(
+            (alpha_dims['n'], alpha_dims['h'], alpha_dims['w'], alpha_dims['c'])
+        )
+        output_data = np.where(input_q >= 0, input_q, input_q * alpha_bc).astype(float_dtype)
+
+        context = {
+            'name': name,
+            'prefix': name,
+            'input_dims': input_dims,
+            'alpha_dims': alpha_dims,
+            'output_dims': output_dims,
+            'input_offset': 0,
+            'alpha_offset': 0,
+            'output_offset': 0,
+            'output_mult_alpha': 0,
+            'output_shift_alpha': 0,
+            'output_mult_identity': 0,
+            'output_shift_identity': 0,
+            'input_data_array': builder.format_array_as_c_literal(input_q),
+            'alpha_array': builder.format_array_as_c_literal(alpha),
+            'expected_output_array': builder.format_array_as_c_literal(output_data),
+            'input_dtype': kernel_info["input_c_type"],
+            'output_dtype': kernel_info["output_c_type"],
+            'alpha_dtype': kernel_info["input_c_type"],
+            'kernel_fn': kernel_info["kernel_fn"],
+            'float_kernel': True,
+            'validation_mode': 'float',
+        }
+        cmake_context = {
+            'name': name,
+            'operator': self.desc.get('operator', 'PReLU'),
+            'operator_name': 'prelu',
+        }
+        self._write_op_outputs(
+            output_dir,
+            "prelu",
+            "ActivationFunctions/prelu/prelu.h.j2",
+            "ActivationFunctions/prelu/prelu.c.j2",
+            context,
+            cmake_context,
+        )
+
     def generate_c_files(self, output_dir: Path) -> None:
         """
         Generate C and H files from templates for PReLU operation.
         """
         if self._is_arg_error_case():
             self._generate_arg_error_c_files(output_dir)
+            return
+
+        float_kernel_info = self._select_cmsis_prelu_kernel()
+        if float_kernel_info.get('float_kernel'):
+            self._generate_float_c_files(output_dir, float_kernel_info)
             return
 
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
