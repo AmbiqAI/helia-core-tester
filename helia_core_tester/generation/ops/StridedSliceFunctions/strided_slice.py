@@ -192,41 +192,37 @@ class OpStridedSlice(OperationBase):
         if output_shape is not None:
             output_shape = tuple(output_shape)
         
+        # The TFLiteConverter's full-integer-quantization path silently concretizes
+        # any batch dimension > 1 down to 1 (confirmed: a Keras model built with
+        # batch_size=2 still reports interpreter input/output shape batch=1 after
+        # int8 conversion), so op_tensors' LiteRT-reported shape cannot be trusted
+        # whenever the descriptor's own declared input_shape asked for a bigger
+        # leading (batch) dimension than what actually survived conversion. This
+        # previously caused strided_slice_case1_whole_slab_s8's golden generation
+        # (input_shape=[2,3,4,2], begin=[1,0,0,0] targeting the "2nd of 2" batch
+        # row) to run against a collapsed 1-row array where index 1 no longer
+        # existed, producing an internally-inconsistent empty expected_output
+        # array despite a non-empty declared output_dims. Detect that mismatch and
+        # fall back to computing golden data directly via numpy on the descriptor's
+        # true full-size input (bypassing the TFLite interpreter/converter
+        # entirely for those cases only); every other case's behavior is
+        # byte-for-byte unchanged. See docs/perf-stream-expansion-progress.md
+        # Phase 7b.
+        descriptor_input_shape = tuple(self.desc.get('input_shape', input_shape))
+        batch_collapsed = (
+            input_shape is not None
+            and len(descriptor_input_shape) == len(input_shape)
+            and descriptor_input_shape[0] > input_shape[0]
+        )
+        if batch_collapsed:
+            input_shape = descriptor_input_shape
+        
         builder = TemplateContextBuilder()
         
         # Convert shapes to CMSIS dims
         input_dims = builder.nhwc_to_cmsis_dims(input_shape)
         
-        # Handle shrink_axis_mask: when dimensions are shrunk, TFLite reduces the rank
-        # but CMSIS-NN still expects 4D, so we need to reconstruct the 4D shape
         shrink_axis_mask = self.desc.get('shrink_axis_mask', 0)
-        if shrink_axis_mask != 0:
-            # Reconstruct 4D output shape from reduced-rank TFLite output
-            # by inserting size-1 dimensions where axes were shrunk
-            output_shape_4d = list(input_shape)  # Start with input shape
-            output_rank = len(output_shape)
-            input_rank = len(input_shape)
-            
-            # Determine which dimensions were shrunk
-            shrunk_dims = []
-            for i in range(min(4, input_rank)):
-                if shrink_axis_mask & (1 << i):
-                    shrunk_dims.append(i)
-                    output_shape_4d[i] = 1  # Shrunk dimension becomes size 1
-            
-            # Now map the TFLite output shape back to 4D
-            # TFLite output has reduced rank, we need to map it correctly
-            output_idx = 0
-            for i in range(4):
-                if i not in shrunk_dims:
-                    if output_idx < output_rank:
-                        output_shape_4d[i] = output_shape[output_idx]
-                        output_idx += 1
-                # else: already set to 1 above
-            
-            output_dims = builder.nhwc_to_cmsis_dims(tuple(output_shape_4d))
-        else:
-            output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         
         # Extract begin, end, and strides from descriptor
         begin = self.desc.get('begin', [0, 0, 0, 0])
@@ -254,6 +250,51 @@ class OpStridedSlice(OperationBase):
         # Convert to CMSIS dims format (NHWC -> N, H, W, C)
         begin_dims = builder.nhwc_to_cmsis_dims(begin_normalized[:4])
         stride_dims = builder.nhwc_to_cmsis_dims(strides[:4])
+        
+        if batch_collapsed:
+            # The TFLite-reported output_shape is equally untrustworthy here (it
+            # was computed against the collapsed 1-row input) -- derive the true
+            # full-rank output shape directly from begin/end/strides against the
+            # descriptor's real input_shape instead. shrink_axis_mask is not
+            # combined with batch-collapse in any current descriptor; if that
+            # combination is ever added, this will need extending.
+            end_for_shape = list(end) if end is not None else list(input_shape)
+            while len(end_for_shape) < len(input_shape):
+                end_for_shape.append(input_shape[len(end_for_shape)])
+            output_shape_4d = tuple(
+                len(range(begin_normalized[i], end_for_shape[i], strides[i]))
+                for i in range(len(input_shape))
+            )
+            output_dims = builder.nhwc_to_cmsis_dims(output_shape_4d)
+        elif shrink_axis_mask != 0:
+            # Handle shrink_axis_mask: when dimensions are shrunk, TFLite reduces the rank
+            # but CMSIS-NN still expects 4D, so we need to reconstruct the 4D shape
+            # Reconstruct 4D output shape from reduced-rank TFLite output
+            # by inserting size-1 dimensions where axes were shrunk
+            output_shape_4d = list(input_shape)  # Start with input shape
+            output_rank = len(output_shape)
+            input_rank = len(input_shape)
+            
+            # Determine which dimensions were shrunk
+            shrunk_dims = []
+            for i in range(min(4, input_rank)):
+                if shrink_axis_mask & (1 << i):
+                    shrunk_dims.append(i)
+                    output_shape_4d[i] = 1  # Shrunk dimension becomes size 1
+            
+            # Now map the TFLite output shape back to 4D
+            # TFLite output has reduced rank, we need to map it correctly
+            output_idx = 0
+            for i in range(4):
+                if i not in shrunk_dims:
+                    if output_idx < output_rank:
+                        output_shape_4d[i] = output_shape[output_idx]
+                        output_idx += 1
+                # else: already set to 1 above
+            
+            output_dims = builder.nhwc_to_cmsis_dims(tuple(output_shape_4d))
+        else:
+            output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         
         # Generate input data and quantize when required.
         rng_state = self.rng.__getstate__()
@@ -298,7 +339,14 @@ class OpStridedSlice(OperationBase):
 
         self.rng.__setstate__(rng_state)
 
-        if kernel_info["input_c_type"] == "float16_t":
+        if kernel_info["input_c_type"] == "float16_t" or batch_collapsed:
+            # StridedSlice is pure data movement (no rescale -- output shares the
+            # input's quantization scale/zero-point), so the golden output can be
+            # computed directly via numpy slicing without invoking a TFLite
+            # interpreter. Used for FP16 always (no reliable FP16 activation path
+            # in the interpreter), and for batch_collapsed cases where the
+            # interpreter's own compiled model no longer has the real batch size
+            # to slice against (see the batch_collapsed comment above).
             end_resolved = list(end) if end is not None else list(input_shape)
             while len(end_resolved) < len(input_shape):
                 end_resolved.append(input_shape[len(end_resolved)])
@@ -312,7 +360,14 @@ class OpStridedSlice(OperationBase):
                     i for i in range(len(input_shape)) if shrink_axis_mask & (1 << i)
                 )
                 output_data = np.squeeze(output_data, axis=squeeze_axes)
-            output_data = np.array(output_data).astype(np.float16)
+            if kernel_info["output_c_type"] == "float16_t":
+                output_data = np.array(output_data).astype(np.float16)
+            elif kernel_info["output_c_type"] == "int32_t":
+                output_data = np.array(output_data).astype(np.int32)
+            elif kernel_info["output_c_type"] == "int16_t":
+                output_data = np.array(output_data).astype(np.int16)
+            else:  # int8_t
+                output_data = np.array(output_data).astype(np.int8)
         else:
             # Run inference using LiteRT interpreter
             interpreter = self.load_litert_interpreter(str(tflite_path))

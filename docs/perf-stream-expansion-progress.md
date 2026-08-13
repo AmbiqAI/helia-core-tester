@@ -1152,3 +1152,75 @@ correct; the bug was in golden-data generation.
   failures as before (`test_descriptor_naming_contract`, 4 float-descriptor-support
   failures, `test_generation_reporting`, 4 squared-difference-generation failures, and
   `test_template_standalone_contract`).
+
+## Phase 7b: strided_slice_case1_whole_slab_s8 empty-golden generator bug fix
+
+**Symptom:** `strided_slice_case1_whole_slab_s8`'s generated header declared a non-empty
+`output_dims` of `(1,3,4,2)` but an entirely empty `expected_output[]` array, tripping the
+generated-test bridge's internal-consistency guard (`UnsupportedGeneratedTestError:
+"...internally inconsistent and cannot be bridged safely."`).
+
+**Root cause:** the descriptor declares `input_shape=[2,3,4,2]`, `begin=[1,0,0,0]`,
+`end=[2,3,4,2]` -- i.e. it explicitly slices out the "2nd of 2" batch rows. But
+`strided_slice.py`'s golden-generation path builds its Keras model via
+`tf.keras.Input(shape=..., batch_size=2)` and converts it with
+`TFLiteConverter` + full-integer (`Optimize.DEFAULT` + int8 input/output) quantization.
+That conversion path silently concretizes any batch dimension > 1 down to `1`
+(confirmed directly: a Keras model built with `batch_size=2` still reports interpreter
+input/output shape `batch=1` after int8 conversion, even though the *uncompiled* Keras
+model's own `output_shape` correctly resolves to `(1,3,4,2)`). The generator was
+building its input data array and calling `interpreter.invoke()` against this collapsed
+1-row array, while `begin=1` targeted row index 1 -- which no longer existed post-collapse
+-- yielding a real 0-row output. Two other existing (previously "passing") descriptors,
+`strided_slice_case2_batch_slice_{s8,s16}` and `strided_slice_batch_height_s32`, hit the
+exact same collapse, but happened not to visibly break because their batch-dimension
+begin/end/stride only ever selects index 0 (a no-op against the collapsed 1-row domain);
+their *golden output for that no-longer-really-multi-batch data* was still technically
+self-consistent, just not actually exercising real multi-row batch slicing as the
+descriptors intended.
+
+**Fix (`helia_core_tester/generation/ops/StridedSliceFunctions/strided_slice.py`):**
+detect exactly this batch-collapse condition (`descriptor input_shape[0] >
+LiteRT-reported input_shape[0]`), and for only the affected descriptors:
+- Use the descriptor's own declared `input_shape` (not the LiteRT/interpreter-derived
+  one) for `input_dims` and for generating the real, correctly-sized input data array.
+- Compute the golden `expected_output` directly via numpy slicing against the true
+  begin/end/strides (matching the pattern already used for the FP16 path, which never
+  goes through the TFLite interpreter at all), instead of calling
+  `interpreter.invoke()` against the collapsed model.
+- Derive `output_dims` directly from the resulting slice shape rather than trusting the
+  (also-collapsed) LiteRT-reported output shape.
+
+All 11 *unaffected* descriptors (batch already ==1, or batch>1 but only ever slicing
+index 0) are **completely untouched** -- verified byte-for-byte identical generated
+headers before/after the fix. Only the 4 genuinely-affected descriptors changed:
+`strided_slice_case1_whole_slab_s8` (now correctly non-empty, `n=2` input / `n=1`
+output), and `strided_slice_case2_batch_slice_{s8,s16}` / `strided_slice_batch_height_s32`
+(now correctly `n=3` input reflecting their true 3-row batch, instead of the previously
+silently-collapsed `n=1`) -- these three were already bridged/passing on hardware under
+the old (degenerate but self-consistent) data, and now validate genuine multi-batch
+`arm_strided_slice_*` behavior (the kernel's `cmsis_nn_dims` fully supports N > 1 per
+`Include/arm_nnfunctions.h`), which the perf-stream bridge's `_build_data_movement_case()`
+StridedSlice path already handles generically (it reads all shapes straight from the
+generated header's dims structs with no hardcoded n=1 assumption), so no bridge-side
+code changes were needed.
+
+### Verification
+
+- Regenerated the full `StridedSliceFunctions` (and then the full `int`/`cortex-m55`)
+  suite; manually diffed all 15 StridedSlice headers -- only the 4 affected cases
+  changed, all other 11 byte-for-byte identical to before the fix.
+- Updated `test_generated_test_bridge_data_movement_phase3e.py`: replaced the old
+  `test_inconsistent_artifacts_stay_skipped` (which asserted the *bug's* symptom against
+  `strided_slice_case1_whole_slab_s8`) with a new `test_strided_slice_batch_collapse_bug_is_fixed`
+  regression test confirming that case now bridges successfully, and rewrote
+  `test_inconsistent_artifacts_stay_skipped` to exercise the internal-consistency guard
+  directly via a synthetically-tampered (empty-`expected_output`) header copy, so the
+  guard itself still has coverage independent of this now-fixed case.
+- **Full pytest baseline:** `303 passed, 11 failed` -- same 11 pre-existing unrelated
+  failures as every prior phase, +1 net new passing test vs. Phase 7a's 302 baseline
+  (one test removed, two added).
+- Real-hardware re-verification of the 3 newly-enlarged-but-already-bridged cases
+  (`strided_slice_case2_batch_slice_{s8,s16}`, `strided_slice_batch_height_s32`) plus the
+  newly-unblocked `strided_slice_case1_whole_slab_s8` is still pending as part of the
+  next full-suite hardware run.

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
 from helia_core_tester.perf_stream.generated_test_bridge import (
     UnsupportedGeneratedTestError,
+    _find_header_file,
     build_case_bundle_from_generated_test,
     discover_generated_tests,
 )
@@ -108,8 +110,46 @@ def test_invalid_status_cases_bridge_as_exact_status_assertions(tmp_path: Path) 
     assert transpose_manifest["required_target_capabilities"] == ["arm_transpose_s8"]
 
 
+def test_strided_slice_batch_collapse_bug_is_fixed(tmp_path: Path) -> None:
+    # strided_slice_case1_whole_slab_s8 used to trip the "non-empty output_dims
+    # but empty expected_output" internal-consistency guard below: its
+    # input_shape=[2,3,4,2]/begin=[1,0,0,0] descriptor explicitly targets the
+    # "2nd of 2" batch row, but the TFLiteConverter's full-integer-quantization
+    # path silently concretizes any batch dimension > 1 down to 1, so golden
+    # generation used to run against a collapsed 1-row array where that row no
+    # longer existed. helia_core_tester/generation/ops/StridedSliceFunctions/
+    # strided_slice.py now detects that batch-collapse and computes golden data
+    # directly via numpy against the descriptor's true full-size input instead,
+    # so this case is bridgeable again -- see docs/perf-stream-expansion-progress.md
+    # Phase 7b.
+    cases = discover_generated_tests(PROJECT_ROOT, family="StridedSliceFunctions", name_filter="strided_slice_case1_whole_slab_s8")
+    assert cases
+    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path)
+    assert bundle is not None
+
+
 def test_inconsistent_artifacts_stay_skipped(tmp_path: Path) -> None:
-    inconsistent_cases = discover_generated_tests(PROJECT_ROOT, family="StridedSliceFunctions", name_filter="strided_slice_case1_whole_slab_s8")
-    assert inconsistent_cases
-    with pytest.raises(UnsupportedGeneratedTestError, match="internally inconsistent"):
-        build_case_bundle_from_generated_test(PROJECT_ROOT, inconsistent_cases[0], output_root=tmp_path)
+    # The guard itself (raising UnsupportedGeneratedTestError for a generated
+    # header that declares a non-empty output_dims but an empty expected_output
+    # array) must still fire for artifacts that are genuinely inconsistent --
+    # exercise it directly against a synthetic malformed header rather than
+    # relying on strided_slice_case1_whole_slab_s8, which is no longer such a
+    # case (see test_strided_slice_batch_collapse_bug_is_fixed above).
+    cases = discover_generated_tests(PROJECT_ROOT, family="StridedSliceFunctions", name_filter="strided_slice_case1_whole_slab_s8")
+    assert cases
+    case = cases[0]
+    header_path = _find_header_file(case.directory)
+    original_text = header_path.read_text()
+    tampered_text = re.sub(
+        r"(_expected_output\[\]\s*=\s*\{)[^}]*(\})",
+        r"\1\2",
+        original_text,
+        count=1,
+    )
+    assert tampered_text != original_text
+    header_path.write_text(tampered_text)
+    try:
+        with pytest.raises(UnsupportedGeneratedTestError, match="internally inconsistent"):
+            build_case_bundle_from_generated_test(PROJECT_ROOT, case, output_root=tmp_path)
+    finally:
+        header_path.write_text(original_text)
