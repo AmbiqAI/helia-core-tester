@@ -414,45 +414,6 @@ def expand_descriptor_variations(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
     return expanded_descriptors
 
 
-# Operator + weight_dtype combos that expose an opt-in precomputed weight-sum ("kernel_sum")
-# kernel route (ns-cmsis-nn `arm_*_with_weight_sum` entry points). Each eligible descriptor is
-# automatically duplicated into a `<name>_kernel_sum` variant (hint.kernel_sum = True) in
-# addition to the original default (non-weight-sum) descriptor, so both routes get covered
-# without hand-duplicating every YAML test case. Extend this set as later PRs land support
-# for more operator/dtype combos (e.g. depthwise conv s4/s8, conv/dwconv s16, fully connected).
-KERNEL_SUM_ELIGIBLE_COMBOS = {
-    ('Convolve', 'S4'),
-}
-
-
-def expand_kernel_sum_variant(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    Duplicate an eligible descriptor into the default (non-weight-sum) descriptor plus a
-    `_kernel_sum` sibling with hint.kernel_sum = True, so generation exercises both the
-    plain and precomputed-weight-sum kernel routes for the same test shape/quantization.
-
-    Descriptors that already set hint.kernel_sum explicitly (e.g. a hand-authored
-    regression case) are left untouched and not duplicated.
-    """
-    operator = desc.get('operator')
-    weight_dtype = str(desc.get('weight_dtype', 'S8')).upper()
-    if (operator, weight_dtype) not in KERNEL_SUM_ELIGIBLE_COMBOS:
-        return [desc]
-
-    hint = desc.get('hint') or {}
-    if hint.get('kernel_sum') is not None:
-        return [desc]
-
-    kernel_sum_desc = copy.deepcopy(desc)
-    kernel_sum_desc['name'] = f"{desc['name']}_kernel_sum"
-    kernel_sum_hint = dict(kernel_sum_desc.get('hint') or {})
-    kernel_sum_hint['kernel_sum'] = True
-    kernel_sum_desc['hint'] = kernel_sum_hint
-    kernel_sum_desc['_base_name'] = desc.get('_base_name', desc['name'])
-
-    return [desc, kernel_sum_desc]
-
-
 def load_all_descriptors(descriptors_dir: str) -> List[Dict[str, Any]]:
     """
     Load and validate all descriptors in directory.
@@ -493,7 +454,7 @@ def load_all_descriptors(descriptors_dir: str) -> List[Dict[str, Any]]:
                     
                     expanded_descs = expand_descriptor_variations(desc_copy)
                     for expanded in expanded_descs:
-                        descriptors.extend(expand_kernel_sum_variant(expanded))
+                        descriptors.append(expanded)
             else:
                 # Single descriptor - preserve original name if present
                 for desc in descs:
@@ -505,7 +466,7 @@ def load_all_descriptors(descriptors_dir: str) -> List[Dict[str, Any]]:
                     
                     expanded_descs = expand_descriptor_variations(desc)
                     for expanded in expanded_descs:
-                        descriptors.extend(expand_kernel_sum_variant(expanded))
+                        descriptors.append(expanded)
         except Exception as e:
             print(f"Warning: Failed to load descriptor {desc_path}: {e}")
             continue

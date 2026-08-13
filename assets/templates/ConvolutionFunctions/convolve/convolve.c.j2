@@ -14,7 +14,7 @@ static cmsis_nn_context {{ name }}_ctx;
 #define {{ name|upper }}_BUFFER_SIZE_MAX {{ buffer_size_max }}
 static uint8_t {{ name }}_buffer[{{ name|upper }}_BUFFER_SIZE_MAX];
 
-{% if kernel_fn == 'arm_convolve_wrapper_s8' or (kernel_fn == 'arm_convolve_wrapper_s4' and use_weight_sum) %}
+{% if kernel_fn == 'arm_convolve_wrapper_s8' %}
 // Weight sum context (precomputed input-offset/bias fold, avoids per-MAC offset arithmetic)
 static cmsis_nn_context {{ name }}_weight_sum_ctx;
 // Weight sum buffer size: output channels * sizeof(int32_t)
@@ -46,10 +46,7 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
   used by _test_case_run) and the --benchmark path ({{name}}_bench_init /
   {{name}}_bench_op, used by _benchmark_run). Defined once as macros so the
   two paths can never drift out of sync -- only the timing boundary differs
-  (init vs. the timed kernel call), not the logic itself. The s4 branch
-  respects `use_weight_sum` so both the "before" (plain arm_convolve_wrapper_s4)
-  and "after" (arm_convolve_wrapper_s4_with_weight_sum) routes can be
-  benchmarked and compared -- see scripts/test_s4_conv_weight_sum.sh.
+  (init vs. the timed kernel call), not the logic itself.
 #}
 {% macro conv_bench_init() %}
     // Calculate required buffer size
@@ -104,20 +101,6 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
                             lhs_offset,
                             NULL);
     {% endif %}
-    {% elif kernel_fn == 'arm_convolve_wrapper_s4' and use_weight_sum %}
-    // Initialize weight sum context and buffer
-    {{ name }}_weight_sum_ctx.buf = {{ name }}_weight_sum_buffer;
-    {{ name }}_weight_sum_ctx.size = {{ name|upper }}_WEIGHT_SUM_BUFFER_SIZE;
-
-    // Calculate weight sum (folds input_offset * sum(weights) + bias)
-    int32_t lhs_offset = (int32_t){{ name }}_conv_params.input_offset;
-    arm_convolve_weight_sum_s4((int32_t*){{ name }}_weight_sum_ctx.buf,
-                               {{ name }}_weights,
-                               &{{ name }}_input_dims,
-                               &{{ name }}_filter_dims,
-                               &{{ name }}_output_dims,
-                               lhs_offset,
-                               {% if has_biases %}{{ name }}_biases{% else %}NULL{% endif %});
     {% endif %}
 {% endmacro %}
 {% macro conv_kernel_call(input_expr, output_expr) %}
@@ -145,28 +128,6 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
     {% elif kernel_fn == 'arm_convolve_wrapper_s8' %}
     // s8 signature: (ctx, weight_sum_ctx, conv_params, quant_params, input_dims, input_data, filter_dims, filter_data, bias_dims, bias_data, output_dims, output_data)
     return arm_convolve_wrapper_s8(
-        &{{ name }}_ctx,
-        &{{ name }}_weight_sum_ctx,
-        &{{ name }}_conv_params,
-        &{{ name }}_quant_params,
-        &{{ name }}_input_dims,
-        {{ input_expr }},
-        &{{ name }}_filter_dims,
-        {{ name }}_weights,
-        {% if has_biases %}
-        &{{ name }}_bias_dims,
-        {{ name }}_biases,
-        {% else %}
-        NULL,  // bias_dims
-        NULL,  // bias_data
-        {% endif %}
-        &{{ name }}_output_dims,
-        {{ output_expr }}
-    );
-    {% elif kernel_fn == 'arm_convolve_wrapper_s4' and use_weight_sum %}
-    // s4 weight-sum signature: (ctx, weight_sum_ctx, conv_params, quant_params, input_dims, input_data,
-    // filter_dims, filter_data, bias_dims, bias_data, output_dims, output_data)
-    return arm_convolve_wrapper_s4_with_weight_sum(
         &{{ name }}_ctx,
         &{{ name }}_weight_sum_ctx,
         &{{ name }}_conv_params,

@@ -212,12 +212,6 @@ class OpConvolve(OperationBase):
 
         hint = self._hint()
 
-        # Opt-in precomputed weight-sum (kernel_sum) route. Currently only the s4 conv
-        # wrapper has a distinct `_with_weight_sum` entry point; s8 already always runs
-        # through its weight-sum-aware wrapper (see convolve.c.j2).
-        if info["kernel_fn"] == "arm_convolve_wrapper_s4":
-            info["use_weight_sum"] = bool(hint.get("kernel_sum", False))
-
         variant = str(hint.get("kernel_variant", "")).lower()
         if not variant:
             return info
@@ -592,12 +586,10 @@ class OpConvolve(OperationBase):
                 else ('cmsis_nn_conv_params_f32' if float_kernel else 'cmsis_nn_conv_params')
             ),
             'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
-            'use_weight_sum': bool(kernel_info.get("use_weight_sum", False)),
             # Selects common/standalone/benchmark.j2's backend: "fvp" (default,
             # DWT-only) or "hardware" (DWT + PMU, Apollo510/Cortex-M55 real
             # silicon). No CLI flag exists yet for this -- set via env var so
-            # scripts (e.g. scripts/test_s4_conv_benchmark.sh --hardware) can
-            # select it without deeper Config/CLI plumbing.
+            # benchmarking scripts can select it without deeper Config/CLI plumbing.
             'benchmark_target': os.environ.get("HELIA_BENCH_TARGET", "fvp"),
         }
         if float_kernel:
