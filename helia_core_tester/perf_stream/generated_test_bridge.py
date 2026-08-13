@@ -609,9 +609,13 @@ def _build_convolve_case(
 
     if generated_test.name == "convolve_grouped_conv_case_01_s8":
         raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: truncating the oversized generated arrays to the header's n=1 slice "
-            f"still fails real-hardware correctness for this grouped-convolution case, so it remains "
-            f"intentionally unbridged pending a deeper grouped-conv-specific fix."
+            f"{generated_test.name}: even after matching the standalone harness's first-slice "
+            f"(header n=1) semantics, the direct arm_convolve_wrapper_s8 path is still not "
+            f"exact-correct for this grouped-convolution artifact: a fresh host-side repro of the "
+            f"real generated header/kernel call still mismatched expected_output at index 68 "
+            f"(expected 77, got 78), and arm_convolve_weight_sum() reports ARG_ERROR on the same "
+            f"grouped dims. It therefore remains intentionally unbridged rather than shipping a "
+            f"known incorrect exact-match convolution result."
         )
 
     activation_numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8

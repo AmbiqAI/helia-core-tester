@@ -1290,3 +1290,41 @@ exact correctness on the pinned Apollo510 board. No cases remain unbridged in th
   - Result: **157/157 passed** for the full family, including all **10/10** new
     DepthwiseConv S4 cases with `mismatch_count=0` in
     `artifacts/reports/performance_stream/phase7c-verify/case_summary.csv`
+
+## Phase 7d: `convolve_grouped_conv_case_01_s8` grouped-conv investigation (left unbridged, documented)
+
+**What the standalone harness actually does:** contrary to the earlier hypothesis that it
+might emulate groups by looping over per-group subviews, the generated
+`convolve_grouped_conv_case_01_s8_convolve.c` harness makes **one direct**
+`arm_convolve_wrapper_s8()` call using the header's truncated dims
+`input_dims=(1,5,5,2)`, `filter_dims=(6,2,2,1)`, `output_dims=(1,4,4,6)`. It does **not**
+split the grouped convolution into two separate 1-channel calls.
+
+**Fresh root-cause repro:** reproducing that exact standalone-harness call on host against
+the real CMSIS-NN sources confirmed this is not a perf-stream-only bug:
+- `arm_convolve_weight_sum()` reports `ARM_CMSIS_NN_ARG_ERROR` on the grouped dims
+- `arm_convolve_wrapper_s8()` still returns success, but the resulting output is **not**
+  exact-correct against the generated golden tensor: `expected_output[68] = 77`, actual
+  output `= 78` (1 LSB mismatch)
+
+That means the generated artifact's own direct-CMSIS path is already not strict-parity
+clean for the exact-match convolution policy. Shipping a perf-stream bridge for it would
+knowingly introduce a false "correctness pass/fail" discrepancy for the only remaining
+grouped-conv artifact in the repo.
+
+**Outcome:** left intentionally unbridged. No grouped multi-invocation perf-stream
+extension was added for this single case, because the current artifact does not have a
+known-good standalone grouped-dispatch pattern to mirror, and the direct harness semantics
+already fail the project's exact convolution contract.
+
+### Verification
+
+- Targeted regression:
+  - `pytest -q helia_core_tester/tests/test_generated_test_bridge_phase6.py -k grouped_convolve_case_01`
+  - Result: **1 passed**
+- Full pytest baseline:
+  - `pytest -q`
+  - Result: **304 passed, 11 failed** -- unchanged baseline failure set
+- No new hardware run was needed for Phase 7d because the bridge behavior for this case
+  remains "unsupported with a specific reason"; the last full-family ConvolutionFunctions
+  hardware run from Phase 7c remains **157/157 passed** on all actually-bridged cases.

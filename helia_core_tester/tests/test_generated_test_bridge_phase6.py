@@ -99,6 +99,6 @@ def test_grouped_convolve_case_01_stays_unbridged_pending_group_specific_fix(tmp
     try:
         build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path)
     except Exception as exc:  # noqa: BLE001 - asserting on specific unsupported reason
-        assert "grouped-convolution case" in str(exc)
+        assert "mismatched expected_output at index 68" in str(exc)
     else:
         raise AssertionError("expected grouped conv case 01 to remain unbridged")
