@@ -1000,12 +1000,13 @@ correct; the bug was in golden-data generation.
   tests now pass at the strict policy (+-1 LSB for approximate/rounding ops, exact match
   for convolution) with zero known failures.
 
-## Phase 6: S4/batch/large-output perf-stream gaps (DONE, except S4 DepthwiseConv)
+## Phase 6: S4/batch/large-output perf-stream gaps (DONE, except S4 DepthwiseConv + 2 known artifacts)
 
-- **Executed-case count increased from 569/569 to 644/644** on the pinned Apollo510
-  board `1160002276` (**+75 newly bridged real-hardware passes**).
-- **Pytest baseline stayed unchanged** after the phase: `295 passed, 11 failed`
-  (the same 11 unrelated pre-existing failures).
+- **Executed-case count increased from 569/569 to 670/670** on the pinned Apollo510
+  board `1160002276` (**+101 newly bridged real-hardware passes**).
+- **Pytest baseline stayed unchanged** after the phase: `299 passed, 11 failed`
+  (the same 11 unrelated pre-existing failures; the extra passes are new bridge
+  regression tests added in this phase).
 
 ### What Phase 6 bridged
 
@@ -1037,6 +1038,15 @@ correct; the bug was in golden-data generation.
   `message_type=6 status=-7` (`TRUNCATED_FRAME`). Raising
   `HCT_SERVER_MAX_OUTBOX_BYTES` from **16384** to **32768** fixed that remaining
   transport bottleneck.
+- **Oversized generated-array / header-dims mismatches**: a follow-up investigation
+  showed that most of the old "dims mismatch" skips were not true unsupported multi-batch
+  kernels. The generated standalone harnesses for these descriptors export full multi-batch
+  arrays, but the actual `cmsis_nn_dims` they pass to CMSIS-NN hardcode `.n = 1`, so the
+  harness itself only validates the first dims-implied slice. The bridge now mirrors that
+  existing behavior exactly by truncating oversized input/weight/expected-output arrays to
+  the first header-sized slice before reshaping. This unlocked **19 additional
+  ConvolutionFunctions cases** and **7 additional PoolingFunctions cases** on real
+  hardware.
 
 ### Deliberately left unbridged
 
@@ -1045,6 +1055,12 @@ correct; the bug was in golden-data generation.
   `arm_depthwise_conv_wrapper_s4()` path. The support was rolled back and the bridge now
   rejects those cases explicitly rather than shipping incorrect results. This phase does
   **not** loosen comparison/tolerance policy to hide those mismatches.
+- **`convolve_grouped_conv_case_01_s8`** is the one oversized-array Convolve artifact that
+  still fails correctness even after applying the harness-matching first-slice truncation,
+  so it remains intentionally unbridged pending a grouped-convolution-specific fix.
+- **`strided_slice_case1_whole_slab_s8`** remains an internally inconsistent generated
+  artifact: its header declares a non-empty output shape but emits an empty
+  `expected_output[]` array.
 
 ### Verification
 
@@ -1052,16 +1068,19 @@ correct; the bug was in golden-data generation.
   - `BasicMathFunctions`: **203/203 passed**
   - `ActivationFunctions`: **69/69 passed**
   - `FullyConnectedFunctions`: **36/36 passed**
-  - `ConvolutionFunctions`: **128/128 passed**
+  - `ConvolutionFunctions`: **147/147 passed**
+  - `PoolingFunctions`: **21/21 passed**
 - **Full hardware regression sweep**
-  - `scripts/run_hardware_perf_suite.sh --serial-no 1160002276 --session-id phase6-final-full --skip-generate --skip-flash`
-  - Result: **644/644 passed**
+  - `scripts/run_hardware_perf_suite.sh --serial-no 1160002276 --session-id phase6b-final-full --skip-generate --skip-flash`
+  - Result: **670/670 passed**
 - **Representative formerly-skipped buckets now passing on hardware**
   - all **50** Convolve S4 cases
   - all **4** FullyConnected S4 cases
   - all **17** batch>1 BasicMath/PReLU cases
   - both **2** multi-pixel PReLUScalar cases
   - both **2** large-output DepthwiseConv cases
+  - **26** old "dims mismatch" / oversized-array cases now bridged via first-slice
+    truncation (19 ConvolutionFunctions + 7 PoolingFunctions)
 
 ### Remaining skips after Phase 6
 
@@ -1069,6 +1088,7 @@ correct; the bug was in golden-data generation.
   fix.
 - **ARG_ERROR/status-code assertion** cases remain unsupported because perf-stream still
   validates streamed outputs, not kernel return statuses.
-- Several older **generated-array-size vs header-dims inconsistencies** remain
-  unbridged; these look like standalone harnesses that loop over extra
-  batch/tiling structure not represented in the exported dims structs.
+- The only remaining non-status unsupported generated artifacts in this area are
+  **`convolve_grouped_conv_case_01_s8`** (grouped-conv-specific correctness issue after
+  first-slice truncation) and **`strided_slice_case1_whole_slab_s8`** (empty
+  `expected_output[]` despite a non-empty declared output shape).

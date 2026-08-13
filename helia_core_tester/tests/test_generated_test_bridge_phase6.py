@@ -56,3 +56,38 @@ def test_prelu_scalar_multi_pixel_case_bridges(tmp_path: Path) -> None:
     assert scalars["block_size"] == 3
     assert scalars["output_h"] == 2
     assert scalars["output_c"] == 3
+
+
+def test_convolve_batch_padded_case_truncates_to_header_dims(tmp_path: Path) -> None:
+    manifest = _bridge(tmp_path, "ConvolutionFunctions", "convolve_kernel1x1_stride_xy_case_01_s8")
+    blobs = {blob["role"]: blob for blob in manifest["blob_roles"]}
+    assert blobs["input_0"]["dimensions"] == [1, 4, 4, 5]
+    assert blobs["input_0"]["byte_length"] == 80
+    assert manifest["expected_output"]["byte_length"] == 20
+
+
+def test_depthwise_batch_padded_case_truncates_to_header_dims(tmp_path: Path) -> None:
+    manifest = _bridge(tmp_path, "ConvolutionFunctions", "depthwise_conv_mult_batches_s8")
+    blobs = {blob["role"]: blob for blob in manifest["blob_roles"]}
+    assert blobs["input_0"]["dimensions"] == [1, 5, 3, 3]
+    assert blobs["input_0"]["byte_length"] == 45
+    assert manifest["expected_output"]["byte_length"] == 18
+
+
+def test_pool_batch_padded_case_truncates_to_header_dims(tmp_path: Path) -> None:
+    manifest = _bridge(tmp_path, "PoolingFunctions", "avg_pool_valid_pool1x1_stride1x2_s16")
+    blobs = {blob["role"]: blob for blob in manifest["blob_roles"]}
+    assert blobs["input_0"]["dimensions"] == [1, 1, 9, 2]
+    assert blobs["input_0"]["byte_length"] == 36
+    assert manifest["expected_output"]["byte_length"] == 20
+
+
+def test_grouped_convolve_case_01_stays_unbridged_pending_group_specific_fix(tmp_path: Path) -> None:
+    cases = discover_generated_tests(PROJECT_ROOT, family="ConvolutionFunctions", name_filter="convolve_grouped_conv_case_01_s8")
+    assert cases
+    try:
+        build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path)
+    except Exception as exc:  # noqa: BLE001 - asserting on specific unsupported reason
+        assert "grouped-convolution case" in str(exc)
+    else:
+        raise AssertionError("expected grouped conv case 01 to remain unbridged")
