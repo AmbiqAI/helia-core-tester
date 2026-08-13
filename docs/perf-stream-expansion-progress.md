@@ -1224,3 +1224,69 @@ code changes were needed.
   (`strided_slice_case2_batch_slice_{s8,s16}`, `strided_slice_batch_height_s32`) plus the
   newly-unblocked `strided_slice_case1_whole_slab_s8` is still pending as part of the
   next full-suite hardware run.
+
+## Phase 7c: DepthwiseConv S4 perf-stream bridge (COMPLETE)
+
+**Root cause found:** the current failure was no longer a real generator/kernel correctness
+bug. Fresh host-side repros compiled the real CMSIS-NN `arm_depthwise_conv_wrapper_s4()`
+ path directly against representative generated headers and showed **0 mismatches** against
+ the embedded LiteRT golden outputs for:
+- `depthwise_conv_generic_s4` (generic even-channel path)
+- `depthwise_conv_opt_s4` (optimized `ch_mult==1` path)
+- `depthwise_conv_odd_chmult3_dil_1x2_bias_s4` (the suspected odd-channel / odd-mult /
+  dilated parity path)
+
+That ruled out the Python-side S4 packing/order as the present blocker. The real missing
+piece was simply that perf-stream still had the old Phase-6 defensive rollback in place:
+the host bridge rejected `weight_dtype=="S4"` for DepthwiseConv entirely, and the firmware
+had no kernel id / dispatch path to `arm_depthwise_conv_wrapper_s4()`.
+
+**Fix applied:**
+- Added kernel id **126** (`ConvolutionFunctions/DepthwiseConv`, `dtype=S8`,
+  `weight_dtype=S4`) to `assets/kernel_registry.yaml` and the firmware switch.
+- Extended `_build_depthwise_conv_case()` to bridge S4-weight cases:
+  - validate packed-weight byte count as `ceil(prod(filter_dims)/2)` (like Convolve S4),
+    not the unpacked element count
+  - stream the packed bytes unchanged while keeping the logical depthwise filter dims
+    `(1, H, W, C_OUT)`
+  - emit `tensor_dtypes.weights == "S4"` and look up the new `(family, operator, dtype,
+    weight_dtype)` kernel id
+  - size scratch only for the optimized wrapper path, matching
+    `arm_depthwise_conv_wrapper_s4_get_buffer_size()` semantics (`4464` bytes for the 3
+    optimized cases here, `0` for the 7 generic/dilated ones)
+- Added the real firmware dispatch branch in `run_depthwise_conv_once()` to call
+  `arm_depthwise_conv_wrapper_s4()` with scratch-buffer validation, alongside the existing
+  S8/S16 paths.
+- Updated `test_generated_test_bridge_depthwise_conv.py` so S4 bridge coverage now asserts
+  the packed-weight and scratch-buffer behavior instead of expecting an intentional skip.
+
+**Hardware outcome:** all **10/10** previously-unbridged DepthwiseConv S4 cases now pass
+exact correctness on the pinned Apollo510 board. No cases remain unbridged in this bucket:
+- `depthwise_conv_eveninch_evenmult2_no_bias_s4`
+- `depthwise_conv_eveninch_oddmult3_bias_s4`
+- `depthwise_conv_generic_chmult1_dilated_s4`
+- `depthwise_conv_generic_even_chmult_dilated_s4`
+- `depthwise_conv_generic_evench_dil_1x2_bias_s4`
+- `depthwise_conv_generic_s4`
+- `depthwise_conv_odd_chmult3_dil_1x2_bias_s4`
+- `depthwise_conv_oddinch_mult1_no_bias_s4`
+- `depthwise_conv_opt_oddch_bias_s4`
+- `depthwise_conv_opt_s4`
+
+### Verification
+
+- Targeted bridge regression:
+  - `python scripts/generate_perf_stream_adapters.py --check`
+  - `pytest -q helia_core_tester/tests/test_generated_test_bridge_depthwise_conv.py`
+  - Result: **6 passed**
+- Full pytest baseline:
+  - `pytest -q`
+  - Result: **304 passed, 11 failed** -- same 11 pre-existing unrelated failures
+    (`test_descriptor_naming_contract`, 4 float-descriptor-support failures,
+    `test_generation_reporting`, 4 squared-difference-generation failures, and
+    `test_template_standalone_contract`)
+- Real hardware:
+  - `scripts/run_hardware_perf_suite.sh --serial-no 1160002276 --family ConvolutionFunctions --session-id phase7c-verify --skip-generate`
+  - Result: **157/157 passed** for the full family, including all **10/10** new
+    DepthwiseConv S4 cases with `mismatch_count=0` in
+    `artifacts/reports/performance_stream/phase7c-verify/case_summary.csv`

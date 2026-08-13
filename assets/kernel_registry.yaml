@@ -768,3 +768,10 @@ kernels:
     dtype: S8
     weight_dtype: S4
     cmsis_function: arm_fully_connected_s4
+
+  - kernel_id: 126
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: S8
+    weight_dtype: S4
+    cmsis_function: arm_depthwise_conv_wrapper_s4

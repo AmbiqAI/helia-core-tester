@@ -489,6 +489,29 @@ def _calculate_convolve_s4_scratch_bytes(
     return 4 * col_length_mve * 16
 
 
+def _calculate_depthwise_conv_s4_scratch_bytes(
+    input_dims: dict[str, int],
+    filter_dims: dict[str, int],
+    output_dims: dict[str, int],
+    *,
+    dilation_h: int,
+    dilation_w: int,
+) -> int:
+    if (
+        input_dims["n"] == 1
+        and input_dims["c"] == output_dims["c"]
+        and dilation_h == 1
+        and dilation_w == 1
+    ):
+        return TemplateContextBuilder.calculate_depthwise_buffer_size_max(
+            input_dims,
+            filter_dims,
+            output_dims,
+            output_dtype="S8",
+        )
+    return 0
+
+
 def discover_generated_tests(
     project_root: Path,
     *,
@@ -751,33 +774,33 @@ def _build_depthwise_conv_case(
     *,
     output_root: Path | None = None,
 ) -> CaseBundle:
-    """Convert one real generated CMSIS-NN DepthwiseConv test (S8 or S16 activation) into
-    a streamable perf-stream CaseBundle. The S8 activation path uses the low-level
-    `arm_depthwise_conv_s8` (not the `_wrapper_s8` variant) since it needs no scratch
-    buffer at all (`ctx` is unused -- see
-    `Source/ConvolutionFunctions/arm_depthwise_conv_s8.c`'s `(void)ctx;`) and no
-    weight-sum precomputation, unlike Convolve's `arm_convolve_s8`. The S16 activation
-    path uses `arm_depthwise_conv_wrapper_s16`, which does need a real scratch buffer
-    (sized via `arm_depthwise_conv_wrapper_s16_get_buffer_size`) and takes a plain
-    `int64_t*` bias pointer (not S16 Convolve's `cmsis_nn_bias_data`-wrapped bias). Filter
-    dims are kept in the header's native (N, H, W, C_OUT) order (unlike Convolve's
-    builder, which reorders filter dims to (H, W, C, N) to match `cmsis_nn_dims`
-    filter-dims convention for the full-conv kernel -- depthwise's
-    `cmsis_nn_dw_conv_params`-based filter format is already (1, H, W, C_OUT), so no
-    reordering is needed).
+    """Convert one real generated CMSIS-NN DepthwiseConv test into a streamable
+    perf-stream CaseBundle.
+
+    Supported paths:
+    - S8 activation + S8 weights -> arm_depthwise_conv_s8
+    - S8 activation + S4 weights -> arm_depthwise_conv_wrapper_s4
+    - S16 activation + S8 weights -> arm_depthwise_conv_wrapper_s16
+
+    Filter dims stay in the generated header's native (N, H, W, C_OUT) order:
+    depthwise's `cmsis_nn_dw_conv_params` filter convention already matches that
+    layout, unlike full Convolve's reordered `(H, W, C, N)` bridge format.
     """
     descriptor = generated_test.descriptor
     operator = str(descriptor.get("operator", ""))
     weight_dtype = str(descriptor.get("weight_dtype", descriptor.get("resolved_tensor_dtypes", {}).get("weights", "")))
     activation_dtype = str(descriptor.get("activation_dtype", ""))
 
-    if weight_dtype != "S8" or activation_dtype not in ("S8", "S16"):
+    if (
+        operator != "DepthwiseConv"
+        or activation_dtype not in ("S8", "S16")
+        or (weight_dtype == "S4" and activation_dtype != "S8")
+        or weight_dtype not in ("S8", "S4")
+    ):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} "
-            f"is not bridgeable -- perf-stream firmware only dispatches "
-            f"arm_depthwise_conv_s8/arm_depthwise_conv_wrapper_s16 (S8 weight + S8 or S16 activation). "
-            f"S4 depthwise-conv generated cases still fail real-hardware correctness with the direct "
-            f"arm_depthwise_conv_wrapper_s4 path, so they remain intentionally unbridged."
+            f"is not bridgeable -- perf-stream firmware only dispatches arm_depthwise_conv_s8, "
+            f"arm_depthwise_conv_wrapper_s4, and arm_depthwise_conv_wrapper_s16."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -809,10 +832,12 @@ def _build_depthwise_conv_case(
     multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
     shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
 
-    if input_flat.size < _shape_product(input_shape) or weights_flat.size < _shape_product(filter_shape):
+    expected_weight_bytes = (int(np.prod(filter_shape)) + 1) // 2 if weight_dtype == "S4" else _shape_product(filter_shape)
+    if input_flat.size < _shape_product(input_shape) or weights_flat.size < expected_weight_bytes:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: generated array sizes (input={input_flat.size}, weights={weights_flat.size}) "
-            f"don't match header dims (input_shape={input_shape}, filter_shape={filter_shape})."
+            f"don't match header dims (input_shape={input_shape}, filter_shape={filter_shape}, "
+            f"expected_weight_bytes={expected_weight_bytes})."
         )
     input_data = _reshape_generated_prefix(
         input_flat,
@@ -821,12 +846,16 @@ def _build_depthwise_conv_case(
         tensor_name="input",
         context=f"input_shape={input_shape}",
     )
-    weights_data = _reshape_generated_prefix(
-        weights_flat,
-        filter_shape,
-        generated_test=generated_test,
-        tensor_name="weights",
-        context=f"filter_shape={filter_shape}",
+    weights_data = (
+        weights_flat[:expected_weight_bytes]
+        if weight_dtype == "S4"
+        else _reshape_generated_prefix(
+            weights_flat,
+            filter_shape,
+            generated_test=generated_test,
+            tensor_name="weights",
+            context=f"filter_shape={filter_shape}",
+        )
     )
 
     if expected_flat.size < _shape_product(output_shape):
@@ -861,14 +890,26 @@ def _build_depthwise_conv_case(
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
-    # arm_depthwise_conv_s8 needs no scratch buffer at all (see docstring above); the S16
-    # wrapper does, and its size depends on activation_dtype -- see
-    # calculate_depthwise_buffer_size_max()'s S8/S16 branches.
-    scratch_bytes = (
-        TemplateContextBuilder.calculate_depthwise_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S16")
-        if activation_dtype == "S16"
-        else 0
-    )
+    if weight_dtype == "S4":
+        scratch_bytes = _calculate_depthwise_conv_s4_scratch_bytes(
+            input_dims,
+            filter_dims,
+            output_dims,
+            dilation_h=dilation_h,
+            dilation_w=dilation_w,
+        )
+    else:
+        # arm_depthwise_conv_s8 needs no scratch buffer at all; the S16 wrapper does.
+        scratch_bytes = (
+            TemplateContextBuilder.calculate_depthwise_buffer_size_max(
+                input_dims,
+                filter_dims,
+                output_dims,
+                output_dtype="S16",
+            )
+            if activation_dtype == "S16"
+            else 0
+        )
 
     arrays = [
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
@@ -903,7 +944,13 @@ def _build_depthwise_conv_case(
         "operator": operator,
         "family": "ConvolutionFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="ConvolutionFunctions", operator="DepthwiseConv", dtype=activation_dtype),
+        "kernel_id": lookup_kernel_id(
+            project_root,
+            family="ConvolutionFunctions",
+            operator="DepthwiseConv",
+            dtype=activation_dtype,
+            weight_dtype=weight_dtype,
+        ),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -922,12 +969,16 @@ def _build_depthwise_conv_case(
             "activation_max": activation_max,
             "ch_mult": ch_mult,
         },
-        "tensor_dtypes": {"input": activation_dtype, "weights": "S8", "bias": bias_wire_dtype, "output": activation_dtype},
+        "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, "bias": bias_wire_dtype, "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         "correctness_comparison": comparison,
         "scratch_buffer": {"bytes": int(scratch_bytes)},
-        "required_target_capabilities": ["depthwise_conv_s8" if activation_dtype == "S8" else "depthwise_conv_s16"],
+        "required_target_capabilities": [
+            "depthwise_conv_s4"
+            if weight_dtype == "S4"
+            else ("depthwise_conv_s8" if activation_dtype == "S8" else "depthwise_conv_s16")
+        ],
         "repeated_invocation_safe": True,
         "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
     }

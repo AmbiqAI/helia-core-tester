@@ -175,6 +175,7 @@
 #define HCT_KERNEL_ID_STRIDED_SLICE_S32 123u
 #define HCT_KERNEL_ID_CONVOLVE_S4 124u
 #define HCT_KERNEL_ID_FULLY_CONNECTED_S4 125u
+#define HCT_KERNEL_ID_DEPTHWISE_CONV_S4 126u
 
 static bool has_capacity(size_t payload_length, size_t offset, size_t needed)
 {
@@ -1018,15 +1019,11 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
     }
 }
 
-/* arm_depthwise_conv_s8 is the low-level (non-wrapper) depthwise conv kernel: unlike
- * arm_convolve_s8 above, its `ctx` and `bias_dims` args are both unused internally (see
- * Source/ConvolutionFunctions/arm_depthwise_conv_s8.c's `(void)ctx;`/`(void)bias_dims;`),
- * so no scratch buffer or weight-sum precomputation is required here. filter_dims stay in
- * the generator's native (N=1, H, W, C_OUT) order -- no HWCN reordering like Convolve's
- * filter_dims (depthwise's cmsis_nn_dw_conv_params filter convention is already NHWC).
- * The S16 variant (arm_depthwise_conv_wrapper_s16) needs a real scratch buffer and takes a
- * plain int64_t* bias pointer directly (unlike Convolve S16's cmsis_nn_bias_data-wrapped
- * bias) -- see arm_nnfunctions.h. */
+/* DepthwiseConv filter_dims stay in the generator's native (N=1, H, W, C_OUT) order --
+ * no HWCN reordering like Convolve's filter_dims (depthwise's cmsis_nn_dw_conv_params
+ * filter convention is already NHWC). The S4 and S16 wrapper variants need a real
+ * scratch buffer; the S8 low-level kernel does not use ctx/bias_dims internally (see
+ * Source/ConvolutionFunctions/arm_depthwise_conv_s8.c's `(void)ctx;`/`(void)bias_dims;`). */
 static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session)
 {
     hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
@@ -1111,6 +1108,30 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
                                               (const int64_t *)blob_ptr(session, bias),
                                               &output_dims,
                                               (int16_t *)session->output_buffer);
+    }
+
+    if (session->expected_kernel_id == HCT_KERNEL_ID_DEPTHWISE_CONV_S4)
+    {
+        cmsis_nn_context ctx;
+        int32_t required_scratch = arm_depthwise_conv_wrapper_s4_get_buffer_size(&dw_conv_params, &input_dims, &filter_dims, &output_dims);
+        if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
+        ctx.size = session->scratch_bytes;
+
+        return arm_depthwise_conv_wrapper_s4(&ctx,
+                                             &dw_conv_params,
+                                             &quant_params,
+                                             &input_dims,
+                                             (const int8_t *)blob_ptr(session, input),
+                                             &filter_dims,
+                                             (const int8_t *)blob_ptr(session, weights),
+                                             &bias_dims,
+                                             (const int32_t *)blob_ptr(session, bias),
+                                             &output_dims,
+                                             (int8_t *)session->output_buffer);
     }
 
     if (session->output_length > sizeof(session->output_buffer))
@@ -3824,6 +3845,7 @@ static arm_cmsis_nn_status run_kernel_once(hct_server_session_t *session)
             return ARM_CMSIS_NN_ARG_ERROR;
 #endif
         case HCT_KERNEL_ID_DEPTHWISE_CONV_S8:
+        case HCT_KERNEL_ID_DEPTHWISE_CONV_S4:
         case HCT_KERNEL_ID_DEPTHWISE_CONV_S16:
 #ifndef HCT_HOST_ABS_ONLY
             return run_depthwise_conv_once(session);

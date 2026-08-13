@@ -10,8 +10,8 @@ a default case, a large-`ch_mult` case, and a dilated case.
 
 This test does not touch real hardware; it bridges real generated-test artifacts already
 checked into `artifacts/generated_tests/` and asserts on the resulting CaseBundle manifest,
-including the larger output-buffer allowance and the phase-6 decision to keep S4-weight
-DepthwiseConv unbridged until its real-hardware correctness issue is resolved.
+including the larger output-buffer allowance and the S4-weight DepthwiseConv bridge's
+packed-weight handling.
 """
 
 from __future__ import annotations
@@ -81,14 +81,23 @@ def test_depthwise_conv_large_output_case_bridges_after_output_buffer_bump(tmp_p
     assert manifest["expected_output"]["byte_length"] == 8750
 
 
-def test_depthwise_conv_s4_weight_case_remains_unbridged_pending_real_hardware_fix(tmp_path: Path) -> None:
-    cases = discover_generated_tests(
-        PROJECT_ROOT, family="ConvolutionFunctions", name_filter="depthwise_conv_odd_chmult3_dil_1x2_bias_s4"
+def test_depthwise_conv_s4_generic_case_bridges_with_packed_weights(tmp_path: Path) -> None:
+    manifest = _bridge(tmp_path, "depthwise_conv_generic_s4")
+    assert manifest["kernel_id"] == lookup_kernel_id(
+        PROJECT_ROOT,
+        family="ConvolutionFunctions",
+        operator="DepthwiseConv",
+        dtype="S8",
+        weight_dtype="S4",
     )
-    assert cases, "expected a discoverable S4-weight DepthwiseConv test"
-    try:
-        build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path)
-    except Exception as exc:  # noqa: BLE001 - asserting on the specific bridge rejection path
-        assert "remain intentionally unbridged" in str(exc)
-    else:
-        raise AssertionError("expected S4-weight DepthwiseConv case to stay unbridged")
+    assert manifest["tensor_dtypes"]["weights"] == "S4"
+    assert manifest["scratch_buffer"]["bytes"] == 0
+    weights_blob = next(blob for blob in manifest["blob_roles"] if blob["role"] == "weights")
+    assert weights_blob["byte_length"] == 36
+    assert weights_blob["dimensions"] == [1, 3, 3, 8]
+
+
+def test_depthwise_conv_s4_opt_case_bridges_with_wrapper_scratch(tmp_path: Path) -> None:
+    manifest = _bridge(tmp_path, "depthwise_conv_opt_s4")
+    assert manifest["required_target_capabilities"] == ["depthwise_conv_s4"]
+    assert manifest["scratch_buffer"]["bytes"] == 4464
