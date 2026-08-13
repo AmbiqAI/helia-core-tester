@@ -1302,20 +1302,54 @@ split the grouped convolution into two separate 1-channel calls.
 
 **Fresh root-cause repro:** reproducing that exact standalone-harness call on host against
 the real CMSIS-NN sources confirmed this is not a perf-stream-only bug:
-- `arm_convolve_weight_sum()` reports `ARM_CMSIS_NN_ARG_ERROR` on the grouped dims
+- `arm_convolve_weight_sum()` reports `ARM_CMSIS_NN_ARG_ERROR` on the grouped dims when
+  compiled without `ARM_MATH_MVEI` (a host-build artifact of that function's `#if
+  !defined(ARM_MATH_MVEI)` branch, not a real firmware failure mode -- on the real
+  MVE-enabled M55 target it unconditionally succeeds).
 - `arm_convolve_wrapper_s8()` still returns success, but the resulting output is **not**
-  exact-correct against the generated golden tensor: `expected_output[68] = 77`, actual
-  output `= 78` (1 LSB mismatch)
+  exact-correct against the generated golden tensor: 2 of 96 output elements mismatch by
+  exactly 1 LSB (e.g. `expected_output[68] = 77`, actual `= 78`).
 
-That means the generated artifact's own direct-CMSIS path is already not strict-parity
-clean for the exact-match convolution policy. Shipping a perf-stream bridge for it would
-knowingly introduce a false "correctness pass/fail" discrepancy for the only remaining
-grouped-conv artifact in the repo.
+**Deeper follow-up investigation (in response to "let's study why this fails"):** manually
+re-implemented `arm_convolve_s8`'s actual grouped-convolution algorithm in Python
+(im2col + per-group filter/bias/multiplier/shift pointer advancement) and confirmed it
+correctly slices input channels, filter rows, and quant params per group -- the kernel's
+groups support is architecturally sound; the group-loop indexing is **not** the bug.
+Both LSB-off mismatches were then diagnosed precisely: they occur at accumulator values
+that land exactly on a fixed-point rounding tie boundary in `arm_nn_requantize()`
+(`Include/arm_nnsupportfunctions.h`). That function has two mutually-exclusive rounding
+modes selected by the `CMSIS_NN_USE_SINGLE_ROUNDING` build macro:
+- **Default (double-rounding, what this project's build actually uses -- the macro is not
+  defined anywhere in this repo's or the parent `ns-cmsis-nn` build)**: rounds once inside
+  `arm_nn_doubling_high_mult_no_sat()`, then rounds again inside
+  `arm_nn_divide_by_power_of_two()`.
+- **`CMSIS_NN_USE_SINGLE_ROUNDING`**: combines both steps into a single rounding op.
 
-**Outcome:** left intentionally unbridged. No grouped multi-invocation perf-stream
-extension was added for this single case, because the current artifact does not have a
-known-good standalone grouped-dispatch pattern to mirror, and the direct harness semantics
-already fail the project's exact convolution contract.
+Hand-evaluating both formulas against the two exact failing accumulators
+(`-29232` and `28507`, both using `multiplier=1513855360`, `shift=-8`) confirmed the
+single-rounding formula reproduces the golden values (`-81`, `77`) **exactly**, while the
+double-rounding formula (what's actually compiled today) produces the observed off-by-one
+values (`-82`, `78`). This is the well-known, industry-wide "double rounding vs single
+rounding" quantized fixed-point discrepancy: LiteRT/TFLite's own quantized-conv reference
+math is single-rounding-equivalent, while this project's CMSIS-NN build uses the (default)
+double-rounding path. The two are mathematically identical for the vast majority of
+accumulator values and only diverge by exactly 1 LSB at rare exact-tie boundaries --
+`convolve_grouped_conv_case_01_s8`'s randomly-generated test data happens to be the one
+generated case (among hundreds across all Convolve-family descriptors) whose accumulators
+land on that boundary. **This is not specific to grouped convolution** -- architecturally
+any Convolve/DepthwiseConv/FullyConnected case could in principle hit the same boundary
+with different random data; it is purely a property of this one generated test vector's
+data landing on a rounding tie.
+
+**Outcome:** left intentionally unbridged. Fixing this definitively would mean defining
+`CMSIS_NN_USE_SINGLE_ROUNDING` project-wide, which would change requantization rounding
+behavior for **every** int8-quantized kernel in the project (Convolve, DepthwiseConv,
+FullyConnected, etc.), requiring a full hardware re-verification of all 713 currently
+passing generated cases to rule out regressions elsewhere. That is a substantial,
+cross-cutting numerics change disproportionate to unblocking a single test case, and was
+deliberately not made without explicit direction to do so. No grouped multi-invocation
+perf-stream extension was needed either, since the root cause is purely a rounding-mode
+mismatch, not a dispatch/bridging gap.
 
 ### Verification
 
