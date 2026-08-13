@@ -27,6 +27,8 @@ class OpSub(BinaryBasicMathBase):
             dtype = "int8"
         elif activation_dtype == "S16":
             dtype = "int16"
+        elif activation_dtype == "FP32":
+            dtype = "float32"
         elif activation_dtype == "FP16":
             dtype = "float16"
         else:
@@ -72,6 +74,13 @@ class OpSub(BinaryBasicMathBase):
                 'input_c_type': 'int16_t',
                 'output_c_type': 'int16_t',
                 'float_kernel': False,
+            }
+        elif activation_dtype == 'FP32':
+            return {
+                'kernel_fn': 'arm_elementwise_sub_f32',
+                'input_c_type': 'float',
+                'output_c_type': 'float',
+                'float_kernel': True,
             }
         elif activation_dtype == 'FP16':
             return {
@@ -139,17 +148,21 @@ class OpSub(BinaryBasicMathBase):
         activation_dtype = self.tensor_dtype("input", default="S8")
 
         if kernel_info["float_kernel"]:
-            # arm_elementwise_sub_f16 has no broadcast support, so both inputs
-            # must already share the same shape.
+            # The float elementwise sub kernels have no broadcast support, so
+            # both inputs must already share the same shape.
+            float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
             activation_min = float(self.desc.get("act_min", -1.0e30))
             activation_max = float(self.desc.get("act_max", 1.0e30))
-            input1_q = self._sample_uniform(input1_shape, dtype=np.float16)
-            input2_q = self._sample_uniform(input2_shape, dtype=np.float16)
+            # Draw both operands from one RNG stream: reseeding per call would
+            # make input1 == input2 and the golden identically zero.
+            input1_f32, input2_f32 = self._sample_dual_uniform_inputs(input1_shape, input2_shape)
+            input1_q = input1_f32.astype(float_dtype)
+            input2_q = input2_f32.astype(float_dtype)
             output_data = np.clip(
                 input1_q.astype(np.float32) - input2_q.astype(np.float32),
                 activation_min,
                 activation_max,
-            ).astype(np.float16)
+            ).astype(float_dtype)
             activation_min_literal = builder.format_float_literal(activation_min)
             activation_max_literal = builder.format_float_literal(activation_max)
             mult1 = shift1 = mult2 = shift2 = output_mult = output_shift = left_shift = 0

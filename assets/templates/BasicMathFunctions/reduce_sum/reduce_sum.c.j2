@@ -1,4 +1,4 @@
-#include "{{ name }}_abs.h"
+#include "{{ name }}_reduce_sum.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
 
@@ -9,35 +9,22 @@ int32_t {{ prefix }}_{{ name }}_run(
     const {{ input_dtype }}* __restrict input,
     {{ output_dtype }}* __restrict output
 ) {
-    // Call abs kernel
-    {% if float_kernel %}
+    // Call ReduceSum kernel
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         input,
+        &{{ name }}_input_dims,
+        &{{ name }}_axis_dims,
         output,
-        {{ block_size }}           // block_size
+        &{{ name }}_output_dims
     );
-    {% else %}
-    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
-        input,
-        {{ input_offset }},        // input_offset (negated zero point)
-        output,
-        {{ output_offset }},       // out_offset
-        {{ out_mult }},            // out_mult
-        {{ out_shift }},           // out_shift
-        {{ needs_rescale }},       // needs_rescale
-        {{ out_activation_min }},  // out_activation_min
-        {{ out_activation_max }},  // out_activation_max
-        {{ block_size }}           // block_size
-    );
-    {% endif %}
-
+    
     return kernel_status;
 }
 
 int32_t {{ prefix }}_{{ name }}_test_case_run(void)
 {
     int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("Abs") }}", status);
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("ReduceSum") }}", status);
 
     int failures = 0;
     HELIA_VALIDATE_OUTPUTS(

@@ -15,11 +15,11 @@ class OpStridedSlice(OperationBase):
     """
 
     def needs_keras_model(self) -> bool:
-        # FP16 uses a LiteRT-only single-op model (Keras/TFLiteConverter has no
-        # reliable FP16 activation path); quantized dtypes keep the existing
-        # Keras-based pipeline.
+        # Float dtypes use a LiteRT-only single-op model (Keras/TFLiteConverter
+        # has no reliable float activation path for single-op slices);
+        # quantized dtypes keep the existing Keras-based pipeline.
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-        return activation_dtype != 'FP16'
+        return activation_dtype not in ('FP16', 'FP32')
 
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for StridedSlice operation."""
@@ -62,7 +62,7 @@ class OpStridedSlice(OperationBase):
         """Convert Keras model to TFLite with quantization."""
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
 
-        if activation_dtype == 'FP16':
+        if activation_dtype in ('FP16', 'FP32'):
             from helia_core_tester.generation.utils.litert_builder import build_strided_slice_op
 
             input_shape = tuple(self.desc['input_shape'])
@@ -79,7 +79,7 @@ class OpStridedSlice(OperationBase):
                 end=end,
                 strides=strides,
                 shrink_axis_mask=shrink_axis_mask,
-                dtype="float16",
+                dtype="float16" if activation_dtype == 'FP16' else "float32",
             )
             with open(out_path, "wb") as f:
                 f.write(model_bytes)
@@ -153,6 +153,12 @@ class OpStridedSlice(OperationBase):
                 'kernel_fn': 'arm_strided_slice_s32',
                 'input_c_type': 'int32_t',
                 'output_c_type': 'int32_t'
+            }
+        elif activation_dtype == 'FP32':
+            return {
+                'kernel_fn': 'arm_strided_slice_f32',
+                'input_c_type': 'float',
+                'output_c_type': 'float'
             }
         elif activation_dtype == 'FP16':
             return {
@@ -300,11 +306,12 @@ class OpStridedSlice(OperationBase):
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
 
-        if kernel_info["input_c_type"] == "float16_t":
+        if kernel_info["input_c_type"] in ("float16_t", "float"):
             # StridedSlice is pure data movement, so the golden output can be
             # computed directly via numpy slicing without invoking a TFLite
-            # interpreter (which has no reliable FP16 activation path).
-            input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float16)
+            # interpreter (which has no reliable float activation path).
+            float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+            input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(float_dtype)
         elif kernel_info["input_c_type"] == "int32_t":
             input_q = self.rng.integers(-1000, 1001, size=input_shape, dtype=np.int32)
         else:
@@ -339,12 +346,12 @@ class OpStridedSlice(OperationBase):
 
         self.rng.__setstate__(rng_state)
 
-        if kernel_info["input_c_type"] == "float16_t" or batch_collapsed:
+        if kernel_info["input_c_type"] in ("float16_t", "float") or batch_collapsed:
             # StridedSlice is pure data movement (no rescale -- output shares the
             # input's quantization scale/zero-point), so the golden output can be
             # computed directly via numpy slicing without invoking a TFLite
-            # interpreter. Used for FP16 always (no reliable FP16 activation path
-            # in the interpreter), and for batch_collapsed cases where the
+            # interpreter. Used for FP16/FP32 always (no reliable float activation
+            # path in the interpreter), and for batch_collapsed cases where the
             # interpreter's own compiled model no longer has the real batch size
             # to slice against (see the batch_collapsed comment above).
             end_resolved = list(end) if end is not None else list(input_shape)
@@ -362,6 +369,8 @@ class OpStridedSlice(OperationBase):
                 output_data = np.squeeze(output_data, axis=squeeze_axes)
             if kernel_info["output_c_type"] == "float16_t":
                 output_data = np.array(output_data).astype(np.float16)
+            elif kernel_info["output_c_type"] == "float":
+                output_data = np.array(output_data).astype(np.float32)
             elif kernel_info["output_c_type"] == "int32_t":
                 output_data = np.array(output_data).astype(np.int32)
             elif kernel_info["output_c_type"] == "int16_t":
@@ -405,7 +414,7 @@ class OpStridedSlice(OperationBase):
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
         }
-        if kernel_info["input_c_type"] == "float16_t":
+        if kernel_info["input_c_type"] in ("float16_t", "float"):
             context["validation_mode"] = "float"
         
         # Render templates
