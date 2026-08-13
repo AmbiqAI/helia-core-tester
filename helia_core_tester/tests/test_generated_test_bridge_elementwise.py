@@ -71,12 +71,18 @@ def test_sub_dual_inputs_case_extracts_true_scalars_and_kernel_id(tmp_path: Path
 
 def test_broadcast_height_case_bridges_with_mismatched_input_dims(tmp_path: Path) -> None:
     # Non-batch broadcast (input1 height differs from input2/output height): CMSIS-NN's
-    # dims-based arm_add_s8 handles this internally, so the bridge should not reject it --
-    # only batch-dimension (n>1) broadcast is explicitly unsupported.
+    # dims-based arm_add_s8 handles this internally, so the bridge should not reject it.
     manifest = _bridge(tmp_path, "add_broadcast_height_s8")
     scalars = manifest["serialized_scalar_parameters"]
     assert scalars["left_shift"] == 20
     assert (scalars["output_h"], scalars["output_w"], scalars["output_c"]) == (2, 3, 2)
+
+
+def test_batch_broadcast_case_bridges_and_serializes_output_n(tmp_path: Path) -> None:
+    manifest = _bridge(tmp_path, "add_broadcast_batch_s8")
+    scalars = manifest["serialized_scalar_parameters"]
+    assert scalars["output_n"] == 2
+    assert (scalars["output_h"], scalars["output_w"], scalars["output_c"]) == (2, 2, 3)
 
 
 def test_mul_default_case_extracts_true_scalars_and_kernel_id(tmp_path: Path) -> None:
@@ -121,3 +127,8 @@ def test_minimum_dual_case_bridges(tmp_path: Path) -> None:
     assert manifest["kernel_id"] == lookup_kernel_id(
         PROJECT_ROOT, family="BasicMathFunctions", operator="Minimum", dtype="S8"
     )
+
+
+def test_maximum_batch_broadcast_case_bridges(tmp_path: Path) -> None:
+    manifest = _bridge(tmp_path, "maximum_batch_broadcast_s8")
+    assert manifest["serialized_scalar_parameters"]["output_n"] == 2

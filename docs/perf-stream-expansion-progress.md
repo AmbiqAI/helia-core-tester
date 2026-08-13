@@ -999,3 +999,76 @@ correct; the bug was in golden-data generation.
   remaining hardware or CMSIS-NN kernel discrepancy for DepthwiseConv. All 569 hardware
   tests now pass at the strict policy (+-1 LSB for approximate/rounding ops, exact match
   for convolution) with zero known failures.
+
+## Phase 6: S4/batch/large-output perf-stream gaps (DONE, except S4 DepthwiseConv)
+
+- **Executed-case count increased from 569/569 to 644/644** on the pinned Apollo510
+  board `1160002276` (**+75 newly bridged real-hardware passes**).
+- **Pytest baseline stayed unchanged** after the phase: `295 passed, 11 failed`
+  (the same 11 unrelated pre-existing failures).
+
+### What Phase 6 bridged
+
+- **ConvolutionFunctions / Convolve S4**: added a distinct `(family, operator, dtype,
+  weight_dtype)` kernel-registry lookup, new kernel id **124**, and a real firmware
+  dispatch path to `arm_convolve_wrapper_s4()`. The generated S4 weight arrays were
+  already emitted in CMSIS-NN's packed-nibble byte layout, so the bridge only needed to
+  validate the packed-byte count (`ceil(num_weights / 2)`) and stream those bytes through
+  unchanged.
+- **FullyConnectedFunctions / FullyConnected S4**: added kernel id **125** and firmware
+  dispatch to `arm_fully_connected_s4()`. Unlike the existing S8/S16 FC bridge, the S4
+  kernel uses per-tensor quantization and no scratch buffer; the bridge now extracts and
+  serializes that scalar `{multiplier, shift}` pair directly.
+- **BasicMathFunctions batch>1**: removed the previous host-side `batch size > 1`
+  rejection for Add/Sub/Mul/Maximum/Minimum after confirming the real CMSIS-NN kernels
+  already operate on the full flattened tensor when the correct output dims are sent.
+- **ActivationFunctions batch>1 PReLU**: same root cause as the BasicMath batch skips --
+  the bridge was overly conservative. Serializing the true `output_n` was sufficient;
+  firmware already reconstructs the full dims struct.
+- **PReLUScalar multi-pixel**: real generated tests can invoke
+  `arm_prelu_scalar_{s8,s16}` once per pixel. The host bridge now parses all repeated
+  calls, validates that their scalar params are consistent, and serializes a multi-pixel
+  bundle; firmware loops over each pixel slice and emits the concatenated output.
+- **Large-output DepthwiseConv cases**: raised `HCT_SERVER_MAX_OUTPUT_BYTES` /
+  `_OUTPUT_BUFFER_CAPACITY_BYTES` from **8192** to **20480** so the 8750-byte and
+  16000-byte output cases fit. One additional firmware limit surfaced after that:
+  `queue_correctness_output()` batches every output frame into the fixed session outbox
+  before the host drains it, so the 16000-byte case still failed with
+  `message_type=6 status=-7` (`TRUNCATED_FRAME`). Raising
+  `HCT_SERVER_MAX_OUTBOX_BYTES` from **16384** to **32768** fixed that remaining
+  transport bottleneck.
+
+### Deliberately left unbridged
+
+- **DepthwiseConv S4** was implemented experimentally and validated on real hardware, but
+  multiple generated cases produced large byte-exact mismatches through the direct
+  `arm_depthwise_conv_wrapper_s4()` path. The support was rolled back and the bridge now
+  rejects those cases explicitly rather than shipping incorrect results. This phase does
+  **not** loosen comparison/tolerance policy to hide those mismatches.
+
+### Verification
+
+- **Targeted family hardware runs**
+  - `BasicMathFunctions`: **203/203 passed**
+  - `ActivationFunctions`: **69/69 passed**
+  - `FullyConnectedFunctions`: **36/36 passed**
+  - `ConvolutionFunctions`: **128/128 passed**
+- **Full hardware regression sweep**
+  - `scripts/run_hardware_perf_suite.sh --serial-no 1160002276 --session-id phase6-final-full --skip-generate --skip-flash`
+  - Result: **644/644 passed**
+- **Representative formerly-skipped buckets now passing on hardware**
+  - all **50** Convolve S4 cases
+  - all **4** FullyConnected S4 cases
+  - all **17** batch>1 BasicMath/PReLU cases
+  - both **2** multi-pixel PReLUScalar cases
+  - both **2** large-output DepthwiseConv cases
+
+### Remaining skips after Phase 6
+
+- **10 DepthwiseConv S4** cases remain intentionally unbridged pending a real correctness
+  fix.
+- **ARG_ERROR/status-code assertion** cases remain unsupported because perf-stream still
+  validates streamed outputs, not kernel return statuses.
+- Several older **generated-array-size vs header-dims inconsistencies** remain
+  unbridged; these look like standalone harnesses that loop over extra
+  batch/tiling structure not represented in the exported dims structs.

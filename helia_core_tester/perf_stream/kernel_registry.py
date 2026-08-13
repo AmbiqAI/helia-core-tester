@@ -23,6 +23,7 @@ class KernelEntry:
     family: str | None
     operator: str
     dtype: str
+    weight_dtype: str | None
     cmsis_function: str
 
 
@@ -43,19 +44,41 @@ def load_kernel_registry(project_root: Path) -> list[KernelEntry]:
             family=entry.get("family"),
             operator=str(entry["operator"]),
             dtype=str(entry["dtype"]),
+            weight_dtype=(None if entry.get("weight_dtype") is None else str(entry["weight_dtype"])),
             cmsis_function=str(entry.get("cmsis_function", "")),
         )
         for entry in data.get("kernels", [])
     ]
 
 
-def lookup_kernel_id(project_root: Path, *, family: str, operator: str, dtype: str = "S8") -> int:
-    """Look up the kernel_id for a bridged (family, operator, dtype) tuple.
+def lookup_kernel_id(
+    project_root: Path,
+    *,
+    family: str,
+    operator: str,
+    dtype: str = "S8",
+    weight_dtype: str | None = None,
+) -> int:
+    """Look up the kernel_id for a bridged (family, operator, dtype[, weight_dtype]) tuple.
 
     Raises UnknownKernelError if the tuple isn't registered -- callers should treat that as
     an UnsupportedGeneratedTestError-worthy condition, not silently default to any kernel_id.
     """
+    candidates: list[KernelEntry] = []
     for entry in load_kernel_registry(project_root):
         if entry.family == family and entry.operator == operator and entry.dtype == dtype:
+            candidates.append(entry)
+
+    if weight_dtype is not None:
+        for entry in candidates:
+            if entry.weight_dtype == weight_dtype:
+                return entry.kernel_id
+
+    for entry in candidates:
+        if entry.weight_dtype is None:
             return entry.kernel_id
-    raise UnknownKernelError(f"No registered kernel_id for family={family!r} operator={operator!r} dtype={dtype!r}")
+
+    raise UnknownKernelError(
+        f"No registered kernel_id for family={family!r} operator={operator!r} "
+        f"dtype={dtype!r} weight_dtype={weight_dtype!r}"
+    )

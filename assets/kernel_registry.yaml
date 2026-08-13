@@ -1,7 +1,7 @@
 # Shared kernel-id registry for the perf_stream hardware bridge.
 #
-# This is the single source of truth mapping a bridged (family, operator, dtype) tuple to
-# the numeric `kernel_id` sent over HCTP in CASE_META and dispatched by firmware in
+# This is the single source of truth mapping a bridged (family, operator, dtype[, weight_dtype])
+# tuple to the numeric `kernel_id` sent over HCTP in CASE_META and dispatched by firmware in
 # `cmake/perf_stream/benchmark_server_session.c`'s `run_kernel_once()`. Host
 # (`helia_core_tester/perf_stream/kernel_registry.py`) and firmware
 # (`cmake/perf_stream/benchmark_server_session.h`'s `HCT_KERNEL_ID_*` defines) must agree on
@@ -754,3 +754,17 @@ kernels:
     operator: StridedSlice
     dtype: S32
     cmsis_function: arm_strided_slice_s32
+
+  - kernel_id: 124
+    family: ConvolutionFunctions
+    operator: Convolve
+    dtype: S8
+    weight_dtype: S4
+    cmsis_function: arm_convolve_wrapper_s4
+
+  - kernel_id: 125
+    family: FullyConnectedFunctions
+    operator: FullyConnected
+    dtype: S8
+    weight_dtype: S4
+    cmsis_function: arm_fully_connected_s4

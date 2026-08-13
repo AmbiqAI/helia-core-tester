@@ -52,7 +52,7 @@ _ARENA_CAPACITY_BYTES = 49152
 # run_depthwise_conv_once/run_pooling_once) with a generic ARM_CMSIS_NN_ARG_ERROR that
 # `handle_run_correctness` collapses to HCTP_STATUS_INVALID_ARGUMENT with no detail -- so,
 # like the arena check above, this must be caught here at bridge time with a clear reason.
-_OUTPUT_BUFFER_CAPACITY_BYTES = 8192
+_OUTPUT_BUFFER_CAPACITY_BYTES = 20480
 
 
 def _align_up(value: int, alignment: int) -> int:
@@ -379,6 +379,64 @@ def _shape_product(shape: tuple[int, ...]) -> int:
     return int(np.prod(shape, dtype=np.int64))
 
 
+def _is_convolve_1x1(input_dims: dict[str, int], filter_dims: dict[str, int], *, pad_h: int, pad_w: int, dilation_h: int, dilation_w: int) -> bool:
+    return (
+        pad_w == 0
+        and pad_h == 0
+        and filter_dims["w"] == 1
+        and filter_dims["h"] == 1
+        and dilation_w == 1
+        and dilation_h == 1
+        and input_dims["c"] == filter_dims["c"]
+    )
+
+
+def _is_convolve_1x1_fast(*, stride_h: int, stride_w: int) -> bool:
+    return stride_w == 1 and stride_h == 1
+
+
+def _is_convolve_1_x_n(input_dims: dict[str, int], filter_dims: dict[str, int], *, stride_w: int, dilation_w: int) -> bool:
+    return (
+        input_dims["h"] == 1
+        and dilation_w == 1
+        and filter_dims["h"] == 1
+        and ((stride_w * input_dims["c"]) % 4 == 0)
+        and input_dims["c"] == filter_dims["c"]
+    )
+
+
+def _calculate_convolve_s4_scratch_bytes(
+    input_dims: dict[str, int],
+    filter_dims: dict[str, int],
+    output_dims: dict[str, int],
+    *,
+    stride_h: int,
+    stride_w: int,
+    pad_h: int,
+    pad_w: int,
+    dilation_h: int,
+    dilation_w: int,
+) -> int:
+    if _is_convolve_1x1(input_dims, filter_dims, pad_h=pad_h, pad_w=pad_w, dilation_h=dilation_h, dilation_w=dilation_w):
+        return 0
+
+    rhs_cols = filter_dims["w"] * filter_dims["h"] * input_dims["c"]
+    if _is_convolve_1_x_n(input_dims, filter_dims, stride_w=stride_w, dilation_w=dilation_w):
+        input_x = input_dims["w"]
+        kernel_x = filter_dims["w"]
+        output_x = output_dims["w"]
+        total_pad = (output_x - 1) * stride_w + kernel_x - input_x
+        asym_pad = total_pad % 2
+        right_pad_num = max(1, (pad_w + asym_pad + stride_w - 1) // stride_w) if (pad_w + asym_pad) != 0 else 0
+        left_pad_num = max(1, (pad_w + stride_w - 1) // stride_w) if pad_w != 0 else 0
+        no_pad_num = max(output_x - (right_pad_num + left_pad_num), 0)
+        if right_pad_num + no_pad_num + left_pad_num == output_x:
+            return 0
+
+    col_length_mve = (rhs_cols + 15) // 16
+    return 4 * col_length_mve * 16
+
+
 def discover_generated_tests(
     project_root: Path,
     *,
@@ -445,11 +503,16 @@ def _build_convolve_case(
     weight_dtype = str(descriptor.get("weight_dtype", descriptor.get("resolved_tensor_dtypes", {}).get("weights", "")))
     activation_dtype = str(descriptor.get("activation_dtype", ""))
 
-    if weight_dtype != "S8" or activation_dtype not in ("S8", "S16"):
+    if (
+        operator != "Convolve"
+        or activation_dtype not in ("S8", "S16")
+        or (weight_dtype == "S4" and activation_dtype != "S8")
+        or weight_dtype not in ("S8", "S4")
+    ):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} "
-            f"is not bridgeable -- perf-stream firmware only dispatches arm_convolve_s8/arm_convolve_wrapper_s16 "
-            f"(S8 weight + S8 or S16 activation)."
+            f"is not bridgeable -- perf-stream firmware only dispatches arm_convolve_wrapper_s4, "
+            f"arm_convolve_s8, and arm_convolve_wrapper_s16."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -480,14 +543,15 @@ def _build_convolve_case(
     multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
     shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
 
-    if input_flat.size != int(np.prod(input_shape)) or weights_flat.size != int(np.prod(filter_shape)):
+    expected_weight_bytes = (int(np.prod(filter_shape)) + 1) // 2 if weight_dtype == "S4" else int(np.prod(filter_shape))
+    if input_flat.size != int(np.prod(input_shape)) or weights_flat.size != expected_weight_bytes:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: generated array sizes (input={input_flat.size}, weights={weights_flat.size}) "
-            f"don't match header dims (input_shape={input_shape}, filter_shape={filter_shape}) -- the standalone "
+            f"don't match header dims (input_shape={input_shape}, filter_shape={filter_shape}, "
+            f"expected_weight_bytes={expected_weight_bytes}) -- the standalone "
             f"test harness likely loops over an outer batch/tiling dimension not reflected in these dims structs, "
             f"which the perf-stream single-invocation bridge doesn't replicate yet."
         )
-    weights = weights_flat.reshape(filter_shape)
     input_data = input_flat.reshape(input_shape)
 
     input_offset = _extract_scalar(header_text, f"{prefix}_conv_params", "input_offset")
@@ -519,9 +583,22 @@ def _build_convolve_case(
     input_dims_dict = input_dims
     filter_dims_dict = {"h": filter_dims["h"], "w": filter_dims["w"], "c": filter_dims["c"], "n": filter_dims["n"]}
     output_dims_dict = output_dims
-    scratch_bytes = TemplateContextBuilder.calculate_buffer_size_max(
-        input_dims_dict, filter_dims_dict, output_dims_dict, output_dtype=activation_dtype
-    )
+    if weight_dtype == "S4":
+        scratch_bytes = _calculate_convolve_s4_scratch_bytes(
+            input_dims_dict,
+            filter_dims_dict,
+            output_dims_dict,
+            stride_h=strides[0],
+            stride_w=strides[1],
+            pad_h=pad_h,
+            pad_w=pad_w,
+            dilation_h=dilation_h,
+            dilation_w=dilation_w,
+        )
+    else:
+        scratch_bytes = TemplateContextBuilder.calculate_buffer_size_max(
+            input_dims_dict, filter_dims_dict, output_dims_dict, output_dtype=activation_dtype
+        )
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
@@ -531,7 +608,7 @@ def _build_convolve_case(
 
     arrays = [
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
-        (2, "weights", "S8", filter_shape, weights, False, False),
+        (2, "weights", "S8", filter_shape, weights_flat, False, False),
         (3, "bias", bias_wire_dtype, (output_channels,), biases, False, False),
         (4, "multiplier", "S32", (output_channels,), multiplier, False, False),
         (5, "shift", "S32", (output_channels,), shift, False, False),
@@ -558,7 +635,13 @@ def _build_convolve_case(
         "operator": operator,
         "family": "ConvolutionFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="ConvolutionFunctions", operator="Convolve", dtype=activation_dtype),
+        "kernel_id": lookup_kernel_id(
+            project_root,
+            family="ConvolutionFunctions",
+            operator="Convolve",
+            dtype=activation_dtype,
+            weight_dtype=weight_dtype,
+        ),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -577,12 +660,14 @@ def _build_convolve_case(
             "activation_min": activation_min,
             "activation_max": activation_max,
         },
-        "tensor_dtypes": {"input": activation_dtype, "weights": "S8", "bias": bias_wire_dtype, "output": activation_dtype},
+        "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, "bias": bias_wire_dtype, "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         "correctness_comparison": comparison,
         "scratch_buffer": {"bytes": int(scratch_bytes)},
-        "required_target_capabilities": ["convolve_s8" if activation_dtype == "S8" else "convolve_s16"],
+        "required_target_capabilities": [
+            "convolve_s4" if weight_dtype == "S4" else ("convolve_s8" if activation_dtype == "S8" else "convolve_s16")
+        ],
         "repeated_invocation_safe": True,
         "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
     }
@@ -619,7 +704,9 @@ def _build_depthwise_conv_case(
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} "
             f"is not bridgeable -- perf-stream firmware only dispatches "
-            f"arm_depthwise_conv_s8/arm_depthwise_conv_wrapper_s16 (S8 weight + S8 or S16 activation)."
+            f"arm_depthwise_conv_s8/arm_depthwise_conv_wrapper_s16 (S8 weight + S8 or S16 activation). "
+            f"S4 depthwise-conv generated cases still fail real-hardware correctness with the direct "
+            f"arm_depthwise_conv_wrapper_s4 path, so they remain intentionally unbridged."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -656,7 +743,6 @@ def _build_depthwise_conv_case(
             f"{generated_test.name}: generated array sizes (input={input_flat.size}, weights={weights_flat.size}) "
             f"don't match header dims (input_shape={input_shape}, filter_shape={filter_shape})."
         )
-    weights = weights_flat.reshape(filter_shape)
     input_data = input_flat.reshape(input_shape)
 
     if expected_flat.size != int(np.prod(output_shape)):
@@ -696,7 +782,7 @@ def _build_depthwise_conv_case(
 
     arrays = [
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
-        (2, "weights", "S8", filter_shape, weights, False, False),
+        (2, "weights", "S8", filter_shape, weights_flat.reshape(filter_shape), False, False),
         (3, "bias", bias_wire_dtype, (output_channels,), biases, False, False),
         (4, "multiplier", "S32", (output_channels,), multiplier, False, False),
         (5, "shift", "S32", (output_channels,), shift, False, False),
@@ -1759,11 +1845,6 @@ def _build_prelu_case(
     input_dims = _extract_dims(header_text, f"{prefix}_input_dims")
     alpha_dims = _extract_dims(header_text, f"{prefix}_alpha_dims")
     output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
-    if input_dims["n"] != 1 or alpha_dims["n"] != 1:
-        raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: batch size > 1 is not yet supported by the perf-stream hardware "
-            f"bridge (firmware dispatches a single PReLU invocation per case)."
-        )
     input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
     alpha_shape = (alpha_dims["n"], alpha_dims["h"], alpha_dims["w"], alpha_dims["c"])
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
@@ -1833,6 +1914,7 @@ def _build_prelu_case(
             "out_shift": out_shift,
             "out_mult_alpha": out_mult_alpha,
             "out_shift_alpha": out_shift_alpha,
+            **({"output_n": output_dims["n"]} if output_dims["n"] != 1 else {}),
             "output_h": output_dims["h"],
             "output_w": output_dims["w"],
             "output_c": output_dims["c"],
@@ -1852,10 +1934,9 @@ def _build_prelu_case(
 # arm_prelu_scalar_s8/s16(scalar_vect, non_scalar_vect, scalar_is_input, input_offset,
 #    alpha_offset, output_offset, output_mult_identity, output_shift_identity,
 #    output_mult_alpha, output_shift_alpha, output, block_size) -- a direct flat-vector API
-# (no cmsis_nn_dims at all) used when one side is a true per-pixel scalar. Every real
-# generated test calls this exactly once (num_pixels == 1 in this corpus), matching the
-# perf-stream firmware's single-invocation-per-case model, so the multi-pixel loop the
-# generator's own template supports (for num_pixels > 1) is out of scope here.
+# (no cmsis_nn_dims at all) used when one side is a true per-pixel scalar. Some generated
+# tests invoke it once per pixel with a fixed block_size; the firmware mirrors that loop
+# using the scalar_input blob length and a shared per-pixel block_size scalar.
 _PRELU_SCALAR_ARG_COUNT = 12
 
 
@@ -1879,14 +1960,6 @@ def _build_prelu_scalar_case(
             f"{generated_test.name}: operator={operator!r} activation_dtype={activation_dtype!r} is not "
             f"bridgeable -- perf-stream firmware only dispatches arm_prelu_scalar_s8/s16."
         )
-    num_pixels = int(np.prod(descriptor.get("input_shape", [1])))
-    if num_pixels != 1:
-        raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: num_pixels={num_pixels} > 1 means the generated test calls "
-            f"arm_prelu_scalar_{{s8,s16}} more than once -- the perf-stream firmware dispatches exactly "
-            f"one kernel invocation per case, so multi-pixel PReLUScalar cases aren't bridgeable."
-        )
-
     header_path = _find_header_file(generated_test.directory)
     header_text = header_path.read_text(encoding="utf-8")
     source_path = _find_source_file(generated_test.directory)
@@ -1897,19 +1970,41 @@ def _build_prelu_scalar_case(
     scalar_flat = np.array(_extract_array(header_text, f"{prefix}_scalar_input"), dtype=numpy_dtype)
     alpha_flat = np.array(_extract_array(header_text, f"{prefix}_alpha"), dtype=numpy_dtype)
     expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
-    if scalar_flat.size != 1:
+    if scalar_flat.size < 1:
         raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: scalar_input array has {scalar_flat.size} elements, expected exactly 1."
+            f"{generated_test.name}: scalar_input array is empty."
         )
-    block_size = alpha_flat.size
-    if expected_flat.size != block_size:
+    call_args = _extract_all_call_args(source_text, "arm_prelu_scalar_s16" if activation_dtype == "S16" else "arm_prelu_scalar_s8", expected_count=_PRELU_SCALAR_ARG_COUNT)
+    if len(call_args) != scalar_flat.size:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: scalar_input has {scalar_flat.size} elements but generated source contains "
+            f"{len(call_args)} arm_prelu_scalar call(s)."
+        )
+    block_sizes = {int(args[11]) for args in call_args}
+    if len(block_sizes) != 1:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: arm_prelu_scalar block_size varies across generated calls ({sorted(block_sizes)})."
+        )
+    shared_scalar_params = {tuple(int(args[index]) for index in range(3, 10)) for args in call_args}
+    if len(shared_scalar_params) != 1:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: arm_prelu_scalar quantization scalars differ across generated calls."
+        )
+    block_size = block_sizes.pop()
+    num_pixels = scalar_flat.size
+    if alpha_flat.size != num_pixels * block_size:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: alpha size ({alpha_flat.size}) does not equal num_pixels * block_size "
+            f"({num_pixels} * {block_size})."
+        )
+    if expected_flat.size != alpha_flat.size:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: expected_output size ({expected_flat.size}) does not match alpha "
-            f"(block_size={block_size})."
+            f"(size={alpha_flat.size})."
         )
 
     cmsis_function = "arm_prelu_scalar_s16" if activation_dtype == "S16" else "arm_prelu_scalar_s8"
-    args = _extract_call_args(source_text, cmsis_function, expected_count=_PRELU_SCALAR_ARG_COUNT)
+    args = call_args[0]
     input_offset, alpha_offset, output_offset = (int(args[3]), int(args[4]), int(args[5]))
     out_mult, out_shift = (int(args[6]), int(args[7]))
     out_mult_alpha, out_shift_alpha = (int(args[8]), int(args[9]))
@@ -1921,9 +2016,9 @@ def _build_prelu_scalar_case(
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
     arrays = [
-        (1, "input_0", activation_dtype, (1, 1, 1, 1), scalar_flat.reshape(1, 1, 1, 1), False, False),
-        (2, "input_1", activation_dtype, (1, 1, 1, block_size), alpha_flat.reshape(1, 1, 1, block_size), False, False),
-        (3, "expected_output", activation_dtype, (1, 1, 1, block_size), expected_flat.reshape(1, 1, 1, block_size), False, True),
+        (1, "input_0", activation_dtype, (1, 1, 1, num_pixels), scalar_flat.reshape(1, 1, 1, num_pixels), False, False),
+        (2, "input_1", activation_dtype, (1, 1, num_pixels, block_size), alpha_flat.reshape(1, 1, num_pixels, block_size), False, False),
+        (3, "expected_output", activation_dtype, (1, 1, num_pixels, block_size), expected_flat.reshape(1, 1, num_pixels, block_size), False, True),
     ]
     blobs: list[BlobInfo] = []
     for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
@@ -1955,7 +2050,7 @@ def _build_prelu_scalar_case(
             "out_mult_alpha": out_mult_alpha,
             "out_shift_alpha": out_shift_alpha,
             "block_size": block_size,
-            "output_h": 1,
+            "output_h": num_pixels,
             "output_w": 1,
             "output_c": block_size,
         },
@@ -2648,7 +2743,9 @@ def _build_elementwise_binary_case(
     prefix = generated_test.name
 
     input1_shape, input2_shape, input1_data, input2_data, expected_output, output_dims = (
-        _extract_elementwise_binary_tensors(header_text, prefix, generated_test, operator, activation_dtype)
+        _extract_elementwise_binary_tensors(
+            header_text, prefix, generated_test, operator, activation_dtype, allow_batch=True
+        )
     )
 
     cmsis_function = _ELEMENTWISE_BINARY_CMSIS_FUNCTION[(operator, activation_dtype)]
@@ -2687,6 +2784,7 @@ def _build_elementwise_binary_case(
         expected_output=expected_output,
         scalar_parameters=scalar_parameters,
         output_root=output_root,
+        include_output_n=(output_dims["n"] != 1),
     )
 
 
@@ -2717,7 +2815,9 @@ def _build_mul_case(
     prefix = generated_test.name
 
     input1_shape, input2_shape, input1_data, input2_data, expected_output, output_dims = (
-        _extract_elementwise_binary_tensors(header_text, prefix, generated_test, operator, activation_dtype)
+        _extract_elementwise_binary_tensors(
+            header_text, prefix, generated_test, operator, activation_dtype, allow_batch=True
+        )
     )
 
     cmsis_function = "arm_mul_s16" if activation_dtype == "S16" else "arm_mul_s8"
@@ -2749,6 +2849,7 @@ def _build_mul_case(
         expected_output=expected_output,
         scalar_parameters=scalar_parameters,
         output_root=output_root,
+        include_output_n=(output_dims["n"] != 1),
     )
 
 
@@ -2779,7 +2880,9 @@ def _build_min_max_case(
     prefix = generated_test.name
 
     input1_shape, input2_shape, input1_data, input2_data, expected_output, output_dims = (
-        _extract_elementwise_binary_tensors(header_text, prefix, generated_test, operator, activation_dtype)
+        _extract_elementwise_binary_tensors(
+            header_text, prefix, generated_test, operator, activation_dtype, allow_batch=True
+        )
     )
 
     dtype_suffix = "s16" if activation_dtype == "S16" else "s8"
@@ -2798,6 +2901,7 @@ def _build_min_max_case(
         expected_output=expected_output,
         scalar_parameters={},
         output_root=output_root,
+        include_output_n=(output_dims["n"] != 1),
     )
 
 
@@ -2893,26 +2997,26 @@ def _build_fully_connected_case(
     *,
     output_root: Path | None = None,
 ) -> CaseBundle:
-    """Bridge a FullyConnectedFunctions FullyConnected generated test. Firmware always
-    dispatches through the per-channel wrapper kernels (arm_fully_connected_wrapper_s8/
-    _s16, see run_fully_connected_once() in benchmark_server_session.c), so genuinely
-    per-tensor-quantized descriptors (a bare `..._multiplier_val`/`..._shift_val` scalar in
-    the generated header, rather than a `..._multiplier[]`/`..._shift[]` array) have their
-    scalar multiplier/shift broadcast across every output channel here -- mathematically
-    identical to the real per-tensor kernel, since per-tensor quantization is simply the
-    degenerate case of per-channel with every channel equal. S4 weight_dtype is out of
-    scope (matches the established Convolve S4 precedent: a completely different
-    quantization scheme with no separate weight-sum requirement)."""
+    """Bridge a FullyConnectedFunctions FullyConnected generated test. S8/S16 activations
+    with S8 weights use the existing per-channel wrapper kernels; S8 activation with packed
+    S4 weights uses arm_fully_connected_s4, which takes one per-tensor multiplier/shift
+    pair and no scratch buffer."""
     descriptor = generated_test.descriptor
     operator = str(descriptor.get("operator", ""))
     weight_dtype = str(descriptor.get("weight_dtype", descriptor.get("resolved_tensor_dtypes", {}).get("weights", "")))
     activation_dtype = str(descriptor.get("activation_dtype", ""))
 
-    if operator != "FullyConnected" or weight_dtype != "S8" or activation_dtype not in ("S8", "S16"):
+    if (
+        operator != "FullyConnected"
+        or activation_dtype not in ("S8", "S16")
+        or (weight_dtype == "S4" and activation_dtype != "S8")
+        or weight_dtype not in ("S8", "S4")
+    ):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: operator={operator!r} weight_dtype={weight_dtype!r} "
             f"activation_dtype={activation_dtype!r} is not bridgeable -- perf-stream firmware only "
-            f"dispatches arm_fully_connected_wrapper_s8/s16 (S8 weight + S8 or S16 activation)."
+            f"dispatches arm_fully_connected_s4, arm_fully_connected_wrapper_s8, and "
+            f"arm_fully_connected_wrapper_s16."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -2965,14 +3069,14 @@ def _build_fully_connected_case(
     # but only their leading slice is ever fed to/compared against the real single-invocation
     # kernel call. Slice to match that same ground-truth single-invocation behavior rather
     # than rejecting these descriptors outright.
-    if weights_flat.size != filter_required or input_flat.size < input_required or expected_flat.size < output_required:
+    expected_weight_bytes = (filter_required + 1) // 2 if weight_dtype == "S4" else filter_required
+    if weights_flat.size != expected_weight_bytes or input_flat.size < input_required or expected_flat.size < output_required:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: generated array sizes (input={input_flat.size}, "
             f"weights={weights_flat.size}, expected_output={expected_flat.size}) are smaller than the "
             f"header dims require (input_shape={input_shape}, filter_shape={filter_shape}, "
-            f"output_shape={output_shape})."
+            f"output_shape={output_shape}, expected_weight_bytes={expected_weight_bytes})."
         )
-    weights = weights_flat.reshape(filter_shape)
     input_data = input_flat[:input_required].reshape(input_shape)
     expected_output = expected_flat[:output_required].reshape(output_shape)
 
@@ -2990,10 +3094,10 @@ def _build_fully_connected_case(
 
     arrays = [
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
-        (2, "weights", "S8", filter_shape, weights, False, False),
+        (2, "weights", "S8", filter_shape, weights_flat, False, False),
         (3, "bias", bias_wire_dtype, (output_units,), biases, False, False),
-        (4, "multiplier", "S32", (output_units,), multiplier, False, False),
-        (5, "shift", "S32", (output_units,), shift, False, False),
+        (4, "multiplier", "S32", multiplier.shape, multiplier, False, False),
+        (5, "shift", "S32", shift.shape, shift, False, False),
         (6, "expected_output", activation_dtype, output_shape, expected_output, False, True),
     ]
     blobs: list[BlobInfo] = []
@@ -3014,7 +3118,13 @@ def _build_fully_connected_case(
         "operator": operator,
         "family": "FullyConnectedFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="FullyConnectedFunctions", operator="FullyConnected", dtype=activation_dtype),
+        "kernel_id": lookup_kernel_id(
+            project_root,
+            family="FullyConnectedFunctions",
+            operator="FullyConnected",
+            dtype=activation_dtype,
+            weight_dtype=weight_dtype,
+        ),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -3024,7 +3134,7 @@ def _build_fully_connected_case(
             "activation_min": activation_min,
             "activation_max": activation_max,
         },
-        "tensor_dtypes": {"input": activation_dtype, "weights": "S8", "bias": bias_wire_dtype, "output": activation_dtype},
+        "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, "bias": bias_wire_dtype, "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         # FullyConnected's generated harness (fully_connected.c.j2's HELIA_VALIDATE_OUTPUTS
@@ -3039,9 +3149,11 @@ def _build_fully_connected_case(
         # at runtime via arm_vector_sum_s8) and S16 (scratch the kernel fills itself) --
         # see run_fully_connected_once()'s header comment and
         # arm_fully_connected_{s8,per_channel_s16}_get_buffer_size{,_mve}().
-        "scratch_buffer": {"bytes": output_units * 4},
+        "scratch_buffer": {"bytes": 0 if weight_dtype == "S4" else output_units * 4},
         "required_target_capabilities": [
-            "fully_connected_s8" if activation_dtype == "S8" else "fully_connected_s16"
+            "fully_connected_s4"
+            if weight_dtype == "S4"
+            else ("fully_connected_s8" if activation_dtype == "S8" else "fully_connected_s16")
         ],
         "repeated_invocation_safe": True,
         "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},

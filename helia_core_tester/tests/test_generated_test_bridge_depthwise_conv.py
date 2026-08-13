@@ -9,7 +9,9 @@ tests pin the extracted `cmsis_nn_dw_conv_params` scalars (including the Depthwi
 a default case, a large-`ch_mult` case, and a dilated case.
 
 This test does not touch real hardware; it bridges real generated-test artifacts already
-checked into `artifacts/generated_tests/` and asserts on the resulting CaseBundle manifest.
+checked into `artifacts/generated_tests/` and asserts on the resulting CaseBundle manifest,
+including the larger output-buffer allowance and the phase-6 decision to keep S4-weight
+DepthwiseConv unbridged until its real-hardware correctness issue is resolved.
 """
 
 from __future__ import annotations
@@ -74,22 +76,12 @@ def test_depthwise_conv_dilated_case_bridges(tmp_path: Path) -> None:
     assert scalars["ch_mult"] == 3
 
 
-def test_depthwise_conv_oversized_channel_count_case_is_rejected_for_output_buffer_capacity(tmp_path: Path) -> None:
-    """depthwise_conv_eq_in_out_ch_s8 still cannot be streamed end-to-end because its
-    8750-byte output tensor exceeds the firmware's fixed 8192-byte output_buffer, even
-    though the expanded phase-3d case arena is now large enough for its input blobs.
-    """
-    cases = discover_generated_tests(PROJECT_ROOT, family="ConvolutionFunctions", name_filter="depthwise_conv_eq_in_out_ch_s8")
-    assert cases, "expected a discoverable oversized-channel-count DepthwiseConv test"
-    try:
-        build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path)
-    except Exception as exc:  # noqa: BLE001 - asserting on the specific bridge rejection path
-        assert "output byte-length" in str(exc)
-    else:
-        raise AssertionError("expected the oversized DepthwiseConv case to be rejected for output-buffer capacity")
+def test_depthwise_conv_large_output_case_bridges_after_output_buffer_bump(tmp_path: Path) -> None:
+    manifest = _bridge(tmp_path, "depthwise_conv_eq_in_out_ch_s8")
+    assert manifest["expected_output"]["byte_length"] == 8750
 
 
-def test_depthwise_conv_s4_weight_case_is_rejected(tmp_path: Path) -> None:
+def test_depthwise_conv_s4_weight_case_remains_unbridged_pending_real_hardware_fix(tmp_path: Path) -> None:
     cases = discover_generated_tests(
         PROJECT_ROOT, family="ConvolutionFunctions", name_filter="depthwise_conv_odd_chmult3_dil_1x2_bias_s4"
     )
@@ -97,6 +89,6 @@ def test_depthwise_conv_s4_weight_case_is_rejected(tmp_path: Path) -> None:
     try:
         build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path)
     except Exception as exc:  # noqa: BLE001 - asserting on the specific bridge rejection path
-        assert "not bridgeable" in str(exc) or "S4" in str(exc)
+        assert "remain intentionally unbridged" in str(exc)
     else:
-        raise AssertionError("expected S4-weight DepthwiseConv case to be rejected, but it bridged successfully")
+        raise AssertionError("expected S4-weight DepthwiseConv case to stay unbridged")

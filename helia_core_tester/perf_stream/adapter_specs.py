@@ -185,6 +185,29 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
                                         (int16_t *)session->output_buffer);
     }
 
+    if (session->expected_kernel_id == HCT_KERNEL_ID_CONVOLVE_S4)
+    {
+        int32_t required_scratch = arm_convolve_wrapper_s4_get_buffer_size(&conv_params, &input_dims, &filter_dims, &output_dims);
+        if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
+        ctx.size = session->scratch_bytes;
+
+        return arm_convolve_wrapper_s4(&ctx,
+                                       &conv_params,
+                                       &quant_params,
+                                       &input_dims,
+                                       (const int8_t *)blob_ptr(session, input),
+                                       &filter_dims,
+                                       (const int8_t *)blob_ptr(session, weights),
+                                       &bias_dims,
+                                       (const int32_t *)blob_ptr(session, bias),
+                                       &output_dims,
+                                       (int8_t *)session->output_buffer);
+    }
+
     {
         /* S8 path: arm_convolve_s8 requires a precomputed per-output-channel weight sum
          * (via arm_convolve_weight_sum()) placed in its own scratch region, distinct from
@@ -588,32 +611,67 @@ static arm_cmsis_nn_status run_prelu_once(hct_server_session_t *session)
     {
         bool is_s16 = (session->expected_kernel_id == HCT_KERNEL_ID_PRELU_SCALAR_S16);
         int32_t block_size = session->block_size;
+        int32_t element_size = is_s16 ? (int32_t)sizeof(int16_t) : (int32_t)sizeof(int8_t);
+        int32_t num_pixels;
         if (block_size <= 0)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        session->output_length = (uint32_t)(block_size * (is_s16 ? (int32_t)sizeof(int16_t) : (int32_t)sizeof(int8_t)));
+        if ((input->byte_length % (uint32_t)element_size) != 0u || (alpha->byte_length % (uint32_t)element_size) != 0u)
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        num_pixels = (int32_t)(input->byte_length / (uint32_t)element_size);
+        if (num_pixels <= 0 || alpha->byte_length != (uint32_t)(num_pixels * block_size * element_size))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        session->output_length = (uint32_t)(num_pixels * block_size * element_size);
         if (session->output_length > sizeof(session->output_buffer))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         if (is_s16)
         {
-            return arm_prelu_scalar_s16((const int16_t *)blob_ptr(session, input),
-                                       (const int16_t *)blob_ptr(session, alpha),
-                                       true,
-                                       session->input_offset, session->alpha_offset, session->output_offset,
-                                       session->out_mult, session->out_shift,
-                                       session->out_mult_alpha, session->out_shift_alpha,
-                                       (int16_t *)session->output_buffer, block_size);
+            const int16_t *input_data = (const int16_t *)blob_ptr(session, input);
+            const int16_t *alpha_data = (const int16_t *)blob_ptr(session, alpha);
+            int16_t *output_data = (int16_t *)session->output_buffer;
+            for (int32_t pixel = 0; pixel < num_pixels; ++pixel)
+            {
+                arm_cmsis_nn_status status = arm_prelu_scalar_s16(input_data + pixel,
+                                                                  alpha_data + pixel * block_size,
+                                                                  true,
+                                                                  session->input_offset, session->alpha_offset, session->output_offset,
+                                                                  session->out_mult, session->out_shift,
+                                                                  session->out_mult_alpha, session->out_shift_alpha,
+                                                                  output_data + pixel * block_size, block_size);
+                if (status != ARM_CMSIS_NN_SUCCESS)
+                {
+                    return status;
+                }
+            }
+            return ARM_CMSIS_NN_SUCCESS;
         }
-        return arm_prelu_scalar_s8((const int8_t *)blob_ptr(session, input),
-                                   (const int8_t *)blob_ptr(session, alpha),
-                                   true,
-                                   session->input_offset, session->alpha_offset, session->output_offset,
-                                   session->out_mult, session->out_shift,
-                                   session->out_mult_alpha, session->out_shift_alpha,
-                                   (int8_t *)session->output_buffer, block_size);
+        {
+            const int8_t *input_data = (const int8_t *)blob_ptr(session, input);
+            const int8_t *alpha_data = (const int8_t *)blob_ptr(session, alpha);
+            int8_t *output_data = (int8_t *)session->output_buffer;
+            for (int32_t pixel = 0; pixel < num_pixels; ++pixel)
+            {
+                arm_cmsis_nn_status status = arm_prelu_scalar_s8(input_data + pixel,
+                                                                 alpha_data + pixel * block_size,
+                                                                 true,
+                                                                 session->input_offset, session->alpha_offset, session->output_offset,
+                                                                 session->out_mult, session->out_shift,
+                                                                 session->out_mult_alpha, session->out_shift_alpha,
+                                                                 output_data + pixel * block_size, block_size);
+                if (status != ARM_CMSIS_NN_SUCCESS)
+                {
+                    return status;
+                }
+            }
+            return ARM_CMSIS_NN_SUCCESS;
+        }
     }
 
     cmsis_nn_dims input_dims;
@@ -1341,10 +1399,11 @@ _RUN_FULLY_CONNECTED_ONCE = '''\
  * bias is passed directly as a real int64_t* array (or NULL) since FC only precomputes a
  * weight-sum for S8 output (see fully_connected.py's `_should_precompute_weight_sum()`).
  *
- * Both dtypes' ctx buffer is sized filter_dims.c * sizeof(int32_t) (i.e. output_units * 4
- * bytes) -- see arm_fully_connected_{s8,per_channel_s16}_get_buffer_size{,_mve}() -- sent
- * by the host via CASE_META's scratch_buffer.bytes, identical mechanism to Convolve/
- * DepthwiseConv/Pooling's scratch sizing.
+ * The S8/S16 wrapper paths size ctx->buf as filter_dims.c * sizeof(int32_t) (i.e.
+ * output_units * 4 bytes) -- see
+ * arm_fully_connected_{s8,per_channel_s16}_get_buffer_size{,_mve}() -- and the host sends
+ * that via CASE_META's scratch_buffer.bytes, identical to Convolve/DepthwiseConv/Pooling.
+ * The S4 path (arm_fully_connected_s4) ignores ctx entirely and needs no scratch buffer.
  *
  * Weights blob dimensions are transmitted as (output_units, input_features) (the natural
  * numpy weight-matrix shape) -- filter_dims.c/.n are read directly from that, not
@@ -1364,6 +1423,7 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
     cmsis_nn_context ctx;
     cmsis_nn_fc_params fc_params;
     cmsis_nn_quant_params quant_params;
+    cmsis_nn_per_tensor_quant_params quant_params_s4;
     cmsis_nn_dims input_dims;
     cmsis_nn_dims filter_dims;
     cmsis_nn_dims bias_dims;
@@ -1392,7 +1452,14 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
     output_dims.w = 1;
     output_dims.c = filter_dims.c;
 
-    required_scratch = (uint32_t)filter_dims.c * (uint32_t)sizeof(int32_t);
+    fc_params.input_offset = session->input_offset;
+    fc_params.filter_offset = session->filter_offset;
+    fc_params.output_offset = session->output_offset;
+    fc_params.activation.min = session->activation_min;
+    fc_params.activation.max = session->activation_max;
+    required_scratch = (session->expected_kernel_id == HCT_KERNEL_ID_FULLY_CONNECTED_S4)
+        ? 0u
+        : (uint32_t)filter_dims.c * (uint32_t)sizeof(int32_t);
     if (required_scratch > session->scratch_bytes)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
@@ -1400,17 +1467,11 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
     ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
     ctx.size = (int32_t)session->scratch_bytes;
 
-    fc_params.input_offset = session->input_offset;
-    fc_params.filter_offset = session->filter_offset;
-    fc_params.output_offset = session->output_offset;
-    fc_params.activation.min = session->activation_min;
-    fc_params.activation.max = session->activation_max;
-    quant_params.multiplier = (int32_t *)blob_ptr(session, multiplier);
-    quant_params.shift = (int32_t *)blob_ptr(session, shift);
-    quant_params.is_per_channel = 1;
-
     if (session->expected_kernel_id == HCT_KERNEL_ID_FULLY_CONNECTED_S16)
     {
+        quant_params.multiplier = (int32_t *)blob_ptr(session, multiplier);
+        quant_params.shift = (int32_t *)blob_ptr(session, shift);
+        quant_params.is_per_channel = 1;
         const int64_t *bias_i64 = (bias != NULL) ? (const int64_t *)blob_ptr(session, bias) : NULL;
 
         session->output_length = (uint32_t)(output_dims.n * output_dims.c * (int32_t)sizeof(int16_t));
@@ -1431,8 +1492,35 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
                                                (int16_t *)session->output_buffer);
     }
 
+    if (session->expected_kernel_id == HCT_KERNEL_ID_FULLY_CONNECTED_S4)
     {
         const int32_t *bias_i32 = (bias != NULL) ? (const int32_t *)blob_ptr(session, bias) : NULL;
+        quant_params_s4.multiplier = *(const int32_t *)blob_ptr(session, multiplier);
+        quant_params_s4.shift = *(const int32_t *)blob_ptr(session, shift);
+
+        session->output_length = (uint32_t)(output_dims.n * output_dims.c);
+        if (session->output_length > sizeof(session->output_buffer))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        return arm_fully_connected_s4(&ctx,
+                                      &fc_params,
+                                      &quant_params_s4,
+                                      &input_dims,
+                                      (const int8_t *)blob_ptr(session, input),
+                                      &filter_dims,
+                                      (const int8_t *)blob_ptr(session, weights),
+                                      &bias_dims,
+                                      bias_i32,
+                                      &output_dims,
+                                      (int8_t *)session->output_buffer);
+    }
+
+    {
+        const int32_t *bias_i32 = (bias != NULL) ? (const int32_t *)blob_ptr(session, bias) : NULL;
+        quant_params.multiplier = (int32_t *)blob_ptr(session, multiplier);
+        quant_params.shift = (int32_t *)blob_ptr(session, shift);
+        quant_params.is_per_channel = 1;
 
         if (arm_vector_sum_s8((int32_t *)ctx.buf,
                               filter_dims.n,
