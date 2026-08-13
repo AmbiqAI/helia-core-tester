@@ -153,8 +153,9 @@ class OpMinMax(BinaryBasicMathBase):
         input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         
-        input1_data = self._sample_uniform(input1_shape)
-        input2_data = self._sample_uniform(input2_shape)
+        # Draw both operands from one RNG stream: reseeding per call would make
+        # input1 == input2 and the golden collapse to min(x,x)/max(x,x) == x.
+        input1_data, input2_data = self._sample_dual_uniform_inputs(input1_shape, input2_shape)
 
         float_kernel = kernel_info["input_c_type"] in {"float", "float16_t"}
         if float_kernel:

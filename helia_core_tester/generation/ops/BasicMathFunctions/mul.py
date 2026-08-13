@@ -121,8 +121,11 @@ class OpMul(BinaryBasicMathBase):
         activation_dtype = self.tensor_dtype("input")
         if kernel_info["float_kernel"]:
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
-            input1_q = self._sample_uniform(input1_shape, dtype=float_dtype)
-            input2_q = self._sample_uniform(input2_shape, dtype=float_dtype)
+            # Draw both operands from one RNG stream: reseeding per call would
+            # make input1 == input2 and the golden collapse to input1**2.
+            input1_f32, input2_f32 = self._sample_dual_uniform_inputs(input1_shape, input2_shape)
+            input1_q = input1_f32.astype(float_dtype)
+            input2_q = input2_f32.astype(float_dtype)
             activation_min = float(self.desc.get("act_min", -1.0e30))
             activation_max = float(self.desc.get("act_max", 1.0e30))
             output_data = np.clip(
@@ -147,8 +150,7 @@ class OpMul(BinaryBasicMathBase):
             effective_scale = (float(input1_scale) * float(input2_scale)) / float(output_scale)
             output_mult, output_shift = calculate_multiplier_shift(effective_scale)
             activation_min, activation_max = activation_bounds(activation_dtype)
-            input1_data = self._sample_uniform(input1_shape)
-            input2_data = self._sample_uniform(input2_shape)
+            input1_data, input2_data = self._sample_dual_uniform_inputs(input1_shape, input2_shape)
             qmin, qmax = activation_bounds(activation_dtype)
             np_in_dtype = np.int16 if activation_dtype == "S16" else np.int8
             input1_q = np.round(input1_data / float(input1_scale) + float(input1_zp)).astype(np.int32)
