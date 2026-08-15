@@ -15,7 +15,7 @@ static int32_t run_gru(void)
         .time_major = {{ time_major_literal }},
         .batch_size = {{ batch_size }},
         .time_steps = {{ time_steps }},
-        .input_size = {{ input_size }},
+        .input_size = {% if fault == "negative_input_size" %}-{{ input_size }}{% else %}{{ input_size }}{% endif %},
         .hidden_size = {{ hidden_size }},
         .reset_after = {{ reset_after_literal }},
         .update_gate = {
