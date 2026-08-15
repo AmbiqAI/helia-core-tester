@@ -6,7 +6,7 @@ static {{ data_dtype }} {{ name }}_temp1[{{ hidden_state_size }}];
 static {{ data_dtype }} {{ name }}_hidden_state[{{ hidden_state_size }}];
 
 /*
- * Fault-injection test case: exercises an arm_gru_unidirectional_f16
+ * Fault-injection test case: exercises an {{ kernel_fn }}
  * argument-validation branch. Fault mode: {{ fault }}.
  */
 static int32_t run_gru(void)
