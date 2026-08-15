@@ -1,10 +1,10 @@
 """GRUUnidirectional operation implementation.
 
-CMSIS-only (force_cmsis) float16 test generation for arm_gru_unidirectional_f16.
-Mirrors the OpLSTMUnidirectional force_cmsis FP16 code path: no Keras/TFLite
-model is built; a pure-numpy reference (matching the arm_nn_gru_step_f16.c
-math for both the reset-after and pre-reset formulations) produces the
-golden output directly.
+CMSIS-only (force_cmsis) float test generation for arm_gru_unidirectional_f16
+and arm_gru_unidirectional_f32. Mirrors the OpLSTMUnidirectional force_cmsis
+code path: no Keras/TFLite model is built; a pure-numpy reference (matching the
+arm_nn_gru_step_*.c math for both the reset-after and pre-reset formulations)
+produces the golden output directly.
 """
 
 from pathlib import Path
@@ -17,7 +17,7 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 
 
 class OpGRUUnidirectional(OperationBase):
-    """GRUUnidirectional operation (float16 CMSIS-only)."""
+    """GRUUnidirectional operation (FP32/FP16, CMSIS-only)."""
 
     def build_keras_model(self) -> tf.keras.Model:
         raise RuntimeError("GRUUnidirectional is CMSIS-only; no Keras model is built.")
@@ -35,7 +35,7 @@ class OpGRUUnidirectional(OperationBase):
     def _sigmoid(x: np.ndarray) -> np.ndarray:
         return 1.0 / (1.0 + np.exp(-x))
 
-    def _generate_gru_expected_f16(
+    def _generate_gru_expected(
         self,
         input_tensor: np.ndarray,
         update_w_in: np.ndarray,
@@ -59,7 +59,8 @@ class OpGRUUnidirectional(OperationBase):
         reset_after: bool,
     ) -> np.ndarray:
         """
-        Reference GRU forward pass matching arm_nn_gru_step_f16.c exactly
+        Reference GRU forward pass matching arm_nn_gru_step_f16.c /
+        arm_nn_gru_step_f32.c exactly
         (same gate order, same reset-after / pre-reset branch, same
         batch-major/time-major addressing), computed in float32 for
         simplicity and cast to float16 only for the returned output.
@@ -117,11 +118,22 @@ class OpGRUUnidirectional(OperationBase):
         time_major = bool(self.desc.get("time_major", False))
         reset_after = bool(self.desc.get("reset_after", True))
 
-        float_dtype = np.float16
-        data_dtype = "float16_t"
-        kernel_fn = "arm_gru_unidirectional_f16"
-        gru_params_type = "cmsis_nn_gru_params_f16"
-        gru_context_type = "cmsis_nn_gru_context_f16"
+        activation_dtype = self.tensor_dtype("input", default="FP32")
+        if activation_dtype == "FP32":
+            float_dtype = np.float32
+            data_dtype = "float32_t"
+            suffix = "f32"
+        elif activation_dtype == "FP16":
+            float_dtype = np.float16
+            data_dtype = "float16_t"
+            suffix = "f16"
+        else:
+            raise ValueError(
+                f"Unsupported GRUUnidirectional dtype: {activation_dtype} (float-only kernels)")
+
+        kernel_fn = f"arm_gru_unidirectional_{suffix}"
+        gru_params_type = f"cmsis_nn_gru_params_{suffix}"
+        gru_context_type = f"cmsis_nn_gru_context_{suffix}"
 
         # Deterministic data, independent of any prior RNG draws in this run.
         rng_state = self.rng.__getstate__()
@@ -150,7 +162,7 @@ class OpGRUUnidirectional(OperationBase):
 
         self.rng.__setstate__(rng_state)
 
-        output_ref = self._generate_gru_expected_f16(
+        output_ref = self._generate_gru_expected(
             input_tensor,
             update_w_in.astype(np.float32),
             update_w_hidden.astype(np.float32),
@@ -212,8 +224,8 @@ class OpGRUUnidirectional(OperationBase):
 
         if fault:
             context["fault"] = fault
-            h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional_f16.h.j2"
-            c_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional_f16_fault.c.j2"
+            h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.h.j2"
+            c_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional_fault.c.j2"
         elif stream:
             if batch_size != 1:
                 raise ValueError("GRUUnidirectional streaming descriptors require batch_size == 1.")
@@ -231,11 +243,11 @@ class OpGRUUnidirectional(OperationBase):
             context["chunk_lengths"] = chunk_lengths
             context["chunk_input_offsets"] = [c * input_size for c in chunk_offsets]
             context["chunk_output_offsets"] = [c * hidden_size for c in chunk_offsets]
-            h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional_f16.h.j2"
-            c_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional_f16_stream.c.j2"
+            h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.h.j2"
+            c_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional_stream.c.j2"
         else:
-            h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional_f16.h.j2"
-            c_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional_f16.c.j2"
+            h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.h.j2"
+            c_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.c.j2"
 
         self._write_op_outputs(
             Path(output_dir),
