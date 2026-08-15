@@ -1,9 +1,13 @@
 #include "{{ name }}_gru_unidirectional.h"
 {% include "common/standalone/runtime_common.j2" %}
 
-static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
-static {{ data_dtype }} {{ name }}_temp1[{{ hidden_state_size }}];
-static {{ data_dtype }} {{ name }}_hidden_state[{{ hidden_state_size }}];
+{# Declare only the buffers this fault mode actually passes to the kernel:
+   a NULL-substituted buffer would otherwise be an unused static
+   (-Wunused-variable), which becomes a hard error under -Werror. #}
+{% if fault != "null_output" %}static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
+{% endif %}{% if fault != "missing_temp1_prereset" %}static {{ data_dtype }} {{ name }}_temp1[{{ hidden_state_size }}];
+{% endif %}{% if fault == "stateful_batch_gt1" %}static {{ data_dtype }} {{ name }}_hidden_state[{{ hidden_state_size }}];
+{% endif %}
 
 /*
  * Fault-injection test case: exercises an {{ kernel_fn }}
@@ -11,12 +15,12 @@ static {{ data_dtype }} {{ name }}_hidden_state[{{ hidden_state_size }}];
  */
 static int32_t run_gru(void)
 {
-    const {{ gru_params_type }} params = {
+{% if fault != "null_params" %}    const {{ gru_params_type }} params = {
         .time_major = {{ time_major_literal }},
-        .batch_size = {{ batch_size }},
-        .time_steps = {{ time_steps }},
+        .batch_size = {% if fault == "zero_batch_size" %}0{% else %}{{ batch_size }}{% endif %},
+        .time_steps = {% if fault == "negative_time_steps" %}-{{ time_steps }}{% else %}{{ time_steps }}{% endif %},
         .input_size = {% if fault == "negative_input_size" %}-{{ input_size }}{% else %}{{ input_size }}{% endif %},
-        .hidden_size = {{ hidden_size }},
+        .hidden_size = {% if fault == "negative_hidden_size" %}-{{ hidden_size }}{% else %}{{ hidden_size }}{% endif %},
         .reset_after = {{ reset_after_literal }},
         .update_gate = {
             .input_weights = {{ name }}_update_gate_input_weights,
@@ -37,7 +41,7 @@ static int32_t run_gru(void)
             .hidden_bias = {{ name }}_candidate_gate_hidden_bias,
         },
     };
-    {{ gru_context_type }} buffers = {
+{% endif %}    {{ gru_context_type }} buffers = {
         .temp1 = {% if fault == "missing_temp1_prereset" %}NULL{% else %}{{ name }}_temp1{% endif %},
         .hidden_state = {% if fault == "stateful_batch_gt1" %}{{ name }}_hidden_state{% else %}NULL{% endif %},
     };

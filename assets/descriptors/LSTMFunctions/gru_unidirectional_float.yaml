@@ -252,8 +252,8 @@ time_major: false
 reset_after: true
 input_shape: [1, 4, 3]
 comparison:
-  atol: 0.05
-  rtol: 0.05
+  atol: 0.01
+  rtol: 0.01
 hint:
   force_cmsis: true
 ---
@@ -275,8 +275,8 @@ time_major: false
 reset_after: false
 input_shape: [1, 3, 4]
 comparison:
-  atol: 0.05
-  rtol: 0.05
+  atol: 0.01
+  rtol: 0.01
 hint:
   force_cmsis: true
 ---
@@ -298,8 +298,8 @@ time_major: true
 reset_after: true
 input_shape: [3, 2, 3]
 comparison:
-  atol: 0.05
-  rtol: 0.05
+  atol: 0.01
+  rtol: 0.01
 hint:
   force_cmsis: true
 ---
@@ -321,8 +321,8 @@ time_major: false
 reset_after: true
 input_shape: [3, 4, 5]
 comparison:
-  atol: 0.05
-  rtol: 0.05
+  atol: 0.01
+  rtol: 0.01
 hint:
   force_cmsis: true
 ---
@@ -455,8 +455,8 @@ reset_after: true
 input_shape: [1, 4, 3]
 stream_chunk_lengths: [2, 2]
 comparison:
-  atol: 0.05
-  rtol: 0.05
+  atol: 0.01
+  rtol: 0.01
 hint:
   force_cmsis: true
   stream: true
@@ -481,5 +481,187 @@ reset_after: true
 input_shape: [1, 2, 2]
 fault: negative_input_size
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_error_negative_hidden_size_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: true
+input_shape: [1, 2, 2]
+fault: negative_hidden_size
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_error_zero_batch_size_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: true
+input_shape: [1, 2, 2]
+fault: zero_batch_size
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_error_negative_time_steps_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: true
+input_shape: [1, 2, 2]
+fault: negative_time_steps
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_pre_reset_multi_batch_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 3
+time_steps: 3
+feature_size: 4
+units: 3
+time_major: false
+reset_after: false
+input_shape: [3, 3, 4]
+hint:
+  force_cmsis: true
+
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_error_negative_hidden_size_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: true
+input_shape: [1, 2, 2]
+fault: negative_hidden_size
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_error_zero_batch_size_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: true
+input_shape: [1, 2, 2]
+fault: zero_batch_size
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_error_negative_time_steps_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: true
+input_shape: [1, 2, 2]
+fault: negative_time_steps
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_pre_reset_multi_batch_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 3
+time_steps: 3
+feature_size: 4
+units: 3
+time_major: false
+reset_after: false
+input_shape: [3, 3, 4]
+comparison:
+  atol: 0.01
+  rtol: 0.01
 hint:
   force_cmsis: true
