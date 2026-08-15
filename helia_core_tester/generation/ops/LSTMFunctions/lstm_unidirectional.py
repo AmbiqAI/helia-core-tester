@@ -260,6 +260,7 @@ class OpLSTMUnidirectional(OperationBase):
                 "name": name,
                 "prefix": name,
                 "data_dtype": data_dtype,
+                "output_dtype": data_dtype,
                 "kernel_fn": kernel_fn,
                 "lstm_params_type": lstm_params_type,
                 "lstm_context_type": lstm_context_type,

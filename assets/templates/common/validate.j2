@@ -64,6 +64,25 @@ static inline int helia_test_finish_validation(int failures)
 #define HELIA_VALIDATE_RETURN_FAILURES(failures) \
     return helia_test_finish_validation((failures))
 
+/*
+ * Compile-time guard (issue #54): the integer validators cast elements to
+ * long long, which silently truncates float outputs (|v| < 1 becomes 0 on
+ * both sides and always "matches"). If a generator regression ever routes a
+ * float-typed output into an integer validator again, fail the BUILD instead
+ * of silently passing forever. __fp16 is included only where the target
+ * defines an IEEE half type, which is every configuration that can compile
+ * float16 test data in the first place.
+ */
+#if defined(__ARM_FP16_FORMAT_IEEE) || defined(__ARM_FEATURE_FP16_SCALAR_ARITHMETIC)
+#define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, __fp16: 1, default: 0)
+#else
+#define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, default: 0)
+#endif
+#define HELIA_ASSERT_INT_VALIDATOR_INPUT(arr) \
+    _Static_assert(!HELIA_ELEM_IS_FLOAT((arr)[0]), \
+                   "integer validator applied to float outputs: validation-mode coercion " \
+                   "(helia-core-tester issue #54); float outputs need the FLOAT validator")
+
 {% if "float" in validation_helpers %}
 static inline double helia_test_float_tolerance(double expected, double atol, double rtol)
 {
@@ -74,6 +93,8 @@ static inline double helia_test_float_tolerance(double expected, double atol, do
 {% if "exact_int" in validation_helpers %}
 #define HELIA_VALIDATE_EXACT_INTS(actual, expected, size, max_reports, failures) \
     do { \
+        HELIA_ASSERT_INT_VALIDATOR_INPUT(actual); \
+        HELIA_ASSERT_INT_VALIDATOR_INPUT(expected); \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
             long long helia_act_val = (long long)((actual)[helia_i]); \
             long long helia_exp_val = (long long)((expected)[helia_i]); \
@@ -90,6 +111,8 @@ static inline double helia_test_float_tolerance(double expected, double atol, do
 {% if "tolerant_int" in validation_helpers %}
 #define HELIA_VALIDATE_TOLERANT_INTS(actual, expected, size, tolerance, max_reports, failures) \
     do { \
+        HELIA_ASSERT_INT_VALIDATOR_INPUT(actual); \
+        HELIA_ASSERT_INT_VALIDATOR_INPUT(expected); \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
             long long helia_act_val = (long long)((actual)[helia_i]); \
             long long helia_exp_val = (long long)((expected)[helia_i]); \

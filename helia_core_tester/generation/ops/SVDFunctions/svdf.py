@@ -269,6 +269,7 @@ class OpSVDF(OperationBase):
                 "prefix": name,
                 "kernel_fn": kernel_fn,
                 "data_dtype": data_dtype,
+                "output_dtype": data_dtype,
                 "svdf_params_type": svdf_params_type,
                 "input_batches": input_batches,
                 "input_height": input_height,
