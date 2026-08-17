@@ -64,9 +64,12 @@ class OpFullyConnected(OperationBase):
         # pointer, leaving the bias-add path completely untested. Use a
         # small nonzero uniform bias, deterministic from the case seed, so
         # real bias data flows through the golden and the kernel call.
+        # Float cases only: the same Keras model also feeds the QUANTIZED
+        # pipeline (see convolve.py) -- keep int FC goldens byte-identical.
+        _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
         bias_initializer = (
             keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
-            if use_bias else 'zeros'
+            if (use_bias and _case_is_float) else 'zeros'
         )
 
         # Dense layer without activation (we'll apply activation separately if needed)

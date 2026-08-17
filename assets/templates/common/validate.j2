@@ -64,6 +64,7 @@ static inline int helia_test_finish_validation(int failures)
 #define HELIA_VALIDATE_RETURN_FAILURES(failures) \
     return helia_test_finish_validation((failures))
 
+{% if "exact_int" in validation_helpers or "tolerant_int" in validation_helpers %}
 /*
  * Compile-time guard (issue #54): the integer validators cast elements to
  * long long, which silently truncates float outputs (|v| < 1 becomes 0 on
@@ -82,6 +83,7 @@ static inline int helia_test_finish_validation(int failures)
     _Static_assert(!HELIA_ELEM_IS_FLOAT((arr)[0]), \
                    "integer validator applied to float outputs: validation-mode coercion " \
                    "(helia-core-tester issue #54); float outputs need the FLOAT validator")
+{% endif %}
 
 {% if "float" in validation_helpers %}
 static inline double helia_test_float_tolerance(double expected, double atol, double rtol)

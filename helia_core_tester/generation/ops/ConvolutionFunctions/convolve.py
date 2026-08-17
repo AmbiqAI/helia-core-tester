@@ -101,9 +101,14 @@ class OpConvolve(OperationBase):
         # bias-add path completely untested. Use a small nonzero uniform
         # bias, deterministic from the case seed, so real bias data flows
         # through the golden and the kernel call.
+        # Float cases only: the same Keras model also feeds the QUANTIZED
+        # pipeline, so an ungated nonzero bias would silently perturb every
+        # int8/int16 conv golden (54 cases -- caught by adversarial review).
+        # Int-suite bias enrichment is a separate, deliberate change.
+        _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
         bias_initializer = (
             tf.keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
-            if use_bias else 'zeros'
+            if (use_bias and _case_is_float) else 'zeros'
         )
 
         conv = tf.keras.layers.Conv2D(
