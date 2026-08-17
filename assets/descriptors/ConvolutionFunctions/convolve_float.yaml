@@ -297,7 +297,7 @@ padding: VALID
 use_bias: true
 # Measured floor (issue #54 first real comparisons): patch-GEMM f16
 # accumulation reassociation reaches 1.06-1.11x the FP16 default on this case
-# (worst diff 1.95e-3 at |exp|=0.84). 2e-3/2e-3 gives ~1.9x margin over the
+# (worst diff 1.95e-3 at |exp|=1.01). 2e-3/2e-3 gives ~1.7x margin over the
 # measured floor. The f32 twin keeps defaults and carries the fleet's
 # scaling-mutation sensitivity (caught at 29x there).
 comparison:

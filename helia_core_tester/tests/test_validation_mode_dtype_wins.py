@@ -55,7 +55,7 @@ def test_int_dtype_still_uses_template_allowlists(template_path):
     assert mode == expected
 
 
-@pytest.mark.parametrize("coerced_mode", ("exact_int", "tolerant_int"))
+@pytest.mark.parametrize("coerced_mode", ("exact_int", "tolerant_int", "bool", "none"))
 def test_explicit_int_coercion_of_float_output_is_rejected(coerced_mode):
     """An explicit validation_mode override cannot force int compare on floats."""
     with pytest.raises(ValueError, match="coercion"):

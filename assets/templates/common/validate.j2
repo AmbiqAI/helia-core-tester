@@ -74,8 +74,14 @@ static inline int helia_test_finish_validation(int failures)
  * defines an IEEE half type, which is every configuration that can compile
  * float16 test data in the first place.
  */
-#if defined(__ARM_FP16_FORMAT_IEEE) || defined(__ARM_FEATURE_FP16_SCALAR_ARITHMETIC)
+#if (defined(__ARM_FP16_FORMAT_IEEE) || defined(__ARM_FEATURE_FP16_SCALAR_ARITHMETIC)) && defined(__FLT16_MAX__)
+/* __fp16 and _Float16 are distinct types on GCC/Clang Arm targets; block both
+ * (float16_t may typedef either depending on toolchain/host configuration). */
+#define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, __fp16: 1, _Float16: 1, default: 0)
+#elif defined(__ARM_FP16_FORMAT_IEEE) || defined(__ARM_FEATURE_FP16_SCALAR_ARITHMETIC)
 #define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, __fp16: 1, default: 0)
+#elif defined(__FLT16_MAX__)
+#define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, _Float16: 1, default: 0)
 #else
 #define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, default: 0)
 #endif

@@ -273,12 +273,14 @@ class TemplateContextBuilder:
         output_dtype = str(
             resolved.get("output_dtype") or resolved.get("data_dtype") or ""
         ).strip().lower()
-        if "float" in output_dtype and mode in ("exact_int", "tolerant_int"):
+        if "float" in output_dtype and mode in ("exact_int", "tolerant_int", "bool", "none"):
             raise ValueError(
                 f"Validation-mode coercion: template '{template_path}' resolved "
-                f"integer validation mode '{mode}' for float output dtype "
-                f"'{output_dtype}'. Float outputs require a float comparison "
-                f"(see helia-core-tester issue #54)."
+                f"validation mode '{mode}' for float output dtype "
+                f"'{output_dtype}'. Float outputs require a float comparison; "
+                f"'none' recreates the #54 end state (no comparison at all). "
+                f"Status-only fault templates should simply not invoke output "
+                f"validation rather than coercing the mode."
             )
         resolved.setdefault("validation_mode", mode)
         resolved.setdefault("validation_mode_token", mode.upper())

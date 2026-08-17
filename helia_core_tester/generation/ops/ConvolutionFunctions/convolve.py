@@ -345,7 +345,19 @@ class OpConvolve(OperationBase):
                                 continue
                             candidate = subgraph.tensors[int(input_idx)]
                             candidate_data = get_tensor_data_from_litert(candidate, model)
-                            if candidate_data is not None and candidate_data.ndim == 1:
+                            # Adversarial-review hardening: the quantized graph's
+                            # hoisted ADD operand clears the opcode/constness/ndim
+                            # gates too (dtype int16, quantized-output domain) --
+                            # only dtype and exact per-channel length make this
+                            # extraction safe. A broadcast scalar (shape (1,))
+                            # would otherwise be emitted and read out of bounds
+                            # by the kernel (output_dims.c elements).
+                            if (
+                                candidate_data is not None
+                                and candidate_data.ndim == 1
+                                and candidate_data.dtype.kind == "f"
+                                and candidate_data.shape[0] == int(self.desc["filter_shape"][3])
+                            ):
                                 hoisted_bias_data = candidate_data
                                 break
                         break
