@@ -101,9 +101,6 @@ input_shape:
 - 16
 activation_type: ARM_NN_FLT_ACT_TANH
 act_param: 0.0
-comparison:
-  atol: 0.001
-  rtol: 0.015
 ---
 operator: NNActivationFloat
 name: nn_activation_float_hardswish_f16
@@ -152,9 +149,6 @@ input_shape:
 - 17
 activation_type: ARM_NN_FLT_ACT_TANH
 act_param: 0.0
-comparison:
-  atol: 0.001
-  rtol: 0.015
 ---
 operator: NNActivationFloat
 name: nn_activation_float_hardswish_tail_f16
