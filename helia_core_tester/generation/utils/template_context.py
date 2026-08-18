@@ -907,7 +907,19 @@ class TemplateContextBuilder:
 
         reverse_conv_possible = (stride_w <= 2) and (stride_h <= 2)
         reverse_conv_efficient = (input_c > reverse_tcol_threshold)
-        
+
+        # Rolling-buffer sizing (ns-cmsis-nn issue #261 / PR #262): this is the
+        # formula arm_transpose_conv_s8_get_buffer_size() (and the _mve variant)
+        # uses directly, and also the lower bound it enforces even when the
+        # reverse-conv route is taken (other direct callers of
+        # arm_transpose_conv_s8 still need the rolling-buffer sizing). Computed
+        # once here so the reverse and non-reverse branches below can never
+        # diverge on this formula.
+        buf_x = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_w)) * output_c
+        buf_x_mve = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_h)) * output_c
+        buf_y = max(filter_h, stride_h)
+        rolling_ctx_size = max(buf_x, buf_x_mve) * buf_y * 4  # int32 scratch
+
         if output_dtype == 'S16':
             # S16 buffer size (conservative estimate)
             buffer_size_mve = 4 * 8 * filter_w * filter_h * 2  # sizeof(int16_t) = 2
@@ -933,17 +945,10 @@ class TemplateContextBuilder:
                 # now returns MAX(reverse-conv size, rolling-buffer size), because other
                 # direct callers of arm_transpose_conv_s8 still need the rolling-buffer
                 # sizing. Mirror that here so this harness bound stays an upper bound.
-                buf_x = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_w)) * output_c
-                buf_x_mve = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_h)) * output_c
-                buf_y = max(filter_h, stride_h)
-                rolling_ctx_size = max(buf_x, buf_x_mve) * buf_y * 4  # int32 scratch
                 ctx_size = max(reverse_conv_ctx_size, rolling_ctx_size)
                 output_ctx_size = input_c * filter_w * filter_h * filter_dims['n']
             else:
-                buf_x = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_w)) * output_c
-                buf_x_mve = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_h)) * output_c
-                buf_y = max(filter_h, stride_h)
-                ctx_size = max(buf_x, buf_x_mve) * buf_y * 4  # int32 scratch
+                ctx_size = rolling_ctx_size
                 output_ctx_size = 0
         
         # Return maximum of ctx and output_ctx
