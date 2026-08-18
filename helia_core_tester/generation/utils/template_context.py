@@ -922,12 +922,22 @@ class TemplateContextBuilder:
                     'w': input_dims['w'] * stride_w,
                     'c': input_c,
                 }
-                ctx_size = TemplateContextBuilder.calculate_buffer_size_max(
+                reverse_conv_ctx_size = TemplateContextBuilder.calculate_buffer_size_max(
                     reverse_conv_input_dims,
                     filter_dims,
                     output_dims,
                     output_dtype='S8',
                 )
+                # ns-cmsis-nn issue #261 / PR #262: even when the reverse-conv route is
+                # taken, arm_transpose_conv_s8_get_buffer_size() (and the _mve variant)
+                # now returns MAX(reverse-conv size, rolling-buffer size), because other
+                # direct callers of arm_transpose_conv_s8 still need the rolling-buffer
+                # sizing. Mirror that here so this harness bound stays an upper bound.
+                buf_x = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_w)) * output_c
+                buf_x_mve = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_h)) * output_c
+                buf_y = max(filter_h, stride_h)
+                rolling_ctx_size = max(buf_x, buf_x_mve) * buf_y * 4  # int32 scratch
+                ctx_size = max(reverse_conv_ctx_size, rolling_ctx_size)
                 output_ctx_size = input_c * filter_w * filter_h * filter_dims['n']
             else:
                 buf_x = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_w)) * output_c
