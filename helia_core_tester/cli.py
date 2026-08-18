@@ -253,6 +253,7 @@ def full(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help="Override the ns-cmsis-nn checkout used for the CMake build (defaults to CMakeLists.txt's ../.. sibling checkout)"),
 ):
     """Run the complete pipeline (generate -> build -> run)."""
     config = get_config(
@@ -280,6 +281,7 @@ def full(
         skip_run=skip_run,
         enable_reporting=not no_report,
         report_formats=report_formats,
+        cmsis_nn_root=cmsis_nn_root,
     )
 
     setup_logger(verbosity=config.verbosity)

@@ -1,0 +1,84 @@
+name: Self-Validate Against ns-cmsis-nn
+
+# Closes helia-core-tester#50: this repo previously had no workflow that
+# exercised its own generator/build pipeline. A PR here was validated only by
+# a title lint, so a broken template, generator bug, or unrenderable
+# descriptor landed green and surfaced later in a ns-cmsis-nn PR (attributed
+# to whoever happened to bump the submodule pointer).
+#
+# This workflow checks out AmbiqAI/ns-cmsis-nn at a configurable ref (default
+# main), points CMSIS_NN_ROOT at it, and runs generation + a compile of the
+# generated harnesses (no FVP execution) for one representative Cortex-M55
+# int + float profile. That is enough to catch every class of breakage
+# described in #50 without paying for a full FVP run in this repo (the full
+# FVP suite still runs downstream in ns-cmsis-nn's own CI once the submodule
+# pointer is bumped).
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      ns_cmsis_nn_ref:
+        description: >-
+          ns-cmsis-nn ref (branch, tag, or SHA) to validate against. Use this
+          to exercise new descriptors/templates against kernel changes that
+          have not merged to ns-cmsis-nn main yet.
+        required: false
+        default: main
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generate-and-compile:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - int
+          - float
+
+    steps:
+      - name: Checkout helia-core-tester
+        uses: actions/checkout@v4
+
+      - name: Checkout ns-cmsis-nn
+        uses: actions/checkout@v4
+        with:
+          repository: AmbiqAI/ns-cmsis-nn
+          ref: ${{ inputs.ns_cmsis_nn_ref || 'main' }}
+          path: ns-cmsis-nn-scratch
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Cache helia-core-tester downloads
+        uses: actions/cache@v4
+        with:
+          path: artifacts/downloads
+          key: helia-core-tester-downloads-${{ runner.os }}-${{ hashFiles('scripts/setup_ci.sh', 'helia_core_tester/scripts/setup_dependencies.py') }}
+          restore-keys: |
+            helia-core-tester-downloads-${{ runner.os }}-
+
+      - name: Setup build dependencies
+        run: ./scripts/setup_ci.sh
+
+      - name: Generate + compile (no FVP run) against ns-cmsis-nn ${{ inputs.ns_cmsis_nn_ref || 'main' }}
+        run: |
+          uv run helia_core_tester full \
+            --cpu cortex-m55 \
+            --suite ${{ matrix.suite }} \
+            --cmsis-nn-root "${{ github.workspace }}/ns-cmsis-nn-scratch" \
+            --skip-run \
+            --no-report \
+            --verbosity 1
