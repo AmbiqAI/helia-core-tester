@@ -95,7 +95,6 @@ class OpTile(OperationBase):
         builder = TemplateContextBuilder()
         context = {
             'name': name,
-            'prefix': name,
             'rank': rank,
             'input_shape': input_shape,
             'output_shape': output_shape,

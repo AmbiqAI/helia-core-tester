@@ -213,7 +213,6 @@ class OpRsqrt(OperationBase):
 
         context = {
             "name": name,
-            "prefix": name,
             "call_style": call_style,
             "input_dims": input_dims,
             "output_dims": output_dims,

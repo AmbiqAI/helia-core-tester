@@ -5,7 +5,7 @@
 #define {{ name|upper }}_OUTPUT_SIZE {{ output_size }}
 static {{ c_type }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
 
-int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+int32_t {{ name }}_test_case_run(void)
 {
     arm_cmsis_nn_status status = {{ kernel_fn }}(
         {{ input_arg | default(name ~ "_input") }},

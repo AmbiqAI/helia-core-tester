@@ -11,7 +11,7 @@ static cmsis_nn_gather_nd_params {{ name }}_params = {
     .batch_dims = {{ batch_dims_test }},
 };
 
-int32_t {{ prefix }}_{{ name }}_run(const {{ input_dtype }}* __restrict params,
+int32_t {{ name }}_run(const {{ input_dtype }}* __restrict params,
                                    const int32_t* __restrict indices,
                                    {{ output_dtype }}* __restrict output)
 {
@@ -28,9 +28,9 @@ int32_t {{ prefix }}_{{ name }}_run(const {{ input_dtype }}* __restrict params,
     return kernel_status;
 }
 
-int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+int32_t {{ name }}_test_case_run(void)
 {
-    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_params_data, {{ name }}_indices, {{ name }}_output);
+    int32_t status = {{ name }}_run({{ name }}_params_data, {{ name }}_indices, {{ name }}_output);
     HELIA_VALIDATE_EXPECTED_STATUS(
         "{{ validation_label | default("GatherND") }}",
         status,

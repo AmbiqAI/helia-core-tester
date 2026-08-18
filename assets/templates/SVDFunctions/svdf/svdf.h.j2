@@ -1,28 +1,28 @@
-#ifndef {{ prefix|upper }}_SVDF_H
-#define {{ prefix|upper }}_SVDF_H
+#ifndef {{ name|upper }}_SVDF_H
+#define {{ name|upper }}_SVDF_H
 
 #include <stdint.h>
 #include "arm_nn_types.h"
 
-#define {{ prefix|upper }}_INPUT_BATCHES {{ input_batches }}
-#define {{ prefix|upper }}_INPUT_HEIGHT {{ input_height }}
-#define {{ prefix|upper }}_FEATURE_BATCHES {{ feature_batches }}
-#define {{ prefix|upper }}_TIME_BATCHES {{ time_batches }}
-#define {{ prefix|upper }}_RANK {{ rank }}
-#define {{ prefix|upper }}_UNIT_COUNT {{ unit_count }}
+#define {{ name|upper }}_INPUT_BATCHES {{ input_batches }}
+#define {{ name|upper }}_INPUT_HEIGHT {{ input_height }}
+#define {{ name|upper }}_FEATURE_BATCHES {{ feature_batches }}
+#define {{ name|upper }}_TIME_BATCHES {{ time_batches }}
+#define {{ name|upper }}_RANK {{ rank }}
+#define {{ name|upper }}_UNIT_COUNT {{ unit_count }}
 
-#define {{ prefix|upper }}_INPUT_OFFSET {{ input_offset }}
-#define {{ prefix|upper }}_OUTPUT_OFFSET {{ output_offset }}
+#define {{ name|upper }}_INPUT_OFFSET {{ input_offset }}
+#define {{ name|upper }}_OUTPUT_OFFSET {{ output_offset }}
 
-#define {{ prefix|upper }}_INPUT_MULTIPLIER {{ input_multiplier }}
-#define {{ prefix|upper }}_INPUT_SHIFT {{ input_shift }}
-#define {{ prefix|upper }}_OUTPUT_MULTIPLIER {{ output_multiplier }}
-#define {{ prefix|upper }}_OUTPUT_SHIFT {{ output_shift }}
+#define {{ name|upper }}_INPUT_MULTIPLIER {{ input_multiplier }}
+#define {{ name|upper }}_INPUT_SHIFT {{ input_shift }}
+#define {{ name|upper }}_OUTPUT_MULTIPLIER {{ output_multiplier }}
+#define {{ name|upper }}_OUTPUT_SHIFT {{ output_shift }}
 
-#define {{ prefix|upper }}_INPUT_ACTIVATION_MIN {{ input_activation_min }}
-#define {{ prefix|upper }}_INPUT_ACTIVATION_MAX {{ input_activation_max }}
-#define {{ prefix|upper }}_OUTPUT_ACTIVATION_MIN {{ output_activation_min }}
-#define {{ prefix|upper }}_OUTPUT_ACTIVATION_MAX {{ output_activation_max }}
+#define {{ name|upper }}_INPUT_ACTIVATION_MIN {{ input_activation_min }}
+#define {{ name|upper }}_INPUT_ACTIVATION_MAX {{ input_activation_max }}
+#define {{ name|upper }}_OUTPUT_ACTIVATION_MIN {{ output_activation_min }}
+#define {{ name|upper }}_OUTPUT_ACTIVATION_MAX {{ output_activation_max }}
 
 static const cmsis_nn_dims {{ name }}_input_dims = {
     .n = {{ input_batches }}, .h = {{ input_height }}, .w = 1, .c = 1

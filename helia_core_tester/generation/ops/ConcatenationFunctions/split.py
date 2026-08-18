@@ -162,7 +162,6 @@ class OpSplit(OperationBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'input_dims_count': len(input_shape),
             'axis': axis,

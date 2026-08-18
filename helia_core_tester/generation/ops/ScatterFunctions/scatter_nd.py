@@ -118,7 +118,6 @@ class OpScatterNd(OperationBase):
         builder = TemplateContextBuilder()
         context = {
             "name": name,
-            "prefix": name,
             "rank": len(output_shape),
             "output_shape": output_shape,
             "num_updates": num_updates,

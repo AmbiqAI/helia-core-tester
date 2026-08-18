@@ -316,7 +316,6 @@ class OpBatchMatMul(OperationBase):
 
             context = {
                 'name': name,
-                'prefix': name,
                 'input_lhs_dims': input_lhs_dims,
                 'input_rhs_dims': input_rhs_dims,
                 'output_dims': output_dims,
@@ -453,7 +452,6 @@ class OpBatchMatMul(OperationBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input_lhs_dims': input_lhs_dims,
             'input_rhs_dims': input_rhs_dims,
             'output_dims': output_dims,

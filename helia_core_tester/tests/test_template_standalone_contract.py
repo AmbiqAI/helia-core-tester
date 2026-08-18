@@ -40,7 +40,7 @@ def test_all_c_templates_use_standalone_harness_contract() -> None:
         assert "TEST_ASSERT" not in text, path
         assert '{% include "common/standalone/runtime_common.j2" %}' in text, path
         assert '{% include "common/standalone/main.j2" %}' in text, path
-        assert "int32_t {{ prefix }}_{{ name }}_test_case_run(void)" in text, path
+        assert "int32_t {{ name }}_test_case_run(void)" in text, path
         assert (
             "HELIA_VALIDATE_STATUS(" in text
             or "HELIA_VALIDATE_EXPECTED_STATUS(" in text
@@ -59,7 +59,7 @@ def test_all_c_templates_keep_inline_validation_out_of_templates() -> None:
         assert 'printf("%d Failures' not in text, path
         assert "compare_output(" not in text, path
 
-        marker = "int32_t {{ prefix }}_{{ name }}_test_case_run(void)"
+        marker = "int32_t {{ name }}_test_case_run(void)"
         start = text.find(marker)
         assert start >= 0, path
         end = text.find('{% include "common/standalone/main.j2" %}', start)
@@ -74,7 +74,6 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
             "ActivationFunctions/relu/relu.c.j2",
             {
                 "name": "relu_smoke",
-                "prefix": "relu",
                 "input_dtype": "int8_t",
                 "output_dtype": "int8_t",
                 "output_size": 4,
@@ -89,7 +88,6 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
             "ComparisonFunctions/comparison/comparison.c.j2",
             {
                 "name": "comparison_smoke",
-                "prefix": "comparison",
                 "input_dtype": "int8_t",
                 "output_size": 4,
                 "kernel_fn": "arm_equal_s8",
@@ -106,7 +104,6 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
             "BasicMathFunctions/argmax/argmax.c.j2",
             {
                 "name": "argmax_smoke",
-                "prefix": "argmax",
                 "input_dtype": "int8_t",
                 "output_dtype": "int32_t",
                 "output_size": 4,
@@ -117,7 +114,6 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
             "QuantizationFunctions/dequantize/dequantize.c.j2",
             {
                 "name": "dequantize_smoke",
-                "prefix": "dequantize",
                 "input_size": 4,
                 "zero_point": 0,
                 "scale": 0.125,
@@ -134,7 +130,6 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
             "ConcatenationFunctions/split/split.c.j2",
             {
                 "name": "split_smoke",
-                "prefix": "split",
                 "input_dtype": "int8_t",
                 "output_dtype": "int8_t",
                 "kernel_fn": "arm_split_s8",
@@ -175,7 +170,6 @@ def test_basic_math_float_templates_render_preformatted_activation_literals() ->
         "BasicMathFunctions/add/add.c.j2",
         {
             "name": "add_float_default_f32",
-            "prefix": "add_float_default_f32",
             "input_dtype": "float",
             "output_dtype": "float",
             "float_kernel": True,
@@ -190,7 +184,6 @@ def test_basic_math_float_templates_render_preformatted_activation_literals() ->
         "BasicMathFunctions/mul/mul.c.j2",
         {
             "name": "mul_float_default_f32",
-            "prefix": "mul_float_default_f32",
             "input_dtype": "float",
             "output_dtype": "float",
             "float_kernel": True,
@@ -205,7 +198,6 @@ def test_basic_math_float_templates_render_preformatted_activation_literals() ->
         "ActivationFunctions/nn_activation_float/nn_activation_float.c.j2",
         {
             "name": "nn_activation_float_leaky_relu_f32",
-            "prefix": "nn_activation_float_leaky_relu_f32",
             "input_dtype": "float",
             "output_dtype": "float",
             "kernel_fn": "arm_nn_activation_f32",
@@ -229,7 +221,6 @@ def test_pooling_float_header_templates_render_public_float_params() -> None:
         "PoolingFunctions/avg_pool/avg_pool.h.j2",
         {
             "name": "avg_pool_float_default_f32",
-            "prefix": "avg_pool_float_default_f32",
             "input_dtype": "float",
             "output_dtype": "float",
             "pool_params_type": "cmsis_nn_pool_params_f32",
@@ -255,7 +246,6 @@ def test_pooling_float_header_templates_render_public_float_params() -> None:
         "PoolingFunctions/max_pool/max_pool.h.j2",
         {
             "name": "max_pool_float_default_f32",
-            "prefix": "max_pool_float_default_f32",
             "input_dtype": "float",
             "output_dtype": "float",
             "pool_params_type": "cmsis_nn_pool_params_f32",
@@ -292,7 +282,6 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
         "ConvolutionFunctions/convolve/convolve.h.j2",
         {
             "name": "convolve_float_default_f32",
-            "prefix": "convolve_float_default_f32",
             "input_dims": {"n": 1, "h": 6, "w": 6, "c": 3},
             "filter_dims": {"n": 5, "h": 3, "w": 3, "c": 3},
             "output_dims": {"n": 1, "h": 6, "w": 6, "c": 5},
@@ -316,7 +305,6 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
         "FullyConnectedFunctions/fully_connected/fully_connected.h.j2",
         {
             "name": "fully_connected_float_default_f32",
-            "prefix": "fully_connected_float_default_f32",
             "input_dims": {"n": 1, "h": 1, "w": 1, "c": 12},
             "filter_dims": {"n": 12, "h": 1, "w": 1, "c": 5},
             "output_dims": {"n": 1, "h": 1, "w": 1, "c": 5},
@@ -345,7 +333,6 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
         "FullyConnectedFunctions/fully_connected/fully_connected.c.j2",
         {
             "name": "fully_connected_float_default_f32",
-            "prefix": "fully_connected_float_default_f32",
             "input_dims": {"n": 1, "h": 1, "w": 1, "c": 12},
             "filter_dims": {"n": 12, "h": 1, "w": 1, "c": 5},
             "output_dims": {"n": 1, "h": 1, "w": 1, "c": 5},
@@ -374,7 +361,6 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
         "FullyConnectedFunctions/batch_matmul/batch_matmul.c.j2",
         {
             "name": "batch_matmul_float_default_f32",
-            "prefix": "batch_matmul_float_default_f32",
             "input_lhs_dims": {"n": 1, "h": 1, "w": 4, "c": 3},
             "input_rhs_dims": {"n": 1, "h": 1, "w": 3, "c": 2},
             "output_dims": {"n": 1, "h": 1, "w": 4, "c": 2},
@@ -398,7 +384,6 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
         "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2",
         {
             "name": "transpose_conv_float_default_f32",
-            "prefix": "transpose_conv_float_default_f32",
             "input_dims": {"n": 1, "h": 4, "w": 4, "c": 2},
             "filter_dims": {"n": 3, "h": 3, "w": 3, "c": 2},
             "output_dims": {"n": 1, "h": 8, "w": 8, "c": 3},
@@ -441,7 +426,6 @@ def test_s16_conv_templates_render_int8_weights_for_public_wrapper_signatures() 
         "ConvolutionFunctions/convolve/convolve.h.j2",
         {
             "name": "convolve_int16xint8xint32_case_04_s16",
-            "prefix": "convolve_int16xint8xint32_case_04_s16",
             "input_dims": {"n": 1, "h": 32, "w": 32, "c": 2},
             "filter_dims": {"n": 2, "h": 2, "w": 2, "c": 2},
             "output_dims": {"n": 1, "h": 30, "w": 30, "c": 2},
@@ -465,7 +449,6 @@ def test_s16_conv_templates_render_int8_weights_for_public_wrapper_signatures() 
         "ConvolutionFunctions/convolve/convolve.c.j2",
         {
             "name": "convolve_int16xint8xint32_case_04_s16",
-            "prefix": "convolve_int16xint8xint32_case_04_s16",
             "input_dims": {"n": 1, "h": 32, "w": 32, "c": 2},
             "filter_dims": {"n": 2, "h": 2, "w": 2, "c": 2},
             "output_dims": {"n": 1, "h": 30, "w": 30, "c": 2},
@@ -489,7 +472,6 @@ def test_s16_conv_templates_render_int8_weights_for_public_wrapper_signatures() 
         "ConvolutionFunctions/depthwise_conv/depthwise_conv.h.j2",
         {
             "name": "depthwise_conv_s16",
-            "prefix": "depthwise_conv_s16",
             "input_dims": {"n": 1, "h": 8, "w": 8, "c": 4},
             "filter_dims": {"n": 1, "h": 3, "w": 3, "c": 4},
             "output_dims": {"n": 1, "h": 6, "w": 6, "c": 4},
@@ -515,7 +497,6 @@ def test_s16_conv_templates_render_int8_weights_for_public_wrapper_signatures() 
         "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2",
         {
             "name": "depthwise_conv_s16",
-            "prefix": "depthwise_conv_s16",
             "input_dims": {"n": 1, "h": 8, "w": 8, "c": 4},
             "filter_dims": {"n": 1, "h": 3, "w": 3, "c": 4},
             "output_dims": {"n": 1, "h": 6, "w": 6, "c": 4},
@@ -554,7 +535,6 @@ def test_gather_nd_invalid_status_render_uses_expected_status_helper() -> None:
         "GatherFunctions/gather_nd/gather_nd.c.j2",
         {
             "name": "gather_nd_invalid_smoke",
-            "prefix": "gather_nd",
             "input_dtype": "int8_t",
             "output_dtype": "int8_t",
             "kernel_fn": "arm_gather_nd_s8",
@@ -576,7 +556,6 @@ def test_transpose_invalid_status_render_uses_expected_status_helper() -> None:
         "TransposeFunctions/transpose/transpose.c.j2",
         {
             "name": "transpose_invalid_smoke",
-            "prefix": "transpose",
             "input_dtype": "int8_t",
             "output_dtype": "int8_t",
             "kernel_fn": "arm_transpose_s8",
@@ -598,7 +577,6 @@ def test_transpose_header_float_uses_inline_perm_array() -> None:
         "TransposeFunctions/transpose/transpose.h.j2",
         {
             "name": "transpose_float_smoke",
-            "prefix": "transpose",
             "input_dims": {"n": 1, "h": 2, "w": 3, "c": 4},
             "output_dims": {"n": 1, "h": 3, "w": 2, "c": 4},
             "num_dims": 4,
@@ -622,7 +600,6 @@ def test_transpose_header_int_uses_permutations_pointer() -> None:
         "TransposeFunctions/transpose/transpose.h.j2",
         {
             "name": "transpose_int_smoke",
-            "prefix": "transpose",
             "input_dims": {"n": 1, "h": 2, "w": 3, "c": 4},
             "output_dims": {"n": 1, "h": 3, "w": 2, "c": 4},
             "num_dims": 4,
@@ -646,7 +623,6 @@ def test_rsqrt_invalid_status_render_uses_expected_status_helper() -> None:
         "BasicMathFunctions/rsqrt/rsqrt.c.j2",
         {
             "name": "rsqrt_invalid_smoke",
-            "prefix": "rsqrt",
             "call_style": "per_op",
             "input_dtype": "int16_t",
             "output_dtype": "int16_t",
@@ -674,7 +650,6 @@ def test_broadcast_to_invalid_status_render_uses_expected_status_helper() -> Non
         "BroadcastFunctions/broadcast_to/broadcast_to.c.j2",
         {
             "name": "broadcast_invalid_smoke",
-            "prefix": "broadcast",
             "c_type": "int8_t",
             "kernel_fn": "arm_broadcast_to_s8",
             "output_size": 4,
@@ -696,7 +671,6 @@ def test_dynamic_update_slice_invalid_status_render_uses_expected_status_helper(
         "DynamicUpdateSliceFunctions/dynamic_update_slice/dynamic_update_slice.c.j2",
         {
             "name": "dynamic_update_slice_invalid_smoke",
-            "prefix": "dynamic_update_slice",
             "c_type": "int8_t",
             "kernel_fn": "arm_dynamic_update_slice_s8",
             "operand_size": 20,
@@ -788,7 +762,6 @@ def test_quantize_and_dequantize_render_only_requested_validation_helpers() -> N
         "QuantizationFunctions/quantize/quantize.c.j2",
         {
             "name": "quantize_smoke",
-            "prefix": "quantize",
             "input_size": 4,
             "zero_point": 0,
             "scale": 0.125,
@@ -808,7 +781,6 @@ def test_quantize_and_dequantize_render_only_requested_validation_helpers() -> N
         "QuantizationFunctions/dequantize/dequantize.c.j2",
         {
             "name": "dequantize_smoke",
-            "prefix": "dequantize",
             "input_size": 4,
             "zero_point": 0,
             "scale": 0.125,
@@ -825,43 +797,46 @@ def test_quantize_and_dequantize_render_only_requested_validation_helpers() -> N
         },
     )
 
-    assert "#define HELIA_VALIDATE_TOLERANT_INTS" in quantize
-    assert "#define HELIA_VALIDATE_FLOATS" not in quantize
-    assert "#define HELIA_VALIDATE_EXACT_INTS" not in quantize
-    assert "#define HELIA_VALIDATE_BOOLEANS" not in quantize
+    # The HELIA_VALIDATE_* macro definitions themselves live once in the shared
+    # helia_test_runtime header (see test_shared_runtime_header_defines_all_validators
+    # below), not in per-template rendered text. Templates only need to select the
+    # correct dispatch mode for their requested validation_helpers.
     assert "TOLERANT_INT" in quantize
+    assert "EXACT_INT" not in quantize
 
-    assert "#define HELIA_VALIDATE_FLOATS" in dequantize
-    assert "#define HELIA_VALIDATE_TOLERANT_INTS" not in dequantize
-    assert "#define HELIA_VALIDATE_EXACT_INTS" not in dequantize
-    assert "#define HELIA_VALIDATE_BOOLEANS" not in dequantize
     assert "FLOAT" in dequantize
+    assert "TOLERANT_INT" not in dequantize
+    assert "EXACT_INT" not in dequantize
+
+
+def test_shared_runtime_header_defines_all_validators() -> None:
+    header = (
+        _repo_root() / "src" / "test_runtime" / "helia_test_runtime.h"
+    ).read_text()
+
+    for macro in (
+        "HELIA_VALIDATE_EXACT_INTS",
+        "HELIA_VALIDATE_TOLERANT_INTS",
+        "HELIA_VALIDATE_FLOATS",
+        "HELIA_VALIDATE_BOOLEANS",
+        "HELIA_VALIDATE_OUTPUTS_EXACT_INT",
+        "HELIA_VALIDATE_OUTPUTS_TOLERANT_INT",
+        "HELIA_VALIDATE_OUTPUTS_FLOAT",
+        "HELIA_VALIDATE_OUTPUTS_BOOL",
+        "HELIA_VALIDATE_OUTPUTS_NONE",
+    ):
+        assert f"#define {macro}(" in header, macro
 
 
 def test_rendered_float_validator_uses_additive_tolerance() -> None:
-    rendered = _render(
-        "QuantizationFunctions/dequantize/dequantize.c.j2",
-        {
-            "name": "dequantize_tolerance_smoke",
-            "prefix": "dequantize",
-            "input_size": 4,
-            "zero_point": 0,
-            "scale": 0.125,
-            "input_data_array": "    0",
-            "expected_output_array": "    0.000000f",
-            "input_dtype": "int8_t",
-            "output_dtype": "float",
-            "kernel_fn": "arm_dequantize_s8_f32",
-            "has_activation": False,
-            "activation_type": "NONE",
-            "comparison_atol": 1.0e-5,
-            "comparison_rtol": 1.0e-5,
-            "validation_helpers": ["float"],
-        },
-    )
+    # The float-tolerance formula is defined once in the shared runtime source
+    # (compiled into helia_test_runtime), not re-emitted per rendered template.
+    source = (
+        _repo_root() / "src" / "test_runtime" / "helia_test_runtime.c"
+    ).read_text()
 
-    assert "return (atol + (rtol * fabs(expected)));" in rendered
-    assert "helia_test_max_double" not in rendered
+    assert "return (atol + (rtol * fabs(expected)));" in source
+    assert "helia_test_max_double" not in source
 
 
 def test_build_validation_context_derives_dtype_specific_float_defaults() -> None:
@@ -910,4 +885,4 @@ def test_top_level_cmake_no_longer_uses_unity() -> None:
     assert "unity_fetch" not in text
     assert "ThrowTheSwitch/Unity" not in text
     assert "FetchContent_Declare(unity" not in text
-    assert "target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn retarget cmsis_startup)" in text
+    assert "target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn retarget cmsis_startup helia_test_runtime)" in text

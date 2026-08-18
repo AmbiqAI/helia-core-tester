@@ -1,39 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
+{% if needs_stdlib | default(false) %}
 #include <stdlib.h>
+{% endif %}
+#include "test_runtime/helia_test_runtime.h"
 
-{% include "common/validate.j2" %}
-
-#ifdef USING_FVP_CORSTONE_300
-extern void uart_init(void);
-#endif
-
-static inline void helia_test_platform_init(void)
-{
-#ifdef USING_FVP_CORSTONE_300
-    uart_init();
-#endif
-    setvbuf(stdout, NULL, _IONBF, 0);
-}
-
-static inline void signal_eot(void)
-{
-    // 0x04 (EOT) triggers FVP shutdown when:
-    //   -C mps3_board.uart0.shutdown_on_eot=1
-    putchar(4);
-    fflush(stdout);
-}
-
-static inline void helia_test_finish(int32_t failures)
-{
-    (void)failures;
-    signal_eot();
-    while (1) { }
-}
-
-void HardFault_Handler(void)
-{
-    printf("HardFault\r\n");
-    signal_eot();
-    while (1) { }
-}

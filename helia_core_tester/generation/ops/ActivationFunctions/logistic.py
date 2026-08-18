@@ -238,7 +238,6 @@ class OpLogistic(OperationBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
             'output_size': output_size,

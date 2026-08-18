@@ -145,7 +145,6 @@ class OpDynamicUpdateSlice(OperationBase):
         builder = TemplateContextBuilder()
         context = {
             "name": name,
-            "prefix": name,
             "rank": params_rank,
             "operand_shape": operand_shape,
             "update_shape": update_shape,

@@ -629,7 +629,6 @@ class OpFullyConnected(OperationBase):
 
             context = {
                 'name': name,
-                'prefix': name,
                 'input_dims': input_dims,
                 'filter_dims': filter_dims,
                 'output_dims': output_dims,
@@ -955,7 +954,6 @@ class OpFullyConnected(OperationBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'filter_dims': filter_dims,
             'output_dims': output_dims,

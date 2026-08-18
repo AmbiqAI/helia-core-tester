@@ -77,7 +77,6 @@ class OpSpaceToDepth(OperationBase):
 
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
             'block_size': int(self.desc.get('block_size', 1)),

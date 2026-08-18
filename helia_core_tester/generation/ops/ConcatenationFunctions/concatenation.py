@@ -301,7 +301,6 @@ class OpConcatenation(OperationBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'output_dims': output_dims,
             'output_rank': output_rank,
             'num_inputs': num_inputs,

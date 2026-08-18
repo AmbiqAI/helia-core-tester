@@ -5,7 +5,7 @@
 #define {{ name|upper }}_MAX_OUTPUT_SIZE {{ max_output_size }}
 static {{ output_c_type }} {{ name }}_output[{{ name|upper }}_MAX_OUTPUT_SIZE];
 
-int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+int32_t {{ name }}_test_case_run(void)
 {
     int32_t num_true = 0;
     arm_cmsis_nn_status status = {{ kernel_fn }}(

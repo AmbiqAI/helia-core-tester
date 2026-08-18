@@ -258,7 +258,6 @@ class OpLSTMUnidirectional(OperationBase):
             builder = TemplateContextBuilder()
             context = {
                 "name": name,
-                "prefix": name,
                 "data_dtype": data_dtype,
                 "output_dtype": data_dtype,
                 "kernel_fn": kernel_fn,

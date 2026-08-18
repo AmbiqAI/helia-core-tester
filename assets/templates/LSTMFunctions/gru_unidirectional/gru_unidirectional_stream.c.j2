@@ -51,7 +51,7 @@ static int32_t run_gru_chunk(int32_t chunk_time_steps, int32_t input_offset, int
         &buffers);
 }
 
-int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+int32_t {{ name }}_test_case_run(void)
 {
     /* Fresh streaming state for this sequence. */
     for (int32_t h = 0; h < {{ hidden_state_size }}; h++)

@@ -158,6 +158,13 @@ add_library(cmsis_startup STATIC)
 # Linker script (GNU)
 set(LINK_FILE ${FVP_CORSTONE_300_PATH}/linker.ld)
 
+# ---------- Shared generated-test runtime ----------
+# Runtime/validation logic common to every generated test .c file, compiled
+# once here instead of being re-emitted by Jinja into each generated file.
+add_library(helia_test_runtime STATIC src/test_runtime/helia_test_runtime.c)
+target_include_directories(helia_test_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(helia_test_runtime PUBLIC USING_FVP_CORSTONE_300)
+
 # ---------- Helpers ----------
 function(_normalize_target_name out_var in_path)
   get_filename_component(_tgt "${in_path}" NAME)
@@ -233,7 +240,7 @@ foreach(TEST_DIR_REL ${GENERATED_TEST_DIRS})
     # Pull in libgcov runtime symbols and emit gcov metadata in the final ELF.
     target_link_options(${TGT_NAME} PRIVATE --coverage)
   endif()
-  target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn retarget cmsis_startup)
+  target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn retarget cmsis_startup helia_test_runtime)
 
   list(APPEND GENERATED_TEST_TARGETS ${TGT_NAME})
 endforeach()

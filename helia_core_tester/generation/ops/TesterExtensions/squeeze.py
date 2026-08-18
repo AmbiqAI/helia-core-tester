@@ -218,7 +218,6 @@ class OpSqueeze(OperationBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
             'total_size': total_size,

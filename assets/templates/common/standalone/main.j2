@@ -1,6 +1,6 @@
 int main(void)
 {
     helia_test_platform_init();
-    int32_t failures = {{ prefix }}_{{ name }}_test_case_run();
+    int32_t failures = {{ name }}_test_case_run();
     helia_test_finish(failures);
 }

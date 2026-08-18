@@ -3,7 +3,7 @@
 #include <string.h>
 {% include "common/standalone/runtime_common.j2" %}
 
-#define SVDF_OUTPUT_SIZE ({{ prefix|upper }}_INPUT_BATCHES * {{ prefix|upper }}_UNIT_COUNT)
+#define SVDF_OUTPUT_SIZE ({{ name|upper }}_INPUT_BATCHES * {{ name|upper }}_UNIT_COUNT)
 static {{ output_dtype }} {{ name }}_output[SVDF_OUTPUT_SIZE];
 
 static int32_t run_svdf(void)
@@ -17,8 +17,8 @@ static int32_t run_svdf(void)
     cmsis_nn_context ctx;
 {% endif %}
 
-    const int32_t scratch_size = {{ prefix|upper }}_INPUT_BATCHES * {{ prefix|upper }}_FEATURE_BATCHES * sizeof(int32_t);
-    const int32_t scratch_size_out = {{ prefix|upper }}_INPUT_BATCHES * {{ prefix|upper }}_UNIT_COUNT * sizeof(int32_t);
+    const int32_t scratch_size = {{ name|upper }}_INPUT_BATCHES * {{ name|upper }}_FEATURE_BATCHES * sizeof(int32_t);
+    const int32_t scratch_size_out = {{ name|upper }}_INPUT_BATCHES * {{ name|upper }}_UNIT_COUNT * sizeof(int32_t);
 
     input_ctx.buf = malloc(scratch_size);
     input_ctx.size = scratch_size;
@@ -32,30 +32,30 @@ static int32_t run_svdf(void)
 #if defined(ARM_MATH_MVEI)
     if (ctx.buf != NULL) {
         arm_vector_sum_s8((int32_t *)ctx.buf,
-                          {{ prefix|upper }}_INPUT_HEIGHT,
-                          {{ prefix|upper }}_FEATURE_BATCHES,
+                          {{ name|upper }}_INPUT_HEIGHT,
+                          {{ name|upper }}_FEATURE_BATCHES,
                           {{ name }}_weights_feature,
-                          -{{ prefix|upper }}_INPUT_OFFSET,
+                          -{{ name|upper }}_INPUT_OFFSET,
                           0,
                           NULL);
     }
 #endif
 {% endif %}
 
-    svdf_params.input_activation.min = {{ prefix|upper }}_INPUT_ACTIVATION_MIN;
-    svdf_params.input_activation.max = {{ prefix|upper }}_INPUT_ACTIVATION_MAX;
-    svdf_params.output_activation.min = {{ prefix|upper }}_OUTPUT_ACTIVATION_MIN;
-    svdf_params.output_activation.max = {{ prefix|upper }}_OUTPUT_ACTIVATION_MAX;
-    svdf_params.input_offset = {{ prefix|upper }}_INPUT_OFFSET;
-    svdf_params.output_offset = {{ prefix|upper }}_OUTPUT_OFFSET;
-    svdf_params.rank = {{ prefix|upper }}_RANK;
+    svdf_params.input_activation.min = {{ name|upper }}_INPUT_ACTIVATION_MIN;
+    svdf_params.input_activation.max = {{ name|upper }}_INPUT_ACTIVATION_MAX;
+    svdf_params.output_activation.min = {{ name|upper }}_OUTPUT_ACTIVATION_MIN;
+    svdf_params.output_activation.max = {{ name|upper }}_OUTPUT_ACTIVATION_MAX;
+    svdf_params.input_offset = {{ name|upper }}_INPUT_OFFSET;
+    svdf_params.output_offset = {{ name|upper }}_OUTPUT_OFFSET;
+    svdf_params.rank = {{ name|upper }}_RANK;
 
-    input_quant_params.multiplier = {{ prefix|upper }}_INPUT_MULTIPLIER;
-    input_quant_params.shift = {{ prefix|upper }}_INPUT_SHIFT;
-    output_quant_params.multiplier = {{ prefix|upper }}_OUTPUT_MULTIPLIER;
-    output_quant_params.shift = {{ prefix|upper }}_OUTPUT_SHIFT;
+    input_quant_params.multiplier = {{ name|upper }}_INPUT_MULTIPLIER;
+    input_quant_params.shift = {{ name|upper }}_INPUT_SHIFT;
+    output_quant_params.multiplier = {{ name|upper }}_OUTPUT_MULTIPLIER;
+    output_quant_params.shift = {{ name|upper }}_OUTPUT_SHIFT;
 
-    {{ state_dtype }} state_data[{{ prefix|upper }}_INPUT_BATCHES * {{ prefix|upper }}_FEATURE_BATCHES * {{ prefix|upper }}_TIME_BATCHES];
+    {{ state_dtype }} state_data[{{ name|upper }}_INPUT_BATCHES * {{ name|upper }}_FEATURE_BATCHES * {{ name|upper }}_TIME_BATCHES];
     memcpy(state_data, {{ name }}_state_init, sizeof({{ name }}_state_init));
 
     memset({{ name }}_output, 0, sizeof({{ name }}_output));
@@ -122,7 +122,7 @@ static int32_t run_svdf(void)
     return result;
 }
 
-int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+int32_t {{ name }}_test_case_run(void)
 {
 {% if has_ctx %}
     int32_t buf_dsp = arm_svdf_s8_get_buffer_size_dsp(&{{ name }}_weights_feature_dims);
