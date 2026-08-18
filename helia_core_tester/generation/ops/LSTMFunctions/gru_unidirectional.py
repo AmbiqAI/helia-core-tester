@@ -191,7 +191,6 @@ class OpGRUUnidirectional(OperationBase):
         builder = TemplateContextBuilder()
         context = {
             "name": name,
-            "prefix": name,
             "data_dtype": data_dtype,
             "kernel_fn": kernel_fn,
             "gru_params_type": gru_params_type,

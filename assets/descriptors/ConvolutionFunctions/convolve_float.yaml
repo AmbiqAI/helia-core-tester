@@ -295,6 +295,15 @@ strides:
 - 1
 padding: VALID
 use_bias: true
+# Measured floor (issue #54 first real comparisons): patch-GEMM f16
+# accumulation reassociation reaches 1.06-1.11x the FP16 default on this case
+# (worst diff 1.95e-3 at |exp|=1.01). 2e-3/2e-3 gives ~1.7x margin over the
+# measured floor. The f32 twin keeps defaults and carries the fleet's
+# scaling-mutation sensitivity (caught at 29x there).
+comparison:
+  atol: 0.002
+  rtol: 0.002
+
 ---
 operator: Convolve
 name: convolve_float_1xn_generic_k4_valid_f32

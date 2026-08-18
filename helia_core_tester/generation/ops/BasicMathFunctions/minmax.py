@@ -223,7 +223,6 @@ class OpMinMax(BinaryBasicMathBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input1_dims': input1_dims,
             'input2_dims': input2_dims,
             'output_dims': output_dims,

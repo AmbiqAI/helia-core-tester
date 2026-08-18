@@ -162,7 +162,6 @@ class OpAbs(OperationBase):
 
         context = {
             "name": name,
-            "prefix": name,
             "input_dims": input_dims,
             "output_dims": output_dims,
             "input_offset": -int(input_zp),

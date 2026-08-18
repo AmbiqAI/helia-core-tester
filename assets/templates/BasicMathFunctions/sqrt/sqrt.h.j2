@@ -1,5 +1,5 @@
-#ifndef {{ prefix|upper }}_SQRT_H
-#define {{ prefix|upper }}_SQRT_H
+#ifndef {{ name|upper }}_SQRT_H
+#define {{ name|upper }}_SQRT_H
 
 #include <stdint.h>
 #include "arm_nnfunctions.h"
@@ -29,4 +29,4 @@ static const {{ output_dtype }} {{ name }}_expected_output[] = {
 {{ expected_output_array }}
 };
 
-#endif // {{ prefix|upper }}_SQRT_H
+#endif // {{ name|upper }}_SQRT_H

@@ -228,7 +228,6 @@ class OpQuantize(QuantizationFamilyBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input_size': input_size,
             'zero_point': int(output_zp),
             'scale': float(output_scale),

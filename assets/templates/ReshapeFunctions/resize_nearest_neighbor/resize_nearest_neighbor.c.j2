@@ -16,7 +16,7 @@ static cmsis_nn_resize_params {{ name }}_params = {
     .half_pixel_centers = {{ half_pixel_centers }},
 };
 
-int32_t {{ prefix }}_{{ name }}_run(
+int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input,
     {{ output_dtype }}* __restrict output
 ) {
@@ -33,9 +33,9 @@ int32_t {{ prefix }}_{{ name }}_run(
     return kernel_status;
 }
 
-int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+int32_t {{ name }}_test_case_run(void)
 {
-    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
+    int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("ResizeNearestNeighbor") }}", status);
 
     int failures = 0;

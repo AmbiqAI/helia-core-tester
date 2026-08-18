@@ -348,7 +348,6 @@ class OpStridedSlice(OperationBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
             'begin_dims': begin_dims,

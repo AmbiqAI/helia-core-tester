@@ -156,7 +156,6 @@ class OpPad(OperationBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
             'pre_pad_dims': pre_pad_dims,

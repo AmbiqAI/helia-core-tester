@@ -130,7 +130,6 @@ class OpArgMin(OperationBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'axis': axis,
             'input_data_array': input_array_str,

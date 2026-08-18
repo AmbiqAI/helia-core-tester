@@ -110,7 +110,6 @@ class OpBatchToSpaceND(OperationBase):
 
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
             'block_shape': block_shape,

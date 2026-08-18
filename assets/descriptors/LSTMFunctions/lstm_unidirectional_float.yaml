@@ -118,6 +118,15 @@ input_shape:
 - 1
 - 4
 - 5
+# Recurrent-f16 family tolerance (matches GRU f16, tester PR #52): the FP16
+# default (atol/rtol 1e-3) sits below the f16 LSTM accumulation floor -- first
+# real float comparisons (issue #54) measured diffs up to 4.2e-3 on
+# clip_tail9_time_major_f16 (~3.4x default). 0.01 gives ~3x margin over the
+# measured floor; the kernel repo's own f16 LSTM unit tests use 8e-2. Gate-swap
+# mutation sensitivity re-verified at this tolerance (see PR).
+comparison:
+  atol: 0.01
+  rtol: 0.01
 hint:
   force_cmsis: true
 ---
@@ -178,6 +187,15 @@ units: 8
 time_major: false
 cell_clip: 0.75
 input_shape: [2, 4, 6]
+# Recurrent-f16 family tolerance (matches GRU f16, tester PR #52): the FP16
+# default (atol/rtol 1e-3) sits below the f16 LSTM accumulation floor -- first
+# real float comparisons (issue #54) measured diffs up to 4.2e-3 on
+# clip_tail9_time_major_f16 (~3.4x default). 0.01 gives ~3x margin over the
+# measured floor; the kernel repo's own f16 LSTM unit tests use 8e-2. Gate-swap
+# mutation sensitivity re-verified at this tolerance (see PR).
+comparison:
+  atol: 0.01
+  rtol: 0.01
 hint:
   force_cmsis: true
 ---
@@ -198,5 +216,14 @@ units: 9
 time_major: true
 cell_clip: 0.75
 input_shape: [4, 2, 6]
+# Recurrent-f16 family tolerance (matches GRU f16, tester PR #52): the FP16
+# default (atol/rtol 1e-3) sits below the f16 LSTM accumulation floor -- first
+# real float comparisons (issue #54) measured diffs up to 4.2e-3 on
+# clip_tail9_time_major_f16 (~3.4x default). 0.01 gives ~3x margin over the
+# measured floor; the kernel repo's own f16 LSTM unit tests use 8e-2. Gate-swap
+# mutation sensitivity re-verified at this tolerance (see PR).
+comparison:
+  atol: 0.01
+  rtol: 0.01
 hint:
   force_cmsis: true

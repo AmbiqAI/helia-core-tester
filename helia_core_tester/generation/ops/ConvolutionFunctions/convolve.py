@@ -93,6 +93,24 @@ class OpConvolve(OperationBase):
             name='input'
         )
         
+        use_bias = self.desc.get('use_bias', True)
+        # A zero bias_initializer produces an all-zero bias tensor, which the
+        # TFLite converter's constant-folding optimizer strips from the
+        # FLOAT (non-quantized) graph entirely -- the generated CMSIS-NN
+        # test then calls the kernel with a NULL bias pointer, leaving the
+        # bias-add path completely untested. Use a small nonzero uniform
+        # bias, deterministic from the case seed, so real bias data flows
+        # through the golden and the kernel call.
+        # Float cases only: the same Keras model also feeds the QUANTIZED
+        # pipeline, so an ungated nonzero bias would silently perturb every
+        # int8/int16 conv golden (54 cases -- caught by adversarial review).
+        # Int-suite bias enrichment is a separate, deliberate change.
+        _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
+        bias_initializer = (
+            tf.keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
+            if (use_bias and _case_is_float) else 'zeros'
+        )
+
         conv = tf.keras.layers.Conv2D(
             filters=output_filters,
             kernel_size=tuple(filter_shape[0:2]),
@@ -100,10 +118,10 @@ class OpConvolve(OperationBase):
             dilation_rate=tuple(dilation),
             padding=padding,
             groups=groups,
-            use_bias=self.desc.get('use_bias', True),
+            use_bias=use_bias,
             activation=act,
             kernel_initializer=tf.keras.initializers.GlorotUniform(seed=1234),
-            bias_initializer='zeros',
+            bias_initializer=bias_initializer,
             name='conv_2d'
         )(x)
         
@@ -278,6 +296,7 @@ class OpConvolve(OperationBase):
         
         conv_op_index = 0
         bts_op_index = None
+        hoisted_bias_data = None
         try:
             from ai_edge_litert import schema_py_generated as litert
 
@@ -289,9 +308,63 @@ class OpConvolve(OperationBase):
                     found_conv = True
                 if opcode.builtinCode == litert.BuiltinOperator.BATCH_TO_SPACE_ND:
                     bts_op_index = i
+
+            # Dilated graphs lower to SpaceToBatchND -> Conv2D -> BatchToSpaceND.
+            # TF's MLIR converter hoists the bias-add out of CONV_2D in this
+            # pattern: the CONV_2D op keeps only a zero-filled placeholder
+            # bias, and the real bias is applied via a separate ADD op after
+            # BatchToSpaceND. If we naively pull "biases" from the CONV_2D
+            # op's own inputs (as done above via get_operator_tensors_from_litert),
+            # we get that zero placeholder instead of the bias the golden
+            # output was actually computed with. Find the hoisted bias, if
+            # this pattern is present, so the CMSIS kernel is called with the
+            # same bias the golden reflects.
+            #
+            # Scoped to float kernels only: the same ADD-after-BatchToSpaceND
+            # shape exists in quantized (S8/S16) graphs too, but there the
+            # hoisted ADD operates in the quantized output domain (its
+            # operand is not a plain int32 accumulator bias), so reusing this
+            # extraction for quantized dtypes would silently substitute the
+            # wrong tensor. Quantized dilated-conv bias handling is out of
+            # scope here and is left untouched.
+            if float_kernel and bts_op_index is not None:
+                from helia_core_tester.generation.utils.litert_utils import get_tensor_data_from_litert
+
+                bts_outs = subgraph.operators[bts_op_index].outputs
+                bts_output_idx = int(bts_outs[0]) if bts_outs is not None and len(bts_outs) > 0 else None
+                if bts_output_idx is not None:
+                    for i in range(bts_op_index + 1, len(subgraph.operators)):
+                        op = subgraph.operators[i]
+                        opcode = model.operatorCodes[op.opcodeIndex]
+                        if opcode.builtinCode != litert.BuiltinOperator.ADD:
+                            continue
+                        if bts_output_idx not in list(op.inputs):
+                            continue
+                        for input_idx in op.inputs:
+                            if int(input_idx) == bts_output_idx:
+                                continue
+                            candidate = subgraph.tensors[int(input_idx)]
+                            candidate_data = get_tensor_data_from_litert(candidate, model)
+                            # Adversarial-review hardening: the quantized graph's
+                            # hoisted ADD operand clears the opcode/constness/ndim
+                            # gates too (dtype int16, quantized-output domain) --
+                            # only dtype and exact per-channel length make this
+                            # extraction safe. A broadcast scalar (shape (1,))
+                            # would otherwise be emitted and read out of bounds
+                            # by the kernel (output_dims.c elements).
+                            if (
+                                candidate_data is not None
+                                and candidate_data.ndim == 1
+                                and candidate_data.dtype.kind == "f"
+                                and candidate_data.shape[0] == int(self.desc["filter_shape"][3])
+                            ):
+                                hoisted_bias_data = candidate_data
+                                break
+                        break
         except Exception:
             conv_op_index = 0
             bts_op_index = None
+            hoisted_bias_data = None
 
         op_tensors = get_operator_tensors_from_litert(model, subgraph, conv_op_index)
         
@@ -359,6 +432,13 @@ class OpConvolve(OperationBase):
         # Extract weights and biases from LiteRT
         weights = op_tensors['weights']
         biases = op_tensors['biases']
+        if hoisted_bias_data is not None:
+            # See the SpaceToBatchND/BatchToSpaceND comment above: this
+            # dilated-conv graph applies its real bias via a post-BatchToSpace
+            # ADD op, not inside CONV_2D. Use that bias instead of the zero
+            # placeholder CONV_2D carries, so the kernel call matches the
+            # golden's bias.
+            biases = hoisted_bias_data
         weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
         if weight_dtype == "S4":
             from helia_core_tester.generation.utils.litert_utils import get_tensor_data_packed_from_litert
@@ -556,7 +636,6 @@ class OpConvolve(OperationBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'filter_dims': filter_dims,
             'output_dims': output_dims,

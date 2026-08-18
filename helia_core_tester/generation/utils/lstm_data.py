@@ -626,7 +626,6 @@ def build_lstm_context(
 
     return {
         "name": name,
-        "prefix": name,
         "dataset": dataset,
         "macro_prefix": macro_prefix,
         "data_prefix": data_prefix,

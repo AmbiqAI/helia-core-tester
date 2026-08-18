@@ -57,8 +57,29 @@ class OpFullyConnected(OperationBase):
             inputs = keras.layers.Input(shape=(input_features,), batch_size=batch_size, name='input')
             x = inputs
         
+        # A zero bias_initializer (Dense's default) produces an all-zero bias
+        # tensor, which the TFLite converter's constant-folding optimizer
+        # strips from the FLOAT (non-quantized) graph entirely -- the
+        # generated CMSIS-NN test then calls the kernel with a NULL bias
+        # pointer, leaving the bias-add path completely untested. Use a
+        # small nonzero uniform bias, deterministic from the case seed, so
+        # real bias data flows through the golden and the kernel call.
+        # Float cases only: the same Keras model also feeds the QUANTIZED
+        # pipeline (see convolve.py) -- keep int FC goldens byte-identical.
+        _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
+        bias_initializer = (
+            keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
+            if (use_bias and _case_is_float) else 'zeros'
+        )
+
         # Dense layer without activation (we'll apply activation separately if needed)
-        x = keras.layers.Dense(output_units, activation=None, use_bias=use_bias, name='dense')(x)
+        x = keras.layers.Dense(
+            output_units,
+            activation=None,
+            use_bias=use_bias,
+            bias_initializer=bias_initializer,
+            name='dense'
+        )(x)
         
         # Apply activation if specified
         if activation_str == 'RELU':
@@ -608,7 +629,6 @@ class OpFullyConnected(OperationBase):
 
             context = {
                 'name': name,
-                'prefix': name,
                 'input_dims': input_dims,
                 'filter_dims': filter_dims,
                 'output_dims': output_dims,
@@ -934,7 +954,6 @@ class OpFullyConnected(OperationBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'filter_dims': filter_dims,
             'output_dims': output_dims,
