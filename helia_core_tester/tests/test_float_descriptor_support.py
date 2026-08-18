@@ -136,7 +136,7 @@ def _load_nn_activation_float_module(monkeypatch):
     fake_tf = SimpleNamespace(
         keras=SimpleNamespace(
             Model=object,
-            activations=SimpleNamespace(sigmoid=lambda x: x, tanh=lambda x: x),
+            activations=SimpleNamespace(sigmoid=lambda x: x, tanh=lambda x: x, linear=lambda x: x),
         ),
         nn=SimpleNamespace(),
     )

@@ -159,12 +159,14 @@ def test_selected_ops_define_local_litert_wrappers() -> None:
 
 
 def test_root_readme_documents_add_op_workflow() -> None:
-    readme_candidates = [
-        _repo_root().parents[1] / "README.md",
-        _repo_root() / "README.md",
-    ]
+    readme_candidates = []
+    if len(_repo_root().parents) > 1:
+        readme_candidates.append(_repo_root().parents[1] / "README.md")
+    readme_candidates.append(_repo_root() / "README.md")
 
     for readme in readme_candidates:
+        if not readme.exists():
+            continue
         content = readme.read_text()
         if "scaffold_operator.py" in content:
             assert "build_<op>_op()" in content or "tensor_dtypes" in content
