@@ -54,7 +54,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: AmbiqAI/ns-cmsis-nn
-          ref: ${{ inputs.ns_cmsis_nn_ref || 'main' }}
+          ref: ${{ github.event.inputs.ns_cmsis_nn_ref || 'main' }}
           path: ns-cmsis-nn-scratch
 
       - name: Install uv
@@ -73,7 +73,7 @@ jobs:
       - name: Setup build dependencies
         run: ./scripts/setup_ci.sh
 
-      - name: Generate + compile (no FVP run) against ns-cmsis-nn ${{ inputs.ns_cmsis_nn_ref || 'main' }}
+      - name: Generate + compile (no FVP run) against ns-cmsis-nn ${{ github.event.inputs.ns_cmsis_nn_ref || 'main' }}
         run: |
           uv run helia_core_tester full \
             --cpu cortex-m55 \
