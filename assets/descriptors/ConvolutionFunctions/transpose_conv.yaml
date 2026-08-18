@@ -227,3 +227,85 @@ strides:
 - 1
 padding: VALID
 use_bias: false
+---
+# helia-core-tester#58: pad_h % stride_h != 0 (row remainder), pad_w % stride_w == 0.
+# SAME padding: pad_total = kernel - stride (independent of spatial extent), pad = pad_total // 2.
+# kernel_h=4, stride_h=2 -> pad_total_h=2, pad_h=1, 1 % 2 = 1 (!= 0).
+# kernel_w=6, stride_w=2 -> pad_total_w=4, pad_w=2, 2 % 2 = 0.
+# This is the exact configuration class that hid the s8 row-misalignment bug (ns-cmsis-nn#260)
+# until the fix landed on ns-cmsis-nn main.
+operator: TransposeConv
+name: transpose_conv_same_kernel4x6_stride2x2_bias_padrem_h_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 5
+- 5
+- 8
+filter_shape:
+- 4
+- 6
+- 8
+- 4
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: true
+---
+# helia-core-tester#58: pad_w % stride_w != 0 (column remainder), pad_h % stride_h == 0.
+# kernel_h=6, stride_h=2 -> pad_total_h=4, pad_h=2, 2 % 2 = 0.
+# kernel_w=4, stride_w=2 -> pad_total_w=2, pad_w=1, 1 % 2 = 1 (!= 0).
+operator: TransposeConv
+name: transpose_conv_same_kernel6x4_stride2x2_no_bias_padrem_w_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 5
+- 5
+- 8
+filter_shape:
+- 6
+- 4
+- 8
+- 4
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: false
+---
+# helia-core-tester#58: both pad_h % stride_h != 0 AND pad_w % stride_w != 0.
+# Mirrors upstream ARM-software/CMSIS-NN#230's minimal repro shape (4x4x8 input, 4x4
+# kernel, stride 2 -> SAME gives pad 1 on both axes): kernel=4, stride=2 ->
+# pad_total=2, pad=1, 1 % 2 = 1 (!= 0) on both H and W.
+operator: TransposeConv
+name: transpose_conv_same_kernel4x4_stride2x2_bias_padrem_hw_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 4
+- 4
+- 8
+filter_shape:
+- 4
+- 4
+- 8
+- 4
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: true
