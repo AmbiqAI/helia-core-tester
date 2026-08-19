@@ -68,14 +68,14 @@ class OpAbs(OperationBase):
             }
         if activation_dtype == "FP32":
             return {
-                "kernel_fn": "arm_abs_f32",
+                "kernel_fn": "arm_nn_abs_f32",
                 "input_c_type": "float",
                 "output_c_type": "float",
                 "float_kernel": True,
             }
         if activation_dtype == "FP16":
             return {
-                "kernel_fn": "arm_abs_f16",
+                "kernel_fn": "arm_nn_abs_f16",
                 "input_c_type": "float16_t",
                 "output_c_type": "float16_t",
                 "float_kernel": True,
