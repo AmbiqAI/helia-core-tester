@@ -111,7 +111,6 @@ class OpSelectV2(OperationBase):
         builder = TemplateContextBuilder()
         context = {
             "name": name,
-            "prefix": name,
             "rank": rank,
             "output_shape": output_shape,
             "condition_shape": condition_shape,

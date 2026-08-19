@@ -133,7 +133,6 @@ class OpBroadcastTo(OperationBase):
         builder = TemplateContextBuilder()
         context = {
             'name': name,
-            'prefix': name,
             'rank': params_rank,
             'input_shape': input_shape,
             'output_shape': output_shape,

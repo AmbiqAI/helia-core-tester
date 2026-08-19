@@ -78,7 +78,6 @@ class OpRequantize(QuantizationFamilyBase):
 
         context = {
             "name": name,
-            "prefix": name,
             "input_size": size,
             "input_shape_array": builder.format_array_as_c_literal(np.array(input_shape, dtype=np.int32)),
             "input_data_array": builder.format_array_as_c_literal(input_q),

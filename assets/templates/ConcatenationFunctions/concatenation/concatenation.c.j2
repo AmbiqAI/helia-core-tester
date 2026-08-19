@@ -12,7 +12,7 @@ static const {{ input_dtype }}* {{ name }}_input_ptrs[] = {
 {% endfor %}
 };
 
-int32_t {{ prefix }}_{{ name }}_run(
+int32_t {{ name }}_run(
     const {{ input_dtype }}* const *input_ptrs,
     {{ output_dtype }}* __restrict output
 ) {
@@ -84,9 +84,9 @@ int32_t {{ prefix }}_{{ name }}_run(
     return kernel_status;
 }
 
-int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+int32_t {{ name }}_test_case_run(void)
 {
-    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input_ptrs, {{ name }}_output);
+    int32_t status = {{ name }}_run({{ name }}_input_ptrs, {{ name }}_output);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("Concatenation") }}", status);
 
     int failures = 0;

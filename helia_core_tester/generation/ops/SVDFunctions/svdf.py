@@ -266,9 +266,9 @@ class OpSVDF(OperationBase):
             builder = TemplateContextBuilder()
             context = {
                 "name": name,
-                "prefix": name,
                 "kernel_fn": kernel_fn,
                 "data_dtype": data_dtype,
+                "output_dtype": data_dtype,
                 "svdf_params_type": svdf_params_type,
                 "input_batches": input_batches,
                 "input_height": input_height,
@@ -390,7 +390,6 @@ class OpSVDF(OperationBase):
         builder = TemplateContextBuilder()
         context = {
             "name": name,
-            "prefix": name,
             "kernel_fn": kernel_fn,
             "has_ctx": has_ctx,
             "input_batches": input_batches,
@@ -424,6 +423,9 @@ class OpSVDF(OperationBase):
             "state_init_array": builder.format_array_as_c_literal(state_init),
             "output_ref_array": builder.format_array_as_c_literal(expected_output),
             "bias_array": builder.format_array_as_c_literal(bias) if bias is not None else "",
+            # svdf.c.j2 is the only template that allocates scratch buffers with
+            # malloc/free; gate the shared runtime_common.j2 stdlib.h include on it.
+            "needs_stdlib": True,
         }
 
         includes_api_dir = output_dir / "includes"

@@ -249,7 +249,6 @@ class OpSqrt(OperationBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'input_data_array': input_array_str,
             'expected_output_array': expected_output_array_str,

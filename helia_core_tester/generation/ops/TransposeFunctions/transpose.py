@@ -262,7 +262,6 @@ class OpTranspose(OperationBase):
 
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
             'num_dims': num_dims,

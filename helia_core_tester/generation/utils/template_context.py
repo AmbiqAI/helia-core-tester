@@ -155,20 +155,31 @@ class TemplateContextBuilder:
         explicit = context.get("validation_mode")
         if explicit:
             return str(explicit).strip().lower()
+        # Output dtype wins over the template-path allowlists: the allowlists
+        # exist to pick the right INT comparison for shared int templates, and
+        # must never route a float-typed output into an integer comparison
+        # (the (long long) cast truncates |v| < 1 to 0 on both sides, making
+        # the comparison vacuous — issue #54). Float descriptors reusing an
+        # int template get a real float comparison; int descriptors are
+        # unaffected and fall through to the allowlists as before.
+        # data_dtype is the fallback because several generators (LSTM, SVDF)
+        # historically set only that key; an op whose output dtype differs
+        # from its data dtype (e.g. Quantize) must set output_dtype explicitly.
+        output_dtype = str(
+            context.get("output_dtype") or context.get("data_dtype") or ""
+        ).strip().lower()
+        if output_dtype == "bool":
+            return "bool"
         if normalized_path in cls._BOOL_VALIDATION_TEMPLATES:
             return "bool"
+        if "float" in output_dtype:
+            return "float"
         if normalized_path in cls._FLOAT_VALIDATION_TEMPLATES:
             return "float"
         if normalized_path in cls._EXACT_INT_VALIDATION_TEMPLATES:
             return "exact_int"
         if normalized_path in cls._TOLERANT_INT_VALIDATION_TEMPLATES:
             return "tolerant_int"
-
-        output_dtype = str(context.get("output_dtype", "")).strip().lower()
-        if output_dtype == "bool":
-            return "bool"
-        if "float" in output_dtype:
-            return "float"
         return "exact_int"
 
     @classmethod
@@ -271,6 +282,21 @@ class TemplateContextBuilder:
     ) -> Dict[str, Any]:
         resolved = dict(context)
         mode = cls.infer_validation_mode(template_path, resolved)
+        # Invariant (issue #54): a float-typed output must never be validated
+        # by an integer comparison — the (long long) cast makes it vacuous.
+        # This also rejects coercion via an explicit validation_mode override.
+        output_dtype = str(
+            resolved.get("output_dtype") or resolved.get("data_dtype") or ""
+        ).strip().lower()
+        if "float" in output_dtype and mode in ("exact_int", "tolerant_int", "bool", "none"):
+            raise ValueError(
+                f"Validation-mode coercion: template '{template_path}' resolved "
+                f"validation mode '{mode}' for float output dtype "
+                f"'{output_dtype}'. Float outputs require a float comparison; "
+                f"'none' recreates the #54 end state (no comparison at all). "
+                f"Status-only fault templates should simply not invoke output "
+                f"validation rather than coercing the mode."
+            )
         resolved.setdefault("validation_mode", mode)
         resolved.setdefault("validation_mode_token", mode.upper())
         resolved.setdefault(
@@ -922,7 +948,19 @@ class TemplateContextBuilder:
 
         reverse_conv_possible = (stride_w <= 2) and (stride_h <= 2)
         reverse_conv_efficient = (input_c > reverse_tcol_threshold)
-        
+
+        # Rolling-buffer sizing (ns-cmsis-nn issue #261 / PR #262): this is the
+        # formula arm_transpose_conv_s8_get_buffer_size() (and the _mve variant)
+        # uses directly, and also the lower bound it enforces even when the
+        # reverse-conv route is taken (other direct callers of
+        # arm_transpose_conv_s8 still need the rolling-buffer sizing). Computed
+        # once here so the reverse and non-reverse branches below can never
+        # diverge on this formula.
+        buf_x = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_w)) * output_c
+        buf_x_mve = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_h)) * output_c
+        buf_y = max(filter_h, stride_h)
+        rolling_ctx_size = max(buf_x, buf_x_mve) * buf_y * 4  # int32 scratch
+
         if output_dtype == 'S16':
             # S16 buffer size (conservative estimate)
             buffer_size_mve = 4 * 8 * filter_w * filter_h * 2  # sizeof(int16_t) = 2
@@ -937,18 +975,21 @@ class TemplateContextBuilder:
                     'w': input_dims['w'] * stride_w,
                     'c': input_c,
                 }
-                ctx_size = TemplateContextBuilder.calculate_buffer_size_max(
+                reverse_conv_ctx_size = TemplateContextBuilder.calculate_buffer_size_max(
                     reverse_conv_input_dims,
                     filter_dims,
                     output_dims,
                     output_dtype='S8',
                 )
+                # ns-cmsis-nn issue #261 / PR #262: even when the reverse-conv route is
+                # taken, arm_transpose_conv_s8_get_buffer_size() (and the _mve variant)
+                # now returns MAX(reverse-conv size, rolling-buffer size), because other
+                # direct callers of arm_transpose_conv_s8 still need the rolling-buffer
+                # sizing. Mirror that here so this harness bound stays an upper bound.
+                ctx_size = max(reverse_conv_ctx_size, rolling_ctx_size)
                 output_ctx_size = input_c * filter_w * filter_h * filter_dims['n']
             else:
-                buf_x = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_w)) * output_c
-                buf_x_mve = ((input_dims['w'] - 1) * stride_w + max(filter_w, stride_h)) * output_c
-                buf_y = max(filter_h, stride_h)
-                ctx_size = max(buf_x, buf_x_mve) * buf_y * 4  # int32 scratch
+                ctx_size = rolling_ctx_size
                 output_ctx_size = 0
         
         # Return maximum of ctx and output_ctx

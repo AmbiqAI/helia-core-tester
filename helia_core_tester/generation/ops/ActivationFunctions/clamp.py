@@ -87,7 +87,6 @@ class OpClamp(OperationBase):
 
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
             'act_min': int(act_min),

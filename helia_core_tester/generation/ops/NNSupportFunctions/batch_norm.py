@@ -51,7 +51,6 @@ class OpBatchNorm(OperationBase):
         builder = TemplateContextBuilder()
         context = {
             "name": name,
-            "prefix": name,
             "input_dims": builder.nhwc_to_cmsis_dims(input_shape),
             "input_data_array": builder.format_array_as_c_literal(input_data),
             "scale_array": builder.format_array_as_c_literal(scale),

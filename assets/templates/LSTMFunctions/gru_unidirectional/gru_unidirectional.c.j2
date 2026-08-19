@@ -40,7 +40,7 @@ static int32_t run_gru(void)
     return {{ kernel_fn }}({{ name }}_input_tensor, {{ name }}_output, &params, &buffers);
 }
 
-int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+int32_t {{ name }}_test_case_run(void)
 {
     int32_t status = run_gru();
     HELIA_VALIDATE_STATUS("{{ validation_label | default("GRU") }}", status);

@@ -1,41 +1,55 @@
-#ifndef HELIA_CORE_TEMPLATE_VALIDATE_H
-#define HELIA_CORE_TEMPLATE_VALIDATE_H
-{% set validation_helpers = validation_helpers | default([]) %}
+/*
+ * Shared standalone-firmware runtime for generated helia-core-tester tests.
+ *
+ * Every generated test .c file is its own standalone firmware image (its own
+ * main()/HardFault_Handler/etc.), but the runtime and validation logic itself
+ * is identical across all ~2,000+ generated files. Rather than re-emitting
+ * this logic via Jinja into every generated file, it is compiled exactly once
+ * into the `helia_test_runtime` static library and linked into every test
+ * executable (see CMakeLists.txt). Generated files only need:
+ *
+ *   #include "test_runtime/helia_test_runtime.h"
+ *
+ * Validation macros (HELIA_VALIDATE_*) intentionally remain macros: they
+ * must expand at the call site so the compiler can see the concrete element
+ * type of the caller's arrays (for the compile-time float/int guard and for
+ * correct promotion in the per-type loops below). Everything that does NOT
+ * need call-site type information (platform init, fault handling, failure
+ * reporting) is a plain compiled function instead.
+ */
+#ifndef HELIA_TEST_RUNTIME_H
+#define HELIA_TEST_RUNTIME_H
 
 #include <math.h>
 #include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
 
-static inline void helia_test_print_failure_count(int failures)
-{
-    printf("%d Failures\r\n", failures);
-}
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-static inline int helia_test_status_failure(const char *label, int status)
-{
-    printf("%s failed with status %d\r\n", label, status);
-    helia_test_print_failure_count(1);
-    return 1;
-}
+/* ---------------------------------------------------------------------- */
+/* Platform / lifecycle (defined once in helia_test_runtime.c)            */
+/* ---------------------------------------------------------------------- */
 
-static inline int helia_test_expected_status_failure(const char *label, int status, int expected_status)
-{
-    printf("%s failed with status %d (expected %d)\r\n", label, status, expected_status);
-    helia_test_print_failure_count(1);
-    return 1;
-}
+void helia_test_platform_init(void);
+void helia_test_finish(int32_t failures);
 
-static inline int helia_test_scalar_int_mismatch(const char *label, const char *subject, int expected, int actual)
-{
-    printf("%s %s mismatch: expected %d got %d\r\n", label, subject, expected, actual);
-    helia_test_print_failure_count(1);
-    return 1;
-}
+/* ---------------------------------------------------------------------- */
+/* Failure reporting (defined once in helia_test_runtime.c)               */
+/* ---------------------------------------------------------------------- */
 
-static inline int helia_test_finish_validation(int failures)
-{
-    helia_test_print_failure_count(failures);
-    return failures;
+void helia_test_print_failure_count(int failures);
+int helia_test_status_failure(const char *label, int status);
+int helia_test_expected_status_failure(const char *label, int status, int expected_status);
+int helia_test_scalar_int_mismatch(const char *label, const char *subject, int expected, int actual);
+int helia_test_finish_validation(int failures);
+double helia_test_float_tolerance(double expected, double atol, double rtol);
+
+#ifdef __cplusplus
 }
+#endif
 
 #define HELIA_VALIDATE_EXPECTED_STATUS(label, status, expected_status) \
     do { \
@@ -64,16 +78,35 @@ static inline int helia_test_finish_validation(int failures)
 #define HELIA_VALIDATE_RETURN_FAILURES(failures) \
     return helia_test_finish_validation((failures))
 
-{% if "float" in validation_helpers %}
-static inline double helia_test_float_tolerance(double expected, double atol, double rtol)
-{
-    return (atol + (rtol * fabs(expected)));
-}
-{% endif %}
+/*
+ * Compile-time guard (issue #54): the integer validators cast elements to
+ * long long, which silently truncates float outputs (|v| < 1 becomes 0 on
+ * both sides and always "matches"). If a generator regression ever routes a
+ * float-typed output into an integer validator again, fail the BUILD instead
+ * of silently passing forever. __fp16 is included only where the target
+ * defines an IEEE half type, which is every configuration that can compile
+ * float16 test data in the first place.
+ */
+#if (defined(__ARM_FP16_FORMAT_IEEE) || defined(__ARM_FEATURE_FP16_SCALAR_ARITHMETIC)) && defined(__FLT16_MAX__)
+/* __fp16 and _Float16 are distinct types on GCC/Clang Arm targets; block both
+ * (float16_t may typedef either depending on toolchain/host configuration). */
+#define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, __fp16: 1, _Float16: 1, default: 0)
+#elif defined(__ARM_FP16_FORMAT_IEEE) || defined(__ARM_FEATURE_FP16_SCALAR_ARITHMETIC)
+#define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, __fp16: 1, default: 0)
+#elif defined(__FLT16_MAX__)
+#define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, _Float16: 1, default: 0)
+#else
+#define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, default: 0)
+#endif
+#define HELIA_ASSERT_INT_VALIDATOR_INPUT(arr) \
+    _Static_assert(!HELIA_ELEM_IS_FLOAT((arr)[0]), \
+                   "integer validator applied to float outputs: validation-mode coercion " \
+                   "(helia-core-tester issue #54); float outputs need the FLOAT validator")
 
-{% if "exact_int" in validation_helpers %}
 #define HELIA_VALIDATE_EXACT_INTS(actual, expected, size, max_reports, failures) \
     do { \
+        HELIA_ASSERT_INT_VALIDATOR_INPUT(actual); \
+        HELIA_ASSERT_INT_VALIDATOR_INPUT(expected); \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
             long long helia_act_val = (long long)((actual)[helia_i]); \
             long long helia_exp_val = (long long)((expected)[helia_i]); \
@@ -85,11 +118,11 @@ static inline double helia_test_float_tolerance(double expected, double atol, do
             } \
         } \
     } while (0)
-{% endif %}
 
-{% if "tolerant_int" in validation_helpers %}
 #define HELIA_VALIDATE_TOLERANT_INTS(actual, expected, size, tolerance, max_reports, failures) \
     do { \
+        HELIA_ASSERT_INT_VALIDATOR_INPUT(actual); \
+        HELIA_ASSERT_INT_VALIDATOR_INPUT(expected); \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
             long long helia_act_val = (long long)((actual)[helia_i]); \
             long long helia_exp_val = (long long)((expected)[helia_i]); \
@@ -111,9 +144,7 @@ static inline double helia_test_float_tolerance(double expected, double atol, do
             } \
         } \
     } while (0)
-{% endif %}
 
-{% if "float" in validation_helpers %}
 #define HELIA_VALIDATE_FLOATS(actual, expected, size, atol, rtol, max_reports, failures) \
     do { \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
@@ -140,9 +171,7 @@ static inline double helia_test_float_tolerance(double expected, double atol, do
             } \
         } \
     } while (0)
-{% endif %}
 
-{% if "bool" in validation_helpers %}
 #define HELIA_VALIDATE_BOOLEANS(actual, expected, size, max_reports, failures) \
     do { \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
@@ -156,7 +185,6 @@ static inline double helia_test_float_tolerance(double expected, double atol, do
             } \
         } \
     } while (0)
-{% endif %}
 
 #define HELIA_VALIDATE_OUTPUTS_EXACT_INT(actual, expected, size, tolerance, atol, rtol, max_reports, failures) \
     HELIA_VALIDATE_EXACT_INTS((actual), (expected), (size), (max_reports), (failures))
@@ -185,4 +213,4 @@ static inline double helia_test_float_tolerance(double expected, double atol, do
 #define HELIA_VALIDATE_OUTPUTS(mode, actual, expected, size, tolerance, atol, rtol, max_reports, failures) \
     HELIA_VALIDATE_OUTPUTS_##mode((actual), (expected), (size), (tolerance), (atol), (rtol), (max_reports), (failures))
 
-#endif
+#endif /* HELIA_TEST_RUNTIME_H */

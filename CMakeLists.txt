@@ -385,6 +385,13 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
   endif()
 endif()
 
+# ---------- Shared generated-test runtime ----------
+# Runtime/validation logic common to every generated test .c file, compiled
+# once here instead of being re-emitted by Jinja into each generated file.
+add_library(helia_test_runtime STATIC src/test_runtime/helia_test_runtime.c)
+target_include_directories(helia_test_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(helia_test_runtime PUBLIC USING_FVP_CORSTONE_300)
+
 # ---------- Helpers ----------
 function(_normalize_target_name out_var in_path)
   get_filename_component(_tgt "${in_path}" NAME)
@@ -481,7 +488,7 @@ if(HELIA_BUILD_GENERATED_TESTS)
         # Pull in libgcov runtime symbols and emit gcov metadata in the final ELF.
         target_link_options(${TGT_NAME} PRIVATE --coverage)
       endif()
-      target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn retarget cmsis_startup)
+      target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn retarget cmsis_startup helia_test_runtime)
     endif()
 
     list(APPEND GENERATED_TEST_TARGETS ${TGT_NAME})
@@ -490,7 +497,6 @@ if(HELIA_BUILD_GENERATED_TESTS)
   if(GENERATED_TEST_TARGETS)
     add_custom_target(generated_tests ALL DEPENDS ${GENERATED_TEST_TARGETS})
   endif()
-endif()
 
 # ---------- Summary ----------
 message(STATUS "  CMSIS_PATH             : ${CMSIS_PATH}")

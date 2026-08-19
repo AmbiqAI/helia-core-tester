@@ -240,7 +240,7 @@ static int32_t run_lstm(void)
     return result;
 }
 
-int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+int32_t {{ name }}_test_case_run(void)
 {
     int32_t status = run_lstm();
     HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);

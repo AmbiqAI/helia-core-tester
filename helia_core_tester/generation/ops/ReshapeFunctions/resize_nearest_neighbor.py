@@ -123,7 +123,6 @@ class OpResizeNearestNeighbor(OperationBase):
 
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
             'output_size_dims': size_dims,

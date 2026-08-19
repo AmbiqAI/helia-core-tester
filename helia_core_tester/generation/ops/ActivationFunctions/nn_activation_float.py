@@ -163,7 +163,6 @@ class OpNNActivationFloat(OperationBase):
         builder = TemplateContextBuilder()
         context = {
             "name": name,
-            "prefix": name,
             "size": int(np.prod(input_shape)),
             "input_data_array": builder.format_array_as_c_literal(input_data),
             "expected_output_array": builder.format_array_as_c_literal(output_data),

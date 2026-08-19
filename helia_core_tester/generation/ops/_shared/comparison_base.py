@@ -147,7 +147,6 @@ class ComparisonFamilyBase(OperationBase):
 
         context = {
             "name": name,
-            "prefix": name,
             "input_1_dims": input_1_dims,
             "input_2_dims": input_2_dims,
             "output_dims": output_dims,

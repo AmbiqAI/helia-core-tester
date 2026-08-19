@@ -173,7 +173,6 @@ class OpGatherND(OperationBase):
 
         context = {
             "name": name,
-            "prefix": name,
             "kernel_fn": kernel_info["kernel_fn"],
             "input_dtype": kernel_info["input_c_type"],
             "output_dtype": kernel_info["output_c_type"],

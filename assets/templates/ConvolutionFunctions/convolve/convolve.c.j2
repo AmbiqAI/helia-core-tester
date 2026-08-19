@@ -42,15 +42,13 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
 {% endif %}
 
 {#
-  Shared logic for both the plain correctness path ({{prefix}}_{{name}}_run,
+  Shared logic for both the plain correctness path ({{name}}_run,
   used by _test_case_run) and the --benchmark path ({{name}}_bench_init /
   {{name}}_bench_op, used by _benchmark_run). Defined once as macros so the
   two paths can never drift out of sync -- only the timing boundary differs
   (init vs. the timed kernel call), not the logic itself.
 #}
 {% macro conv_bench_init() %}
-    // Calculate required buffer size
-    {% if float_kernel %}
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
         &{{ name }}_conv_params,
         &{{ name }}_input_dims,
@@ -191,7 +189,7 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
     #error "Unsupported kernel function: {{ kernel_fn }}"
     {% endif %}
 {% endmacro %}
-int32_t {{ prefix }}_{{ name }}_run(
+int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input,
     {{ output_dtype }}* __restrict output
 ) {
@@ -228,7 +226,7 @@ static int32_t {{ name }}_bench_op(void)
 }
 
 {% if not use_batch_harness %}
-static void {{ prefix }}_{{ name }}_benchmark_run(void)
+static void {{ name }}_benchmark_run(void)
 {
     {{ name }}_bench_init();
     helia_benchmark_run("{{ name }}", {{ name }}_bench_op);
@@ -236,9 +234,9 @@ static void {{ prefix }}_{{ name }}_benchmark_run(void)
 {% endif %}
 #endif // HELIA_BENCHMARK_MODE
 
-int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+int32_t {{ name }}_test_case_run(void)
 {
-    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input, {{ name }}_output);
+    int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("Convolution") }}", status);
 
     int failures = 0;

@@ -119,7 +119,6 @@ class OpNNActivationS16(OperationBase):
 
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
             'left_shift': int(left_shift),

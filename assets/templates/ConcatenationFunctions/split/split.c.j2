@@ -13,7 +13,7 @@ static {{ output_dtype }}* {{ name }}_output_ptrs[] = {
     {% endfor %}
 };
 
-int32_t {{ prefix }}_{{ name }}_run(
+int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input
 ) {
     // Call Split kernel
@@ -31,9 +31,9 @@ int32_t {{ prefix }}_{{ name }}_run(
     return kernel_status;
 }
 
-int32_t {{ prefix }}_{{ name }}_test_case_run(void)
+int32_t {{ name }}_test_case_run(void)
 {
-    int32_t status = {{ prefix }}_{{ name }}_run({{ name }}_input);
+    int32_t status = {{ name }}_run({{ name }}_input);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("Split") }}", status);
 
     int failures = 0;

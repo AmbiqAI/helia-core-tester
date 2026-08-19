@@ -194,7 +194,6 @@ class OpPReLUScalar(OperationBase):
         builder = TemplateContextBuilder()
         context = {
             "name": name,
-            "prefix": name,
             "num_pixels": num_pixels,
             "scalar_array": builder.format_array_as_c_literal(scalar_q.reshape(-1)),
             "alpha_array": builder.format_array_as_c_literal(alpha_q.reshape(-1)),

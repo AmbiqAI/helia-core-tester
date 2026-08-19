@@ -142,7 +142,6 @@ class OpReduceMax(OperationBase):
         # Build template context
         context = {
             'name': name,
-            'prefix': name,
             'input_dims': input_dims,
             'output_dims': output_dims,
             'axis_dims': axis_dims_cmsis,
