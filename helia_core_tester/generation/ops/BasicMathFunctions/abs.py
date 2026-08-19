@@ -111,7 +111,7 @@ class OpAbs(OperationBase):
         activation_dtype = self.desc.get("activation_dtype", "S8")
 
         if kernel_info["float_kernel"]:
-            # arm_abs_f32/f16 are pure (input, output, block_size) kernels
+            # arm_nn_abs_f32/f16 are pure (input, output, block_size) kernels
             # with no quantization or activation parameters.
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
             rng_state = self.rng.__getstate__()
