@@ -3095,7 +3095,20 @@ def _extract_elementwise_binary_tensors(
             f"header output_dims product ({int(np.prod(output_shape))})"
         )
     input1_data = input1_flat.reshape(input1_shape)
-    input2_data = input2_flat[: int(np.prod(input2_shape))].reshape(input2_shape)
+    # Add/Sub/Mul float kernels (arm_elementwise_{add,sub,mul}_f32/f16) are flat block_size
+    # calls with no broadcast awareness -- the generator pre-tiles input2 up to the full
+    # output size even when input2_dims describes a smaller (scalar/channel/etc.) logical
+    # shape. Maximum/Minimum, by contrast, use dims-based kernels that broadcast internally
+    # and keep the compact (non-tiled) input2 array matching input2_shape. Truncating a
+    # pre-tiled Add/Sub/Mul input2 down to input2_shape's product silently sends the wrong
+    # (undersized) data to hardware while FVP -- which runs the original .c source with the
+    # full pre-tiled array -- still passes. Detect which convention applies from the actual
+    # array length rather than truncating unconditionally.
+    if input2_flat.size == int(np.prod(output_shape)):
+        input2_data = input2_flat.reshape(output_shape)
+        input2_shape = output_shape
+    else:
+        input2_data = input2_flat[: int(np.prod(input2_shape))].reshape(input2_shape)
     expected_output = expected_flat.reshape(output_shape)
     return input1_shape, input2_shape, input1_data, input2_data, expected_output, output_dims
 
