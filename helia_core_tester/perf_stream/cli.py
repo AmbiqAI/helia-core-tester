@@ -34,6 +34,46 @@ _DEFAULT_BUILD_DIR = "build/perf_stream/benchmark_server_gcc2"
 _TOOLCHAIN_FILE = "cmake/nsx/toolchains/arm-none-eabi-gcc.cmake"
 
 
+def _format_case_line(case, *, id_width: int = 0) -> str:
+    passed = case.comparison.passed
+    label = "PASS" if passed else "FAIL"
+    # Pad the plain label to a fixed width *before* applying ANSI color styling --
+    # styling first would make python's string padding count the (invisible)
+    # escape codes as characters and silently break column alignment.
+    status = typer.style(f"{label:<4}", fg=typer.colors.GREEN if passed else typer.colors.RED, bold=True)
+    line = (
+        f"  {case.case_bundle.case_id:<{id_width}}  {status}  "
+        f"median_cycles={case.statistics.median_cycles:>10.1f}"
+    )
+    if not passed:
+        line += f"  mismatches={case.comparison.mismatch_count}"
+    return line
+
+
+def _make_live_progress_printer(total_hint: int | None = None, *, id_width: int = 0):
+    """Return an on_case_complete callback that prints one line per case as soon
+    as it finishes running on hardware, so a long multi-batch suite shows visible
+    progress instead of going silent until the very end (or until it errors out).
+
+    id_width/total_hint (when known ahead of time) keep the case_id, PASS/FAIL,
+    and progress-counter columns aligned across every printed line, regardless
+    of how long individual case_ids are or how many cases/digits the total has.
+    """
+    count = 0
+    total_width = len(str(total_hint)) if total_hint else 0
+
+    def _on_case_complete(case) -> None:
+        nonlocal count
+        count += 1
+        if total_hint:
+            progress = f"[{count:>{total_width}}/{total_hint}]"
+        else:
+            progress = f"[{count}]"
+        typer.echo(f"{progress} {_format_case_line(case, id_width=id_width)}")
+
+    return _on_case_complete
+
+
 def _print_case_results(cases) -> tuple[int, list[str]]:
     """Print a readable, colorized per-case listing grouped by operator family.
 
@@ -50,21 +90,12 @@ def _print_case_results(cases) -> tuple[int, list[str]]:
             typer.echo(typer.style(f"\n[{family}]", bold=True))
             current_family = family
 
-        passed = case.comparison.passed
-        if passed:
+        if case.comparison.passed:
             passed_count += 1
-            status = typer.style("PASS", fg=typer.colors.GREEN, bold=True)
         else:
             failed_case_ids.append(case.case_bundle.case_id)
-            status = typer.style("FAIL", fg=typer.colors.RED, bold=True)
 
-        line = (
-            f"  {case.case_bundle.case_id:<{id_width}}  {status}  "
-            f"median_cycles={case.statistics.median_cycles:>10.1f}"
-        )
-        if not passed:
-            line += f"  mismatches={case.comparison.mismatch_count}"
-        typer.echo(line)
+        typer.echo(_format_case_line(case, id_width=id_width))
 
     return passed_count, failed_case_ids
 
@@ -262,11 +293,23 @@ def run_generated(
     -- the firmware silently drops (and hangs the host on) a LOAD_PLAN naming more
     cases than that in a single session.
     """
-    from .hardware_run import run_apollo510_generated_test_session
+    from .hardware_run import build_generated_test_case_bundles, run_apollo510_generated_test_session
 
     repo_root = _repo_root()
     resolved_build_dir = build_dir if build_dir.is_absolute() else repo_root / build_dir
     groups = tuple(g.strip() for g in pmu_groups.split(",") if g.strip())
+
+    # Discover the bridgeable case count/case_ids up front (cheap: just descriptor/header
+    # parsing, no hardware I/O) purely so the live progress printer can align its
+    # [N/total] counter and case_id columns from the very first printed line instead of
+    # widening them as longer names are discovered mid-run.
+    preview_bundles, _preview_skipped = build_generated_test_case_bundles(
+        repo_root, cpu=cpu, family=family, name_filter=test_name, limit=limit
+    )
+    id_width = max((len(b.case_id) for b in preview_bundles), default=0)
+
+    typer.echo("Running full generated test suite over HCTP/RTT (progress below)...")
+    on_case_complete = _make_live_progress_printer(len(preview_bundles), id_width=id_width)
     try:
         result, bundle, skipped = run_apollo510_generated_test_session(
             repo_root,
@@ -280,11 +323,13 @@ def run_generated(
             family=family,
             name_filter=test_name,
             limit=limit,
+            on_case_complete=on_case_complete,
         )
     except RuntimeError as exc:
         typer.echo(f"✗ {exc}", err=True)
         sys.exit(1)
 
+    typer.echo("\nFinal per-case results:")
     passed_count, failed_case_ids = _print_case_results(result.cases)
     if skipped:
         _print_skipped_summary(skipped)

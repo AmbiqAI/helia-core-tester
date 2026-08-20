@@ -182,53 +182,114 @@ static bool has_capacity(size_t payload_length, size_t offset, size_t needed)
     return offset + needed <= payload_length;
 }
 
-static uint8_t read_u8(const uint8_t *buffer, size_t *offset)
+/* Bounded cursor API (F006): every primitive read below verifies that enough bytes
+ * remain in the payload *before* it dereferences the buffer or advances the offset.
+ * Once a read runs off the end, the cursor is latched into an overrun state -- every
+ * subsequent read becomes a harmless no-op (returns 0/false without touching the
+ * buffer or offset again) so callers can keep composing reads without re-checking
+ * after every single call, and simply test cursor.overrun (or the return value) once
+ * at a convenient point to detect any truncation across the whole sequence. This
+ * replaces the previous unchecked read_u8/u16/u32/i32/text helpers, which indexed the
+ * buffer and advanced the offset unconditionally -- a short/truncated LOAD_PLAN,
+ * CASE_META, or BLOB_CHUNK payload could walk the cursor arbitrarily far past the
+ * validated payload_length. */
+typedef struct
 {
-    return buffer[(*offset)++];
+    const uint8_t *buffer;
+    size_t length;
+    size_t offset;
+    bool overrun;
+} hct_cursor_t;
+
+static void cursor_init(hct_cursor_t *cursor, const uint8_t *buffer, size_t length)
+{
+    cursor->buffer = buffer;
+    cursor->length = length;
+    cursor->offset = 0u;
+    cursor->overrun = false;
 }
 
-static uint16_t read_u16(const uint8_t *buffer, size_t *offset)
+static bool cursor_require(hct_cursor_t *cursor, size_t needed)
 {
-    const uint16_t value = (uint16_t)buffer[*offset] | ((uint16_t)buffer[*offset + 1u] << 8);
-    *offset += 2u;
+    if (cursor->overrun || !has_capacity(cursor->length, cursor->offset, needed))
+    {
+        cursor->overrun = true;
+        return false;
+    }
+    return true;
+}
+
+static uint8_t cursor_u8(hct_cursor_t *cursor)
+{
+    uint8_t value;
+    if (!cursor_require(cursor, 1u))
+    {
+        return 0u;
+    }
+    value = cursor->buffer[cursor->offset];
+    cursor->offset += 1u;
     return value;
 }
 
-static uint32_t read_u32(const uint8_t *buffer, size_t *offset)
+static uint16_t cursor_u16(hct_cursor_t *cursor)
 {
-    const uint32_t value = (uint32_t)buffer[*offset]
-                         | ((uint32_t)buffer[*offset + 1u] << 8)
-                         | ((uint32_t)buffer[*offset + 2u] << 16)
-                         | ((uint32_t)buffer[*offset + 3u] << 24);
-    *offset += 4u;
+    uint16_t value;
+    if (!cursor_require(cursor, 2u))
+    {
+        return 0u;
+    }
+    value = (uint16_t)cursor->buffer[cursor->offset] | ((uint16_t)cursor->buffer[cursor->offset + 1u] << 8);
+    cursor->offset += 2u;
     return value;
 }
 
-static int32_t read_i32(const uint8_t *buffer, size_t *offset)
+static uint32_t cursor_u32(hct_cursor_t *cursor)
 {
-    return (int32_t)read_u32(buffer, offset);
+    uint32_t value;
+    if (!cursor_require(cursor, 4u))
+    {
+        return 0u;
+    }
+    value = (uint32_t)cursor->buffer[cursor->offset]
+          | ((uint32_t)cursor->buffer[cursor->offset + 1u] << 8)
+          | ((uint32_t)cursor->buffer[cursor->offset + 2u] << 16)
+          | ((uint32_t)cursor->buffer[cursor->offset + 3u] << 24);
+    cursor->offset += 4u;
+    return value;
 }
 
-static hctp_status_t read_text(const uint8_t *buffer,
-                               size_t payload_length,
-                               size_t *offset,
-                               char *dest,
-                               size_t dest_capacity)
+static int32_t cursor_i32(hct_cursor_t *cursor)
+{
+    return (int32_t)cursor_u32(cursor);
+}
+
+static bool cursor_text(hct_cursor_t *cursor, char *dest, size_t dest_capacity)
 {
     size_t index;
-    const uint16_t length = read_u16(buffer, offset);
-    if (*offset + length > payload_length || (size_t)length + 1u > dest_capacity)
+    uint16_t length;
+    if (cursor->overrun)
     {
-        return HCTP_STATUS_TRUNCATED_FRAME;
+        return false;
+    }
+    length = cursor_u16(cursor);
+    if (cursor->overrun)
+    {
+        return false;
+    }
+    if (!cursor_require(cursor, length) || (size_t)length + 1u > dest_capacity)
+    {
+        cursor->overrun = true;
+        return false;
     }
     for (index = 0u; index < length; ++index)
     {
-        dest[index] = (char)buffer[*offset + index];
+        dest[index] = (char)cursor->buffer[cursor->offset + index];
     }
     dest[length] = '\0';
-    *offset += length;
-    return HCTP_STATUS_OK;
+    cursor->offset += length;
+    return true;
 }
+
 
 static hctp_status_t write_u8(uint8_t *buffer, size_t capacity, size_t *offset, uint8_t value)
 {
@@ -2861,8 +2922,54 @@ static uint32_t hct_shape_product(const int32_t *shape, int32_t rank)
             return 0u;
         }
         product *= (uint32_t)shape[i];
+        /* F007: guard against 32-bit wraparound in the running shape product -- a
+         * blob claiming an enormous dimension could otherwise overflow back into a
+         * small, seemingly-valid uint32_t and slip past the output_buffer capacity
+         * check below with a corrupted (too-small) output_length. */
+        if (product > (uint64_t)UINT32_MAX)
+        {
+            return 0u;
+        }
     }
     return (uint32_t)product;
+}
+
+/* F007: validates the META_0 blob's rank/axis/byte-count *before* any data-movement
+ * kernel is dispatched, since the dispatcher below casts the blob straight to
+ * `const int32_t *` and indexes it at kernel-specific fixed offsets with no proof the
+ * byte length actually covers them. `required_ints` is the number of leading int32_t
+ * elements the selected kernel's case in `run_data_movement_once()` reads; `rank`/`axis`
+ * are the kernel's declared tensor rank and (if applicable) concatenation/split axis --
+ * pass -1 for either when the kernel doesn't use that concept so it's skipped. */
+static bool hct_validate_meta0_blob(const hct_server_blob_t *meta_blob,
+                                    size_t required_ints,
+                                    int32_t rank,
+                                    int32_t axis)
+{
+    if (meta_blob == NULL)
+    {
+        return false;
+    }
+    if ((meta_blob->arena_offset % sizeof(int32_t)) != 0u)
+    {
+        /* 4-byte alignment requirement: the dispatcher reinterprets this blob's raw
+         * bytes as `const int32_t *`, which is undefined behavior on a misaligned
+         * pointer. */
+        return false;
+    }
+    if ((uint64_t)required_ints * sizeof(int32_t) > (uint64_t)meta_blob->byte_length)
+    {
+        return false;
+    }
+    if (rank >= 0 && (rank < 1 || rank > 4))
+    {
+        return false;
+    }
+    if (axis >= 0 && rank >= 0 && axis >= rank)
+    {
+        return false;
+    }
+    return true;
 }
 
 static void hct_row_major_strides(const int32_t *shape, int32_t rank, int32_t *strides)
@@ -2930,18 +3037,28 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             uint32_t permutations[4] = {0u, 1u, 2u, 3u};
             int32_t rank;
             int32_t i;
-            if (input0 == NULL || meta == NULL)
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 1u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             rank = meta[0];
-            if (rank < 1 || rank > 4)
+            /* F007: now that rank is known, re-validate that the blob actually covers
+             * the rank int32_t plus its permutation entries before reading them, and
+             * reject an out-of-range rank up front. */
+            if (rank < 1 || rank > 4 || !hct_validate_meta0_blob(meta_blob, (size_t)(1 + rank), rank, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             for (i = 0; i < rank; ++i)
             {
                 permutations[i] = (uint32_t)meta[1 + i];
+                /* F007: reject any permutation entry outside [0, rank) -- an invalid
+                 * axis here would let arm_transpose_s8/s16 index the input dims array
+                 * out of bounds. */
+                if (permutations[i] >= (uint32_t)rank)
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
             }
             hct_fill_dims_from_blob(input0, &input_dims);
             hct_fill_output_dims_from_session(session, &output_dims);
@@ -2974,7 +3091,9 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             cmsis_nn_dims pre_pad;
             cmsis_nn_dims post_pad;
             uint32_t element_size = (session->expected_kernel_id == HCT_KERNEL_ID_PAD_S16) ? sizeof(int16_t) : sizeof(int8_t);
-            if (input0 == NULL || meta == NULL)
+            /* F007: meta[0..8] is a fixed 9-int32_t layout (pad value + 4 pre-pad + 4
+             * post-pad dims); prove the blob covers all 9 before reading any of them. */
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 9u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3022,12 +3141,12 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             uint32_t element_size = (session->expected_kernel_id == HCT_KERNEL_ID_MIRROR_PAD_S16) ? sizeof(int16_t) : sizeof(int8_t);
             int32_t rank;
             int32_t i;
-            if (input0 == NULL || meta == NULL)
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 2u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             rank = meta[0];
-            if (rank < 1 || rank > 4)
+            if (rank < 1 || rank > 4 || !hct_validate_meta0_blob(meta_blob, (size_t)(2 + rank), rank, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3067,7 +3186,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             int32_t rank;
             int32_t axis;
             int32_t inputs_count;
-            if (input0 == NULL || input1 == NULL || meta == NULL)
+            if (input0 == NULL || input1 == NULL || !hct_validate_meta0_blob(meta_blob, 4u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3075,7 +3194,11 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             rank = meta[1];
             axis = meta[2];
             inputs_count = meta[3];
-            if (rank < 1 || rank > 4 || inputs_count != 2)
+            /* F007: axis must be a valid index into a rank-sized shape array -- meta[2]
+             * previously indexed input_shape0[axis]/input_shape1[axis] with no bound,
+             * so a wire-controlled out-of-range axis could read/write past the 4-element
+             * stack arrays below. */
+            if (rank < 1 || rank > 4 || inputs_count != 2 || axis < 0 || axis >= rank)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3188,14 +3311,19 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             int32_t num_splits;
             int32_t input_shape[4] = {1, 1, 1, 1};
             uint32_t offset_bytes = 0u;
-            if (input0 == NULL || meta == NULL)
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 3u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             rank = meta[0];
             axis = meta[1];
             num_splits = meta[2];
-            if (rank < 1 || rank > 4 || num_splits < 1 || num_splits > 4)
+            /* F007: axis must be a valid index into the rank-sized shape array (it's
+             * used to index output_shape[axis] below), and the required-ints check must
+             * be widened once num_splits is known, since the split sizes at meta[3..]
+             * come after the fixed 3-int header. */
+            if (rank < 1 || rank > 4 || num_splits < 1 || num_splits > 4 || axis < 0 || axis >= rank ||
+                !hct_validate_meta0_blob(meta_blob, (size_t)(3 + num_splits), rank, axis))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -4109,24 +4237,29 @@ static hctp_status_t finish_case(hct_server_session_t *session)
 
 static hctp_status_t handle_load_plan(hct_server_session_t *session, const uint8_t *payload, size_t payload_length)
 {
-    size_t offset = 0u;
+    /* F006: every field below is read through the bounded cursor API, which checks
+     * remaining capacity before each access/advance -- a truncated LOAD_PLAN (short
+     * header, short group/case-id text, or a plan cut off mid kernel-id list) is
+     * caught by the single cursor.overrun check at the end instead of risking an
+     * out-of-bounds read. */
+    hct_cursor_t cursor;
     uint16_t case_index;
-    char scratch[HCT_SERVER_MAX_CASE_ID];
 
-    if (payload_length < 20u)
+    cursor_init(&cursor, payload, payload_length);
+
+    session->planned_case_count = cursor_u16(&cursor);
+    (void)cursor_u8(&cursor);
+    session->planned_warmups = cursor_u16(&cursor);
+    session->planned_samples = cursor_u16(&cursor);
+    session->planned_iterations = cursor_u32(&cursor);
+    session->min_cycles = cursor_u32(&cursor);
+    session->max_iterations = cursor_u32(&cursor);
+    session->requested_group_count = cursor_u8(&cursor);
+
+    if (cursor.overrun)
     {
         return HCTP_STATUS_TRUNCATED_FRAME;
     }
-
-    session->planned_case_count = read_u16(payload, &offset);
-    (void)read_u8(payload, &offset);
-    session->planned_warmups = read_u16(payload, &offset);
-    session->planned_samples = read_u16(payload, &offset);
-    session->planned_iterations = read_u32(payload, &offset);
-    session->min_cycles = read_u32(payload, &offset);
-    session->max_iterations = read_u32(payload, &offset);
-    session->requested_group_count = read_u8(payload, &offset);
-
     if (session->planned_case_count == 0u || session->planned_case_count > HCT_SERVER_MAX_CASES)
     {
         return HCTP_STATUS_INVALID_ARGUMENT;
@@ -4138,7 +4271,7 @@ static hctp_status_t handle_load_plan(hct_server_session_t *session, const uint8
 
     for (case_index = 0u; case_index < session->requested_group_count; ++case_index)
     {
-        if (read_text(payload, payload_length, &offset, session->requested_groups[case_index], sizeof(session->requested_groups[case_index])) != HCTP_STATUS_OK)
+        if (!cursor_text(&cursor, session->requested_groups[case_index], sizeof(session->requested_groups[case_index])))
         {
             return HCTP_STATUS_TRUNCATED_FRAME;
         }
@@ -4151,27 +4284,35 @@ static hctp_status_t handle_load_plan(hct_server_session_t *session, const uint8
 
     for (case_index = 0u; case_index < session->planned_case_count; ++case_index)
     {
-        if (read_text(payload, payload_length, &offset, session->planned_case_ids[case_index], sizeof(session->planned_case_ids[case_index])) != HCTP_STATUS_OK)
+        if (!cursor_text(&cursor, session->planned_case_ids[case_index], sizeof(session->planned_case_ids[case_index])))
         {
             return HCTP_STATUS_TRUNCATED_FRAME;
         }
-        session->planned_kernel_ids[case_index] = read_u32(payload, &offset);
+        session->planned_kernel_ids[case_index] = cursor_u32(&cursor);
+    }
+    if (cursor.overrun)
+    {
+        return HCTP_STATUS_TRUNCATED_FRAME;
     }
 
     strcpy(session->current_case_id, session->planned_case_ids[0]);
     session->expected_kernel_id = session->planned_kernel_ids[0];
-    (void)scratch;
     session->state = HCT_SERVER_STATE_WAIT_CASE_META;
     return queue_request_case(session);
 }
 
 static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8_t *payload, size_t payload_length)
 {
-    size_t offset = 0u;
+    /* F006: converted to the bounded cursor API -- see its definition above for the
+     * overrun-latching rationale. Every field read here (case_id, kernel_id, comparison
+     * config, scalar name/value pairs, and every blob's id/role/dtype/rank/dims/byte
+     * length/alignment/crc/mutability) now goes through cursor_u8/u16/u32/i32/text
+     * instead of the previous unchecked read_*() + manual has_capacity() calls. */
+    hct_cursor_t cursor;
     uint8_t scalar_count;
     uint16_t blob_index;
     /* Must be large enough for the longest string this handler reads via
-     * read_text(): the case_id (up to HCT_SERVER_MAX_CASE_ID, e.g. the 79-char
+     * cursor_text(): the case_id (up to HCT_SERVER_MAX_CASE_ID, e.g. the 79-char
      * FullyConnected per-channel descriptor names), not just the short
      * scalar-name/role/dtype strings that also flow through this same buffer. */
     char scratch[HCT_SERVER_MAX_CASE_ID];
@@ -4188,32 +4329,40 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
     session->input_offset = 0;
     session->output_offset = 0;
 
-    status = read_text(payload, payload_length, &offset, scratch, sizeof(scratch));
-    if (status != HCTP_STATUS_OK) return status;
-    if (strcmp(scratch, session->current_case_id) != 0) return HCTP_STATUS_INVALID_ARGUMENT;
-    if (!has_capacity(payload_length, offset, 4u)) return HCTP_STATUS_TRUNCATED_FRAME;
-    if (read_u32(payload, &offset) != session->expected_kernel_id) return HCTP_STATUS_INVALID_ARGUMENT;
+    cursor_init(&cursor, payload, payload_length);
 
-    if (!has_capacity(payload_length, offset, 16u)) return HCTP_STATUS_TRUNCATED_FRAME;
-    (void)read_u16(payload, &offset);
-    session->comparison_mode = read_u8(payload, &offset);
-    session->tolerance = read_i32(payload, &offset);
-    session->atol_q16 = read_u32(payload, &offset);
-    session->rtol_q16 = read_u32(payload, &offset);
-    scalar_count = read_u8(payload, &offset);
+    if (!cursor_text(&cursor, scratch, sizeof(scratch))) return HCTP_STATUS_TRUNCATED_FRAME;
+    if (strcmp(scratch, session->current_case_id) != 0) return HCTP_STATUS_INVALID_ARGUMENT;
+    if (cursor_u32(&cursor) != session->expected_kernel_id)
+    {
+        return cursor.overrun ? HCTP_STATUS_TRUNCATED_FRAME : HCTP_STATUS_INVALID_ARGUMENT;
+    }
+
+    (void)cursor_u16(&cursor);
+    session->comparison_mode = cursor_u8(&cursor);
+    session->tolerance = cursor_i32(&cursor);
+    session->atol_q16 = cursor_u32(&cursor);
+    session->rtol_q16 = cursor_u32(&cursor);
+    scalar_count = cursor_u8(&cursor);
+    if (cursor.overrun)
+    {
+        return HCTP_STATUS_TRUNCATED_FRAME;
+    }
     while (scalar_count-- > 0u)
     {
         int32_t value;
-        status = read_text(payload, payload_length, &offset, scratch, sizeof(scratch));
-        if (status != HCTP_STATUS_OK) return status;
-        if (!has_capacity(payload_length, offset, 4u)) return HCTP_STATUS_TRUNCATED_FRAME;
-        value = read_i32(payload, &offset);
+        if (!cursor_text(&cursor, scratch, sizeof(scratch))) return HCTP_STATUS_TRUNCATED_FRAME;
+        value = cursor_i32(&cursor);
+        if (cursor.overrun) return HCTP_STATUS_TRUNCATED_FRAME;
         status = parse_scalar(session, scratch, value);
         if (status != HCTP_STATUS_OK) return status;
     }
 
-    if (!has_capacity(payload_length, offset, 2u)) return HCTP_STATUS_TRUNCATED_FRAME;
-    session->blob_count = read_u16(payload, &offset);
+    session->blob_count = cursor_u16(&cursor);
+    if (cursor.overrun)
+    {
+        return HCTP_STATUS_TRUNCATED_FRAME;
+    }
     if (session->blob_count == 0u || session->blob_count > HCT_SERVER_MAX_BLOBS)
     {
         return HCTP_STATUS_INVALID_ARGUMENT;
@@ -4223,24 +4372,24 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
     {
         hct_server_blob_t *blob = &session->blobs[blob_index];
         uint8_t dim_index;
-        if (!has_capacity(payload_length, offset, 4u)) return HCTP_STATUS_TRUNCATED_FRAME;
-        blob->blob_id = read_u32(payload, &offset);
-        status = read_text(payload, payload_length, &offset, scratch, sizeof(scratch));
-        if (status != HCTP_STATUS_OK) return status;
+        blob->blob_id = cursor_u32(&cursor);
+        if (!cursor_text(&cursor, scratch, sizeof(scratch))) return HCTP_STATUS_TRUNCATED_FRAME;
         blob->role = role_from_name(scratch);
-        status = read_text(payload, payload_length, &offset, scratch, sizeof(scratch));
-        if (status != HCTP_STATUS_OK) return status;
+        if (!cursor_text(&cursor, scratch, sizeof(scratch))) return HCTP_STATUS_TRUNCATED_FRAME;
         blob->dtype = dtype_from_name(scratch);
-        if (!has_capacity(payload_length, offset, 1u + (6u * 4u) + 4u + 4u + 4u + 1u)) return HCTP_STATUS_TRUNCATED_FRAME;
-        blob->rank = read_u8(payload, &offset);
+        blob->rank = cursor_u8(&cursor);
         for (dim_index = 0u; dim_index < 6u; ++dim_index)
         {
-            blob->dimensions[dim_index] = read_u32(payload, &offset);
+            blob->dimensions[dim_index] = cursor_u32(&cursor);
         }
-        blob->byte_length = read_u32(payload, &offset);
-        blob->alignment = read_u32(payload, &offset);
-        blob->crc32 = read_u32(payload, &offset);
-        blob->mutable_data = read_u8(payload, &offset);
+        blob->byte_length = cursor_u32(&cursor);
+        blob->alignment = cursor_u32(&cursor);
+        blob->crc32 = cursor_u32(&cursor);
+        blob->mutable_data = cursor_u8(&cursor);
+        if (cursor.overrun)
+        {
+            return HCTP_STATUS_TRUNCATED_FRAME;
+        }
         if (blob->role == HCT_BLOB_ROLE_UNKNOWN || blob->dtype == HCT_DTYPE_UNKNOWN || blob->alignment == 0u)
         {
             return HCTP_STATUS_INVALID_ARGUMENT;
@@ -4249,8 +4398,11 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
         if (status != HCTP_STATUS_OK) return status;
     }
 
-    if (!has_capacity(payload_length, offset, 4u)) return HCTP_STATUS_TRUNCATED_FRAME;
-    session->scratch_bytes = read_u32(payload, &offset);
+    session->scratch_bytes = cursor_u32(&cursor);
+    if (cursor.overrun)
+    {
+        return HCTP_STATUS_TRUNCATED_FRAME;
+    }
     if (session->scratch_bytes > 0u)
     {
         session->scratch_offset = align_up(session->case_arena_used_bytes, 16u);
@@ -4269,29 +4421,31 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
 
 static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint8_t *payload, size_t payload_length)
 {
-    size_t offset = 0u;
+    /* F006: converted to the bounded cursor API. */
+    hct_cursor_t cursor;
     uint32_t blob_id;
     uint32_t chunk_offset;
     uint32_t chunk_length;
     hct_server_blob_t *blob;
 
-    if (!has_capacity(payload_length, offset, 12u))
+    cursor_init(&cursor, payload, payload_length);
+    blob_id = cursor_u32(&cursor);
+    chunk_offset = cursor_u32(&cursor);
+    chunk_length = cursor_u32(&cursor);
+    if (cursor.overrun)
     {
         return HCTP_STATUS_TRUNCATED_FRAME;
     }
-    blob_id = read_u32(payload, &offset);
-    chunk_offset = read_u32(payload, &offset);
-    chunk_length = read_u32(payload, &offset);
     blob = &session->blobs[session->current_blob_index];
 
     if (blob_id != blob->blob_id) return HCTP_STATUS_INVALID_ARGUMENT;
     if (chunk_offset != blob->bytes_received) return HCTP_STATUS_INVALID_ARGUMENT;
-    if (offset + chunk_length > payload_length) return HCTP_STATUS_TRUNCATED_FRAME;
+    if (!cursor_require(&cursor, chunk_length)) return HCTP_STATUS_TRUNCATED_FRAME;
     if (chunk_offset + chunk_length > blob->byte_length) return HCTP_STATUS_INVALID_ARGUMENT;
     if ((uint64_t)chunk_offset + (uint64_t)chunk_length > (uint64_t)sizeof(session->case_arena)) return HCTP_STATUS_INVALID_ARGUMENT;
     if ((blob->alignment > 1u) && ((chunk_offset % blob->alignment) != 0u)) return HCTP_STATUS_INVALID_ARGUMENT;
 
-    memcpy(blob_ptr(session, blob) + chunk_offset, payload + offset, chunk_length);
+    memcpy(blob_ptr(session, blob) + chunk_offset, payload + cursor.offset, chunk_length);
     blob->bytes_received += chunk_length;
 
     if (blob->bytes_received < blob->byte_length)
@@ -4430,17 +4584,39 @@ hctp_status_t hct_server_session_accept_frame(hct_server_session_t *session,
                 return HCTP_STATUS_INVALID_ARGUMENT;
             }
             session->state = HCT_SERVER_STATE_WAIT_PLAN;
-            if (hct_build_catalog_frame(session->session_id,
-                                        session->next_outgoing_sequence++,
-                                        frame_buffer,
-                                        sizeof(frame_buffer),
-                                        &catalog_frame_length) != HCTP_STATUS_OK)
             {
-                session->state = HCT_SERVER_STATE_ERROR;
-                queue_error_frame(session, frame.header.message_type, HCTP_STATUS_TRUNCATED_FRAME);
-                return HCTP_STATUS_TRUNCATED_FRAME;
+                /* F008: emit the full catalog as one or more paginated CAPABILITIES
+                 * frames; loop until the chunk builder reports is_final so all 126
+                 * entries reach the host regardless of how many chunks that takes. */
+                size_t chunk_start_index = 0u;
+                bool chunk_is_final = false;
+                do
+                {
+                    size_t chunk_next_index = 0u;
+                    if (hct_build_catalog_frame_chunk(session->session_id,
+                                                      session->next_outgoing_sequence++,
+                                                      chunk_start_index,
+                                                      frame_buffer,
+                                                      sizeof(frame_buffer),
+                                                      &catalog_frame_length,
+                                                      &chunk_next_index,
+                                                      &chunk_is_final) != HCTP_STATUS_OK)
+                    {
+                        session->state = HCT_SERVER_STATE_ERROR;
+                        queue_error_frame(session, frame.header.message_type, HCTP_STATUS_TRUNCATED_FRAME);
+                        return HCTP_STATUS_TRUNCATED_FRAME;
+                    }
+                    status = append_frame(session, frame_buffer, catalog_frame_length);
+                    if (status != HCTP_STATUS_OK)
+                    {
+                        session->state = HCT_SERVER_STATE_ERROR;
+                        queue_error_frame(session, frame.header.message_type, status);
+                        return status;
+                    }
+                    chunk_start_index = chunk_next_index;
+                } while (!chunk_is_final);
             }
-            return append_frame(session, frame_buffer, catalog_frame_length);
+            return HCTP_STATUS_OK;
         case HCTP_MSG_LOAD_PLAN:
             if (session->state != HCT_SERVER_STATE_WAIT_PLAN)
             {

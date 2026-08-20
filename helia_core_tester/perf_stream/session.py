@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
 from .case_bundle import CaseBundle, BlobInfo, blob_numpy, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
 from .comparison import ComparisonResult, compare_output, compare_status
 from .fake_target import FakeTargetTransport
-from .hctp import ByteReader, ByteWriter, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
+from .firmware_messages import CatalogEntry, decode_catalog_payload
+from .hctp import HCTP_FLAG_MORE, ByteReader, ByteWriter, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
 from .measurement import NormalizedSample, RawCounterValue, RawSample, SampleStatistics, compute_sample_statistics, normalize_samples
 from .transport import Transport
 
@@ -76,12 +79,35 @@ class HostSession:
     def run(self, case_bundle: CaseBundle) -> SessionResult:
         return self.run_many([case_bundle])
 
-    def run_many(self, case_bundles: list[CaseBundle]) -> SessionResult:
+    def run_many(
+        self,
+        case_bundles: list[CaseBundle],
+        *,
+        on_case_complete: Callable[[CaseRunResult], None] | None = None,
+    ) -> SessionResult:
+        """Run every case in case_bundles over one LOAD_PLAN.
+
+        If on_case_complete is given, it is invoked with each case's CaseRunResult
+        immediately after it finishes (i.e. as soon as its CASE_COMPLETE frame is
+        decoded), before waiting on the next case -- callers can use this for live
+        per-case progress output instead of waiting for the whole batch/session to
+        finish before seeing anything.
+        """
         hello = self._recv_one(MessageType.HELLO)
-        self._decode_hello(hello.payload)
+        hello_payload = self._decode_hello(hello.payload)
         self._session_id = hello.header.session_id
         self._incoming_validator = SessionFrameValidator(session_id=self._session_id, next_sequence_id=1)
         self._send(MessageType.HELLO_ACK, b"")
+
+        catalog = self._recv_catalog(hello_payload["catalog_hash"])
+        known_kernel_ids = {entry.kernel_id for entry in catalog}
+        for bundle in case_bundles:
+            if bundle.kernel_id not in known_kernel_ids:
+                raise RuntimeError(
+                    f"Case {bundle.case_id!r} references kernel_id {bundle.kernel_id}, "
+                    "which is not present in the target's advertised catalog."
+                )
+
         self._send(MessageType.LOAD_PLAN, self._encode_plan(case_bundles))
 
         case_map = {bundle.case_id: bundle for bundle in case_bundles}
@@ -151,7 +177,7 @@ class HostSession:
                     raise RuntimeError("CASE_COMPLETE arrived before correctness finished.")
                 raw_samples = tuple(samples)
                 normalized_samples = tuple(normalize_samples(self._to_raw_samples(raw_samples)))
-                results[current_case_id] = CaseRunResult(
+                case_result = CaseRunResult(
                     case_bundle=case_map[current_case_id],
                     comparison=comparison_result,
                     output_bytes=bytes(actual_output_bytes),
@@ -159,11 +185,16 @@ class HostSession:
                     normalized_samples=normalized_samples,
                     statistics=compute_sample_statistics(normalized_samples),
                 )
+                results[current_case_id] = case_result
+                if on_case_complete is not None:
+                    on_case_complete(case_result)
             elif frame.header.message_type == MessageType.SESSION_COMPLETE:
                 session_complete_cases = ByteReader(frame.payload).u16()
                 break
             elif frame.header.message_type == MessageType.ERROR:
-                raise RuntimeError(ByteReader(frame.payload).text())
+                error_text = ByteReader(frame.payload).text()
+                case_context = f" (while running case_id={current_case_id!r})" if current_case_id is not None else ""
+                raise RuntimeError(f"{error_text}{case_context}")
             else:
                 raise ValueError(f"Unhandled frame type: {frame.header.message_type}")
 
@@ -197,12 +228,55 @@ class HostSession:
         reader = ByteReader(payload)
         return {
             "build_id": reader.text(),
-            "catalog_hash": reader.fixed(32).hex(),
+            "catalog_hash": reader.fixed(32),
             "max_frame_payload": reader.u32(),
             "runtime_arena_capacity": reader.u32(),
             "transfer_mode": reader.u8(),
             "output_mode": reader.u8(),
         }
+
+    def _recv_catalog(self, expected_hash: bytes) -> tuple[CatalogEntry, ...]:
+        """F008: accumulate one or more paginated CAPABILITIES chunks (each chunk carries
+        HCTP_FLAG_MORE until the final one) into the full kernel catalog, rejecting
+        duplicate/missing kernel ids and verifying the assembled catalog's canonical-JSON
+        SHA-256 matches the HELLO frame's advertised catalog_hash before returning."""
+        entries_by_id: dict[int, CatalogEntry] = {}
+        while True:
+            frame = self._recv_one(MessageType.CAPABILITIES)
+            for entry in decode_catalog_payload(frame.payload):
+                if entry.kernel_id in entries_by_id:
+                    raise RuntimeError(f"Duplicate kernel_id {entry.kernel_id} in paginated catalog.")
+                entries_by_id[entry.kernel_id] = entry
+            if (frame.header.flags & HCTP_FLAG_MORE) == 0:
+                break
+
+        entries = tuple(entries_by_id[kernel_id] for kernel_id in sorted(entries_by_id))
+        canonical = json.dumps(
+            [
+                {
+                    "kernel_id": entry.kernel_id,
+                    "canonical_name": entry.canonical_name,
+                    "operator_family": entry.operator_family,
+                    "api_version": entry.api_version,
+                    "supported_dtype": entry.supported_dtype,
+                    "adapter_schema_version": entry.adapter_schema_version,
+                    "stateless": entry.stateless,
+                    "repeated_invocation_safe": entry.repeated_invocation_safe,
+                    "mutates_input": entry.mutates_input,
+                    "scratch_bytes": entry.scratch_bytes,
+                }
+                for entry in entries
+            ],
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        actual_hash = hashlib.sha256(canonical).digest()
+        if actual_hash != expected_hash:
+            raise RuntimeError(
+                f"Assembled kernel catalog hash {actual_hash.hex()} does not match HELLO "
+                f"catalog_hash {expected_hash.hex()}."
+            )
+        return entries
 
     def _encode_plan(self, case_bundles: list[CaseBundle]) -> bytes:
         first = case_bundles[0]

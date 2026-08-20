@@ -50,7 +50,7 @@ static void gcov_dump_before_eot(void)
 #endif
 unsigned char UartPutc(unsigned char ch) { return uart_putc(ch); }
 
-unsigned char UartGetc(void) { return uart_putc(uart_getc()); }
+unsigned char UartGetc(void) { return uart_getc(); }
 
 __attribute__((noreturn)) void UartEndSimulation(int code)
 {
@@ -294,15 +294,27 @@ int _read(int fd, char *ptr, int len)
     char c;
     int i;
 
+    if (len <= 0)
+    {
+        return (0);
+    }
+
     for (i = 0; i < len; i++)
     {
+        // SER_GetChar() already echoes exactly once via UartPutc(UartGetc());
+        // uart_getc() also normalizes '\r' to '\n', so treat '\n' as the
+        // line terminator here (checking for the original 0x0D is dead code
+        // once that normalization has happened).
         c = SER_GetChar();
-        if (c == 0x0D)
+        if (c == '\n')
+        {
+            *ptr++ = c;
+            i++;
             break;
+        }
         *ptr++ = c;
-        SER_PutChar(c);
     }
-    return (len - i);
+    return (i);
 }
 
 int _write(int fd, char *ptr, int len)

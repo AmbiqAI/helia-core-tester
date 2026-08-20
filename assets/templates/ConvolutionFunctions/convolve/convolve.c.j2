@@ -49,6 +49,8 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
   (init vs. the timed kernel call), not the logic itself.
 #}
 {% macro conv_bench_init() %}
+    // Calculate required buffer size
+    {% if float_kernel %}
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
         &{{ name }}_conv_params,
         &{{ name }}_input_dims,

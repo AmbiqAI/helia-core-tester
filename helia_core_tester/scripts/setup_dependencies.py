@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import platform
 import shutil
 import subprocess
@@ -28,6 +29,27 @@ from pathlib import Path
 from typing import Optional
 
 from helia_core_tester.core.discovery import find_repo_root
+
+
+class ChecksumMismatchError(RuntimeError):
+    """Raised when a downloaded file's SHA-256 does not match the pinned value."""
+
+
+# Pinned SHA-256 digests for all downloaded dependency archives, keyed by
+# (dependency, architecture). Values were obtained from Arm's official release
+# artifacts:
+#   - ARM GCC toolchain 14.2.rel1: published by Arm alongside the release at
+#     https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/<file>.sha256asc
+#   - Corstone-300 FVP 11.24_13: Arm does not publish a SHA-256 sidecar for this
+#     archive; the digest below was computed directly from a fresh download of
+#     the official Arm URL referenced in setup_corstone300() and should be
+#     re-verified/updated whenever the pinned Corstone300 version changes.
+PINNED_SHA256 = {
+    ("arm_gcc", "x86_64"): "62a63b981fe391a9cbad7ef51b17e49aeaa3e7b0d029b36ca1e9c3b2a9b78823",
+    ("arm_gcc", "aarch64"): "87330bab085dd8749d4ed0ad633674b9dc48b237b61069e3b481abd364d0a684",
+    ("corstone300", "x86_64"): "6ea4096ecf8a8c06d6e76e21cae494f0c7139374cb33f6bc3964d189b84539a9",
+    ("corstone300", "aarch64"): "9b43da6a688220c707cd1801baf9cf4f5fb37d6dc77587b9071347411a64fd56",
+}
 
 
 def get_architecture() -> str:
@@ -52,20 +74,43 @@ def get_os() -> str:
 
 
 
-def download_file(url: str, dest_path: Path, description: str) -> None:
-    """Download a file from URL to destination path."""
+def download_file(url: str, dest_path: Path, description: str, expected_sha256: str) -> None:
+    """Download a file from URL to destination path, verifying its SHA-256 digest.
+
+    Streams the hash incrementally while writing to disk, compares it against
+    `expected_sha256` once the download completes, and deletes the file and
+    raises ChecksumMismatchError on any mismatch. Never returns successfully
+    for a file whose digest does not match.
+    """
     print(f"Downloading {description}...")
     print(f"  URL: {url}")
     print(f"  Destination: {dest_path}")
-    
+
+    hasher = hashlib.sha256()
     try:
         with urllib.request.urlopen(url) as response:
             with open(dest_path, 'wb') as f:
-                shutil.copyfileobj(response, f)
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    hasher.update(chunk)
+                    f.write(chunk)
         print("Downloaded successfully")
     except Exception as e:
         print(f"Download failed: {e}")
+        dest_path.unlink(missing_ok=True)
         raise
+
+    actual_sha256 = hasher.hexdigest()
+    if actual_sha256.lower() != expected_sha256.lower():
+        dest_path.unlink(missing_ok=True)
+        raise ChecksumMismatchError(
+            f"SHA-256 mismatch for {description} ({url}): "
+            f"expected {expected_sha256}, got {actual_sha256}. "
+            "The downloaded file has been deleted and will not be extracted or executed."
+        )
+    print(f"Checksum verified (sha256={actual_sha256})")
 
 
 def extract_tar_gz(archive_path: Path, extract_to: Path, strip_components: int = 0) -> None:
@@ -153,6 +198,8 @@ def setup_corstone300(downloads_dir: Path, force: bool = False) -> None:
     else:
         raise RuntimeError(f"Unsupported architecture for Corstone300: {arch}")
 
+    expected_sha256 = PINNED_SHA256[("corstone300", arch)]
+
     # Work in temp dirs like the bash script
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
@@ -160,7 +207,11 @@ def setup_corstone300(downloads_dir: Path, force: bool = False) -> None:
 
         # Download (equivalent to: wget -q "${CORSTONE_URL}" -O "${TEMPFILE}")
         try:
-            download_file(corstone_url, archive_file, "Corstone300")
+            download_file(corstone_url, archive_file, "Corstone300", expected_sha256)
+        except ChecksumMismatchError:
+            # Fail closed: do not extract or execute an archive that failed
+            # integrity verification.
+            raise
         except Exception:
             # Match the bash error message
             raise RuntimeError("Download Corstone300 failed!")
@@ -227,12 +278,14 @@ def setup_arm_gcc(downloads_dir: Path, force: bool = False) -> None:
         gcc_url = "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-aarch64-arm-none-eabi.tar.xz"
     else:
         raise RuntimeError(f"Unsupported architecture for ARM GCC: {arch}")
-    
+
+    expected_sha256 = PINNED_SHA256[("arm_gcc", arch)]
+
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         archive_file = temp_path / "arm_gcc.tar.xz"
         
-        download_file(gcc_url, archive_file, "ARM GCC toolchain")
+        download_file(gcc_url, archive_file, "ARM GCC toolchain", expected_sha256)
         
         # Extract to temporary directory first
         temp_extract = temp_path / "extracted"

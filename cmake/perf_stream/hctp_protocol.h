@@ -14,6 +14,10 @@ extern "C" {
 #define HCTP_DEFAULT_MAX_PAYLOAD (64u * 1024u)
 
 #define HCTP_FLAG_NONE 0u
+/* F008: set on every non-final CAPABILITIES chunk when the catalog is too large for a
+ * single frame's payload; the host keeps decoding/accumulating chunks until it receives
+ * one without this flag set. */
+#define HCTP_FLAG_MORE (1u << 0)
 
 typedef enum
 {

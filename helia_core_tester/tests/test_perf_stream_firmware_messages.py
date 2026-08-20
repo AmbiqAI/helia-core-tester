@@ -9,7 +9,7 @@ import subprocess
 import pytest
 
 from helia_core_tester.perf_stream.firmware_messages import decode_catalog_payload, decode_hello_payload
-from helia_core_tester.perf_stream.hctp import FrameDecoder, MessageType
+from helia_core_tester.perf_stream.hctp import HCTP_FLAG_MORE, FrameDecoder, MessageType
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -48,13 +48,23 @@ def test_firmware_hello_and_catalog_roundtrip_with_python_decoder(tmp_path: Path
 
     decoder = FrameDecoder()
     [hello_frame] = decoder.feed(hello_path.read_bytes())
-    [catalog_frame] = decoder.feed(catalog_path.read_bytes())
+    # F008: the emit tool concatenates every paginated CAPABILITIES chunk (each non-final
+    # chunk carries HCTP_FLAG_MORE) into catalog.bin; decode them all and accumulate.
+    catalog_frames = decoder.feed(catalog_path.read_bytes())
+    assert len(catalog_frames) >= 1
 
     assert hello_frame.header.message_type is MessageType.HELLO
-    assert catalog_frame.header.message_type is MessageType.CAPABILITIES
+    entries_by_id: dict[int, object] = {}
+    for index, frame in enumerate(catalog_frames):
+        assert frame.header.message_type is MessageType.CAPABILITIES
+        is_final = index == len(catalog_frames) - 1
+        assert bool(frame.header.flags & HCTP_FLAG_MORE) != is_final
+        for entry in decode_catalog_payload(frame.payload):
+            assert entry.kernel_id not in entries_by_id, f"duplicate kernel_id {entry.kernel_id}"
+            entries_by_id[entry.kernel_id] = entry
+    catalog = [entries_by_id[kernel_id] for kernel_id in sorted(entries_by_id)]
 
     hello = decode_hello_payload(hello_frame.payload)
-    catalog = decode_catalog_payload(catalog_frame.payload)
 
     assert hello.build_id == "hct-benchmark-server-v0"
     assert hello.board_id == "apollo510_evb"
@@ -62,11 +72,14 @@ def test_firmware_hello_and_catalog_roundtrip_with_python_decoder(tmp_path: Path
     assert hello.transport_kind == 1
     assert hello.max_frame_payload == 256
     assert hello.runtime_arena_capacity == 32768
-    assert len(catalog) == 7
+    assert len(catalog) == 126
+    assert catalog[0].kernel_id == 1
     assert catalog[0].canonical_name == "arm_abs_s8"
-    assert catalog[1].canonical_name == "arm_convolve_s8"
-    assert catalog[1].scratch_bytes == 64
-    assert catalog[-1].canonical_name == "arm_maximum_s8"
+    assert catalog[5].kernel_id == 6
+    assert catalog[5].operator_family == "BasicMathFunctions"
+    assert catalog[5].canonical_name == "arm_maximum_s8"
+    assert catalog[6].kernel_id == 7
+    assert catalog[6].canonical_name == "arm_minimum_s8"
 
     canonical = json.dumps(
         json.loads((PROJECT_ROOT / "cmake" / "perf_stream" / "kernel_catalog.json").read_text()),

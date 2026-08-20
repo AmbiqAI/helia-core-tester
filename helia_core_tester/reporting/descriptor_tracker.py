@@ -26,33 +26,35 @@ class DescriptorTracker:
         self._descriptors: Dict[str, Dict] = {}
         self._descriptor_paths: Dict[str, Path] = {}
     
-    def load_all_descriptors(self) -> Dict[str, Dict]:
+    def load_all_descriptors(self, best_effort: bool = False) -> Dict[str, Dict]:
         """
         Load all descriptors from the descriptors directory.
-        
+
+        Args:
+            best_effort: Passed through to the underlying loader. When False
+                (default), any descriptor load/validation failure raises
+                DescriptorLoadError instead of silently returning a partial
+                result, so broken descriptors are never invisible in reports.
+
         Returns:
             Dictionary mapping descriptor name to descriptor content
         """
         if not self.descriptors_dir.exists():
             return {}
-        
-        try:
-            descriptors_list = load_all_descriptors(str(self.descriptors_dir))
-            
-            for desc in descriptors_list:
-                name = desc.get('name')
-                if name:
-                    self._descriptors[name] = desc
-                    source_relpath = desc.get("_source_relpath")
-                    if source_relpath:
-                        self._descriptor_paths[name] = self.descriptors_dir / str(source_relpath)
-                    else:
-                        self._descriptor_paths[name] = self._find_descriptor_file(name)
-            
-            return self._descriptors
-        except Exception as e:
-            print(f"Warning: Failed to load descriptors from {self.descriptors_dir}: {e}")
-            return {}
+
+        descriptors_list = load_all_descriptors(str(self.descriptors_dir), best_effort=best_effort)
+
+        for desc in descriptors_list:
+            name = desc.get('name')
+            if name:
+                self._descriptors[name] = desc
+                source_relpath = desc.get("_source_relpath")
+                if source_relpath:
+                    self._descriptor_paths[name] = self.descriptors_dir / str(source_relpath)
+                else:
+                    self._descriptor_paths[name] = self._find_descriptor_file(name)
+
+        return self._descriptors
     
     def _find_descriptor_file(self, descriptor_name: str) -> Path:
         """Find the YAML file containing this descriptor."""

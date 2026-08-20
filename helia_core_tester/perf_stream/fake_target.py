@@ -270,6 +270,25 @@ class FakeTargetTransport:
         writer.u8(1)
         self._queue(MessageType.HELLO, writer.finish())
 
+    def _emit_capabilities(self) -> None:
+        """F008: emit the (small, unpaginated) fake catalog as a single CAPABILITIES
+        frame with HCTP_FLAG_MORE clear, matching the real firmware's paginated
+        protocol contract (a single final chunk is a valid one-chunk "page")."""
+        writer = ByteWriter()
+        writer.u16(len(self._catalog))
+        for entry in self._catalog:
+            writer.u32(int(entry["kernel_id"]))
+            writer.text(str(entry["canonical_name"]))
+            writer.text(str(entry["operator_family"]))
+            writer.u16(int(entry["api_version"]))
+            writer.text(str(entry["supported_dtype"]))
+            writer.u16(int(entry["adapter_schema_version"]))
+            writer.u8(1 if entry["stateless"] else 0)
+            writer.u8(1 if entry["repeated_invocation_safe"] else 0)
+            writer.u8(1 if entry["mutates_input"] else 0)
+            writer.u32(int(entry["scratch_bytes"]))
+        self._queue(MessageType.CAPABILITIES, writer.finish())
+
     def _queue_error(self, message: str) -> None:
         writer = ByteWriter()
         writer.text(message)
@@ -360,6 +379,7 @@ class FakeTargetTransport:
     def _handle_frame(self, frame: Frame) -> None:
         if frame.header.message_type == MessageType.HELLO_ACK:
             self._state = _TargetState.WAIT_PLAN
+            self._emit_capabilities()
             return
         if frame.header.message_type == MessageType.LOAD_PLAN:
             self._plan = self._decode_plan(frame.payload)

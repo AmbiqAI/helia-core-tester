@@ -830,7 +830,16 @@ def _build_depthwise_conv_case(
     activation_numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
     bias_numpy_dtype = np.int64 if activation_dtype == "S16" else np.int32
     bias_wire_dtype = "S64" if activation_dtype == "S16" else "S32"
-    biases = np.array(_extract_array(header_text, f"{prefix}_biases"), dtype=bias_numpy_dtype)
+    # The generator (post-F004) legitimately emits `<prefix>_biases = NULL;` for no-bias
+    # descriptors -- treat that as a real all-zero bias array rather than an error: the
+    # firmware's run_depthwise_conv_once() unconditionally requires a non-NULL bias blob,
+    # and an all-zero bias is mathematically identical to "no bias" for the kernel.
+    has_generated_bias = not _extract_null_pointer_decl(header_text, f"{prefix}_biases")
+    biases = (
+        np.array(_extract_array(header_text, f"{prefix}_biases"), dtype=bias_numpy_dtype)
+        if has_generated_bias
+        else np.zeros((output_channels,), dtype=bias_numpy_dtype)
+    )
     input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=activation_numpy_dtype)
     expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=activation_numpy_dtype)
     multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)

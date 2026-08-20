@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "arm_nnfunctions.h"
 #include "benchmark_server_adapter.h"
@@ -58,20 +59,52 @@ static void hct_flush_outbound(hct_server_session_t *session, const hct_transpor
 static void hct_poll_session(hct_server_session_t *session, const hct_transport_vtable_t *transport)
 {
     hctp_frame_header_t header;
+    /* The largest payload a complete frame could carry and still fit in our fixed-size
+     * receive buffer (F005). Decoding against this bound -- rather than the protocol's
+     * generic HCTP_DEFAULT_MAX_PAYLOAD (64 KiB) -- means we reject any header claiming a
+     * payload too large for g_hct_rx_buffer up front, instead of accepting it and later
+     * calling transport->read() with zero remaining capacity while we wait forever for
+     * bytes that can never arrive. */
+    const uint32_t max_payload_for_buffer = (uint32_t)(sizeof(g_hct_rx_buffer) - HCTP_HEADER_SIZE);
 
-    g_hct_last_transport_read_bytes = (uint32_t)transport->read(g_hct_rx_buffer + g_hct_rx_length, sizeof(g_hct_rx_buffer) - g_hct_rx_length);
-    g_hct_rx_length += g_hct_last_transport_read_bytes;
+    /* Never call the transport with zero capacity (F005): if the buffer is already full
+     * of an in-flight frame we can't yet consume, skip the read this poll instead of
+     * passing a zero-length span to transport->read(). */
+    if (g_hct_rx_length < sizeof(g_hct_rx_buffer))
+    {
+        g_hct_last_transport_read_bytes = (uint32_t)transport->read(g_hct_rx_buffer + g_hct_rx_length, sizeof(g_hct_rx_buffer) - g_hct_rx_length);
+        g_hct_rx_length += g_hct_last_transport_read_bytes;
+    }
+    else
+    {
+        g_hct_last_transport_read_bytes = 0u;
+    }
 
     while (g_hct_rx_length >= HCTP_HEADER_SIZE)
     {
         size_t frame_length;
-        if (hctp_decode_header(g_hct_rx_buffer, HCTP_HEADER_SIZE, HCTP_DEFAULT_MAX_PAYLOAD, &header) != HCTP_STATUS_OK)
+        const hctp_status_t header_status = hctp_decode_header(g_hct_rx_buffer, HCTP_HEADER_SIZE, max_payload_for_buffer, &header);
+        if (header_status != HCTP_STATUS_OK)
         {
-            g_hct_last_session_status = HCTP_STATUS_HEADER_CRC_MISMATCH;
+            /* Resynchronize cleanly (F005): a header that is malformed, or whose
+             * declared payload cannot possibly fit in our receive buffer, can never be
+             * completed by reading more bytes into the same buffer. Discard everything
+             * we've buffered so far and let the next poll start resynchronizing from a
+             * clean slate, rather than wedging with a frame we can never finish. */
+            g_hct_last_session_status = (uint32_t)header_status;
             g_hct_rx_length = 0u;
             break;
         }
         frame_length = HCTP_HEADER_SIZE + (size_t)header.payload_length;
+        if (frame_length > sizeof(g_hct_rx_buffer))
+        {
+            /* Same resync rationale as above: max_payload_for_buffer should already
+             * prevent this, but guard defensively against any future change to that
+             * bound so a too-large-for-the-buffer frame can never silently stall. */
+            g_hct_last_session_status = (uint32_t)HCTP_STATUS_OVERSIZED_PAYLOAD;
+            g_hct_rx_length = 0u;
+            break;
+        }
         if (g_hct_rx_length < frame_length)
         {
             break;

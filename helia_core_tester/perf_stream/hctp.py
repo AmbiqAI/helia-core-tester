@@ -12,6 +12,9 @@ HEADER_SIZE = 32
 SUPPORTED_VERSION = 1
 DEFAULT_MAX_PAYLOAD = 64 * 1024
 
+# F008: set on every non-final paginated CAPABILITIES chunk; cleared on the final chunk.
+HCTP_FLAG_MORE = 1 << 0
+
 _HEADER_WITHOUT_CRC = struct.Struct("<4sHHIIIII")
 _HEADER = struct.Struct("<4sHHIIIIII")
 

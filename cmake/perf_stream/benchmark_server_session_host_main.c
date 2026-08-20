@@ -77,6 +77,23 @@ static int drain_single_message(hct_server_session_t *session, uint16_t expected
     return 0;
 }
 
+static int drain_catalog_frames(hct_server_session_t *session)
+{
+    /* F008: HELLO_ACK now triggers one or more paginated CAPABILITIES frames (each
+     * non-final chunk carries HCTP_FLAG_MORE); drain them all before expecting the
+     * next protocol message. */
+    uint8_t frame_bytes[2048];
+    hctp_frame_view_t frame;
+    for (;;)
+    {
+        const size_t frame_length = hct_server_session_take_next_frame(session, frame_bytes, sizeof(frame_bytes));
+        if (frame_length == 0u) return 1;
+        if (hctp_decode_frame(frame_bytes, frame_length, HCTP_DEFAULT_MAX_PAYLOAD, &frame) != HCTP_STATUS_OK) return 2;
+        if (frame.header.message_type != HCTP_MSG_CAPABILITIES) return 3;
+        if ((frame.header.flags & HCTP_FLAG_MORE) == 0u) return 0;
+    }
+}
+
 int main(void)
 {
     static const int8_t kInput[] = {-12, -1, 0, 7, -99, 5, -8, 3, -4, 11, -2, 100};
@@ -98,7 +115,7 @@ int main(void)
 
     offset = 0u;
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_HELLO_ACK, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 11;
-    if (drain_single_message(&session, HCTP_MSG_CAPABILITIES, outbound_payload, &outbound_length) != 0) return 12;
+    if (drain_catalog_frames(&session) != 0) return 12;
 
     offset = 0u;
     write_u16(inbound_payload, &offset, 1u);

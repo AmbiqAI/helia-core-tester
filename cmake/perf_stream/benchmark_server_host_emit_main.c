@@ -1,6 +1,8 @@
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "benchmark_server_messages.h"
 
@@ -23,7 +25,7 @@ static int write_file(const char *path, const uint8_t *data, size_t length)
 int main(int argc, char **argv)
 {
     uint8_t hello[512];
-    uint8_t catalog[1024];
+    uint8_t catalog[16384];
     size_t hello_len = 0u;
     size_t catalog_len = 0u;
 
@@ -36,13 +38,33 @@ int main(int argc, char **argv)
     {
         return 65;
     }
-    if (hct_build_catalog_frame(0xC0DE1234u, 1u, catalog, sizeof(catalog), &catalog_len) != HCTP_STATUS_OK)
-    {
-        return 66;
-    }
     if (write_file(argv[1], hello, hello_len) != 0)
     {
         return 67;
+    }
+
+    /* F008: write every paginated CAPABILITIES chunk concatenated into one file so the
+     * test harness can decode the full multi-frame catalog with a single FrameDecoder. */
+    {
+        size_t start_index = 0u;
+        bool is_final = false;
+        do
+        {
+            uint8_t chunk[1024];
+            size_t chunk_len = 0u;
+            size_t next_index = 0u;
+            if (hct_build_catalog_frame_chunk(0xC0DE1234u, 1u, start_index, chunk, sizeof(chunk), &chunk_len, &next_index, &is_final) != HCTP_STATUS_OK)
+            {
+                return 66;
+            }
+            if (catalog_len + chunk_len > sizeof(catalog))
+            {
+                return 69;
+            }
+            memcpy(catalog + catalog_len, chunk, chunk_len);
+            catalog_len += chunk_len;
+            start_index = next_index;
+        } while (!is_final);
     }
     if (write_file(argv[2], catalog, catalog_len) != 0)
     {

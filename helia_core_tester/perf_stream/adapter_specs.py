@@ -2128,8 +2128,54 @@ static uint32_t hct_shape_product(const int32_t *shape, int32_t rank)
             return 0u;
         }
         product *= (uint32_t)shape[i];
+        /* F007: guard against 32-bit wraparound in the running shape product -- a
+         * blob claiming an enormous dimension could otherwise overflow back into a
+         * small, seemingly-valid uint32_t and slip past the output_buffer capacity
+         * check below with a corrupted (too-small) output_length. */
+        if (product > (uint64_t)UINT32_MAX)
+        {
+            return 0u;
+        }
     }
     return (uint32_t)product;
+}
+
+/* F007: validates the META_0 blob's rank/axis/byte-count *before* any data-movement
+ * kernel is dispatched, since the dispatcher below casts the blob straight to
+ * `const int32_t *` and indexes it at kernel-specific fixed offsets with no proof the
+ * byte length actually covers them. `required_ints` is the number of leading int32_t
+ * elements the selected kernel's case in `run_data_movement_once()` reads; `rank`/`axis`
+ * are the kernel's declared tensor rank and (if applicable) concatenation/split axis --
+ * pass -1 for either when the kernel doesn't use that concept so it's skipped. */
+static bool hct_validate_meta0_blob(const hct_server_blob_t *meta_blob,
+                                    size_t required_ints,
+                                    int32_t rank,
+                                    int32_t axis)
+{
+    if (meta_blob == NULL)
+    {
+        return false;
+    }
+    if ((meta_blob->arena_offset % sizeof(int32_t)) != 0u)
+    {
+        /* 4-byte alignment requirement: the dispatcher reinterprets this blob's raw
+         * bytes as `const int32_t *`, which is undefined behavior on a misaligned
+         * pointer. */
+        return false;
+    }
+    if ((uint64_t)required_ints * sizeof(int32_t) > (uint64_t)meta_blob->byte_length)
+    {
+        return false;
+    }
+    if (rank >= 0 && (rank < 1 || rank > 4))
+    {
+        return false;
+    }
+    if (axis >= 0 && rank >= 0 && axis >= rank)
+    {
+        return false;
+    }
+    return true;
 }
 
 static void hct_row_major_strides(const int32_t *shape, int32_t rank, int32_t *strides)
@@ -2197,18 +2243,28 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             uint32_t permutations[4] = {0u, 1u, 2u, 3u};
             int32_t rank;
             int32_t i;
-            if (input0 == NULL || meta == NULL)
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 1u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             rank = meta[0];
-            if (rank < 1 || rank > 4)
+            /* F007: now that rank is known, re-validate that the blob actually covers
+             * the rank int32_t plus its permutation entries before reading them, and
+             * reject an out-of-range rank up front. */
+            if (rank < 1 || rank > 4 || !hct_validate_meta0_blob(meta_blob, (size_t)(1 + rank), rank, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             for (i = 0; i < rank; ++i)
             {
                 permutations[i] = (uint32_t)meta[1 + i];
+                /* F007: reject any permutation entry outside [0, rank) -- an invalid
+                 * axis here would let arm_transpose_s8/s16 index the input dims array
+                 * out of bounds. */
+                if (permutations[i] >= (uint32_t)rank)
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
             }
             hct_fill_dims_from_blob(input0, &input_dims);
             hct_fill_output_dims_from_session(session, &output_dims);
@@ -2241,7 +2297,9 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             cmsis_nn_dims pre_pad;
             cmsis_nn_dims post_pad;
             uint32_t element_size = (session->expected_kernel_id == HCT_KERNEL_ID_PAD_S16) ? sizeof(int16_t) : sizeof(int8_t);
-            if (input0 == NULL || meta == NULL)
+            /* F007: meta[0..8] is a fixed 9-int32_t layout (pad value + 4 pre-pad + 4
+             * post-pad dims); prove the blob covers all 9 before reading any of them. */
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 9u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -2289,12 +2347,12 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             uint32_t element_size = (session->expected_kernel_id == HCT_KERNEL_ID_MIRROR_PAD_S16) ? sizeof(int16_t) : sizeof(int8_t);
             int32_t rank;
             int32_t i;
-            if (input0 == NULL || meta == NULL)
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 2u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             rank = meta[0];
-            if (rank < 1 || rank > 4)
+            if (rank < 1 || rank > 4 || !hct_validate_meta0_blob(meta_blob, (size_t)(2 + rank), rank, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -2334,7 +2392,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             int32_t rank;
             int32_t axis;
             int32_t inputs_count;
-            if (input0 == NULL || input1 == NULL || meta == NULL)
+            if (input0 == NULL || input1 == NULL || !hct_validate_meta0_blob(meta_blob, 4u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -2342,7 +2400,11 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             rank = meta[1];
             axis = meta[2];
             inputs_count = meta[3];
-            if (rank < 1 || rank > 4 || inputs_count != 2)
+            /* F007: axis must be a valid index into a rank-sized shape array -- meta[2]
+             * previously indexed input_shape0[axis]/input_shape1[axis] with no bound,
+             * so a wire-controlled out-of-range axis could read/write past the 4-element
+             * stack arrays below. */
+            if (rank < 1 || rank > 4 || inputs_count != 2 || axis < 0 || axis >= rank)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -2455,14 +2517,19 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             int32_t num_splits;
             int32_t input_shape[4] = {1, 1, 1, 1};
             uint32_t offset_bytes = 0u;
-            if (input0 == NULL || meta == NULL)
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 3u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             rank = meta[0];
             axis = meta[1];
             num_splits = meta[2];
-            if (rank < 1 || rank > 4 || num_splits < 1 || num_splits > 4)
+            /* F007: axis must be a valid index into the rank-sized shape array (it's
+             * used to index output_shape[axis] below), and the required-ints check must
+             * be widened once num_splits is known, since the split sizes at meta[3..]
+             * come after the fixed 3-int header. */
+            if (rank < 1 || rank > 4 || num_splits < 1 || num_splits > 4 || axis < 0 || axis >= rank ||
+                !hct_validate_meta0_blob(meta_blob, (size_t)(3 + num_splits), rank, axis))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }

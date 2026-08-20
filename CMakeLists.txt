@@ -497,6 +497,7 @@ if(HELIA_BUILD_GENERATED_TESTS)
   if(GENERATED_TEST_TARGETS)
     add_custom_target(generated_tests ALL DEPENDS ${GENERATED_TEST_TARGETS})
   endif()
+endif()
 
 # ---------- Summary ----------
 message(STATUS "  CMSIS_PATH             : ${CMSIS_PATH}")

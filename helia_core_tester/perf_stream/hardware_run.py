@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from datetime import UTC, datetime
+from typing import Callable
 
 from .benchmark_firmware_report import generate_benchmark_server_memory_report
 from .case_bundle import CaseBundle, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
@@ -16,7 +17,7 @@ from .generated_test_bridge import (
     discover_generated_tests,
 )
 from .result_bundle import write_result_bundle
-from .session import HostSession, SessionResult
+from .session import CaseRunResult, HostSession, SessionResult
 from .transport import JLinkRttTransport, symbol_address_from_elf
 
 # Must match HCT_SERVER_MAX_CASES in cmake/perf_stream/benchmark_server_session.h.
@@ -40,6 +41,7 @@ def _run_single_session(
     speed_khz: int,
     requested_counter_groups: tuple[str, ...],
     build_dir: Path,
+    on_case_complete: Callable[[CaseRunResult], None] | None = None,
 ) -> tuple[SessionResult, int]:
     """Open one fresh (reset-on-open) RTT session and run exactly one LOAD_PLAN
     worth of case bundles. Callers must keep len(case_bundles) <= MAX_CASES_PER_SESSION
@@ -63,7 +65,9 @@ def _run_single_session(
         read_timeout_s=10.0,
     )
     try:
-        result = HostSession(transport, requested_counter_groups=requested_counter_groups).run_many(case_bundles)
+        result = HostSession(transport, requested_counter_groups=requested_counter_groups).run_many(
+            case_bundles, on_case_complete=on_case_complete
+        )
     finally:
         transport.close()
     return result, rtt_address
@@ -80,6 +84,7 @@ def _run_case_bundles_on_apollo510(
     session_id: str | None,
     build_dir: Path | None,
     session_id_prefix: str,
+    on_case_complete: Callable[[CaseRunResult], None] | None = None,
 ) -> tuple[SessionResult, Path]:
     build_dir = build_dir or (project_root / "build" / "perf_stream" / "benchmark_server_gcc2")
     result, rtt_address = _run_single_session(
@@ -90,6 +95,7 @@ def _run_case_bundles_on_apollo510(
         speed_khz=speed_khz,
         requested_counter_groups=requested_counter_groups,
         build_dir=build_dir,
+        on_case_complete=on_case_complete,
     )
 
     memory_report_path = generate_benchmark_server_memory_report(build_dir=build_dir)
@@ -129,6 +135,7 @@ def _run_case_bundles_in_batches(
     session_id: str | None,
     build_dir: Path | None,
     session_id_prefix: str,
+    on_case_complete: Callable[[CaseRunResult], None] | None = None,
 ) -> tuple[SessionResult, Path]:
     """Like _run_case_bundles_on_apollo510, but transparently splits case_bundles
     into batches of at most MAX_CASES_PER_SESSION and runs one fresh (reset-on-open)
@@ -146,15 +153,22 @@ def _run_case_bundles_in_batches(
     for batch_index in range(batch_count):
         start = batch_index * MAX_CASES_PER_SESSION
         batch = case_bundles[start : start + MAX_CASES_PER_SESSION]
-        result, rtt_address = _run_single_session(
-            project_root,
-            batch,
-            serial_no=serial_no,
-            chip_name=chip_name,
-            speed_khz=speed_khz,
-            requested_counter_groups=requested_counter_groups,
-            build_dir=build_dir,
-        )
+        try:
+            result, rtt_address = _run_single_session(
+                project_root,
+                batch,
+                serial_no=serial_no,
+                chip_name=chip_name,
+                speed_khz=speed_khz,
+                requested_counter_groups=requested_counter_groups,
+                build_dir=build_dir,
+                on_case_complete=on_case_complete,
+            )
+        except RuntimeError as exc:
+            batch_case_ids = [b.case_id for b in batch]
+            raise RuntimeError(
+                f"{exc} (batch {batch_index}/{batch_count - 1}, candidate case_ids={batch_case_ids})"
+            ) from exc
         all_cases.extend(result.cases)
         all_trace.extend(f"batch{batch_index}:{entry}" for entry in result.protocol_trace)
         session_complete_cases += result.session_complete_cases
@@ -256,6 +270,7 @@ def run_apollo510_generated_test_session(
     family: str | None = "ConvolutionFunctions",
     name_filter: str | None = None,
     limit: int | None = None,
+    on_case_complete: Callable[[CaseRunResult], None] | None = None,
 ) -> tuple[SessionResult, Path, list[tuple[GeneratedTestCase, str]]]:
     """Run real `helia_core_tester generate`-produced kernel tests (with their real golden
     data) against connected Apollo510 hardware over the streaming HCTP/RTT session,
@@ -289,6 +304,7 @@ def run_apollo510_generated_test_session(
         session_id=session_id,
         build_dir=build_dir,
         session_id_prefix="apollo510-generated-tests",
+        on_case_complete=on_case_complete,
     )
     return result, bundle_root, skipped
 

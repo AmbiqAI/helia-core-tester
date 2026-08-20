@@ -56,7 +56,7 @@ def test_run_case_bundles_in_batches_splits_and_merges(tmp_path: Path, monkeypat
 
     calls: list[list[Any]] = []
 
-    def _fake_run_single_session(project_root, case_bundles, *, serial_no, chip_name, speed_khz, requested_counter_groups, build_dir):
+    def _fake_run_single_session(project_root, case_bundles, *, serial_no, chip_name, speed_khz, requested_counter_groups, build_dir, on_case_complete=None):
         assert len(case_bundles) <= hardware_run.MAX_CASES_PER_SESSION
         calls.append(list(case_bundles))
         # One fake "case result" per bundle in this batch, tagged with its case_id.
