@@ -1664,9 +1664,11 @@ def _build_activation_case(
     input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
 
-    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
-    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
-    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
+    dtype_map = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}
+    numpy_dtype = dtype_map[activation_dtype]
+    extract_array = _extract_typed_array if activation_dtype in {"FP32", "FP16"} else _extract_array
+    input_flat = np.array(extract_array(header_text, f"{prefix}_input", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
+    expected_flat = np.array(extract_array(header_text, f"{prefix}_expected_output", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
     if input_flat.size != int(np.prod(input_shape)):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: generated input array size ({input_flat.size}) doesn't match header "
@@ -1806,7 +1808,7 @@ def _build_quantize_case(
     prefix = generated_test.name
 
     input_flat = np.array(_extract_float_array(header_text, f"{prefix}_input"), dtype=np.float32)
-    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
+    numpy_dtype = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}[activation_dtype]
     expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
     if input_flat.size != size or expected_flat.size != size:
         raise UnsupportedGeneratedTestError(
@@ -1951,7 +1953,7 @@ def _build_dequantize_case(
     source_text = source_path.read_text(encoding="utf-8")
     prefix = generated_test.name
 
-    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
+    numpy_dtype = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}[activation_dtype]
     input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
     expected_flat = np.array(_extract_float_array(header_text, f"{prefix}_expected_output"), dtype=np.float32)
     if input_flat.size != size or expected_flat.size != size:
@@ -2043,9 +2045,11 @@ def _build_requantize_case(
     source_text = source_path.read_text(encoding="utf-8")
     prefix = generated_test.name
 
-    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
-    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
-    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
+    dtype_map = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}
+    numpy_dtype = dtype_map[activation_dtype]
+    extract_array = _extract_typed_array if activation_dtype in {"FP32", "FP16"} else _extract_array
+    input_flat = np.array(extract_array(header_text, f"{prefix}_input", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
+    expected_flat = np.array(extract_array(header_text, f"{prefix}_expected_output", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
     size = int(np.prod(input_shape))
     if input_flat.size != size or expected_flat.size != size:
         raise UnsupportedGeneratedTestError(
@@ -2137,7 +2141,7 @@ def _build_comparison_case(
     input_2_shape = (input_2_dims["n"], input_2_dims["h"], input_2_dims["w"], input_2_dims["c"])
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
 
-    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
+    numpy_dtype = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}[activation_dtype]
     input_1_flat = np.array(_extract_array(header_text, f"{prefix}_input_1"), dtype=numpy_dtype)
     input_2_flat = np.array(_extract_array(header_text, f"{prefix}_input_2"), dtype=numpy_dtype)
     expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=np.bool_)
@@ -2250,7 +2254,7 @@ def _build_prelu_case(
     alpha_shape = (alpha_dims["n"], alpha_dims["h"], alpha_dims["w"], alpha_dims["c"])
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
 
-    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
+    numpy_dtype = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}[activation_dtype]
     input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
     alpha_flat = np.array(_extract_array(header_text, f"{prefix}_alpha"), dtype=numpy_dtype)
     if input_flat.size != int(np.prod(input_shape)) or alpha_flat.size != int(np.prod(alpha_shape)):
@@ -2375,7 +2379,7 @@ def _build_prelu_scalar_case(
     source_text = source_path.read_text(encoding="utf-8")
     prefix = generated_test.name
 
-    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
+    numpy_dtype = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}[activation_dtype]
     scalar_flat = np.array(_extract_array(header_text, f"{prefix}_scalar_input"), dtype=numpy_dtype)
     alpha_flat = np.array(_extract_array(header_text, f"{prefix}_alpha"), dtype=numpy_dtype)
     expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
@@ -2623,10 +2627,10 @@ def _build_abs_case(
     descriptor = generated_test.descriptor
     operator = str(descriptor.get("operator", ""))
     activation_dtype = str(descriptor.get("activation_dtype", ""))
-    if operator != "Abs" or activation_dtype not in ("S8", "S16"):
+    if operator != "Abs" or activation_dtype not in ("S8", "S16", "FP32", "FP16"):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: operator={operator!r} activation_dtype={activation_dtype!r} is not "
-            f"bridgeable -- perf-stream firmware only dispatches arm_abs_s8/s16."
+            f"bridgeable -- perf-stream firmware only dispatches arm_abs_s8/s16/f32/f16."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -2638,9 +2642,11 @@ def _build_abs_case(
     input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
 
-    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
-    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
-    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
+    dtype_map = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}
+    numpy_dtype = dtype_map[activation_dtype]
+    extract_array = _extract_typed_array if activation_dtype in {"FP32", "FP16"} else _extract_array
+    input_flat = np.array(extract_array(header_text, f"{prefix}_input", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
+    expected_flat = np.array(extract_array(header_text, f"{prefix}_expected_output", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
     if input_flat.size != int(np.prod(input_shape)) or expected_flat.size != int(np.prod(output_shape)):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: generated array sizes (input={input_flat.size}, expected_output={expected_flat.size}) "
@@ -2649,32 +2655,39 @@ def _build_abs_case(
     input_data = input_flat.reshape(input_shape)
     expected_output = expected_flat.reshape(output_shape)
 
-    cmsis_function = "arm_abs_s16" if activation_dtype == "S16" else "arm_abs_s8"
+    cmsis_function = {"S8": "arm_abs_s8", "S16": "arm_abs_s16", "FP32": "arm_abs_f32", "FP16": "arm_abs_f16"}[activation_dtype]
     sidecar = _load_generation_sidecar(generated_test.directory)
     if sidecar is not None:
         scalars = sidecar["scalars"]
-        scalar_parameters = {
-            "input_offset": int(scalars["input_offset"]),
-            "output_offset": int(scalars["output_offset"]),
-            "out_mult": int(scalars["out_mult"]),
-            "out_shift": int(scalars["out_shift"]),
-            "needs_rescale": int(scalars["needs_rescale"]),
-            "activation_min": int(scalars["out_activation_min"]),
-            "activation_max": int(scalars["out_activation_max"]),
-        }
+        if activation_dtype in {"FP32", "FP16"}:
+            scalar_parameters = {"block_size": int(scalars["block_size"])}
+        else:
+            scalar_parameters = {
+                "input_offset": int(scalars["input_offset"]),
+                "output_offset": int(scalars["output_offset"]),
+                "out_mult": int(scalars["out_mult"]),
+                "out_shift": int(scalars["out_shift"]),
+                "needs_rescale": int(scalars["needs_rescale"]),
+                "activation_min": int(scalars["out_activation_min"]),
+                "activation_max": int(scalars["out_activation_max"]),
+            }
     else:
         source_path = _find_source_file(generated_test.directory)
         source_text = source_path.read_text(encoding="utf-8")
-        args = _extract_call_args(source_text, cmsis_function, expected_count=_ABS_ARG_COUNT)
-        scalar_parameters = {
-            "input_offset": int(args[1]),
-            "output_offset": int(args[3]),
-            "out_mult": int(args[4]),
-            "out_shift": int(args[5]),
-            "needs_rescale": int(args[6]),
-            "activation_min": int(args[7]),
-            "activation_max": int(args[8]),
-        }
+        expected_count = 3 if activation_dtype in {"FP32", "FP16"} else _ABS_ARG_COUNT
+        args = _extract_call_args(source_text, cmsis_function, expected_count=expected_count)
+        if activation_dtype in {"FP32", "FP16"}:
+            scalar_parameters = {"block_size": int(args[2])}
+        else:
+            scalar_parameters = {
+                "input_offset": int(args[1]),
+                "output_offset": int(args[3]),
+                "out_mult": int(args[4]),
+                "out_shift": int(args[5]),
+                "needs_rescale": int(args[6]),
+                "activation_min": int(args[7]),
+                "activation_max": int(args[8]),
+            }
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
@@ -2911,7 +2924,7 @@ def _build_basic_math_lut_case(
 
     input_dims = _extract_dims(header_text, f"{prefix}_input_dims")
     input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
-    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
+    numpy_dtype = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}[activation_dtype]
     input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
     if input_flat.size != int(np.prod(input_shape)):
         raise UnsupportedGeneratedTestError(
@@ -3017,10 +3030,14 @@ _ELEMENTWISE_BINARY_ARG_COUNT = 18
 _ELEMENTWISE_BINARY_CMSIS_FUNCTION = {
     ("Add", "S8"): "arm_add_s8",
     ("Add", "S16"): "arm_add_s16",
+    ("Add", "FP32"): "arm_elementwise_add_f32",
+    ("Add", "FP16"): "arm_elementwise_add_f16",
     ("Sub", "S8"): "arm_sub_s8",
     ("Sub", "S16"): "arm_sub_s16",
+    ("Sub", "FP32"): "arm_elementwise_sub_f32",
+    ("Sub", "FP16"): "arm_elementwise_sub_f16",
 }
-_ELEMENTWISE_BINARY_SUPPORTED_DTYPES = ("S8", "S16")
+_ELEMENTWISE_BINARY_SUPPORTED_DTYPES = ("S8", "S16", "FP32", "FP16")
 
 # arm_mul_s8(input1_data, &input1_dims, input2_data, &input2_dims,
 #    input1_offset, input2_offset,
@@ -3045,7 +3062,7 @@ def _extract_elementwise_binary_tensors(
     array naming convention in the generated header). Supports both S8 and S16 activations --
     CMSIS-NN's S16 elementwise kernels are argument-for-argument identical to their S8
     counterparts, just with int16_t data."""
-    numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
+    numpy_dtype = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}[activation_dtype]
     input1_dims = _extract_dims(header_text, f"{prefix}_input1_dims")
     input2_dims = _extract_dims(header_text, f"{prefix}_input2_dims")
     output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
@@ -3058,14 +3075,19 @@ def _extract_elementwise_binary_tensors(
     input2_shape = (input2_dims["n"], input2_dims["h"], input2_dims["w"], input2_dims["c"])
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
 
-    input1_flat = np.array(_extract_array(header_text, f"{prefix}_input1"), dtype=numpy_dtype)
-    input2_flat = np.array(_extract_array(header_text, f"{prefix}_input2"), dtype=numpy_dtype)
-    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
-    if input1_flat.size != int(np.prod(input1_shape)) or input2_flat.size != int(np.prod(input2_shape)):
+    extract_array = _extract_typed_array if activation_dtype in {"FP32", "FP16"} else _extract_array
+    input1_flat = np.array(extract_array(header_text, f"{prefix}_input1", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_input1"), dtype=numpy_dtype)
+    input2_flat = np.array(extract_array(header_text, f"{prefix}_input2", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_input2"), dtype=numpy_dtype)
+    expected_flat = np.array(extract_array(header_text, f"{prefix}_expected_output", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
+    if input1_flat.size != int(np.prod(input1_shape)):
         raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: generated array sizes (input1={input1_flat.size}, "
-            f"input2={input2_flat.size}) don't match header dims (input1_shape={input1_shape}, "
-            f"input2_shape={input2_shape})."
+            f"{generated_test.name}: generated input1 size ({input1_flat.size}) doesn't match header dims "
+            f"(input1_shape={input1_shape})."
+        )
+    if input2_flat.size < int(np.prod(input2_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: generated input2 size ({input2_flat.size}) is smaller than header dims "
+            f"(input2_shape={input2_shape})."
         )
     if expected_flat.size != int(np.prod(output_shape)):
         raise UnsupportedGeneratedTestError(
@@ -3073,7 +3095,7 @@ def _extract_elementwise_binary_tensors(
             f"header output_dims product ({int(np.prod(output_shape))})"
         )
     input1_data = input1_flat.reshape(input1_shape)
-    input2_data = input2_flat.reshape(input2_shape)
+    input2_data = input2_flat[: int(np.prod(input2_shape))].reshape(input2_shape)
     expected_output = expected_flat.reshape(output_shape)
     return input1_shape, input2_shape, input1_data, input2_data, expected_output, output_dims
 
@@ -3185,44 +3207,59 @@ def _build_elementwise_binary_case(
     sidecar = _load_generation_sidecar(generated_test.directory)
     if sidecar is not None:
         scalars = sidecar["scalars"]
-        scalar_parameters = {
-            "input1_offset": int(scalars["input1_offset"]),
-            "input1_mult": int(scalars["input1_mult"]),
-            "input1_shift": int(scalars["input1_shift"]),
-            "input2_offset": int(scalars["input2_offset"]),
-            "input2_mult": int(scalars["input2_mult"]),
-            "input2_shift": int(scalars["input2_shift"]),
-            "left_shift": int(scalars["left_shift"]),
-            "output_offset": int(scalars["out_offset"]),
-            "out_mult": int(scalars["out_mult"]),
-            "out_shift": int(scalars["out_shift"]),
-            "activation_min": int(scalars["out_activation_min"]),
-            "activation_max": int(scalars["out_activation_max"]),
-        }
+        if activation_dtype in {"FP32", "FP16"}:
+            scalar_parameters = {
+                "block_size": int(scalars["block_size"]),
+                "float_activation_min_bits": int(np.asarray(np.float32(float(str(scalars["out_activation_min_literal"] if "out_activation_min_literal" in scalars else scalars["out_activation_min"]).rstrip("f"))), dtype=np.float32).view(np.int32).item()),
+                "float_activation_max_bits": int(np.asarray(np.float32(float(str(scalars["out_activation_max_literal"] if "out_activation_max_literal" in scalars else scalars["out_activation_max"]).rstrip("f"))), dtype=np.float32).view(np.int32).item()),
+            }
+        else:
+            scalar_parameters = {
+                "input1_offset": int(scalars["input1_offset"]),
+                "input1_mult": int(scalars["input1_mult"]),
+                "input1_shift": int(scalars["input1_shift"]),
+                "input2_offset": int(scalars["input2_offset"]),
+                "input2_mult": int(scalars["input2_mult"]),
+                "input2_shift": int(scalars["input2_shift"]),
+                "left_shift": int(scalars["left_shift"]),
+                "output_offset": int(scalars["out_offset"]),
+                "out_mult": int(scalars["out_mult"]),
+                "out_shift": int(scalars["out_shift"]),
+                "activation_min": int(scalars["out_activation_min"]),
+                "activation_max": int(scalars["out_activation_max"]),
+            }
     else:
         source_path = _find_source_file(generated_test.directory)
         source_text = source_path.read_text(encoding="utf-8")
-        args = _extract_call_args(source_text, cmsis_function, expected_count=_ELEMENTWISE_BINARY_ARG_COUNT)
-        input1_offset, input1_mult, input1_shift = (int(args[4]), int(args[5]), int(args[6]))
-        input2_offset, input2_mult, input2_shift = (int(args[7]), int(args[8]), int(args[9]))
-        left_shift = int(args[10])
-        out_offset, out_mult, out_shift = (int(args[13]), int(args[14]), int(args[15]))
-        activation_min, activation_max = (int(args[16]), int(args[17]))
+        expected_count = 6 if activation_dtype in {"FP32", "FP16"} else _ELEMENTWISE_BINARY_ARG_COUNT
+        args = _extract_call_args(source_text, cmsis_function, expected_count=expected_count)
+        if activation_dtype in {"FP32", "FP16"}:
+            scalar_parameters = {
+                "block_size": int(args[5]),
+                "float_activation_min_bits": int(np.asarray(np.float32(args[3]), dtype=np.float32).view(np.int32).item()),
+                "float_activation_max_bits": int(np.asarray(np.float32(args[4]), dtype=np.float32).view(np.int32).item()),
+            }
+        else:
+            input1_offset, input1_mult, input1_shift = (int(args[4]), int(args[5]), int(args[6]))
+            input2_offset, input2_mult, input2_shift = (int(args[7]), int(args[8]), int(args[9]))
+            left_shift = int(args[10])
+            out_offset, out_mult, out_shift = (int(args[13]), int(args[14]), int(args[15]))
+            activation_min, activation_max = (int(args[16]), int(args[17]))
 
-        scalar_parameters = {
-            "input1_offset": input1_offset,
-            "input1_mult": input1_mult,
-            "input1_shift": input1_shift,
-            "input2_offset": input2_offset,
-            "input2_mult": input2_mult,
-            "input2_shift": input2_shift,
-            "left_shift": left_shift,
-            "output_offset": out_offset,
-            "out_mult": out_mult,
-            "out_shift": out_shift,
-            "activation_min": activation_min,
-            "activation_max": activation_max,
-        }
+            scalar_parameters = {
+                "input1_offset": input1_offset,
+                "input1_mult": input1_mult,
+                "input1_shift": input1_shift,
+                "input2_offset": input2_offset,
+                "input2_mult": input2_mult,
+                "input2_shift": input2_shift,
+                "left_shift": left_shift,
+                "output_offset": out_offset,
+                "out_mult": out_mult,
+                "out_shift": out_shift,
+                "activation_min": activation_min,
+                "activation_max": activation_max,
+            }
     return _write_elementwise_binary_bundle(
         project_root,
         generated_test,
@@ -3271,36 +3308,51 @@ def _build_mul_case(
         )
     )
 
-    cmsis_function = "arm_mul_s16" if activation_dtype == "S16" else "arm_mul_s8"
+    cmsis_function = {"S8": "arm_mul_s8", "S16": "arm_mul_s16", "FP32": "arm_elementwise_mul_f32", "FP16": "arm_elementwise_mul_f16"}[activation_dtype]
     sidecar = _load_generation_sidecar(generated_test.directory)
     if sidecar is not None:
         scalars = sidecar["scalars"]
-        scalar_parameters = {
-            "input1_offset": int(scalars["input1_offset"]),
-            "input2_offset": int(scalars["input2_offset"]),
-            "output_offset": int(scalars["out_offset"]),
-            "out_mult": int(scalars["out_mult"]),
-            "out_shift": int(scalars["out_shift"]),
-            "activation_min": int(scalars["out_activation_min"]),
-            "activation_max": int(scalars["out_activation_max"]),
-        }
+        if activation_dtype in {"FP32", "FP16"}:
+            scalar_parameters = {
+                "block_size": int(scalars["block_size"]),
+                "float_activation_min_bits": int(np.asarray(np.float32(float(str(scalars["out_activation_min_literal"] if "out_activation_min_literal" in scalars else scalars["out_activation_min"]).rstrip("f"))), dtype=np.float32).view(np.int32).item()),
+                "float_activation_max_bits": int(np.asarray(np.float32(float(str(scalars["out_activation_max_literal"] if "out_activation_max_literal" in scalars else scalars["out_activation_max"]).rstrip("f"))), dtype=np.float32).view(np.int32).item()),
+            }
+        else:
+            scalar_parameters = {
+                "input1_offset": int(scalars["input1_offset"]),
+                "input2_offset": int(scalars["input2_offset"]),
+                "output_offset": int(scalars["out_offset"]),
+                "out_mult": int(scalars["out_mult"]),
+                "out_shift": int(scalars["out_shift"]),
+                "activation_min": int(scalars["out_activation_min"]),
+                "activation_max": int(scalars["out_activation_max"]),
+            }
     else:
         source_path = _find_source_file(generated_test.directory)
         source_text = source_path.read_text(encoding="utf-8")
-        args = _extract_call_args(source_text, cmsis_function, expected_count=_MUL_ARG_COUNT)
-        input1_offset, input2_offset = (int(args[4]), int(args[5]))
-        out_offset, out_mult, out_shift = (int(args[8]), int(args[9]), int(args[10]))
-        activation_min, activation_max = (int(args[11]), int(args[12]))
+        expected_count = 6 if activation_dtype in {"FP32", "FP16"} else _MUL_ARG_COUNT
+        args = _extract_call_args(source_text, cmsis_function, expected_count=expected_count)
+        if activation_dtype in {"FP32", "FP16"}:
+            scalar_parameters = {
+                "block_size": int(args[5]),
+                "float_activation_min_bits": int(np.asarray(np.float32(args[3]), dtype=np.float32).view(np.int32).item()),
+                "float_activation_max_bits": int(np.asarray(np.float32(args[4]), dtype=np.float32).view(np.int32).item()),
+            }
+        else:
+            input1_offset, input2_offset = (int(args[4]), int(args[5]))
+            out_offset, out_mult, out_shift = (int(args[8]), int(args[9]), int(args[10]))
+            activation_min, activation_max = (int(args[11]), int(args[12]))
 
-        scalar_parameters = {
-            "input1_offset": input1_offset,
-            "input2_offset": input2_offset,
-            "output_offset": out_offset,
-            "out_mult": out_mult,
-            "out_shift": out_shift,
-            "activation_min": activation_min,
-            "activation_max": activation_max,
-        }
+            scalar_parameters = {
+                "input1_offset": input1_offset,
+                "input2_offset": input2_offset,
+                "output_offset": out_offset,
+                "out_mult": out_mult,
+                "out_shift": out_shift,
+                "activation_min": activation_min,
+                "activation_max": activation_max,
+            }
     return _write_elementwise_binary_bundle(
         project_root,
         generated_test,
@@ -3351,7 +3403,7 @@ def _build_min_max_case(
         )
     )
 
-    dtype_suffix = "s16" if activation_dtype == "S16" else "s8"
+    dtype_suffix = {"S8": "s8", "S16": "s16", "FP32": "f32", "FP16": "f16"}[activation_dtype]
     cmsis_function = f"arm_maximum_{dtype_suffix}" if operator == "Maximum" else f"arm_minimum_{dtype_suffix}"
     return _write_elementwise_binary_bundle(
         project_root,
@@ -3406,20 +3458,27 @@ def _build_squared_difference_case(
     sidecar = _load_generation_sidecar(generated_test.directory)
     if sidecar is not None:
         scalars = sidecar["scalars"]
-        scalar_parameters = {
-            "input1_offset": int(scalars["input1_offset"]),
-            "input1_mult": int(scalars["input1_mult"]),
-            "input1_shift": int(scalars["input1_shift"]),
-            "input2_offset": int(scalars["input2_offset"]),
-            "input2_mult": int(scalars["input2_mult"]),
-            "input2_shift": int(scalars["input2_shift"]),
-            "left_shift": int(scalars["left_shift"]),
-            "output_offset": int(scalars["out_offset"]),
-            "out_mult": int(scalars["out_mult"]),
-            "out_shift": int(scalars["out_shift"]),
-            "activation_min": int(scalars["out_activation_min"]),
-            "activation_max": int(scalars["out_activation_max"]),
-        }
+        if activation_dtype in {"FP32", "FP16"}:
+            scalar_parameters = {
+                "block_size": int(scalars["block_size"]),
+                "float_activation_min_bits": int(np.asarray(np.float32(float(str(scalars["out_activation_min_literal"] if "out_activation_min_literal" in scalars else scalars["out_activation_min"]).rstrip("f"))), dtype=np.float32).view(np.int32).item()),
+                "float_activation_max_bits": int(np.asarray(np.float32(float(str(scalars["out_activation_max_literal"] if "out_activation_max_literal" in scalars else scalars["out_activation_max"]).rstrip("f"))), dtype=np.float32).view(np.int32).item()),
+            }
+        else:
+            scalar_parameters = {
+                "input1_offset": int(scalars["input1_offset"]),
+                "input1_mult": int(scalars["input1_mult"]),
+                "input1_shift": int(scalars["input1_shift"]),
+                "input2_offset": int(scalars["input2_offset"]),
+                "input2_mult": int(scalars["input2_mult"]),
+                "input2_shift": int(scalars["input2_shift"]),
+                "left_shift": int(scalars["left_shift"]),
+                "output_offset": int(scalars["out_offset"]),
+                "out_mult": int(scalars["out_mult"]),
+                "out_shift": int(scalars["out_shift"]),
+                "activation_min": int(scalars["out_activation_min"]),
+                "activation_max": int(scalars["out_activation_max"]),
+            }
     else:
         source_path = _find_source_file(generated_test.directory)
         source_text = source_path.read_text(encoding="utf-8")

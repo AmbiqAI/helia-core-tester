@@ -856,3 +856,75 @@ kernels:
     operator: Split
     dtype: FP16
     cmsis_function: arm_split_f16
+
+  - kernel_id: 140
+    family: BasicMathFunctions
+    operator: Abs
+    dtype: FP32
+    cmsis_function: arm_abs_f32
+
+  - kernel_id: 141
+    family: BasicMathFunctions
+    operator: Abs
+    dtype: FP16
+    cmsis_function: arm_abs_f16
+
+  - kernel_id: 142
+    family: BasicMathFunctions
+    operator: Add
+    dtype: FP32
+    cmsis_function: arm_elementwise_add_f32
+
+  - kernel_id: 143
+    family: BasicMathFunctions
+    operator: Add
+    dtype: FP16
+    cmsis_function: arm_elementwise_add_f16
+
+  - kernel_id: 144
+    family: BasicMathFunctions
+    operator: Sub
+    dtype: FP32
+    cmsis_function: arm_elementwise_sub_f32
+
+  - kernel_id: 145
+    family: BasicMathFunctions
+    operator: Sub
+    dtype: FP16
+    cmsis_function: arm_elementwise_sub_f16
+
+  - kernel_id: 146
+    family: BasicMathFunctions
+    operator: Mul
+    dtype: FP32
+    cmsis_function: arm_elementwise_mul_f32
+
+  - kernel_id: 147
+    family: BasicMathFunctions
+    operator: Mul
+    dtype: FP16
+    cmsis_function: arm_elementwise_mul_f16
+
+  - kernel_id: 148
+    family: BasicMathFunctions
+    operator: Maximum
+    dtype: FP32
+    cmsis_function: arm_maximum_f32
+
+  - kernel_id: 149
+    family: BasicMathFunctions
+    operator: Maximum
+    dtype: FP16
+    cmsis_function: arm_maximum_f16
+
+  - kernel_id: 150
+    family: BasicMathFunctions
+    operator: Minimum
+    dtype: FP32
+    cmsis_function: arm_minimum_f32
+
+  - kernel_id: 151
+    family: BasicMathFunctions
+    operator: Minimum
+    dtype: FP16
+    cmsis_function: arm_minimum_f16

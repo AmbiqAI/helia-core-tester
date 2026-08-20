@@ -153,13 +153,25 @@ static const hct_kernel_catalog_entry_t g_hct_kernel_catalog[] = {
     {137u, "arm_concatenation_f32_w", "ConcatenationFunctions", 1u, "FP32", 1u, true, true, false, 0u},
     {138u, "arm_concatenation_f16_w", "ConcatenationFunctions", 1u, "FP16", 1u, true, true, false, 0u},
     {139u, "arm_split_f16", "ConcatenationFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {140u, "arm_abs_f32", "BasicMathFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {141u, "arm_abs_f16", "BasicMathFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {142u, "arm_elementwise_add_f32", "BasicMathFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {143u, "arm_elementwise_add_f16", "BasicMathFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {144u, "arm_elementwise_sub_f32", "BasicMathFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {145u, "arm_elementwise_sub_f16", "BasicMathFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {146u, "arm_elementwise_mul_f32", "BasicMathFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {147u, "arm_elementwise_mul_f16", "BasicMathFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {148u, "arm_maximum_f32", "BasicMathFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {149u, "arm_maximum_f16", "BasicMathFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {150u, "arm_minimum_f32", "BasicMathFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {151u, "arm_minimum_f16", "BasicMathFunctions", 1u, "FP16", 1u, true, true, false, 0u},
 };
 
 static const uint8_t g_hct_kernel_catalog_hash[32] = {
-    0xafu, 0x24u, 0x2bu, 0x00u, 0xc1u, 0x83u, 0x47u, 0xcbu,
-    0x84u, 0x25u, 0x12u, 0xffu, 0xd8u, 0x0cu, 0x16u, 0xd8u,
-    0x4cu, 0xfau, 0x3eu, 0x5bu, 0x52u, 0x73u, 0xe6u, 0xefu,
-    0x98u, 0x93u, 0xd0u, 0xa0u, 0x79u, 0xbfu, 0xafu, 0xfcu,
+    0x68u, 0xdeu, 0xdcu, 0xbbu, 0x13u, 0x0cu, 0x10u, 0x75u,
+    0xf0u, 0x9cu, 0x47u, 0xaeu, 0xe7u, 0x74u, 0x05u, 0x19u,
+    0x8bu, 0xc9u, 0x07u, 0xc8u, 0x79u, 0x27u, 0x74u, 0xf3u,
+    0xe7u, 0x26u, 0x8au, 0x43u, 0x33u, 0x83u, 0xfeu, 0xcbu,
 };
 
 const hct_kernel_catalog_entry_t *hct_benchmark_server_catalog(size_t *count)

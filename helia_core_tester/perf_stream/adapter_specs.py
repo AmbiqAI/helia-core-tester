@@ -1888,14 +1888,9 @@ static arm_cmsis_nn_status run_basic_math_lut_once(hct_server_session_t *session
 }'''
 
 _RUN_ELEMENTWISE_BINARY_ONCE = '''\
-/* arm_add_s8/arm_sub_s8 (and their S16 counterparts arm_add_s16/arm_sub_s16) share an
- * identical signature/argument order per dtype; all are dispatched from this one wrapper,
- * branching only on session->expected_kernel_id (see assets/kernel_registry.yaml for the
- * kernel_id <-> (operator, dtype) mapping). The S16 kernels have the exact same argument
- * shape as their S8 counterparts (just int16_t data pointers) -- see arm_nnfunctions.h --
- * so no separate scalar fields or output-dims handling are needed for S16. Ground-truth
- * output dims (session->output_h/w/c) are sent explicitly by the host, same rationale as
- * compute_convolve_output_dims(): broadcasting output shape shouldn't be re-derived here. */
+/* Int Add/Sub/Mul/Maximum/Minimum/SquaredDifference and float Add/Sub/Mul/Maximum/Minimum
+ * share the same tensor-plumbing wrapper: blob lookup, dims extraction, explicit host-sent
+ * output dims, then branch on kernel_id for the exact CMSIS-NN entrypoint/signature. */
 static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *session)
 {
     hct_server_blob_t *input1 = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
@@ -2061,6 +2056,86 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
                                        output_data, &output_dims);
             }
             return arm_minimum_s16(&ctx16, input1_data, &input1_dims, input2_data, &input2_dims,
+                                   output_data, &output_dims);
+        }
+        case HCT_KERNEL_ID_ADD_F32:
+        case HCT_KERNEL_ID_SUB_F32:
+        case HCT_KERNEL_ID_MUL_F32:
+        case HCT_KERNEL_ID_MAXIMUM_F32:
+        case HCT_KERNEL_ID_MINIMUM_F32:
+        {
+            if (session->output_length * sizeof(float) > sizeof(session->output_buffer))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            session->output_length = (uint32_t)(session->output_length * sizeof(float));
+            const float *input1_data = (const float *)blob_ptr(session, input1);
+            const float *input2_data = (const float *)blob_ptr(session, input2);
+            float *output_data = (float *)session->output_buffer;
+            const float activation_min = quant_scale_from_bits(session->float_activation_min_bits);
+            const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
+            if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_F32)
+            {
+                return arm_elementwise_add_f32(input1_data, input2_data, output_data,
+                                               activation_min, activation_max, session->block_size);
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_SUB_F32)
+            {
+                return arm_elementwise_sub_f32(input1_data, input2_data, output_data,
+                                               activation_min, activation_max, session->block_size);
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_MUL_F32)
+            {
+                return arm_elementwise_mul_f32(input1_data, input2_data, output_data,
+                                               activation_min, activation_max, session->block_size);
+            }
+            cmsis_nn_context ctxf32 = {NULL, 0};
+            if (session->expected_kernel_id == HCT_KERNEL_ID_MAXIMUM_F32)
+            {
+                return arm_maximum_f32(&ctxf32, input1_data, &input1_dims, input2_data, &input2_dims,
+                                       output_data, &output_dims);
+            }
+            return arm_minimum_f32(&ctxf32, input1_data, &input1_dims, input2_data, &input2_dims,
+                                   output_data, &output_dims);
+        }
+        case HCT_KERNEL_ID_ADD_F16:
+        case HCT_KERNEL_ID_SUB_F16:
+        case HCT_KERNEL_ID_MUL_F16:
+        case HCT_KERNEL_ID_MAXIMUM_F16:
+        case HCT_KERNEL_ID_MINIMUM_F16:
+        {
+            if (session->output_length * sizeof(float16_t) > sizeof(session->output_buffer))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            session->output_length = (uint32_t)(session->output_length * sizeof(float16_t));
+            const float16_t *input1_data = (const float16_t *)blob_ptr(session, input1);
+            const float16_t *input2_data = (const float16_t *)blob_ptr(session, input2);
+            float16_t *output_data = (float16_t *)session->output_buffer;
+            const float activation_min = quant_scale_from_bits(session->float_activation_min_bits);
+            const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
+            if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_F16)
+            {
+                return arm_elementwise_add_f16(input1_data, input2_data, output_data,
+                                               activation_min, activation_max, session->block_size);
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_SUB_F16)
+            {
+                return arm_elementwise_sub_f16(input1_data, input2_data, output_data,
+                                               activation_min, activation_max, session->block_size);
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_MUL_F16)
+            {
+                return arm_elementwise_mul_f16(input1_data, input2_data, output_data,
+                                               activation_min, activation_max, session->block_size);
+            }
+            cmsis_nn_context ctxf16 = {NULL, 0};
+            if (session->expected_kernel_id == HCT_KERNEL_ID_MAXIMUM_F16)
+            {
+                return arm_maximum_f16(&ctxf16, input1_data, &input1_dims, input2_data, &input2_dims,
+                                       output_data, &output_dims);
+            }
+            return arm_minimum_f16(&ctxf16, input1_data, &input1_dims, input2_data, &input2_dims,
                                    output_data, &output_dims);
         }
         default:
