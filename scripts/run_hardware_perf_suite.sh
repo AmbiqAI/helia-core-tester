@@ -20,13 +20,14 @@
 #
 # Usage:
 #   scripts/run_hardware_perf_suite.sh [--serial-no SERIAL] [--cpu CPU] \
-#       [--family FAMILY] [--test-name FILTER] [--limit N] \
+#       [--family FAMILY] [--test-name FILTER] [--limit N] [--suite int|float] \
 #       [--session-id NAME] [--skip-generate] [--skip-flash]
 #
 # Examples:
 #   scripts/run_hardware_perf_suite.sh                     # run all bridged families
 #   scripts/run_hardware_perf_suite.sh --serial-no 1160002276
 #   scripts/run_hardware_perf_suite.sh --family ConvolutionFunctions --test-name convolve_generic_s4
+#   scripts/run_hardware_perf_suite.sh --suite float --family PoolingFunctions --test-name _f32
 #
 # Not tested against real hardware (no board/J-Link probe available in this
 # sandbox) -- please run and report back any errors from the flash/serial
@@ -43,6 +44,7 @@ CPU="cortex-m55"
 FAMILY=""
 TEST_NAME=""
 LIMIT=""
+SUITE="int"
 SESSION_ID="apollo510-full-suite-$(date -u +%Y%m%dT%H%M%SZ)"
 SKIP_GENERATE=0
 SKIP_FLASH=0
@@ -54,6 +56,7 @@ while [[ $# -gt 0 ]]; do
         --family) FAMILY="$2"; shift 2 ;;
         --test-name) TEST_NAME="$2"; shift 2 ;;
         --limit) LIMIT="$2"; shift 2 ;;
+        --suite) SUITE="$2"; shift 2 ;;
         --session-id) SESSION_ID="$2"; shift 2 ;;
         --skip-generate) SKIP_GENERATE=1; shift ;;
         --skip-flash) SKIP_FLASH=1; shift ;;
@@ -110,14 +113,14 @@ fi
 
 echo
 echo "[run_hardware_perf_suite] Config:"
-echo "  serial_no=${SERIAL_NO} cpu=${CPU} family=${FAMILY:-<all bridged families>} test_name=${TEST_NAME:-<all>} limit=${LIMIT:-<all>}"
+echo "  serial_no=${SERIAL_NO} cpu=${CPU} family=${FAMILY:-<all bridged families>} test_name=${TEST_NAME:-<all>} limit=${LIMIT:-<all>} suite=${SUITE}"
 echo "  session_id=${SESSION_ID}"
 echo
 
 # --- Step 1: generate the test suite ---------------------------------------
 if [[ "${SKIP_GENERATE}" -eq 0 ]]; then
-    echo "[run_hardware_perf_suite] Generating tests (cpu=${CPU})..."
-    uv run helia_core_tester generate --cpu "${CPU}"
+    echo "[run_hardware_perf_suite] Generating tests (cpu=${CPU} suite=${SUITE})..."
+    uv run helia_core_tester generate --cpu "${CPU}" --suite "${SUITE}"
 else
     echo "[run_hardware_perf_suite] --skip-generate set; reusing existing artifacts/generated_tests."
 fi
@@ -141,6 +144,7 @@ RUN_GENERATED_ARGS=(
     --serial-no "${SERIAL_NO}"
     --session-id "${SESSION_ID}"
     --cpu "${CPU}"
+    --suite "${SUITE}"
 )
 [[ -n "${FAMILY}" ]] && RUN_GENERATED_ARGS+=(--family "${FAMILY}")
 [[ -n "${TEST_NAME}" ]] && RUN_GENERATED_ARGS+=(--test-name "${TEST_NAME}")

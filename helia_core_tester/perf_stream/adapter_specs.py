@@ -404,20 +404,22 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
 }'''
 
 _RUN_POOLING_ONCE = '''\
-/* arm_avgpool_s8/arm_max_pool_s8 (and their S16 counterparts) all share the same
- * cmsis_nn_pool_params-based signature -- unlike Convolve/DepthwiseConv, pooling has no
+/* arm_avgpool_s8/arm_max_pool_s8 (and their S16/F32 counterparts) all share the same
+ * pool_params-based signature -- unlike Convolve/DepthwiseConv, pooling has no
  * input_offset/output_offset (see cmsis_nn_pool_params's definition in arm_nn_types.h:
  * only stride, padding, activation) and no weights/bias blobs at all, since a pool window
  * has no learned parameters -- just its size (session->pool_h/w, sent explicitly by the
  * host since there is no weights blob to read filter dims off of, unlike Convolve's).
- * MaxPool never needs a scratch buffer for either dtype. AvgPool needs one sized via
+ * MaxPool never needs a scratch buffer for any dtype; F32 AvgPool never does either (its
+ * generated harness always passes ctx.buf=NULL). Int8/int16 AvgPool needs one sized via
  * arm_avgpool_{s8,s16}_get_buffer_size(output_w, input_c) -- zero for many small cases,
  * so scratch_bytes may legitimately be 0 (case_arena pointer is never dereferenced when
- * ctx.size is 0). */
+ * ctx.size is 0). F32's activation.min/max are real floats (e.g. +/-1e30), not int32
+ * clamps, so they're sent bit-cast through float_activation_min_bits/max_bits (same
+ * bit-cast-through-int32 wire convention as scale_bits -- see quant_scale_from_bits()). */
 static arm_cmsis_nn_status run_pooling_once(hct_server_session_t *session)
 {
     hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
-    cmsis_nn_pool_params pool_params;
     cmsis_nn_dims input_dims;
     cmsis_nn_dims filter_dims;
     cmsis_nn_dims output_dims;
@@ -446,59 +448,89 @@ static arm_cmsis_nn_status run_pooling_once(hct_server_session_t *session)
         return ARM_CMSIS_NN_ARG_ERROR;
     }
 
-    pool_params.stride.w = (session->stride_w == 0) ? 1 : session->stride_w;
-    pool_params.stride.h = (session->stride_h == 0) ? 1 : session->stride_h;
-    pool_params.padding.w = session->pad_w;
-    pool_params.padding.h = session->pad_h;
-    pool_params.activation.min = session->activation_min;
-    pool_params.activation.max = session->activation_max;
-
-    if (session->expected_kernel_id == HCT_KERNEL_ID_MAXPOOL_S8 || session->expected_kernel_id == HCT_KERNEL_ID_MAXPOOL_S16)
+    if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_F32 || session->expected_kernel_id == HCT_KERNEL_ID_MAXPOOL_F32)
     {
+        cmsis_nn_pool_params_f32 pool_params_f32;
+        pool_params_f32.stride.w = (session->stride_w == 0) ? 1 : session->stride_w;
+        pool_params_f32.stride.h = (session->stride_h == 0) ? 1 : session->stride_h;
+        pool_params_f32.padding.w = session->pad_w;
+        pool_params_f32.padding.h = session->pad_h;
+        pool_params_f32.activation.min = quant_scale_from_bits(session->float_activation_min_bits);
+        pool_params_f32.activation.max = quant_scale_from_bits(session->float_activation_max_bits);
+
         ctx.buf = NULL;
         ctx.size = 0;
-    }
-    else
-    {
-        int32_t required_scratch = (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_S16)
-            ? arm_avgpool_s16_get_buffer_size((int)output_dims.w, (int)input_dims.c)
-            : arm_avgpool_s8_get_buffer_size((int)output_dims.w, (int)input_dims.c);
-        if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
-        {
-            return ARM_CMSIS_NN_ARG_ERROR;
-        }
-        ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
-        ctx.size = session->scratch_bytes;
-    }
 
-    if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_S16 || session->expected_kernel_id == HCT_KERNEL_ID_MAXPOOL_S16)
-    {
-        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c * (int32_t)sizeof(int16_t));
+        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c * (int32_t)sizeof(float));
         if (session->output_length > sizeof(session->output_buffer))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_S16)
+        if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_F32)
         {
-            return arm_avgpool_s16(&ctx, &pool_params, &input_dims, (const int16_t *)blob_ptr(session, input),
-                                   &filter_dims, &output_dims, (int16_t *)session->output_buffer);
+            return arm_avg_pool_f32(&ctx, &pool_params_f32, &input_dims, (const float *)blob_ptr(session, input),
+                                    &filter_dims, &output_dims, (float *)session->output_buffer);
         }
-        return arm_max_pool_s16(&ctx, &pool_params, &input_dims, (const int16_t *)blob_ptr(session, input),
-                                &filter_dims, &output_dims, (int16_t *)session->output_buffer);
+        return arm_max_pool_f32(&ctx, &pool_params_f32, &input_dims, (const float *)blob_ptr(session, input),
+                                &filter_dims, &output_dims, (float *)session->output_buffer);
     }
 
-    session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c);
-    if (session->output_length > sizeof(session->output_buffer))
     {
-        return ARM_CMSIS_NN_ARG_ERROR;
+        cmsis_nn_pool_params pool_params;
+        pool_params.stride.w = (session->stride_w == 0) ? 1 : session->stride_w;
+        pool_params.stride.h = (session->stride_h == 0) ? 1 : session->stride_h;
+        pool_params.padding.w = session->pad_w;
+        pool_params.padding.h = session->pad_h;
+        pool_params.activation.min = session->activation_min;
+        pool_params.activation.max = session->activation_max;
+
+        if (session->expected_kernel_id == HCT_KERNEL_ID_MAXPOOL_S8 || session->expected_kernel_id == HCT_KERNEL_ID_MAXPOOL_S16)
+        {
+            ctx.buf = NULL;
+            ctx.size = 0;
+        }
+        else
+        {
+            int32_t required_scratch = (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_S16)
+                ? arm_avgpool_s16_get_buffer_size((int)output_dims.w, (int)input_dims.c)
+                : arm_avgpool_s8_get_buffer_size((int)output_dims.w, (int)input_dims.c);
+            if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.size = session->scratch_bytes;
+        }
+
+        if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_S16 || session->expected_kernel_id == HCT_KERNEL_ID_MAXPOOL_S16)
+        {
+            session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c * (int32_t)sizeof(int16_t));
+            if (session->output_length > sizeof(session->output_buffer))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_S16)
+            {
+                return arm_avgpool_s16(&ctx, &pool_params, &input_dims, (const int16_t *)blob_ptr(session, input),
+                                       &filter_dims, &output_dims, (int16_t *)session->output_buffer);
+            }
+            return arm_max_pool_s16(&ctx, &pool_params, &input_dims, (const int16_t *)blob_ptr(session, input),
+                                    &filter_dims, &output_dims, (int16_t *)session->output_buffer);
+        }
+
+        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c);
+        if (session->output_length > sizeof(session->output_buffer))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_S8)
+        {
+            return arm_avgpool_s8(&ctx, &pool_params, &input_dims, (const int8_t *)blob_ptr(session, input),
+                                  &filter_dims, &output_dims, (int8_t *)session->output_buffer);
+        }
+        return arm_max_pool_s8(&ctx, &pool_params, &input_dims, (const int8_t *)blob_ptr(session, input),
+                               &filter_dims, &output_dims, (int8_t *)session->output_buffer);
     }
-    if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_S8)
-    {
-        return arm_avgpool_s8(&ctx, &pool_params, &input_dims, (const int8_t *)blob_ptr(session, input),
-                              &filter_dims, &output_dims, (int8_t *)session->output_buffer);
-    }
-    return arm_max_pool_s8(&ctx, &pool_params, &input_dims, (const int8_t *)blob_ptr(session, input),
-                           &filter_dims, &output_dims, (int8_t *)session->output_buffer);
 }'''
 
 _RUN_ACTIVATION_ONCE = '''\
@@ -3204,6 +3236,7 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
             "stride_h", "stride_w", "pad_h", "pad_w",
             "output_h", "output_w", "output_c",
             "activation_min", "activation_max", "pool_h", "pool_w",
+            "float_activation_min_bits", "float_activation_max_bits",
         ),
         c_body=_RUN_POOLING_ONCE,
     ),

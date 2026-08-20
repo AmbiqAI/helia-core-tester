@@ -174,6 +174,7 @@ def _configure(build_dir: Path, cpu: str, board: str, force: bool) -> None:
         "-DHELIA_HARDWARE_BUILD=ON",
         f"-DHELIA_HARDWARE_BOARD={board}",
         f"-DTARGET_CPU={cpu}",
+        "-DARM_NN_ENABLE_F32=ON",
     ]
     typer.echo(f"[perf-stream] Configuring: {' '.join(cmd)}")
     subprocess.run(cmd, cwd=repo_root, check=True)
@@ -271,6 +272,7 @@ def run_generated(
     family: Optional[str] = typer.Option(None, "--family", help="Operator family under artifacts/generated_tests to bridge. Omit to bridge every family with real firmware dispatch support (see generated_test_bridge.bridged_families())."),
     test_name: Optional[str] = typer.Option(None, "--test-name", help="Only bridge generated tests whose directory name contains this substring."),
     limit: Optional[int] = typer.Option(None, "--limit", help="Only bridge the first N discovered generated tests."),
+    suite: str = typer.Option("int", "--suite", help="Generated-test suite to bridge: 'int' (S8/S16/S32/S4, default) or 'float' (FP16/FP32)."),
 ):
     """Stream real `helia_core_tester generate`-produced kernel tests (real golden data,
     not synthetic demo data) to already-flashed hardware over HCTP/RTT and check correctness.
@@ -299,7 +301,7 @@ def run_generated(
     # [N/total] counter and case_id columns from the very first printed line instead of
     # widening them as longer names are discovered mid-run.
     preview_bundles, _preview_skipped = build_generated_test_case_bundles(
-        repo_root, cpu=cpu, family=family, name_filter=test_name, limit=limit
+        repo_root, cpu=cpu, family=family, name_filter=test_name, limit=limit, suite=suite
     )
     id_width = max((len(b.case_id) for b in preview_bundles), default=0)
 
@@ -318,6 +320,7 @@ def run_generated(
             family=family,
             name_filter=test_name,
             limit=limit,
+            suite=suite,
             on_case_complete=on_case_complete,
         )
     except RuntimeError as exc:

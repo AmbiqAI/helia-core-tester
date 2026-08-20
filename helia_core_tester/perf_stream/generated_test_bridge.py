@@ -105,6 +105,7 @@ class GeneratedTestCase:
     family: str
     directory: Path
     descriptor: dict
+    suite: str = "int"
 
 
 _INT_ARRAY_RE = re.compile(r"=\s*\{([^}]*)\}")
@@ -406,6 +407,36 @@ def _extract_nested_scalar(header_text: str, struct_name: str, nested_field: str
     return int(field_match.group(1))
 
 
+def _extract_nested_float_scalar(header_text: str, struct_name: str, nested_field: str, field: str) -> float:
+    """Float counterpart of `_extract_nested_scalar()` -- for F32 pooling's
+    `cmsis_nn_pool_params_f32.activation.{min,max}`, which are real floats (e.g.
+    `1.0e+30f`), not the int32 clamps every other adapter's activation.min/max uses."""
+    struct_pattern = re.compile(rf"\b{re.escape(struct_name)}\s*=\s*\{{(.*?)\}}\s*;", re.DOTALL)
+    struct_match = struct_pattern.search(header_text)
+    if struct_match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find struct `{struct_name}` in generated header")
+    body = struct_match.group(1)
+
+    float_re = r"(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)[fF]?"
+    dotted_pattern = re.compile(rf"\.{re.escape(nested_field)}\.{re.escape(field)}\s*=\s*{float_re}")
+    dotted_match = dotted_pattern.search(body)
+    if dotted_match is not None:
+        return float(dotted_match.group(1))
+
+    nested_pattern = re.compile(rf"\.{re.escape(nested_field)}\s*=\s*\{{([^}}]*)\}}")
+    nested_match = nested_pattern.search(body)
+    if nested_match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find nested field `.{nested_field}` on struct `{struct_name}`")
+    nested_body = nested_match.group(1)
+    field_pattern = re.compile(rf"\.{re.escape(field)}\s*=\s*{float_re}")
+    field_match = field_pattern.search(nested_body)
+    if field_match is None:
+        raise UnsupportedGeneratedTestError(
+            f"Could not find field `.{field}` on nested `.{nested_field}` of struct `{struct_name}`"
+        )
+    return float(field_match.group(1))
+
+
 def _shape_to_padded_nhwc(shape: tuple[int, ...]) -> tuple[int, int, int, int]:
     if len(shape) > 4:
         raise UnsupportedGeneratedTestError(f"Only ranks up to 4 are bridgeable, got shape {shape}.")
@@ -539,9 +570,12 @@ def discover_generated_tests(
     family: str = "ConvolutionFunctions",
     name_filter: str | None = None,
     limit: int | None = None,
+    suite: str = "int",
 ) -> list[GeneratedTestCase]:
-    """Discover generated-test directories with a parseable descriptor.yaml under artifacts/generated_tests."""
-    root = project_root / "artifacts" / "generated_tests" / "int" / cpu / family
+    """Discover generated-test directories with a parseable descriptor.yaml under
+    artifacts/generated_tests/<suite>/<cpu>/<family>. `suite="int"` (default) covers the
+    quantized/S4/S8/S16/S32 test tree; `suite="float"` covers the FP16/FP32 tree."""
+    root = project_root / "artifacts" / "generated_tests" / suite / cpu / family
     if not root.is_dir():
         return []
     results: list[GeneratedTestCase] = []
@@ -553,7 +587,7 @@ def discover_generated_tests(
         if name_filter is not None and name_filter not in name:
             continue
         descriptor = yaml.safe_load(descriptor_path.read_text(encoding="utf-8"))
-        results.append(GeneratedTestCase(name=name, cpu=cpu, family=family, directory=directory, descriptor=descriptor))
+        results.append(GeneratedTestCase(name=name, cpu=cpu, family=family, directory=directory, descriptor=descriptor, suite=suite))
         if limit is not None and len(results) >= limit:
             break
     return results
@@ -594,6 +628,7 @@ def build_case_bundle_from_generated_test(
                 project_root,
                 generated_test.name,
                 cpu=generated_test.cpu,
+                suite=generated_test.suite,
                 allow_missing_report=True,
             )
         except FvpCaseFailedGateError as exc:
@@ -1344,6 +1379,167 @@ def _build_pooling_case(
         "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
     }
     return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
+def _build_pooling_float_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    """Convert one real generated CMSIS-NN AvgPool/MaxPool FP32 test into a streamable
+    perf-stream CaseBundle. Like the quantized pooling builder above, there are no weights/
+    bias blobs (a pool window has no learned parameters) and no scratch buffer (F32
+    AvgPool's generated harness always passes ctx.buf=NULL -- see the sidecar's
+    `kernel_get_buffer_size_fn: null`). Unlike the quantized path, there is no
+    input/output zero-point, and the activation clamp (`cmsis_nn_pool_params_f32.
+    activation.{min,max}`) is a real float (e.g. +/-1e30), not an int32 quantized clamp --
+    it is bit-cast through int32 on the wire (see `_quant_scale_to_bits`/
+    `float_activation_min_bits` in benchmark_server_session.h). Only the `arm_avg_pool_f32`/
+    `arm_max_pool_f32` entrypoints are bridged, not their `_nhwc` alias variants (same
+    kernel, different call site in the generated harness -- not yet worth a second
+    kernel_id)."""
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    tensor_dtypes = descriptor.get("resolved_tensor_dtypes", descriptor.get("tensor_dtypes", {}))
+    input_dtype = str(tensor_dtypes.get("input", ""))
+    if operator not in ("AvgPool", "MaxPool") or input_dtype != "FP32":
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: operator={operator!r} input_dtype={input_dtype!r} is not "
+            f"bridgeable -- perf-stream firmware only dispatches arm_avg_pool_f32/arm_max_pool_f32 "
+            f"(FP32 input/output, not the _nhwc alias variants)."
+        )
+
+    header_path = _find_header_file(generated_test.directory)
+    header_text = header_path.read_text(encoding="utf-8")
+    source_text = _find_source_file(generated_test.directory).read_text(encoding="utf-8")
+    plain_fn = f"arm_{'avg' if operator == 'AvgPool' else 'max'}_pool_f32("
+    nhwc_fn = f"arm_{'avg' if operator == 'AvgPool' else 'max'}_pool_nhwc_f32("
+    if nhwc_fn in source_text and plain_fn not in source_text:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: uses the _nhwc alias entrypoint, not the plain "
+            f"{plain_fn} -- not yet bridged."
+        )
+    prefix = generated_test.name
+
+    input_dims = _extract_dims(header_text, f"{prefix}_input_dims")
+    filter_dims = _extract_dims(header_text, f"{prefix}_filter_dims")
+    output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
+    if input_dims["n"] != 1:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: batch size {input_dims['n']} > 1 is not yet supported by the "
+            f"perf-stream hardware bridge (firmware dispatches a single pooling invocation per case)."
+        )
+    input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
+    output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
+
+    input_flat = _extract_float_array(header_text, f"{prefix}_input")
+    expected_flat = _extract_float_array(header_text, f"{prefix}_expected_output")
+    input_arr = np.array(input_flat, dtype=np.float32)
+    expected_arr = np.array(expected_flat, dtype=np.float32)
+
+    if input_arr.size < _shape_product(input_shape):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: generated input array size ({input_arr.size}) doesn't match header "
+            f"input_dims (input_shape={input_shape})."
+        )
+    input_data = _reshape_generated_prefix(
+        input_arr,
+        input_shape,
+        generated_test=generated_test,
+        tensor_name="input",
+        context=f"input_shape={input_shape}",
+    )
+    if expected_arr.size < _shape_product(output_shape):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: expected_output size ({expected_arr.size}) does not match header "
+            f"output_dims product ({int(np.prod(output_shape))})"
+        )
+    expected_output = _reshape_generated_prefix(
+        expected_arr,
+        output_shape,
+        generated_test=generated_test,
+        tensor_name="expected_output",
+        context=f"output_shape={output_shape}",
+    )
+
+    params_struct = f"{prefix}_pool_params"
+    activation_min = _extract_nested_float_scalar(header_text, params_struct, "activation", "min")
+    activation_max = _extract_nested_float_scalar(header_text, params_struct, "activation", "max")
+    stride_h = _extract_nested_scalar(header_text, params_struct, "stride", "h")
+    stride_w = _extract_nested_scalar(header_text, params_struct, "stride", "w")
+    pad_h = _extract_nested_scalar(header_text, params_struct, "padding", "h")
+    pad_w = _extract_nested_scalar(header_text, params_struct, "padding", "w")
+
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, "PoolingFunctions", case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+
+    arrays = [
+        (1, "input_0", "FP32", input_shape, input_data, False, False),
+        (6, "expected_output", "FP32", tuple(int(v) for v in expected_output.shape), expected_output, False, True),
+    ]
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array, dtype=np.float32))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    comparison = dict(descriptor.get("resolved_comparison", {"mode": "float"}))
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": operator,
+        "family": "PoolingFunctions",
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family="PoolingFunctions", operator=operator, dtype="FP32"),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": {
+            "stride_h": stride_h,
+            "stride_w": stride_w,
+            "pad_h": pad_h,
+            "pad_w": pad_w,
+            "output_h": output_dims["h"],
+            "output_w": output_dims["w"],
+            "output_c": output_dims["c"],
+            "float_activation_min_bits": _quant_scale_to_bits(activation_min),
+            "float_activation_max_bits": _quant_scale_to_bits(activation_max),
+            "pool_h": filter_dims["h"],
+            "pool_w": filter_dims["w"],
+        },
+        "tensor_dtypes": {"input": "FP32", "output": "FP32"},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": "FP32", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": comparison,
+        "scratch_buffer": {"bytes": 0},
+        "required_target_capabilities": [f"{operator.lower()}_fp32"],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
+def _build_pooling_case_dispatch(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    """Route to the quantized (S8/S16) or FP32 AvgPool/MaxPool builder based on the
+    generated test's suite/dtype -- both builders share the (family, operator) key in
+    `_BUILDERS` since the same operator name spans both the int and float suites."""
+    if generated_test.suite == "float":
+        return _build_pooling_float_case(project_root, generated_test, output_root=output_root)
+    return _build_pooling_case(project_root, generated_test, output_root=output_root)
 
 
 # ActivationFunctions unary ops (single input tensor -> same-shape output, no weights/bias
@@ -4137,8 +4333,8 @@ _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
     ("BasicMathFunctions", "Mul"): _build_mul_case,
     ("BasicMathFunctions", "Maximum"): _build_min_max_case,
     ("BasicMathFunctions", "Minimum"): _build_min_max_case,
-    ("PoolingFunctions", "AvgPool"): _build_pooling_case,
-    ("PoolingFunctions", "MaxPool"): _build_pooling_case,
+    ("PoolingFunctions", "AvgPool"): _build_pooling_case_dispatch,
+    ("PoolingFunctions", "MaxPool"): _build_pooling_case_dispatch,
     ("ActivationFunctions", "Relu"): _build_activation_case,
     ("ActivationFunctions", "Relu6"): _build_activation_case,
     ("ActivationFunctions", "Clamp"): _build_activation_case,

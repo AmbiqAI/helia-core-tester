@@ -120,6 +120,11 @@ typedef struct
      * run_pooling_once() in benchmark_server_session.c. */
     int32_t pool_h;
     int32_t pool_w;
+    /* PoolingFunctions F32 AvgPool/MaxPool activation clamp -- real floats (e.g. +/-1e30),
+     * not int32 quantized clamps, so they're bit-cast through int32 on the wire (same
+     * convention as scale_bits -- see quant_scale_from_bits() in benchmark_server_session.c). */
+    int32_t float_activation_min_bits;
+    int32_t float_activation_max_bits;
     /* ActivationFunctions scalar params -- see parse_scalar() and run_activation_once() in
      * benchmark_server_session.c. Relu/Relu6/Clamp/LeakyRelu/HardSwish* all reuse
      * input_offset/output_offset/out_mult/out_shift/activation_min/max above where semantics

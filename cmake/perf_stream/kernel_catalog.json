@@ -1510,5 +1510,29 @@
     "scratch_bytes": 0,
     "stateless": true,
     "supported_dtype": "S8"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_avg_pool_f32",
+    "kernel_id": 127,
+    "mutates_input": false,
+    "operator_family": "PoolingFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP32"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_max_pool_f32",
+    "kernel_id": 128,
+    "mutates_input": false,
+    "operator_family": "PoolingFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP32"
   }
 ]

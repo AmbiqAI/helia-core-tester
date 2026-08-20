@@ -775,3 +775,15 @@ kernels:
     dtype: S8
     weight_dtype: S4
     cmsis_function: arm_depthwise_conv_wrapper_s4
+
+  - kernel_id: 127
+    family: PoolingFunctions
+    operator: AvgPool
+    dtype: FP32
+    cmsis_function: arm_avg_pool_f32
+
+  - kernel_id: 128
+    family: PoolingFunctions
+    operator: MaxPool
+    dtype: FP32
+    cmsis_function: arm_max_pool_f32

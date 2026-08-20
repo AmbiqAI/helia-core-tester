@@ -233,6 +233,7 @@ def build_generated_test_case_bundles(
     family: str | None = "ConvolutionFunctions",
     name_filter: str | None = None,
     limit: int | None = None,
+    suite: str = "int",
 ) -> tuple[list[CaseBundle], list[tuple[GeneratedTestCase, str]]]:
     """Discover generated (`helia_core_tester generate`) kernel tests and bridge the
     ones with real perf-stream firmware dispatch support into CaseBundles.
@@ -241,6 +242,8 @@ def build_generated_test_case_bundles(
     `generated_test_bridge.bridged_families()`) instead of a single hardcoded family --
     i.e. runs the complete set of hardware-supported kernels across all families.
     `limit`, if given, is applied per-family (not globally) when `family=None`.
+    `suite="int"` (default) discovers under artifacts/generated_tests/int; `suite="float"`
+    discovers the FP16/FP32 tree instead -- the two suites are never mixed in one call.
 
     Returns (bridged_case_bundles, [(skipped_test, reason), ...]).
     """
@@ -248,7 +251,7 @@ def build_generated_test_case_bundles(
     bundles: list[CaseBundle] = []
     skipped: list[tuple[GeneratedTestCase, str]] = []
     for fam in families:
-        discovered = discover_generated_tests(project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit)
+        discovered = discover_generated_tests(project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite)
         for test in discovered:
             try:
                 bundles.append(build_case_bundle_from_generated_test(project_root, test))
@@ -270,6 +273,7 @@ def run_apollo510_generated_test_session(
     family: str | None = "ConvolutionFunctions",
     name_filter: str | None = None,
     limit: int | None = None,
+    suite: str = "int",
     on_case_complete: Callable[[CaseRunResult], None] | None = None,
 ) -> tuple[SessionResult, Path, list[tuple[GeneratedTestCase, str]]]:
     """Run real `helia_core_tester generate`-produced kernel tests (with their real golden
@@ -278,7 +282,8 @@ def run_apollo510_generated_test_session(
 
     `family=None` bridges every family with real firmware dispatch support (see
     `build_generated_test_case_bundles`), i.e. runs the complete hardware-supported suite
-    in one session (transparently batched).
+    in one session (transparently batched). `suite="int"` (default) or `suite="float"`
+    selects which generated-test tree to discover from.
 
     Transparently splits the discovered/bridged cases into batches of at most
     MAX_CASES_PER_SESSION (matching firmware HCT_SERVER_MAX_CASES) and runs one
@@ -287,12 +292,12 @@ def run_apollo510_generated_test_session(
     causes the firmware to silently drop the plan and hang the host.
     """
     bundles, skipped = build_generated_test_case_bundles(
-        project_root, cpu=cpu, family=family, name_filter=name_filter, limit=limit
+        project_root, cpu=cpu, family=family, name_filter=name_filter, limit=limit, suite=suite
     )
     if not bundles:
         raise RuntimeError(
             f"No bridgeable generated tests found for cpu={cpu} family={family if family is not None else '<all bridged families>'} "
-            f"name_filter={name_filter!r} (skipped {len(skipped)}); run `helia_core_tester generate` first."
+            f"name_filter={name_filter!r} suite={suite!r} (skipped {len(skipped)}); run `helia_core_tester generate` first."
         )
     result, bundle_root = _run_case_bundles_in_batches(
         project_root,
