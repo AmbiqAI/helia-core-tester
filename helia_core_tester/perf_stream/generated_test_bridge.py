@@ -582,6 +582,11 @@ def build_case_bundle_from_generated_test(
     tests that don't have a real FVP report to check against).
     """
     from .fvp_gate import FvpCaseFailedGateError, require_fvp_pass as _require_fvp_pass
+    from .known_limitations import lookup_known_limitation
+
+    known_limitation = lookup_known_limitation(generated_test.name)
+    if known_limitation is not None:
+        raise UnsupportedGeneratedTestError(f"{generated_test.name}: {known_limitation.reason}")
 
     if require_fvp_pass:
         try:
@@ -656,17 +661,6 @@ def _build_convolve_case(
     filter_shape = (filter_dims["h"], filter_dims["w"], filter_dims["c"], filter_dims["n"])
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
     output_channels = filter_dims["n"]
-
-    if generated_test.name == "convolve_grouped_conv_case_01_s8":
-        raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: even after matching the standalone harness's first-slice "
-            f"(header n=1) semantics, the direct arm_convolve_wrapper_s8 path is still not "
-            f"exact-correct for this grouped-convolution artifact: a fresh host-side repro of the "
-            f"real generated header/kernel call still mismatched expected_output at index 68 "
-            f"(expected 77, got 78), and arm_convolve_weight_sum() reports ARG_ERROR on the same "
-            f"grouped dims. It therefore remains intentionally unbridged rather than shipping a "
-            f"known incorrect exact-match convolution result."
-        )
 
     activation_numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
     bias_numpy_dtype = np.int64 if activation_dtype == "S16" else np.int32
