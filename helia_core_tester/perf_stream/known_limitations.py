@@ -29,24 +29,12 @@ class KnownLimitation:
 
 
 # Keyed by GeneratedTestCase.name. One entry per known-broken case; see each
-# reason string for the specific correctness gap and investigation history.
-_KNOWN_LIMITATIONS: dict[str, KnownLimitation] = {
-    "convolve_grouped_conv_case_01_s8": KnownLimitation(
-        case_name="convolve_grouped_conv_case_01_s8",
-        reason=(
-            "even after matching the standalone harness's first-slice (header n=1) "
-            "semantics, the direct arm_convolve_wrapper_s8 path is still not "
-            "exact-correct for this grouped-convolution artifact: a fresh host-side "
-            "repro of the real generated header/kernel call still mismatched "
-            "expected_output at index 68 (expected 77, got 78), and "
-            "arm_convolve_weight_sum() reports ARG_ERROR on the same grouped dims. "
-            "It therefore remains intentionally unbridged rather than shipping a "
-            "known incorrect exact-match convolution result. Note: this case PASSES "
-            "under FVP -- the gap is specific to the real-hardware direct-dispatch "
-            "bridge path, not a general correctness issue with the generated case."
-        ),
-    ),
-}
+# reason string for the specific correctness gap.
+#
+# convolve_grouped_conv_case_01_s8 was previously listed here (1 LSB mismatch
+# on real hardware vs. FVP's tolerant fallback); fixed by adding an explicit
+# "Convolve": 1 override in dtypes.py, so it was removed from this registry.
+_KNOWN_LIMITATIONS: dict[str, KnownLimitation] = {}
 
 
 def lookup_known_limitation(case_name: str) -> KnownLimitation | None:

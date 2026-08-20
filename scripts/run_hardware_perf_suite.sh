@@ -8,14 +8,10 @@
 #   3. uv run helia_core_tester perf-stream run-generated --serial-no <SERIAL> ...
 #
 # By default (no --family given) this runs EVERY operator family with real
-# firmware dispatch support in one session -- see
-# helia_core_tester/perf_stream/generated_test_bridge.py's `_BUILDERS` dispatch
-# table for the authoritative, up-to-date list (currently: ConvolutionFunctions
-# Convolve/DepthwiseConv, PoolingFunctions AvgPool/MaxPool, BasicMathFunctions
-# Add/Sub/Mul/Maximum/Minimum, and ActivationFunctions Relu/Relu6/Clamp/LeakyRelu/
-# Logistic/Tanh/HardSwishCompat/HardSwishPrecise, all for both S8 and S16
-# activations where applicable). Pass --family to restrict to one family.
-# Kernels without a registered builder are reported
+# firmware dispatch support in one session -- see the `_BUILDERS` dispatch
+# table in helia_core_tester/perf_stream/generated_test_bridge.py (or call
+# `bridged_families()` at runtime) for the up-to-date list. Pass --family to
+# restrict to one family. Kernels without a registered builder are reported
 # as skipped (with the reason) rather than silently omitted.
 #
 # If --serial-no isn't given, this auto-detects the connected J-Link probe's

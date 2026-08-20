@@ -275,15 +275,10 @@ def run_generated(
     """Stream real `helia_core_tester generate`-produced kernel tests (real golden data,
     not synthetic demo data) to already-flashed hardware over HCTP/RTT and check correctness.
 
-    Only kernels with real firmware dispatch support are bridged -- see
-    `generated_test_bridge.bridged_families()` and the `_BUILDERS` dispatch table for the
-    authoritative, up-to-date list (currently includes arm_convolve_s8/arm_convolve_wrapper_s16,
-    arm_depthwise_conv_s8/arm_depthwise_conv_wrapper_s16, arm_avgpool_s8/s16 and
-    arm_max_pool_s8/s16, the BasicMathFunctions Add/Sub/Mul/Maximum/Minimum family, and the
-    ActivationFunctions Relu/Relu6/Clamp/LeakyRelu/Logistic/Tanh/HardSwishCompat/HardSwishPrecise
-    family, all for both S8 and S16 activations where applicable; batch size 1 only).
-    Everything else is reported as skipped with the reason, instead of silently
-    fabricating a result. By default (no --family given) every bridged family is run,
+    Only kernels with real firmware dispatch support are bridged -- see the `_BUILDERS`
+    dispatch table in `generated_test_bridge.py` (or call `bridged_families()` at
+    runtime) for the up-to-date list. Everything else is reported as skipped with the
+    reason, instead of silently fabricating a result. By default (no --family given) every bridged family is run,
     i.e. the complete hardware-supported suite. Run `helia_core_tester generate --cpu
     cortex-m55` first to produce bridgeable test data.
 

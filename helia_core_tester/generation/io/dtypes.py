@@ -143,60 +143,46 @@ def get_resolved_tensor_dtype(desc: Mapping[str, Any], role: str, default: str |
 
 
 # Single source of truth for per-operator integer comparison tolerance.
+# Both resolve_comparison() (hardware bridge manifest) and
+# template_context.py's infer_validation_tolerance() (FVP codegen) read this
+# table, so both paths always validate a given case under the same tolerance.
 #
-# This used to be duplicated: generation/utils/template_context.py maintained
-# its own hardcoded per-template-path override tables (_TOLERANCE_OVERRIDES /
-# _INT16_TOLERANCE_OVERRIDES) that only controlled what the FVP standalone
-# harness (HELIA_VALIDATE_OUTPUTS) validated against, while resolve_comparison()
-# below -- which the hardware perf-stream bridge's manifest actually reads via
-# descriptor["resolved_comparison"] -- had no knowledge of those overrides and
-# defaulted every int8/int16 output to exact_int (zero tolerance). The two paths
-# could therefore silently validate the same generated case under different
-# rules (e.g. convolve_grouped_conv_case_01_s8 passed FVP under a tolerant
-# +-1 LSB policy while the hardware bridge required an exact bit-for-bit match
-# for the same golden data). Keying tolerance policy by operator here, and
-# having template_context.py derive its FVP tolerance from this same table
-# instead of its own copy, makes "what FVP validated" and "what hardware
-# requires" provably the same thing.
-# KNOWN GAP (tracked, not yet fixed): any operator using tolerant_int FVP
-# validation with no entry in this table falls back to a hardcoded tolerance
-# of 1 (see default_int_tolerance()/infer_validation_tolerance() below), while
-# resolve_comparison() below defaults such an operator's hardware manifest to
-# exact_int (tolerance 0). This is the same class of FVP/hardware mismatch
-# that caused convolve_grouped_conv_case_01_s8's silent FVP-pass/hardware-fail
-# divergence -- but it is NOT limited to that one case. It affects every
-# operator in template_context.py's _TOLERANT_INT_VALIDATION_TEMPLATES that
-# has no explicit override here, including (at minimum): Convolve,
-# TransposeConv, FullyConnected, BatchMatMul, AvgPool, MaxPool, Softmax,
-# Quantize, Concatenation, Split, Reshape, BatchToSpaceND, SpaceToBatchND,
-# SpaceToDepth, StridedSlice, Squeeze, Transpose, Pad, Logistic, Relu, Relu6,
-# Tanh, HardSwish, Mean, MinMax, ReduceMax, ReduceMin, Sub. Each of these was
-# never audited to determine whether it is genuinely bit-exact on real
-# hardware (in which case its FVP tolerance should be tightened to 0/removed
-# from the tolerant list) or genuinely needs +-1 LSB slack (in which case it
-# should get an explicit override here so hardware validates the same way).
-# Deliberately NOT resolved by blindly flipping the fallback default to 0
-# here, since that could silently reintroduce false hardware failures for any
-# operator that legitimately has a real, currently-undocumented 1 LSB
-# divergence on real silicon (no FVP/hardware access available in this
-# environment to verify each one). Tracked for a follow-up audit -- see
-# docs/known-limitations.yaml once introduced.
+# KNOWN GAP: any operator using tolerant_int FVP validation with no entry
+# here falls back to a hardcoded tolerance of 1 (see default_int_tolerance()
+# below), while resolve_comparison() defaults such an operator's hardware
+# manifest to exact_int (tolerance 0) -- a silent FVP-pass/hardware-fail
+# divergence risk. Still-unaudited operators: TransposeConv, FullyConnected,
+# BatchMatMul, AvgPool, MaxPool, Softmax, Quantize, Logistic, Relu, Relu6,
+# Tanh, HardSwish, Mean, MinMax, ReduceMax, ReduceMin, Sub. Not resolved by
+# flipping the fallback to 0, since that could reintroduce false hardware
+# failures for an operator with a real undocumented 1 LSB divergence.
 _OPERATOR_TOLERANCE_OVERRIDES: Dict[str, int] = {
     "PReLU": 2,
-    # LeakyRelu/HardSwishCompat are approximate/rounding activations (LUT-style
-    # requantization with a scalar-vs-MVE rounding-path divergence on real
-    # hardware -- see docs/perf-stream-expansion-progress.md's root-cause
-    # investigation) -- policy: +-1 LSB tolerance for approximate/rounding ops.
+    # LUT-style requantization with a scalar-vs-MVE rounding divergence on
+    # real hardware -- see docs/perf-stream-expansion-progress.md.
     "LeakyRelu": 1,
     "HardSwishCompat": 1,
-    # DepthwiseConv is a convolution op -- policy: exact (0 tolerance) match
-    # required, even though real hardware has been observed to diverge by up
-    # to 2 LSB on the dilation/non-optimized accumulation path (see
-    # docs/perf-stream-expansion-progress.md). Kept as an explicit 0 override
-    # (rather than exact_int mode) so it stays on the same tolerant_int
-    # validation path as other convolution operators; tolerance=0 is
-    # functionally equivalent to an exact match.
+    # Exact match required, even though hardware has been observed to
+    # diverge by up to 2 LSB on the dilation/non-optimized path.
     "DepthwiseConv": 0,
+    # convolve_grouped_conv_case_01_s8 mismatched real hardware by exactly
+    # 1 LSB while FVP validated it under a tolerant fallback of 1.
+    "Convolve": 1,
+    # Pure byte-copy/index-permutation kernels (arm_reshape_s8,
+    # arm_concatenation_s8, arm_split_s8, arm_pad_s8, arm_transpose_*,
+    # arm_strided_slice_*, arm_space_to_depth_s8, arm_batch_to_space_nd_s8,
+    # arm_space_to_batch_nd_s8) -- no requantization/rounding, so exact
+    # match is expected.
+    "Reshape": 0,
+    "Concatenation": 0,
+    "Split": 0,
+    "Pad": 0,
+    "Transpose": 0,
+    "StridedSlice": 0,
+    "Squeeze": 0,
+    "SpaceToDepth": 0,
+    "BatchToSpaceND": 0,
+    "SpaceToBatchND": 0,
 }
 
 # Per-operator tolerance overrides that apply only when the resolved output

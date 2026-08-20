@@ -1,23 +1,10 @@
-"""Regression coverage for the unified tolerance/comparison policy.
-
-Prior to this, generation/utils/template_context.py maintained its own
-hardcoded per-template-path tolerance override tables (used only to drive
-what the FVP standalone harness validates), while
-generation/io/dtypes.py's resolve_comparison() -- which the hardware
-perf-stream bridge reads via descriptor["resolved_comparison"] -- had no
-knowledge of those overrides and defaulted every int8/int16 output to
-exact_int (zero tolerance). The two paths could therefore validate the same
-generated golden data under silently different rules (see
-convolve_grouped_conv_case_01_s8: FVP tolerant +-1 LSB, hardware bridge
-exact-match). These tests assert that default_int_tolerance() is now the
-single source of truth consumed by both resolve_comparison() (hardware side)
-and TemplateContextBuilder.infer_validation_tolerance() (FVP side), and that
-migrating the previously-hardcoded per-template overrides onto this
-operator-keyed table did not change any previously-documented tolerance
-value.
+"""Regression coverage for the unified tolerance/comparison policy: asserts
+that default_int_tolerance() is the single source of truth consumed by both
+resolve_comparison() (hardware side) and
+TemplateContextBuilder.infer_validation_tolerance() (FVP side).
 """
 
-from helia_core_tester.generation.io.dtypes import default_int_tolerance, resolve_comparison
+from helia_core_tester.generation.io.dtypes import default_int_tolerance, has_int_tolerance_override, resolve_comparison
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -31,7 +18,17 @@ def test_resolve_comparison_preserves_prior_per_operator_overrides():
         ("Abs", "S8", {"mode": "exact_int"}),
         ("Add", "S16", {"mode": "tolerant_int", "tolerance": 3}),
         ("SquaredDifference", "S16", {"mode": "tolerant_int", "tolerance": 3}),
-        ("Convolve", "S8", {"mode": "exact_int"}),
+        ("Convolve", "S8", {"mode": "tolerant_int", "tolerance": 1}),
+        ("Reshape", "S8", {"mode": "exact_int"}),
+        ("Concatenation", "S8", {"mode": "exact_int"}),
+        ("Split", "S8", {"mode": "exact_int"}),
+        ("Pad", "S8", {"mode": "exact_int"}),
+        ("Transpose", "S8", {"mode": "exact_int"}),
+        ("StridedSlice", "S8", {"mode": "exact_int"}),
+        ("Squeeze", "S8", {"mode": "exact_int"}),
+        ("SpaceToDepth", "S8", {"mode": "exact_int"}),
+        ("BatchToSpaceND", "S8", {"mode": "exact_int"}),
+        ("SpaceToBatchND", "S8", {"mode": "exact_int"}),
     ]
     for operator, output_dtype, expected in cases:
         desc = {"operator": operator, "resolved_tensor_dtypes": {"input": output_dtype, "output": output_dtype}}
@@ -39,11 +36,8 @@ def test_resolve_comparison_preserves_prior_per_operator_overrides():
 
 
 def test_fvp_validation_tolerance_derives_from_same_operator_table_as_hardware_manifest():
-    # For every operator with an explicit override, the FVP-side tolerance
-    # (infer_validation_tolerance) and the hardware manifest's resolved
-    # tolerance (resolve_comparison) must agree -- eliminating the class of
-    # silent divergence that let convolve_grouped_conv_case_01_s8 pass FVP
-    # while the hardware bridge required an exact match for the same golden.
+    # FVP tolerance (infer_validation_tolerance) and hardware manifest
+    # tolerance (resolve_comparison) must agree for every explicit override.
     overridden_operators = [
         ("PReLU", "S8", "int8_t"),
         ("LeakyRelu", "S8", "int8_t"),
@@ -65,8 +59,55 @@ def test_fvp_validation_tolerance_derives_from_same_operator_table_as_hardware_m
 
 
 def test_default_int_tolerance_has_no_override_for_unlisted_operators():
-    # Baseline sanity: an operator with no declared override resolves to 0
-    # (functionally exact), which is the safe default absent evidence of a
-    # genuine hardware rounding divergence.
+    # An unlisted operator defaults to 0 (functionally exact).
     assert default_int_tolerance("SomeBrandNewOperator", "S8") == 0
     assert default_int_tolerance("SomeBrandNewOperator", "S16") == 0
+
+
+# Operators from dtypes.py's KNOWN GAP comment that have been audited and now
+# have an explicit _OPERATOR_TOLERANCE_OVERRIDES entry.
+_AUDITED_KNOWN_GAP_OPERATORS = (
+    "Convolve",
+    "Reshape",
+    "Concatenation",
+    "Split",
+    "Pad",
+    "Transpose",
+    "StridedSlice",
+    "Squeeze",
+    "SpaceToDepth",
+    "BatchToSpaceND",
+    "SpaceToBatchND",
+)
+
+# Operators from the same KNOWN GAP list still NOT audited. When one gets
+# audited, move it to _AUDITED_KNOWN_GAP_OPERATORS and update dtypes.py.
+_STILL_UNAUDITED_KNOWN_GAP_OPERATORS = (
+    "TransposeConv",
+    "FullyConnected",
+    "BatchMatMul",
+    "AvgPool",
+    "MaxPool",
+    "Softmax",
+    "Quantize",
+    "Logistic",
+    "Relu",
+    "Relu6",
+    "Tanh",
+    "HardSwish",
+    "Mean",
+    "MinMax",
+    "ReduceMax",
+    "ReduceMin",
+    "Sub",
+)
+
+
+def test_audited_known_gap_operators_all_have_explicit_overrides():
+    for operator in _AUDITED_KNOWN_GAP_OPERATORS:
+        assert has_int_tolerance_override(operator, "S8"), operator
+
+
+def test_still_unaudited_known_gap_operators_have_no_explicit_override():
+    for operator in _STILL_UNAUDITED_KNOWN_GAP_OPERATORS:
+        assert not has_int_tolerance_override(operator, "S8"), operator

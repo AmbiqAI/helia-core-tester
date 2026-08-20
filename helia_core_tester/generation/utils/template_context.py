@@ -102,31 +102,6 @@ class TemplateContextBuilder:
             return default if len(value) == 0 else value[0]
         return value
 
-    _TOLERANCE_OVERRIDES = {
-        "ActivationFunctions/prelu/prelu.c.j2": 2,
-        # LeakyRelu/HardSwishCompat are approximate/rounding activations (LUT-style
-        # requantization with a scalar-vs-MVE rounding-path divergence on real hardware --
-        # see docs/perf-stream-expansion-progress.md's root-cause investigation) --
-        # policy: +-1 LSB tolerance for approximate/rounding operators.
-        "ActivationFunctions/leaky_relu/leaky_relu.c.j2": 1,
-        "ActivationFunctions/hard_swish/hard_swish_compat.c.j2": 1,
-        # DepthwiseConv is a convolution op -- policy: exact (0 tolerance) match required,
-        # even though real hardware has been observed to diverge by up to 2 LSB on the
-        # dilation/non-optimized accumulation path (see docs/perf-stream-expansion-progress.md).
-        # Kept as an explicit 0 override (rather than switching validation_mode to
-        # exact_int) so it stays in `_TOLERANT_INT_VALIDATION_TEMPLATES`/uses the same
-        # HELIA_VALIDATE_OUTPUTS(TOLERANT_INT, ...) call shape as other convolution
-        # templates; tolerance=0 is functionally equivalent to an exact match.
-        "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2": 0,
-    }
-
-
-    _INT16_TOLERANCE_OVERRIDES = {
-        "BasicMathFunctions/abs/abs.c.j2": 2,
-        "BasicMathFunctions/add/add.c.j2": 3,
-        "BasicMathFunctions/squared_difference/squared_difference.c.j2": 3,
-    }
-
     _VALIDATION_HELPERS_BY_MODE = {
         "exact_int": ["exact_int"],
         "tolerant_int": ["tolerant_int"],
@@ -230,25 +205,16 @@ class TemplateContextBuilder:
         if mode != "tolerant_int":
             return 1
 
-        # Single source of truth: the same per-operator tolerance table that
-        # resolve_comparison() (dtypes.py) uses to build the hardware perf-stream
-        # manifest's correctness_comparison. Deriving the FVP standalone harness's
-        # tolerance from this same table (rather than a separately hand-maintained
-        # per-template-path dict) guarantees FVP and hardware always validate a
-        # given case under the identical tolerance -- see default_int_tolerance().
+        # Reads dtypes.py's single-source-of-truth per-operator tolerance
+        # table so FVP and hardware always validate a case identically.
         operator = str((desc or {}).get("operator") or context.get("operator") or "")
         output_dtype = str(context.get("output_dtype", "")).strip()
         dtype_token = "S16" if output_dtype == "int16_t" else "S8"
         if operator and has_int_tolerance_override(operator, dtype_token):
             return default_int_tolerance(operator, dtype_token)
 
-        normalized_path = cls._normalize_template_path(template_path)
-        if normalized_path in cls._TOLERANCE_OVERRIDES:
-            return int(cls._TOLERANCE_OVERRIDES[normalized_path])
-
-        if output_dtype == "int16_t" and normalized_path in cls._INT16_TOLERANCE_OVERRIDES:
-            return int(cls._INT16_TOLERANCE_OVERRIDES[normalized_path])
-
+        # KNOWN GAP: no operator-level override exists -- see dtypes.py's
+        # _OPERATOR_TOLERANCE_OVERRIDES for unaudited operators.
         return 1
 
     @classmethod

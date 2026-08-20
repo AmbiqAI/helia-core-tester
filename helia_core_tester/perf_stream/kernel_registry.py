@@ -70,13 +70,26 @@ def lookup_kernel_id(
             candidates.append(entry)
 
     if weight_dtype is not None:
-        for entry in candidates:
-            if entry.weight_dtype == weight_dtype:
-                return entry.kernel_id
+        matches = [entry for entry in candidates if entry.weight_dtype == weight_dtype]
+        if len(matches) > 1:
+            raise UnknownKernelError(
+                f"Ambiguous kernel registry entries for family={family!r} operator={operator!r} "
+                f"dtype={dtype!r} weight_dtype={weight_dtype!r}: "
+                f"{[e.cmsis_function for e in matches]} -- registry must have at most one "
+                f"entry per (family, operator, dtype, weight_dtype) tuple."
+            )
+        if matches:
+            return matches[0].kernel_id
 
-    for entry in candidates:
-        if entry.weight_dtype is None:
-            return entry.kernel_id
+    unweighted_matches = [entry for entry in candidates if entry.weight_dtype is None]
+    if len(unweighted_matches) > 1:
+        raise UnknownKernelError(
+            f"Ambiguous kernel registry entries for family={family!r} operator={operator!r} "
+            f"dtype={dtype!r} (no weight_dtype): {[e.cmsis_function for e in unweighted_matches]} -- "
+            f"registry must have at most one entry per (family, operator, dtype, weight_dtype) tuple."
+        )
+    if unweighted_matches:
+        return unweighted_matches[0].kernel_id
 
     raise UnknownKernelError(
         f"No registered kernel_id for family={family!r} operator={operator!r} "

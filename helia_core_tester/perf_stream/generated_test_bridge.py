@@ -764,9 +764,7 @@ def _build_convolve_case(
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    comparison = {"mode": "tolerant_int", "tolerance": 1} if operator == "Mean" else dict(
-        descriptor.get("resolved_comparison", {"mode": "exact_int"})
-    )
+    comparison = dict(descriptor.get("resolved_comparison", {"mode": "exact_int"}))
     manifest = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,
@@ -1309,9 +1307,7 @@ def _build_pooling_case(
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    comparison = {"mode": "tolerant_int", "tolerance": 1} if operator == "Mean" else dict(
-        descriptor.get("resolved_comparison", {"mode": "exact_int"})
-    )
+    comparison = dict(descriptor.get("resolved_comparison", {"mode": "exact_int"}))
     manifest = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,

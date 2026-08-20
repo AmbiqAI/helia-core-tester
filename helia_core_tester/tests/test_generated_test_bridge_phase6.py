@@ -93,12 +93,13 @@ def test_pool_batch_padded_case_truncates_to_header_dims(tmp_path: Path) -> None
     assert manifest["expected_output"]["byte_length"] == 20
 
 
-def test_grouped_convolve_case_01_stays_unbridged_pending_group_specific_fix(tmp_path: Path) -> None:
+def test_grouped_convolve_case_01_now_bridges_with_unified_tolerance(tmp_path: Path) -> None:
+    """Regression test: convolve_grouped_conv_case_01_s8 now bridges under
+    tolerant_int/tolerance=1 (was previously unbridgeable under exact_int)."""
     cases = discover_generated_tests(PROJECT_ROOT, family="ConvolutionFunctions", name_filter="convolve_grouped_conv_case_01_s8")
     assert cases
-    try:
-        build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path)
-    except Exception as exc:  # noqa: BLE001 - asserting on specific unsupported reason
-        assert "mismatched expected_output at index 68" in str(exc)
-    else:
-        raise AssertionError("expected grouped conv case 01 to remain unbridged")
+    bundle = build_case_bundle_from_generated_test(
+        PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False
+    )
+    assert bundle.manifest["correctness_comparison"] == {"mode": "tolerant_int", "tolerance": 1}
+

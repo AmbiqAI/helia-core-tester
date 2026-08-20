@@ -21,6 +21,7 @@ than a hard failure -- callers that want a strict gate should call
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -50,6 +51,20 @@ def _tests_report_dir(project_root: Path, cpu: str, suite: str) -> Path:
     return project_root / "artifacts" / "reports" / "tests" / suite / cpu
 
 
+_REPORT_TIMESTAMP_RE = re.compile(r"_(\d{8}_\d{6})\.json$")
+
+
+def _report_sort_key(path: Path) -> tuple[str, float]:
+    """Sort by the filename's embedded timestamp, falling back to mtime."""
+    match = _REPORT_TIMESTAMP_RE.search(path.name)
+    timestamp = match.group(1) if match else ""
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    return (timestamp, mtime)
+
+
 def find_latest_fvp_report(project_root: Path, *, cpu: str = "cortex-m55", suite: str = "int") -> Optional[Path]:
     """Return the most recent test_report_<cpu>_<timestamp>.json for (cpu, suite),
     or None if no FVP run has ever been recorded for it.
@@ -57,7 +72,7 @@ def find_latest_fvp_report(project_root: Path, *, cpu: str = "cortex-m55", suite
     report_dir = _tests_report_dir(project_root, cpu, suite)
     if not report_dir.is_dir():
         return None
-    candidates = sorted(report_dir.glob(f"test_report_{cpu}_*.json"))
+    candidates = sorted(report_dir.glob(f"test_report_{cpu}_*.json"), key=_report_sort_key)
     return candidates[-1] if candidates else None
 
 
