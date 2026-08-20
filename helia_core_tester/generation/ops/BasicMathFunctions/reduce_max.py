@@ -152,27 +152,17 @@ class OpReduceMax(OperationBase):
             'kernel_fn': kernel_info["kernel_fn"],
         }
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("BasicMathFunctions/reduce_max/reduce_max.h.j2", context)
-        h_path = includes_api_dir / f"{name}_reduce_max.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("BasicMathFunctions/reduce_max/reduce_max.c.j2", context)
-        c_path = output_dir / f"{name}_reduce_max.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'ReduceMax'),
             'operator_name': 'reduce_max'
         }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self._write_op_outputs(
+            output_dir,
+            "reduce_max",
+            "BasicMathFunctions/reduce_max/reduce_max.h.j2",
+            "BasicMathFunctions/reduce_max/reduce_max.c.j2",
+            context,
+            cmake_context,
+        )
         

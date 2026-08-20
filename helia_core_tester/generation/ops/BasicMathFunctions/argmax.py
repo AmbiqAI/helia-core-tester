@@ -140,27 +140,17 @@ class OpArgMax(OperationBase):
             'output_size': int(np.prod(output_shape)),
         }
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("BasicMathFunctions/argmax/argmax.h.j2", context)
-        h_path = includes_api_dir / f"{name}_argmax.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("BasicMathFunctions/argmax/argmax.c.j2", context)
-        c_path = output_dir / f"{name}_argmax.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'ArgMax'),
             'operator_name': 'argmax'
         }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self._write_op_outputs(
+            output_dir,
+            "argmax",
+            "BasicMathFunctions/argmax/argmax.h.j2",
+            "BasicMathFunctions/argmax/argmax.c.j2",
+            context,
+            cmake_context,
+        )
         
