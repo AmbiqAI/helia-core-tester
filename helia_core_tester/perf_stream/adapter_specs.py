@@ -2080,6 +2080,7 @@ static uint32_t hct_dtype_size_bytes(uint8_t dtype)
         case HCT_DTYPE_S64: return sizeof(int64_t);
         case HCT_DTYPE_BOOL: return sizeof(bool);
         case HCT_DTYPE_F32: return sizeof(float);
+        case HCT_DTYPE_F16: return sizeof(float16_t);
         default: return 0u;
     }
 }
