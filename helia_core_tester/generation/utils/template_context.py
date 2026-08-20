@@ -7,7 +7,12 @@ import numpy as np
 from pathlib import PurePosixPath
 from typing import Dict, Any, List, Tuple
 
-from helia_core_tester.generation.io.dtypes import default_comparison_for_dtype, resolve_comparison
+from helia_core_tester.generation.io.dtypes import (
+    default_comparison_for_dtype,
+    default_int_tolerance,
+    has_int_tolerance_override,
+    resolve_comparison,
+)
 
 class TemplateContextBuilder:
     """
@@ -213,7 +218,9 @@ class TemplateContextBuilder:
         return int(cls._REPORT_LIMIT_OVERRIDES.get(normalized_path, 20))
 
     @classmethod
-    def infer_validation_tolerance(cls, template_path: str, context: Dict[str, Any], mode: str) -> int:
+    def infer_validation_tolerance(
+        cls, template_path: str, context: Dict[str, Any], mode: str, desc: Dict[str, Any] | None = None
+    ) -> int:
         explicit = context.get("validation_tolerance")
         if explicit is not None:
             return int(explicit)
@@ -223,11 +230,22 @@ class TemplateContextBuilder:
         if mode != "tolerant_int":
             return 1
 
+        # Single source of truth: the same per-operator tolerance table that
+        # resolve_comparison() (dtypes.py) uses to build the hardware perf-stream
+        # manifest's correctness_comparison. Deriving the FVP standalone harness's
+        # tolerance from this same table (rather than a separately hand-maintained
+        # per-template-path dict) guarantees FVP and hardware always validate a
+        # given case under the identical tolerance -- see default_int_tolerance().
+        operator = str((desc or {}).get("operator") or context.get("operator") or "")
+        output_dtype = str(context.get("output_dtype", "")).strip()
+        dtype_token = "S16" if output_dtype == "int16_t" else "S8"
+        if operator and has_int_tolerance_override(operator, dtype_token):
+            return default_int_tolerance(operator, dtype_token)
+
         normalized_path = cls._normalize_template_path(template_path)
         if normalized_path in cls._TOLERANCE_OVERRIDES:
             return int(cls._TOLERANCE_OVERRIDES[normalized_path])
 
-        output_dtype = str(context.get("output_dtype", "")).strip()
         if output_dtype == "int16_t" and normalized_path in cls._INT16_TOLERANCE_OVERRIDES:
             return int(cls._INT16_TOLERANCE_OVERRIDES[normalized_path])
 
@@ -309,7 +327,7 @@ class TemplateContextBuilder:
         )
         resolved.setdefault(
             "validation_tolerance",
-            cls.infer_validation_tolerance(template_path, resolved, mode),
+            cls.infer_validation_tolerance(template_path, resolved, mode, desc),
         )
         float_defaults = cls.infer_float_comparison_defaults(resolved, desc)
         resolved.setdefault(

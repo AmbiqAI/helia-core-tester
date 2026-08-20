@@ -142,6 +142,100 @@ def get_resolved_tensor_dtype(desc: Mapping[str, Any], role: str, default: str |
     return normalize_dtype(dtype)
 
 
+# Single source of truth for per-operator integer comparison tolerance.
+#
+# This used to be duplicated: generation/utils/template_context.py maintained
+# its own hardcoded per-template-path override tables (_TOLERANCE_OVERRIDES /
+# _INT16_TOLERANCE_OVERRIDES) that only controlled what the FVP standalone
+# harness (HELIA_VALIDATE_OUTPUTS) validated against, while resolve_comparison()
+# below -- which the hardware perf-stream bridge's manifest actually reads via
+# descriptor["resolved_comparison"] -- had no knowledge of those overrides and
+# defaulted every int8/int16 output to exact_int (zero tolerance). The two paths
+# could therefore silently validate the same generated case under different
+# rules (e.g. convolve_grouped_conv_case_01_s8 passed FVP under a tolerant
+# +-1 LSB policy while the hardware bridge required an exact bit-for-bit match
+# for the same golden data). Keying tolerance policy by operator here, and
+# having template_context.py derive its FVP tolerance from this same table
+# instead of its own copy, makes "what FVP validated" and "what hardware
+# requires" provably the same thing.
+# KNOWN GAP (tracked, not yet fixed): any operator using tolerant_int FVP
+# validation with no entry in this table falls back to a hardcoded tolerance
+# of 1 (see default_int_tolerance()/infer_validation_tolerance() below), while
+# resolve_comparison() below defaults such an operator's hardware manifest to
+# exact_int (tolerance 0). This is the same class of FVP/hardware mismatch
+# that caused convolve_grouped_conv_case_01_s8's silent FVP-pass/hardware-fail
+# divergence -- but it is NOT limited to that one case. It affects every
+# operator in template_context.py's _TOLERANT_INT_VALIDATION_TEMPLATES that
+# has no explicit override here, including (at minimum): Convolve,
+# TransposeConv, FullyConnected, BatchMatMul, AvgPool, MaxPool, Softmax,
+# Quantize, Concatenation, Split, Reshape, BatchToSpaceND, SpaceToBatchND,
+# SpaceToDepth, StridedSlice, Squeeze, Transpose, Pad, Logistic, Relu, Relu6,
+# Tanh, HardSwish, Mean, MinMax, ReduceMax, ReduceMin, Sub. Each of these was
+# never audited to determine whether it is genuinely bit-exact on real
+# hardware (in which case its FVP tolerance should be tightened to 0/removed
+# from the tolerant list) or genuinely needs +-1 LSB slack (in which case it
+# should get an explicit override here so hardware validates the same way).
+# Deliberately NOT resolved by blindly flipping the fallback default to 0
+# here, since that could silently reintroduce false hardware failures for any
+# operator that legitimately has a real, currently-undocumented 1 LSB
+# divergence on real silicon (no FVP/hardware access available in this
+# environment to verify each one). Tracked for a follow-up audit -- see
+# docs/known-limitations.yaml once introduced.
+_OPERATOR_TOLERANCE_OVERRIDES: Dict[str, int] = {
+    "PReLU": 2,
+    # LeakyRelu/HardSwishCompat are approximate/rounding activations (LUT-style
+    # requantization with a scalar-vs-MVE rounding-path divergence on real
+    # hardware -- see docs/perf-stream-expansion-progress.md's root-cause
+    # investigation) -- policy: +-1 LSB tolerance for approximate/rounding ops.
+    "LeakyRelu": 1,
+    "HardSwishCompat": 1,
+    # DepthwiseConv is a convolution op -- policy: exact (0 tolerance) match
+    # required, even though real hardware has been observed to diverge by up
+    # to 2 LSB on the dilation/non-optimized accumulation path (see
+    # docs/perf-stream-expansion-progress.md). Kept as an explicit 0 override
+    # (rather than exact_int mode) so it stays on the same tolerant_int
+    # validation path as other convolution operators; tolerance=0 is
+    # functionally equivalent to an exact match.
+    "DepthwiseConv": 0,
+}
+
+# Per-operator tolerance overrides that apply only when the resolved output
+# dtype is S16 (int16_t). Distinct from _OPERATOR_TOLERANCE_OVERRIDES because
+# these operators are exact for S8 output but need slack for S16 accumulation.
+_OPERATOR_INT16_TOLERANCE_OVERRIDES: Dict[str, int] = {
+    "Abs": 2,
+    "Add": 3,
+    "SquaredDifference": 3,
+}
+
+
+def has_int_tolerance_override(operator: str, output_dtype: str) -> bool:
+    """True if ``operator`` has an explicit tolerance entry (including an
+    explicit 0, e.g. DepthwiseConv) for the given resolved ``output_dtype`` --
+    as opposed to no entry at all, which falls back to each caller's own
+    default (see the KNOWN GAP note above _OPERATOR_TOLERANCE_OVERRIDES).
+    """
+    normalized_output = normalize_dtype(output_dtype)
+    if normalized_output == "S16" and operator in _OPERATOR_INT16_TOLERANCE_OVERRIDES:
+        return True
+    return operator in _OPERATOR_TOLERANCE_OVERRIDES
+
+
+def default_int_tolerance(operator: str, output_dtype: str) -> int:
+    """Return the single-source-of-truth integer comparison tolerance for
+    ``operator`` (as declared in a descriptor's ``operator`` field) given its
+    resolved ``output_dtype``. Used identically by generation's FVP validation
+    codegen (template_context.py) and by resolve_comparison() below, so both
+    paths always agree. Returns 0 if no explicit override exists; callers
+    that need to distinguish "no override" from "explicit override of 0"
+    should check has_int_tolerance_override() first.
+    """
+    normalized_output = normalize_dtype(output_dtype)
+    if normalized_output == "S16" and operator in _OPERATOR_INT16_TOLERANCE_OVERRIDES:
+        return _OPERATOR_INT16_TOLERANCE_OVERRIDES[operator]
+    return _OPERATOR_TOLERANCE_OVERRIDES.get(operator, 0)
+
+
 def default_comparison_for_dtype(dtype: str) -> Dict[str, Any]:
     normalized = normalize_dtype(dtype)
     if normalized in FLOAT_DTYPES:
@@ -160,6 +254,16 @@ def resolve_comparison(desc: Mapping[str, Any], resolved_tensor_dtypes: Mapping[
     resolved = dict(resolved_tensor_dtypes or desc.get("resolved_tensor_dtypes") or resolve_tensor_dtypes(desc))
     comparison = default_comparison_for_dtype(resolved["output"])
     user_config = desc.get("comparison")
+    if comparison["mode"] == "exact_int" and not isinstance(user_config, Mapping):
+        # No explicit per-descriptor override -- fall back to the single-source-of-truth
+        # per-operator tolerance policy (see _OPERATOR_TOLERANCE_OVERRIDES above) instead of
+        # silently defaulting to zero tolerance. A tolerance of 0 is functionally identical
+        # to exact_int, so operators with no override (the common case) are unaffected.
+        operator = str(desc.get("operator", ""))
+        tolerance = default_int_tolerance(operator, resolved["output"])
+        if tolerance > 0:
+            return {"mode": "tolerant_int", "tolerance": tolerance}
+        return comparison
     if not isinstance(user_config, Mapping):
         return comparison
     if comparison["mode"] == "exact_int":
