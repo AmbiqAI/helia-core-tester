@@ -544,11 +544,41 @@ def build_case_bundle_from_generated_test(
     generated_test: GeneratedTestCase,
     *,
     output_root: Path | None = None,
+    require_fvp_pass: bool = True,
 ) -> CaseBundle:
     """Convert one real generated CMSIS-NN kernel test (with its real golden data) into a
     streamable perf-stream CaseBundle. Dispatches to a per-(family, operator) builder
     registered in `_BUILDERS` -- each builder owns its own header/source extraction logic.
+
+    Phase 2 FVP-pass gate (`require_fvp_pass`, default True): before bridging, checks the
+    most recently recorded FVP test_report_<cpu>_*.json for this exact case name. If FVP
+    itself recorded a non-PASS result for this case, refuses to bridge it onto real
+    hardware (raises fvp_gate.FvpCaseFailedGateError) rather than silently shipping a
+    hardware result for a case FVP doesn't believe is correct -- this is the same class of
+    silent divergence that convolve_grouped_conv_case_01_s8 exposed. If no FVP report is
+    available at all (e.g. this sandbox cannot run FVP, or the case is new since the last
+    FVP run), the gate is a no-op rather than a hard failure -- pass
+    `require_fvp_pass=False` to skip the check entirely (e.g. for host-only bridge unit
+    tests that don't have a real FVP report to check against).
     """
+    from .fvp_gate import FvpCaseFailedGateError, require_fvp_pass as _require_fvp_pass
+
+    if require_fvp_pass:
+        try:
+            _require_fvp_pass(
+                project_root,
+                generated_test.name,
+                cpu=generated_test.cpu,
+                allow_missing_report=True,
+            )
+        except FvpCaseFailedGateError as exc:
+            # Re-raise as UnsupportedGeneratedTestError so existing callers
+            # (which only catch that one exception type to skip/report
+            # unbridgeable cases) handle an FVP-gate rejection the same way
+            # as any other "not bridgeable" reason, without needing to learn
+            # about a second exception type.
+            raise UnsupportedGeneratedTestError(str(exc)) from exc
+
     descriptor = generated_test.descriptor
     operator = str(descriptor.get("operator", ""))
     builder = _BUILDERS.get((generated_test.family, operator))
