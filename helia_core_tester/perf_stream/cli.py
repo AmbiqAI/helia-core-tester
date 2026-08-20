@@ -161,8 +161,13 @@ def _configure(build_dir: Path, cpu: str, board: str, force: bool) -> None:
     repo_root = _repo_root()
     cache = build_dir / "CMakeCache.txt"
     if cache.exists() and not force:
-        typer.echo(f"[perf-stream] Reusing existing configured build dir: {build_dir}")
-        return
+        # A build dir configured before ARM_NN_ENABLE_F16 was added here would
+        # otherwise silently keep compiling without FP16 kernel support.
+        cache_text = cache.read_text(encoding="utf-8", errors="ignore")
+        if "ARM_NN_ENABLE_F16:BOOL=ON" in cache_text:
+            typer.echo(f"[perf-stream] Reusing existing configured build dir: {build_dir}")
+            return
+        typer.echo(f"[perf-stream] Existing build dir at {build_dir} predates ARM_NN_ENABLE_F16 -- reconfiguring.")
     build_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         "cmake",
@@ -175,6 +180,7 @@ def _configure(build_dir: Path, cpu: str, board: str, force: bool) -> None:
         f"-DHELIA_HARDWARE_BOARD={board}",
         f"-DTARGET_CPU={cpu}",
         "-DARM_NN_ENABLE_F32=ON",
+        "-DARM_NN_ENABLE_F16=ON",
     ]
     typer.echo(f"[perf-stream] Configuring: {' '.join(cmd)}")
     subprocess.run(cmd, cwd=repo_root, check=True)

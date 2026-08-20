@@ -787,3 +787,72 @@ kernels:
     operator: MaxPool
     dtype: FP32
     cmsis_function: arm_max_pool_f32
+
+  - kernel_id: 129
+    family: ReshapeFunctions
+    operator: Reshape
+    dtype: FP32
+    cmsis_function: arm_reshape_f32
+
+  - kernel_id: 130
+    family: ReshapeFunctions
+    operator: Reshape
+    dtype: FP16
+    cmsis_function: arm_reshape_f16
+
+  - kernel_id: 131
+    family: TransposeFunctions
+    operator: Transpose
+    dtype: FP32
+    cmsis_function: arm_transpose_f32
+
+  - kernel_id: 132
+    family: TransposeFunctions
+    operator: Transpose
+    dtype: FP16
+    cmsis_function: arm_transpose_f16
+
+  - kernel_id: 133
+    family: PadFunctions
+    operator: Pad
+    dtype: FP32
+    cmsis_function: arm_pad_f32
+
+  - kernel_id: 134
+    family: PadFunctions
+    operator: Pad
+    dtype: FP16
+    cmsis_function: arm_pad_f16
+
+  - kernel_id: 135
+    family: StridedSliceFunctions
+    operator: StridedSlice
+    dtype: FP32
+    cmsis_function: arm_strided_slice_f32
+
+  - kernel_id: 136
+    family: StridedSliceFunctions
+    operator: StridedSlice
+    dtype: FP16
+    cmsis_function: arm_strided_slice_f16
+
+  - kernel_id: 137
+    family: ConcatenationFunctions
+    operator: Concatenation
+    dtype: FP32
+    # covers all 4 arm_concatenation_f32_{w,x,y,z} style entrypoints -- the style is
+    # selected at build time from the generated source's call-site function name suffix,
+    # same convention as the existing S8 style-suffixed variants.
+    cmsis_function: arm_concatenation_f32_w
+
+  - kernel_id: 138
+    family: ConcatenationFunctions
+    operator: Concatenation
+    dtype: FP16
+    cmsis_function: arm_concatenation_f16_w
+
+  - kernel_id: 139
+    family: ConcatenationFunctions
+    operator: Split
+    dtype: FP16
+    cmsis_function: arm_split_f16

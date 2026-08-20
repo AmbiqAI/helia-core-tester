@@ -2265,6 +2265,33 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             return ARM_CMSIS_NN_SUCCESS;
         }
 
+        case HCT_KERNEL_ID_RESHAPE_F32:
+        case HCT_KERNEL_ID_RESHAPE_F16:
+        {
+            if (input0 == NULL)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            session->output_length = input0->byte_length;
+            if (session->output_length > sizeof(session->output_buffer))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_RESHAPE_F16)
+            {
+                arm_reshape_f16((const float16_t *)blob_ptr(session, input0),
+                                (float16_t *)session->output_buffer,
+                                hct_blob_element_count(input0));
+            }
+            else
+            {
+                arm_reshape_f32((const float *)blob_ptr(session, input0),
+                                (float *)session->output_buffer,
+                                hct_blob_element_count(input0));
+            }
+            return ARM_CMSIS_NN_SUCCESS;
+        }
+
         case HCT_KERNEL_ID_TRANSPOSE_S8:
         case HCT_KERNEL_ID_TRANSPOSE_S16:
         {
@@ -2322,6 +2349,70 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                     &params);
         }
 
+        case HCT_KERNEL_ID_TRANSPOSE_F32:
+        case HCT_KERNEL_ID_TRANSPOSE_F16:
+        {
+            cmsis_nn_context ctx = {NULL, 0};
+            cmsis_nn_dims input_dims;
+            cmsis_nn_dims output_dims;
+            int32_t output_shape[4] = {1, 1, 1, 1};
+            uint32_t element_size = (session->expected_kernel_id == HCT_KERNEL_ID_TRANSPOSE_F16) ? sizeof(float16_t) : sizeof(float);
+            int32_t perm[4] = {0, 1, 2, 3};
+            int32_t rank;
+            int32_t i;
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 1u, -1, -1))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            rank = meta[0];
+            if (rank < 1 || rank > 4 || !hct_validate_meta0_blob(meta_blob, (size_t)(1 + rank), rank, -1))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            for (i = 0; i < rank; ++i)
+            {
+                perm[i] = meta[1 + i];
+                if (perm[i] < 0 || perm[i] >= rank)
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
+            }
+            hct_fill_dims_from_blob(input0, &input_dims);
+            hct_fill_output_dims_from_session(session, &output_dims);
+            hct_fill_output_shape_from_session(session, rank, output_shape);
+            session->output_length = hct_shape_product(output_shape, rank) * element_size;
+            if (session->output_length > sizeof(session->output_buffer))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            cmsis_nn_transpose_params_f32 params_f32;
+            cmsis_nn_transpose_params_f16 params_f16;
+            params_f32.num_dims = rank;
+            params_f32.layout = ARM_NN_LAYOUT_NHWC;
+            params_f16.num_dims = rank;
+            params_f16.layout = ARM_NN_LAYOUT_NHWC;
+            for (i = 0; i < 4; ++i)
+            {
+                params_f32.perm[i] = perm[i];
+                params_f16.perm[i] = perm[i];
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_TRANSPOSE_F16)
+            {
+                return arm_transpose_f16(&ctx,
+                                        &params_f16,
+                                        &input_dims,
+                                        (const float16_t *)blob_ptr(session, input0),
+                                        &output_dims,
+                                        (float16_t *)session->output_buffer);
+            }
+            return arm_transpose_f32(&ctx,
+                                     &params_f32,
+                                     &input_dims,
+                                     (const float *)blob_ptr(session, input0),
+                                     &output_dims,
+                                     (float *)session->output_buffer);
+        }
+
         case HCT_KERNEL_ID_PAD_S8:
         case HCT_KERNEL_ID_PAD_S16:
         {
@@ -2367,6 +2458,55 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                               &input_dims,
                               &pre_pad,
                               &post_pad);
+        }
+
+        case HCT_KERNEL_ID_PAD_F32:
+        case HCT_KERNEL_ID_PAD_F16:
+        {
+            cmsis_nn_dims input_dims;
+            cmsis_nn_dims pre_pad;
+            cmsis_nn_dims post_pad;
+            union { int32_t i; float f; } pad_value_bits;
+            uint32_t element_size = (session->expected_kernel_id == HCT_KERNEL_ID_PAD_F16) ? sizeof(float16_t) : sizeof(float);
+            /* pad_value is bit-cast into meta[0] (same slot the S8/S16 path uses),
+             * same wire-encoding convention as the pooling FP32 activation clamp. */
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 9u, -1, -1))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            hct_fill_dims_from_blob(input0, &input_dims);
+            pre_pad.n = meta[1];
+            pre_pad.h = meta[2];
+            pre_pad.w = meta[3];
+            pre_pad.c = meta[4];
+            post_pad.n = meta[5];
+            post_pad.h = meta[6];
+            post_pad.w = meta[7];
+            post_pad.c = meta[8];
+            session->output_length = (uint32_t)((session->output_n > 0 ? session->output_n : 1) *
+                                                (session->output_h > 0 ? session->output_h : 1) *
+                                                (session->output_w > 0 ? session->output_w : 1) *
+                                                (session->output_c > 0 ? session->output_c : 1)) * element_size;
+            if (session->output_length > sizeof(session->output_buffer))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            pad_value_bits.i = meta[0];
+            if (session->expected_kernel_id == HCT_KERNEL_ID_PAD_F16)
+            {
+                return arm_pad_f16((const float16_t *)blob_ptr(session, input0),
+                                   (float16_t *)session->output_buffer,
+                                   (float16_t)pad_value_bits.f,
+                                   &input_dims,
+                                   &pre_pad,
+                                   &post_pad);
+            }
+            return arm_pad_f32((const float *)blob_ptr(session, input0),
+                               (float *)session->output_buffer,
+                               pad_value_bits.f,
+                               &input_dims,
+                               &pre_pad,
+                               &post_pad);
         }
 
         case HCT_KERNEL_ID_MIRROR_PAD_S8:
@@ -2541,6 +2681,102 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                         output_shape);
         }
 
+        case HCT_KERNEL_ID_CONCATENATION_F32:
+        case HCT_KERNEL_ID_CONCATENATION_F16:
+        {
+            /* Float concatenation only ships the 4 style-suffixed entrypoints
+             * (arm_concatenation_f32/f16_w/_x/_y/_z) -- there is no generic
+             * axis-based arm_concatenation_f32/f16, so style_code must be nonzero. */
+            int32_t output_shape[4] = {1, 1, 1, 1};
+            int32_t input_shape0[4] = {1, 1, 1, 1};
+            int32_t input_shape1[4] = {1, 1, 1, 1};
+            uint32_t style_code;
+            int32_t rank;
+            int32_t axis;
+            int32_t inputs_count;
+            uint32_t offset;
+            const int32_t *shapes[2];
+            int32_t idx;
+            bool is_f16 = (session->expected_kernel_id == HCT_KERNEL_ID_CONCATENATION_F16);
+            uint32_t element_size = is_f16 ? sizeof(float16_t) : sizeof(float);
+            if (input0 == NULL || input1 == NULL || !hct_validate_meta0_blob(meta_blob, 4u, -1, -1))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            style_code = (uint32_t)meta[0];
+            rank = meta[1];
+            axis = meta[2];
+            inputs_count = meta[3];
+            if (rank < 1 || rank > 4 || inputs_count != 2 || axis < 0 || axis >= rank || style_code == 0u || style_code > 4u)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            hct_fill_output_shape_from_session(session, rank, output_shape);
+            hct_fill_shape_from_blob(input0, rank, input_shape0, false);
+            hct_fill_shape_from_blob(input1, rank, input_shape1, false);
+            session->output_length = hct_shape_product(output_shape, rank) * element_size;
+            if (session->output_length > sizeof(session->output_buffer))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            offset = 0u;
+            shapes[0] = input_shape0;
+            shapes[1] = input_shape1;
+            for (idx = 0; idx < 2; ++idx)
+            {
+                const int32_t *shape = shapes[idx];
+                const void *input_data = (idx == 0) ? blob_ptr(session, input0) : blob_ptr(session, input1);
+                switch (style_code)
+                {
+                    case 1u:
+                        if (is_f16)
+                        {
+                            arm_concatenation_f16_x((const float16_t *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float16_t *)session->output_buffer, (uint16_t)output_shape[2], offset);
+                        }
+                        else
+                        {
+                            arm_concatenation_f32_x((const float *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float *)session->output_buffer, (uint16_t)output_shape[2], offset);
+                        }
+                        offset += (uint32_t)shape[2];
+                        break;
+                    case 2u:
+                        if (is_f16)
+                        {
+                            arm_concatenation_f16_y((const float16_t *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float16_t *)session->output_buffer, (uint16_t)output_shape[1], offset);
+                        }
+                        else
+                        {
+                            arm_concatenation_f32_y((const float *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float *)session->output_buffer, (uint16_t)output_shape[1], offset);
+                        }
+                        offset += (uint32_t)shape[1];
+                        break;
+                    case 3u:
+                        if (is_f16)
+                        {
+                            arm_concatenation_f16_z((const float16_t *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float16_t *)session->output_buffer, (uint16_t)output_shape[3], offset);
+                        }
+                        else
+                        {
+                            arm_concatenation_f32_z((const float *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float *)session->output_buffer, (uint16_t)output_shape[3], offset);
+                        }
+                        offset += (uint32_t)shape[3];
+                        break;
+                    default:
+                        if (is_f16)
+                        {
+                            arm_concatenation_f16_w((const float16_t *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float16_t *)session->output_buffer, offset);
+                        }
+                        else
+                        {
+                            arm_concatenation_f32_w((const float *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float *)session->output_buffer, offset);
+                        }
+                        offset += (uint32_t)shape[0];
+                        break;
+                }
+            }
+            return ARM_CMSIS_NN_SUCCESS;
+        }
+
         case HCT_KERNEL_ID_SPLIT_S8:
         case HCT_KERNEL_ID_SPLIT_S16:
         {
@@ -2618,6 +2854,51 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                     &meta[3],
                                     output_ptrs);
             }
+        }
+
+        case HCT_KERNEL_ID_SPLIT_F16:
+        {
+            int32_t rank;
+            int32_t axis;
+            int32_t num_splits;
+            int32_t input_shape[4] = {1, 1, 1, 1};
+            uint32_t offset_bytes = 0u;
+            float16_t *output_ptrs[4] = {NULL, NULL, NULL, NULL};
+            int32_t split_index;
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 3u, -1, -1))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            rank = meta[0];
+            axis = meta[1];
+            num_splits = meta[2];
+            if (rank < 1 || rank > 4 || num_splits < 1 || num_splits > 4 || axis < 0 || axis >= rank ||
+                !hct_validate_meta0_blob(meta_blob, (size_t)(3 + num_splits), rank, axis))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            hct_fill_shape_from_blob(input0, rank, input_shape, false);
+            for (split_index = 0; split_index < num_splits; ++split_index)
+            {
+                int32_t output_shape[4] = {input_shape[0], input_shape[1], input_shape[2], input_shape[3]};
+                uint32_t bytes;
+                output_shape[axis] = meta[3 + split_index];
+                bytes = hct_shape_product(output_shape, rank) * sizeof(float16_t);
+                if (offset_bytes + bytes > sizeof(session->output_buffer))
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
+                output_ptrs[split_index] = (float16_t *)&session->output_buffer[offset_bytes];
+                offset_bytes += bytes;
+            }
+            session->output_length = offset_bytes;
+            return arm_split_f16((const float16_t *)blob_ptr(session, input0),
+                                 rank,
+                                 input_shape,
+                                 axis,
+                                 num_splits,
+                                 &meta[3],
+                                 output_ptrs);
         }
 
         case HCT_KERNEL_ID_BATCH_TO_SPACE_ND_S8:
@@ -3181,6 +3462,51 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             }
             return arm_strided_slice_s8((const int8_t *)blob_ptr(session, input0),
                                         (int8_t *)session->output_buffer,
+                                        &input_dims,
+                                        &begin_dims,
+                                        &stride_dims,
+                                        &output_dims);
+        }
+
+        case HCT_KERNEL_ID_STRIDED_SLICE_F32:
+        case HCT_KERNEL_ID_STRIDED_SLICE_F16:
+        {
+            cmsis_nn_dims input_dims;
+            cmsis_nn_dims output_dims;
+            cmsis_nn_dims begin_dims;
+            cmsis_nn_dims stride_dims;
+            uint32_t element_size;
+            if (input0 == NULL || meta == NULL)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            hct_fill_dims_from_blob(input0, &input_dims);
+            hct_fill_output_dims_from_session(session, &output_dims);
+            begin_dims.n = meta[0];
+            begin_dims.h = meta[1];
+            begin_dims.w = meta[2];
+            begin_dims.c = meta[3];
+            stride_dims.n = meta[4];
+            stride_dims.h = meta[5];
+            stride_dims.w = meta[6];
+            stride_dims.c = meta[7];
+            element_size = hct_dtype_size_bytes(input0->dtype);
+            session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c) * element_size;
+            if (session->output_length > sizeof(session->output_buffer))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_STRIDED_SLICE_F16)
+            {
+                return arm_strided_slice_f16((const float16_t *)blob_ptr(session, input0),
+                                            (float16_t *)session->output_buffer,
+                                            &input_dims,
+                                            &begin_dims,
+                                            &stride_dims,
+                                            &output_dims);
+            }
+            return arm_strided_slice_f32((const float *)blob_ptr(session, input0),
+                                        (float *)session->output_buffer,
                                         &input_dims,
                                         &begin_dims,
                                         &stride_dims,

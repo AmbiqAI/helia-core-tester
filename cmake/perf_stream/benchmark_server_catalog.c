@@ -142,13 +142,24 @@ static const hct_kernel_catalog_entry_t g_hct_kernel_catalog[] = {
     {126u, "arm_depthwise_conv_wrapper_s4", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {127u, "arm_avg_pool_f32", "PoolingFunctions", 1u, "FP32", 1u, true, true, false, 0u},
     {128u, "arm_max_pool_f32", "PoolingFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {129u, "arm_reshape_f32", "ReshapeFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {130u, "arm_reshape_f16", "ReshapeFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {131u, "arm_transpose_f32", "TransposeFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {132u, "arm_transpose_f16", "TransposeFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {133u, "arm_pad_f32", "PadFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {134u, "arm_pad_f16", "PadFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {135u, "arm_strided_slice_f32", "StridedSliceFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {136u, "arm_strided_slice_f16", "StridedSliceFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {137u, "arm_concatenation_f32_w", "ConcatenationFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {138u, "arm_concatenation_f16_w", "ConcatenationFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {139u, "arm_split_f16", "ConcatenationFunctions", 1u, "FP16", 1u, true, true, false, 0u},
 };
 
 static const uint8_t g_hct_kernel_catalog_hash[32] = {
-    0xf8u, 0xe5u, 0x81u, 0xf4u, 0xfcu, 0x8eu, 0xf7u, 0x3du,
-    0x1au, 0xe2u, 0x55u, 0x6du, 0xc4u, 0x8du, 0x16u, 0xcdu,
-    0xfau, 0x71u, 0xf5u, 0xcdu, 0x30u, 0x93u, 0x2fu, 0x93u,
-    0x0au, 0x10u, 0xb8u, 0xdfu, 0xedu, 0x7au, 0xefu, 0x9cu,
+    0xafu, 0x24u, 0x2bu, 0x00u, 0xc1u, 0x83u, 0x47u, 0xcbu,
+    0x84u, 0x25u, 0x12u, 0xffu, 0xd8u, 0x0cu, 0x16u, 0xd8u,
+    0x4cu, 0xfau, 0x3eu, 0x5bu, 0x52u, 0x73u, 0xe6u, 0xefu,
+    0x98u, 0x93u, 0xd0u, 0xa0u, 0x79u, 0xbfu, 0xafu, 0xfcu,
 };
 
 const hct_kernel_catalog_entry_t *hct_benchmark_server_catalog(size_t *count)

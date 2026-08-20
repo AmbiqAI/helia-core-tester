@@ -194,14 +194,16 @@ def _extract_array(header_text: str, array_name: str) -> list[int]:
 
 
 def _extract_float_array(header_text: str, array_name: str) -> list[float]:
-    """Same as `_extract_array()` but for float32 arrays (values written with an `f` suffix,
-    e.g. `0.133486f`) -- used by Quantize (float input) and Dequantize (float expected
-    output)."""
+    """Same as `_extract_array()` but for float32/float16 arrays (values written with an `f`
+    suffix, e.g. `0.133486f`, optionally preceded by a `(float16_t)` cast for FP16 arrays) --
+    used by Quantize (float input), Dequantize (float expected output), and the FP32/FP16
+    data-movement operators."""
     pattern = re.compile(rf"\b{re.escape(array_name)}\s*(?:\[[^\]]*\])?\s*=\s*\{{(.*?)\}}\s*;", re.DOTALL)
     match = pattern.search(header_text)
     if match is None:
         raise UnsupportedGeneratedTestError(f"Could not find array `{array_name}` in generated header")
     raw = re.sub(r"//[^\n]*", "", match.group(1))
+    raw = re.sub(r"\(\s*float16_t\s*\)", "", raw)
     values = [v.strip() for v in raw.replace("\n", " ").split(",") if v.strip() != ""]
     return [float(v.rstrip("fF")) for v in values]
 
@@ -230,6 +232,8 @@ def _extract_typed_array(header_text: str, array_name: str, dtype: str) -> np.nd
         return np.array(_extract_bool_array(header_text, array_name), dtype=np.bool_)
     if dtype == "FP32":
         return np.array(_extract_float_array(header_text, array_name), dtype=np.float32)
+    if dtype == "FP16":
+        return np.array(_extract_float_array(header_text, array_name), dtype=np.float16)
     numpy_dtype = {
         "S8": np.int8,
         "S16": np.int16,
@@ -3818,10 +3822,14 @@ def _build_data_movement_case(
     descriptor = generated_test.descriptor
     operator = str(descriptor.get("operator", ""))
     activation_dtype = str(descriptor.get("activation_dtype", descriptor.get("resolved_tensor_dtypes", {}).get("input", "S8")))
-    if activation_dtype not in {"S8", "S16", "S32"}:
+    if activation_dtype not in {"S8", "S16", "S32", "FP32", "FP16"}:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: activation_dtype={activation_dtype!r} is not bridgeable -- phase 3e only dispatches "
-            "the int generated-test variants."
+            "the int and FP32/FP16 generated-test variants."
+        )
+    if activation_dtype in {"FP32", "FP16"} and operator == "Split" and activation_dtype != "FP16":
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: no arm_split_f32 entrypoint exists in the generated-test corpus -- only FP16 Split is bridgeable."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -3872,6 +3880,29 @@ def _build_data_movement_case(
         return np.array([], dtype={"S8": np.int8, "S16": np.int16, "S32": np.int32, "S64": np.int64, "BOOL": np.bool_}[dtype])
 
     if operator in {"Reshape", "Squeeze"}:
+        if operator == "Reshape" and activation_dtype in {"FP32", "FP16"}:
+            input_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_input_dims"))
+            output_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_output_dims"))
+            input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
+            expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
+            arrays.extend([
+                (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+                (2, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+            ])
+            tensor_dtypes = {"input": activation_dtype, "output": activation_dtype}
+            add_output_scalars(output_shape)
+            return _build_data_movement_bundle(
+                project_root,
+                generated_test,
+                lookup_dtype=activation_dtype,
+                cmsis_function=cmsis_function,
+                arrays=arrays,
+                tensor_dtypes=tensor_dtypes,
+                comparison=comparison,
+                scalar_parameters=scalar_parameters,
+                scratch_bytes=0,
+                output_root=output_root,
+            )
         input_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_input_dims"))
         output_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_output_dims"))
         input_data = _extract_typed_array(header_text, f"{prefix}_input", "S8").reshape(input_shape)
@@ -3900,7 +3931,9 @@ def _build_data_movement_case(
         rank = _extract_scalar(header_text, params_struct, "num_dims")
         input_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_input_dims"), rank=rank)
         output_shape = _dims_dict_to_shape(_extract_dims(header_text, f"{prefix}_output_dims"), rank=rank)
-        permutations = _extract_array(header_text, f"{prefix}_permutations")
+        # float Transpose headers name the raw permutation array `_perm`, not `_permutations`
+        # like the int variants -- the params struct itself is still `.num_dims`/`.perm`.
+        permutations = _extract_array(header_text, f"{prefix}_perm" if activation_dtype in {"FP32", "FP16"} else f"{prefix}_permutations")
         input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
         expected_output = (
             status_placeholder_output(activation_dtype)
@@ -3923,7 +3956,13 @@ def _build_data_movement_case(
         pre_pad = _extract_dims(header_text, f"{prefix}_pre_pad")
         post_pad = _extract_dims(header_text, f"{prefix}_post_pad")
         call_args = _extract_call_args(source_text, cmsis_function, expected_count=6)
-        pad_value = int(call_args[2])
+        if activation_dtype in {"FP32", "FP16"}:
+            # pad_value is a real float literal (e.g. "0.25f") for the float entrypoints,
+            # unlike the int8/int16 versions where it's a plain integer -- bit-cast it
+            # through int32 the same way scalar float params travel the wire elsewhere.
+            pad_value = _quant_scale_to_bits(float(call_args[2].rstrip("fF")))
+        else:
+            pad_value = int(call_args[2])
         input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
         expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
         add_meta([pad_value, pre_pad["n"], pre_pad["h"], pre_pad["w"], pre_pad["c"], post_pad["n"], post_pad["h"], post_pad["w"], post_pad["c"]])

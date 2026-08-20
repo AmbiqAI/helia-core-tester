@@ -21,13 +21,21 @@
 # Usage:
 #   scripts/run_hardware_perf_suite.sh [--serial-no SERIAL] [--cpu CPU] \
 #       [--family FAMILY] [--test-name FILTER] [--limit N] [--suite int|float] \
-#       [--session-id NAME] [--skip-generate] [--skip-flash]
+#       [--precision fp16|fp32] [--session-id NAME] [--skip-generate] [--skip-flash]
+#
+# --precision fp16|fp32 is a convenience shortcut for the float suite: it sets
+# --suite float and additionally filters to only the _f16/_f32-suffixed
+# generated test cases (via --test-name), since a single `float` suite
+# directory holds both precisions side by side. Combine with --test-name for
+# extra narrowing (e.g. --precision fp32 --test-name reshape).
 #
 # Examples:
 #   scripts/run_hardware_perf_suite.sh                     # run all bridged families
 #   scripts/run_hardware_perf_suite.sh --serial-no 1160002276
 #   scripts/run_hardware_perf_suite.sh --family ConvolutionFunctions --test-name convolve_generic_s4
 #   scripts/run_hardware_perf_suite.sh --suite float --family PoolingFunctions --test-name _f32
+#   scripts/run_hardware_perf_suite.sh --precision fp16     # every bridged FP16 case
+#   scripts/run_hardware_perf_suite.sh --precision fp32     # every bridged FP32 case
 #
 # Not tested against real hardware (no board/J-Link probe available in this
 # sandbox) -- please run and report back any errors from the flash/serial
@@ -45,6 +53,7 @@ FAMILY=""
 TEST_NAME=""
 LIMIT=""
 SUITE="int"
+PRECISION=""
 SESSION_ID="apollo510-full-suite-$(date -u +%Y%m%dT%H%M%SZ)"
 SKIP_GENERATE=0
 SKIP_FLASH=0
@@ -57,11 +66,12 @@ while [[ $# -gt 0 ]]; do
         --test-name) TEST_NAME="$2"; shift 2 ;;
         --limit) LIMIT="$2"; shift 2 ;;
         --suite) SUITE="$2"; shift 2 ;;
+        --precision) PRECISION="$2"; shift 2 ;;
         --session-id) SESSION_ID="$2"; shift 2 ;;
         --skip-generate) SKIP_GENERATE=1; shift ;;
         --skip-flash) SKIP_FLASH=1; shift ;;
         -h|--help)
-            sed -n '2,34p' "${BASH_SOURCE[0]}"
+            sed -n '2,40p' "${BASH_SOURCE[0]}"
             exit 0
             ;;
         *)
@@ -70,6 +80,27 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ -n "${PRECISION}" ]]; then
+    case "${PRECISION}" in
+        fp16|FP16) PRECISION_SUFFIX="_f16" ;;
+        fp32|FP32) PRECISION_SUFFIX="_f32" ;;
+        *)
+            echo "ERROR: --precision must be 'fp16' or 'fp32' (got '${PRECISION}')." >&2
+            exit 1
+            ;;
+    esac
+    SUITE="float"
+    if [[ -n "${TEST_NAME}" ]]; then
+        # --test-name is a plain substring filter (no regex/OR support), so
+        # combining it with --precision would silently narrow to whichever
+        # cases happen to contain both substrings -- refuse rather than
+        # produce a confusing, likely-empty result set.
+        echo "ERROR: --precision and --test-name cannot be combined (both filter via a single substring match)." >&2
+        exit 1
+    fi
+    TEST_NAME="${PRECISION_SUFFIX}"
+fi
 
 # --- Step 0: find the J-Link probe serial number if not given -------------
 if [[ -z "${SERIAL_NO}" ]]; then
@@ -113,7 +144,7 @@ fi
 
 echo
 echo "[run_hardware_perf_suite] Config:"
-echo "  serial_no=${SERIAL_NO} cpu=${CPU} family=${FAMILY:-<all bridged families>} test_name=${TEST_NAME:-<all>} limit=${LIMIT:-<all>} suite=${SUITE}"
+echo "  serial_no=${SERIAL_NO} cpu=${CPU} family=${FAMILY:-<all bridged families>} test_name=${TEST_NAME:-<all>} limit=${LIMIT:-<all>} suite=${SUITE} precision=${PRECISION:-<n/a>}"
 echo "  session_id=${SESSION_ID}"
 echo
 
