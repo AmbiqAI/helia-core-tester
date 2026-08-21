@@ -964,3 +964,39 @@ kernels:
     operator: MaxPool
     dtype: FP16
     cmsis_function: arm_max_pool_f16
+
+  - kernel_id: 158
+    family: ActivationFunctions
+    operator: NNActivationFloat
+    dtype: FP32
+    cmsis_function: arm_nn_activation_f32
+
+  - kernel_id: 159
+    family: ActivationFunctions
+    operator: NNActivationFloat
+    dtype: FP16
+    cmsis_function: arm_nn_activation_f16
+
+  - kernel_id: 160
+    family: BasicMathFunctions
+    operator: ReduceSum
+    dtype: FP32
+    cmsis_function: arm_reduce_sum_f32
+
+  - kernel_id: 161
+    family: BasicMathFunctions
+    operator: ReduceSum
+    dtype: FP16
+    cmsis_function: arm_reduce_sum_f16
+
+  - kernel_id: 162
+    family: NNSupportFunctions
+    operator: BatchNorm
+    dtype: FP32
+    cmsis_function: arm_batch_norm_f32
+
+  - kernel_id: 163
+    family: NNSupportFunctions
+    operator: BatchNorm
+    dtype: FP16
+    cmsis_function: arm_batch_norm_f16

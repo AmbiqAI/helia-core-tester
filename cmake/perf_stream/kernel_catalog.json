@@ -1882,5 +1882,77 @@
     "scratch_bytes": 0,
     "stateless": true,
     "supported_dtype": "FP16"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_nn_activation_f32",
+    "kernel_id": 158,
+    "mutates_input": false,
+    "operator_family": "ActivationFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP32"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_nn_activation_f16",
+    "kernel_id": 159,
+    "mutates_input": false,
+    "operator_family": "ActivationFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP16"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_reduce_sum_f32",
+    "kernel_id": 160,
+    "mutates_input": false,
+    "operator_family": "BasicMathFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP32"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_reduce_sum_f16",
+    "kernel_id": 161,
+    "mutates_input": false,
+    "operator_family": "BasicMathFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP16"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_batch_norm_f32",
+    "kernel_id": 162,
+    "mutates_input": false,
+    "operator_family": "NNSupportFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP32"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_batch_norm_f16",
+    "kernel_id": 163,
+    "mutates_input": false,
+    "operator_family": "NNSupportFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP16"
   }
 ]

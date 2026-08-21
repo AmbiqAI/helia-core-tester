@@ -208,6 +208,12 @@
 #define HCT_KERNEL_ID_SOFTMAX_F16 155u
 #define HCT_KERNEL_ID_AVGPOOL_F16 156u
 #define HCT_KERNEL_ID_MAXPOOL_F16 157u
+#define HCT_KERNEL_ID_NN_ACTIVATION_FLOAT_F32 158u
+#define HCT_KERNEL_ID_NN_ACTIVATION_FLOAT_F16 159u
+#define HCT_KERNEL_ID_REDUCE_SUM_F32 160u
+#define HCT_KERNEL_ID_REDUCE_SUM_F16 161u
+#define HCT_KERNEL_ID_BATCH_NORM_F32 162u
+#define HCT_KERNEL_ID_BATCH_NORM_F16 163u
 
 static bool has_capacity(size_t payload_length, size_t offset, size_t needed)
 {
@@ -1679,6 +1685,55 @@ static arm_cmsis_nn_status run_prelu_once(hct_server_session_t *session)
                         &output_dims, (int8_t *)session->output_buffer);
 }
 
+/* ActivationFunctions NNActivationFloat shares one kernel_id per float dtype; the concrete
+ * activation variant is chosen by the streamed activation_kind enum plus a float param
+ * bit-cast through scale_bits (used only by LeakyRelu, 0.0f otherwise). */
+static arm_cmsis_nn_status run_nn_activation_float_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+    int32_t block_size;
+
+    if (input == NULL || session->block_size <= 0)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    block_size = session->block_size;
+
+    if (session->expected_kernel_id == HCT_KERNEL_ID_NN_ACTIVATION_FLOAT_F32)
+    {
+        session->output_length = (uint32_t)(block_size * (int32_t)sizeof(float));
+        if (session->output_length > sizeof(session->output_buffer))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        {
+            float param = quant_scale_from_bits(session->scale_bits);
+            return arm_nn_activation_f32((const float *)blob_ptr(session, input),
+                                     (float *)session->output_buffer,
+                                     block_size,
+                                     (arm_nn_activation_type)session->activation_kind,
+                                     param);
+        }
+    }
+    if (session->expected_kernel_id == HCT_KERNEL_ID_NN_ACTIVATION_FLOAT_F16)
+    {
+        session->output_length = (uint32_t)(block_size * (int32_t)sizeof(float16_t));
+        if (session->output_length > sizeof(session->output_buffer))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        {
+            float param = quant_scale_from_bits(session->scale_bits);
+            return arm_nn_activation_f16((const float16_t *)blob_ptr(session, input),
+                                     (float16_t *)session->output_buffer,
+                                     block_size,
+                                     (arm_nn_activation_type)session->activation_kind,
+                                     param);
+        }
+    }
+    return ARM_CMSIS_NN_ARG_ERROR;
+}
+
 /* Reinterprets session->scale_bits (transmitted as a raw int32) back into the float scale
  * value it was bit-cast from on the host -- see the scale_bits field comment in
  * benchmark_server_session.h. */
@@ -2759,6 +2814,66 @@ static arm_cmsis_nn_status run_basic_math_reduction_once(hct_server_session_t *s
     }
 }
 
+/* BasicMathFunctions ReduceSum uses the same axis_dims encoding already emitted in the
+ * generated headers: each of n/h/w/c is either 0 (not reduced) or 1 (reduce this axis). */
+static arm_cmsis_nn_status run_reduce_sum_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+    cmsis_nn_dims input_dims;
+    cmsis_nn_dims axis_dims;
+    cmsis_nn_dims output_dims;
+
+    if (input == NULL)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    input_dims.n = (int32_t)input->dimensions[0];
+    input_dims.h = (int32_t)input->dimensions[1];
+    input_dims.w = (int32_t)input->dimensions[2];
+    input_dims.c = (int32_t)input->dimensions[3];
+    axis_dims.n = session->axis_n;
+    axis_dims.h = session->axis_h;
+    axis_dims.w = session->axis_w;
+    axis_dims.c = session->axis_c;
+    output_dims.n = (session->output_n > 0) ? session->output_n : 1;
+    output_dims.h = session->output_h;
+    output_dims.w = session->output_w;
+    output_dims.c = session->output_c;
+
+    if (output_dims.n <= 0 || output_dims.h <= 0 || output_dims.w <= 0 || output_dims.c <= 0)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    if (session->expected_kernel_id == HCT_KERNEL_ID_REDUCE_SUM_F32)
+    {
+        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c * (int32_t)sizeof(float));
+        if (session->output_length > sizeof(session->output_buffer))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        return arm_reduce_sum_f32((const float *)blob_ptr(session, input),
+                                  &input_dims, &axis_dims,
+                                  (float *)session->output_buffer,
+                                  &output_dims);
+    }
+
+    if (session->expected_kernel_id == HCT_KERNEL_ID_REDUCE_SUM_F16)
+    {
+        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c * (int32_t)sizeof(float16_t));
+        if (session->output_length > sizeof(session->output_buffer))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        return arm_reduce_sum_f16((const float16_t *)blob_ptr(session, input),
+                                  &input_dims, &axis_dims,
+                                  (float16_t *)session->output_buffer,
+                                  &output_dims);
+    }
+    return ARM_CMSIS_NN_ARG_ERROR;
+}
+
 static arm_cmsis_nn_status run_basic_math_lut_once(hct_server_session_t *session)
 {
     hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
@@ -2804,6 +2919,60 @@ static arm_cmsis_nn_status run_basic_math_lut_once(hct_server_session_t *session
         default:
             return ARM_CMSIS_NN_ARG_ERROR;
     }
+}
+
+static arm_cmsis_nn_status run_batch_norm_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+    hct_server_blob_t *scale = find_blob_by_role(session, HCT_BLOB_ROLE_MULTIPLIER);
+    hct_server_blob_t *bias = find_blob_by_role(session, HCT_BLOB_ROLE_BIAS);
+    cmsis_nn_dims input_dims;
+    int32_t element_count;
+
+    if (input == NULL || scale == NULL || bias == NULL)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    input_dims.n = (int32_t)input->dimensions[0];
+    input_dims.h = (int32_t)input->dimensions[1];
+    input_dims.w = (int32_t)input->dimensions[2];
+    input_dims.c = (int32_t)input->dimensions[3];
+    element_count = input_dims.n * input_dims.h * input_dims.w * input_dims.c;
+    if (element_count <= 0)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    if (session->expected_kernel_id == HCT_KERNEL_ID_BATCH_NORM_F32)
+    {
+        session->output_length = (uint32_t)(element_count * (int32_t)sizeof(float));
+        if (session->output_length > sizeof(session->output_buffer))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        return arm_batch_norm_f32((const float *)blob_ptr(session, input),
+                                  (float *)session->output_buffer,
+                                  (const float *)blob_ptr(session, scale),
+                                  (const float *)blob_ptr(session, bias),
+                                  &input_dims,
+                                  session->activation_kind);
+    }
+    if (session->expected_kernel_id == HCT_KERNEL_ID_BATCH_NORM_F16)
+    {
+        session->output_length = (uint32_t)(element_count * (int32_t)sizeof(float16_t));
+        if (session->output_length > sizeof(session->output_buffer))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        return arm_batch_norm_f16((const float16_t *)blob_ptr(session, input),
+                                  (float16_t *)session->output_buffer,
+                                  (const float16_t *)blob_ptr(session, scale),
+                                  (const float16_t *)blob_ptr(session, bias),
+                                  &input_dims,
+                                  session->activation_kind);
+    }
+    return ARM_CMSIS_NN_ARG_ERROR;
 }
 
 /* Int Add/Sub/Mul/Maximum/Minimum/SquaredDifference and float Add/Sub/Mul/Maximum/Minimum
@@ -4647,6 +4816,13 @@ static arm_cmsis_nn_status run_kernel_once(hct_server_session_t *session)
 #else
             return ARM_CMSIS_NN_ARG_ERROR;
 #endif
+        case HCT_KERNEL_ID_NN_ACTIVATION_FLOAT_F32:
+        case HCT_KERNEL_ID_NN_ACTIVATION_FLOAT_F16:
+#ifndef HCT_HOST_ABS_ONLY
+            return run_nn_activation_float_once(session);
+#else
+            return ARM_CMSIS_NN_ARG_ERROR;
+#endif
         case HCT_KERNEL_ID_QUANTIZE_S8:
         case HCT_KERNEL_ID_QUANTIZE_S16:
 #ifndef HCT_HOST_ABS_ONLY
@@ -4692,6 +4868,20 @@ static arm_cmsis_nn_status run_kernel_once(hct_server_session_t *session)
         case HCT_KERNEL_ID_SOFTMAX_F16:
 #ifndef HCT_HOST_ABS_ONLY
             return run_softmax_once(session);
+#else
+            return ARM_CMSIS_NN_ARG_ERROR;
+#endif
+        case HCT_KERNEL_ID_REDUCE_SUM_F32:
+        case HCT_KERNEL_ID_REDUCE_SUM_F16:
+#ifndef HCT_HOST_ABS_ONLY
+            return run_reduce_sum_once(session);
+#else
+            return ARM_CMSIS_NN_ARG_ERROR;
+#endif
+        case HCT_KERNEL_ID_BATCH_NORM_F32:
+        case HCT_KERNEL_ID_BATCH_NORM_F16:
+#ifndef HCT_HOST_ABS_ONLY
+            return run_batch_norm_once(session);
 #else
             return ARM_CMSIS_NN_ARG_ERROR;
 #endif

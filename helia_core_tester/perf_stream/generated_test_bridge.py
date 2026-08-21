@@ -853,6 +853,294 @@ def _build_convolve_case(
     return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
 
 
+def _build_nn_activation_float_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    tensor_dtypes = descriptor.get("resolved_tensor_dtypes", descriptor.get("tensor_dtypes", {}))
+    input_dtype = str(tensor_dtypes.get("input", ""))
+    if operator != "NNActivationFloat" or input_dtype not in ("FP32", "FP16"):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: operator={operator!r} input_dtype={input_dtype!r} is not "
+            "bridgeable -- perf-stream firmware only dispatches arm_nn_activation_f32/f16."
+        )
+
+    header_text = _find_header_file(generated_test.directory).read_text(encoding="utf-8")
+    source_text = _find_source_file(generated_test.directory).read_text(encoding="utf-8")
+    prefix = generated_test.name
+    input_name = f"{prefix}_input"
+    expected_name = f"{prefix}_expected_output"
+    input_flat = _extract_typed_array(header_text, input_name, input_dtype)
+    expected_flat = _extract_typed_array(header_text, expected_name, input_dtype)
+    block_size = input_flat.size
+    if expected_flat.size != block_size:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: expected_output size ({expected_flat.size}) does not match input size ({block_size})."
+        )
+    sidecar = _load_generation_sidecar(generated_test.directory)
+    cmsis_function = "arm_nn_activation_f16" if input_dtype == "FP16" else "arm_nn_activation_f32"
+    if sidecar is not None:
+        scalars = sidecar["scalars"]
+        activation_symbol = str(scalars["activation_symbol"])
+        act_param = float(str(scalars["act_param_literal"]).rstrip("fF"))
+        block_size = int(scalars["size"])
+    else:
+        args = _extract_call_args(source_text, cmsis_function, expected_count=5)
+        block_size = int(args[2])
+        activation_symbol = str(args[3])
+        act_param = float(str(args[4]).rstrip("fF"))
+    if block_size != input_flat.size:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: block_size {block_size} does not match extracted input size {input_flat.size}."
+        )
+
+    activation_kind_map = {
+        "ARM_NN_FLT_ACT_RELU": 0,
+        "ARM_NN_FLT_ACT_RELU6": 1,
+        "ARM_NN_FLT_ACT_SIGMOID": 2,
+        "ARM_NN_FLT_ACT_TANH": 3,
+        "ARM_NN_FLT_ACT_NONE": 4,
+        "ARM_NN_FLT_ACT_LEAKY_RELU": 5,
+        "ARM_NN_FLT_ACT_HARDSWISH": 6,
+    }
+    if activation_symbol not in activation_kind_map:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: unsupported float activation enum {activation_symbol!r}."
+        )
+
+    numpy_dtype = np.float16 if input_dtype == "FP16" else np.float32
+    input_shape = (1, 1, 1, block_size)
+    expected_shape = (1, 1, 1, block_size)
+    input_data = _reshape_generated_prefix(np.array(input_flat, dtype=numpy_dtype), input_shape, generated_test=generated_test, tensor_name="input", context=f"block_size={block_size}")
+    expected_output = _reshape_generated_prefix(np.array(expected_flat, dtype=numpy_dtype), expected_shape, generated_test=generated_test, tensor_name="expected_output", context=f"block_size={block_size}")
+
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+
+    arrays = [
+        (1, "input_0", input_dtype, input_shape, input_data, False, False),
+        (2, "expected_output", input_dtype, expected_shape, expected_output, False, True),
+    ]
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array, dtype=numpy_dtype))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": operator,
+        "family": generated_test.family,
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": {
+            "block_size": block_size,
+            "activation_kind": activation_kind_map[activation_symbol],
+            "scale_bits": _quant_scale_to_bits(act_param),
+        },
+        "tensor_dtypes": {"input": input_dtype, "output": input_dtype},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": input_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "float"})),
+        "scratch_buffer": {"bytes": 0},
+        "required_target_capabilities": [cmsis_function],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
+def _build_reduce_sum_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    tensor_dtypes = descriptor.get("resolved_tensor_dtypes", descriptor.get("tensor_dtypes", {}))
+    input_dtype = str(tensor_dtypes.get("input", ""))
+    if operator != "ReduceSum" or input_dtype not in ("FP32", "FP16"):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: operator={operator!r} input_dtype={input_dtype!r} is not "
+            "bridgeable -- perf-stream firmware only dispatches arm_reduce_sum_f32/f16."
+        )
+
+    header_text = _find_header_file(generated_test.directory).read_text(encoding="utf-8")
+    prefix = generated_test.name
+    input_dims = _extract_dims(header_text, f"{prefix}_input_dims")
+    output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
+    axis_dims = _extract_dims(header_text, f"{prefix}_axis_dims")
+    input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
+    output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
+    numpy_dtype = np.float16 if input_dtype == "FP16" else np.float32
+    input_flat = np.array(_extract_typed_array(header_text, f"{prefix}_input", input_dtype), dtype=numpy_dtype)
+    expected_flat = np.array(_extract_typed_array(header_text, f"{prefix}_expected_output", input_dtype), dtype=numpy_dtype)
+    if input_flat.size < int(np.prod(input_shape)) or expected_flat.size < int(np.prod(output_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: generated arrays do not match input/output dims ({input_shape} -> {output_shape})."
+        )
+    input_data = _reshape_generated_prefix(input_flat, input_shape, generated_test=generated_test, tensor_name="input", context=f"input_shape={input_shape}")
+    expected_output = _reshape_generated_prefix(expected_flat, output_shape, generated_test=generated_test, tensor_name="expected_output", context=f"output_shape={output_shape}")
+
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+    arrays = [
+        (1, "input_0", input_dtype, input_shape, input_data, False, False),
+        (2, "expected_output", input_dtype, output_shape, expected_output, False, True),
+    ]
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array, dtype=numpy_dtype))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    cmsis_function = "arm_reduce_sum_f16" if input_dtype == "FP16" else "arm_reduce_sum_f32"
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": operator,
+        "family": generated_test.family,
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": {
+            "output_n": output_dims["n"],
+            "output_h": output_dims["h"],
+            "output_w": output_dims["w"],
+            "output_c": output_dims["c"],
+            "axis_n": axis_dims["n"],
+            "axis_h": axis_dims["h"],
+            "axis_w": axis_dims["w"],
+            "axis_c": axis_dims["c"],
+        },
+        "tensor_dtypes": {"input": input_dtype, "output": input_dtype},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": input_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "float"})),
+        "scratch_buffer": {"bytes": 0},
+        "required_target_capabilities": [cmsis_function],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
+def _build_batch_norm_case(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    *,
+    output_root: Path | None = None,
+) -> CaseBundle:
+    descriptor = generated_test.descriptor
+    operator = str(descriptor.get("operator", ""))
+    tensor_dtypes = descriptor.get("resolved_tensor_dtypes", descriptor.get("tensor_dtypes", {}))
+    input_dtype = str(tensor_dtypes.get("input", ""))
+    if operator != "BatchNorm" or input_dtype not in ("FP32", "FP16"):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: operator={operator!r} input_dtype={input_dtype!r} is not "
+            "bridgeable -- perf-stream firmware only dispatches arm_batch_norm_f32/f16."
+        )
+
+    header_text = _find_header_file(generated_test.directory).read_text(encoding="utf-8")
+    source_text = _find_source_file(generated_test.directory).read_text(encoding="utf-8")
+    prefix = generated_test.name
+    input_dims = _extract_dims(header_text, f"{prefix}_input_dims")
+    input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
+    numpy_dtype = np.float16 if input_dtype == "FP16" else np.float32
+    input_flat = np.array(_extract_typed_array(header_text, f"{prefix}_input", input_dtype), dtype=numpy_dtype)
+    scale = np.array(_extract_typed_array(header_text, f"{prefix}_scale", input_dtype), dtype=numpy_dtype)
+    bias = np.array(_extract_typed_array(header_text, f"{prefix}_bias", input_dtype), dtype=numpy_dtype)
+    expected_flat = np.array(_extract_typed_array(header_text, f"{prefix}_expected_output", input_dtype), dtype=numpy_dtype)
+    if input_flat.size < int(np.prod(input_shape)) or expected_flat.size < int(np.prod(input_shape)):
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: generated input/expected sizes do not match input dims {input_shape}."
+        )
+    if scale.size != input_dims["c"] or bias.size != input_dims["c"]:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: scale/bias channel counts ({scale.size}, {bias.size}) do not match input C={input_dims['c']}."
+        )
+    cmsis_function = "arm_batch_norm_f16" if input_dtype == "FP16" else "arm_batch_norm_f32"
+    args = _extract_call_args(source_text, cmsis_function, expected_count=6)
+    layout_map = {"ARM_NN_LAYOUT_NHWC": 0, "ARM_NN_LAYOUT_NCHW": 1}
+    layout_symbol = str(args[5])
+    if layout_symbol not in layout_map:
+        raise UnsupportedGeneratedTestError(f"{generated_test.name}: unsupported batch norm layout {layout_symbol!r}.")
+
+    input_data = _reshape_generated_prefix(input_flat, input_shape, generated_test=generated_test, tensor_name="input", context=f"input_shape={input_shape}")
+    expected_output = _reshape_generated_prefix(expected_flat, input_shape, generated_test=generated_test, tensor_name="expected_output", context=f"input_shape={input_shape}")
+
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+    arrays = [
+        (1, "input_0", input_dtype, input_shape, input_data, False, False),
+        (3, "bias", input_dtype, (input_dims["c"],), bias, False, False),
+        (4, "multiplier", input_dtype, (input_dims["c"],), scale, False, False),
+        (5, "expected_output", input_dtype, input_shape, expected_output, False, True),
+    ]
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        _write_blob(path, np.asarray(array, dtype=numpy_dtype))
+        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    descriptor_text = descriptor_path.read_text(encoding="utf-8")
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": str(descriptor_path.relative_to(project_root)) if descriptor_path.is_relative_to(project_root) else str(descriptor_path),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+        "operator": operator,
+        "family": generated_test.family,
+        "target_cpu": generated_test.cpu,
+        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": {"activation_kind": layout_map[layout_symbol]},
+        "tensor_dtypes": {"input": input_dtype, "bias": input_dtype, "multiplier": input_dtype, "output": input_dtype},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": input_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "float"})),
+        "scratch_buffer": {"bytes": 0},
+        "required_target_capabilities": [cmsis_function],
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+
+
 def _build_depthwise_conv_case(
     project_root: Path,
     generated_test: GeneratedTestCase,
@@ -4483,6 +4771,7 @@ _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
     ("BasicMathFunctions", "Mul"): _build_mul_case,
     ("BasicMathFunctions", "Maximum"): _build_min_max_case,
     ("BasicMathFunctions", "Minimum"): _build_min_max_case,
+    ("BasicMathFunctions", "ReduceSum"): _build_reduce_sum_case,
     ("PoolingFunctions", "AvgPool"): _build_pooling_case_dispatch,
     ("PoolingFunctions", "MaxPool"): _build_pooling_case_dispatch,
     ("ActivationFunctions", "Relu"): _build_activation_case,
@@ -4494,10 +4783,12 @@ _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
     ("ActivationFunctions", "HardSwishCompat"): _build_activation_case,
     ("ActivationFunctions", "HardSwishPrecise"): _build_activation_case,
     ("ActivationFunctions", "PReLU"): _build_prelu_case,
+    ("ActivationFunctions", "NNActivationFloat"): _build_nn_activation_float_case,
     ("ActivationFunctions", "PReLUScalar"): _build_prelu_scalar_case,
     ("QuantizationFunctions", "Quantize"): _build_quantize_case,
     ("QuantizationFunctions", "Dequantize"): _build_dequantize_case,
     ("NNSupportFunctions", "Requantize"): _build_requantize_case,
+    ("NNSupportFunctions", "BatchNorm"): _build_batch_norm_case,
     ("ComparisonFunctions", "Comparison"): _build_comparison_case,
     ("SoftmaxFunctions", "Softmax"): _build_softmax_case,
     ("FullyConnectedFunctions", "FullyConnected"): _build_fully_connected_case,
