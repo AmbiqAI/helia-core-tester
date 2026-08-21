@@ -1391,38 +1391,35 @@ def _build_pooling_float_case(
     *,
     output_root: Path | None = None,
 ) -> CaseBundle:
-    """Convert one real generated CMSIS-NN AvgPool/MaxPool FP32 test into a streamable
+    """Convert one real generated CMSIS-NN AvgPool/MaxPool FP32/FP16 test into a streamable
     perf-stream CaseBundle. Like the quantized pooling builder above, there are no weights/
-    bias blobs (a pool window has no learned parameters) and no scratch buffer (F32
-    AvgPool's generated harness always passes ctx.buf=NULL -- see the sidecar's
-    `kernel_get_buffer_size_fn: null`). Unlike the quantized path, there is no
-    input/output zero-point, and the activation clamp (`cmsis_nn_pool_params_f32.
-    activation.{min,max}`) is a real float (e.g. +/-1e30), not an int32 quantized clamp --
-    it is bit-cast through int32 on the wire (see `_quant_scale_to_bits`/
-    `float_activation_min_bits` in benchmark_server_session.h). Only the `arm_avg_pool_f32`/
-    `arm_max_pool_f32` entrypoints are bridged, not their `_nhwc` alias variants (same
-    kernel, different call site in the generated harness -- not yet worth a second
-    kernel_id)."""
+    bias blobs (a pool window has no learned parameters). Unlike the quantized path, there is
+    no input/output zero-point, and the activation clamp (`cmsis_nn_pool_params_f32`/
+    `cmsis_nn_pool_params_f16.activation.{min,max}`) is a real float (e.g. +/-1e30), not an
+    int32 quantized clamp -- it is bit-cast through int32 on the wire (see
+    `_quant_scale_to_bits`/`float_activation_min_bits` in benchmark_server_session.h).
+    Scratch remains zero for the real generated float cases currently emitted. Both the plain
+    and `_nhwc` alias entrypoints share the same kernel_id/firmware dispatch."""
     descriptor = generated_test.descriptor
     operator = str(descriptor.get("operator", ""))
     tensor_dtypes = descriptor.get("resolved_tensor_dtypes", descriptor.get("tensor_dtypes", {}))
     input_dtype = str(tensor_dtypes.get("input", ""))
-    if operator not in ("AvgPool", "MaxPool") or input_dtype != "FP32":
+    if operator not in ("AvgPool", "MaxPool") or input_dtype not in ("FP32", "FP16"):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: operator={operator!r} input_dtype={input_dtype!r} is not "
-            f"bridgeable -- perf-stream firmware only dispatches arm_avg_pool_f32/arm_max_pool_f32 "
-            f"(FP32 input/output, not the _nhwc alias variants)."
+            f"bridgeable -- perf-stream firmware only dispatches arm_avg/max_pool_f32/f16 "
+            f"(including _nhwc aliases) for FP32/FP16 input/output."
         )
 
     header_path = _find_header_file(generated_test.directory)
     header_text = header_path.read_text(encoding="utf-8")
     source_text = _find_source_file(generated_test.directory).read_text(encoding="utf-8")
-    plain_fn = f"arm_{'avg' if operator == 'AvgPool' else 'max'}_pool_f32("
-    nhwc_fn = f"arm_{'avg' if operator == 'AvgPool' else 'max'}_pool_nhwc_f32("
-    if nhwc_fn in source_text and plain_fn not in source_text:
+    suffix = "f16" if input_dtype == "FP16" else "f32"
+    plain_fn = f"arm_{'avg' if operator == 'AvgPool' else 'max'}_pool_{suffix}("
+    nhwc_fn = f"arm_{'avg' if operator == 'AvgPool' else 'max'}_pool_nhwc_{suffix}("
+    if plain_fn not in source_text and nhwc_fn not in source_text:
         raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: uses the _nhwc alias entrypoint, not the plain "
-            f"{plain_fn} -- not yet bridged."
+            f"{generated_test.name}: no supported pooling call ({plain_fn} or {nhwc_fn}) found in generated source."
         )
     prefix = generated_test.name
 
@@ -1437,10 +1434,11 @@ def _build_pooling_float_case(
     input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
 
+    numpy_dtype = np.float16 if input_dtype == "FP16" else np.float32
     input_flat = _extract_float_array(header_text, f"{prefix}_input")
     expected_flat = _extract_float_array(header_text, f"{prefix}_expected_output")
-    input_arr = np.array(input_flat, dtype=np.float32)
-    expected_arr = np.array(expected_flat, dtype=np.float32)
+    input_arr = np.array(input_flat, dtype=numpy_dtype)
+    expected_arr = np.array(expected_flat, dtype=numpy_dtype)
 
     if input_arr.size < _shape_product(input_shape):
         raise UnsupportedGeneratedTestError(
@@ -1482,13 +1480,13 @@ def _build_pooling_float_case(
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
     arrays = [
-        (1, "input_0", "FP32", input_shape, input_data, False, False),
-        (6, "expected_output", "FP32", tuple(int(v) for v in expected_output.shape), expected_output, False, True),
+        (1, "input_0", input_dtype, input_shape, input_data, False, False),
+        (6, "expected_output", input_dtype, tuple(int(v) for v in expected_output.shape), expected_output, False, True),
     ]
     blobs: list[BlobInfo] = []
     for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
         path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array, dtype=np.float32))
+        _write_blob(path, np.asarray(array, dtype=numpy_dtype))
         blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
@@ -1504,7 +1502,7 @@ def _build_pooling_float_case(
         "operator": operator,
         "family": "PoolingFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="PoolingFunctions", operator=operator, dtype="FP32"),
+        "kernel_id": lookup_kernel_id(project_root, family="PoolingFunctions", operator=operator, dtype=input_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -1520,12 +1518,12 @@ def _build_pooling_float_case(
             "pool_h": filter_dims["h"],
             "pool_w": filter_dims["w"],
         },
-        "tensor_dtypes": {"input": "FP32", "output": "FP32"},
+        "tensor_dtypes": {"input": input_dtype, "output": input_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": "FP32", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         "correctness_comparison": comparison,
         "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [f"{operator.lower()}_fp32"],
+        "required_target_capabilities": [plain_fn.rstrip("(")],
         "repeated_invocation_safe": True,
         "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
     }
@@ -2225,7 +2223,7 @@ def _build_prelu_case(
     *,
     output_root: Path | None = None,
 ) -> CaseBundle:
-    """Bridge an ActivationFunctions PReLU generated test (S8 or S16). Unlike the pure unary
+    """Bridge an ActivationFunctions PReLU generated test (S8/S16 or FP32/FP16). Unlike the pure unary
     activations, PReLU takes a second (broadcastable) alpha tensor input -- structurally
     closer to BasicMathFunctions elementwise binary ops, just with PReLU's own scalar-param
     set (input_offset/alpha_offset/output_offset + separate identity/alpha multiplier-shift
@@ -2235,10 +2233,10 @@ def _build_prelu_case(
     activation_dtype = str(descriptor.get("activation_dtype", ""))
     expected_status = str(descriptor.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
     expects_status = expected_status != "ARM_CMSIS_NN_SUCCESS"
-    if operator != "PReLU" or activation_dtype not in ("S8", "S16"):
+    if operator != "PReLU" or activation_dtype not in ("S8", "S16", "FP32", "FP16"):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: operator={operator!r} activation_dtype={activation_dtype!r} is not "
-            f"bridgeable -- perf-stream firmware only dispatches arm_prelu_s8/s16."
+            f"bridgeable -- perf-stream firmware only dispatches arm_prelu_s8/s16/f32/f16."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -2255,37 +2253,70 @@ def _build_prelu_case(
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
 
     numpy_dtype = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}[activation_dtype]
-    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
-    alpha_flat = np.array(_extract_array(header_text, f"{prefix}_alpha"), dtype=numpy_dtype)
-    if input_flat.size != int(np.prod(input_shape)) or alpha_flat.size != int(np.prod(alpha_shape)):
+    extract_tensor = (lambda name: np.array(_extract_typed_array(header_text, name, activation_dtype), dtype=numpy_dtype)) if activation_dtype in ("FP32", "FP16") else (lambda name: np.array(_extract_array(header_text, name), dtype=numpy_dtype))
+    input_flat = extract_tensor(f"{prefix}_input")
+    alpha_flat = extract_tensor(f"{prefix}_alpha")
+    if input_flat.size != int(np.prod(input_shape)) or alpha_flat.size < int(np.prod(alpha_shape)):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: generated array sizes (input={input_flat.size}, "
             f"alpha={alpha_flat.size}) don't match header dims (input_shape={input_shape}, "
             f"alpha_shape={alpha_shape})."
         )
     input_data = input_flat.reshape(input_shape)
-    alpha_data = alpha_flat.reshape(alpha_shape)
+    alpha_data = _reshape_generated_prefix(
+        alpha_flat,
+        alpha_shape,
+        generated_test=generated_test,
+        tensor_name="alpha",
+        context=f"alpha_shape={alpha_shape}",
+    )
     comparison: dict[str, int | str]
     if expects_status:
         expected_output = np.array([], dtype=numpy_dtype)
         expected_output_shape = (0,)
         comparison = _status_comparison(expected_status)
     else:
-        expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
-        if expected_flat.size != int(np.prod(output_shape)):
+        expected_flat = extract_tensor(f"{prefix}_expected_output")
+        if expected_flat.size < int(np.prod(output_shape)):
             raise UnsupportedGeneratedTestError(
                 f"{generated_test.name}: expected_output size ({expected_flat.size}) does not match header "
                 f"output_dims product ({int(np.prod(output_shape))})"
             )
-        expected_output = expected_flat.reshape(output_shape)
+        expected_output = _reshape_generated_prefix(
+            expected_flat,
+            output_shape,
+            generated_test=generated_test,
+            tensor_name="expected_output",
+            context=f"output_shape={output_shape}",
+        )
         expected_output_shape = tuple(int(v) for v in expected_output.shape)
-        comparison = dict(descriptor.get("resolved_comparison", {"mode": "exact_int"}))
+        comparison = dict(descriptor.get("resolved_comparison", {"mode": "float" if activation_dtype in ("FP32", "FP16") else "exact_int"}))
 
-    cmsis_function = "arm_prelu_s16" if activation_dtype == "S16" else "arm_prelu_s8"
-    args = _extract_call_args(source_text, cmsis_function, expected_count=_PRELU_ARG_COUNT)
-    input_offset, alpha_offset, output_offset = (int(args[4]), int(args[5]), int(args[6]))
-    out_mult, out_shift = (int(args[7]), int(args[8]))
-    out_mult_alpha, out_shift_alpha = (int(args[9]), int(args[10]))
+    if activation_dtype in ("FP32", "FP16"):
+        cmsis_function = "arm_prelu_f16" if activation_dtype == "FP16" else "arm_prelu_f32"
+        _extract_call_args(source_text, cmsis_function, expected_count=6)
+        scalar_parameters = {
+            **({"output_n": output_dims["n"]} if output_dims["n"] != 1 else {}),
+            "output_h": output_dims["h"],
+            "output_w": output_dims["w"],
+            "output_c": output_dims["c"],
+        }
+    else:
+        cmsis_function = "arm_prelu_s16" if activation_dtype == "S16" else "arm_prelu_s8"
+        args = _extract_call_args(source_text, cmsis_function, expected_count=_PRELU_ARG_COUNT)
+        scalar_parameters = {
+            "input_offset": int(args[4]),
+            "alpha_offset": int(args[5]),
+            "output_offset": int(args[6]),
+            "out_mult": int(args[7]),
+            "out_shift": int(args[8]),
+            "out_mult_alpha": int(args[9]),
+            "out_shift_alpha": int(args[10]),
+            **({"output_n": output_dims["n"]} if output_dims["n"] != 1 else {}),
+            "output_h": output_dims["h"],
+            "output_w": output_dims["w"],
+            "output_c": output_dims["c"],
+        }
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
@@ -2319,19 +2350,7 @@ def _build_prelu_case(
         "kernel_id": lookup_kernel_id(project_root, family="ActivationFunctions", operator=operator, dtype=activation_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
-            "input_offset": input_offset,
-            "alpha_offset": alpha_offset,
-            "output_offset": output_offset,
-            "out_mult": out_mult,
-            "out_shift": out_shift,
-            "out_mult_alpha": out_mult_alpha,
-            "out_shift_alpha": out_shift_alpha,
-            **({"output_n": output_dims["n"]} if output_dims["n"] != 1 else {}),
-            "output_h": output_dims["h"],
-            "output_w": output_dims["w"],
-            "output_c": output_dims["c"],
-        },
+        "serialized_scalar_parameters": scalar_parameters,
         "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
@@ -2492,7 +2511,7 @@ def _build_softmax_case(
     *,
     output_root: Path | None = None,
 ) -> CaseBundle:
-    """Bridge a SoftmaxFunctions Softmax generated test. Three CMSIS-NN kernels are used
+    """Bridge a SoftmaxFunctions Softmax generated test. Five CMSIS-NN kernels are used
     depending on the descriptor's (activation_dtype, hint.force_cmsis, hint.output_dtype)
     combination -- detected here directly from which kernel function the generator actually
     emitted in the generated `.c` file (the descriptor's `operator` field is always
@@ -2502,13 +2521,15 @@ def _build_softmax_case(
                                embedded once in firmware) -- kernel_id lookup dtype S16
       - `arm_softmax_s8_s16`  (S8 in, S16 out, the `force_cmsis`+`output_dtype: S16` hint
                                combination) -- registered under operator "SoftmaxS8S16"
+      - `arm_softmax_f32`     (FP32 in, FP32 out)
+      - `arm_softmax_f16`     (FP16 in, FP16 out)
     """
     descriptor = generated_test.descriptor
     operator = str(descriptor.get("operator", ""))
     if operator != "Softmax":
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: operator={operator!r} is not bridgeable -- perf-stream firmware "
-            f"only dispatches arm_softmax_s8/s16/s8_s16."
+            f"only dispatches arm_softmax_s8/s16/s8_s16/f32/f16."
         )
 
     source_path = _find_source_file(generated_test.directory)
@@ -2517,7 +2538,15 @@ def _build_softmax_case(
     header_text = header_path.read_text(encoding="utf-8")
     prefix = generated_test.name
 
-    if re.search(r"\barm_softmax_s8_s16\s*\(", source_text):
+    if re.search(r"\barm_softmax_f16\s*\(", source_text):
+        cmsis_function = "arm_softmax_f16"
+        lookup_operator, lookup_dtype = "Softmax", "FP16"
+        input_dtype = output_dtype = "FP16"
+    elif re.search(r"\barm_softmax_f32\s*\(", source_text):
+        cmsis_function = "arm_softmax_f32"
+        lookup_operator, lookup_dtype = "Softmax", "FP32"
+        input_dtype = output_dtype = "FP32"
+    elif re.search(r"\barm_softmax_s8_s16\s*\(", source_text):
         cmsis_function = "arm_softmax_s8_s16"
         lookup_operator, lookup_dtype = "SoftmaxS8S16", "S8"
         input_dtype, output_dtype = "S8", "S16"
@@ -2531,18 +2560,24 @@ def _build_softmax_case(
         input_dtype = output_dtype = "S8"
     else:
         raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: no arm_softmax_s8/s16/s8_s16 call found in generated source."
+            f"{generated_test.name}: no arm_softmax_s8/s16/s8_s16/f32/f16 call found in generated source."
         )
 
-    args = _extract_call_args(source_text, cmsis_function, expected_count=_SOFTMAX_ARG_COUNT)
-    num_rows, row_size, mult, shift = (int(args[1]), int(args[2]), int(args[3]), int(args[4]))
-    diff_min = 0 if cmsis_function == "arm_softmax_s16" else int(args[5])
+    expected_count = 4 if input_dtype in ("FP32", "FP16") else _SOFTMAX_ARG_COUNT
+    args = _extract_call_args(source_text, cmsis_function, expected_count=expected_count)
+    if input_dtype in ("FP32", "FP16"):
+        num_rows, row_size = (int(args[1]), int(args[2]))
+        mult = shift = diff_min = 0
+    else:
+        num_rows, row_size, mult, shift = (int(args[1]), int(args[2]), int(args[3]), int(args[4]))
+        diff_min = 0 if cmsis_function == "arm_softmax_s16" else int(args[5])
     size = num_rows * row_size
 
-    input_numpy_dtype = np.int16 if input_dtype == "S16" else np.int8
-    output_numpy_dtype = np.int16 if output_dtype == "S16" else np.int8
-    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=input_numpy_dtype)
-    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=output_numpy_dtype)
+    dtype_map = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}
+    input_numpy_dtype = dtype_map[input_dtype]
+    output_numpy_dtype = dtype_map[output_dtype]
+    input_flat = np.array(_extract_typed_array(header_text, f"{prefix}_input", input_dtype), dtype=input_numpy_dtype)
+    expected_flat = np.array(_extract_typed_array(header_text, f"{prefix}_expected_output", output_dtype), dtype=output_numpy_dtype)
     if input_flat.size != size or expected_flat.size != size:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: array sizes (input={input_flat.size}, "
@@ -2597,7 +2632,7 @@ def _build_softmax_case(
         # _build_quantize_case()): the non-force_cmsis golden output comes from a full
         # TFLite/LiteRT quantized graph, not the raw kernel math, so it can differ by up
         # to 1 ULP. Match the template's real validation semantics here.
-        "correctness_comparison": {"mode": "tolerant_int", "tolerance": 1},
+        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "float"})) if input_dtype in ("FP32", "FP16") else {"mode": "tolerant_int", "tolerance": 1},
         "scratch_buffer": {"bytes": 0},
         "required_target_capabilities": [cmsis_function],
         "repeated_invocation_safe": True,
@@ -4072,10 +4107,12 @@ def _build_data_movement_case(
         input_z = _extract_array(header_text, f"{prefix}_input_z")
         input_w = _extract_array(header_text, f"{prefix}_input_w")
         input_shapes = [(int(input_w[i]), int(input_y[i]), int(input_x[i]), int(input_z[i])) for i in range(len(input_x))]
-        if len(input_shapes) != 2:
-            raise UnsupportedGeneratedTestError(f"{generated_test.name}: only up to 2 Concatenation inputs are bridgeable today.")
-        input1 = _extract_typed_array(header_text, f"{prefix}_input1", activation_dtype).reshape(input_shapes[0])
-        input2 = _extract_typed_array(header_text, f"{prefix}_input2", activation_dtype).reshape(input_shapes[1])
+        if len(input_shapes) > 3:
+            raise UnsupportedGeneratedTestError(f"{generated_test.name}: only up to 3 Concatenation inputs are bridgeable today.")
+        input_arrays = [
+            _extract_typed_array(header_text, f"{prefix}_input{i+1}", activation_dtype).reshape(input_shapes[i])
+            for i in range(len(input_shapes))
+        ]
         expected_output = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype).reshape(output_shape)
         style_code = 0
         axis = 0
@@ -4094,13 +4131,15 @@ def _build_data_movement_case(
         else:
             axis = int(_extract_call_args(source_text, cmsis_function, expected_count=7)[3])
         add_meta([style_code, len(output_shape), axis, len(input_shapes)])
+        for i, (shape, arr) in enumerate(zip(input_shapes, input_arrays, strict=False), start=1):
+            arrays.append((i, f"input_{i-1}", activation_dtype, shape, arr, False, False))
+        meta_blob_id = len(input_shapes) + 1
+        expected_blob_id = len(input_shapes) + 2
         arrays.extend([
-            (1, "input_0", activation_dtype, input_shapes[0], input1, False, False),
-            (2, "input_1", activation_dtype, input_shapes[1], input2, False, False),
-            (3, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
-            (4, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+            (meta_blob_id, "meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+            (expected_blob_id, "expected_output", activation_dtype, output_shape, expected_output, False, True),
         ])
-        tensor_dtypes = {"input_0": activation_dtype, "input_1": activation_dtype, "meta": "S32", "output": activation_dtype}
+        tensor_dtypes = {**{f"input_{i}": activation_dtype for i in range(len(input_shapes))}, "meta": "S32", "output": activation_dtype}
         add_output_scalars(output_shape)
         return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
 

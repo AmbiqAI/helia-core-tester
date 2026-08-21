@@ -1810,5 +1810,77 @@
     "scratch_bytes": 0,
     "stateless": true,
     "supported_dtype": "FP16"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_prelu_f32",
+    "kernel_id": 152,
+    "mutates_input": false,
+    "operator_family": "ActivationFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP32"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_prelu_f16",
+    "kernel_id": 153,
+    "mutates_input": false,
+    "operator_family": "ActivationFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP16"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_softmax_f32",
+    "kernel_id": 154,
+    "mutates_input": false,
+    "operator_family": "SoftmaxFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP32"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_softmax_f16",
+    "kernel_id": 155,
+    "mutates_input": false,
+    "operator_family": "SoftmaxFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP16"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_avg_pool_f16",
+    "kernel_id": 156,
+    "mutates_input": false,
+    "operator_family": "PoolingFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP16"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_max_pool_f16",
+    "kernel_id": 157,
+    "mutates_input": false,
+    "operator_family": "PoolingFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP16"
   }
 ]

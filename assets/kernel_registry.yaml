@@ -928,3 +928,39 @@ kernels:
     operator: Minimum
     dtype: FP16
     cmsis_function: arm_minimum_f16
+
+  - kernel_id: 152
+    family: ActivationFunctions
+    operator: PReLU
+    dtype: FP32
+    cmsis_function: arm_prelu_f32
+
+  - kernel_id: 153
+    family: ActivationFunctions
+    operator: PReLU
+    dtype: FP16
+    cmsis_function: arm_prelu_f16
+
+  - kernel_id: 154
+    family: SoftmaxFunctions
+    operator: Softmax
+    dtype: FP32
+    cmsis_function: arm_softmax_f32
+
+  - kernel_id: 155
+    family: SoftmaxFunctions
+    operator: Softmax
+    dtype: FP16
+    cmsis_function: arm_softmax_f16
+
+  - kernel_id: 156
+    family: PoolingFunctions
+    operator: AvgPool
+    dtype: FP16
+    cmsis_function: arm_avg_pool_f16
+
+  - kernel_id: 157
+    family: PoolingFunctions
+    operator: MaxPool
+    dtype: FP16
+    cmsis_function: arm_max_pool_f16

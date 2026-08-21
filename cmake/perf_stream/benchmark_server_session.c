@@ -202,8 +202,12 @@
 #define HCT_KERNEL_ID_MAXIMUM_F16 149u
 #define HCT_KERNEL_ID_MINIMUM_F32 150u
 #define HCT_KERNEL_ID_MINIMUM_F16 151u
-#define HCT_KERNEL_ID_UNUSED_152 152u
-#define HCT_KERNEL_ID_UNUSED_153 153u
+#define HCT_KERNEL_ID_PRELU_F32 152u
+#define HCT_KERNEL_ID_PRELU_F16 153u
+#define HCT_KERNEL_ID_SOFTMAX_F32 154u
+#define HCT_KERNEL_ID_SOFTMAX_F16 155u
+#define HCT_KERNEL_ID_AVGPOOL_F16 156u
+#define HCT_KERNEL_ID_MAXPOOL_F16 157u
 
 static bool has_capacity(size_t payload_length, size_t offset, size_t needed)
 {
@@ -1319,31 +1323,51 @@ static arm_cmsis_nn_status run_pooling_once(hct_server_session_t *session)
         return ARM_CMSIS_NN_ARG_ERROR;
     }
 
-    if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_F32 || session->expected_kernel_id == HCT_KERNEL_ID_MAXPOOL_F32)
+    if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_F32 || session->expected_kernel_id == HCT_KERNEL_ID_MAXPOOL_F32 ||
+        session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_F16 || session->expected_kernel_id == HCT_KERNEL_ID_MAXPOOL_F16)
     {
-        cmsis_nn_pool_params_f32 pool_params_f32;
-        pool_params_f32.stride.w = (session->stride_w == 0) ? 1 : session->stride_w;
-        pool_params_f32.stride.h = (session->stride_h == 0) ? 1 : session->stride_h;
-        pool_params_f32.padding.w = session->pad_w;
-        pool_params_f32.padding.h = session->pad_h;
-        pool_params_f32.activation.min = quant_scale_from_bits(session->float_activation_min_bits);
-        pool_params_f32.activation.max = quant_scale_from_bits(session->float_activation_max_bits);
-
+        bool is_f16 = (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_F16 || session->expected_kernel_id == HCT_KERNEL_ID_MAXPOOL_F16);
         ctx.buf = NULL;
         ctx.size = 0;
-
-        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c * (int32_t)sizeof(float));
+        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c *
+                                            (is_f16 ? (int32_t)sizeof(float16_t) : (int32_t)sizeof(float)));
         if (session->output_length > sizeof(session->output_buffer))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_F32)
+        if (is_f16)
         {
-            return arm_avg_pool_f32(&ctx, &pool_params_f32, &input_dims, (const float *)blob_ptr(session, input),
+            cmsis_nn_pool_params_f16 pool_params_f16;
+            pool_params_f16.stride.w = (session->stride_w == 0) ? 1 : session->stride_w;
+            pool_params_f16.stride.h = (session->stride_h == 0) ? 1 : session->stride_h;
+            pool_params_f16.padding.w = session->pad_w;
+            pool_params_f16.padding.h = session->pad_h;
+            pool_params_f16.activation.min = (float16_t)quant_scale_from_bits(session->float_activation_min_bits);
+            pool_params_f16.activation.max = (float16_t)quant_scale_from_bits(session->float_activation_max_bits);
+            if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_F16)
+            {
+                return arm_avg_pool_f16(&ctx, &pool_params_f16, &input_dims, (const float16_t *)blob_ptr(session, input),
+                                        &filter_dims, &output_dims, (float16_t *)session->output_buffer);
+            }
+            return arm_max_pool_f16(&ctx, &pool_params_f16, &input_dims, (const float16_t *)blob_ptr(session, input),
+                                    &filter_dims, &output_dims, (float16_t *)session->output_buffer);
+        }
+        {
+            cmsis_nn_pool_params_f32 pool_params_f32;
+            pool_params_f32.stride.w = (session->stride_w == 0) ? 1 : session->stride_w;
+            pool_params_f32.stride.h = (session->stride_h == 0) ? 1 : session->stride_h;
+            pool_params_f32.padding.w = session->pad_w;
+            pool_params_f32.padding.h = session->pad_h;
+            pool_params_f32.activation.min = quant_scale_from_bits(session->float_activation_min_bits);
+            pool_params_f32.activation.max = quant_scale_from_bits(session->float_activation_max_bits);
+            if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_F32)
+            {
+                return arm_avg_pool_f32(&ctx, &pool_params_f32, &input_dims, (const float *)blob_ptr(session, input),
+                                        &filter_dims, &output_dims, (float *)session->output_buffer);
+            }
+            return arm_max_pool_f32(&ctx, &pool_params_f32, &input_dims, (const float *)blob_ptr(session, input),
                                     &filter_dims, &output_dims, (float *)session->output_buffer);
         }
-        return arm_max_pool_f32(&ctx, &pool_params_f32, &input_dims, (const float *)blob_ptr(session, input),
-                                &filter_dims, &output_dims, (float *)session->output_buffer);
     }
 
     {
@@ -1616,11 +1640,27 @@ static arm_cmsis_nn_status run_prelu_once(hct_server_session_t *session)
     }
 
     bool out_is_s16 = (session->expected_kernel_id == HCT_KERNEL_ID_PRELU_S16);
+    bool out_is_f16 = (session->expected_kernel_id == HCT_KERNEL_ID_PRELU_F16);
+    bool out_is_f32 = (session->expected_kernel_id == HCT_KERNEL_ID_PRELU_F32);
     session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c *
-                                        (out_is_s16 ? (int32_t)sizeof(int16_t) : (int32_t)sizeof(int8_t)));
+                                        (out_is_f32 ? (int32_t)sizeof(float) :
+                                         out_is_f16 ? (int32_t)sizeof(float16_t) :
+                                         out_is_s16 ? (int32_t)sizeof(int16_t) : (int32_t)sizeof(int8_t)));
     if (session->output_length > sizeof(session->output_buffer))
     {
         return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    if (out_is_f32)
+    {
+        return arm_prelu_f32(&input_dims, (const float *)blob_ptr(session, input),
+                             &alpha_dims, (const float *)blob_ptr(session, alpha),
+                             &output_dims, (float *)session->output_buffer);
+    }
+    if (out_is_f16)
+    {
+        return arm_prelu_f16(&input_dims, (const float16_t *)blob_ptr(session, input),
+                             &alpha_dims, (const float16_t *)blob_ptr(session, alpha),
+                             &output_dims, (float16_t *)session->output_buffer);
     }
     if (out_is_s16)
     {
@@ -2249,6 +2289,28 @@ static arm_cmsis_nn_status run_softmax_once(hct_server_session_t *session)
     }
     size = session->num_rows * session->row_size;
 
+    if (session->expected_kernel_id == HCT_KERNEL_ID_SOFTMAX_F32)
+    {
+        session->output_length = (uint32_t)(size * (int32_t)sizeof(float));
+        if (session->output_length > sizeof(session->output_buffer))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        return arm_softmax_f32((const float *)blob_ptr(session, input),
+                               session->num_rows, session->row_size,
+                               (float *)session->output_buffer);
+    }
+    if (session->expected_kernel_id == HCT_KERNEL_ID_SOFTMAX_F16)
+    {
+        session->output_length = (uint32_t)(size * (int32_t)sizeof(float16_t));
+        if (session->output_length > sizeof(session->output_buffer))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        return arm_softmax_f16((const float16_t *)blob_ptr(session, input),
+                               session->num_rows, session->row_size,
+                               (float16_t *)session->output_buffer);
+    }
     if (session->expected_kernel_id == HCT_KERNEL_ID_SOFTMAX_S16)
     {
         session->output_length = (uint32_t)(size * (int32_t)sizeof(int16_t));
@@ -3618,18 +3680,16 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
              * (arm_concatenation_f32/f16_w/_x/_y/_z) -- there is no generic
              * axis-based arm_concatenation_f32/f16, so style_code must be nonzero. */
             int32_t output_shape[4] = {1, 1, 1, 1};
-            int32_t input_shape0[4] = {1, 1, 1, 1};
-            int32_t input_shape1[4] = {1, 1, 1, 1};
+            int32_t input_shapes[3][4];
             uint32_t style_code;
             int32_t rank;
             int32_t axis;
             int32_t inputs_count;
             uint32_t offset;
-            const int32_t *shapes[2];
             int32_t idx;
             bool is_f16 = (session->expected_kernel_id == HCT_KERNEL_ID_CONCATENATION_F16);
             uint32_t element_size = is_f16 ? sizeof(float16_t) : sizeof(float);
-            if (input0 == NULL || input1 == NULL || !hct_validate_meta0_blob(meta_blob, 4u, -1, -1))
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 4u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3637,25 +3697,28 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             rank = meta[1];
             axis = meta[2];
             inputs_count = meta[3];
-            if (rank < 1 || rank > 4 || inputs_count != 2 || axis < 0 || axis >= rank || style_code == 0u || style_code > 4u)
+            if (rank < 1 || rank > 4 || inputs_count < 1 || inputs_count > 3 || axis < 0 || axis >= rank || style_code == 0u || style_code > 4u)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             hct_fill_output_shape_from_session(session, rank, output_shape);
-            hct_fill_shape_from_blob(input0, rank, input_shape0, false);
-            hct_fill_shape_from_blob(input1, rank, input_shape1, false);
             session->output_length = hct_shape_product(output_shape, rank) * element_size;
             if (session->output_length > sizeof(session->output_buffer))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             offset = 0u;
-            shapes[0] = input_shape0;
-            shapes[1] = input_shape1;
-            for (idx = 0; idx < 2; ++idx)
+            for (idx = 0; idx < inputs_count; ++idx)
             {
-                const int32_t *shape = shapes[idx];
-                const void *input_data = (idx == 0) ? blob_ptr(session, input0) : blob_ptr(session, input1);
+                hct_server_blob_t *input_blob = (idx == 0) ? input0 : ((idx == 1) ? input1 : input2);
+                const int32_t *shape = input_shapes[idx];
+                const void *input_data;
+                if (input_blob == NULL)
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
+                hct_fill_shape_from_blob(input_blob, rank, input_shapes[idx], false);
+                input_data = blob_ptr(session, input_blob);
                 switch (style_code)
                 {
                     case 1u:
@@ -4548,6 +4611,8 @@ static arm_cmsis_nn_status run_kernel_once(hct_server_session_t *session)
         case HCT_KERNEL_ID_MAXPOOL_S16:
         case HCT_KERNEL_ID_AVGPOOL_F32:
         case HCT_KERNEL_ID_MAXPOOL_F32:
+        case HCT_KERNEL_ID_AVGPOOL_F16:
+        case HCT_KERNEL_ID_MAXPOOL_F16:
 #ifndef HCT_HOST_ABS_ONLY
             return run_pooling_once(session);
 #else
@@ -4573,6 +4638,8 @@ static arm_cmsis_nn_status run_kernel_once(hct_server_session_t *session)
 #endif
         case HCT_KERNEL_ID_PRELU_S8:
         case HCT_KERNEL_ID_PRELU_S16:
+        case HCT_KERNEL_ID_PRELU_F32:
+        case HCT_KERNEL_ID_PRELU_F16:
         case HCT_KERNEL_ID_PRELU_SCALAR_S8:
         case HCT_KERNEL_ID_PRELU_SCALAR_S16:
 #ifndef HCT_HOST_ABS_ONLY
@@ -4621,6 +4688,8 @@ static arm_cmsis_nn_status run_kernel_once(hct_server_session_t *session)
         case HCT_KERNEL_ID_SOFTMAX_S8:
         case HCT_KERNEL_ID_SOFTMAX_S16:
         case HCT_KERNEL_ID_SOFTMAX_S8_S16:
+        case HCT_KERNEL_ID_SOFTMAX_F32:
+        case HCT_KERNEL_ID_SOFTMAX_F16:
 #ifndef HCT_HOST_ABS_ONLY
             return run_softmax_once(session);
 #else
