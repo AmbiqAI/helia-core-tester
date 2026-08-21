@@ -268,11 +268,6 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
 }'''
 
 _RUN_DEPTHWISE_CONV_ONCE = '''\
-/* DepthwiseConv filter_dims stay in the generator's native (N=1, H, W, C_OUT) order --
- * no HWCN reordering like Convolve's filter_dims (depthwise's cmsis_nn_dw_conv_params
- * filter convention is already NHWC). The S4 and S16 wrapper variants need a real
- * scratch buffer; the S8 low-level kernel does not use ctx/bias_dims internally (see
- * Source/ConvolutionFunctions/arm_depthwise_conv_s8.c's `(void)ctx;`/`(void)bias_dims;`). */
 static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session)
 {
     hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
@@ -280,14 +275,12 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
     hct_server_blob_t *bias = find_blob_by_role(session, HCT_BLOB_ROLE_BIAS);
     hct_server_blob_t *multiplier = find_blob_by_role(session, HCT_BLOB_ROLE_MULTIPLIER);
     hct_server_blob_t *shift = find_blob_by_role(session, HCT_BLOB_ROLE_SHIFT);
-    cmsis_nn_dw_conv_params dw_conv_params;
-    cmsis_nn_per_channel_quant_params quant_params;
     cmsis_nn_dims input_dims;
     cmsis_nn_dims filter_dims;
     cmsis_nn_dims bias_dims;
     cmsis_nn_dims output_dims;
 
-    if (input == NULL || weights == NULL || bias == NULL || multiplier == NULL || shift == NULL)
+    if (input == NULL || weights == NULL || bias == NULL)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
@@ -315,6 +308,86 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
     }
     session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c);
 
+    if (session->expected_kernel_id == HCT_KERNEL_ID_DEPTHWISE_CONV_F32 ||
+        session->expected_kernel_id == HCT_KERNEL_ID_DEPTHWISE_CONV_F16)
+    {
+        const bool is_f16 = (session->expected_kernel_id == HCT_KERNEL_ID_DEPTHWISE_CONV_F16);
+        const uint32_t element_size = is_f16 ? (uint32_t)sizeof(float16_t) : (uint32_t)sizeof(float);
+        const float activation_min = quant_scale_from_bits(session->float_activation_min_bits);
+        const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
+        cmsis_nn_context ctx;
+        int32_t required_scratch;
+
+        if (session->output_length > sizeof(session->output_buffer) / element_size)
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        session->output_length *= element_size;
+
+        if (is_f16)
+        {
+            cmsis_nn_dw_conv_params_f16 params = {
+                .ch_mult = session->ch_mult,
+                .stride = { .w = (session->stride_w == 0) ? 1 : session->stride_w, .h = (session->stride_h == 0) ? 1 : session->stride_h },
+                .padding = { .w = session->pad_w, .h = session->pad_h },
+                .dilation = { .w = (session->dilation_w == 0) ? 1 : session->dilation_w, .h = (session->dilation_h == 0) ? 1 : session->dilation_h },
+                .activation = { .min = (float16_t)activation_min, .max = (float16_t)activation_max },
+            };
+            required_scratch = arm_depthwise_conv_f16_get_buffer_size(&params, &input_dims, &filter_dims, &output_dims, ARM_NN_LAYOUT_NHWC);
+            if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.size = required_scratch;
+            return arm_depthwise_conv_f16(&ctx,
+                                          &params,
+                                          &input_dims,
+                                          (const float16_t *)blob_ptr(session, input),
+                                          &filter_dims,
+                                          (const float16_t *)blob_ptr(session, weights),
+                                          &bias_dims,
+                                          (const float16_t *)blob_ptr(session, bias),
+                                          &output_dims,
+                                          (float16_t *)session->output_buffer,
+                                          ARM_NN_LAYOUT_NHWC);
+        }
+        else
+        {
+            cmsis_nn_dw_conv_params_f32 params = {
+                .ch_mult = session->ch_mult,
+                .stride = { .w = (session->stride_w == 0) ? 1 : session->stride_w, .h = (session->stride_h == 0) ? 1 : session->stride_h },
+                .padding = { .w = session->pad_w, .h = session->pad_h },
+                .dilation = { .w = (session->dilation_w == 0) ? 1 : session->dilation_w, .h = (session->dilation_h == 0) ? 1 : session->dilation_h },
+                .activation = { .min = activation_min, .max = activation_max },
+            };
+            required_scratch = arm_depthwise_conv_f32_get_buffer_size(&params, &input_dims, &filter_dims, &output_dims, ARM_NN_LAYOUT_NHWC);
+            if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.size = required_scratch;
+            return arm_depthwise_conv_f32(&ctx,
+                                          &params,
+                                          &input_dims,
+                                          (const float *)blob_ptr(session, input),
+                                          &filter_dims,
+                                          (const float *)blob_ptr(session, weights),
+                                          &bias_dims,
+                                          (const float *)blob_ptr(session, bias),
+                                          &output_dims,
+                                          (float *)session->output_buffer,
+                                          ARM_NN_LAYOUT_NHWC);
+        }
+    }
+
+    cmsis_nn_dw_conv_params dw_conv_params;
+    cmsis_nn_per_channel_quant_params quant_params;
+    if (multiplier == NULL || shift == NULL)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
     dw_conv_params.input_offset = session->input_offset;
     dw_conv_params.output_offset = session->output_offset;
     dw_conv_params.ch_mult = session->ch_mult;
@@ -390,18 +463,19 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
     {
         cmsis_nn_context ctx = {NULL, 0};
         return arm_depthwise_conv_s8(&ctx,
-                                      &dw_conv_params,
-                                      &quant_params,
-                                      &input_dims,
-                                      (const int8_t *)blob_ptr(session, input),
-                                      &filter_dims,
-                                      (const int8_t *)blob_ptr(session, weights),
-                                      &bias_dims,
-                                      (const int32_t *)blob_ptr(session, bias),
-                                      &output_dims,
-                                      (int8_t *)session->output_buffer);
+                                     &dw_conv_params,
+                                     &quant_params,
+                                     &input_dims,
+                                     (const int8_t *)blob_ptr(session, input),
+                                     &filter_dims,
+                                     (const int8_t *)blob_ptr(session, weights),
+                                     &bias_dims,
+                                     (const int32_t *)blob_ptr(session, bias),
+                                     &output_dims,
+                                     (int8_t *)session->output_buffer);
     }
-}'''
+}
+'''
 
 _RUN_POOLING_ONCE = '''\
 /* arm_avgpool_s8/arm_max_pool_s8 (and their S16/F32 counterparts) all share the same
@@ -1975,47 +2049,11 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
 
 
 _RUN_BATCH_MATMUL_ONCE = '''\
-/* FullyConnectedFunctions BatchMatMul -- arm_batch_matmul_s8/_s16 both take two same-
- * dtype operands (unlike FullyConnected, there is no separate always-S8 "weights" tensor:
- * for S16 both lhs and rhs are int16_t) and a single per-tensor cmsis_nn_per_tensor_quant_
- * params (a plain {multiplier, shift} struct, not the array-shaped per-channel blob
- * FullyConnected needs) -- reusing session->out_mult/out_shift is sufficient, no new
- * multiplier/shift blob roles required.
- *
- * Neither kernel reads bmm_params->adj_x/adj_y (see arm_batch_matmul_s8.c's own "Does not
- * perform transposes" comment) -- the real generated test's transposed-operand descriptors
- * already pre-arrange their raw lhs/rhs header array data and dims into the final
- * row-major layout the kernel expects, so this bridge only needs to stream that data/dims
- * through unchanged; no transpose flag is transmitted at all.
- *
- * The real generated test harness always uses a single-invocation shape with
- * input_lhs_dims/input_rhs_dims/output_dims.n == .h == 1 (batch/height looping handled
- * entirely inside the kernel's own loop) regardless of how many logical batches the
- * descriptor name implies -- exactly the same "batch is cosmetic at the single-invocation
- * level" pattern already established for FullyConnected. Blob dimensions are transmitted
- * as compact 2-tuples (rows, cols) per operand/output, matching FullyConnected's wire
- * convention; dims.n/.h are always reconstructed here as 1. Because
- * arm_nn_vec_mat_mult_t_s8/s16 (the per-row primitive this kernel calls) treats rhs as
- * already-transposed ([N, K] rather than [K, N]), input_rhs_dims.w is N (the shared
- * output/reduction-count dimension -- output_dims.c) while input_rhs_dims.c is K (the
- * inner dimension shared with input_lhs_dims.c), NOT the more intuitive "rows=M,
- * cols=N" reading -- output_dims.c must be read off input_rhs_dims.w, not .c.
- *
- * S8's ctx->buf is an N-sized (input_rhs_dims.w) int32 kernel-sum scratch buffer the
- * kernel itself fills at runtime via its own internal arm_vector_sum_s8() call (unlike
- * FullyConnected, which must precompute+bake in a real bias here) -- sized via the same
- * arm_fully_connected_s8_get_buffer_size() helper FullyConnected already uses, since
- * BatchMatMul's rhs plays the identical "filter" role for buffer-sizing purposes (see
- * arm_batch_matmul_s8.c's own "we use RHS dims as filter_dims for buffer size
- * calculation" comment, which maps filter_dims.c = N = input_rhs_dims.w). S16 needs no
- * scratch at all (ctx is unused in arm_batch_matmul_s16 -- no vector_sum precompute in
- * the S16 path). */
 static arm_cmsis_nn_status run_batch_matmul_once(hct_server_session_t *session)
 {
     hct_server_blob_t *input_lhs = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
     hct_server_blob_t *input_rhs = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_1);
     cmsis_nn_context ctx;
-    cmsis_nn_per_tensor_quant_params quant_params;
     cmsis_nn_dims input_lhs_dims;
     cmsis_nn_dims input_rhs_dims;
     cmsis_nn_dims output_dims;
@@ -2025,81 +2063,156 @@ static arm_cmsis_nn_status run_batch_matmul_once(hct_server_session_t *session)
         return ARM_CMSIS_NN_ARG_ERROR;
     }
 
-    input_lhs_dims.n = 1;
-    input_lhs_dims.h = 1;
-    input_lhs_dims.w = (int32_t)input_lhs->dimensions[0];
-    input_lhs_dims.c = (int32_t)input_lhs->dimensions[1];
-    input_rhs_dims.n = 1;
-    input_rhs_dims.h = 1;
-    input_rhs_dims.w = (int32_t)input_rhs->dimensions[0];
-    input_rhs_dims.c = (int32_t)input_rhs->dimensions[1];
+    input_lhs_dims.n = (int32_t)((input_lhs->rank > 0u) ? input_lhs->dimensions[0] : 1u);
+    input_lhs_dims.h = (int32_t)((input_lhs->rank > 1u) ? input_lhs->dimensions[1] : 1u);
+    input_lhs_dims.w = (int32_t)((input_lhs->rank > 2u) ? input_lhs->dimensions[2] : input_lhs->dimensions[0]);
+    input_lhs_dims.c = (int32_t)((input_lhs->rank > 3u) ? input_lhs->dimensions[3] : input_lhs->dimensions[1]);
+    input_rhs_dims.n = (int32_t)((input_rhs->rank > 0u) ? input_rhs->dimensions[0] : 1u);
+    input_rhs_dims.h = (int32_t)((input_rhs->rank > 1u) ? input_rhs->dimensions[1] : 1u);
+    input_rhs_dims.w = (int32_t)((input_rhs->rank > 2u) ? input_rhs->dimensions[2] : input_rhs->dimensions[0]);
+    input_rhs_dims.c = (int32_t)((input_rhs->rank > 3u) ? input_rhs->dimensions[3] : input_rhs->dimensions[1]);
     output_dims.n = (session->output_n > 0) ? session->output_n : 1;
-    output_dims.h = 1;
-    output_dims.w = input_lhs_dims.w;
-    output_dims.c = input_rhs_dims.w;
-
-    /* cmsis_nn_bmm_params's adj_x/adj_y are `const bool` fields, which makes the whole
-     * struct non-assignable after declaration in C -- must be fully initialized here via
-     * a designated initializer instead of member-by-member assignment. */
-    const cmsis_nn_bmm_params bmm_params = {
-        .adj_x = false,
-        .adj_y = false,
-        .fc_params = {
-            .input_offset = session->input_offset,
-            .filter_offset = session->filter_offset,
-            .output_offset = session->output_offset,
-            .activation = { .min = session->activation_min, .max = session->activation_max }
-        }
-    };
-    quant_params.multiplier = session->out_mult;
-    quant_params.shift = session->out_shift;
-
-    if (session->expected_kernel_id == HCT_KERNEL_ID_BATCH_MATMUL_S16)
+    output_dims.h = (session->output_h > 0) ? session->output_h : 1;
+    output_dims.w = session->output_w;
+    output_dims.c = session->output_c;
+    if (output_dims.w <= 0 || output_dims.c <= 0)
     {
-        session->output_length = (uint32_t)(output_dims.w * output_dims.c * (int32_t)sizeof(int16_t));
-        if (session->output_length > sizeof(session->output_buffer))
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    if (session->expected_kernel_id == HCT_KERNEL_ID_BATCH_MATMUL_F32 ||
+        session->expected_kernel_id == HCT_KERNEL_ID_BATCH_MATMUL_F16)
+    {
+        const bool is_f16 = (session->expected_kernel_id == HCT_KERNEL_ID_BATCH_MATMUL_F16);
+        const uint32_t element_size = is_f16 ? (uint32_t)sizeof(float16_t) : (uint32_t)sizeof(float);
+        const bool adj_x = (session->adj_x != 0);
+        const bool adj_y = (session->adj_y != 0);
+        const float activation_min = quant_scale_from_bits(session->float_activation_min_bits);
+        const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
+        int32_t required_scratch;
+
+        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c);
+        if (session->output_length > sizeof(session->output_buffer) / element_size)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        ctx.buf = NULL;
-        ctx.size = 0;
-        return arm_batch_matmul_s16(&ctx,
-                                    &bmm_params,
-                                    &quant_params,
-                                    &input_lhs_dims,
-                                    (const int16_t *)blob_ptr(session, input_lhs),
-                                    &input_rhs_dims,
-                                    (const int16_t *)blob_ptr(session, input_rhs),
-                                    &output_dims,
-                                    (int16_t *)session->output_buffer);
+        session->output_length *= element_size;
+
+        if (is_f16)
+        {
+            const cmsis_nn_bmm_params_f16 bmm_params = {
+                .adj_x = adj_x,
+                .adj_y = adj_y,
+                .activation = { .min = (float16_t)activation_min, .max = (float16_t)activation_max },
+                .rhs_format = ARM_NN_WEIGHT_FORMAT_STANDARD,
+            };
+            required_scratch = arm_batch_matmul_f16_get_buffer_size(&bmm_params, &input_lhs_dims, &input_rhs_dims, &output_dims);
+            if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.size = required_scratch;
+            return arm_batch_matmul_f16(&ctx,
+                                        &bmm_params,
+                                        &input_lhs_dims,
+                                        (const float16_t *)blob_ptr(session, input_lhs),
+                                        &input_rhs_dims,
+                                        (const float16_t *)blob_ptr(session, input_rhs),
+                                        &output_dims,
+                                        (float16_t *)session->output_buffer);
+        }
+        else
+        {
+            const cmsis_nn_bmm_params_f32 bmm_params = {
+                .adj_x = adj_x,
+                .adj_y = adj_y,
+                .activation = { .min = activation_min, .max = activation_max },
+                .rhs_format = ARM_NN_WEIGHT_FORMAT_STANDARD,
+            };
+            required_scratch = arm_batch_matmul_f32_get_buffer_size(&bmm_params, &input_lhs_dims, &input_rhs_dims, &output_dims);
+            if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.size = required_scratch;
+            return arm_batch_matmul_f32(&ctx,
+                                        &bmm_params,
+                                        &input_lhs_dims,
+                                        (const float *)blob_ptr(session, input_lhs),
+                                        &input_rhs_dims,
+                                        (const float *)blob_ptr(session, input_rhs),
+                                        &output_dims,
+                                        (float *)session->output_buffer);
+        }
     }
 
     {
-        const uint32_t required_scratch = (uint32_t)input_rhs_dims.w * (uint32_t)sizeof(int32_t);
-        if (required_scratch > session->scratch_bytes)
-        {
-            return ARM_CMSIS_NN_ARG_ERROR;
-        }
-        ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
-        ctx.size = (int32_t)session->scratch_bytes;
+        cmsis_nn_per_tensor_quant_params quant_params;
+        /* cmsis_nn_bmm_params's adj_x/adj_y are `const bool` fields, which makes the whole
+         * struct non-assignable after declaration in C -- must be fully initialized here via
+         * a designated initializer instead of member-by-member assignment. */
+        const cmsis_nn_bmm_params bmm_params = {
+            .adj_x = false,
+            .adj_y = false,
+            .fc_params = {
+                .input_offset = session->input_offset,
+                .filter_offset = session->filter_offset,
+                .output_offset = session->output_offset,
+                .activation = { .min = session->activation_min, .max = session->activation_max }
+            }
+        };
+        quant_params.multiplier = session->out_mult;
+        quant_params.shift = session->out_shift;
 
-        session->output_length = (uint32_t)(output_dims.w * output_dims.c);
-        if (session->output_length > sizeof(session->output_buffer))
+        if (session->expected_kernel_id == HCT_KERNEL_ID_BATCH_MATMUL_S16)
         {
-            return ARM_CMSIS_NN_ARG_ERROR;
+            session->output_length = (uint32_t)(output_dims.w * output_dims.c * (int32_t)sizeof(int16_t));
+            if (session->output_length > sizeof(session->output_buffer))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            ctx.buf = NULL;
+            ctx.size = 0;
+            return arm_batch_matmul_s16(&ctx,
+                                        &bmm_params,
+                                        &quant_params,
+                                        &input_lhs_dims,
+                                        (const int16_t *)blob_ptr(session, input_lhs),
+                                        &input_rhs_dims,
+                                        (const int16_t *)blob_ptr(session, input_rhs),
+                                        &output_dims,
+                                        (int16_t *)session->output_buffer);
         }
-        return arm_batch_matmul_s8(&ctx,
-                                   &bmm_params,
-                                   &quant_params,
-                                   &input_lhs_dims,
-                                   (const int8_t *)blob_ptr(session, input_lhs),
-                                   &input_rhs_dims,
-                                   (const int8_t *)blob_ptr(session, input_rhs),
-                                   &output_dims,
-                                   (int8_t *)session->output_buffer);
+
+        {
+            const uint32_t required_scratch = (uint32_t)input_rhs_dims.w * (uint32_t)sizeof(int32_t);
+            if (required_scratch > session->scratch_bytes)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.size = (int32_t)session->scratch_bytes;
+
+            session->output_length = (uint32_t)(output_dims.w * output_dims.c);
+            if (session->output_length > sizeof(session->output_buffer))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            return arm_batch_matmul_s8(&ctx,
+                                       &bmm_params,
+                                       &quant_params,
+                                       &input_lhs_dims,
+                                       (const int8_t *)blob_ptr(session, input_lhs),
+                                       &input_rhs_dims,
+                                       (const int8_t *)blob_ptr(session, input_rhs),
+                                       &output_dims,
+                                       (int8_t *)session->output_buffer);
+        }
     }
-}'''
-
+}
+'''
 
 _RUN_BASIC_MATH_REDUCTION_ONCE = '''\
 static arm_cmsis_nn_status run_basic_math_reduction_once(hct_server_session_t *session)
@@ -3997,7 +4110,7 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         scalar_fields=(
             "stride_h", "stride_w", "pad_h", "pad_w", "dilation_h", "dilation_w",
             "output_h", "output_w", "output_c", "input_offset", "output_offset",
-            "activation_min", "activation_max", "ch_mult",
+            "activation_min", "activation_max", "float_activation_min_bits", "float_activation_max_bits", "ch_mult",
         ),
         c_body=_RUN_DEPTHWISE_CONV_ONCE,
     ),
@@ -4108,7 +4221,7 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         label="FullyConnectedFunctions/BatchMatMul",
         function_name="run_batch_matmul_once",
         guard="HCT_HOST_ABS_ONLY",
-        scalar_fields=("input_offset", "filter_offset", "output_offset", "activation_min", "activation_max", "out_mult", "out_shift"),
+        scalar_fields=("input_offset", "filter_offset", "output_offset", "activation_min", "activation_max", "float_activation_min_bits", "float_activation_max_bits", "out_mult", "out_shift", "adj_x", "adj_y", "output_n", "output_h", "output_w", "output_c"),
         c_body=_RUN_BATCH_MATMUL_ONCE,
     ),
     FirmwareAdapterSpec(

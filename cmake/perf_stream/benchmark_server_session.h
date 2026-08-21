@@ -213,13 +213,19 @@ typedef struct
      * zero point), filter_offset (rhs zero point), output_offset, activation_min/max,
      * and out_mult/out_shift (the kernel's single per-tensor requantization pair --
      * BatchMatMul has no per-channel variant, unlike FullyConnected) above. No adj_x/
-     * adj_y field is needed: arm_batch_matmul_{s8,s16}() never reads bmm_params->adj_x/
-     * adj_y (see the kernel source -- "Does not perform transposes"), so the real
-     * generated test's transposed-operand descriptors simply pre-arrange their raw
-     * `_input_lhs`/`_input_rhs` header array data (and dims) into the final row-major
-     * layout the kernel expects; the bridge only ever needs to stream that already-
-     * correct data/dims through unchanged.
-     */
+     * adj_y field is needed for S8/S16: arm_batch_matmul_{s8,s16}() never reads
+     * bmm_params->adj_x/adj_y (see the kernel source -- "Does not perform transposes"),
+     * so the real generated test's transposed-operand descriptors simply pre-arrange
+     * their raw `_input_lhs`/`_input_rhs` header array data (and dims) into the final
+     * row-major layout the kernel expects; the bridge only ever needs to stream that
+     * already-correct data/dims through unchanged.
+     *
+     * The float kernels (arm_batch_matmul_f32/f16) DO read bmm_params->adj_x/adj_y
+     * directly (they perform the transpose internally rather than requiring
+     * pre-arranged data), so adj_x/adj_y are transmitted as real scalar fields for the
+     * float path only -- see run_batch_matmul_once()'s FP32/FP16 branch. */
+    int32_t adj_x;
+    int32_t adj_y;
     uint16_t blob_count;
     uint16_t current_blob_index;
     uint32_t scratch_bytes;

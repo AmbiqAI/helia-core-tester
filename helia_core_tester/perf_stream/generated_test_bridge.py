@@ -336,6 +336,20 @@ def _extract_scalar(header_text: str, struct_name: str, field: str) -> int:
     return int(field_match.group(1))
 
 
+
+
+def _extract_bool_scalar(header_text: str, struct_name: str, field: str) -> bool:
+    struct_pattern = re.compile(rf"\b{re.escape(struct_name)}\s*=\s*\{{(.*?)\}}\s*;", re.DOTALL)
+    struct_match = struct_pattern.search(header_text)
+    if struct_match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find struct `{struct_name}` in generated header")
+    body = struct_match.group(1)
+    field_pattern = re.compile(rf"\.{re.escape(field)}\s*=\s*(true|false)")
+    field_match = field_pattern.search(body)
+    if field_match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find field `.{field}` on struct `{struct_name}`")
+    return field_match.group(1) == "true"
+
 def _extract_bare_scalar(header_text: str, variable_name: str) -> int | None:
     """Extract a plain `static int32_t <variable_name> = <value>;` declaration (as opposed
     to `_extract_array()`'s `<name>[] = {...}` or `_extract_scalar()`'s struct-field form).
@@ -701,16 +715,31 @@ def _build_convolve_case(
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
     output_channels = filter_dims["n"]
 
-    activation_numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
-    bias_numpy_dtype = np.int64 if activation_dtype == "S16" else np.int32
-    bias_wire_dtype = "S64" if activation_dtype == "S16" else "S32"
+    if activation_dtype == "S16":
+        activation_numpy_dtype = np.int16
+        bias_numpy_dtype = np.int64
+        bias_wire_dtype = "S64"
+    elif activation_dtype == "S8":
+        activation_numpy_dtype = np.int8
+        bias_numpy_dtype = np.int32
+        bias_wire_dtype = "S32"
+    else:
+        activation_numpy_dtype = np.float16 if activation_dtype == "FP16" else np.float32
+        bias_numpy_dtype = np.float16 if activation_dtype == "FP16" else np.float32
+        bias_wire_dtype = activation_dtype
 
-    weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=np.int8)
+    if activation_dtype in ("FP32", "FP16"):
+        weights_flat = np.array(_extract_typed_array(header_text, f"{prefix}_weights", weight_dtype), dtype=activation_numpy_dtype)
+    else:
+        weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=np.int8)
     biases = np.array(_extract_array(header_text, f"{prefix}_biases"), dtype=bias_numpy_dtype)
-    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=activation_numpy_dtype)
-    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=activation_numpy_dtype)
-    multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
-    shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
+    extract_data = _extract_typed_array if activation_dtype in ("FP32", "FP16") else _extract_array
+    input_flat = np.array(extract_data(header_text, f"{prefix}_input", activation_dtype) if extract_data is _extract_typed_array else extract_data(header_text, f"{prefix}_input"), dtype=activation_numpy_dtype)
+    expected_flat = np.array(extract_data(header_text, f"{prefix}_expected_output", activation_dtype) if extract_data is _extract_typed_array else extract_data(header_text, f"{prefix}_expected_output"), dtype=activation_numpy_dtype)
+    multiplier = shift = None
+    if activation_dtype in ("S8", "S16"):
+        multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
+        shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
 
     expected_weight_bytes = (int(np.prod(filter_shape)) + 1) // 2 if weight_dtype == "S4" else int(np.prod(filter_shape))
     if input_flat.size < _shape_product(input_shape) or weights_flat.size < expected_weight_bytes:
@@ -1154,6 +1183,8 @@ def _build_depthwise_conv_case(
     - S8 activation + S8 weights -> arm_depthwise_conv_s8
     - S8 activation + S4 weights -> arm_depthwise_conv_wrapper_s4
     - S16 activation + S8 weights -> arm_depthwise_conv_wrapper_s16
+    - FP32 activation + FP32 weights -> arm_depthwise_conv_f32
+    - FP16 activation + FP16 weights -> arm_depthwise_conv_f16
 
     Filter dims stay in the generated header's native (N, H, W, C_OUT) order:
     depthwise's `cmsis_nn_dw_conv_params` filter convention already matches that
@@ -1166,14 +1197,14 @@ def _build_depthwise_conv_case(
 
     if (
         operator != "DepthwiseConv"
-        or activation_dtype not in ("S8", "S16")
+        or activation_dtype not in ("S8", "S16", "FP32", "FP16")
         or (weight_dtype == "S4" and activation_dtype != "S8")
-        or weight_dtype not in ("S8", "S4")
+        or weight_dtype not in (("S8", "S4") if activation_dtype in ("S8", "S16") else ("FP32", "FP16"))
     ):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} "
             f"is not bridgeable -- perf-stream firmware only dispatches arm_depthwise_conv_s8, "
-            f"arm_depthwise_conv_wrapper_s4, and arm_depthwise_conv_wrapper_s16."
+            f"arm_depthwise_conv_wrapper_s4, arm_depthwise_conv_wrapper_s16, arm_depthwise_conv_f32, and arm_depthwise_conv_f16."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -1195,24 +1226,39 @@ def _build_depthwise_conv_case(
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
     output_channels = output_dims["c"]
 
-    weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=np.int8)
-    activation_numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
-    bias_numpy_dtype = np.int64 if activation_dtype == "S16" else np.int32
-    bias_wire_dtype = "S64" if activation_dtype == "S16" else "S32"
+    if activation_dtype == "S16":
+        activation_numpy_dtype = np.int16
+        bias_numpy_dtype = np.int64
+        bias_wire_dtype = "S64"
+    elif activation_dtype == "S8":
+        activation_numpy_dtype = np.int8
+        bias_numpy_dtype = np.int32
+        bias_wire_dtype = "S32"
+    else:
+        activation_numpy_dtype = np.float16 if activation_dtype == "FP16" else np.float32
+        bias_numpy_dtype = np.float16 if activation_dtype == "FP16" else np.float32
+        bias_wire_dtype = activation_dtype
+    if activation_dtype in ("FP32", "FP16"):
+        weights_flat = np.array(_extract_typed_array(header_text, f"{prefix}_weights", weight_dtype), dtype=activation_numpy_dtype)
+    else:
+        weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=np.int8)
     # The generator (post-F004) legitimately emits `<prefix>_biases = NULL;` for no-bias
     # descriptors -- treat that as a real all-zero bias array rather than an error: the
     # firmware's run_depthwise_conv_once() unconditionally requires a non-NULL bias blob,
     # and an all-zero bias is mathematically identical to "no bias" for the kernel.
     has_generated_bias = not _extract_null_pointer_decl(header_text, f"{prefix}_biases")
     biases = (
-        np.array(_extract_array(header_text, f"{prefix}_biases"), dtype=bias_numpy_dtype)
+        np.array(_extract_typed_array(header_text, f"{prefix}_biases", bias_wire_dtype), dtype=bias_numpy_dtype)
         if has_generated_bias
         else np.zeros((output_channels,), dtype=bias_numpy_dtype)
     )
-    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=activation_numpy_dtype)
-    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=activation_numpy_dtype)
-    multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
-    shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
+    extract_data = _extract_typed_array if activation_dtype in ("FP32", "FP16") else _extract_array
+    input_flat = np.array(extract_data(header_text, f"{prefix}_input", activation_dtype) if extract_data is _extract_typed_array else extract_data(header_text, f"{prefix}_input"), dtype=activation_numpy_dtype)
+    expected_flat = np.array(extract_data(header_text, f"{prefix}_expected_output", activation_dtype) if extract_data is _extract_typed_array else extract_data(header_text, f"{prefix}_expected_output"), dtype=activation_numpy_dtype)
+    multiplier = shift = None
+    if activation_dtype in ("S8", "S16"):
+        multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
+        shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
 
     expected_weight_bytes = (int(np.prod(filter_shape)) + 1) // 2 if weight_dtype == "S4" else _shape_product(filter_shape)
     if input_flat.size < _shape_product(input_shape) or weights_flat.size < expected_weight_bytes:
@@ -1254,8 +1300,9 @@ def _build_depthwise_conv_case(
     )
 
     params_struct = f"{prefix}_dw_conv_params"
-    input_offset = _extract_scalar(header_text, params_struct, "input_offset")
-    output_offset = _extract_scalar(header_text, params_struct, "output_offset")
+    is_float_dw = activation_dtype in ("FP32", "FP16")
+    input_offset = 0 if is_float_dw else _extract_scalar(header_text, params_struct, "input_offset")
+    output_offset = 0 if is_float_dw else _extract_scalar(header_text, params_struct, "output_offset")
     ch_mult = _extract_scalar(header_text, params_struct, "ch_mult")
     activation_min = _extract_nested_scalar(header_text, params_struct, "activation", "min")
     activation_max = _extract_nested_scalar(header_text, params_struct, "activation", "max")
@@ -1280,27 +1327,36 @@ def _build_depthwise_conv_case(
             dilation_h=dilation_h,
             dilation_w=dilation_w,
         )
-    else:
-        # arm_depthwise_conv_s8 needs no scratch buffer at all; the S16 wrapper does.
-        scratch_bytes = (
-            TemplateContextBuilder.calculate_depthwise_buffer_size_max(
-                input_dims,
-                filter_dims,
-                output_dims,
-                output_dtype="S16",
-            )
-            if activation_dtype == "S16"
-            else 0
+    elif activation_dtype == "S16":
+        scratch_bytes = TemplateContextBuilder.calculate_depthwise_buffer_size_max(
+            input_dims,
+            filter_dims,
+            output_dims,
+            output_dtype="S16",
         )
+    elif activation_dtype in ("FP32", "FP16"):
+        scratch_bytes = TemplateContextBuilder.calculate_depthwise_buffer_size_max(
+            input_dims,
+            filter_dims,
+            output_dims,
+            output_dtype=activation_dtype,
+        )
+    else:
+        scratch_bytes = 0
 
     arrays = [
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
-        (2, "weights", "S8", filter_shape, weights_data, False, False),
+        (2, "weights", weight_dtype, filter_shape, weights_data, False, False),
         (3, "bias", bias_wire_dtype, (output_channels,), biases, False, False),
-        (4, "multiplier", "S32", (output_channels,), multiplier, False, False),
-        (5, "shift", "S32", (output_channels,), shift, False, False),
-        (6, "expected_output", activation_dtype, tuple(int(v) for v in expected_output.shape), expected_output, False, True),
     ]
+    next_blob_id = 4
+    if activation_dtype in ("S8", "S16"):
+        arrays.extend([
+            (next_blob_id, "multiplier", "S32", (output_channels,), multiplier, False, False),
+            (next_blob_id + 1, "shift", "S32", (output_channels,), shift, False, False),
+        ])
+        next_blob_id += 2
+    arrays.append((next_blob_id, "expected_output", activation_dtype, tuple(int(v) for v in expected_output.shape), expected_output, False, True))
     blobs: list[BlobInfo] = []
     for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
         path = blobs_dir / f"{role}.bin"
@@ -1347,8 +1403,13 @@ def _build_depthwise_conv_case(
             "output_c": output_dims["c"],
             "input_offset": input_offset,
             "output_offset": output_offset,
-            "activation_min": activation_min,
-            "activation_max": activation_max,
+            **({
+                "float_activation_min_bits": _quant_scale_to_bits(activation_min),
+                "float_activation_max_bits": _quant_scale_to_bits(activation_max),
+            } if activation_dtype in ("FP32", "FP16") else {
+                "activation_min": activation_min,
+                "activation_max": activation_max,
+            }),
             "ch_mult": ch_mult,
         },
         "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, "bias": bias_wire_dtype, "output": activation_dtype},
@@ -1359,7 +1420,15 @@ def _build_depthwise_conv_case(
         "required_target_capabilities": [
             "depthwise_conv_s4"
             if weight_dtype == "S4"
-            else ("depthwise_conv_s8" if activation_dtype == "S8" else "depthwise_conv_s16")
+            else (
+                "depthwise_conv_s8"
+                if activation_dtype == "S8"
+                else (
+                    "depthwise_conv_s16"
+                    if activation_dtype == "S16"
+                    else ("depthwise_conv_f32" if activation_dtype == "FP32" else "depthwise_conv_f16")
+                )
+            )
         ],
         "repeated_invocation_safe": True,
         "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
@@ -1609,8 +1678,9 @@ def _build_pooling_case(
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
 
     activation_numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
-    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=activation_numpy_dtype)
-    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=activation_numpy_dtype)
+    extract_data = _extract_typed_array if activation_dtype in ("FP32", "FP16") else _extract_array
+    input_flat = np.array(extract_data(header_text, f"{prefix}_input", activation_dtype) if extract_data is _extract_typed_array else extract_data(header_text, f"{prefix}_input"), dtype=activation_numpy_dtype)
+    expected_flat = np.array(extract_data(header_text, f"{prefix}_expected_output", activation_dtype) if extract_data is _extract_typed_array else extract_data(header_text, f"{prefix}_expected_output"), dtype=activation_numpy_dtype)
 
     if input_flat.size < _shape_product(input_shape):
         raise UnsupportedGeneratedTestError(
@@ -4142,11 +4212,15 @@ def _build_batch_matmul_case(
     weight_dtype = str(descriptor.get("weight_dtype", descriptor.get("resolved_tensor_dtypes", {}).get("weights", "")))
     activation_dtype = str(descriptor.get("activation_dtype", ""))
 
-    if operator != "BatchMatMul" or weight_dtype != "S8" or activation_dtype not in ("S8", "S16"):
+    if operator != "BatchMatMul" or (
+        (activation_dtype in ("S8", "S16") and weight_dtype != "S8")
+        or (activation_dtype in ("FP32", "FP16") and weight_dtype != activation_dtype)
+        or activation_dtype not in ("S8", "S16", "FP32", "FP16")
+    ):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: operator={operator!r} weight_dtype={weight_dtype!r} "
             f"activation_dtype={activation_dtype!r} is not bridgeable -- perf-stream firmware only "
-            f"dispatches arm_batch_matmul_s8/s16 (S8 weight + S8 or S16 activation)."
+            f"dispatches arm_batch_matmul_s8/s16 and arm_batch_matmul_f32/f16."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -4156,23 +4230,51 @@ def _build_batch_matmul_case(
     input_lhs_dims = _extract_dims(header_text, f"{prefix}_input_lhs_dims")
     input_rhs_dims = _extract_dims(header_text, f"{prefix}_input_rhs_dims")
     output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
-    input_lhs_shape = (input_lhs_dims["w"], input_lhs_dims["c"])
-    input_rhs_shape = (input_rhs_dims["w"], input_rhs_dims["c"])
-    output_shape = (output_dims["w"], output_dims["c"])
+    input_lhs_shape = tuple(input_lhs_dims[k] for k in ("n", "h", "w", "c"))
+    input_rhs_shape = tuple(input_rhs_dims[k] for k in ("n", "h", "w", "c"))
+    output_shape = tuple(output_dims[k] for k in ("n", "h", "w", "c"))
 
-    activation_numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
+    if activation_dtype == "S16":
+        activation_numpy_dtype = np.int16
+    elif activation_dtype == "S8":
+        activation_numpy_dtype = np.int8
+    else:
+        activation_numpy_dtype = np.float16 if activation_dtype == "FP16" else np.float32
 
-    input_lhs = np.array(_extract_array(header_text, f"{prefix}_input_lhs"), dtype=activation_numpy_dtype).reshape(input_lhs_shape)
-    input_rhs = np.array(_extract_array(header_text, f"{prefix}_input_rhs"), dtype=activation_numpy_dtype).reshape(input_rhs_shape)
-    expected_output = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=activation_numpy_dtype).reshape(output_shape)
+    input_lhs = _reshape_generated_prefix(
+        np.array(_extract_typed_array(header_text, f"{prefix}_input_lhs", activation_dtype), dtype=activation_numpy_dtype),
+        input_lhs_shape,
+        generated_test=generated_test,
+        tensor_name="input_lhs",
+        context=f"input_lhs_shape={input_lhs_shape}",
+    )
+    input_rhs = _reshape_generated_prefix(
+        np.array(_extract_typed_array(header_text, f"{prefix}_input_rhs", activation_dtype), dtype=activation_numpy_dtype),
+        input_rhs_shape,
+        generated_test=generated_test,
+        tensor_name="input_rhs",
+        context=f"input_rhs_shape={input_rhs_shape}",
+    )
+    expected_output = _reshape_generated_prefix(
+        np.array(_extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype), dtype=activation_numpy_dtype),
+        output_shape,
+        generated_test=generated_test,
+        tensor_name="expected_output",
+        context=f"output_shape={output_shape}",
+    )
 
-    input_offset = _extract_scalar(header_text, f"{prefix}_bmm_params", "input_offset")
-    filter_offset = _extract_scalar(header_text, f"{prefix}_bmm_params", "filter_offset")
-    output_offset = _extract_scalar(header_text, f"{prefix}_bmm_params", "output_offset")
+    adj_x = _extract_bool_scalar(header_text, f"{prefix}_bmm_params", "adj_x")
+    adj_y = _extract_bool_scalar(header_text, f"{prefix}_bmm_params", "adj_y")
     activation_min = _extract_nested_scalar(header_text, f"{prefix}_bmm_params", "activation", "min")
     activation_max = _extract_nested_scalar(header_text, f"{prefix}_bmm_params", "activation", "max")
-    multiplier = _extract_scalar(header_text, f"{prefix}_quant_params", "multiplier")
-    shift = _extract_scalar(header_text, f"{prefix}_quant_params", "shift")
+    multiplier = shift = None
+    input_offset = filter_offset = output_offset = 0
+    if activation_dtype in ("S8", "S16"):
+        input_offset = _extract_scalar(header_text, f"{prefix}_bmm_params", "input_offset")
+        filter_offset = _extract_scalar(header_text, f"{prefix}_bmm_params", "filter_offset")
+        output_offset = _extract_scalar(header_text, f"{prefix}_bmm_params", "output_offset")
+        multiplier = _extract_scalar(header_text, f"{prefix}_quant_params", "multiplier")
+        shift = _extract_scalar(header_text, f"{prefix}_quant_params", "shift")
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
@@ -4203,17 +4305,28 @@ def _build_batch_matmul_case(
         "operator": operator,
         "family": "FullyConnectedFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="FullyConnectedFunctions", operator="BatchMatMul", dtype=activation_dtype),
+        "kernel_id": lookup_kernel_id(project_root, family="FullyConnectedFunctions", operator="BatchMatMul", dtype=activation_dtype, weight_dtype=(activation_dtype if activation_dtype in ("FP32", "FP16") else None)),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
-            "input_offset": input_offset,
-            "filter_offset": filter_offset,
-            "output_offset": output_offset,
-            "activation_min": activation_min,
-            "activation_max": activation_max,
-            "out_mult": multiplier,
-            "out_shift": shift,
+            **({
+                "input_offset": input_offset,
+                "filter_offset": filter_offset,
+                "output_offset": output_offset,
+                "activation_min": activation_min,
+                "activation_max": activation_max,
+                "out_mult": multiplier,
+                "out_shift": shift,
+            } if activation_dtype in ("S8", "S16") else {
+                "float_activation_min_bits": _quant_scale_to_bits(activation_min),
+                "float_activation_max_bits": _quant_scale_to_bits(activation_max),
+                "adj_x": int(bool(adj_x)),
+                "adj_y": int(bool(adj_y)),
+            }),
+            **({"output_n": output_dims["n"]} if output_dims["n"] != 1 else {}),
+            **({"output_h": output_dims["h"]} if output_dims["h"] != 1 else {}),
+            "output_w": output_dims["w"],
+            "output_c": output_dims["c"],
         },
         "tensor_dtypes": {"input_lhs": activation_dtype, "input_rhs": activation_dtype, "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
@@ -4225,9 +4338,25 @@ def _build_batch_matmul_case(
         "correctness_comparison": {"mode": "tolerant_int", "tolerance": 1},
         # ctx->buf sized rhs_cols * sizeof(int32_t) for S8 only (kernel-sum scratch the
         # kernel fills itself at runtime); S16 needs none. See run_batch_matmul_once().
-        "scratch_buffer": {"bytes": input_rhs_shape[0] * 4 if activation_dtype == "S8" else 0},
+        "scratch_buffer": {
+            "bytes": (
+                input_rhs_dims["w"] * 4
+                if activation_dtype == "S8"
+                else (
+                    int(_extract_define_int(_find_source_file(generated_test.directory).read_text(encoding="utf-8"), f"{prefix.upper()}_BUFFER_SIZE_MAX"))
+                    if activation_dtype in ("FP32", "FP16")
+                    else 0
+                )
+            )
+        },
         "required_target_capabilities": [
-            "batch_matmul_s8" if activation_dtype == "S8" else "batch_matmul_s16"
+            "batch_matmul_s8"
+            if activation_dtype == "S8"
+            else (
+                "batch_matmul_s16"
+                if activation_dtype == "S16"
+                else ("batch_matmul_f32" if activation_dtype == "FP32" else "batch_matmul_f16")
+            )
         ],
         "repeated_invocation_safe": True,
         "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},

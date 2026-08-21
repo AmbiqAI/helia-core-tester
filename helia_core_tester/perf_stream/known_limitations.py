@@ -34,7 +34,40 @@ class KnownLimitation:
 # convolve_grouped_conv_case_01_s8 was previously listed here (1 LSB mismatch
 # on real hardware vs. FVP's tolerant fallback); fixed by adding an explicit
 # "Convolve": 1 override in dtypes.py, so it was removed from this registry.
-_KNOWN_LIMITATIONS: dict[str, KnownLimitation] = {}
+_KNOWN_LIMITATIONS: dict[str, KnownLimitation] = {
+    "batch_matmul_float_mve_scalar_both_lhs_stride_f16": KnownLimitation(
+        case_name="batch_matmul_float_mve_scalar_both_lhs_stride_f16",
+        reason=(
+            "case-arena footprint (~93.6 KB for a (9363, 1) FP16 lhs/output shape) "
+            "exceeds the firmware's fixed HCT_SERVER_MAX_ARENA_BYTES (48 KB) -- would "
+            "require raising the firmware's fixed arena size to bridge, not a bridge-logic bug."
+        ),
+    ),
+    "batch_matmul_float_mve_scalar_both_rhs_stride_f16": KnownLimitation(
+        case_name="batch_matmul_float_mve_scalar_both_rhs_stride_f16",
+        reason=(
+            "case-arena footprint (~93.6 KB for a (9363, 1) FP16 rhs/output shape) "
+            "exceeds the firmware's fixed HCT_SERVER_MAX_ARENA_BYTES (48 KB) -- would "
+            "require raising the firmware's fixed arena size to bridge, not a bridge-logic bug."
+        ),
+    ),
+    "batch_matmul_float_mve_scalar_lhs_stride_f16": KnownLimitation(
+        case_name="batch_matmul_float_mve_scalar_lhs_stride_f16",
+        reason=(
+            "case-arena footprint (~93.6 KB for a (9363, 1) FP16 lhs/output shape) "
+            "exceeds the firmware's fixed HCT_SERVER_MAX_ARENA_BYTES (48 KB) -- would "
+            "require raising the firmware's fixed arena size to bridge, not a bridge-logic bug."
+        ),
+    ),
+    "batch_matmul_float_mve_scalar_rhs_stride_f16": KnownLimitation(
+        case_name="batch_matmul_float_mve_scalar_rhs_stride_f16",
+        reason=(
+            "case-arena footprint (~93.6 KB for a (9363, 1) FP16 rhs/output shape) "
+            "exceeds the firmware's fixed HCT_SERVER_MAX_ARENA_BYTES (48 KB) -- would "
+            "require raising the firmware's fixed arena size to bridge, not a bridge-logic bug."
+        ),
+    ),
+}
 
 
 def lookup_known_limitation(case_name: str) -> KnownLimitation | None:

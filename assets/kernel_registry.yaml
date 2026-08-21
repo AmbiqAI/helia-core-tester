@@ -1028,3 +1028,32 @@ kernels:
     dtype: FP16
     weight_dtype: FP16
     cmsis_function: arm_transpose_conv_f16
+
+
+  - kernel_id: 168
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: FP32
+    weight_dtype: FP32
+    cmsis_function: arm_depthwise_conv_f32
+
+  - kernel_id: 169
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: FP16
+    weight_dtype: FP16
+    cmsis_function: arm_depthwise_conv_f16
+
+  - kernel_id: 170
+    family: FullyConnectedFunctions
+    operator: BatchMatMul
+    dtype: FP32
+    weight_dtype: FP32
+    cmsis_function: arm_batch_matmul_f32
+
+  - kernel_id: 171
+    family: FullyConnectedFunctions
+    operator: BatchMatMul
+    dtype: FP16
+    weight_dtype: FP16
+    cmsis_function: arm_batch_matmul_f16

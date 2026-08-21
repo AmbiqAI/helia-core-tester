@@ -2002,5 +2002,53 @@
     "scratch_bytes": 0,
     "stateless": true,
     "supported_dtype": "FP16"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_depthwise_conv_f32",
+    "kernel_id": 168,
+    "mutates_input": false,
+    "operator_family": "ConvolutionFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP32"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_depthwise_conv_f16",
+    "kernel_id": 169,
+    "mutates_input": false,
+    "operator_family": "ConvolutionFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP16"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_batch_matmul_f32",
+    "kernel_id": 170,
+    "mutates_input": false,
+    "operator_family": "FullyConnectedFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP32"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_batch_matmul_f16",
+    "kernel_id": 171,
+    "mutates_input": false,
+    "operator_family": "FullyConnectedFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP16"
   }
 ]
