@@ -72,7 +72,7 @@ def test_firmware_hello_and_catalog_roundtrip_with_python_decoder(tmp_path: Path
     assert hello.transport_kind == 1
     assert hello.max_frame_payload == 256
     assert hello.runtime_arena_capacity == 32768
-    assert len(catalog) == 171
+    assert len(catalog) == 173
     assert catalog[0].kernel_id == 1
     assert catalog[0].canonical_name == "arm_abs_s8"
     assert catalog[5].kernel_id == 6

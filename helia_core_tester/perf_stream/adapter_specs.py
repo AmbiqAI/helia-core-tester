@@ -131,6 +131,79 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
         return ARM_CMSIS_NN_ARG_ERROR;
     }
 
+    if (session->expected_kernel_id == HCT_KERNEL_ID_CONVOLVE_F32 ||
+        session->expected_kernel_id == HCT_KERNEL_ID_CONVOLVE_F16)
+    {
+        const bool is_f16 = (session->expected_kernel_id == HCT_KERNEL_ID_CONVOLVE_F16);
+        const uint32_t element_size = is_f16 ? (uint32_t)sizeof(float16_t) : (uint32_t)sizeof(float);
+        const float activation_min = quant_scale_from_bits(session->float_activation_min_bits);
+        const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
+        int32_t required_scratch;
+
+        if (session->output_length > sizeof(session->output_buffer) / element_size)
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        session->output_length *= element_size;
+
+        if (is_f16)
+        {
+            cmsis_nn_conv_params_f16 params = {
+                .stride = { .w = (session->stride_w == 0) ? 1 : session->stride_w, .h = (session->stride_h == 0) ? 1 : session->stride_h },
+                .padding = { .w = session->pad_w, .h = session->pad_h },
+                .dilation = { .w = (session->dilation_w == 0) ? 1 : session->dilation_w, .h = (session->dilation_h == 0) ? 1 : session->dilation_h },
+                .activation = { .min = (float16_t)activation_min, .max = (float16_t)activation_max },
+                .weight_format = ARM_NN_WEIGHT_FORMAT_STANDARD,
+            };
+            required_scratch = arm_convolve_f16_get_buffer_size(&params, &input_dims, &filter_dims, &output_dims, ARM_NN_LAYOUT_NHWC);
+            if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.size = required_scratch;
+            return arm_convolve_f16(&ctx,
+                                    &params,
+                                    &input_dims,
+                                    (const float16_t *)blob_ptr(session, input),
+                                    &filter_dims,
+                                    (const float16_t *)blob_ptr(session, weights),
+                                    &bias_dims,
+                                    (bias != NULL) ? (const float16_t *)blob_ptr(session, bias) : NULL,
+                                    &output_dims,
+                                    (float16_t *)session->output_buffer,
+                                    ARM_NN_LAYOUT_NHWC);
+        }
+
+        {
+            cmsis_nn_conv_params_f32 params = {
+                .stride = { .w = (session->stride_w == 0) ? 1 : session->stride_w, .h = (session->stride_h == 0) ? 1 : session->stride_h },
+                .padding = { .w = session->pad_w, .h = session->pad_h },
+                .dilation = { .w = (session->dilation_w == 0) ? 1 : session->dilation_w, .h = (session->dilation_h == 0) ? 1 : session->dilation_h },
+                .activation = { .min = activation_min, .max = activation_max },
+                .weight_format = ARM_NN_WEIGHT_FORMAT_STANDARD,
+            };
+            required_scratch = arm_convolve_f32_get_buffer_size(&params, &input_dims, &filter_dims, &output_dims, ARM_NN_LAYOUT_NHWC);
+            if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.size = required_scratch;
+            return arm_convolve_f32(&ctx,
+                                    &params,
+                                    &input_dims,
+                                    (const float *)blob_ptr(session, input),
+                                    &filter_dims,
+                                    (const float *)blob_ptr(session, weights),
+                                    &bias_dims,
+                                    (bias != NULL) ? (const float *)blob_ptr(session, bias) : NULL,
+                                    &output_dims,
+                                    (float *)session->output_buffer,
+                                    ARM_NN_LAYOUT_NHWC);
+        }
+    }
+
     conv_params.input_offset = session->input_offset;
     conv_params.output_offset = session->output_offset;
     conv_params.stride.w = (session->stride_w == 0) ? 1 : session->stride_w;

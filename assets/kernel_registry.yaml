@@ -1057,3 +1057,17 @@ kernels:
     dtype: FP16
     weight_dtype: FP16
     cmsis_function: arm_batch_matmul_f16
+
+  - kernel_id: 172
+    family: ConvolutionFunctions
+    operator: Convolve
+    dtype: FP32
+    weight_dtype: FP32
+    cmsis_function: arm_convolve_f32
+
+  - kernel_id: 173
+    family: ConvolutionFunctions
+    operator: Convolve
+    dtype: FP16
+    weight_dtype: FP16
+    cmsis_function: arm_convolve_f16

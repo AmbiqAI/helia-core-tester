@@ -688,14 +688,14 @@ def _build_convolve_case(
 
     if (
         operator != "Convolve"
-        or activation_dtype not in ("S8", "S16")
+        or activation_dtype not in ("S8", "S16", "FP32", "FP16")
         or (weight_dtype == "S4" and activation_dtype != "S8")
-        or weight_dtype not in ("S8", "S4")
+        or weight_dtype not in (("S8", "S4") if activation_dtype in ("S8", "S16") else ("FP32", "FP16"))
     ):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} "
             f"is not bridgeable -- perf-stream firmware only dispatches arm_convolve_wrapper_s4, "
-            f"arm_convolve_s8, and arm_convolve_wrapper_s16."
+            f"arm_convolve_s8, arm_convolve_wrapper_s16, arm_convolve_f32, and arm_convolve_f16."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -732,7 +732,16 @@ def _build_convolve_case(
         weights_flat = np.array(_extract_typed_array(header_text, f"{prefix}_weights", weight_dtype), dtype=activation_numpy_dtype)
     else:
         weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=np.int8)
-    biases = np.array(_extract_array(header_text, f"{prefix}_biases"), dtype=bias_numpy_dtype)
+    has_bias = not _extract_null_pointer_decl(header_text, f"{prefix}_biases")
+    if has_bias:
+        bias_values = (
+            _extract_typed_array(header_text, f"{prefix}_biases", activation_dtype)
+            if activation_dtype in ("FP32", "FP16")
+            else _extract_array(header_text, f"{prefix}_biases")
+        )
+        biases = np.array(bias_values, dtype=bias_numpy_dtype)
+    else:
+        biases = None
     extract_data = _extract_typed_array if activation_dtype in ("FP32", "FP16") else _extract_array
     input_flat = np.array(extract_data(header_text, f"{prefix}_input", activation_dtype) if extract_data is _extract_typed_array else extract_data(header_text, f"{prefix}_input"), dtype=activation_numpy_dtype)
     expected_flat = np.array(extract_data(header_text, f"{prefix}_expected_output", activation_dtype) if extract_data is _extract_typed_array else extract_data(header_text, f"{prefix}_expected_output"), dtype=activation_numpy_dtype)
@@ -758,10 +767,16 @@ def _build_convolve_case(
     )
     weights_data = weights_flat[:expected_weight_bytes]
 
-    input_offset = _extract_scalar(header_text, f"{prefix}_conv_params", "input_offset")
-    output_offset = _extract_scalar(header_text, f"{prefix}_conv_params", "output_offset")
-    activation_min = _extract_scalar(header_text, f"{prefix}_conv_params", "min")
-    activation_max = _extract_scalar(header_text, f"{prefix}_conv_params", "max")
+    if activation_dtype in ("FP32", "FP16"):
+        input_offset = 0
+        output_offset = 0
+        activation_min = float(_extract_nested_float_scalar(header_text, f"{prefix}_conv_params", "activation", "min"))
+        activation_max = float(_extract_nested_float_scalar(header_text, f"{prefix}_conv_params", "activation", "max"))
+    else:
+        input_offset = _extract_scalar(header_text, f"{prefix}_conv_params", "input_offset")
+        output_offset = _extract_scalar(header_text, f"{prefix}_conv_params", "output_offset")
+        activation_min = _extract_scalar(header_text, f"{prefix}_conv_params", "min")
+        activation_max = _extract_scalar(header_text, f"{prefix}_conv_params", "max")
     strides = tuple(int(v) for v in descriptor["strides"])
     padding = str(descriptor["padding"])
     # Ground-truth padding actually used to generate the reference output, read directly
@@ -818,12 +833,17 @@ def _build_convolve_case(
 
     arrays = [
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
-        (2, "weights", "S8", filter_shape, weights_data, False, False),
-        (3, "bias", bias_wire_dtype, (output_channels,), biases, False, False),
-        (4, "multiplier", "S32", (output_channels,), multiplier, False, False),
-        (5, "shift", "S32", (output_channels,), shift, False, False),
-        (6, "expected_output", activation_dtype, tuple(int(v) for v in expected_output.shape), expected_output, False, True),
+        (2, "weights", weight_dtype, filter_shape, weights_data, False, False),
     ]
+    next_blob_id = 3
+    if has_bias and biases is not None:
+        arrays.append((next_blob_id, "bias", bias_wire_dtype, (output_channels,), biases, False, False))
+        next_blob_id += 1
+    if activation_dtype in ("S8", "S16"):
+        arrays.append((next_blob_id, "multiplier", "S32", (output_channels,), multiplier, False, False))
+        arrays.append((next_blob_id + 1, "shift", "S32", (output_channels,), shift, False, False))
+        next_blob_id += 2
+    arrays.append((next_blob_id, "expected_output", activation_dtype, tuple(int(v) for v in expected_output.shape), expected_output, False, True))
     blobs: list[BlobInfo] = []
     for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
         path = blobs_dir / f"{role}.bin"
@@ -863,18 +883,33 @@ def _build_convolve_case(
             "output_h": output_dims["h"],
             "output_w": output_dims["w"],
             "output_c": output_dims["c"],
-            "input_offset": input_offset,
-            "output_offset": output_offset,
-            "activation_min": activation_min,
-            "activation_max": activation_max,
+            **(
+                {
+                    "input_offset": input_offset,
+                    "output_offset": output_offset,
+                    "activation_min": activation_min,
+                    "activation_max": activation_max,
+                }
+                if activation_dtype in ("S8", "S16")
+                else {
+                    "float_activation_min_bits": _quant_scale_to_bits(activation_min),
+                    "float_activation_max_bits": _quant_scale_to_bits(activation_max),
+                }
+            ),
         },
-        "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, "bias": bias_wire_dtype, "output": activation_dtype},
+        "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, **({"bias": bias_wire_dtype} if has_bias else {}), "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         "correctness_comparison": comparison,
         "scratch_buffer": {"bytes": int(scratch_bytes)},
         "required_target_capabilities": [
-            "convolve_s4" if weight_dtype == "S4" else ("convolve_s8" if activation_dtype == "S8" else "convolve_s16")
+            "convolve_s4"
+            if weight_dtype == "S4"
+            else (
+                "convolve_s8"
+                if activation_dtype == "S8"
+                else ("convolve_s16" if activation_dtype == "S16" else ("convolve_f32" if activation_dtype == "FP32" else "convolve_f16"))
+            )
         ],
         "repeated_invocation_safe": True,
         "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},

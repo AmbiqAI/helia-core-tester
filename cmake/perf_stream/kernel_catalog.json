@@ -2050,5 +2050,29 @@
     "scratch_bytes": 0,
     "stateless": true,
     "supported_dtype": "FP16"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_convolve_f32",
+    "kernel_id": 172,
+    "mutates_input": false,
+    "operator_family": "ConvolutionFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP32"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_convolve_f16",
+    "kernel_id": 173,
+    "mutates_input": false,
+    "operator_family": "ConvolutionFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "FP16"
   }
 ]
