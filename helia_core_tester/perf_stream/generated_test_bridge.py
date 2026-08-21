@@ -1377,10 +1377,11 @@ def _build_transpose_conv_case(
     operator = str(descriptor.get("operator", ""))
     activation_dtype = str(descriptor.get("activation_dtype", ""))
     weight_dtype = str(descriptor.get("weight_dtype", descriptor.get("resolved_tensor_dtypes", {}).get("weights", "")))
-    if operator != "TransposeConv" or activation_dtype != "S8" or weight_dtype != "S8":
+    if operator != "TransposeConv" or (activation_dtype, weight_dtype) not in {("S8", "S8"), ("FP32", "FP32"), ("FP16", "FP16")}:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} is not "
-            "bridgeable -- perf-stream firmware only dispatches arm_transpose_conv_wrapper_s8."
+            "bridgeable -- perf-stream firmware only dispatches arm_transpose_conv_wrapper_s8, "
+            "arm_transpose_conv_f32, and arm_transpose_conv_f16."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -1402,11 +1403,18 @@ def _build_transpose_conv_case(
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
     output_channels = output_dims["c"]
 
-    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=np.int8)
-    weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=np.int8)
-    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=np.int8)
-    multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
-    shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
+    if activation_dtype == "S8":
+        numpy_dtype = np.int8
+        input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
+        weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=numpy_dtype)
+        expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
+        multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
+        shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
+    else:
+        numpy_dtype = np.float32 if activation_dtype == "FP32" else np.float16
+        input_flat = np.array(_extract_float_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
+        weights_flat = np.array(_extract_float_array(header_text, f"{prefix}_weights"), dtype=numpy_dtype)
+        expected_flat = np.array(_extract_float_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
     expected_input_size = int(np.prod(input_shape))
     expected_filter_size = int(np.prod(filter_shape))
     expected_output_size = int(np.prod(output_shape))
@@ -1427,15 +1435,13 @@ def _build_transpose_conv_case(
     input_flat = input_flat[:expected_input_size]
     weights_flat = weights_flat[:expected_filter_size]
     expected_flat = expected_flat[:expected_output_size]
-    if multiplier.size != output_channels or shift.size != output_channels:
+    if activation_dtype == "S8" and (multiplier.size != output_channels or shift.size != output_channels):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: quant array sizes (multiplier={multiplier.size}, shift={shift.size}) do not "
             f"match output channels ({output_channels})."
         )
 
     params_struct = f"{prefix}_transpose_conv_params"
-    input_offset = _extract_scalar(header_text, params_struct, "input_offset")
-    output_offset = _extract_scalar(header_text, params_struct, "output_offset")
     stride_h = _extract_nested_scalar(header_text, params_struct, "stride", "h")
     stride_w = _extract_nested_scalar(header_text, params_struct, "stride", "w")
     dilation_h = _extract_nested_scalar(header_text, params_struct, "dilation", "h")
@@ -1444,11 +1450,24 @@ def _build_transpose_conv_case(
     pad_w = _extract_nested_scalar(header_text, params_struct, "padding", "w")
     pad_offset_h = _extract_nested_scalar(header_text, params_struct, "padding_offsets", "h")
     pad_offset_w = _extract_nested_scalar(header_text, params_struct, "padding_offsets", "w")
-    activation_min = _extract_nested_scalar(header_text, params_struct, "activation", "min")
-    activation_max = _extract_nested_scalar(header_text, params_struct, "activation", "max")
+    if activation_dtype == "S8":
+        input_offset = _extract_scalar(header_text, params_struct, "input_offset")
+        output_offset = _extract_scalar(header_text, params_struct, "output_offset")
+        activation_min = _extract_nested_scalar(header_text, params_struct, "activation", "min")
+        activation_max = _extract_nested_scalar(header_text, params_struct, "activation", "max")
+    else:
+        input_offset = 0
+        output_offset = 0
+        activation_min = float(_extract_nested_float_scalar(header_text, params_struct, "activation", "min"))
+        activation_max = float(_extract_nested_float_scalar(header_text, params_struct, "activation", "max"))
 
     has_bias = not _extract_null_pointer_decl(header_text, f"{prefix}_biases")
-    biases = np.array(_extract_array(header_text, f"{prefix}_biases"), dtype=np.int32) if has_bias else None
+    if has_bias:
+        bias_dtype = np.int32 if activation_dtype == "S8" else numpy_dtype
+        bias_values = _extract_array(header_text, f"{prefix}_biases") if activation_dtype == "S8" else _extract_float_array(header_text, f"{prefix}_biases")
+        biases = np.array(bias_values, dtype=bias_dtype)
+    else:
+        biases = None
     if has_bias and biases.size != output_channels:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: bias array size ({biases.size}) does not match output channels ({output_channels})."
@@ -1456,12 +1475,12 @@ def _build_transpose_conv_case(
 
     ctx_upper = _extract_define_int(source_text, f"{upper_prefix}_BUFFER_SIZE_MAX")
     reverse_upper = _extract_define_int(source_text, f"{upper_prefix}_REVERSE_CONV_CTX_SIZE")
-    weight_sum_bytes = output_channels * 4
+    weight_sum_bytes = output_channels * 4 if activation_dtype == "S8" else 0
     scratch_bytes = int(_align_up(_align_up(ctx_upper, 16) + reverse_upper, 16) + weight_sum_bytes)
 
-    input_data = input_flat.reshape(input_shape)
-    weights = weights_flat.reshape(filter_shape)
-    expected_output = expected_flat.reshape(output_shape)
+    input_data = _reshape_generated_prefix(input_flat, input_shape, generated_test=generated_test, tensor_name="input", context=f"input_shape={input_shape}")
+    weights = _reshape_generated_prefix(weights_flat, filter_shape, generated_test=generated_test, tensor_name="weights", context=f"filter_shape={filter_shape}")
+    expected_output = _reshape_generated_prefix(expected_flat, output_shape, generated_test=generated_test, tensor_name="expected_output", context=f"output_shape={output_shape}")
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
@@ -1470,17 +1489,22 @@ def _build_transpose_conv_case(
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
     arrays: list[tuple[int, str, str, tuple[int, ...], np.ndarray, bool, bool]] = [
-        (1, "input_0", "S8", input_shape, input_data, False, False),
-        (2, "weights", "S8", filter_shape, weights, False, False),
-        (3, "multiplier", "S32", (output_channels,), multiplier, False, False),
-        (4, "shift", "S32", (output_channels,), shift, False, False),
+        (1, "input_0", activation_dtype, input_shape, input_data, False, False),
+        (2, "weights", weight_dtype, filter_shape, weights, False, False),
     ]
+    next_blob_id = 3
+    if activation_dtype == "S8":
+        arrays.extend([
+            (3, "multiplier", "S32", (output_channels,), multiplier, False, False),
+            (4, "shift", "S32", (output_channels,), shift, False, False),
+        ])
+        next_blob_id = 5
     if has_bias and biases is not None:
-        arrays.append((5, "bias", "S32", (output_channels,), biases, False, False))
-        expected_blob_id = 6
+        arrays.append((next_blob_id, "bias", "S32" if activation_dtype == "S8" else activation_dtype, (output_channels,), biases, False, False))
+        expected_blob_id = next_blob_id + 1
     else:
-        expected_blob_id = 5
-    arrays.append((expected_blob_id, "expected_output", "S8", output_shape, expected_output, False, True))
+        expected_blob_id = next_blob_id
+    arrays.append((expected_blob_id, "expected_output", activation_dtype, output_shape, expected_output, False, True))
 
     blobs: list[BlobInfo] = []
     for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
@@ -1500,7 +1524,7 @@ def _build_transpose_conv_case(
         "operator": operator,
         "family": generated_test.family,
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype="S8"),
+        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype, weight_dtype=weight_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -1516,17 +1540,28 @@ def _build_transpose_conv_case(
             "output_c": output_dims["c"],
             "dilation_h": dilation_h,
             "dilation_w": dilation_w,
-            "input_offset": input_offset,
-            "output_offset": output_offset,
-            "activation_min": activation_min,
-            "activation_max": activation_max,
+            **(
+                {
+                    "input_offset": input_offset,
+                    "output_offset": output_offset,
+                    "activation_min": activation_min,
+                    "activation_max": activation_max,
+                }
+                if activation_dtype == "S8"
+                else {
+                    "float_activation_min_bits": _quant_scale_to_bits(activation_min),
+                    "float_activation_max_bits": _quant_scale_to_bits(activation_max),
+                }
+            ),
         },
-        "tensor_dtypes": {"input": "S8", "weights": "S8", **({"bias": "S32"} if has_bias else {}), "output": "S8"},
+        "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, **({"bias": ("S32" if activation_dtype == "S8" else activation_dtype)} if has_bias else {}), "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": "S8", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": {"mode": "tolerant_int", "tolerance": 1},
+        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "correctness_comparison": {"mode": "tolerant_int", "tolerance": 1} if activation_dtype == "S8" else dict(descriptor.get("resolved_comparison", {"mode": "float"})),
         "scratch_buffer": {"bytes": scratch_bytes},
-        "required_target_capabilities": ["arm_transpose_conv_wrapper_s8"],
+        "required_target_capabilities": [
+            "arm_transpose_conv_wrapper_s8" if activation_dtype == "S8" else ("arm_transpose_conv_f32" if activation_dtype == "FP32" else "arm_transpose_conv_f16")
+        ],
         "repeated_invocation_safe": True,
         "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
     }
@@ -3885,17 +3920,16 @@ def _build_fully_connected_case(
     weight_dtype = str(descriptor.get("weight_dtype", descriptor.get("resolved_tensor_dtypes", {}).get("weights", "")))
     activation_dtype = str(descriptor.get("activation_dtype", ""))
 
-    if (
-        operator != "FullyConnected"
-        or activation_dtype not in ("S8", "S16")
-        or (weight_dtype == "S4" and activation_dtype != "S8")
-        or weight_dtype not in ("S8", "S4")
+    if operator != "FullyConnected" or (
+        (activation_dtype in ("S8", "S16") and not ((weight_dtype == "S4" and activation_dtype == "S8") or weight_dtype == "S8"))
+        or (activation_dtype in ("FP32", "FP16") and weight_dtype != activation_dtype)
+        or activation_dtype not in ("S8", "S16", "FP32", "FP16")
     ):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: operator={operator!r} weight_dtype={weight_dtype!r} "
             f"activation_dtype={activation_dtype!r} is not bridgeable -- perf-stream firmware only "
-            f"dispatches arm_fully_connected_s4, arm_fully_connected_wrapper_s8, and "
-            f"arm_fully_connected_wrapper_s16."
+            f"dispatches arm_fully_connected_s4, arm_fully_connected_wrapper_s8, "
+            f"arm_fully_connected_wrapper_s16, arm_fully_connected_f32, and arm_fully_connected_f16."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -3912,30 +3946,51 @@ def _build_fully_connected_case(
     filter_shape = (output_units, input_features)
     output_shape = (output_dims["n"], output_dims["c"])
 
-    activation_numpy_dtype = np.int16 if activation_dtype == "S16" else np.int8
-    bias_numpy_dtype = np.int64 if activation_dtype == "S16" else np.int32
-    bias_wire_dtype = "S64" if activation_dtype == "S16" else "S32"
+    is_float = activation_dtype in ("FP32", "FP16")
+    if activation_dtype == "S16":
+        activation_numpy_dtype = np.int16
+        bias_numpy_dtype = np.int64
+        bias_wire_dtype = "S64"
+    elif activation_dtype == "S8":
+        activation_numpy_dtype = np.int8
+        bias_numpy_dtype = np.int32
+        bias_wire_dtype = "S32"
+    elif activation_dtype == "FP32":
+        activation_numpy_dtype = np.float32
+        bias_numpy_dtype = np.float32
+        bias_wire_dtype = "FP32"
+    else:
+        activation_numpy_dtype = np.float16
+        bias_numpy_dtype = np.float16
+        bias_wire_dtype = "FP16"
 
-    weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=np.int8)
-    input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=activation_numpy_dtype)
-    expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=activation_numpy_dtype)
+    if is_float:
+        weights_flat = np.array(_extract_float_array(header_text, f"{prefix}_weights"), dtype=activation_numpy_dtype)
+        input_flat = np.array(_extract_float_array(header_text, f"{prefix}_input"), dtype=activation_numpy_dtype)
+        expected_flat = np.array(_extract_float_array(header_text, f"{prefix}_expected_output"), dtype=activation_numpy_dtype)
+    else:
+        weights_flat = np.array(_extract_array(header_text, f"{prefix}_weights"), dtype=np.int8)
+        input_flat = np.array(_extract_array(header_text, f"{prefix}_input"), dtype=activation_numpy_dtype)
+        expected_flat = np.array(_extract_array(header_text, f"{prefix}_expected_output"), dtype=activation_numpy_dtype)
 
-    try:
-        biases_list = _extract_array(header_text, f"{prefix}_biases")
-        has_bias = True
-    except UnsupportedGeneratedTestError:
+    has_bias = not _extract_null_pointer_decl(header_text, f"{prefix}_biases")
+    if has_bias:
+        biases_list = _extract_float_array(header_text, f"{prefix}_biases") if is_float else _extract_array(header_text, f"{prefix}_biases")
+    else:
         biases_list = []
-        has_bias = False
     biases = np.array(biases_list if has_bias else [0] * output_units, dtype=bias_numpy_dtype)
 
-    multiplier_scalar = _extract_bare_scalar(header_text, f"{prefix}_multiplier_val")
-    if multiplier_scalar is not None:
-        shift_scalar = _extract_bare_scalar(header_text, f"{prefix}_shift_val")
-        multiplier = np.full((output_units,), multiplier_scalar, dtype=np.int32)
-        shift = np.full((output_units,), shift_scalar, dtype=np.int32)
-    else:
-        multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
-        shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
+    multiplier = None
+    shift = None
+    if not is_float:
+        multiplier_scalar = _extract_bare_scalar(header_text, f"{prefix}_multiplier_val")
+        if multiplier_scalar is not None:
+            shift_scalar = _extract_bare_scalar(header_text, f"{prefix}_shift_val")
+            multiplier = np.full((output_units,), multiplier_scalar, dtype=np.int32)
+            shift = np.full((output_units,), shift_scalar, dtype=np.int32)
+        else:
+            multiplier = np.array(_extract_array(header_text, f"{prefix}_multiplier"), dtype=np.int32)
+            shift = np.array(_extract_array(header_text, f"{prefix}_shift"), dtype=np.int32)
 
     input_required = int(np.prod(input_shape))
     filter_required = int(np.prod(filter_shape))
@@ -3956,14 +4011,21 @@ def _build_fully_connected_case(
             f"header dims require (input_shape={input_shape}, filter_shape={filter_shape}, "
             f"output_shape={output_shape}, expected_weight_bytes={expected_weight_bytes})."
         )
-    input_data = input_flat[:input_required].reshape(input_shape)
-    expected_output = expected_flat[:output_required].reshape(output_shape)
+    input_data = _reshape_generated_prefix(input_flat, input_shape, generated_test=generated_test, tensor_name="input", context=f"input_shape={input_shape}")
+    expected_output = _reshape_generated_prefix(expected_flat, output_shape, generated_test=generated_test, tensor_name="expected_output", context=f"output_shape={output_shape}")
 
-    input_offset = _extract_scalar(header_text, f"{prefix}_fc_params", "input_offset")
-    filter_offset = _extract_scalar(header_text, f"{prefix}_fc_params", "filter_offset")
-    output_offset = _extract_scalar(header_text, f"{prefix}_fc_params", "output_offset")
-    activation_min = _extract_nested_scalar(header_text, f"{prefix}_fc_params", "activation", "min")
-    activation_max = _extract_nested_scalar(header_text, f"{prefix}_fc_params", "activation", "max")
+    if is_float:
+        activation_min = float(_extract_nested_float_scalar(header_text, f"{prefix}_fc_params", "activation", "min"))
+        activation_max = float(_extract_nested_float_scalar(header_text, f"{prefix}_fc_params", "activation", "max"))
+        input_offset = 0
+        filter_offset = 0
+        output_offset = 0
+    else:
+        input_offset = _extract_scalar(header_text, f"{prefix}_fc_params", "input_offset")
+        filter_offset = _extract_scalar(header_text, f"{prefix}_fc_params", "filter_offset")
+        output_offset = _extract_scalar(header_text, f"{prefix}_fc_params", "output_offset")
+        activation_min = _extract_nested_scalar(header_text, f"{prefix}_fc_params", "activation", "min")
+        activation_max = _extract_nested_scalar(header_text, f"{prefix}_fc_params", "activation", "max")
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
@@ -3973,12 +4035,17 @@ def _build_fully_connected_case(
 
     arrays = [
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
-        (2, "weights", "S8", filter_shape, weights_flat, False, False),
-        (3, "bias", bias_wire_dtype, (output_units,), biases, False, False),
-        (4, "multiplier", "S32", multiplier.shape, multiplier, False, False),
-        (5, "shift", "S32", shift.shape, shift, False, False),
-        (6, "expected_output", activation_dtype, output_shape, expected_output, False, True),
+        (2, "weights", weight_dtype, filter_shape, weights_flat, False, False),
     ]
+    next_blob_id = 3
+    if has_bias:
+        arrays.append((next_blob_id, "bias", bias_wire_dtype, (output_units,), biases, False, False))
+        next_blob_id += 1
+    if not is_float and multiplier is not None and shift is not None:
+        arrays.append((next_blob_id, "multiplier", "S32", multiplier.shape, multiplier, False, False))
+        arrays.append((next_blob_id + 1, "shift", "S32", shift.shape, shift, False, False))
+        next_blob_id += 2
+    arrays.append((next_blob_id, "expected_output", activation_dtype, output_shape, expected_output, False, True))
     blobs: list[BlobInfo] = []
     for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
         path = blobs_dir / f"{role}.bin"
@@ -4007,13 +4074,22 @@ def _build_fully_connected_case(
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
-            "input_offset": input_offset,
-            "filter_offset": filter_offset,
-            "output_offset": output_offset,
-            "activation_min": activation_min,
-            "activation_max": activation_max,
+            **(
+                {
+                    "input_offset": input_offset,
+                    "filter_offset": filter_offset,
+                    "output_offset": output_offset,
+                    "activation_min": activation_min,
+                    "activation_max": activation_max,
+                }
+                if not is_float
+                else {
+                    "float_activation_min_bits": _quant_scale_to_bits(activation_min),
+                    "float_activation_max_bits": _quant_scale_to_bits(activation_max),
+                }
+            ),
         },
-        "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, "bias": bias_wire_dtype, "output": activation_dtype},
+        "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, **({"bias": bias_wire_dtype} if has_bias else {}), "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         # FullyConnected's generated harness (fully_connected.c.j2's HELIA_VALIDATE_OUTPUTS
@@ -4023,16 +4099,20 @@ def _build_fully_connected_case(
         # _build_softmax_case()/_build_quantize_case()): requantization rounding can differ
         # by up to 1 ULP depending on intermediate accumulation order. Match the template's
         # real validation semantics here rather than the misleading descriptor metadata.
-        "correctness_comparison": {"mode": "tolerant_int", "tolerance": 1},
+        "correctness_comparison": {"mode": "tolerant_int", "tolerance": 1} if not is_float else dict(descriptor.get("resolved_comparison", {"mode": "float"})),
         # ctx->buf sized output_units * sizeof(int32_t) for both S8 (kernel_sum, computed
         # at runtime via arm_vector_sum_s8) and S16 (scratch the kernel fills itself) --
         # see run_fully_connected_once()'s header comment and
         # arm_fully_connected_{s8,per_channel_s16}_get_buffer_size{,_mve}().
-        "scratch_buffer": {"bytes": 0 if weight_dtype == "S4" else output_units * 4},
+        "scratch_buffer": {"bytes": 0 if weight_dtype == "S4" else (int(_extract_define_int(_find_source_file(generated_test.directory).read_text(encoding="utf-8"), f"{prefix.upper()}_BUFFER_SIZE_MAX")) if is_float else output_units * 4)},
         "required_target_capabilities": [
             "fully_connected_s4"
             if weight_dtype == "S4"
-            else ("fully_connected_s8" if activation_dtype == "S8" else "fully_connected_s16")
+            else (
+                "fully_connected_s8"
+                if activation_dtype == "S8"
+                else ("fully_connected_s16" if activation_dtype == "S16" else ("arm_fully_connected_f32" if activation_dtype == "FP32" else "arm_fully_connected_f16"))
+            )
         ],
         "repeated_invocation_safe": True,
         "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},

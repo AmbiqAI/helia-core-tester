@@ -177,13 +177,17 @@ static const hct_kernel_catalog_entry_t g_hct_kernel_catalog[] = {
     {161u, "arm_reduce_sum_f16", "BasicMathFunctions", 1u, "FP16", 1u, true, true, false, 0u},
     {162u, "arm_batch_norm_f32", "NNSupportFunctions", 1u, "FP32", 1u, true, true, false, 0u},
     {163u, "arm_batch_norm_f16", "NNSupportFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {164u, "arm_fully_connected_f32", "FullyConnectedFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {165u, "arm_fully_connected_f16", "FullyConnectedFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {166u, "arm_transpose_conv_f32", "ConvolutionFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {167u, "arm_transpose_conv_f16", "ConvolutionFunctions", 1u, "FP16", 1u, true, true, false, 0u},
 };
 
 static const uint8_t g_hct_kernel_catalog_hash[32] = {
-    0xb7u, 0xe7u, 0xa5u, 0xbbu, 0x12u, 0x65u, 0x97u, 0xe8u,
-    0x18u, 0x73u, 0x04u, 0x30u, 0xbdu, 0xb5u, 0x85u, 0x43u,
-    0x52u, 0x57u, 0x48u, 0x55u, 0xfau, 0x3au, 0x75u, 0xf7u,
-    0xf4u, 0x1du, 0x1du, 0x8fu, 0x0cu, 0xbdu, 0xa9u, 0xf1u,
+    0x0au, 0x3cu, 0x47u, 0x02u, 0x52u, 0xd1u, 0xeeu, 0x3au,
+    0x44u, 0xd0u, 0x4fu, 0x3eu, 0x47u, 0x70u, 0x96u, 0x10u,
+    0x1cu, 0xe2u, 0x80u, 0x49u, 0x91u, 0x06u, 0x88u, 0x1au,
+    0x1cu, 0x7eu, 0xaeu, 0x7du, 0x0eu, 0xf1u, 0x1du, 0x68u,
 };
 
 const hct_kernel_catalog_entry_t *hct_benchmark_server_catalog(size_t *count)

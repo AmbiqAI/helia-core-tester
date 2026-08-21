@@ -1000,3 +1000,31 @@ kernels:
     operator: BatchNorm
     dtype: FP16
     cmsis_function: arm_batch_norm_f16
+
+  - kernel_id: 164
+    family: FullyConnectedFunctions
+    operator: FullyConnected
+    dtype: FP32
+    weight_dtype: FP32
+    cmsis_function: arm_fully_connected_f32
+
+  - kernel_id: 165
+    family: FullyConnectedFunctions
+    operator: FullyConnected
+    dtype: FP16
+    weight_dtype: FP16
+    cmsis_function: arm_fully_connected_f16
+
+  - kernel_id: 166
+    family: ConvolutionFunctions
+    operator: TransposeConv
+    dtype: FP32
+    weight_dtype: FP32
+    cmsis_function: arm_transpose_conv_f32
+
+  - kernel_id: 167
+    family: ConvolutionFunctions
+    operator: TransposeConv
+    dtype: FP16
+    weight_dtype: FP16
+    cmsis_function: arm_transpose_conv_f16
