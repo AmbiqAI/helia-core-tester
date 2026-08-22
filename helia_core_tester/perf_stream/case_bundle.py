@@ -18,6 +18,11 @@ from helia_core_tester.generation.utils.tflite_utils import calculate_per_channe
 
 _DTYPE_TO_NUMPY = {
     "S8": np.int8,
+    # S4 weight blobs are transmitted packed 2 nibbles/byte (see generated_test_bridge.py's
+    # expected_weight_bytes = (num_elements + 1) // 2 convention) -- the same on-wire byte
+    # representation as S8, so S4 maps to the same np.int8 dtype for CRC/alignment/blob_numpy
+    # purposes; nibble unpacking (if ever needed) happens elsewhere, not via this dtype map.
+    "S4": np.int8,
     "S16": np.int16,
     "S32": np.int32,
     "S64": np.int64,

@@ -336,6 +336,20 @@ def _extract_scalar(header_text: str, struct_name: str, field: str) -> int:
     return int(field_match.group(1))
 
 
+def _extract_enum_scalar(header_text: str, struct_name: str, field: str) -> str:
+    """Extracts a `.field = SOME_ENUM_NAME` identifier value (as opposed to a numeric
+    literal, see `_extract_scalar`) from a generated struct initializer -- used for e.g.
+    `.weight_format = ARM_NN_WEIGHT_FORMAT_STANDARD` / `ARM_NN_WEIGHT_FORMAT_NT_N_PACKED`."""
+    struct_pattern = re.compile(rf"\b{re.escape(struct_name)}\s*=\s*\{{(.*?)\}}\s*;", re.DOTALL)
+    struct_match = struct_pattern.search(header_text)
+    if struct_match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find struct `{struct_name}` in generated header")
+    body = struct_match.group(1)
+    field_pattern = re.compile(rf"\.{re.escape(field)}\s*=\s*(\w+)")
+    field_match = field_pattern.search(body)
+    if field_match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find field `.{field}` on struct `{struct_name}`")
+    return field_match.group(1)
 
 
 def _extract_bool_scalar(header_text: str, struct_name: str, field: str) -> bool:
@@ -791,6 +805,20 @@ def _build_convolve_case(
     # silently produced wrong output for any real generated test with dilation != 1.
     dilation_h = _extract_nested_scalar(header_text, f"{prefix}_conv_params", "dilation", "h")
     dilation_w = _extract_nested_scalar(header_text, f"{prefix}_conv_params", "dilation", "w")
+    # Ground-truth weight_format, likewise read directly from the generated header rather
+    # than assumed to be STANDARD -- firmware previously hardcoded ARM_NN_WEIGHT_FORMAT_
+    # STANDARD unconditionally for the float dispatch path, which silently corrupted (or
+    # hung, since arm_convolve_f32/f16 interprets the weights blob completely differently
+    # for the two formats) any real generated *_packed_* case using the real
+    # ARM_NN_WEIGHT_FORMAT_NT_N_PACKED layout CMSIS-NN's own test generator emits for those
+    # cases. Only relevant for the float path (S8/S16 select STANDARD vs NT_N_PACKED via a
+    # wholly separate kernel_id -- S4 -- rather than a runtime enum).
+    weight_format_name = (
+        _extract_enum_scalar(header_text, f"{prefix}_conv_params", "weight_format")
+        if activation_dtype in ("FP32", "FP16")
+        else "ARM_NN_WEIGHT_FORMAT_STANDARD"
+    )
+    is_packed_weights = weight_format_name == "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"
 
     if expected_flat.size < _shape_product(output_shape):
         raise UnsupportedGeneratedTestError(
@@ -894,6 +922,7 @@ def _build_convolve_case(
                 else {
                     "float_activation_min_bits": _quant_scale_to_bits(activation_min),
                     "float_activation_max_bits": _quant_scale_to_bits(activation_max),
+                    "weight_format_is_packed": int(is_packed_weights),
                 }
             ),
         },
@@ -962,14 +991,19 @@ def _build_nn_activation_float_case(
             f"{generated_test.name}: block_size {block_size} does not match extracted input size {input_flat.size}."
         )
 
+    # Values must match the real CMSIS-NN arm_nn_activation_type_flt enum
+    # (Include/arm_nn_types_flt.h) exactly, since the firmware casts the
+    # streamed integer straight to that enum type. These intentionally live
+    # in a dedicated 32+ range to avoid overlap with the legacy quantized
+    # arm_nn_activation_type enum (ARM_SIGMOID=0, ARM_TANH=1).
     activation_kind_map = {
-        "ARM_NN_FLT_ACT_RELU": 0,
-        "ARM_NN_FLT_ACT_RELU6": 1,
-        "ARM_NN_FLT_ACT_SIGMOID": 2,
-        "ARM_NN_FLT_ACT_TANH": 3,
-        "ARM_NN_FLT_ACT_NONE": 4,
-        "ARM_NN_FLT_ACT_LEAKY_RELU": 5,
-        "ARM_NN_FLT_ACT_HARDSWISH": 6,
+        "ARM_NN_FLT_ACT_NONE": 32,
+        "ARM_NN_FLT_ACT_SIGMOID": 33,
+        "ARM_NN_FLT_ACT_TANH": 34,
+        "ARM_NN_FLT_ACT_RELU": 35,
+        "ARM_NN_FLT_ACT_RELU6": 36,
+        "ARM_NN_FLT_ACT_HARDSWISH": 37,
+        "ARM_NN_FLT_ACT_LEAKY_RELU": 38,
     }
     if activation_symbol not in activation_kind_map:
         raise UnsupportedGeneratedTestError(

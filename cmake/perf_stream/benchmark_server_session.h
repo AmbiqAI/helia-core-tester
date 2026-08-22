@@ -125,6 +125,13 @@ typedef struct
      * convention as scale_bits -- see quant_scale_from_bits() in benchmark_server_session.c). */
     int32_t float_activation_min_bits;
     int32_t float_activation_max_bits;
+    /* ConvolutionFunctions Convolve float weight-layout selector -- 0 means the weights
+     * blob is ARM_NN_WEIGHT_FORMAT_STANDARD (plain HWIO layout), 1 means it is the real
+     * generated test's ARM_NN_WEIGHT_FORMAT_NT_N_PACKED layout (used by some *_packed_*
+     * cases) -- see parse_scalar() and run_convolve_once() in benchmark_server_session.c.
+     * Only meaningful for the F32/F16 dispatch path (S8/S16 select STANDARD vs packed via
+     * a wholly separate kernel_id -- S4 -- rather than a runtime flag). */
+    int32_t weight_format_is_packed;
     /* ActivationFunctions scalar params -- see parse_scalar() and run_activation_once() in
      * benchmark_server_session.c. Relu/Relu6/Clamp/LeakyRelu/HardSwish* all reuse
      * input_offset/output_offset/out_mult/out_shift/activation_min/max above where semantics

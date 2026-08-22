@@ -108,7 +108,14 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
     cmsis_nn_dims bias_dims;
     cmsis_nn_dims output_dims;
 
-    if (input == NULL || weights == NULL || bias == NULL || multiplier == NULL || shift == NULL)
+    /* multiplier/shift (per-channel requantization params) only exist for quantized
+     * (S8/S16) Convolve cases -- the F16/F32 float bundles built by
+     * generated_test_bridge.py never emit those blobs, so requiring them
+     * unconditionally here would reject every float Convolve case before the
+     * float-specific dispatch below is ever reached. */
+    const bool is_float_kernel = (session->expected_kernel_id == HCT_KERNEL_ID_CONVOLVE_F32 ||
+                                  session->expected_kernel_id == HCT_KERNEL_ID_CONVOLVE_F16);
+    if (input == NULL || weights == NULL || bias == NULL || (!is_float_kernel && (multiplier == NULL || shift == NULL)))
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
@@ -153,7 +160,7 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
                 .padding = { .w = session->pad_w, .h = session->pad_h },
                 .dilation = { .w = (session->dilation_w == 0) ? 1 : session->dilation_w, .h = (session->dilation_h == 0) ? 1 : session->dilation_h },
                 .activation = { .min = (float16_t)activation_min, .max = (float16_t)activation_max },
-                .weight_format = ARM_NN_WEIGHT_FORMAT_STANDARD,
+                .weight_format = (session->weight_format_is_packed != 0) ? ARM_NN_WEIGHT_FORMAT_NT_N_PACKED : ARM_NN_WEIGHT_FORMAT_STANDARD,
             };
             required_scratch = arm_convolve_f16_get_buffer_size(&params, &input_dims, &filter_dims, &output_dims, ARM_NN_LAYOUT_NHWC);
             if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
@@ -181,7 +188,7 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
                 .padding = { .w = session->pad_w, .h = session->pad_h },
                 .dilation = { .w = (session->dilation_w == 0) ? 1 : session->dilation_w, .h = (session->dilation_h == 0) ? 1 : session->dilation_h },
                 .activation = { .min = activation_min, .max = activation_max },
-                .weight_format = ARM_NN_WEIGHT_FORMAT_STANDARD,
+                .weight_format = (session->weight_format_is_packed != 0) ? ARM_NN_WEIGHT_FORMAT_NT_N_PACKED : ARM_NN_WEIGHT_FORMAT_STANDARD,
             };
             required_scratch = arm_convolve_f32_get_buffer_size(&params, &input_dims, &filter_dims, &output_dims, ARM_NN_LAYOUT_NHWC);
             if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
@@ -980,7 +987,7 @@ static arm_cmsis_nn_status run_nn_activation_float_once(hct_server_session_t *se
             return arm_nn_activation_f32((const float *)blob_ptr(session, input),
                                      (float *)session->output_buffer,
                                      block_size,
-                                     (arm_nn_activation_type)session->activation_kind,
+                                     (arm_nn_activation_type_flt)session->activation_kind,
                                      param);
         }
     }
@@ -996,7 +1003,7 @@ static arm_cmsis_nn_status run_nn_activation_float_once(hct_server_session_t *se
             return arm_nn_activation_f16((const float16_t *)blob_ptr(session, input),
                                      (float16_t *)session->output_buffer,
                                      block_size,
-                                     (arm_nn_activation_type)session->activation_kind,
+                                     (arm_nn_activation_type_flt)session->activation_kind,
                                      param);
         }
     }

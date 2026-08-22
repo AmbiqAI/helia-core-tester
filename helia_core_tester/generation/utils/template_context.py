@@ -772,12 +772,29 @@ class TemplateContextBuilder:
         For S16 (int16_t):
           MVE: 4 * ceil((input_c * filter_w * filter_h) / 8) * 8 * sizeof(int16_t)
           DSP: 2 * input_c * filter_w * filter_h * sizeof(int16_t)
+
+        For FP32/FP16 (float32_t/float16_t):
+          CMSIS-NN's real arm_convolve_f32/f16_get_buffer_size() falls back, for the
+          general (non-1x1, non-1xn) case, to the patch-gemm tile formula:
+              ARM_NN_CONV_NHWC_PATCH_GEMM_{F32,F16}_MAX_TILE_ROWS(8) * filter_h * filter_w
+              * input_c * sizeof(element)
+          This is strictly >= every other float Convolve buffer-size specialization
+          (1x1, 1xN, depthwise NT_T, packed-weight direct k3/k5), so it is used
+          unconditionally here as the conservative upper bound, matching the S8/S16
+          "max of known formulas" philosophy above. Previously this function silently
+          fell through to the S8 (int8) formula for FP32/FP16 callers, undersizing the
+          scratch buffer by 2x-4x (elem_size=1 assumed instead of 2 or 4) and causing
+          real hardware ARM_CMSIS_NN_ARG_ERROR rejections for float Convolve cases.
         """
         input_c = input_dims['c']
         filter_w = filter_dims['w']
         filter_h = filter_dims['h']
-        
-        if output_dtype == 'S16':
+
+        if output_dtype in ('FP32', 'FP16'):
+            elem_size = 4 if output_dtype == 'FP32' else 2
+            max_tile_rows = 8
+            return max_tile_rows * filter_h * filter_w * input_c * elem_size
+        elif output_dtype == 'S16':
             # S16 buffer size calculation
             # MVE: 4 * ceil((input_c * filter_w * filter_h) / 8) * 8 * sizeof(int16_t)
             col_length_mve = input_c * filter_w * filter_h
