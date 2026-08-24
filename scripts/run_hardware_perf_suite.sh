@@ -4,7 +4,7 @@
 # `helia_core_tester perf-stream` CLI:
 #
 #   1. uv run helia_core_tester generate ...
-#   2. uv run helia_core_tester perf-stream flash --cpu <CPU>
+#   2. uv run helia_core_tester perf-stream flash --cpu <CPU> --serial-no <SERIAL>
 #   3. uv run helia_core_tester perf-stream run-generated --serial-no <SERIAL> ...
 #
 # By default (no --family given) this runs EVERY operator family with real
@@ -157,13 +157,13 @@ else
 fi
 
 # --- Step 2: flash the real benchmark-server firmware ----------------------
-# Note: `perf-stream flash` has no --serial-no option -- J-Link flashing
-# (via nsx_add_segger_targets()'s CMake target) assumes a single connected
-# probe. The detected/given SERIAL_NO is only used below for the RTT
-# session in `perf-stream run-generated`.
+# `perf-stream flash --serial-no` threads SERIAL_NO through to CMake as
+# -DNSX_JLINK_SERIAL, which nsx_add_segger_targets() (cmake/nsx/nsx_helpers.cmake)
+# turns into a `-USB <serial>` arg for JLinkExe -- required to disambiguate
+# which probe to flash when more than one J-Link is connected.
 if [[ "${SKIP_FLASH}" -eq 0 ]]; then
-    echo "[run_hardware_perf_suite] Flashing hct_benchmark_server firmware..."
-    uv run helia_core_tester perf-stream flash --cpu "${CPU}"
+    echo "[run_hardware_perf_suite] Flashing hct_benchmark_server firmware (serial ${SERIAL_NO})..."
+    uv run helia_core_tester perf-stream flash --cpu "${CPU}" --serial-no "${SERIAL_NO}"
 else
     echo "[run_hardware_perf_suite] --skip-flash set; reusing firmware already running on the board."
 fi

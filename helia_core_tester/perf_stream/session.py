@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -156,10 +157,38 @@ class HostSession:
                     comparison_result = compare_status(reported_status, bundle.comparison)
                 else:
                     expected_output = blob_numpy(bundle.expected_output)
-                    actual = np.frombuffer(bytes(actual_output_bytes), dtype=expected_output.dtype).reshape(
-                        expected_output.shape
-                    )
-                    comparison_result = compare_output(actual, expected_output, bundle.comparison)
+                    expected_size = expected_output.size
+                    itemsize = expected_output.dtype.itemsize
+                    actual_size = len(actual_output_bytes) // itemsize if itemsize else 0
+                    if actual_size != expected_size or len(actual_output_bytes) % itemsize != 0:
+                        # Defensive: an earlier case's kernel writing out-of-bounds into a
+                        # shared session/output buffer (observed after a run of failing
+                        # DepthwiseConv float cases) can leave a *later*, otherwise-correct
+                        # case's OUTPUT_CHUNK stream holding more/fewer bytes than its own
+                        # expected_output size implies. np.reshape() would raise here and
+                        # crash the entire suite run over one corrupted case -- report it as
+                        # a failed comparison instead so the rest of the suite still runs and
+                        # the failure (and its diagnostic) is visible in the results table.
+                        print(
+                            f"[perf-stream] WARNING: case {current_case_id!r} output size mismatch -- "
+                            f"received {len(actual_output_bytes)} bytes ({actual_size} elements of "
+                            f"dtype {expected_output.dtype}), expected {expected_size} elements "
+                            f"(shape {expected_output.shape}). Likely firmware/session state "
+                            "corruption from a preceding case; reporting as a failed comparison "
+                            "rather than aborting the run.",
+                            file=sys.stderr,
+                        )
+                        comparison_result = ComparisonResult(
+                            passed=False,
+                            mismatch_count=abs(actual_size - expected_size),
+                            max_abs_diff=float("nan"),
+                            mode=str(bundle.comparison.get("mode", "unknown")),
+                        )
+                    else:
+                        actual = np.frombuffer(bytes(actual_output_bytes), dtype=expected_output.dtype).reshape(
+                            expected_output.shape
+                        )
+                        comparison_result = compare_output(actual, expected_output, bundle.comparison)
                 writer = ByteWriter()
                 writer.u8(1 if comparison_result.passed else 0)
                 self._send(MessageType.CORRECTNESS_ACK, writer.finish())

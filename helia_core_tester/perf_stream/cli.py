@@ -157,17 +157,32 @@ def _print_skipped_summary(skipped: list[tuple]) -> None:
             typer.echo("      " + ", ".join(names[i : i + _NAMES_PER_LINE]))
 
 
-def _configure(build_dir: Path, cpu: str, board: str, force: bool) -> None:
+def _cached_var(cache_text: str, name: str) -> Optional[str]:
+    """Return the cached value of a CMakeCache.txt entry (e.g. `NSX_JLINK_SERIAL`),
+    or None if it isn't present. Cache lines look like `NAME:TYPE=value`."""
+    match = re.search(rf"^{re.escape(name)}:[^=]*=(.*)$", cache_text, re.MULTILINE)
+    return match.group(1) if match else None
+
+
+def _configure(build_dir: Path, cpu: str, board: str, force: bool, serial_no: Optional[int] = None) -> None:
     repo_root = _repo_root()
     cache = build_dir / "CMakeCache.txt"
     if cache.exists() and not force:
         # A build dir configured before ARM_NN_ENABLE_F16 was added here would
         # otherwise silently keep compiling without FP16 kernel support.
         cache_text = cache.read_text(encoding="utf-8", errors="ignore")
-        if "ARM_NN_ENABLE_F16:BOOL=ON" in cache_text:
+        # NSX_JLINK_SERIAL is baked into the generated *_flash/_reset/_view
+        # custom-target commands at configure time (see nsx_add_segger_targets()
+        # in cmake/nsx/nsx_helpers.cmake), so switching --serial-no against an
+        # already-configured build dir requires a reconfigure to take effect.
+        serial_stale = serial_no is not None and _cached_var(cache_text, "NSX_JLINK_SERIAL") != str(serial_no)
+        if "ARM_NN_ENABLE_F16:BOOL=ON" in cache_text and not serial_stale:
             typer.echo(f"[perf-stream] Reusing existing configured build dir: {build_dir}")
             return
-        typer.echo(f"[perf-stream] Existing build dir at {build_dir} predates ARM_NN_ENABLE_F16 -- reconfiguring.")
+        if serial_stale:
+            typer.echo(f"[perf-stream] Requested --serial-no {serial_no} differs from configured build dir -- reconfiguring.")
+        else:
+            typer.echo(f"[perf-stream] Existing build dir at {build_dir} predates ARM_NN_ENABLE_F16 -- reconfiguring.")
     build_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         "cmake",
@@ -182,6 +197,8 @@ def _configure(build_dir: Path, cpu: str, board: str, force: bool) -> None:
         "-DARM_NN_ENABLE_F32=ON",
         "-DARM_NN_ENABLE_F16=ON",
     ]
+    if serial_no is not None:
+        cmd.append(f"-DNSX_JLINK_SERIAL={serial_no}")
     typer.echo(f"[perf-stream] Configuring: {' '.join(cmd)}")
     subprocess.run(cmd, cwd=repo_root, check=True)
 
@@ -217,11 +234,18 @@ def flash(
     build_dir: Path = typer.Option(Path(_DEFAULT_BUILD_DIR), "--build-dir", help="CMake build directory."),
     jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel build jobs."),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
+    serial_no: Optional[int] = typer.Option(
+        None,
+        "--serial-no",
+        help="J-Link probe serial number to flash (see `JLinkExe` -> ShowEmuList). "
+        "Required when more than one J-Link probe is connected -- otherwise JLinkExe "
+        "cannot disambiguate and flashing fails with 'Cannot connect to the probe/programmer'.",
+    ),
 ):
     """Build (if needed) and flash the real hct_benchmark_server firmware to a connected Apollo510 board via J-Link."""
     repo_root = _repo_root()
     resolved_build_dir = build_dir if build_dir.is_absolute() else repo_root / build_dir
-    _configure(resolved_build_dir, cpu, board, force_reconfigure)
+    _configure(resolved_build_dir, cpu, board, force_reconfigure, serial_no=serial_no)
     _build(resolved_build_dir, "hct_benchmark_server_flash", jobs)
     typer.echo("✓ Firmware flashed successfully")
 

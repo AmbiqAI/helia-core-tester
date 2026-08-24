@@ -903,7 +903,7 @@ static arm_cmsis_nn_status run_abs_once(hct_server_session_t *session)
     if (session->expected_kernel_id == HCT_KERNEL_ID_ABS_F32)
     {
 #ifndef HCT_HOST_ABS_ONLY
-        return arm_abs_f32((const float *)blob_ptr(session, input),
+        return arm_nn_abs_f32((const float *)blob_ptr(session, input),
                               (float *)session->output_buffer,
                               session->block_size);
 #else
@@ -913,7 +913,7 @@ static arm_cmsis_nn_status run_abs_once(hct_server_session_t *session)
     if (session->expected_kernel_id == HCT_KERNEL_ID_ABS_F16)
     {
 #ifndef HCT_HOST_ABS_ONLY
-        return arm_abs_f16((const float16_t *)blob_ptr(session, input),
+        return arm_nn_abs_f16((const float16_t *)blob_ptr(session, input),
                               (float16_t *)session->output_buffer,
                               session->block_size);
 #else
