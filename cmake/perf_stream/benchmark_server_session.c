@@ -792,16 +792,13 @@ static void reset_case_buffers(hct_server_session_t *session)
     session->case_arena_used_bytes = 0u;
     session->output_length = 0u;
     session->last_kernel_status = ARM_CMSIS_NN_SUCCESS;
-    session->pad_offset_h = 0;
-    session->pad_offset_w = 0;
-    session->output_n = 0;
-    session->axis_n = 0;
-    session->axis_h = 0;
-    session->axis_w = 0;
-    session->axis_c = 0;
-    session->axis = 0;
-    session->needs_rescale = 0;
-    session->null_arg_mask = 0;
+    /* Zero every per-case scalar param field (stride_h..adj_y, contiguous in the struct --
+     * see benchmark_server_session.h) in one shot. Individually resetting only a handful of
+     * these fields left the rest (e.g. output_h, float_activation_min_bits/max_bits) stale
+     * across cases within the same batch/session, so a later case that doesn't retransmit a
+     * given scalar (because the bridge omits it when it equals its own default, e.g.
+     * BatchMatMul's output_h) would silently reuse a previous case's leaked value. */
+    memset(&session->stride_h, 0, offsetof(hct_server_session_t, blob_count) - offsetof(hct_server_session_t, stride_h));
     memset(session->case_arena, 0, sizeof(session->case_arena));
 }
 

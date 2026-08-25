@@ -1373,8 +1373,16 @@ def _build_depthwise_conv_case(
     input_offset = 0 if is_float_dw else _extract_scalar(header_text, params_struct, "input_offset")
     output_offset = 0 if is_float_dw else _extract_scalar(header_text, params_struct, "output_offset")
     ch_mult = _extract_scalar(header_text, params_struct, "ch_mult")
-    activation_min = _extract_nested_scalar(header_text, params_struct, "activation", "min")
-    activation_max = _extract_nested_scalar(header_text, params_struct, "activation", "max")
+    if is_float_dw:
+        # Float dw_conv_params.activation.{min,max} are real floats (e.g. -1.0e+30f), not
+        # the int32 quantized clamps every S8/S16 adapter's activation.min/max uses --
+        # _extract_nested_scalar's integer regex silently truncates "-1.0e+30f" to -1,
+        # producing a bogus [-1, 1] clamp instead of the intended no-op [-1e30, 1e30].
+        activation_min = _extract_nested_float_scalar(header_text, params_struct, "activation", "min")
+        activation_max = _extract_nested_float_scalar(header_text, params_struct, "activation", "max")
+    else:
+        activation_min = _extract_nested_scalar(header_text, params_struct, "activation", "min")
+        activation_max = _extract_nested_scalar(header_text, params_struct, "activation", "max")
     stride_h = _extract_nested_scalar(header_text, params_struct, "stride", "h")
     stride_w = _extract_nested_scalar(header_text, params_struct, "stride", "w")
     pad_h = _extract_nested_scalar(header_text, params_struct, "padding", "h")
@@ -1434,13 +1442,19 @@ def _build_depthwise_conv_case(
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    # Policy: convolution operators require an exact (0 tolerance) match. Real hardware
-    # has been observed to diverge from the scalar/golden reference by up to 2 LSB on the
-    # dilation/non-optimized accumulation path (see
+    # Policy: integer (S8/S16) convolution operators require an exact (0 tolerance)
+    # match. Real hardware has been observed to diverge from the scalar/golden
+    # reference by up to 2 LSB on the dilation/non-optimized accumulation path (see
     # docs/perf-stream-expansion-progress.md's root-cause investigation), but that is a
     # known CMSIS-NN kernel-level MVE-vs-scalar rounding issue, not something to be
-    # papered over with test tolerance for a convolution op.
-    comparison = {"mode": "exact_int"}
+    # papered over with test tolerance for a convolution op. Float (FP16/FP32)
+    # activations legitimately diverge between MVE and scalar accumulation and must use
+    # the descriptor's resolved float tolerance instead, matching the Convolve builder.
+    comparison = (
+        dict(descriptor.get("resolved_comparison", {"mode": "float", "atol": 0.001, "rtol": 0.001}))
+        if activation_dtype in ("FP32", "FP16")
+        else {"mode": "exact_int"}
+    )
     manifest = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,
@@ -4334,8 +4348,16 @@ def _build_batch_matmul_case(
 
     adj_x = _extract_bool_scalar(header_text, f"{prefix}_bmm_params", "adj_x")
     adj_y = _extract_bool_scalar(header_text, f"{prefix}_bmm_params", "adj_y")
-    activation_min = _extract_nested_scalar(header_text, f"{prefix}_bmm_params", "activation", "min")
-    activation_max = _extract_nested_scalar(header_text, f"{prefix}_bmm_params", "activation", "max")
+    if activation_dtype in ("FP32", "FP16"):
+        # Float kernels' activation.min/max are real floats (e.g. -1.0e+30f), not the
+        # int32 quantized clamps every S8/S16 adapter's activation.min/max uses --
+        # _extract_nested_scalar's integer regex silently truncates "-1.0e+30f" to -1,
+        # producing a bogus [-1, 1] clamp instead of the intended no-op [-1e30, 1e30].
+        activation_min = _extract_nested_float_scalar(header_text, f"{prefix}_bmm_params", "activation", "min")
+        activation_max = _extract_nested_float_scalar(header_text, f"{prefix}_bmm_params", "activation", "max")
+    else:
+        activation_min = _extract_nested_scalar(header_text, f"{prefix}_bmm_params", "activation", "min")
+        activation_max = _extract_nested_scalar(header_text, f"{prefix}_bmm_params", "activation", "max")
     multiplier = shift = None
     input_offset = filter_offset = output_offset = 0
     if activation_dtype in ("S8", "S16"):
@@ -4401,10 +4423,17 @@ def _build_batch_matmul_case(
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         # BatchMatMul's generated harness (batch_matmul.c.j2's HELIA_VALIDATE_OUTPUTS call)
-        # always validates with TOLERANT_INT tolerance=1, NOT the generic dtype-based
+        # validates S8/S16 with TOLERANT_INT tolerance=1, NOT the generic dtype-based
         # exact_int default resolve_comparison() computes -- same template-vs-descriptor
-        # fidelity gap already documented for FullyConnected/Softmax/Quantize.
-        "correctness_comparison": {"mode": "tolerant_int", "tolerance": 1},
+        # fidelity gap already documented for FullyConnected/Softmax/Quantize. FP16/FP32
+        # kernels set validation_mode='float' (see batch_matmul.py), so they validate
+        # with FLOAT atol/rtol instead and must use the descriptor's resolved float
+        # tolerance here, not TOLERANT_INT.
+        "correctness_comparison": (
+            dict(descriptor.get("resolved_comparison", {"mode": "float", "atol": 0.001, "rtol": 0.001}))
+            if activation_dtype in ("FP32", "FP16")
+            else {"mode": "tolerant_int", "tolerance": 1}
+        ),
         # ctx->buf sized rhs_cols * sizeof(int32_t) for S8 only (kernel-sum scratch the
         # kernel fills itself at runtime); S16 needs none. See run_batch_matmul_once().
         "scratch_buffer": {
