@@ -32,7 +32,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 def _bridge(tmp_path: Path, name_filter: str) -> dict[str, object]:
     cases = discover_generated_tests(PROJECT_ROOT, family="BasicMathFunctions", name_filter=name_filter)
     assert cases, f"expected a discoverable BasicMathFunctions test matching {name_filter!r}"
-    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path)
+    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False)
     loaded = load_case_bundle(bundle.manifest_path)
     return loaded.manifest
 

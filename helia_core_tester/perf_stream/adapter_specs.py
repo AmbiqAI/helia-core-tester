@@ -84,8 +84,7 @@ static hctp_status_t compute_convolve_output_dims(const hct_server_session_t *se
         return HCTP_STATUS_INVALID_ARGUMENT;
     }
 
-    *output_bytes = (uint32_t)(output_dims->n * output_dims->h * output_dims->w * output_dims->c);
-    if (*output_bytes > sizeof(session->output_buffer))
+    if (!hct_checked_dims_bytes(output_dims, 1u, session->output_capacity_bytes, output_bytes))
     {
         return HCTP_STATUS_INVALID_ARGUMENT;
     }
@@ -147,7 +146,7 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
         const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
         int32_t required_scratch;
 
-        if (session->output_length > sizeof(session->output_buffer) / element_size)
+        if (session->output_length > session->output_capacity_bytes / element_size)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
@@ -167,7 +166,7 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.buf = (required_scratch > 0) ? &session->workspace[session->scratch_offset] : NULL;
             ctx.size = required_scratch;
             return arm_convolve_f16(&ctx,
                                     &params,
@@ -178,7 +177,7 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
                                     &bias_dims,
                                     (bias != NULL) ? (const float16_t *)blob_ptr(session, bias) : NULL,
                                     &output_dims,
-                                    (float16_t *)session->output_buffer,
+                                    (float16_t *)hct_output_ptr(session),
                                     ARM_NN_LAYOUT_NHWC);
         }
 
@@ -195,7 +194,7 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.buf = (required_scratch > 0) ? &session->workspace[session->scratch_offset] : NULL;
             ctx.size = required_scratch;
             return arm_convolve_f32(&ctx,
                                     &params,
@@ -206,7 +205,7 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
                                     &bias_dims,
                                     (bias != NULL) ? (const float *)blob_ptr(session, bias) : NULL,
                                     &output_dims,
-                                    (float *)session->output_buffer,
+                                    (float *)hct_output_ptr(session),
                                     ARM_NN_LAYOUT_NHWC);
         }
     }
@@ -240,14 +239,14 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
+        ctx.buf = (session->scratch_bytes > 0u) ? &session->workspace[session->scratch_offset] : NULL;
         ctx.size = session->scratch_bytes;
 
         /* session->output_length is transmitted to the host as a raw byte count (see the
          * RTT send loop below) -- compute_convolve_output_dims() above computed it in
          * elements, so rescale to bytes for 2-byte-per-element S16 output. */
-        session->output_length = (uint32_t)(session->output_length * sizeof(int16_t));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (!hct_checked_dims_bytes(&output_dims, sizeof(int16_t),
+                                    session->output_capacity_bytes, &session->output_length))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
@@ -262,7 +261,7 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
                                         &bias_dims,
                                         &bias_data,
                                         &output_dims,
-                                        (int16_t *)session->output_buffer);
+                                        (int16_t *)hct_output_ptr(session));
     }
 
     if (session->expected_kernel_id == HCT_KERNEL_ID_CONVOLVE_S4)
@@ -272,7 +271,7 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
+        ctx.buf = (session->scratch_bytes > 0u) ? &session->workspace[session->scratch_offset] : NULL;
         ctx.size = session->scratch_bytes;
 
         return arm_convolve_wrapper_s4(&ctx,
@@ -285,7 +284,7 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
                                        &bias_dims,
                                        (const int32_t *)blob_ptr(session, bias),
                                        &output_dims,
-                                       (int8_t *)session->output_buffer);
+                                       (int8_t *)hct_output_ptr(session));
     }
 
     {
@@ -295,25 +294,33 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
         cmsis_nn_context weight_sum_ctx;
         hct_convolve_s8_request_t request;
         int32_t required_scratch;
-        uint32_t weight_sum_offset;
+        uint32_t weight_sum_relative_offset;
         uint32_t weight_sum_bytes;
+        uint32_t weight_sum_end;
 
         required_scratch = arm_convolve_s8_get_buffer_size(&input_dims, &filter_dims);
         if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        weight_sum_bytes = (uint32_t)output_dims.c * (uint32_t)sizeof(int32_t);
-        weight_sum_offset = align_up(session->scratch_offset + session->scratch_bytes, 16u);
-        if (weight_sum_offset + weight_sum_bytes > session->runtime_arena_capacity ||
-            weight_sum_offset + weight_sum_bytes > sizeof(session->case_arena))
         {
-            return ARM_CMSIS_NN_ARG_ERROR;
+            const int32_t weight_sum_shape[1] = {output_dims.c};
+            if (!hct_checked_shape_bytes(weight_sum_shape, 1, sizeof(int32_t),
+                                         session->scratch_bytes, &weight_sum_bytes) ||
+                !hct_checked_aligned_range((uint32_t)required_scratch,
+                                           16u,
+                                           weight_sum_bytes,
+                                           session->scratch_bytes,
+                                           &weight_sum_relative_offset,
+                                           &weight_sum_end))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
         }
 
-        ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
-        ctx.size = session->scratch_bytes;
-        weight_sum_ctx.buf = &session->case_arena[weight_sum_offset];
+        ctx.buf = (required_scratch > 0) ? &session->workspace[session->scratch_offset] : NULL;
+        ctx.size = required_scratch;
+        weight_sum_ctx.buf = &session->workspace[session->scratch_offset + weight_sum_relative_offset];
         weight_sum_ctx.size = (int32_t)weight_sum_bytes;
         if (arm_convolve_weight_sum((int32_t *)weight_sum_ctx.buf,
                                     (const int8_t *)blob_ptr(session, weights),
@@ -325,11 +332,6 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        if (weight_sum_offset + weight_sum_bytes > session->case_arena_used_bytes)
-        {
-            session->case_arena_used_bytes = weight_sum_offset + weight_sum_bytes;
-        }
-
         request.ctx = &ctx;
         request.weight_sum_ctx = &weight_sum_ctx;
         request.conv_params = &conv_params;
@@ -342,7 +344,7 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
         request.bias_data = (const int32_t *)blob_ptr(session, bias);
         request.upscale_dims = NULL;
         request.output_dims = &output_dims;
-        request.output_data = (int8_t *)session->output_buffer;
+        request.output_data = (int8_t *)hct_output_ptr(session);
         return hct_dispatch_convolve_s8(&request);
     }
 }'''
@@ -386,7 +388,10 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
-    session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c);
+    if (!hct_checked_dims_bytes(&output_dims, 1u, session->output_capacity_bytes, &session->output_length))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
 
     if (session->expected_kernel_id == HCT_KERNEL_ID_DEPTHWISE_CONV_F32 ||
         session->expected_kernel_id == HCT_KERNEL_ID_DEPTHWISE_CONV_F16)
@@ -398,7 +403,7 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
         cmsis_nn_context ctx;
         int32_t required_scratch;
 
-        if (session->output_length > sizeof(session->output_buffer) / element_size)
+        if (session->output_length > session->output_capacity_bytes / element_size)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
@@ -418,7 +423,7 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.buf = (required_scratch > 0) ? &session->workspace[session->scratch_offset] : NULL;
             ctx.size = required_scratch;
             return arm_depthwise_conv_f16(&ctx,
                                           &params,
@@ -429,7 +434,7 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
                                           &bias_dims,
                                           (const float16_t *)blob_ptr(session, bias),
                                           &output_dims,
-                                          (float16_t *)session->output_buffer,
+                                          (float16_t *)hct_output_ptr(session),
                                           ARM_NN_LAYOUT_NHWC);
         }
         else
@@ -446,7 +451,7 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.buf = (required_scratch > 0) ? &session->workspace[session->scratch_offset] : NULL;
             ctx.size = required_scratch;
             return arm_depthwise_conv_f32(&ctx,
                                           &params,
@@ -457,7 +462,7 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
                                           &bias_dims,
                                           (const float *)blob_ptr(session, bias),
                                           &output_dims,
-                                          (float *)session->output_buffer,
+                                          (float *)hct_output_ptr(session),
                                           ARM_NN_LAYOUT_NHWC);
         }
     }
@@ -490,11 +495,11 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
+        ctx.buf = (session->scratch_bytes > 0u) ? &session->workspace[session->scratch_offset] : NULL;
         ctx.size = session->scratch_bytes;
 
-        session->output_length = (uint32_t)(session->output_length * sizeof(int16_t));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (!hct_checked_dims_bytes(&output_dims, sizeof(int16_t),
+                                    session->output_capacity_bytes, &session->output_length))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
@@ -509,7 +514,7 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
                                               &bias_dims,
                                               (const int64_t *)blob_ptr(session, bias),
                                               &output_dims,
-                                              (int16_t *)session->output_buffer);
+                                              (int16_t *)hct_output_ptr(session));
     }
 
     if (session->expected_kernel_id == HCT_KERNEL_ID_DEPTHWISE_CONV_S4)
@@ -520,7 +525,7 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
+        ctx.buf = (session->scratch_bytes > 0u) ? &session->workspace[session->scratch_offset] : NULL;
         ctx.size = session->scratch_bytes;
 
         return arm_depthwise_conv_wrapper_s4(&ctx,
@@ -533,10 +538,10 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
                                              &bias_dims,
                                              (const int32_t *)blob_ptr(session, bias),
                                              &output_dims,
-                                             (int8_t *)session->output_buffer);
+                                             (int8_t *)hct_output_ptr(session));
     }
 
-    if (session->output_length > sizeof(session->output_buffer))
+    if (session->output_length > session->output_capacity_bytes)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
@@ -552,7 +557,7 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
                                      &bias_dims,
                                      (const int32_t *)blob_ptr(session, bias),
                                      &output_dims,
-                                     (int8_t *)session->output_buffer);
+                                     (int8_t *)hct_output_ptr(session));
     }
 }
 '''
@@ -567,7 +572,7 @@ _RUN_POOLING_ONCE = '''\
  * MaxPool never needs a scratch buffer for any dtype; F32 AvgPool never does either (its
  * generated harness always passes ctx.buf=NULL). Int8/int16 AvgPool needs one sized via
  * arm_avgpool_{s8,s16}_get_buffer_size(output_w, input_c) -- zero for many small cases,
- * so scratch_bytes may legitimately be 0 (case_arena pointer is never dereferenced when
+ * so scratch_bytes may legitimately be 0 (the workspace pointer is never dereferenced when
  * ctx.size is 0). F32's activation.min/max are real floats (e.g. +/-1e30), not int32
  * clamps, so they're sent bit-cast through float_activation_min_bits/max_bits (same
  * bit-cast-through-int32 wire convention as scale_bits -- see quant_scale_from_bits()). */
@@ -608,9 +613,10 @@ static arm_cmsis_nn_status run_pooling_once(hct_server_session_t *session)
         bool is_f16 = (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_F16 || session->expected_kernel_id == HCT_KERNEL_ID_MAXPOOL_F16);
         ctx.buf = NULL;
         ctx.size = 0;
-        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c *
-                                            (is_f16 ? (int32_t)sizeof(float16_t) : (int32_t)sizeof(float)));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (!hct_checked_dims_bytes(&output_dims,
+                                    is_f16 ? sizeof(float16_t) : sizeof(float),
+                                    session->output_capacity_bytes,
+                                    &session->output_length))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
@@ -626,10 +632,10 @@ static arm_cmsis_nn_status run_pooling_once(hct_server_session_t *session)
             if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_F16)
             {
                 return arm_avg_pool_f16(&ctx, &pool_params_f16, &input_dims, (const float16_t *)blob_ptr(session, input),
-                                        &filter_dims, &output_dims, (float16_t *)session->output_buffer);
+                                        &filter_dims, &output_dims, (float16_t *)hct_output_ptr(session));
             }
             return arm_max_pool_f16(&ctx, &pool_params_f16, &input_dims, (const float16_t *)blob_ptr(session, input),
-                                    &filter_dims, &output_dims, (float16_t *)session->output_buffer);
+                                    &filter_dims, &output_dims, (float16_t *)hct_output_ptr(session));
         }
         {
             cmsis_nn_pool_params_f32 pool_params_f32;
@@ -642,10 +648,10 @@ static arm_cmsis_nn_status run_pooling_once(hct_server_session_t *session)
             if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_F32)
             {
                 return arm_avg_pool_f32(&ctx, &pool_params_f32, &input_dims, (const float *)blob_ptr(session, input),
-                                        &filter_dims, &output_dims, (float *)session->output_buffer);
+                                        &filter_dims, &output_dims, (float *)hct_output_ptr(session));
             }
             return arm_max_pool_f32(&ctx, &pool_params_f32, &input_dims, (const float *)blob_ptr(session, input),
-                                    &filter_dims, &output_dims, (float *)session->output_buffer);
+                                    &filter_dims, &output_dims, (float *)hct_output_ptr(session));
         }
     }
 
@@ -672,38 +678,38 @@ static arm_cmsis_nn_status run_pooling_once(hct_server_session_t *session)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.buf = (session->scratch_bytes > 0u) ? &session->workspace[session->scratch_offset] : NULL;
             ctx.size = session->scratch_bytes;
         }
 
         if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_S16 || session->expected_kernel_id == HCT_KERNEL_ID_MAXPOOL_S16)
         {
-            session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c * (int32_t)sizeof(int16_t));
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, sizeof(int16_t),
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_S16)
             {
                 return arm_avgpool_s16(&ctx, &pool_params, &input_dims, (const int16_t *)blob_ptr(session, input),
-                                       &filter_dims, &output_dims, (int16_t *)session->output_buffer);
+                                       &filter_dims, &output_dims, (int16_t *)hct_output_ptr(session));
             }
             return arm_max_pool_s16(&ctx, &pool_params, &input_dims, (const int16_t *)blob_ptr(session, input),
-                                    &filter_dims, &output_dims, (int16_t *)session->output_buffer);
+                                    &filter_dims, &output_dims, (int16_t *)hct_output_ptr(session));
         }
 
-        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c);
-        if (session->output_length > sizeof(session->output_buffer))
+        if (!hct_checked_dims_bytes(&output_dims, sizeof(int8_t),
+                                    session->output_capacity_bytes, &session->output_length))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         if (session->expected_kernel_id == HCT_KERNEL_ID_AVGPOOL_S8)
         {
             return arm_avgpool_s8(&ctx, &pool_params, &input_dims, (const int8_t *)blob_ptr(session, input),
-                                  &filter_dims, &output_dims, (int8_t *)session->output_buffer);
+                                  &filter_dims, &output_dims, (int8_t *)hct_output_ptr(session));
         }
         return arm_max_pool_s8(&ctx, &pool_params, &input_dims, (const int8_t *)blob_ptr(session, input),
-                               &filter_dims, &output_dims, (int8_t *)session->output_buffer);
+                               &filter_dims, &output_dims, (int8_t *)hct_output_ptr(session));
     }
 }'''
 
@@ -739,7 +745,7 @@ static arm_cmsis_nn_status run_activation_once(hct_server_session_t *session)
               session->expected_kernel_id == HCT_KERNEL_ID_TANH_S16 ||
               session->expected_kernel_id == HCT_KERNEL_ID_HARD_SWISH_PRECISE_S16);
     session->output_length = (uint32_t)(size * (is_s16 ? (int32_t)sizeof(int16_t) : (int32_t)sizeof(int8_t)));
-    if (session->output_length > sizeof(session->output_buffer))
+    if (session->output_length > session->output_capacity_bytes)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
@@ -747,7 +753,7 @@ static arm_cmsis_nn_status run_activation_once(hct_server_session_t *session)
     if (is_s16)
     {
         const int16_t *in16 = (const int16_t *)blob_ptr(session, input);
-        int16_t *out16 = (int16_t *)session->output_buffer;
+        int16_t *out16 = (int16_t *)hct_output_ptr(session);
         switch (session->expected_kernel_id)
         {
             case HCT_KERNEL_ID_RELU_S16:
@@ -780,7 +786,7 @@ static arm_cmsis_nn_status run_activation_once(hct_server_session_t *session)
     else
     {
         const int8_t *in8 = (const int8_t *)blob_ptr(session, input);
-        int8_t *out8 = (int8_t *)session->output_buffer;
+        int8_t *out8 = (int8_t *)hct_output_ptr(session);
         switch (session->expected_kernel_id)
         {
             case HCT_KERNEL_ID_RELU_S8:
@@ -853,7 +859,7 @@ static arm_cmsis_nn_status run_prelu_once(hct_server_session_t *session)
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         session->output_length = (uint32_t)(num_pixels * block_size * element_size);
-        if (session->output_length > sizeof(session->output_buffer))
+        if (session->output_length > session->output_capacity_bytes)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
@@ -861,7 +867,7 @@ static arm_cmsis_nn_status run_prelu_once(hct_server_session_t *session)
         {
             const int16_t *input_data = (const int16_t *)blob_ptr(session, input);
             const int16_t *alpha_data = (const int16_t *)blob_ptr(session, alpha);
-            int16_t *output_data = (int16_t *)session->output_buffer;
+            int16_t *output_data = (int16_t *)hct_output_ptr(session);
             for (int32_t pixel = 0; pixel < num_pixels; ++pixel)
             {
                 arm_cmsis_nn_status status = arm_prelu_scalar_s16(input_data + pixel,
@@ -881,7 +887,7 @@ static arm_cmsis_nn_status run_prelu_once(hct_server_session_t *session)
         {
             const int8_t *input_data = (const int8_t *)blob_ptr(session, input);
             const int8_t *alpha_data = (const int8_t *)blob_ptr(session, alpha);
-            int8_t *output_data = (int8_t *)session->output_buffer;
+            int8_t *output_data = (int8_t *)hct_output_ptr(session);
             for (int32_t pixel = 0; pixel < num_pixels; ++pixel)
             {
                 arm_cmsis_nn_status status = arm_prelu_scalar_s8(input_data + pixel,
@@ -923,11 +929,12 @@ static arm_cmsis_nn_status run_prelu_once(hct_server_session_t *session)
     bool out_is_s16 = (session->expected_kernel_id == HCT_KERNEL_ID_PRELU_S16);
     bool out_is_f16 = (session->expected_kernel_id == HCT_KERNEL_ID_PRELU_F16);
     bool out_is_f32 = (session->expected_kernel_id == HCT_KERNEL_ID_PRELU_F32);
-    session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c *
-                                        (out_is_f32 ? (int32_t)sizeof(float) :
-                                         out_is_f16 ? (int32_t)sizeof(float16_t) :
-                                         out_is_s16 ? (int32_t)sizeof(int16_t) : (int32_t)sizeof(int8_t)));
-    if (session->output_length > sizeof(session->output_buffer))
+    if (!hct_checked_dims_bytes(&output_dims,
+                                out_is_f32 ? sizeof(float) :
+                                out_is_f16 ? sizeof(float16_t) :
+                                out_is_s16 ? sizeof(int16_t) : sizeof(int8_t),
+                                session->output_capacity_bytes,
+                                &session->output_length))
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
@@ -935,13 +942,13 @@ static arm_cmsis_nn_status run_prelu_once(hct_server_session_t *session)
     {
         return arm_prelu_f32(&input_dims, (const float *)blob_ptr(session, input),
                              &alpha_dims, (const float *)blob_ptr(session, alpha),
-                             &output_dims, (float *)session->output_buffer);
+                             &output_dims, (float *)hct_output_ptr(session));
     }
     if (out_is_f16)
     {
         return arm_prelu_f16(&input_dims, (const float16_t *)blob_ptr(session, input),
                              &alpha_dims, (const float16_t *)blob_ptr(session, alpha),
-                             &output_dims, (float16_t *)session->output_buffer);
+                             &output_dims, (float16_t *)hct_output_ptr(session));
     }
     if (out_is_s16)
     {
@@ -950,14 +957,14 @@ static arm_cmsis_nn_status run_prelu_once(hct_server_session_t *session)
                              session->input_offset, session->alpha_offset, session->output_offset,
                              session->out_mult, session->out_shift,
                              session->out_mult_alpha, session->out_shift_alpha,
-                             &output_dims, (int16_t *)session->output_buffer);
+                             &output_dims, (int16_t *)hct_output_ptr(session));
     }
     return arm_prelu_s8(&input_dims, (const int8_t *)blob_ptr(session, input),
                         &alpha_dims, (const int8_t *)blob_ptr(session, alpha),
                         session->input_offset, session->alpha_offset, session->output_offset,
                         session->out_mult, session->out_shift,
                         session->out_mult_alpha, session->out_shift_alpha,
-                        &output_dims, (int8_t *)session->output_buffer);
+                        &output_dims, (int8_t *)hct_output_ptr(session));
 }'''
 
 _RUN_NN_ACTIVATION_FLOAT_ONCE = '''\
@@ -978,14 +985,14 @@ static arm_cmsis_nn_status run_nn_activation_float_once(hct_server_session_t *se
     if (session->expected_kernel_id == HCT_KERNEL_ID_NN_ACTIVATION_FLOAT_F32)
     {
         session->output_length = (uint32_t)(block_size * (int32_t)sizeof(float));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (session->output_length > session->output_capacity_bytes)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         {
             float param = quant_scale_from_bits(session->scale_bits);
             return arm_nn_activation_f32((const float *)blob_ptr(session, input),
-                                     (float *)session->output_buffer,
+                                     (float *)hct_output_ptr(session),
                                      block_size,
                                      (arm_nn_activation_type_flt)session->activation_kind,
                                      param);
@@ -994,14 +1001,14 @@ static arm_cmsis_nn_status run_nn_activation_float_once(hct_server_session_t *se
     if (session->expected_kernel_id == HCT_KERNEL_ID_NN_ACTIVATION_FLOAT_F16)
     {
         session->output_length = (uint32_t)(block_size * (int32_t)sizeof(float16_t));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (session->output_length > session->output_capacity_bytes)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         {
             float param = quant_scale_from_bits(session->scale_bits);
             return arm_nn_activation_f16((const float16_t *)blob_ptr(session, input),
-                                     (float16_t *)session->output_buffer,
+                                     (float16_t *)hct_output_ptr(session),
                                      block_size,
                                      (arm_nn_activation_type_flt)session->activation_kind,
                                      param);
@@ -1045,27 +1052,27 @@ static arm_cmsis_nn_status run_reduce_sum_once(hct_server_session_t *session)
 
     if (session->expected_kernel_id == HCT_KERNEL_ID_REDUCE_SUM_F32)
     {
-        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c * (int32_t)sizeof(float));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (!hct_checked_dims_bytes(&output_dims, sizeof(float),
+                                    session->output_capacity_bytes, &session->output_length))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         return arm_reduce_sum_f32((const float *)blob_ptr(session, input),
                                   &input_dims, &axis_dims,
-                                  (float *)session->output_buffer,
+                                  (float *)hct_output_ptr(session),
                                   &output_dims);
     }
 
     if (session->expected_kernel_id == HCT_KERNEL_ID_REDUCE_SUM_F16)
     {
-        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c * (int32_t)sizeof(float16_t));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (!hct_checked_dims_bytes(&output_dims, sizeof(float16_t),
+                                    session->output_capacity_bytes, &session->output_length))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         return arm_reduce_sum_f16((const float16_t *)blob_ptr(session, input),
                                   &input_dims, &axis_dims,
-                                  (float16_t *)session->output_buffer,
+                                  (float16_t *)hct_output_ptr(session),
                                   &output_dims);
     }
     return ARM_CMSIS_NN_ARG_ERROR;
@@ -1098,12 +1105,12 @@ static arm_cmsis_nn_status run_batch_norm_once(hct_server_session_t *session)
     if (session->expected_kernel_id == HCT_KERNEL_ID_BATCH_NORM_F32)
     {
         session->output_length = (uint32_t)(element_count * (int32_t)sizeof(float));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (session->output_length > session->output_capacity_bytes)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         return arm_batch_norm_f32((const float *)blob_ptr(session, input),
-                                  (float *)session->output_buffer,
+                                  (float *)hct_output_ptr(session),
                                   (const float *)blob_ptr(session, scale),
                                   (const float *)blob_ptr(session, bias),
                                   &input_dims,
@@ -1112,12 +1119,12 @@ static arm_cmsis_nn_status run_batch_norm_once(hct_server_session_t *session)
     if (session->expected_kernel_id == HCT_KERNEL_ID_BATCH_NORM_F16)
     {
         session->output_length = (uint32_t)(element_count * (int32_t)sizeof(float16_t));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (session->output_length > session->output_capacity_bytes)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         return arm_batch_norm_f16((const float16_t *)blob_ptr(session, input),
-                                  (float16_t *)session->output_buffer,
+                                  (float16_t *)hct_output_ptr(session),
                                   (const float16_t *)blob_ptr(session, scale),
                                   (const float16_t *)blob_ptr(session, bias),
                                   &input_dims,
@@ -1162,21 +1169,21 @@ static arm_cmsis_nn_status run_quantize_once(hct_server_session_t *session)
     if (session->expected_kernel_id == HCT_KERNEL_ID_QUANTIZE_S16)
     {
         session->output_length = (uint32_t)(size * (int32_t)sizeof(int16_t));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (session->output_length > session->output_capacity_bytes)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         return arm_quantize_f32_s16((const float *)blob_ptr(session, input),
-                                    (int16_t *)session->output_buffer,
+                                    (int16_t *)hct_output_ptr(session),
                                     size, session->output_offset, scale);
     }
     session->output_length = (uint32_t)size;
-    if (session->output_length > sizeof(session->output_buffer))
+    if (session->output_length > session->output_capacity_bytes)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
     return arm_quantize_f32_s8((const float *)blob_ptr(session, input),
-                              (int8_t *)session->output_buffer,
+                              (int8_t *)hct_output_ptr(session),
                               size, session->output_offset, scale);
 }'''
 
@@ -1204,12 +1211,12 @@ static arm_cmsis_nn_status run_dequantize_once(hct_server_session_t *session)
     }
     size = session->output_h * session->output_w * session->output_c;
     session->output_length = (uint32_t)(size * (int32_t)sizeof(float));
-    if (session->output_length > sizeof(session->output_buffer))
+    if (session->output_length > session->output_capacity_bytes)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
     scale = quant_scale_from_bits(session->scale_bits);
-    out = (float *)session->output_buffer;
+    out = (float *)hct_output_ptr(session);
 
     if (session->expected_kernel_id == HCT_KERNEL_ID_DEQUANTIZE_S16)
     {
@@ -1256,7 +1263,7 @@ static arm_cmsis_nn_status run_requantize_once(hct_server_session_t *session)
         return ARM_CMSIS_NN_ARG_ERROR;
     }
     session->output_length = input->byte_length;
-    if (session->output_length > sizeof(session->output_buffer))
+    if (session->output_length > session->output_capacity_bytes)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
@@ -1264,7 +1271,7 @@ static arm_cmsis_nn_status run_requantize_once(hct_server_session_t *session)
     if (session->expected_kernel_id == HCT_KERNEL_ID_REQUANTIZE_S16)
     {
         return arm_requantize_s16_s16((const int16_t *)blob_ptr(session, input),
-                                      (int16_t *)session->output_buffer,
+                                      (int16_t *)hct_output_ptr(session),
                                       (int32_t)(input->byte_length / sizeof(int16_t)),
                                       session->out_mult,
                                       session->out_shift,
@@ -1272,7 +1279,7 @@ static arm_cmsis_nn_status run_requantize_once(hct_server_session_t *session)
                                       session->output_offset);
     }
     return arm_requantize_s8_s8((const int8_t *)blob_ptr(session, input),
-                                (int8_t *)session->output_buffer,
+                                (int8_t *)hct_output_ptr(session),
                                 (int32_t)input->byte_length,
                                 session->out_mult,
                                 session->out_shift,
@@ -1288,7 +1295,6 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
     cmsis_nn_dims input_1_dims;
     cmsis_nn_dims input_2_dims;
     cmsis_nn_dims output_dims;
-    int32_t output_size;
 
     if (input_1 == NULL || input_2 == NULL)
     {
@@ -1309,17 +1315,11 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
     output_dims.h = session->output_h;
     output_dims.w = session->output_w;
     output_dims.c = session->output_c;
-    output_size = output_dims.n * output_dims.h * output_dims.w * output_dims.c;
-    if (output_size <= 0)
+    if (!hct_checked_dims_bytes(&output_dims, sizeof(bool),
+                                session->output_capacity_bytes, &session->output_length))
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
-    session->output_length = (uint32_t)output_size;
-    if (session->output_length > sizeof(session->output_buffer))
-    {
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
-
     switch (session->expected_kernel_id)
     {
         case HCT_KERNEL_ID_EQUAL_S8:
@@ -1328,7 +1328,7 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
                                 &input_1_dims,
                                 (const int8_t *)blob_ptr(session, input_2),
                                 &input_2_dims,
-                                (bool *)session->output_buffer,
+                                (bool *)hct_output_ptr(session),
                                 &output_dims,
                                 session->input1_offset,
                                 session->input1_mult,
@@ -1343,7 +1343,7 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
                                     &input_1_dims,
                                     (const int8_t *)blob_ptr(session, input_2),
                                     &input_2_dims,
-                                    (bool *)session->output_buffer,
+                                    (bool *)hct_output_ptr(session),
                                     &output_dims,
                                     session->input1_offset,
                                     session->input1_mult,
@@ -1358,7 +1358,7 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
                                   &input_1_dims,
                                   (const int8_t *)blob_ptr(session, input_2),
                                   &input_2_dims,
-                                  (bool *)session->output_buffer,
+                                  (bool *)hct_output_ptr(session),
                                   &output_dims,
                                   session->input1_offset,
                                   session->input1_mult,
@@ -1373,7 +1373,7 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
                                         &input_1_dims,
                                         (const int8_t *)blob_ptr(session, input_2),
                                         &input_2_dims,
-                                        (bool *)session->output_buffer,
+                                        (bool *)hct_output_ptr(session),
                                         &output_dims,
                                         session->input1_offset,
                                         session->input1_mult,
@@ -1388,7 +1388,7 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
                                &input_1_dims,
                                (const int8_t *)blob_ptr(session, input_2),
                                &input_2_dims,
-                               (bool *)session->output_buffer,
+                               (bool *)hct_output_ptr(session),
                                &output_dims,
                                session->input1_offset,
                                session->input1_mult,
@@ -1403,7 +1403,7 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
                                      &input_1_dims,
                                      (const int8_t *)blob_ptr(session, input_2),
                                      &input_2_dims,
-                                     (bool *)session->output_buffer,
+                                     (bool *)hct_output_ptr(session),
                                      &output_dims,
                                      session->input1_offset,
                                      session->input1_mult,
@@ -1418,7 +1418,7 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
                                  &input_1_dims,
                                  (const int16_t *)blob_ptr(session, input_2),
                                  &input_2_dims,
-                                 (bool *)session->output_buffer,
+                                 (bool *)hct_output_ptr(session),
                                  &output_dims,
                                  session->input1_offset,
                                  session->input1_mult,
@@ -1433,7 +1433,7 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
                                      &input_1_dims,
                                      (const int16_t *)blob_ptr(session, input_2),
                                      &input_2_dims,
-                                     (bool *)session->output_buffer,
+                                     (bool *)hct_output_ptr(session),
                                      &output_dims,
                                      session->input1_offset,
                                      session->input1_mult,
@@ -1448,7 +1448,7 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
                                    &input_1_dims,
                                    (const int16_t *)blob_ptr(session, input_2),
                                    &input_2_dims,
-                                   (bool *)session->output_buffer,
+                                   (bool *)hct_output_ptr(session),
                                    &output_dims,
                                    session->input1_offset,
                                    session->input1_mult,
@@ -1463,7 +1463,7 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
                                          &input_1_dims,
                                          (const int16_t *)blob_ptr(session, input_2),
                                          &input_2_dims,
-                                         (bool *)session->output_buffer,
+                                         (bool *)hct_output_ptr(session),
                                          &output_dims,
                                          session->input1_offset,
                                          session->input1_mult,
@@ -1478,7 +1478,7 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
                                 &input_1_dims,
                                 (const int16_t *)blob_ptr(session, input_2),
                                 &input_2_dims,
-                                (bool *)session->output_buffer,
+                                (bool *)hct_output_ptr(session),
                                 &output_dims,
                                 session->input1_offset,
                                 session->input1_mult,
@@ -1493,7 +1493,7 @@ static arm_cmsis_nn_status run_comparison_once(hct_server_session_t *session)
                                       &input_1_dims,
                                       (const int16_t *)blob_ptr(session, input_2),
                                       &input_2_dims,
-                                      (bool *)session->output_buffer,
+                                      (bool *)hct_output_ptr(session),
                                       &output_dims,
                                       session->input1_offset,
                                       session->input1_mult,
@@ -1566,12 +1566,11 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
         cmsis_nn_transpose_conv_params_f32 params_f32;
         cmsis_nn_transpose_conv_params_f16 params_f16;
 
-        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c);
-        if (session->output_length > sizeof(session->output_buffer) / element_size)
+        if (!hct_checked_dims_bytes(&output_dims, element_size,
+                                    session->output_capacity_bytes, &session->output_length))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        session->output_length *= element_size;
 
         if (is_f16)
         {
@@ -1608,18 +1607,17 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
             return ARM_CMSIS_NN_ARG_ERROR;
         }
 
-        ctx_offset = align_up(local_offset, 16u);
-        local_offset = ctx_offset + (uint32_t)required_ctx;
-        output_ctx_offset = align_up(local_offset, 16u);
-        local_offset = output_ctx_offset + (uint32_t)required_output_ctx;
-        if (local_offset > session->scratch_bytes)
+        if (!hct_checked_aligned_range(local_offset, 16u, (uint32_t)required_ctx,
+                                       session->scratch_bytes, &ctx_offset, &local_offset) ||
+            !hct_checked_aligned_range(local_offset, 16u, (uint32_t)required_output_ctx,
+                                       session->scratch_bytes, &output_ctx_offset, &local_offset))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
 
-        ctx.buf = (required_ctx > 0) ? &session->case_arena[session->scratch_offset + ctx_offset] : NULL;
+        ctx.buf = (required_ctx > 0) ? &session->workspace[session->scratch_offset + ctx_offset] : NULL;
         ctx.size = required_ctx;
-        output_ctx.buf = (required_output_ctx > 0) ? &session->case_arena[session->scratch_offset + output_ctx_offset] : NULL;
+        output_ctx.buf = (required_output_ctx > 0) ? &session->workspace[session->scratch_offset + output_ctx_offset] : NULL;
         output_ctx.size = required_output_ctx;
 
         if (is_f16)
@@ -1634,7 +1632,7 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
                                           &bias_dims,
                                           (bias != NULL) ? (const float16_t *)blob_ptr(session, bias) : NULL,
                                           &output_dims,
-                                          (float16_t *)session->output_buffer,
+                                          (float16_t *)hct_output_ptr(session),
                                           ARM_NN_LAYOUT_NHWC);
         }
         return arm_transpose_conv_f32(&ctx,
@@ -1647,7 +1645,7 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
                                       &bias_dims,
                                       (bias != NULL) ? (const float *)blob_ptr(session, bias) : NULL,
                                       &output_dims,
-                                      (float *)session->output_buffer,
+                                      (float *)hct_output_ptr(session),
                                       ARM_NN_LAYOUT_NHWC);
     }
 
@@ -1659,7 +1657,7 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
         cmsis_nn_per_channel_quant_params quant_params;
         uint32_t weight_sum_offset;
         uint32_t weight_sum_bytes;
-        int32_t total_required;
+        uint32_t weight_sum_end;
         const int32_t *bias_data = NULL;
 
         if (multiplier == NULL || shift == NULL)
@@ -1667,8 +1665,8 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
             return ARM_CMSIS_NN_ARG_ERROR;
         }
 
-        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c);
-        if (session->output_length > sizeof(session->output_buffer))
+        if (!hct_checked_dims_bytes(&output_dims, sizeof(int8_t),
+                                    session->output_capacity_bytes, &session->output_length))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
@@ -1700,23 +1698,30 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
             return ARM_CMSIS_NN_ARG_ERROR;
         }
 
-        ctx_offset = align_up(local_offset, 16u);
-        local_offset = ctx_offset + (uint32_t)required_ctx;
-        output_ctx_offset = align_up(local_offset, 16u);
-        local_offset = output_ctx_offset + (uint32_t)required_output_ctx;
-        weight_sum_offset = align_up(local_offset, 16u);
-        weight_sum_bytes = (uint32_t)output_dims.c * (uint32_t)sizeof(int32_t);
-        total_required = (int32_t)(weight_sum_offset + weight_sum_bytes);
-        if ((uint32_t)total_required > session->scratch_bytes)
+        {
+            const int32_t weight_sum_shape[1] = {output_dims.c};
+            if (!hct_checked_shape_bytes(weight_sum_shape, 1, sizeof(int32_t),
+                                         session->scratch_bytes, &weight_sum_bytes) ||
+                !hct_checked_aligned_range(local_offset, 16u, (uint32_t)required_ctx,
+                                           session->scratch_bytes, &ctx_offset, &local_offset) ||
+                !hct_checked_aligned_range(local_offset, 16u, (uint32_t)required_output_ctx,
+                                           session->scratch_bytes, &output_ctx_offset, &local_offset) ||
+                !hct_checked_aligned_range(local_offset, 16u, weight_sum_bytes,
+                                           session->scratch_bytes, &weight_sum_offset, &weight_sum_end))
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+        }
+        if (weight_sum_end > session->scratch_bytes)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
 
-        ctx.buf = (required_ctx > 0) ? &session->case_arena[session->scratch_offset + ctx_offset] : NULL;
+        ctx.buf = (required_ctx > 0) ? &session->workspace[session->scratch_offset + ctx_offset] : NULL;
         ctx.size = required_ctx;
-        output_ctx.buf = (required_output_ctx > 0) ? &session->case_arena[session->scratch_offset + output_ctx_offset] : NULL;
+        output_ctx.buf = (required_output_ctx > 0) ? &session->workspace[session->scratch_offset + output_ctx_offset] : NULL;
         output_ctx.size = required_output_ctx;
-        weight_sum_ctx.buf = (weight_sum_bytes > 0u) ? &session->case_arena[session->scratch_offset + weight_sum_offset] : NULL;
+        weight_sum_ctx.buf = (weight_sum_bytes > 0u) ? &session->workspace[session->scratch_offset + weight_sum_offset] : NULL;
         weight_sum_ctx.size = (int32_t)weight_sum_bytes;
 
         if (arm_convolve_weight_sum((int32_t *)weight_sum_ctx.buf,
@@ -1742,7 +1747,7 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
                                              &bias_dims,
                                              bias_data,
                                              &output_dims,
-                                             (int8_t *)session->output_buffer);
+                                             (int8_t *)hct_output_ptr(session));
     }
 }'''
 
@@ -1851,29 +1856,29 @@ static arm_cmsis_nn_status run_softmax_once(hct_server_session_t *session)
     if (session->expected_kernel_id == HCT_KERNEL_ID_SOFTMAX_F32)
     {
         session->output_length = (uint32_t)(size * (int32_t)sizeof(float));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (session->output_length > session->output_capacity_bytes)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         return arm_softmax_f32((const float *)blob_ptr(session, input),
                                session->num_rows, session->row_size,
-                               (float *)session->output_buffer);
+                               (float *)hct_output_ptr(session));
     }
     if (session->expected_kernel_id == HCT_KERNEL_ID_SOFTMAX_F16)
     {
         session->output_length = (uint32_t)(size * (int32_t)sizeof(float16_t));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (session->output_length > session->output_capacity_bytes)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         return arm_softmax_f16((const float16_t *)blob_ptr(session, input),
                                session->num_rows, session->row_size,
-                               (float16_t *)session->output_buffer);
+                               (float16_t *)hct_output_ptr(session));
     }
     if (session->expected_kernel_id == HCT_KERNEL_ID_SOFTMAX_S16)
     {
         session->output_length = (uint32_t)(size * (int32_t)sizeof(int16_t));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (session->output_length > session->output_capacity_bytes)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
@@ -1881,30 +1886,30 @@ static arm_cmsis_nn_status run_softmax_once(hct_server_session_t *session)
                                session->num_rows, session->row_size,
                                session->out_mult, session->out_shift,
                                &hct_softmax_lut_s16,
-                               (int16_t *)session->output_buffer);
+                               (int16_t *)hct_output_ptr(session));
     }
     if (session->expected_kernel_id == HCT_KERNEL_ID_SOFTMAX_S8_S16)
     {
         session->output_length = (uint32_t)(size * (int32_t)sizeof(int16_t));
-        if (session->output_length > sizeof(session->output_buffer))
+        if (session->output_length > session->output_capacity_bytes)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
         arm_softmax_s8_s16((const int8_t *)blob_ptr(session, input),
                            session->num_rows, session->row_size,
                            session->out_mult, session->out_shift, session->diff_min,
-                           (int16_t *)session->output_buffer);
+                           (int16_t *)hct_output_ptr(session));
         return ARM_CMSIS_NN_SUCCESS;
     }
     session->output_length = (uint32_t)size;
-    if (session->output_length > sizeof(session->output_buffer))
+    if (session->output_length > session->output_capacity_bytes)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
     arm_softmax_s8((const int8_t *)blob_ptr(session, input),
                    session->num_rows, session->row_size,
                    session->out_mult, session->out_shift, session->diff_min,
-                   (int8_t *)session->output_buffer);
+                   (int8_t *)hct_output_ptr(session));
     return ARM_CMSIS_NN_SUCCESS;
 }'''
 
@@ -1954,12 +1959,11 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
         const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
         int32_t required_scratch;
 
-        session->output_length = (uint32_t)(output_dims.n * output_dims.c);
-        if (session->output_length > sizeof(session->output_buffer) / element_size)
+        if (!hct_checked_dims_bytes(&output_dims, element_size,
+                                    session->output_capacity_bytes, &session->output_length))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        session->output_length *= element_size;
 
         if (is_f16)
         {
@@ -1972,7 +1976,7 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.buf = (required_scratch > 0) ? &session->workspace[session->scratch_offset] : NULL;
             ctx.size = required_scratch;
             return arm_fully_connected_f16(&ctx,
                                            &fc_params_f16,
@@ -1983,7 +1987,7 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
                                            &bias_dims,
                                            (bias != NULL) ? (const float16_t *)blob_ptr(session, bias) : NULL,
                                            &output_dims,
-                                           (float16_t *)session->output_buffer,
+                                           (float16_t *)hct_output_ptr(session),
                                            ARM_NN_LAYOUT_NHWC);
         }
 
@@ -1997,7 +2001,7 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.buf = (required_scratch > 0) ? &session->workspace[session->scratch_offset] : NULL;
             ctx.size = required_scratch;
             return arm_fully_connected_f32(&ctx,
                                            &fc_params_f32,
@@ -2008,7 +2012,7 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
                                            &bias_dims,
                                            (bias != NULL) ? (const float *)blob_ptr(session, bias) : NULL,
                                            &output_dims,
-                                           (float *)session->output_buffer,
+                                           (float *)hct_output_ptr(session),
                                            ARM_NN_LAYOUT_NHWC);
         }
     }
@@ -2038,7 +2042,7 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
+        ctx.buf = (session->scratch_bytes > 0u) ? &session->workspace[session->scratch_offset] : NULL;
         ctx.size = (int32_t)session->scratch_bytes;
 
         if (session->expected_kernel_id == HCT_KERNEL_ID_FULLY_CONNECTED_S16)
@@ -2048,8 +2052,8 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
             quant_params.is_per_channel = 1;
             const int64_t *bias_i64 = (bias != NULL) ? (const int64_t *)blob_ptr(session, bias) : NULL;
 
-            session->output_length = (uint32_t)(output_dims.n * output_dims.c * (int32_t)sizeof(int16_t));
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, sizeof(int16_t),
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -2063,7 +2067,7 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
                                                    &bias_dims,
                                                    bias_i64,
                                                    &output_dims,
-                                                   (int16_t *)session->output_buffer);
+                                                   (int16_t *)hct_output_ptr(session));
         }
 
         if (session->expected_kernel_id == HCT_KERNEL_ID_FULLY_CONNECTED_S4)
@@ -2072,8 +2076,8 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
             quant_params_s4.multiplier = *(const int32_t *)blob_ptr(session, multiplier);
             quant_params_s4.shift = *(const int32_t *)blob_ptr(session, shift);
 
-            session->output_length = (uint32_t)(output_dims.n * output_dims.c);
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, sizeof(int8_t),
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -2087,7 +2091,7 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
                                           &bias_dims,
                                           bias_i32,
                                           &output_dims,
-                                          (int8_t *)session->output_buffer);
+                                          (int8_t *)hct_output_ptr(session));
         }
 
         {
@@ -2107,8 +2111,8 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
 
-            session->output_length = (uint32_t)(output_dims.n * output_dims.c);
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, sizeof(int8_t),
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -2122,7 +2126,7 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
                                                   &bias_dims,
                                                   NULL,
                                                   &output_dims,
-                                                  (int8_t *)session->output_buffer);
+                                                  (int8_t *)hct_output_ptr(session));
         }
     }
 }'''
@@ -2171,12 +2175,11 @@ static arm_cmsis_nn_status run_batch_matmul_once(hct_server_session_t *session)
         const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
         int32_t required_scratch;
 
-        session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c);
-        if (session->output_length > sizeof(session->output_buffer) / element_size)
+        if (!hct_checked_dims_bytes(&output_dims, element_size,
+                                    session->output_capacity_bytes, &session->output_length))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        session->output_length *= element_size;
 
         if (is_f16)
         {
@@ -2191,7 +2194,7 @@ static arm_cmsis_nn_status run_batch_matmul_once(hct_server_session_t *session)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.buf = (required_scratch > 0) ? &session->workspace[session->scratch_offset] : NULL;
             ctx.size = required_scratch;
             return arm_batch_matmul_f16(&ctx,
                                         &bmm_params,
@@ -2200,7 +2203,7 @@ static arm_cmsis_nn_status run_batch_matmul_once(hct_server_session_t *session)
                                         &input_rhs_dims,
                                         (const float16_t *)blob_ptr(session, input_rhs),
                                         &output_dims,
-                                        (float16_t *)session->output_buffer);
+                                        (float16_t *)hct_output_ptr(session));
         }
         else
         {
@@ -2215,7 +2218,7 @@ static arm_cmsis_nn_status run_batch_matmul_once(hct_server_session_t *session)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            ctx.buf = (required_scratch > 0) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.buf = (required_scratch > 0) ? &session->workspace[session->scratch_offset] : NULL;
             ctx.size = required_scratch;
             return arm_batch_matmul_f32(&ctx,
                                         &bmm_params,
@@ -2224,7 +2227,7 @@ static arm_cmsis_nn_status run_batch_matmul_once(hct_server_session_t *session)
                                         &input_rhs_dims,
                                         (const float *)blob_ptr(session, input_rhs),
                                         &output_dims,
-                                        (float *)session->output_buffer);
+                                        (float *)hct_output_ptr(session));
         }
     }
 
@@ -2248,8 +2251,9 @@ static arm_cmsis_nn_status run_batch_matmul_once(hct_server_session_t *session)
 
         if (session->expected_kernel_id == HCT_KERNEL_ID_BATCH_MATMUL_S16)
         {
-            session->output_length = (uint32_t)(output_dims.w * output_dims.c * (int32_t)sizeof(int16_t));
-            if (session->output_length > sizeof(session->output_buffer))
+            const int32_t output_shape[2] = {output_dims.w, output_dims.c};
+            if (!hct_checked_shape_bytes(output_shape, 2, sizeof(int16_t),
+                                         session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -2263,20 +2267,23 @@ static arm_cmsis_nn_status run_batch_matmul_once(hct_server_session_t *session)
                                         &input_rhs_dims,
                                         (const int16_t *)blob_ptr(session, input_rhs),
                                         &output_dims,
-                                        (int16_t *)session->output_buffer);
+                                        (int16_t *)hct_output_ptr(session));
         }
 
         {
-            const uint32_t required_scratch = (uint32_t)input_rhs_dims.w * (uint32_t)sizeof(int32_t);
-            if (required_scratch > session->scratch_bytes)
+            const int32_t scratch_shape[1] = {input_rhs_dims.w};
+            const int32_t output_shape[2] = {output_dims.w, output_dims.c};
+            uint32_t required_scratch;
+            if (!hct_checked_shape_bytes(scratch_shape, 1, sizeof(int32_t),
+                                         session->scratch_bytes, &required_scratch))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            ctx.buf = (session->scratch_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.buf = (session->scratch_bytes > 0u) ? &session->workspace[session->scratch_offset] : NULL;
             ctx.size = (int32_t)session->scratch_bytes;
 
-            session->output_length = (uint32_t)(output_dims.w * output_dims.c);
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_shape_bytes(output_shape, 2, sizeof(int8_t),
+                                         session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -2288,7 +2295,7 @@ static arm_cmsis_nn_status run_batch_matmul_once(hct_server_session_t *session)
                                        &input_rhs_dims,
                                        (const int8_t *)blob_ptr(session, input_rhs),
                                        &output_dims,
-                                       (int8_t *)session->output_buffer);
+                                       (int8_t *)hct_output_ptr(session));
         }
     }
 }
@@ -2326,7 +2333,10 @@ static arm_cmsis_nn_status run_basic_math_reduction_once(hct_server_session_t *s
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
-    output_elements = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c);
+    if (!hct_checked_dims_bytes(&output_dims, 1u, UINT32_MAX, &output_elements))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
 
     switch (session->expected_kernel_id)
     {
@@ -2334,68 +2344,69 @@ static arm_cmsis_nn_status run_basic_math_reduction_once(hct_server_session_t *s
         case HCT_KERNEL_ID_ARGMIN_S8:
         case HCT_KERNEL_ID_ARGMAX_S16:
         case HCT_KERNEL_ID_ARGMIN_S16:
-            session->output_length = output_elements * sizeof(int32_t);
-            if (session->output_length > sizeof(session->output_buffer) || session->axis < 0 || session->axis > 3)
+            if (!hct_checked_dims_bytes(&output_dims, sizeof(int32_t),
+                                        session->output_capacity_bytes, &session->output_length) ||
+                session->axis < 0 || session->axis > 3)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_ARGMAX_S8)
             {
-                return arm_argmax_s8((const int8_t *)blob_ptr(session, input), &input_dims, session->axis, (int32_t *)session->output_buffer);
+                return arm_argmax_s8((const int8_t *)blob_ptr(session, input), &input_dims, session->axis, (int32_t *)hct_output_ptr(session));
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_ARGMIN_S8)
             {
-                return arm_argmin_s8((const int8_t *)blob_ptr(session, input), &input_dims, session->axis, (int32_t *)session->output_buffer);
+                return arm_argmin_s8((const int8_t *)blob_ptr(session, input), &input_dims, session->axis, (int32_t *)hct_output_ptr(session));
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_ARGMAX_S16)
             {
-                return arm_argmax_s16((const int16_t *)blob_ptr(session, input), &input_dims, session->axis, (int32_t *)session->output_buffer);
+                return arm_argmax_s16((const int16_t *)blob_ptr(session, input), &input_dims, session->axis, (int32_t *)hct_output_ptr(session));
             }
-            return arm_argmin_s16((const int16_t *)blob_ptr(session, input), &input_dims, session->axis, (int32_t *)session->output_buffer);
+            return arm_argmin_s16((const int16_t *)blob_ptr(session, input), &input_dims, session->axis, (int32_t *)hct_output_ptr(session));
 
         case HCT_KERNEL_ID_MEAN_S8:
         case HCT_KERNEL_ID_REDUCE_MAX_S8:
         case HCT_KERNEL_ID_REDUCE_MIN_S8:
             session->output_length = output_elements;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (session->output_length > session->output_capacity_bytes)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_MEAN_S8)
             {
                 return arm_mean_s8((const int8_t *)blob_ptr(session, input), &input_dims, session->input_offset,
-                                   &axis_dims, (int8_t *)session->output_buffer, &output_dims,
+                                   &axis_dims, (int8_t *)hct_output_ptr(session), &output_dims,
                                    session->output_offset, session->out_mult, session->out_shift);
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_REDUCE_MAX_S8)
             {
                 return arm_reduce_max_s8((const int8_t *)blob_ptr(session, input), &input_dims, &axis_dims,
-                                         (int8_t *)session->output_buffer, &output_dims);
+                                         (int8_t *)hct_output_ptr(session), &output_dims);
             }
             return arm_reduce_min_s8((const int8_t *)blob_ptr(session, input), &input_dims, &axis_dims,
-                                     (int8_t *)session->output_buffer, &output_dims);
+                                     (int8_t *)hct_output_ptr(session), &output_dims);
 
         case HCT_KERNEL_ID_MEAN_S16:
         case HCT_KERNEL_ID_REDUCE_MAX_S16:
         case HCT_KERNEL_ID_REDUCE_MIN_S16:
-            session->output_length = output_elements * sizeof(int16_t);
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, sizeof(int16_t),
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_MEAN_S16)
             {
                 return arm_mean_s16((const int16_t *)blob_ptr(session, input), &input_dims, session->input_offset,
-                                    &axis_dims, (int16_t *)session->output_buffer, &output_dims,
+                                    &axis_dims, (int16_t *)hct_output_ptr(session), &output_dims,
                                     session->output_offset, session->out_mult, session->out_shift);
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_REDUCE_MAX_S16)
             {
                 return arm_reduce_max_s16((const int16_t *)blob_ptr(session, input), &input_dims, &axis_dims,
-                                          (int16_t *)session->output_buffer, &output_dims);
+                                          (int16_t *)hct_output_ptr(session), &output_dims);
             }
             return arm_reduce_min_s16((const int16_t *)blob_ptr(session, input), &input_dims, &axis_dims,
-                                      (int16_t *)session->output_buffer, &output_dims);
+                                      (int16_t *)hct_output_ptr(session), &output_dims);
 
         default:
             return ARM_CMSIS_NN_ARG_ERROR;
@@ -2421,7 +2432,7 @@ static arm_cmsis_nn_status run_basic_math_lut_once(hct_server_session_t *session
     input_dims.c = (int32_t)input->dimensions[3];
     block_size = input_dims.n * input_dims.h * input_dims.w * input_dims.c;
     session->output_length = input->byte_length;
-    if (session->output_length > sizeof(session->output_buffer))
+    if (session->output_length > session->output_capacity_bytes)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
@@ -2430,18 +2441,18 @@ static arm_cmsis_nn_status run_basic_math_lut_once(hct_server_session_t *session
     {
         case HCT_KERNEL_ID_SQRT_S8:
             return arm_sqrt_s8((const int8_t *)blob_ptr(session, input), &input_dims,
-                               (int8_t *)session->output_buffer, (int8_t *)blob_ptr(session, lut));
+                               (int8_t *)hct_output_ptr(session), (int8_t *)blob_ptr(session, lut));
         case HCT_KERNEL_ID_SQRT_S16:
             return arm_sqrt_s16((const int16_t *)blob_ptr(session, input), &input_dims,
-                                (int16_t *)session->output_buffer, (const int16_t *)blob_ptr(session, lut));
+                                (int16_t *)hct_output_ptr(session), (const int16_t *)blob_ptr(session, lut));
         case HCT_KERNEL_ID_RSQRT_S16_PER_OP:
             return arm_rsqrt_s16_per_op((const int16_t *)blob_ptr(session, input), session->input_offset,
-                                        (int16_t *)session->output_buffer, session->output_offset,
+                                        (int16_t *)hct_output_ptr(session), session->output_offset,
                                         session->activation_min, session->activation_max, block_size,
                                         (const int16_t *)blob_ptr(session, lut));
         case HCT_KERNEL_ID_RSQRT_S16_UNIVERSAL:
             return arm_rsqrt_s16_universal((const int16_t *)blob_ptr(session, input), session->input_offset,
-                                           (int16_t *)session->output_buffer, session->output_offset,
+                                           (int16_t *)hct_output_ptr(session), session->output_offset,
                                            session->out_mult, session->out_shift, session->needs_rescale != 0,
                                            session->activation_min, session->activation_max, block_size,
                                            (const int32_t *)blob_ptr(session, lut));
@@ -2484,7 +2495,10 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
-    session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c);
+    if (!hct_checked_dims_bytes(&output_dims, 1u, session->output_capacity_bytes, &session->output_length))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
 
     switch (session->expected_kernel_id)
     {
@@ -2495,13 +2509,13 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
         case HCT_KERNEL_ID_MINIMUM_S8:
         case HCT_KERNEL_ID_SQUARED_DIFFERENCE_S8:
         {
-            if (session->output_length > sizeof(session->output_buffer))
+            if (session->output_length > session->output_capacity_bytes)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             const int8_t *input1_data = (const int8_t *)blob_ptr(session, input1);
             const int8_t *input2_data = (const int8_t *)blob_ptr(session, input2);
-            int8_t *output_data = (int8_t *)session->output_buffer;
+            int8_t *output_data = (int8_t *)hct_output_ptr(session);
             if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_S8)
             {
                 return arm_add_s8(input1_data, &input1_dims, input2_data, &input2_dims,
@@ -2560,7 +2574,8 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
         case HCT_KERNEL_ID_MINIMUM_S16:
         case HCT_KERNEL_ID_SQUARED_DIFFERENCE_S16:
         {
-            if (session->output_length * sizeof(int16_t) > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, sizeof(int16_t),
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -2568,10 +2583,9 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
              * the RTT send loop in benchmark_server_session.c), so it must be rescaled from
              * elements to bytes for 2-byte-per-element S16 output -- otherwise only the
              * first half of the output buffer is sent back over the wire. */
-            session->output_length = (uint32_t)(session->output_length * sizeof(int16_t));
             const int16_t *input1_data = (const int16_t *)blob_ptr(session, input1);
             const int16_t *input2_data = (const int16_t *)blob_ptr(session, input2);
-            int16_t *output_data = (int16_t *)session->output_buffer;
+            int16_t *output_data = (int16_t *)hct_output_ptr(session);
             if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_S16)
             {
                 return arm_add_s16(input1_data, &input1_dims, input2_data, &input2_dims,
@@ -2627,14 +2641,14 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
         case HCT_KERNEL_ID_MAXIMUM_F32:
         case HCT_KERNEL_ID_MINIMUM_F32:
         {
-            if (session->output_length * sizeof(float) > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, sizeof(float),
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            session->output_length = (uint32_t)(session->output_length * sizeof(float));
             const float *input1_data = (const float *)blob_ptr(session, input1);
             const float *input2_data = (const float *)blob_ptr(session, input2);
-            float *output_data = (float *)session->output_buffer;
+            float *output_data = (float *)hct_output_ptr(session);
             const float activation_min = quant_scale_from_bits(session->float_activation_min_bits);
             const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
             if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_F32)
@@ -2667,14 +2681,14 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
         case HCT_KERNEL_ID_MAXIMUM_F16:
         case HCT_KERNEL_ID_MINIMUM_F16:
         {
-            if (session->output_length * sizeof(float16_t) > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, sizeof(float16_t),
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            session->output_length = (uint32_t)(session->output_length * sizeof(float16_t));
             const float16_t *input1_data = (const float16_t *)blob_ptr(session, input1);
             const float16_t *input2_data = (const float16_t *)blob_ptr(session, input2);
-            float16_t *output_data = (float16_t *)session->output_buffer;
+            float16_t *output_data = (float16_t *)hct_output_ptr(session);
             const float activation_min = quant_scale_from_bits(session->float_activation_min_bits);
             const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
             if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_F16)
@@ -2784,31 +2798,13 @@ static void hct_fill_output_dims_from_session(const hct_server_session_t *sessio
     dims->c = (session->output_c > 0) ? session->output_c : 1;
 }
 
-static uint32_t hct_shape_product(const int32_t *shape, int32_t rank)
+static bool hct_checked_dims_bytes(const cmsis_nn_dims *dims,
+                                   uint32_t element_size,
+                                   uint32_t capacity,
+                                   uint32_t *output_bytes)
 {
-    uint64_t product = 1u;
-    int32_t i;
-    if (rank <= 0)
-    {
-        return 0u;
-    }
-    for (i = 0; i < rank; ++i)
-    {
-        if (shape[i] <= 0)
-        {
-            return 0u;
-        }
-        product *= (uint32_t)shape[i];
-        /* F007: guard against 32-bit wraparound in the running shape product -- a
-         * blob claiming an enormous dimension could otherwise overflow back into a
-         * small, seemingly-valid uint32_t and slip past the output_buffer capacity
-         * check below with a corrupted (too-small) output_length. */
-        if (product > (uint64_t)UINT32_MAX)
-        {
-            return 0u;
-        }
-    }
-    return (uint32_t)product;
+    const int32_t shape[4] = {dims->n, dims->h, dims->w, dims->c};
+    return hct_checked_shape_bytes(shape, 4, element_size, capacity, output_bytes);
 }
 
 /* F007: validates the META_0 blob's rank/axis/byte-count *before* any data-movement
@@ -2823,7 +2819,9 @@ static bool hct_validate_meta0_blob(const hct_server_blob_t *meta_blob,
                                     int32_t rank,
                                     int32_t axis)
 {
-    if (meta_blob == NULL)
+    if (meta_blob == NULL || meta_blob->dtype != HCT_DTYPE_S32 ||
+        meta_blob->alignment < sizeof(int32_t) ||
+        (meta_blob->byte_length % sizeof(int32_t)) != 0u)
     {
         return false;
     }
@@ -2894,12 +2892,12 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             session->output_length = input0->byte_length;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (session->output_length > session->output_capacity_bytes)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             arm_reshape_s8((const int8_t *)blob_ptr(session, input0),
-                           (int8_t *)session->output_buffer,
+                           (int8_t *)hct_output_ptr(session),
                            hct_blob_element_count(input0));
             return ARM_CMSIS_NN_SUCCESS;
         }
@@ -2912,20 +2910,20 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             session->output_length = input0->byte_length;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (session->output_length > session->output_capacity_bytes)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_RESHAPE_F16)
             {
                 arm_reshape_f16((const float16_t *)blob_ptr(session, input0),
-                                (float16_t *)session->output_buffer,
+                                (float16_t *)hct_output_ptr(session),
                                 hct_blob_element_count(input0));
             }
             else
             {
                 arm_reshape_f32((const float *)blob_ptr(session, input0),
-                                (float *)session->output_buffer,
+                                (float *)hct_output_ptr(session),
                                 hct_blob_element_count(input0));
             }
             return ARM_CMSIS_NN_SUCCESS;
@@ -2967,8 +2965,8 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             hct_fill_dims_from_blob(input0, &input_dims);
             hct_fill_output_dims_from_session(session, &output_dims);
             hct_fill_output_shape_from_session(session, rank, output_shape);
-            session->output_length = hct_shape_product(output_shape, rank) * element_size;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_shape_bytes(output_shape, rank, element_size,
+                                         session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -2976,13 +2974,13 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             if (session->expected_kernel_id == HCT_KERNEL_ID_TRANSPOSE_S16)
             {
                 return arm_transpose_s16((const int16_t *)blob_ptr(session, input0),
-                                         (int16_t *)session->output_buffer,
+                                         (int16_t *)hct_output_ptr(session),
                                          &input_dims,
                                          &output_dims,
                                          &params);
             }
             return arm_transpose_s8((const int8_t *)blob_ptr(session, input0),
-                                    (int8_t *)session->output_buffer,
+                                    (int8_t *)hct_output_ptr(session),
                                     &input_dims,
                                     &output_dims,
                                     &params);
@@ -3019,8 +3017,8 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             hct_fill_dims_from_blob(input0, &input_dims);
             hct_fill_output_dims_from_session(session, &output_dims);
             hct_fill_output_shape_from_session(session, rank, output_shape);
-            session->output_length = hct_shape_product(output_shape, rank) * element_size;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_shape_bytes(output_shape, rank, element_size,
+                                         session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3042,14 +3040,14 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                         &input_dims,
                                         (const float16_t *)blob_ptr(session, input0),
                                         &output_dims,
-                                        (float16_t *)session->output_buffer);
+                                        (float16_t *)hct_output_ptr(session));
             }
             return arm_transpose_f32(&ctx,
                                      &params_f32,
                                      &input_dims,
                                      (const float *)blob_ptr(session, input0),
                                      &output_dims,
-                                     (float *)session->output_buffer);
+                                     (float *)hct_output_ptr(session));
         }
 
         case HCT_KERNEL_ID_PAD_S8:
@@ -3078,21 +3076,21 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                                 (session->output_h > 0 ? session->output_h : 1) *
                                                 (session->output_w > 0 ? session->output_w : 1) *
                                                 (session->output_c > 0 ? session->output_c : 1)) * element_size;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (session->output_length > session->output_capacity_bytes)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_PAD_S16)
             {
                 return arm_pad_s16((const int16_t *)blob_ptr(session, input0),
-                                   (int16_t *)session->output_buffer,
+                                   (int16_t *)hct_output_ptr(session),
                                    (int16_t)meta[0],
                                    &input_dims,
                                    &pre_pad,
                                    &post_pad);
             }
             return arm_pad_s8((const int8_t *)blob_ptr(session, input0),
-                              (int8_t *)session->output_buffer,
+                              (int8_t *)hct_output_ptr(session),
                               (int8_t)meta[0],
                               &input_dims,
                               &pre_pad,
@@ -3126,7 +3124,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                                 (session->output_h > 0 ? session->output_h : 1) *
                                                 (session->output_w > 0 ? session->output_w : 1) *
                                                 (session->output_c > 0 ? session->output_c : 1)) * element_size;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (session->output_length > session->output_capacity_bytes)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3134,14 +3132,14 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             if (session->expected_kernel_id == HCT_KERNEL_ID_PAD_F16)
             {
                 return arm_pad_f16((const float16_t *)blob_ptr(session, input0),
-                                   (float16_t *)session->output_buffer,
+                                   (float16_t *)hct_output_ptr(session),
                                    (float16_t)pad_value_bits.f,
                                    &input_dims,
                                    &pre_pad,
                                    &post_pad);
             }
             return arm_pad_f32((const float *)blob_ptr(session, input0),
-                               (float *)session->output_buffer,
+                               (float *)hct_output_ptr(session),
                                pad_value_bits.f,
                                &input_dims,
                                &pre_pad,
@@ -3173,8 +3171,8 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             {
                 pad_before[i] = meta[2 + i];
             }
-            session->output_length = hct_shape_product(output_shape, rank) * element_size;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_shape_bytes(output_shape, rank, element_size,
+                                         session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3185,9 +3183,9 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             params.mode = meta[1];
             if (session->expected_kernel_id == HCT_KERNEL_ID_MIRROR_PAD_S16)
             {
-                return arm_mirror_pad_s16((const int16_t *)blob_ptr(session, input0), &params, (int16_t *)session->output_buffer);
+                return arm_mirror_pad_s16((const int16_t *)blob_ptr(session, input0), &params, (int16_t *)hct_output_ptr(session));
             }
-            return arm_mirror_pad_s8((const int8_t *)blob_ptr(session, input0), &params, (int8_t *)session->output_buffer);
+            return arm_mirror_pad_s8((const int8_t *)blob_ptr(session, input0), &params, (int8_t *)hct_output_ptr(session));
         }
 
         case HCT_KERNEL_ID_CONCATENATION_S8:
@@ -3226,8 +3224,8 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             input_concat_dims[1] = input_shape1[axis];
             input_ptrs[0] = blob_ptr(session, input0);
             input_ptrs[1] = blob_ptr(session, input1);
-            session->output_length = hct_shape_product(output_shape, rank) * hct_dtype_size_bytes(input0->dtype);
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_shape_bytes(output_shape, rank, hct_dtype_size_bytes(input0->dtype),
+                                         session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3248,7 +3246,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                                    (uint16_t)shape[1],
                                                    (uint16_t)shape[3],
                                                    (uint16_t)shape[0],
-                                                   (int8_t *)session->output_buffer,
+                                                   (int8_t *)hct_output_ptr(session),
                                                    (uint16_t)output_shape[2],
                                                    offset);
                             offset += (uint32_t)shape[2];
@@ -3259,7 +3257,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                                    (uint16_t)shape[1],
                                                    (uint16_t)shape[3],
                                                    (uint16_t)shape[0],
-                                                   (int8_t *)session->output_buffer,
+                                                   (int8_t *)hct_output_ptr(session),
                                                    (uint16_t)output_shape[1],
                                                    offset);
                             offset += (uint32_t)shape[1];
@@ -3270,7 +3268,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                                    (uint16_t)shape[1],
                                                    (uint16_t)shape[3],
                                                    (uint16_t)shape[0],
-                                                   (int8_t *)session->output_buffer,
+                                                   (int8_t *)hct_output_ptr(session),
                                                    (uint16_t)output_shape[3],
                                                    offset);
                             offset += (uint32_t)shape[3];
@@ -3281,7 +3279,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                                    (uint16_t)shape[1],
                                                    (uint16_t)shape[3],
                                                    (uint16_t)shape[0],
-                                                   (int8_t *)session->output_buffer,
+                                                   (int8_t *)hct_output_ptr(session),
                                                    offset);
                             offset += (uint32_t)shape[0];
                             break;
@@ -3297,7 +3295,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                              inputs_count,
                                              input_concat_dims,
                                              axis,
-                                             (int16_t *)session->output_buffer,
+                                             (int16_t *)hct_output_ptr(session),
                                              rank,
                                              output_shape);
             }
@@ -3307,7 +3305,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                              inputs_count,
                                              input_concat_dims,
                                              axis,
-                                             (int32_t *)session->output_buffer,
+                                             (int32_t *)hct_output_ptr(session),
                                              rank,
                                              output_shape);
             }
@@ -3315,7 +3313,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                         inputs_count,
                                         input_concat_dims,
                                         axis,
-                                        (int8_t *)session->output_buffer,
+                                        (int8_t *)hct_output_ptr(session),
                                         rank,
                                         output_shape);
         }
@@ -3349,8 +3347,8 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             hct_fill_output_shape_from_session(session, rank, output_shape);
-            session->output_length = hct_shape_product(output_shape, rank) * element_size;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_shape_bytes(output_shape, rank, element_size,
+                                         session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3371,44 +3369,44 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                     case 1u:
                         if (is_f16)
                         {
-                            arm_concatenation_f16_x((const float16_t *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float16_t *)session->output_buffer, (uint16_t)output_shape[2], offset);
+                            arm_concatenation_f16_x((const float16_t *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float16_t *)hct_output_ptr(session), (uint16_t)output_shape[2], offset);
                         }
                         else
                         {
-                            arm_concatenation_f32_x((const float *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float *)session->output_buffer, (uint16_t)output_shape[2], offset);
+                            arm_concatenation_f32_x((const float *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float *)hct_output_ptr(session), (uint16_t)output_shape[2], offset);
                         }
                         offset += (uint32_t)shape[2];
                         break;
                     case 2u:
                         if (is_f16)
                         {
-                            arm_concatenation_f16_y((const float16_t *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float16_t *)session->output_buffer, (uint16_t)output_shape[1], offset);
+                            arm_concatenation_f16_y((const float16_t *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float16_t *)hct_output_ptr(session), (uint16_t)output_shape[1], offset);
                         }
                         else
                         {
-                            arm_concatenation_f32_y((const float *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float *)session->output_buffer, (uint16_t)output_shape[1], offset);
+                            arm_concatenation_f32_y((const float *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float *)hct_output_ptr(session), (uint16_t)output_shape[1], offset);
                         }
                         offset += (uint32_t)shape[1];
                         break;
                     case 3u:
                         if (is_f16)
                         {
-                            arm_concatenation_f16_z((const float16_t *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float16_t *)session->output_buffer, (uint16_t)output_shape[3], offset);
+                            arm_concatenation_f16_z((const float16_t *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float16_t *)hct_output_ptr(session), (uint16_t)output_shape[3], offset);
                         }
                         else
                         {
-                            arm_concatenation_f32_z((const float *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float *)session->output_buffer, (uint16_t)output_shape[3], offset);
+                            arm_concatenation_f32_z((const float *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float *)hct_output_ptr(session), (uint16_t)output_shape[3], offset);
                         }
                         offset += (uint32_t)shape[3];
                         break;
                     default:
                         if (is_f16)
                         {
-                            arm_concatenation_f16_w((const float16_t *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float16_t *)session->output_buffer, offset);
+                            arm_concatenation_f16_w((const float16_t *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float16_t *)hct_output_ptr(session), offset);
                         }
                         else
                         {
-                            arm_concatenation_f32_w((const float *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float *)session->output_buffer, offset);
+                            arm_concatenation_f32_w((const float *)input_data, (uint16_t)shape[2], (uint16_t)shape[1], (uint16_t)shape[3], (uint16_t)shape[0], (float *)hct_output_ptr(session), offset);
                         }
                         offset += (uint32_t)shape[0];
                         break;
@@ -3451,12 +3449,16 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                     int32_t output_shape[4] = {input_shape[0], input_shape[1], input_shape[2], input_shape[3]};
                     uint32_t bytes;
                     output_shape[axis] = meta[3 + split_index];
-                    bytes = hct_shape_product(output_shape, rank) * sizeof(int16_t);
-                    if (offset_bytes + bytes > sizeof(session->output_buffer))
+                    if (!hct_checked_shape_bytes(output_shape, rank, sizeof(int16_t),
+                                                 session->output_capacity_bytes - offset_bytes, &bytes))
                     {
                         return ARM_CMSIS_NN_ARG_ERROR;
                     }
-                    output_ptrs[split_index] = (int16_t *)&session->output_buffer[offset_bytes];
+                    if (offset_bytes + bytes > session->output_capacity_bytes)
+                    {
+                        return ARM_CMSIS_NN_ARG_ERROR;
+                    }
+                    output_ptrs[split_index] = (int16_t *)&hct_output_ptr(session)[offset_bytes];
                     offset_bytes += bytes;
                 }
                 session->output_length = offset_bytes;
@@ -3477,12 +3479,16 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                     int32_t output_shape[4] = {input_shape[0], input_shape[1], input_shape[2], input_shape[3]};
                     uint32_t bytes;
                     output_shape[axis] = meta[3 + split_index];
-                    bytes = hct_shape_product(output_shape, rank) * sizeof(int8_t);
-                    if (offset_bytes + bytes > sizeof(session->output_buffer))
+                    if (!hct_checked_shape_bytes(output_shape, rank, sizeof(int8_t),
+                                                 session->output_capacity_bytes - offset_bytes, &bytes))
                     {
                         return ARM_CMSIS_NN_ARG_ERROR;
                     }
-                    output_ptrs[split_index] = (int8_t *)&session->output_buffer[offset_bytes];
+                    if (offset_bytes + bytes > session->output_capacity_bytes)
+                    {
+                        return ARM_CMSIS_NN_ARG_ERROR;
+                    }
+                    output_ptrs[split_index] = (int8_t *)&hct_output_ptr(session)[offset_bytes];
                     offset_bytes += bytes;
                 }
                 session->output_length = offset_bytes;
@@ -3523,12 +3529,16 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                 int32_t output_shape[4] = {input_shape[0], input_shape[1], input_shape[2], input_shape[3]};
                 uint32_t bytes;
                 output_shape[axis] = meta[3 + split_index];
-                bytes = hct_shape_product(output_shape, rank) * sizeof(float16_t);
-                if (offset_bytes + bytes > sizeof(session->output_buffer))
+                if (!hct_checked_shape_bytes(output_shape, rank, sizeof(float16_t),
+                                             session->output_capacity_bytes - offset_bytes, &bytes))
                 {
                     return ARM_CMSIS_NN_ARG_ERROR;
                 }
-                output_ptrs[split_index] = (float16_t *)&session->output_buffer[offset_bytes];
+                if (offset_bytes + bytes > session->output_capacity_bytes)
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
+                output_ptrs[split_index] = (float16_t *)&hct_output_ptr(session)[offset_bytes];
                 offset_bytes += bytes;
             }
             session->output_length = offset_bytes;
@@ -3551,7 +3561,11 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             cmsis_nn_dims extra_dims;
             cmsis_nn_tile block_shape;
             uint32_t element_size = (input0 != NULL) ? hct_dtype_size_bytes(input0->dtype) : 0u;
-            if (input0 == NULL || meta == NULL)
+            const bool is_batch_to_space =
+                session->expected_kernel_id == HCT_KERNEL_ID_BATCH_TO_SPACE_ND_S8 ||
+                session->expected_kernel_id == HCT_KERNEL_ID_BATCH_TO_SPACE_ND_S16;
+            const size_t required_meta_ints = is_batch_to_space ? 6u : 7u;
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, required_meta_ints, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3563,24 +3577,24 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             extra_dims.h = meta[3];
             extra_dims.w = meta[4];
             extra_dims.c = meta[5];
-            session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c) * element_size;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, element_size,
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_BATCH_TO_SPACE_ND_S16)
             {
-                return arm_batch_to_space_nd_s16((const int16_t *)blob_ptr(session, input0), &input_dims, &block_shape, &extra_dims, (int16_t *)session->output_buffer, &output_dims);
+                return arm_batch_to_space_nd_s16((const int16_t *)blob_ptr(session, input0), &input_dims, &block_shape, &extra_dims, (int16_t *)hct_output_ptr(session), &output_dims);
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_BATCH_TO_SPACE_ND_S8)
             {
-                return arm_batch_to_space_nd_s8((const int8_t *)blob_ptr(session, input0), &input_dims, &block_shape, &extra_dims, (int8_t *)session->output_buffer, &output_dims);
+                return arm_batch_to_space_nd_s8((const int8_t *)blob_ptr(session, input0), &input_dims, &block_shape, &extra_dims, (int8_t *)hct_output_ptr(session), &output_dims);
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SPACE_TO_BATCH_ND_S16)
             {
-                return arm_space_to_batch_nd_s16((const int16_t *)blob_ptr(session, input0), &input_dims, &block_shape, &extra_dims, (int16_t *)session->output_buffer, &output_dims, meta[6]);
+                return arm_space_to_batch_nd_s16((const int16_t *)blob_ptr(session, input0), &input_dims, &block_shape, &extra_dims, (int16_t *)hct_output_ptr(session), &output_dims, meta[6]);
             }
-            return arm_space_to_batch_nd_s8((const int8_t *)blob_ptr(session, input0), &input_dims, &block_shape, &extra_dims, (int8_t *)session->output_buffer, &output_dims, meta[6]);
+            return arm_space_to_batch_nd_s8((const int8_t *)blob_ptr(session, input0), &input_dims, &block_shape, &extra_dims, (int8_t *)hct_output_ptr(session), &output_dims, meta[6]);
         }
 
         case HCT_KERNEL_ID_SPACE_TO_DEPTH_S8:
@@ -3591,30 +3605,30 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             cmsis_nn_dims input_dims;
             cmsis_nn_dims output_dims;
             uint32_t element_size = (input0 != NULL) ? hct_dtype_size_bytes(input0->dtype) : 0u;
-            if (input0 == NULL || meta == NULL)
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 1u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             hct_fill_dims_from_blob(input0, &input_dims);
             hct_fill_output_dims_from_session(session, &output_dims);
-            session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c) * element_size;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, element_size,
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SPACE_TO_DEPTH_S16)
             {
-                return arm_space_to_depth_s16((const int16_t *)blob_ptr(session, input0), &input_dims, meta[0], (int16_t *)session->output_buffer, &output_dims);
+                return arm_space_to_depth_s16((const int16_t *)blob_ptr(session, input0), &input_dims, meta[0], (int16_t *)hct_output_ptr(session), &output_dims);
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SPACE_TO_DEPTH_S8)
             {
-                return arm_space_to_depth_s8((const int8_t *)blob_ptr(session, input0), &input_dims, meta[0], (int8_t *)session->output_buffer, &output_dims);
+                return arm_space_to_depth_s8((const int8_t *)blob_ptr(session, input0), &input_dims, meta[0], (int8_t *)hct_output_ptr(session), &output_dims);
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_DEPTH_TO_SPACE_S16)
             {
-                return arm_depth_to_space_s16((const int16_t *)blob_ptr(session, input0), &input_dims, meta[0], (int16_t *)session->output_buffer, &output_dims);
+                return arm_depth_to_space_s16((const int16_t *)blob_ptr(session, input0), &input_dims, meta[0], (int16_t *)hct_output_ptr(session), &output_dims);
             }
-            return arm_depth_to_space_s8((const int8_t *)blob_ptr(session, input0), &input_dims, meta[0], (int8_t *)session->output_buffer, &output_dims);
+            return arm_depth_to_space_s8((const int8_t *)blob_ptr(session, input0), &input_dims, meta[0], (int8_t *)hct_output_ptr(session), &output_dims);
         }
 
         case HCT_KERNEL_ID_RESIZE_NEAREST_NEIGHBOR_S8:
@@ -3628,23 +3642,24 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             int32_t output_size_data[2];
             uint32_t required_ctx_bytes;
             uint32_t element_size = (input0 != NULL) ? hct_dtype_size_bytes(input0->dtype) : 0u;
-            if (input0 == NULL || meta == NULL)
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 2u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             hct_fill_dims_from_blob(input0, &input_dims);
             hct_fill_output_dims_from_session(session, &output_dims);
-            required_ctx_bytes = (uint32_t)(output_dims.h + output_dims.w) * sizeof(int32_t);
-            if (required_ctx_bytes > session->scratch_bytes)
+            if (output_dims.h <= 0 || output_dims.w <= 0 ||
+                ((uint64_t)(uint32_t)output_dims.h + (uint32_t)output_dims.w) * sizeof(int32_t) > session->scratch_bytes)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c) * element_size;
-            if (session->output_length > sizeof(session->output_buffer))
+            required_ctx_bytes = ((uint32_t)output_dims.h + (uint32_t)output_dims.w) * sizeof(int32_t);
+            if (!hct_checked_dims_bytes(&output_dims, element_size,
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            ctx.buf = (required_ctx_bytes > 0u) ? &session->case_arena[session->scratch_offset] : NULL;
+            ctx.buf = (required_ctx_bytes > 0u) ? &session->workspace[session->scratch_offset] : NULL;
             ctx.size = (int32_t)required_ctx_bytes;
             params.align_corners = meta[0];
             params.half_pixel_centers = meta[1];
@@ -3663,7 +3678,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                                        &output_size_dims,
                                                        output_size_data,
                                                        &output_dims,
-                                                       (int16_t *)session->output_buffer);
+                                                       (int16_t *)hct_output_ptr(session));
             }
             return arm_resize_nearest_neighbor_s8(&ctx,
                                                   &params,
@@ -3672,7 +3687,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                                   &output_size_dims,
                                                   output_size_data,
                                                   &output_dims,
-                                                  (int8_t *)session->output_buffer);
+                                                  (int8_t *)hct_output_ptr(session));
         }
 
         case HCT_KERNEL_ID_TILE_S8:
@@ -3684,12 +3699,16 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             int32_t multiples[4] = {1, 1, 1, 1};
             int32_t rank;
             int32_t i;
-            if (input0 == NULL || meta == NULL)
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 1u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             rank = meta[0];
             if (rank < 1 || rank > 4)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            if (!hct_validate_meta0_blob(meta_blob, (size_t)(1 + rank), rank, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3699,8 +3718,8 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             {
                 multiples[i] = meta[1 + i];
             }
-            session->output_length = hct_shape_product(output_shape, rank) * hct_dtype_size_bytes(input0->dtype);
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_shape_bytes(output_shape, rank, hct_dtype_size_bytes(input0->dtype),
+                                         session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3709,9 +3728,9 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             params.multiples = multiples;
             if (session->expected_kernel_id == HCT_KERNEL_ID_TILE_S16)
             {
-                return arm_tile_s16((const int16_t *)blob_ptr(session, input0), &params, (int16_t *)session->output_buffer);
+                return arm_tile_s16((const int16_t *)blob_ptr(session, input0), &params, (int16_t *)hct_output_ptr(session));
             }
-            return arm_tile_s8((const int8_t *)blob_ptr(session, input0), &params, (int8_t *)session->output_buffer);
+            return arm_tile_s8((const int8_t *)blob_ptr(session, input0), &params, (int8_t *)hct_output_ptr(session));
         }
 
         case HCT_KERNEL_ID_GATHER_S8:
@@ -3721,7 +3740,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             cmsis_nn_dims indices_dims;
             cmsis_nn_dims output_dims;
             cmsis_nn_gather_params params;
-            if (input0 == NULL || input1 == NULL || meta == NULL)
+            if (input0 == NULL || input1 == NULL || !hct_validate_meta0_blob(meta_blob, 4u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3732,8 +3751,8 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             params.batch_dims = meta[1];
             params.input_rank = meta[2];
             params.coords_rank = meta[3];
-            session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c) * hct_dtype_size_bytes(input0->dtype);
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, hct_dtype_size_bytes(input0->dtype),
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3744,7 +3763,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                       (const int32_t *)blob_ptr(session, input1),
                                       &indices_dims,
                                       &params,
-                                      (int16_t *)session->output_buffer,
+                                      (int16_t *)hct_output_ptr(session),
                                       &output_dims);
             }
             return arm_gather_s8((const int8_t *)blob_ptr(session, input0),
@@ -3752,7 +3771,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                  (const int32_t *)blob_ptr(session, input1),
                                  &indices_dims,
                                  &params,
-                                 (int8_t *)session->output_buffer,
+                                 (int8_t *)hct_output_ptr(session),
                                  &output_dims);
         }
 
@@ -3763,7 +3782,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             cmsis_nn_dims indices_dims;
             cmsis_nn_dims output_dims;
             cmsis_nn_gather_nd_params params;
-            if (input0 == NULL || input1 == NULL || meta == NULL)
+            if (input0 == NULL || input1 == NULL || !hct_validate_meta0_blob(meta_blob, 3u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3773,8 +3792,8 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             params.params_rank = meta[0];
             params.indices_rank = meta[1];
             params.batch_dims = meta[2];
-            session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c) * hct_dtype_size_bytes(input0->dtype);
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, hct_dtype_size_bytes(input0->dtype),
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3785,7 +3804,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                          (const int32_t *)blob_ptr(session, input1),
                                          &indices_dims,
                                          &params,
-                                         (int16_t *)session->output_buffer,
+                                         (int16_t *)hct_output_ptr(session),
                                          &output_dims);
             }
             return arm_gather_nd_s8((const int8_t *)blob_ptr(session, input0),
@@ -3793,7 +3812,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                     (const int32_t *)blob_ptr(session, input1),
                                     &indices_dims,
                                     &params,
-                                    (int8_t *)session->output_buffer,
+                                    (int8_t *)hct_output_ptr(session),
                                     &output_dims);
         }
 
@@ -3806,7 +3825,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             int32_t rank;
             uint32_t max_output_bytes;
             arm_cmsis_nn_status status;
-            if (input0 == NULL || meta == NULL)
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 1u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3817,7 +3836,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             }
             hct_fill_shape_from_blob(input0, rank, shape, false);
             max_output_bytes = hct_blob_element_count(input0) * (uint32_t)rank * sizeof(int64_t);
-            if (max_output_bytes > sizeof(session->output_buffer))
+            if (max_output_bytes > session->output_capacity_bytes)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3825,11 +3844,11 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             params.shape = shape;
             if (session->expected_kernel_id == HCT_KERNEL_ID_WHERE_S16)
             {
-                status = arm_where_s16((const int16_t *)blob_ptr(session, input0), &params, (int64_t *)session->output_buffer, &num_true);
+                status = arm_where_s16((const int16_t *)blob_ptr(session, input0), &params, (int64_t *)hct_output_ptr(session), &num_true);
             }
             else
             {
-                status = arm_where_s8((const int8_t *)blob_ptr(session, input0), &params, (int64_t *)session->output_buffer, &num_true);
+                status = arm_where_s8((const int8_t *)blob_ptr(session, input0), &params, (int64_t *)hct_output_ptr(session), &num_true);
             }
             session->output_length = (uint32_t)num_true * (uint32_t)rank * sizeof(int64_t);
             return status;
@@ -3844,7 +3863,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             int32_t x_strides[4] = {0, 0, 0, 0};
             int32_t y_strides[4] = {0, 0, 0, 0};
             int32_t rank;
-            if (input0 == NULL || input1 == NULL || input2 == NULL || meta == NULL)
+            if (input0 == NULL || input1 == NULL || input2 == NULL || !hct_validate_meta0_blob(meta_blob, 1u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3857,8 +3876,8 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             hct_broadcast_strides(input0, output_shape, rank, cond_strides);
             hct_broadcast_strides(input1, output_shape, rank, x_strides);
             hct_broadcast_strides(input2, output_shape, rank, y_strides);
-            session->output_length = hct_shape_product(output_shape, rank) * hct_dtype_size_bytes(input1->dtype);
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_shape_bytes(output_shape, rank, hct_dtype_size_bytes(input1->dtype),
+                                         session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3873,13 +3892,13 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                                          (const int16_t *)blob_ptr(session, input1),
                                          (const int16_t *)blob_ptr(session, input2),
                                          &params,
-                                         (int16_t *)session->output_buffer);
+                                         (int16_t *)hct_output_ptr(session));
             }
             return arm_select_v2_s8((const bool *)blob_ptr(session, input0),
                                     (const int8_t *)blob_ptr(session, input1),
                                     (const int8_t *)blob_ptr(session, input2),
                                     &params,
-                                    (int8_t *)session->output_buffer);
+                                    (int8_t *)hct_output_ptr(session));
         }
 
         case HCT_KERNEL_ID_REVERSE_SEQUENCE_S8:
@@ -3888,7 +3907,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             cmsis_nn_reverse_sequence_params params;
             int32_t shape[4] = {1, 1, 1, 1};
             int32_t rank;
-            if (input0 == NULL || input1 == NULL || meta == NULL)
+            if (input0 == NULL || input1 == NULL || !hct_validate_meta0_blob(meta_blob, 3u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3903,7 +3922,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             params.seq_dim = meta[1];
             params.batch_dim = meta[2];
             session->output_length = input0->byte_length;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (session->output_length > session->output_capacity_bytes)
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3912,19 +3931,19 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                 return arm_reverse_sequence_s16((const int16_t *)blob_ptr(session, input0),
                                                 (const int32_t *)blob_ptr(session, input1),
                                                 &params,
-                                                (int16_t *)session->output_buffer);
+                                                (int16_t *)hct_output_ptr(session));
             }
             return arm_reverse_sequence_s8((const int8_t *)blob_ptr(session, input0),
                                            (const int32_t *)blob_ptr(session, input1),
                                            &params,
-                                           (int8_t *)session->output_buffer);
+                                           (int8_t *)hct_output_ptr(session));
         }
 
         case HCT_KERNEL_ID_SCATTER_ND_S8:
         case HCT_KERNEL_ID_SCATTER_ND_S16:
         {
             cmsis_nn_scatter_nd_params params;
-            if (input0 == NULL || input1 == NULL || meta == NULL)
+            if (input0 == NULL || input1 == NULL || !hct_validate_meta0_blob(meta_blob, 4u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3932,24 +3951,36 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             params.index_depth = meta[1];
             params.slice_size = meta[2];
             params.output_size = meta[3];
-            params.output_strides = &meta[4];
-            session->output_length = (uint32_t)params.output_size * hct_dtype_size_bytes(input1->dtype);
-            if (session->output_length > sizeof(session->output_buffer))
+            if (params.index_depth < 0 || params.index_depth > 4 ||
+                !hct_validate_meta0_blob(meta_blob, (size_t)(4 + params.index_depth), -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
-            memset(session->output_buffer, 0, session->output_length);
+            params.output_strides = &meta[4];
+            {
+                const int32_t output_shape[1] = {params.output_size};
+                if (!hct_checked_shape_bytes(output_shape, 1, hct_dtype_size_bytes(input1->dtype),
+                                             session->output_capacity_bytes, &session->output_length))
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
+            }
+            if (session->output_length != session->output_capacity_bytes)
+            {
+                return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            memset(hct_output_ptr(session), 0, session->output_length);
             if (session->expected_kernel_id == HCT_KERNEL_ID_SCATTER_ND_S16)
             {
                 return arm_scatter_nd_s16((const int32_t *)blob_ptr(session, input0),
                                           (const int16_t *)blob_ptr(session, input1),
                                           &params,
-                                          (int16_t *)session->output_buffer);
+                                          (int16_t *)hct_output_ptr(session));
             }
             return arm_scatter_nd_s8((const int32_t *)blob_ptr(session, input0),
                                      (const int8_t *)blob_ptr(session, input1),
                                      &params,
-                                     (int8_t *)session->output_buffer);
+                                     (int8_t *)hct_output_ptr(session));
         }
 
         case HCT_KERNEL_ID_BROADCAST_TO_S8:
@@ -3960,7 +3991,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             int32_t output_shape[9] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
             int32_t rank;
             const cmsis_nn_broadcast_to_params *params_ptr;
-            if (input0 == NULL || meta == NULL)
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 1u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -3973,8 +4004,8 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             hct_fill_output_shape_from_session(session, rank, output_shape);
             if (!expects_exact_status(session))
             {
-                session->output_length = hct_shape_product(output_shape, rank) * hct_dtype_size_bytes(input0->dtype);
-                if (session->output_length > sizeof(session->output_buffer))
+                if (!hct_checked_shape_bytes(output_shape, rank, hct_dtype_size_bytes(input0->dtype),
+                                             session->output_capacity_bytes, &session->output_length))
                 {
                     return ARM_CMSIS_NN_ARG_ERROR;
                 }
@@ -3988,13 +4019,13 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                 return arm_broadcast_to_s16(
                     null_arg_requested(session, HCT_NULL_ARG_INPUT0_BIT) ? NULL : (const int16_t *)blob_ptr(session, input0),
                     params_ptr,
-                    null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int16_t *)session->output_buffer
+                    null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int16_t *)hct_output_ptr(session)
                 );
             }
             return arm_broadcast_to_s8(
                 null_arg_requested(session, HCT_NULL_ARG_INPUT0_BIT) ? NULL : (const int8_t *)blob_ptr(session, input0),
                 params_ptr,
-                null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int8_t *)session->output_buffer
+                null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int8_t *)hct_output_ptr(session)
             );
         }
 
@@ -4007,7 +4038,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             int32_t operand_strides[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
             int32_t rank;
             const cmsis_nn_dynamic_update_slice_params *params_ptr;
-            if (input0 == NULL || input1 == NULL || input2 == NULL || meta == NULL)
+            if (input0 == NULL || input1 == NULL || input2 == NULL || !hct_validate_meta0_blob(meta_blob, 1u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -4028,7 +4059,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             if (!expects_exact_status(session))
             {
                 session->output_length = input0->byte_length;
-                if (session->output_length > sizeof(session->output_buffer))
+                if (session->output_length > session->output_capacity_bytes)
                 {
                     return ARM_CMSIS_NN_ARG_ERROR;
                 }
@@ -4041,7 +4072,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                     null_arg_requested(session, HCT_NULL_ARG_INPUT1_BIT) ? NULL : (const int16_t *)blob_ptr(session, input1),
                     null_arg_requested(session, HCT_NULL_ARG_INPUT2_BIT) ? NULL : (const int32_t *)blob_ptr(session, input2),
                     params_ptr,
-                    null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int16_t *)session->output_buffer
+                    null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int16_t *)hct_output_ptr(session)
                 );
             }
             return arm_dynamic_update_slice_s8(
@@ -4049,7 +4080,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
                 null_arg_requested(session, HCT_NULL_ARG_INPUT1_BIT) ? NULL : (const int8_t *)blob_ptr(session, input1),
                 null_arg_requested(session, HCT_NULL_ARG_INPUT2_BIT) ? NULL : (const int32_t *)blob_ptr(session, input2),
                 params_ptr,
-                null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int8_t *)session->output_buffer
+                null_arg_requested(session, HCT_NULL_ARG_OUTPUT_BIT) ? NULL : (int8_t *)hct_output_ptr(session)
             );
         }
 
@@ -4062,7 +4093,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             cmsis_nn_dims begin_dims;
             cmsis_nn_dims stride_dims;
             uint32_t element_size;
-            if (input0 == NULL || meta == NULL)
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 8u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -4077,15 +4108,15 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             stride_dims.w = meta[6];
             stride_dims.c = meta[7];
             element_size = hct_dtype_size_bytes(input0->dtype);
-            session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c) * element_size;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, element_size,
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_STRIDED_SLICE_S16)
             {
                 return arm_strided_slice_s16((const int16_t *)blob_ptr(session, input0),
-                                             (int16_t *)session->output_buffer,
+                                             (int16_t *)hct_output_ptr(session),
                                              &input_dims,
                                              &begin_dims,
                                              &stride_dims,
@@ -4094,14 +4125,14 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             if (session->expected_kernel_id == HCT_KERNEL_ID_STRIDED_SLICE_S32)
             {
                 return arm_strided_slice_s32((const int32_t *)blob_ptr(session, input0),
-                                             (int32_t *)session->output_buffer,
+                                             (int32_t *)hct_output_ptr(session),
                                              &input_dims,
                                              &begin_dims,
                                              &stride_dims,
                                              &output_dims);
             }
             return arm_strided_slice_s8((const int8_t *)blob_ptr(session, input0),
-                                        (int8_t *)session->output_buffer,
+                                        (int8_t *)hct_output_ptr(session),
                                         &input_dims,
                                         &begin_dims,
                                         &stride_dims,
@@ -4116,7 +4147,7 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             cmsis_nn_dims begin_dims;
             cmsis_nn_dims stride_dims;
             uint32_t element_size;
-            if (input0 == NULL || meta == NULL)
+            if (input0 == NULL || !hct_validate_meta0_blob(meta_blob, 8u, -1, -1))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
@@ -4131,22 +4162,22 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
             stride_dims.w = meta[6];
             stride_dims.c = meta[7];
             element_size = hct_dtype_size_bytes(input0->dtype);
-            session->output_length = (uint32_t)(output_dims.n * output_dims.h * output_dims.w * output_dims.c) * element_size;
-            if (session->output_length > sizeof(session->output_buffer))
+            if (!hct_checked_dims_bytes(&output_dims, element_size,
+                                        session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_STRIDED_SLICE_F16)
             {
                 return arm_strided_slice_f16((const float16_t *)blob_ptr(session, input0),
-                                            (float16_t *)session->output_buffer,
+                                            (float16_t *)hct_output_ptr(session),
                                             &input_dims,
                                             &begin_dims,
                                             &stride_dims,
                                             &output_dims);
             }
             return arm_strided_slice_f32((const float *)blob_ptr(session, input0),
-                                        (float *)session->output_buffer,
+                                        (float *)hct_output_ptr(session),
                                         &input_dims,
                                         &begin_dims,
                                         &stride_dims,

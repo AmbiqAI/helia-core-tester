@@ -2,6 +2,16 @@
 
 #include <stdio.h>
 
+arm_cmsis_nn_status arm_nn_abs_f32(const float32_t *input, float32_t *output, int32_t block_size)
+{
+    return arm_abs_f32(input, output, block_size);
+}
+
+arm_cmsis_nn_status arm_nn_abs_f16(const float16_t *input, float16_t *output, int32_t block_size)
+{
+    return arm_abs_f16(input, output, block_size);
+}
+
 #ifdef USING_FVP_CORSTONE_300
 extern void uart_init(void);
 #endif

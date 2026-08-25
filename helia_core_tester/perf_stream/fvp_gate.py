@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from helia_core_tester.generation.artifact_identity import generated_case_artifact_sha256
+
 
 class FvpReportUnavailableError(Exception):
     """Raised when a caller requires an FVP report but none can be found."""
@@ -35,12 +37,17 @@ class FvpCaseFailedGateError(Exception):
     """Raised when a case's most recently recorded FVP status is not PASS."""
 
 
+class FvpCaseStaleGateError(FvpCaseFailedGateError):
+    """Raised when a recorded result is not for the current generated artifacts."""
+
+
 
 @dataclass(frozen=True)
 class FvpCaseStatus:
     name: str
     status: str
     report_path: Path
+    artifact_sha256: str | None = None
 
     @property
     def passed(self) -> bool:
@@ -108,7 +115,13 @@ def lookup_fvp_case_status(
     if entry is None:
         return None
     status = str(entry.get("test_result", {}).get("status", ""))
-    return FvpCaseStatus(name=case_name, status=status, report_path=report_path)
+    digest = entry.get("artifact_sha256")
+    return FvpCaseStatus(
+        name=case_name,
+        status=status,
+        report_path=report_path,
+        artifact_sha256=str(digest) if digest is not None else None,
+    )
 
 
 def require_fvp_pass(
@@ -118,6 +131,7 @@ def require_fvp_pass(
     cpu: str = "cortex-m55",
     suite: str = "int",
     allow_missing_report: bool = True,
+    case_dir: Path | None = None,
 ) -> None:
     """Raise if `case_name` has a recorded, non-PASS FVP status.
 
@@ -143,3 +157,15 @@ def require_fvp_pass(
             f"{fvp_status.report_path} -- refusing to bridge a case FVP itself does not "
             f"believe is correct onto real hardware."
         )
+    if case_dir is not None:
+        current_digest = generated_case_artifact_sha256(case_dir)
+        if fvp_status.artifact_sha256 is None:
+            raise FvpCaseStaleGateError(
+                f"{case_name}: recorded PASS in {fvp_status.report_path} has no artifact_sha256; "
+                "rerun the FVP suite before bridging this case."
+            )
+        if fvp_status.artifact_sha256 != current_digest:
+            raise FvpCaseStaleGateError(
+                f"{case_name}: recorded PASS artifact {fvp_status.artifact_sha256} does not match "
+                f"current generated artifact {current_digest}; rerun the FVP suite."
+            )

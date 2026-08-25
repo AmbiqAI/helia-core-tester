@@ -17,10 +17,12 @@ import pytest
 
 from helia_core_tester.perf_stream.fvp_gate import (
     FvpCaseFailedGateError,
+    FvpCaseStaleGateError,
     find_latest_fvp_report,
     lookup_fvp_case_status,
     require_fvp_pass,
 )
+from helia_core_tester.generation.artifact_identity import generated_case_artifact_sha256
 from helia_core_tester.perf_stream.generated_test_bridge import (
     GeneratedTestCase,
     UnsupportedGeneratedTestError,
@@ -72,6 +74,44 @@ def test_recorded_pass_does_not_raise(tmp_path: Path) -> None:
     assert status is not None
     assert status.passed
     require_fvp_pass(tmp_path, "my_case", cpu="cortex-m55", suite="int")
+
+
+def _case_artifacts(root: Path) -> Path:
+    case_dir = root / "generated" / "my_case"
+    case_dir.mkdir(parents=True)
+    (case_dir / "descriptor.yaml").write_text("name: my_case\n", encoding="utf-8")
+    (case_dir / "CMakeLists.txt").write_text("add_executable(my_case test.c)\n", encoding="utf-8")
+    (case_dir / "test.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    return case_dir
+
+
+def test_recorded_pass_requires_matching_artifact_digest(tmp_path: Path) -> None:
+    case_dir = _case_artifacts(tmp_path)
+    digest = generated_case_artifact_sha256(case_dir)
+    _write_fake_report(tmp_path, "cortex-m55", "int", {
+        "my_case": {"test_result": {"status": "PASS"}, "artifact_sha256": digest}
+    })
+    require_fvp_pass(tmp_path, "my_case", case_dir=case_dir)
+
+
+def test_matching_legacy_pass_without_digest_is_stale(tmp_path: Path) -> None:
+    case_dir = _case_artifacts(tmp_path)
+    _write_fake_report(tmp_path, "cortex-m55", "int", {
+        "my_case": {"test_result": {"status": "PASS"}}
+    })
+    with pytest.raises(FvpCaseStaleGateError, match="has no artifact_sha256"):
+        require_fvp_pass(tmp_path, "my_case", case_dir=case_dir)
+
+
+def test_changed_artifact_rejects_previous_pass(tmp_path: Path) -> None:
+    case_dir = _case_artifacts(tmp_path)
+    digest = generated_case_artifact_sha256(case_dir)
+    _write_fake_report(tmp_path, "cortex-m55", "int", {
+        "my_case": {"test_result": {"status": "PASS"}, "artifact_sha256": digest}
+    })
+    (case_dir / "test.c").write_text("int main(void) { return 1; }\n", encoding="utf-8")
+    with pytest.raises(FvpCaseStaleGateError, match="does not match"):
+        require_fvp_pass(tmp_path, "my_case", case_dir=case_dir)
 
 
 def test_recorded_fail_raises_gate_error(tmp_path: Path) -> None:

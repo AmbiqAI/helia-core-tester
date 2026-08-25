@@ -147,15 +147,9 @@ def get_resolved_tensor_dtype(desc: Mapping[str, Any], role: str, default: str |
 # template_context.py's infer_validation_tolerance() (FVP codegen) read this
 # table, so both paths always validate a given case under the same tolerance.
 #
-# KNOWN GAP: any operator using tolerant_int FVP validation with no entry
-# here falls back to a hardcoded tolerance of 1 (see default_int_tolerance()
-# below), while resolve_comparison() defaults such an operator's hardware
-# manifest to exact_int (tolerance 0) -- a silent FVP-pass/hardware-fail
-# divergence risk. Still-unaudited operators: TransposeConv, FullyConnected,
-# BatchMatMul, AvgPool, MaxPool, Softmax, Quantize, Logistic, Relu, Relu6,
-# Tanh, HardSwish, Mean, MinMax, ReduceMax, ReduceMin, Sub. Not resolved by
-# flipping the fallback to 0, since that could reintroduce false hardware
-# failures for an operator with a real undocumented 1 LSB divergence.
+# Operators that historically relied on the template's implicit tolerance-1
+# fallback are listed explicitly below so generated C, sidecars, and streamed
+# hardware manifests all consume the same resolved comparison object.
 _OPERATOR_TOLERANCE_OVERRIDES: Dict[str, int] = {
     "PReLU": 2,
     # LUT-style requantization with a scalar-vs-MVE rounding divergence on
@@ -183,6 +177,25 @@ _OPERATOR_TOLERANCE_OVERRIDES: Dict[str, int] = {
     "SpaceToDepth": 0,
     "BatchToSpaceND": 0,
     "SpaceToBatchND": 0,
+    # Preserve the historical standalone/FVP tolerant-int contract while making
+    # the same resolved comparison authoritative for streamed hardware cases.
+    "TransposeConv": 1,
+    "FullyConnected": 1,
+    "BatchMatMul": 1,
+    "AvgPool": 1,
+    "MaxPool": 1,
+    "Softmax": 1,
+    "Quantize": 1,
+    "Logistic": 1,
+    "Relu": 1,
+    "Relu6": 1,
+    "Tanh": 1,
+    "HardSwish": 1,
+    "Mean": 1,
+    "MinMax": 1,
+    "ReduceMax": 1,
+    "ReduceMin": 1,
+    "Sub": 1,
 }
 
 # Per-operator tolerance overrides that apply only when the resolved output

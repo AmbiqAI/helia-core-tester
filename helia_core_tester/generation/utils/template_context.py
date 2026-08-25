@@ -265,7 +265,16 @@ class TemplateContextBuilder:
         desc: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         resolved = dict(context)
-        mode = cls.infer_validation_mode(template_path, resolved)
+        comparison: Dict[str, Any] | None = None
+        if desc is not None:
+            raw_comparison = desc.get("resolved_comparison")
+            comparison = dict(raw_comparison) if isinstance(raw_comparison, dict) else resolve_comparison(desc)
+        comparison_mode = str((comparison or {}).get("mode", ""))
+        if comparison_mode in {"exact_int", "tolerant_int", "float", "bool", "none"}:
+            mode = comparison_mode
+            resolved["validation_mode"] = mode
+        else:
+            mode = cls.infer_validation_mode(template_path, resolved)
         # Invariant (issue #54): a float-typed output must never be validated
         # by an integer comparison — the (long long) cast makes it vacuous.
         # This also rejects coercion via an explicit validation_mode override.
@@ -281,8 +290,8 @@ class TemplateContextBuilder:
                 f"Status-only fault templates should simply not invoke output "
                 f"validation rather than coercing the mode."
             )
-        resolved.setdefault("validation_mode", mode)
-        resolved.setdefault("validation_mode_token", mode.upper())
+        resolved["validation_mode"] = mode
+        resolved["validation_mode_token"] = mode.upper()
         resolved.setdefault(
             "validation_label",
             cls.infer_validation_label(template_path, resolved, desc),
@@ -291,10 +300,13 @@ class TemplateContextBuilder:
             "validation_report_limit",
             cls.infer_validation_report_limit(template_path, resolved),
         )
-        resolved.setdefault(
-            "validation_tolerance",
-            cls.infer_validation_tolerance(template_path, resolved, mode, desc),
-        )
+        if comparison_mode == "tolerant_int":
+            resolved["validation_tolerance"] = int(comparison.get("tolerance", 0))
+        else:
+            resolved.setdefault(
+                "validation_tolerance",
+                cls.infer_validation_tolerance(template_path, resolved, mode, desc),
+            )
         float_defaults = cls.infer_float_comparison_defaults(resolved, desc)
         resolved.setdefault(
             "validation_atol",

@@ -47,6 +47,7 @@ set(HELIA_BENCHMARK_MEASURED_RUNS "10" CACHE STRING "Timed measured iterations p
 # from those steps so they can be corrected.
 option(HELIA_HARDWARE_BUILD "Build generated tests for real Apollo510 hardware (NSX bring-up) instead of the FVP toolchain" OFF)
 set(HELIA_HARDWARE_BOARD "apollo510_evb" CACHE STRING "NSX board name for HELIA_HARDWARE_BUILD")
+set(HCT_SERVER_WORKSPACE_BYTES 114688 CACHE STRING "Unified per-case benchmark server workspace size in bytes")
 
 if((HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER) AND NOT HELIA_HARDWARE_BUILD)
   message(FATAL_ERROR "Streaming perf-stream firmware targets require HELIA_HARDWARE_BUILD=ON")
@@ -373,7 +374,8 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
       "${HCT_RTT_BUILD_ROOT}/Config")
     target_compile_definitions(hct_benchmark_server PRIVATE
       HCT_BENCHMARK_SERVER_BOARD_ID="${HELIA_HARDWARE_BOARD}"
-      HCT_BENCHMARK_SERVER_TARGET_CPU="${TARGET_CPU}")
+      HCT_BENCHMARK_SERVER_TARGET_CPU="${TARGET_CPU}"
+      HCT_SERVER_WORKSPACE_BYTES=${HCT_SERVER_WORKSPACE_BYTES})
     _hct_link_perf_stream_target(hct_benchmark_server)
     add_custom_command(TARGET hct_benchmark_server POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -390,7 +392,8 @@ endif()
 # once here instead of being re-emitted by Jinja into each generated file.
 add_library(helia_test_runtime STATIC src/test_runtime/helia_test_runtime.c)
 target_include_directories(helia_test_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_definitions(helia_test_runtime PUBLIC USING_FVP_CORSTONE_300)
+target_compile_definitions(helia_test_runtime PRIVATE $<IF:$<BOOL:${HELIA_HARDWARE_BUILD}>,HELIA_HARDWARE_BUILD,USING_FVP_CORSTONE_300>)
+target_link_libraries(helia_test_runtime PRIVATE cmsis-nn)
 
 # ---------- Helpers ----------
 function(_normalize_target_name out_var in_path)
@@ -459,7 +462,7 @@ if(HELIA_BUILD_GENERATED_TESTS)
       "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/AmbiqSuite/R5.1.0_rc27/CMSIS/AmbiqMicro/Include"
       "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/CMSIS/CMSIS-DSP-1.16.2/Include")
 
-    target_compile_definitions(${TGT_NAME} PUBLIC $<IF:$<BOOL:${HELIA_HARDWARE_BUILD}>,HELIA_HARDWARE_BUILD,USING_FVP_CORSTONE_300>)
+    target_compile_definitions(${TGT_NAME} PRIVATE $<IF:$<BOOL:${HELIA_HARDWARE_BUILD}>,HELIA_HARDWARE_BUILD,USING_FVP_CORSTONE_300>)
     target_compile_options(${TGT_NAME} PRIVATE -Wno-switch-default -Wno-unused-parameter -Wno-cast-align)
 
     if(HELIA_BENCHMARK_MODE)
@@ -480,7 +483,7 @@ if(HELIA_BUILD_GENERATED_TESTS)
       if(ENABLE_COVERAGE)
         target_link_options(${TGT_NAME} PRIVATE --coverage)
       endif()
-      target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn nsx::board nsx::core nsx::perf)
+      target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn nsx::board nsx::core nsx::perf helia_test_runtime)
       nsx_finalize_app(${TGT_NAME})
     else()
       target_link_options(${TGT_NAME} PRIVATE -T ${LINK_FILE})

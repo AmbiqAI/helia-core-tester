@@ -108,6 +108,13 @@ class HostSession:
                     f"Case {bundle.case_id!r} references kernel_id {bundle.kernel_id}, "
                     "which is not present in the target's advertised catalog."
                 )
+            required = bundle.workspace_bytes_required
+            available = int(hello_payload["runtime_arena_capacity"])
+            if required > available:
+                raise RuntimeError(
+                    f"Case {bundle.case_id!r} requires {required} workspace bytes, "
+                    f"but the target advertises only {available} bytes."
+                )
 
         self._send(MessageType.LOAD_PLAN, self._encode_plan(case_bundles))
 
@@ -145,11 +152,30 @@ class HostSession:
                 actual_output_bytes = bytearray()
             elif frame.header.message_type == MessageType.OUTPUT_CHUNK:
                 reader = ByteReader(frame.payload)
-                _offset = reader.u32()
-                actual_output_bytes.extend(reader.raw())
+                chunk_offset = reader.u32()
+                chunk_length = reader.u32()
+                chunk = reader.fixed(chunk_length)
+                trailing_bytes = reader.remaining()
+                if chunk_offset != len(actual_output_bytes) or trailing_bytes:
+                    raise RuntimeError(
+                        f"Invalid OUTPUT_CHUNK: offset={chunk_offset}, length={chunk_length}, "
+                        f"received={len(chunk)}, trailing={len(trailing_bytes)}, "
+                        f"expected_offset={len(actual_output_bytes)}."
+                    )
+                actual_output_bytes.extend(chunk)
             elif frame.header.message_type == MessageType.OUTPUT_END:
                 if current_case_id is None:
                     raise RuntimeError("Received OUTPUT_END without an active case.")
+                output_end = ByteReader(frame.payload)
+                declared_length = output_end.u32()
+                declared_checksum = output_end.u32()
+                actual_checksum = sum(actual_output_bytes) & 0xFFFFFFFF
+                if declared_length != len(actual_output_bytes) or declared_checksum != actual_checksum:
+                    raise RuntimeError(
+                        f"Invalid OUTPUT_END for {current_case_id!r}: declared length/checksum "
+                        f"{declared_length}/{declared_checksum}, received "
+                        f"{len(actual_output_bytes)}/{actual_checksum}."
+                    )
                 bundle = case_map[current_case_id]
                 if bundle.comparison["mode"] == "exact_status":
                     if reported_status is None:
@@ -327,7 +353,8 @@ class HostSession:
 
     def _encode_case_meta(self, case_bundle: CaseBundle) -> bytes:
         comparison = case_bundle.comparison
-        scalar_parameters = case_bundle.manifest.get("serialized_scalar_parameters", {})
+        scalar_parameters = dict(case_bundle.manifest.get("serialized_scalar_parameters", {}))
+        scalar_parameters["output_capacity_bytes"] = case_bundle.expected_output.byte_length
         writer = ByteWriter()
         writer.text(case_bundle.case_id)
         writer.u32(case_bundle.kernel_id)

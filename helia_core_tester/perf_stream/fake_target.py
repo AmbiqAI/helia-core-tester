@@ -191,6 +191,7 @@ class FakeTargetTransport:
         self._flash_count = 1
         self._rewind_count = 0
         self._completed_case_count = 0
+        self._case_workspace_history: list[int] = []
         self._current_case_index = 0
         self._catalog_entries = {adapter.entry.kernel_id: adapter for adapter in (FakeAbsS8Adapter(), FakeConvolveS8Adapter())}
         self._catalog = [self._catalog_dict(adapter.entry) for adapter in self._catalog_entries.values()]
@@ -222,6 +223,10 @@ class FakeTargetTransport:
     @property
     def arena_used_bytes(self) -> int:
         return self._arena.used_bytes
+
+    @property
+    def case_workspace_history(self) -> tuple[int, ...]:
+        return tuple(self._case_workspace_history)
 
     def close(self) -> None:
         self._outbound.clear()
@@ -434,8 +439,14 @@ class FakeTargetTransport:
             )
             for blob_id, spec in self._blob_specs.items()
         }
-        self._arena.reserve(int(self._case_meta["scratch_bytes"]))
-        self._arena.reserve(sum(int(spec["byte_length"]) for spec in self._blob_specs.values()))
+        for spec in self._case_meta["blobs"]:
+            self._arena.reserve_aligned(int(spec["byte_length"]), max(1, int(spec["alignment"])))
+        scratch_bytes = int(self._case_meta["scratch_bytes"])
+        output_bytes = int(self._case_meta["scalar_parameters"]["output_capacity_bytes"])
+        if scratch_bytes:
+            self._arena.reserve_aligned(scratch_bytes, 16)
+        if output_bytes:
+            self._arena.reserve_aligned(output_bytes, 16)
 
     def _request_blob(self) -> None:
         assert self._current_blob_id is not None
@@ -501,7 +512,8 @@ class FakeTargetTransport:
             part = self._computed_output[offset : offset + chunk_size]
             writer = ByteWriter()
             writer.u32(offset)
-            writer.raw(part)
+            writer.u32(len(part))
+            writer.fixed(part)
             self._queue(MessageType.OUTPUT_CHUNK, writer.finish())
         end_writer = ByteWriter()
         end_writer.u32(len(self._computed_output))
@@ -546,6 +558,7 @@ class FakeTargetTransport:
         complete_writer.u8(1)
         complete_writer.u32(self._arena.used_bytes)
         self._queue(MessageType.CASE_COMPLETE, complete_writer.finish())
+        self._case_workspace_history.append(self._arena.used_bytes)
         self._arena.rewind()
         self._rewind_count += 1
         self._completed_case_count += 1

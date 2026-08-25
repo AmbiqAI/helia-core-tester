@@ -50,7 +50,7 @@ _STATUS_CASES = [
 def _bridge(tmp_path: Path, family: str, test_name: str) -> dict:
     cases = discover_generated_tests(PROJECT_ROOT, family=family, name_filter=test_name)
     assert cases, f"expected discoverable generated test {test_name}"
-    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path)
+    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False)
     return bundle.manifest
 
 
@@ -124,7 +124,7 @@ def test_strided_slice_batch_collapse_bug_is_fixed(tmp_path: Path) -> None:
     # Phase 7b.
     cases = discover_generated_tests(PROJECT_ROOT, family="StridedSliceFunctions", name_filter="strided_slice_case1_whole_slab_s8")
     assert cases
-    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path)
+    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False)
     assert bundle is not None
 
 
@@ -150,6 +150,6 @@ def test_inconsistent_artifacts_stay_skipped(tmp_path: Path) -> None:
     header_path.write_text(tampered_text)
     try:
         with pytest.raises(UnsupportedGeneratedTestError, match="internally inconsistent"):
-            build_case_bundle_from_generated_test(PROJECT_ROOT, case, output_root=tmp_path)
+            build_case_bundle_from_generated_test(PROJECT_ROOT, case, output_root=tmp_path, require_fvp_pass=False)
     finally:
         header_path.write_text(original_text)

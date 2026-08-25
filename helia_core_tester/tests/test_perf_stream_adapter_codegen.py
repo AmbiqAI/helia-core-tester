@@ -72,6 +72,17 @@ def test_generator_script_check_mode_passes_on_committed_file() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_data_movement_adapters_validate_all_meta_and_output_shapes() -> None:
+    block = render_generated_adapters_block()
+    assert "meta == NULL" not in block
+    assert "meta_blob->dtype != HCT_DTYPE_S32" in block
+    assert "meta_blob->alignment < sizeof(int32_t)" in block
+    assert "hct_shape_product" not in block
+    assert "hct_checked_shape_bytes" in block
+    assert "hct_checked_dims_bytes" in block
+    assert "const size_t required_meta_ints = is_batch_to_space ? 6u : 7u;" in block
+
+
 def test_every_registered_adapter_has_a_unique_function_name() -> None:
     names = [adapter.function_name for adapter in FIRMWARE_ADAPTERS]
     assert len(names) == len(set(names)), f"duplicate function_name entries: {names}"

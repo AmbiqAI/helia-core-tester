@@ -15,6 +15,7 @@ from helia_core_tester.core.path_layout import tests_report_dir as canonical_tes
 from helia_core_tester.reporting.models import DescriptorResult, TestReport, TestResult, TestStatus
 from helia_core_tester.reporting.descriptor_tracker import DescriptorTracker
 from helia_core_tester.reporting.generator import ReportGenerator
+from helia_core_tester.generation.artifact_identity import generated_case_artifact_sha256
 
 from .cmake import cmake_build, cmake_configure, find_elves
 from .coverage import generate_coverage_reports, new_coverage_context
@@ -151,6 +152,7 @@ def run_tests_with_reporting(
                 generated_tests_dir=cpu_generated_tests_dir,
             )
             desc_path = tracker.get_descriptor_path(desc_name)
+            generated_test_dir = tracker.generated_test_dir_for(desc_name, cpu_generated_tests_dir)
             descriptor_results[desc_name] = DescriptorResult(
                 descriptor_name=desc_name,
                 descriptor_path=desc_path,
@@ -159,6 +161,7 @@ def run_tests_with_reporting(
                 test_result=test_result,
                 failure_stage=failure_stage,
                 failure_reason=failure_reason,
+                artifact_sha256=generated_case_artifact_sha256(generated_test_dir),
             )
 
         for result in cpu_results:
@@ -185,6 +188,9 @@ def run_tests_with_reporting(
                 test_result=result,
                 failure_stage=failure_stage,
                 failure_reason=failure_reason,
+                artifact_sha256=generated_case_artifact_sha256(
+                    tracker.generated_test_dir_for(desc_name, cpu_generated_tests_dir)
+                ),
             )
 
         metadata = {

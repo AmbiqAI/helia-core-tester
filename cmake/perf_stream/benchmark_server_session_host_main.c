@@ -109,8 +109,9 @@ int main(void)
     uint32_t requested_offset = 0u;
     uint16_t requested_length = 0u;
     hctp_frame_view_t frame;
+    static uint8_t workspace[32768u];
 
-    hct_server_session_init(&session, 0xC0DE1234u, 256u, 32768u);
+    hct_server_session_init(&session, 0xC0DE1234u, 256u, workspace, (uint32_t)sizeof(workspace));
     if (drain_single_message(&session, HCTP_MSG_HELLO, outbound_payload, &outbound_length) != 0) return 10;
 
     offset = 0u;
@@ -139,7 +140,9 @@ int main(void)
     write_i32(inbound_payload, &offset, 0);
     write_u32(inbound_payload, &offset, 0u);
     write_u32(inbound_payload, &offset, 0u);
-    write_u8(inbound_payload, &offset, 0u);
+    write_u8(inbound_payload, &offset, 1u);
+    write_text(inbound_payload, &offset, "output_capacity_bytes");
+    write_i32(inbound_payload, &offset, (int32_t)sizeof(kExpected));
     write_u16(inbound_payload, &offset, 1u);
     write_u32(inbound_payload, &offset, 1u);
     write_text(inbound_payload, &offset, "input_0");
@@ -184,7 +187,7 @@ int main(void)
     {
         int chunk_count = 0;
         int8_t actual[sizeof(kExpected)] = {0};
-        while (session.outbox_length > 0u)
+        while (session.outbox_length > 0u || session.output_stream_active != 0u)
         {
             const size_t frame_length = hct_server_session_take_next_frame(&session, outbound_payload, sizeof(outbound_payload));
             if (hctp_decode_frame(outbound_payload, frame_length, HCTP_DEFAULT_MAX_PAYLOAD, &frame) != HCTP_STATUS_OK) return 23;

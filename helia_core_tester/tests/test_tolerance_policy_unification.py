@@ -78,11 +78,6 @@ _AUDITED_KNOWN_GAP_OPERATORS = (
     "SpaceToDepth",
     "BatchToSpaceND",
     "SpaceToBatchND",
-)
-
-# Operators from the same KNOWN GAP list still NOT audited. When one gets
-# audited, move it to _AUDITED_KNOWN_GAP_OPERATORS and update dtypes.py.
-_STILL_UNAUDITED_KNOWN_GAP_OPERATORS = (
     "TransposeConv",
     "FullyConnected",
     "BatchMatMul",
@@ -101,6 +96,10 @@ _STILL_UNAUDITED_KNOWN_GAP_OPERATORS = (
     "ReduceMin",
     "Sub",
 )
+
+# Operators from the same KNOWN GAP list still NOT audited. When one gets
+# audited, move it to _AUDITED_KNOWN_GAP_OPERATORS and update dtypes.py.
+_STILL_UNAUDITED_KNOWN_GAP_OPERATORS: tuple[str, ...] = ()
 
 
 def test_audited_known_gap_operators_all_have_explicit_overrides():

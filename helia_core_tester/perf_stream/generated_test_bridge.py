@@ -28,31 +28,12 @@ import yaml
 
 from .case_bundle import BlobInfo, CaseBundle, _blob_info, _case_root, _manifest_blob_entry, _write_blob, _write_manifest
 from .kernel_registry import lookup_kernel_id
+from helia_core_tester.generation.io.dtypes import resolve_comparison
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
 class UnsupportedGeneratedTestError(Exception):
     """Raised when a generated test's operator/dtype isn't bridgeable to real firmware dispatch yet."""
-
-
-# Must match HCT_SERVER_MAX_ARENA_BYTES in cmake/perf_stream/benchmark_server_session.h.
-# The firmware's `session->case_arena` is a single fixed-size buffer shared by every
-# streamed (non-host-only) blob *and* any scratch/weight-sum buffer for the case; a case
-# whose total footprint exceeds this will fail `allocate_blob()` inside `handle_case_meta()`
-# with HCTP_STATUS_INVALID_ARGUMENT (surfaced to the host as a CASE_META ERROR frame) --
-# so it must be rejected here at bridge time with a clear skip reason instead of silently
-# producing a CaseBundle the firmware will reject at runtime.
-_ARENA_CAPACITY_BYTES = 49152
-
-# Must match HCT_SERVER_MAX_OUTPUT_BYTES in cmake/perf_stream/benchmark_server_session.h.
-# The firmware's `session->output_buffer` is a separate fixed-size buffer (not part of
-# `case_arena`) that every kernel dispatch writes its correctness output into; a case
-# whose output byte-length exceeds this is rejected deep inside the kernel-dispatch adapter
-# itself (e.g. `output_length > sizeof(session->output_buffer)` in run_convolve_once/
-# run_depthwise_conv_once/run_pooling_once) with a generic ARM_CMSIS_NN_ARG_ERROR that
-# `handle_run_correctness` collapses to HCTP_STATUS_INVALID_ARGUMENT with no detail -- so,
-# like the arena check above, this must be caught here at bridge time with a clear reason.
-_OUTPUT_BUFFER_CAPACITY_BYTES = 20480
 
 
 def _align_up(value: int, alignment: int) -> int:
@@ -62,38 +43,8 @@ def _align_up(value: int, alignment: int) -> int:
 
 
 def _check_case_arena_capacity(generated_test: GeneratedTestCase, manifest: dict, blobs: tuple[BlobInfo, ...]) -> None:
-    """Simulate the firmware's `allocate_blob()` bump-allocator over every streamed
-    (non-host-only) blob, plus any scratch buffer, plus (for ConvolutionFunctions/Convolve
-    specifically) the extra weight-sum buffer `arm_convolve_weight_sum()` needs -- and raise
-    UnsupportedGeneratedTestError if the simulated total would exceed the firmware's fixed
-    `HCT_SERVER_MAX_ARENA_BYTES` case arena.
-    """
-    used = 0
-    for blob in blobs:
-        if blob.host_only:
-            continue
-        used = _align_up(used, max(int(blob.required_alignment), 1)) + int(blob.byte_length)
-    scratch_bytes = int(manifest.get("scratch_buffer", {}).get("bytes", 0))
-    if scratch_bytes > 0:
-        used = _align_up(used, 16) + scratch_bytes
-    if manifest.get("family") == "ConvolutionFunctions" and manifest.get("operator") == "Convolve":
-        output_c = int(manifest.get("serialized_scalar_parameters", {}).get("output_c", 0))
-        used = _align_up(used, 16) + output_c * 4
-    if used > _ARENA_CAPACITY_BYTES:
-        raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: estimated case-arena footprint ({used} bytes) exceeds the "
-            f"firmware's fixed HCT_SERVER_MAX_ARENA_BYTES ({_ARENA_CAPACITY_BYTES} bytes) -- this "
-            f"case's blobs/scratch would not fit in a single hardware session and would be "
-            f"rejected by allocate_blob() at CASE_META time."
-        )
-    output_bytes = int(manifest.get("expected_output", {}).get("byte_length", 0))
-    if output_bytes > _OUTPUT_BUFFER_CAPACITY_BYTES:
-        raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: expected output byte-length ({output_bytes} bytes) exceeds the "
-            f"firmware's fixed HCT_SERVER_MAX_OUTPUT_BYTES ({_OUTPUT_BUFFER_CAPACITY_BYTES} bytes) -- "
-            f"this case's output would not fit in the firmware's single output_buffer and would be "
-            f"rejected by the kernel-dispatch adapter's output_length bounds check at runtime."
-        )
+    """Retained as a compatibility hook; capacity is negotiated from target HELLO."""
+    del generated_test, manifest, blobs
 
 
 @dataclass(frozen=True)
@@ -619,6 +570,9 @@ def discover_generated_tests(
         if name_filter is not None and name_filter not in name:
             continue
         descriptor = yaml.safe_load(descriptor_path.read_text(encoding="utf-8"))
+        descriptor["resolved_comparison"] = resolve_comparison(
+            descriptor, descriptor.get("resolved_tensor_dtypes")
+        )
         results.append(GeneratedTestCase(name=name, cpu=cpu, family=family, directory=directory, descriptor=descriptor, suite=suite))
         if limit is not None and len(results) >= limit:
             break
@@ -662,6 +616,7 @@ def build_case_bundle_from_generated_test(
                 cpu=generated_test.cpu,
                 suite=generated_test.suite,
                 allow_missing_report=True,
+                case_dir=generated_test.directory,
             )
         except FvpCaseFailedGateError as exc:
             # Re-raise as UnsupportedGeneratedTestError so existing callers
@@ -852,6 +807,8 @@ def _build_convolve_case(
         scratch_bytes = TemplateContextBuilder.calculate_buffer_size_max(
             input_dims_dict, filter_dims_dict, output_dims_dict, output_dtype=activation_dtype
         )
+        if activation_dtype == "S8":
+            scratch_bytes = _align_up(int(scratch_bytes), 16) + output_channels * 4
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
@@ -1709,7 +1666,7 @@ def _build_transpose_conv_case(
         "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, **({"bias": ("S32" if activation_dtype == "S8" else activation_dtype)} if has_bias else {}), "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": {"mode": "tolerant_int", "tolerance": 1} if activation_dtype == "S8" else dict(descriptor.get("resolved_comparison", {"mode": "float"})),
+        "correctness_comparison": dict(descriptor["resolved_comparison"]),
         "scratch_buffer": {"bytes": scratch_bytes},
         "required_target_capabilities": [
             "arm_transpose_conv_wrapper_s8" if activation_dtype == "S8" else ("arm_transpose_conv_f32" if activation_dtype == "FP32" else "arm_transpose_conv_f16")
@@ -1996,7 +1953,7 @@ def _build_pooling_float_case(
         },
         "tensor_dtypes": {"input": input_dtype, "output": input_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": "FP32", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        "expected_output": {"dtype": input_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         "correctness_comparison": comparison,
         "scratch_buffer": {"bytes": 0},
         "required_target_capabilities": [plain_fn.rstrip("(")],
@@ -2343,15 +2300,7 @@ def _build_quantize_case(
         "tensor_dtypes": {"input": "FP32", "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        # Quantize's generated harness (quantize.c.j2's HELIA_VALIDATE_OUTPUTS call) always
-        # validates with TOLERANT_INT tolerance=1, NOT the generic dtype-based exact_int
-        # default resolve_comparison() computes for resolved_comparison below -- an
-        # intentional, hardcoded template convention (no per-descriptor override exists)
-        # that captures an inherent off-by-one rounding gap between the TFLite reference
-        # graph used to produce the golden output and the CMSIS-NN kernel's own
-        # value/scale+zero_point rounding. Match the template's real validation semantics
-        # here rather than the generic descriptor metadata.
-        "correctness_comparison": {"mode": "tolerant_int", "tolerance": 1},
+        "correctness_comparison": dict(descriptor["resolved_comparison"]),
         "scratch_buffer": {"bytes": 0},
         "required_target_capabilities": [cmsis_function],
         "repeated_invocation_safe": True,
@@ -3101,14 +3050,7 @@ def _build_softmax_case(
         "tensor_dtypes": {"input": input_dtype, "output": output_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": output_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        # Softmax's generated harness (softmax.c.j2's HELIA_VALIDATE_OUTPUTS call) always
-        # validates with TOLERANT_INT tolerance=1, NOT the generic dtype-based exact_int
-        # default resolve_comparison() computes for resolved_comparison -- the same
-        # template-vs-descriptor fidelity gap documented for Quantize (see
-        # _build_quantize_case()): the non-force_cmsis golden output comes from a full
-        # TFLite/LiteRT quantized graph, not the raw kernel math, so it can differ by up
-        # to 1 ULP. Match the template's real validation semantics here.
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "float"})) if input_dtype in ("FP32", "FP16") else {"mode": "tolerant_int", "tolerance": 1},
+        "correctness_comparison": dict(descriptor["resolved_comparison"]),
         "scratch_buffer": {"bytes": 0},
         "required_target_capabilities": [cmsis_function],
         "repeated_invocation_safe": True,
@@ -3166,7 +3108,7 @@ def _build_abs_case(
     input_data = input_flat.reshape(input_shape)
     expected_output = expected_flat.reshape(output_shape)
 
-    cmsis_function = {"S8": "arm_abs_s8", "S16": "arm_abs_s16", "FP32": "arm_abs_f32", "FP16": "arm_abs_f16"}[activation_dtype]
+    cmsis_function = {"S8": "arm_abs_s8", "S16": "arm_abs_s16", "FP32": "arm_nn_abs_f32", "FP16": "arm_nn_abs_f16"}[activation_dtype]
     sidecar = _load_generation_sidecar(generated_test.directory)
     if sidecar is not None:
         scalars = sidecar["scalars"]
@@ -4245,14 +4187,7 @@ def _build_fully_connected_case(
         "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, **({"bias": bias_wire_dtype} if has_bias else {}), "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        # FullyConnected's generated harness (fully_connected.c.j2's HELIA_VALIDATE_OUTPUTS
-        # call) always validates with TOLERANT_INT tolerance=1, NOT the generic dtype-based
-        # exact_int default resolve_comparison() computes for resolved_comparison -- same
-        # template-vs-descriptor fidelity gap documented for Softmax/Quantize (see
-        # _build_softmax_case()/_build_quantize_case()): requantization rounding can differ
-        # by up to 1 ULP depending on intermediate accumulation order. Match the template's
-        # real validation semantics here rather than the misleading descriptor metadata.
-        "correctness_comparison": {"mode": "tolerant_int", "tolerance": 1} if not is_float else dict(descriptor.get("resolved_comparison", {"mode": "float"})),
+        "correctness_comparison": dict(descriptor["resolved_comparison"]),
         # ctx->buf sized output_units * sizeof(int32_t) for both S8 (kernel_sum, computed
         # at runtime via arm_vector_sum_s8) and S16 (scratch the kernel fills itself) --
         # see run_fully_connected_once()'s header comment and
@@ -4422,18 +4357,7 @@ def _build_batch_matmul_case(
         "tensor_dtypes": {"input_lhs": activation_dtype, "input_rhs": activation_dtype, "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        # BatchMatMul's generated harness (batch_matmul.c.j2's HELIA_VALIDATE_OUTPUTS call)
-        # validates S8/S16 with TOLERANT_INT tolerance=1, NOT the generic dtype-based
-        # exact_int default resolve_comparison() computes -- same template-vs-descriptor
-        # fidelity gap already documented for FullyConnected/Softmax/Quantize. FP16/FP32
-        # kernels set validation_mode='float' (see batch_matmul.py), so they validate
-        # with FLOAT atol/rtol instead and must use the descriptor's resolved float
-        # tolerance here, not TOLERANT_INT.
-        "correctness_comparison": (
-            dict(descriptor.get("resolved_comparison", {"mode": "float", "atol": 0.001, "rtol": 0.001}))
-            if activation_dtype in ("FP32", "FP16")
-            else {"mode": "tolerant_int", "tolerance": 1}
-        ),
+        "correctness_comparison": dict(descriptor["resolved_comparison"]),
         # ctx->buf sized rhs_cols * sizeof(int32_t) for S8 only (kernel-sum scratch the
         # kernel fills itself at runtime); S16 needs none. See run_batch_matmul_once().
         "scratch_buffer": {

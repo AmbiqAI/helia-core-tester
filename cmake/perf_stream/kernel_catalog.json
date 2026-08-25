@@ -1670,7 +1670,7 @@
   {
     "adapter_schema_version": 1,
     "api_version": 1,
-    "canonical_name": "arm_abs_f32",
+    "canonical_name": "arm_nn_abs_f32",
     "kernel_id": 140,
     "mutates_input": false,
     "operator_family": "BasicMathFunctions",
@@ -1682,7 +1682,7 @@
   {
     "adapter_schema_version": 1,
     "api_version": 1,
-    "canonical_name": "arm_abs_f16",
+    "canonical_name": "arm_nn_abs_f16",
     "kernel_id": 141,
     "mutates_input": false,
     "operator_family": "BasicMathFunctions",

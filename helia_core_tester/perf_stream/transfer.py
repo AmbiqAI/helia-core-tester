@@ -105,5 +105,17 @@ class ArenaTracker:
             )
         self.used_bytes += bytes_required
 
+    def reserve_aligned(self, bytes_required: int, alignment: int) -> int:
+        if alignment <= 0 or alignment & (alignment - 1):
+            raise ValueError("alignment must be a positive power of two")
+        aligned = (self.used_bytes + alignment - 1) & ~(alignment - 1)
+        end = aligned + bytes_required
+        if end > self.capacity_bytes:
+            raise CaseTooLargeError(
+                f"Case requires {end} bytes, exceeds arena capacity {self.capacity_bytes}."
+            )
+        self.used_bytes = end
+        return aligned
+
     def rewind(self) -> None:
         self.used_bytes = 0

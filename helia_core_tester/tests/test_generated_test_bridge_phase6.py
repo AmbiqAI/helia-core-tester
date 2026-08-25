@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 def _bridge(tmp_path: Path, family: str, name_filter: str) -> dict[str, object]:
     cases = discover_generated_tests(PROJECT_ROOT, family=family, name_filter=name_filter)
     assert cases, f"expected a discoverable {family} test matching {name_filter!r}"
-    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path)
+    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False)
     return load_case_bundle(bundle.manifest_path).manifest
 
 
@@ -93,6 +93,23 @@ def test_pool_batch_padded_case_truncates_to_header_dims(tmp_path: Path) -> None
     assert manifest["expected_output"]["byte_length"] == 20
 
 
+def test_fp16_pooling_expected_output_manifest_uses_fp16(tmp_path: Path) -> None:
+    cases = discover_generated_tests(
+        PROJECT_ROOT,
+        suite="float",
+        family="PoolingFunctions",
+        name_filter="avg_pool_float_nhwc_alias_f16",
+    )
+    assert cases
+    bundle = build_case_bundle_from_generated_test(
+        PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False
+    )
+    expected = bundle.manifest["expected_output"]
+    blob = next(entry for entry in bundle.manifest["blob_roles"] if entry["blob_id"] == expected["blob_id"])
+    assert expected["dtype"] == blob["dtype"] == "FP16"
+    assert expected["byte_length"] == blob["byte_length"]
+
+
 def test_grouped_convolve_case_01_now_bridges_with_unified_tolerance(tmp_path: Path) -> None:
     """Regression test: convolve_grouped_conv_case_01_s8 now bridges under
     tolerant_int/tolerance=1 (was previously unbridgeable under exact_int)."""
@@ -102,4 +119,3 @@ def test_grouped_convolve_case_01_now_bridges_with_unified_tolerance(tmp_path: P
         PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False
     )
     assert bundle.manifest["correctness_comparison"] == {"mode": "tolerant_int", "tolerance": 1}
-

@@ -86,6 +86,20 @@ class CaseBundle:
     def expected_output(self) -> BlobInfo:
         return self.blob_by_role("expected_output")
 
+    @property
+    def workspace_bytes_required(self) -> int:
+        """Exact firmware bump-allocation footprint for this case."""
+        used = 0
+        for blob in self.streamable_blobs:
+            used = _align_up(used, max(blob.required_alignment, 1)) + blob.byte_length
+        scratch = int(self.manifest.get("scratch_buffer", {}).get("bytes", 0))
+        if scratch:
+            used = _align_up(used, 16) + scratch
+        output = self.expected_output
+        if output.byte_length:
+            used = _align_up(used, max(output.required_alignment, 16)) + output.byte_length
+        return used
+
     def blob_by_role(self, role: str) -> BlobInfo:
         return next(blob for blob in self.blobs if blob.role == role)
 
@@ -93,6 +107,10 @@ class CaseBundle:
 
 def _sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _align_up(value: int, alignment: int) -> int:
+    return value if alignment <= 1 else ((value + alignment - 1) // alignment) * alignment
 
 
 
@@ -196,6 +214,16 @@ def _manifest_blob_entry(blob: BlobInfo) -> dict[str, Any]:
 
 
 def _write_manifest(case_root: Path, manifest: dict[str, Any]) -> Path:
+    expected = manifest.get("expected_output", {})
+    matching = [blob for blob in manifest.get("blob_roles", []) if blob.get("blob_id") == expected.get("blob_id")]
+    if len(matching) != 1:
+        raise ValueError("expected_output must reference exactly one blob_roles entry")
+    blob = matching[0]
+    for key in ("dtype", "byte_length"):
+        if expected.get(key) != blob.get(key):
+            raise ValueError(
+                f"expected_output.{key}={expected.get(key)!r} does not match referenced blob {blob.get(key)!r}"
+            )
     manifest_path = case_root / "case_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8", newline="\n")
     return manifest_path
@@ -212,13 +240,14 @@ def build_abs_s8_case_bundle(
     *,
     output_root: Path | None = None,
     case_id: str = "abs_default_s8_stream_demo",
+    input_shape: tuple[int, ...] | None = None,
 ) -> CaseBundle:
     descriptor_path = Path("assets/descriptors/BasicMathFunctions/abs.yaml")
     descriptors = load_descriptor(str(project_root / descriptor_path))
     descriptor = next(desc for desc in descriptors if desc["name"] == "abs_default_s8")
 
     rng = np.random.default_rng(500)
-    input_shape = tuple(int(v) for v in descriptor["input_shape"])
+    input_shape = input_shape or tuple(int(v) for v in descriptor["input_shape"])
     input_data = rng.integers(-127, 128, size=input_shape, dtype=np.int16).astype(np.int8)
     expected_output = np.abs(input_data.astype(np.int16)).astype(np.int8)
 

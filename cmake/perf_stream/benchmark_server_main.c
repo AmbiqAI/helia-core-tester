@@ -17,7 +17,7 @@ typedef struct
     const void *address;
 } hct_symbol_ref_t;
 
-__attribute__((aligned(16))) static uint8_t g_hct_runtime_arena[HCT_SERVER_MAX_ARENA_BYTES];
+__attribute__((aligned(16))) static uint8_t g_hct_workspace[HCT_SERVER_WORKSPACE_BYTES];
 
 static const hct_symbol_ref_t g_hct_symbol_refs[] = {
 #include "kernel_symbol_refs.inc"
@@ -152,7 +152,11 @@ int main(void)
     g_hct_last_abs_dispatch_status = (uint32_t)hct_link_smoke_invoke_abs_s8();
     g_hct_last_conv_dispatch_status = (uint32_t)hct_link_smoke_invoke_convolve_s8();
     g_hct_last_transport_init_status = (uint32_t)transport->init();
-    hct_server_session_init(&g_hct_session, 0xC0DE1234u, 256u, (uint32_t)sizeof(g_hct_runtime_arena));
+    hct_server_session_init(&g_hct_session,
+                            0xC0DE1234u,
+                            256u,
+                            g_hct_workspace,
+                            (uint32_t)sizeof(g_hct_workspace));
     g_hct_last_hello_status = HCTP_STATUS_OK;
     g_hct_last_catalog_status = HCTP_STATUS_OK;
     hct_flush_outbound(&g_hct_session, transport);

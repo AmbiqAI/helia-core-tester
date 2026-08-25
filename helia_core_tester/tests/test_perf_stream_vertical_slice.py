@@ -106,6 +106,11 @@ def test_multi_case_session_rewinds_arena(tmp_path: Path) -> None:
     assert transport.rewind_count == 2
     assert transport.arena_used_bytes == 0
     assert all(case.comparison.passed for case in result.cases)
+    assert transport.case_workspace_history == (
+        abs_bundle.workspace_bytes_required,
+        conv_bundle.workspace_bytes_required,
+    )
+    assert abs_bundle.workspace_bytes_required != conv_bundle.workspace_bytes_required
 
 
 def test_persistent_fake_target_multi_operator_session_without_reflash(tmp_path: Path) -> None:
@@ -135,8 +140,48 @@ def test_case_too_large_fails(tmp_path: Path) -> None:
     conv_bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path).manifest_path)
     transport = FakeTargetTransport(runtime_arena_capacity=32)
 
-    with pytest.raises(RuntimeError, match="exceeds arena capacity"):
+    with pytest.raises(RuntimeError, match="requires .* workspace bytes.*advertises"):
         HostSession(transport).run(conv_bundle)
+
+
+def test_case_one_byte_over_advertised_workspace_fails_before_plan(tmp_path: Path) -> None:
+    bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path).manifest_path)
+    transport = FakeTargetTransport(runtime_arena_capacity=bundle.workspace_bytes_required - 1)
+    session = HostSession(transport)
+
+    with pytest.raises(RuntimeError, match=rf"requires {bundle.workspace_bytes_required} workspace bytes"):
+        session.run(bundle)
+
+    assert "TX:LOAD_PLAN" not in session._trace
+
+
+def test_large_correctness_output_exceeding_old_outbox_streams_in_order(tmp_path: Path) -> None:
+    bundle = load_case_bundle(
+        build_abs_s8_case_bundle(
+            PROJECT_ROOT,
+            output_root=tmp_path,
+            case_id="abs_large_output",
+            input_shape=(40000,),
+        ).manifest_path
+    )
+    assert bundle.expected_output.byte_length > 32768
+    transport = FakeTargetTransport(runtime_arena_capacity=114688, max_frame_payload=256)
+
+    result = HostSession(transport).run(bundle)
+
+    assert result.cases[0].comparison.passed
+    assert result.cases[0].output_bytes == blob_numpy(bundle.expected_output).tobytes(order="C")
+    assert result.protocol_trace.count("RX:OUTPUT_CHUNK") > 100
+
+
+def test_firmware_output_stream_is_pumped_after_outbox_drains() -> None:
+    source = (PROJECT_ROOT / "cmake" / "perf_stream" / "benchmark_server_session.c").read_text()
+    queue_body = source.split("static hctp_status_t queue_correctness_output", 1)[1].split(
+        "static hctp_status_t pump_correctness_output", 1
+    )[0]
+    assert "while (cursor < session->output_length)" not in queue_body
+    assert "output_stream_active = 1u" in queue_body
+    assert "outbox_length == 0u && session->output_stream_active != 0u" in source
 
 
 def test_correctness_failure_still_completes_session_instead_of_deadlocking(tmp_path: Path) -> None:

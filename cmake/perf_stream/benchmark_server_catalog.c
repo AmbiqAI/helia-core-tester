@@ -153,8 +153,8 @@ static const hct_kernel_catalog_entry_t g_hct_kernel_catalog[] = {
     {137u, "arm_concatenation_f32_w", "ConcatenationFunctions", 1u, "FP32", 1u, true, true, false, 0u},
     {138u, "arm_concatenation_f16_w", "ConcatenationFunctions", 1u, "FP16", 1u, true, true, false, 0u},
     {139u, "arm_split_f16", "ConcatenationFunctions", 1u, "FP16", 1u, true, true, false, 0u},
-    {140u, "arm_abs_f32", "BasicMathFunctions", 1u, "FP32", 1u, true, true, false, 0u},
-    {141u, "arm_abs_f16", "BasicMathFunctions", 1u, "FP16", 1u, true, true, false, 0u},
+    {140u, "arm_nn_abs_f32", "BasicMathFunctions", 1u, "FP32", 1u, true, true, false, 0u},
+    {141u, "arm_nn_abs_f16", "BasicMathFunctions", 1u, "FP16", 1u, true, true, false, 0u},
     {142u, "arm_elementwise_add_f32", "BasicMathFunctions", 1u, "FP32", 1u, true, true, false, 0u},
     {143u, "arm_elementwise_add_f16", "BasicMathFunctions", 1u, "FP16", 1u, true, true, false, 0u},
     {144u, "arm_elementwise_sub_f32", "BasicMathFunctions", 1u, "FP32", 1u, true, true, false, 0u},
@@ -190,10 +190,10 @@ static const hct_kernel_catalog_entry_t g_hct_kernel_catalog[] = {
 };
 
 static const uint8_t g_hct_kernel_catalog_hash[32] = {
-    0xddu, 0x5fu, 0xb3u, 0x8au, 0xccu, 0x76u, 0x5cu, 0xe1u,
-    0x81u, 0xfbu, 0x3cu, 0x4au, 0x40u, 0x62u, 0x9cu, 0x19u,
-    0x32u, 0x41u, 0xe4u, 0x25u, 0xe3u, 0x12u, 0x2au, 0x40u,
-    0x3fu, 0xa0u, 0x81u, 0xf7u, 0x32u, 0xefu, 0x98u, 0xb5u,
+    0x83u, 0x2bu, 0x22u, 0x63u, 0x9au, 0xe9u, 0xfcu, 0x14u,
+    0x14u, 0xb4u, 0x66u, 0xf3u, 0x51u, 0x69u, 0xebu, 0x60u,
+    0x1eu, 0x1eu, 0xe3u, 0x02u, 0xc2u, 0xa4u, 0xd3u, 0xf3u,
+    0xe9u, 0x63u, 0x75u, 0x2cu, 0xbfu, 0x00u, 0xdcu, 0xc2u,
 };
 
 const hct_kernel_catalog_entry_t *hct_benchmark_server_catalog(size_t *count)

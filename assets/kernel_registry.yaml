@@ -861,13 +861,13 @@ kernels:
     family: BasicMathFunctions
     operator: Abs
     dtype: FP32
-    cmsis_function: arm_abs_f32
+    cmsis_function: arm_nn_abs_f32
 
   - kernel_id: 141
     family: BasicMathFunctions
     operator: Abs
     dtype: FP16
-    cmsis_function: arm_abs_f16
+    cmsis_function: arm_nn_abs_f16
 
   - kernel_id: 142
     family: BasicMathFunctions

@@ -16,8 +16,9 @@ extern "C" {
 #define HCT_SERVER_MAX_GROUP_NAME 16u
 #define HCT_SERVER_MAX_BLOBS 8u
 #define HCT_SERVER_MAX_INPUT_BYTES 4096u
-#define HCT_SERVER_MAX_ARENA_BYTES 49152u
-#define HCT_SERVER_MAX_OUTPUT_BYTES 20480u
+#ifndef HCT_SERVER_WORKSPACE_BYTES
+#define HCT_SERVER_WORKSPACE_BYTES 114688u
+#endif
 #define HCT_SERVER_MAX_OUTBOX_BYTES 32768u
 #define HCT_SERVER_BLOB_CHUNK_BYTES 64u
 
@@ -28,10 +29,11 @@ typedef enum
     HCT_SERVER_STATE_WAIT_CASE_META = 2,
     HCT_SERVER_STATE_WAIT_BLOB_CHUNK = 3,
     HCT_SERVER_STATE_WAIT_RUN_CORRECTNESS = 4,
-    HCT_SERVER_STATE_WAIT_CORRECTNESS_ACK = 5,
-    HCT_SERVER_STATE_WAIT_RUN_PERFORMANCE = 6,
-    HCT_SERVER_STATE_COMPLETE = 7,
-    HCT_SERVER_STATE_ERROR = 8
+    HCT_SERVER_STATE_STREAM_OUTPUT = 5,
+    HCT_SERVER_STATE_WAIT_CORRECTNESS_ACK = 6,
+    HCT_SERVER_STATE_WAIT_RUN_PERFORMANCE = 7,
+    HCT_SERVER_STATE_COMPLETE = 8,
+    HCT_SERVER_STATE_ERROR = 9
 } hct_server_state_t;
 
 typedef struct
@@ -237,11 +239,16 @@ typedef struct
     uint16_t current_blob_index;
     uint32_t scratch_bytes;
     uint32_t scratch_offset;
-    uint32_t case_arena_used_bytes;
+    uint32_t workspace_used_bytes;
+    uint32_t output_capacity_bytes;
+    uint32_t output_workspace_offset;
     uint32_t output_length;
+    uint32_t output_stream_offset;
+    uint32_t output_stream_checksum;
+    uint8_t output_stream_active;
+    uint8_t *workspace;
+    uint32_t workspace_bytes;
     hct_server_blob_t blobs[HCT_SERVER_MAX_BLOBS];
-    uint8_t case_arena[HCT_SERVER_MAX_ARENA_BYTES];
-    uint8_t output_buffer[HCT_SERVER_MAX_OUTPUT_BYTES];
     uint8_t outbox[HCT_SERVER_MAX_OUTBOX_BYTES];
     size_t outbox_length;
 } hct_server_session_t;
@@ -249,7 +256,8 @@ typedef struct
 void hct_server_session_init(hct_server_session_t *session,
                              uint32_t session_id,
                              uint32_t max_frame_payload,
-                             uint32_t runtime_arena_capacity);
+                             void *workspace,
+                             uint32_t workspace_bytes);
 
 hctp_status_t hct_server_session_accept_frame(hct_server_session_t *session,
                                               const uint8_t *frame_bytes,

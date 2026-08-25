@@ -25,6 +25,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "arm_nnfunctions.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -35,6 +37,12 @@ extern "C" {
 
 void helia_test_platform_init(void);
 void helia_test_finish(int32_t failures);
+
+/* Stable float-Abs names used by generated artifacts and the perf catalog.
+ * The checked-in CMSIS-NN revision exports arm_abs_f32/f16, so the shared
+ * runtime supplies these compatibility entry points for standalone tests. */
+arm_cmsis_nn_status arm_nn_abs_f32(const float32_t *input, float32_t *output, int32_t block_size);
+arm_cmsis_nn_status arm_nn_abs_f16(const float16_t *input, float16_t *output, int32_t block_size);
 
 /* ---------------------------------------------------------------------- */
 /* Failure reporting (defined once in helia_test_runtime.c)               */
