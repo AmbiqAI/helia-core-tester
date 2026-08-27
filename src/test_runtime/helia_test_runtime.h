@@ -151,21 +151,45 @@ double helia_test_float_tolerance(double expected, double atol, double rtol);
  * largest raw diff observed and the largest fraction of the tolerance budget
  * it consumed (diff / tol). This is what makes "re-measure headroom" a
  * mechanical FVP run instead of a by-hand exercise: the Python side just
- * greps this one line out of every float test's stdout. The printed
- * maxfrac is -1.0 (sentinel) when a per-element tolerance budget is
- * exactly zero and the diff is nonzero -- an unrepresentable "infinite"
- * fraction rather than a real headroom number; helia_max_frac itself
- * stays at 0.0 in that case and helia_zero_tol_violation gates the -1.0
- * substitution at print time.
+ * greps this one line out of every float test's stdout.
+ *
+ * Sentinels on the printed line (a real headroom number is never negative):
+ *   maxfrac = -1.0  a per-element tolerance budget was exactly zero and the
+ *                   diff was nonzero -- an unrepresentable "infinite" fraction
+ *                   rather than a real headroom number. helia_max_frac itself
+ *                   stays at 0.0; helia_zero_tol_violation gates the -1.0 at
+ *                   print time.
+ *   maxdiff = -1.0, maxfrac = -2.0  at least one actual or expected element was
+ *                   non-finite (NaN/Inf). fabs(NaN - x) is NaN, which compares
+ *                   false against every threshold, so without this guard a
+ *                   NaN-/Inf-producing kernel regression would not be counted
+ *                   as a failure and the summary would stay pinned at 0.0 --
+ *                   i.e. report maximum headroom for a broken kernel (issue
+ *                   #75). Such elements are counted as failures and excluded
+ *                   from the max trackers so NaN/Inf never reaches printf.
  */
 #define HELIA_VALIDATE_FLOATS(actual, expected, size, atol, rtol, max_reports, failures) \
     do { \
         double helia_max_diff = 0.0; \
         double helia_max_frac = 0.0; \
         int helia_zero_tol_violation = 0; \
+        int helia_nonfinite = 0; \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
             double helia_act_val = (double)((actual)[helia_i]); \
             double helia_exp_val = (double)((expected)[helia_i]); \
+            if (!isfinite(helia_act_val) || !isfinite(helia_exp_val)) { \
+                ++(failures); \
+                helia_nonfinite = 1; \
+                if ((failures) <= (max_reports)) { \
+                    printf( \
+                        "NonFinite[%d]: exp=%.6f got=%.6f\r\n", \
+                        helia_i, \
+                        helia_exp_val, \
+                        helia_act_val \
+                    ); \
+                } \
+                continue; \
+            } \
             double helia_diff = fabs(helia_act_val - helia_exp_val); \
             double helia_tol = helia_test_float_tolerance( \
                 helia_exp_val, \
@@ -199,8 +223,8 @@ double helia_test_float_tolerance(double expected, double atol, double rtol);
         } \
         printf( \
             "HELIA_FLOAT_MAXDIFF maxdiff=%.8e maxfrac=%.6f n=%d\r\n", \
-            helia_max_diff, \
-            helia_zero_tol_violation ? -1.0 : helia_max_frac, \
+            helia_nonfinite ? -1.0 : helia_max_diff, \
+            helia_nonfinite ? -2.0 : (helia_zero_tol_violation ? -1.0 : helia_max_frac), \
             (int)(size) \
         ); \
     } while (0)

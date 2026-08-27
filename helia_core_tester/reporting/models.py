@@ -43,8 +43,8 @@ class TestResult:
     actual_output: Optional[str] = None  # Actual test output
     output_differences: List[str] = field(default_factory=list)  # List of difference details
     project_root: Optional[Path] = None  # For making paths relative
-    max_diff: Optional[float] = None  # Largest raw |actual - expected| observed (float suite only, issue #53)
-    max_tolerance_fraction: Optional[float] = None  # Largest diff/tolerance ratio; -1.0 = zero-width tol budget violated (issue #53)
+    max_diff: Optional[float] = None  # Largest raw |actual - expected| observed; -1.0 = non-finite output (float suite only, issue #53)
+    max_tolerance_fraction: Optional[float] = None  # Largest diff/tolerance ratio; -1.0 = zero-width tol budget violated, -2.0 = non-finite output (issue #53/#75)
     
     def _make_path_relative(self, path: str) -> str:
         """Convert absolute path to relative path if project_root is set."""

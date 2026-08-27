@@ -1,5 +1,6 @@
 """Test result parser for standalone harness output with legacy Unity fallback."""
 
+import math
 import re
 import time
 from datetime import datetime
@@ -23,9 +24,15 @@ class TestResultParser:
         self.cycles_pattern = re.compile(r'\[PERF\]\s+(\w+):\s+(\d+)\s+cycles')
         self.memory_pattern = re.compile(r'Memory usage:\s+(\d+)\s+bytes')
         # Headroom instrumentation (issue #53): HELIA_FLOAT_MAXDIFF summary line
-        # emitted once per float-validated case by HELIA_VALIDATE_FLOATS.
+        # emitted once per float-validated case by HELIA_VALIDATE_FLOATS. The
+        # numeric fields also accept a literal nan/inf defensively -- the macro
+        # never prints those (it substitutes negative sentinels for a non-finite
+        # element, issue #75), but a stray one must not make the whole line
+        # unmatchable and silently drop the headroom data.
+        _num = r'[-+]?(?:[0-9.]+(?:[eE][-+]?[0-9]+)?|nan|inf)'
         self.float_maxdiff_pattern = re.compile(
-            r'HELIA_FLOAT_MAXDIFF\s+maxdiff=([0-9.eE+-]+)\s+maxfrac=([0-9.eE+-]+)\s+n=(\d+)'
+            r'HELIA_FLOAT_MAXDIFF\s+maxdiff=(' + _num + r')\s+maxfrac=(' + _num + r')\s+n=(\d+)',
+            re.IGNORECASE,
         )
         # Patterns for extracting output differences
         self.expected_pattern = re.compile(r'(?:Expected|Golden|Reference)[:\s]+([^\n]+)', re.IGNORECASE)
@@ -197,9 +204,19 @@ class TestResultParser:
 
         A case can emit more than one HELIA_FLOAT_MAXDIFF line (multiple output
         tensors validated in one test); this returns the max raw diff and the max
-        fraction across all of them. A fraction of -1.0 from any single line
-        (zero-width tolerance budget violated) wins over any finite fraction,
-        since it represents an unmeasurable/undefined headroom, not "small".
+        fraction across all of them.
+
+        Negative values are sentinels, never headroom numbers, and the more
+        severe one from any single line wins over any finite measurement:
+          maxfrac == -1.0             a zero-width tolerance budget was violated
+                                      (undefined/infinite fraction, not "small")
+          maxdiff == -1.0, frac -2.0  a non-finite (NaN/Inf) element was seen
+                                      (issue #75); headroom is unmeasurable and
+                                      the kernel output is broken. Reported back
+                                      as (-1.0, -2.0) so no consumer can read it
+                                      as benign near-zero headroom.
+        A literal nan/inf token (which the macro does not emit) is treated the
+        same as the non-finite sentinel.
         """
         matches = self.float_maxdiff_pattern.findall(output)
         if not matches:
@@ -208,11 +225,16 @@ class TestResultParser:
         max_diff = 0.0
         max_frac = 0.0
         saw_zero_tol_violation = False
+        saw_nonfinite = False
         for diff_str, frac_str, _n_str in matches:
             try:
                 diff_val = float(diff_str)
                 frac_val = float(frac_str)
             except ValueError:
+                continue
+            if (not math.isfinite(diff_val) or not math.isfinite(frac_val)
+                    or diff_val < 0.0 or frac_val <= -2.0):
+                saw_nonfinite = True
                 continue
             max_diff = max(max_diff, diff_val)
             if frac_val < 0.0:
@@ -220,6 +242,8 @@ class TestResultParser:
             else:
                 max_frac = max(max_frac, frac_val)
 
+        if saw_nonfinite:
+            return -1.0, -2.0
         return max_diff, (-1.0 if saw_zero_tol_violation else max_frac)
 
     def _extract_relevant_lines(self, lines: List[str]) -> List[str]:

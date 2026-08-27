@@ -112,6 +112,60 @@ def test_parser_float_maxdiff_zero_tolerance_violation_is_sentinel() -> None:
     assert result.max_tolerance_fraction == -1.0
 
 
+def test_parser_float_maxdiff_nonfinite_is_sentinel() -> None:
+    # issue #75: a NaN/Inf-producing kernel emits the -1.0 / -2.0 sentinel pair;
+    # it must not be reported as benign near-zero headroom.
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "NonFinite[7]: exp=0.500000 got=nan\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=64\n"
+        "1 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("logistic_f16.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.max_diff == -1.0
+    assert result.max_tolerance_fraction == -2.0
+
+
+def test_parser_float_maxdiff_nonfinite_wins_over_finite_line() -> None:
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "HELIA_FLOAT_MAXDIFF maxdiff=2.0e-05 maxfrac=0.4 n=4\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=4\n"
+        "1 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("multi_output.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.max_diff == -1.0
+    assert result.max_tolerance_fraction == -2.0
+
+
+def test_parser_float_maxdiff_literal_nan_token_is_sentinel() -> None:
+    # Defensive: the macro substitutes negative sentinels and never prints a
+    # literal nan/inf, but a stray token must still be caught, not dropped.
+    parser = reporting_parser.TestResultParser()
+    output = "HELIA_FLOAT_MAXDIFF maxdiff=nan maxfrac=nan n=16\n1 Failures\n"
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("stray.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.max_diff == -1.0
+    assert result.max_tolerance_fraction == -2.0
+
+
 def test_parser_no_maxdiff_line_yields_none() -> None:
     parser = reporting_parser.TestResultParser()
     result = parser.parse_fvp_output(
