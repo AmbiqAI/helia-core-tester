@@ -61,7 +61,7 @@ def test_parser_keeps_legacy_unity_fallback() -> None:
     assert result.status == reporting_models.TestStatus.PASS
 
 
-def test_parser_extracts_float_maxdiff_headroom(tmp_path: Path) -> None:
+def test_parser_extracts_float_maxdiff_headroom() -> None:
     # issue #53: HELIA_FLOAT_MAXDIFF is the mechanical headroom-measurement hook.
     parser = reporting_parser.TestResultParser()
     result = parser.parse_fvp_output(

@@ -151,10 +151,12 @@ double helia_test_float_tolerance(double expected, double atol, double rtol);
  * largest raw diff observed and the largest fraction of the tolerance budget
  * it consumed (diff / tol). This is what makes "re-measure headroom" a
  * mechanical FVP run instead of a by-hand exercise: the Python side just
- * greps this one line out of every float test's stdout. helia_max_frac is
- * left at -1.0 (sentinel, printed as "-1.000000") when a per-element
- * tolerance budget is exactly zero and the diff is nonzero -- an
- * unrepresentable "infinite" fraction rather than a real headroom number.
+ * greps this one line out of every float test's stdout. The printed
+ * maxfrac is -1.0 (sentinel) when a per-element tolerance budget is
+ * exactly zero and the diff is nonzero -- an unrepresentable "infinite"
+ * fraction rather than a real headroom number; helia_max_frac itself
+ * stays at 0.0 in that case and helia_zero_tol_violation gates the -1.0
+ * substitution at print time.
  */
 #define HELIA_VALIDATE_FLOATS(actual, expected, size, atol, rtol, max_reports, failures) \
     do { \
