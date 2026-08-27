@@ -145,8 +145,22 @@ double helia_test_float_tolerance(double expected, double atol, double rtol);
         } \
     } while (0)
 
+/*
+ * Headroom instrumentation (issue #53): every float-validated case prints a
+ * single "HELIA_FLOAT_MAXDIFF" summary line, pass or fail, recording the
+ * largest raw diff observed and the largest fraction of the tolerance budget
+ * it consumed (diff / tol). This is what makes "re-measure headroom" a
+ * mechanical FVP run instead of a by-hand exercise: the Python side just
+ * greps this one line out of every float test's stdout. helia_max_frac is
+ * left at -1.0 (sentinel, printed as "-1.000000") when a per-element
+ * tolerance budget is exactly zero and the diff is nonzero -- an
+ * unrepresentable "infinite" fraction rather than a real headroom number.
+ */
 #define HELIA_VALIDATE_FLOATS(actual, expected, size, atol, rtol, max_reports, failures) \
     do { \
+        double helia_max_diff = 0.0; \
+        double helia_max_frac = 0.0; \
+        int helia_zero_tol_violation = 0; \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
             double helia_act_val = (double)((actual)[helia_i]); \
             double helia_exp_val = (double)((expected)[helia_i]); \
@@ -156,6 +170,17 @@ double helia_test_float_tolerance(double expected, double atol, double rtol);
                 (double)(atol), \
                 (double)(rtol) \
             ); \
+            if (helia_diff > helia_max_diff) { \
+                helia_max_diff = helia_diff; \
+            } \
+            if (helia_tol > 0.0) { \
+                double helia_frac = helia_diff / helia_tol; \
+                if (helia_frac > helia_max_frac) { \
+                    helia_max_frac = helia_frac; \
+                } \
+            } else if (helia_diff > 0.0) { \
+                helia_zero_tol_violation = 1; \
+            } \
             if (helia_diff > helia_tol) { \
                 ++(failures); \
                 if ((failures) <= (max_reports)) { \
@@ -170,6 +195,12 @@ double helia_test_float_tolerance(double expected, double atol, double rtol);
                 } \
             } \
         } \
+        printf( \
+            "HELIA_FLOAT_MAXDIFF maxdiff=%.8e maxfrac=%.6f n=%d\r\n", \
+            helia_max_diff, \
+            helia_zero_tol_violation ? -1.0 : helia_max_frac, \
+            (int)(size) \
+        ); \
     } while (0)
 
 #define HELIA_VALIDATE_BOOLEANS(actual, expected, size, max_reports, failures) \

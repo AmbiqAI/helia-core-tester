@@ -22,6 +22,11 @@ class TestResultParser:
         self.error_pattern = re.compile(r'ERROR:\s*(.+)')
         self.cycles_pattern = re.compile(r'\[PERF\]\s+(\w+):\s+(\d+)\s+cycles')
         self.memory_pattern = re.compile(r'Memory usage:\s+(\d+)\s+bytes')
+        # Headroom instrumentation (issue #53): HELIA_FLOAT_MAXDIFF summary line
+        # emitted once per float-validated case by HELIA_VALIDATE_FLOATS.
+        self.float_maxdiff_pattern = re.compile(
+            r'HELIA_FLOAT_MAXDIFF\s+maxdiff=([0-9.eE+-]+)\s+maxfrac=([0-9.eE+-]+)\s+n=(\d+)'
+        )
         # Patterns for extracting output differences
         self.expected_pattern = re.compile(r'(?:Expected|Golden|Reference)[:\s]+([^\n]+)', re.IGNORECASE)
         self.actual_pattern = re.compile(r'(?:Actual|Got|Output|Result)[:\s]+([^\n]+)', re.IGNORECASE)
@@ -71,6 +76,7 @@ class TestResultParser:
         
         cycles = self._extract_cycles(output)
         memory_usage = self._extract_memory_usage(output)
+        max_diff, max_tolerance_fraction = self._extract_float_maxdiff(output)
         
         relevant_lines = self._extract_relevant_lines(lines)
         
@@ -98,7 +104,9 @@ class TestResultParser:
             descriptor_name=descriptor_name,
             expected_output=expected_output,
             actual_output=actual_output,
-            output_differences=output_differences
+            output_differences=output_differences,
+            max_diff=max_diff,
+            max_tolerance_fraction=max_tolerance_fraction,
         )
     
     def _extract_test_name(self, elf_path: Path) -> str:
@@ -184,6 +192,36 @@ class TestResultParser:
                 pass
         return None
     
+    def _extract_float_maxdiff(self, output: str) -> Tuple[Optional[float], Optional[float]]:
+        """Extract the worst-case measured diff / tolerance-budget fraction (issue #53).
+
+        A case can emit more than one HELIA_FLOAT_MAXDIFF line (multiple output
+        tensors validated in one test); this returns the max raw diff and the max
+        fraction across all of them. A fraction of -1.0 from any single line
+        (zero-width tolerance budget violated) wins over any finite fraction,
+        since it represents an unmeasurable/undefined headroom, not "small".
+        """
+        matches = self.float_maxdiff_pattern.findall(output)
+        if not matches:
+            return None, None
+
+        max_diff = 0.0
+        max_frac = 0.0
+        saw_zero_tol_violation = False
+        for diff_str, frac_str, _n_str in matches:
+            try:
+                diff_val = float(diff_str)
+                frac_val = float(frac_str)
+            except ValueError:
+                continue
+            max_diff = max(max_diff, diff_val)
+            if frac_val < 0.0:
+                saw_zero_tol_violation = True
+            else:
+                max_frac = max(max_frac, frac_val)
+
+        return max_diff, (-1.0 if saw_zero_tol_violation else max_frac)
+
     def _extract_relevant_lines(self, lines: List[str]) -> List[str]:
         """Extract relevant output lines for debugging."""
         relevant = []
