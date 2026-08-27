@@ -533,7 +533,14 @@ class TemplateContextBuilder:
             pad_w = 0
 
         # Activation clamp defaults depend on activation dtype
-        act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
+        resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or {}
+        tensor_dtypes = desc.get("tensor_dtypes") or {}
+        act_dtype = str(
+            resolved_tensor_dtypes.get(
+                "input",
+                tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
+            )
+        ).upper()
         if act_dtype in {'FP32', 'FP16'}:
             activation_min = float(desc.get('activation_min', -1.0e30))
             activation_max = float(desc.get('activation_max', 1.0e30))
@@ -633,7 +640,14 @@ class TemplateContextBuilder:
             pad_w = 0
         
         # Activation clamp defaults depend on activation dtype
-        act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
+        resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or {}
+        tensor_dtypes = desc.get("tensor_dtypes") or {}
+        act_dtype = str(
+            resolved_tensor_dtypes.get(
+                "input",
+                tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
+            )
+        ).upper()
         if act_dtype in {'FP32', 'FP16'}:
             activation_min = float(desc.get('activation_min', -1.0e30))
             activation_max = float(desc.get('activation_max', 1.0e30))
@@ -877,7 +891,14 @@ class TemplateContextBuilder:
             pad_offset_w = 0
         
         # Activation clamp defaults depend on activation dtype
-        act_dtype = str(desc.get('activation_dtype', 'S8')).upper()
+        resolved_tensor_dtypes = desc.get("resolved_tensor_dtypes") or {}
+        tensor_dtypes = desc.get("tensor_dtypes") or {}
+        act_dtype = str(
+            resolved_tensor_dtypes.get(
+                "input",
+                tensor_dtypes.get("input", desc.get('activation_dtype', 'S8')),
+            )
+        ).upper()
         if act_dtype in {'FP32', 'FP16'}:
             activation_min = float(desc.get('activation_min', -1.0e30))
             activation_max = float(desc.get('activation_max', 1.0e30))

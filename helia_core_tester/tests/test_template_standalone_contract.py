@@ -45,7 +45,13 @@ def test_all_c_templates_use_standalone_harness_contract() -> None:
             "HELIA_VALIDATE_STATUS(" in text
             or "HELIA_VALIDATE_EXPECTED_STATUS(" in text
         ), path
-        assert "HELIA_VALIDATE_OUTPUTS(" in text, path
+        # Fault-injection templates deliberately only assert the kernel's
+        # returned status (e.g. rejecting null pointers/invalid params) and
+        # never produce a valid output buffer to compare, so they are exempt
+        # from the HELIA_VALIDATE_OUTPUTS requirement.
+        is_fault_template = path.stem.endswith("_fault.c")
+        if not is_fault_template:
+            assert "HELIA_VALIDATE_OUTPUTS(" in text, path
         assert "HELIA_VALIDATE_RETURN_FAILURES(" in text, path
 
 

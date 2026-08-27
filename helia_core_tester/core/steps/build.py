@@ -67,6 +67,8 @@ class BuildStep(StepBase):
                     "--no-run",
                     "--no-report",
                 ]
+                if getattr(self.config, "cmsis_nn_root", None):
+                    cmd += ["--cmake-def", f"CMSIS_NN_ROOT={self.config.cmsis_nn_root}"]
 
                 if suite == "float":
                     float_precision = group.get("float_precision")

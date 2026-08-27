@@ -39,6 +39,7 @@ PATH_KEYS = frozenset(
         "generation_dir",
         "generated_tests_root",
         "reports_root",
+        "cmsis_nn_root",
     }
 )
 
@@ -53,6 +54,7 @@ class Config:
     generation_dir: Optional[Path] = None
     generated_tests_root: Optional[Path] = None
     reports_root: Optional[Path] = None
+    cmsis_nn_root: Optional[Path] = None
 
     cpu: str = "cortex-m55"
     cpus: list[str] = field(default_factory=list)
@@ -180,6 +182,9 @@ class Config:
             self.reports_root = reports_root(self.project_root)
         else:
             self.reports_root = Path(self.reports_root).resolve()
+
+        if self.cmsis_nn_root is not None:
+            self.cmsis_nn_root = Path(self.cmsis_nn_root).resolve()
 
     def _parse_bool(self, key: str, value: str) -> bool:
         normalized = value.strip().lower()
