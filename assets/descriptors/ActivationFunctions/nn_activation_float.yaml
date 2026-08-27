@@ -313,3 +313,324 @@ input_min: -4.0
 input_max: 4.0
 activation_type: ARM_NN_FLT_ACT_NONE
 act_param: 0.0
+---
+# ---------------------------------------------------------------------------
+# Wide-domain tanh/sigmoid cases.
+#
+# Every other tanh/sigmoid case above leaves input_min/input_max at the
+# generator default of [-1, 1] (nn_activation_float.py), so no case ever left
+# the first sixth of the f32 tanh LUT or reached any saturation branch. The f32
+# tanh kernel interpolates arm_nn_tanh_lut384_f32 over |x| < 6 and saturates to
+# +/-1 at |x| >= 6; the f16 tanh kernel switches at |x| = 4 (MVE LUT) and
+# |x| = 3 (scalar rational fit). None of that was reachable, so ns-cmsis-nn#303
+# (which widened the f32 window from 4 to 6) shipped with no case covering it.
+#
+# WHAT THESE CASES ACTUALLY PIN DOWN. Read this before trusting them as the
+# regression guard for the widened f32 window. A too-narrow LUT window is only
+# observable where the resulting error exceeds the comparison tolerance, and
+# saturating early is invisible once 1 - tanh(x) drops below atol
+# (1 - tanh(5.30) = 5e-5, the FP32 default atol). So the +/-8 cases below,
+# on their own, only detect a window regression down to XMAX ~ 4.90 -- roughly
+# the lower 45% of the widened 4..6 band. Sampling denser does not help; it
+# only moves that limit to ~5.11. The dedicated lutband and lutedge pairs
+# further down close the remainder by confining every sample to the band of
+# interest so a much tighter atol becomes affordable -- lutedge additionally
+# stops below 6.0 so that no sample saturates, which lets its tolerance drop
+# ~20x and pushes detection out to XMAX 5.96.
+#
+# input_min/input_max of -8/+8 puts samples in every band. With the pipeline's
+# default seed (500) the 64-element cases split 38 / 13 / 13 across
+# |x| < 4, 4 <= |x| < 6 and |x| >= 6 (the 65-element cases 38 / 14 / 13), with
+# x = -4.0062 sitting just past the old |x| < 4 window edge and the pair
+# x = +5.9978 / x = -6.0662 straddling the |x| = 6 saturation boundary.
+#
+# ON THE _wide_tail_ VARIANTS. These exercise a partially-predicated final
+# vector, not a scalar tail: both MVE kernels are fully tail-predicated
+# (vctp32q / vctp16q feeding vst1q_p), and the scalar for-loop is the #else
+# branch that handles all n. 65 % 4 == 65 % 8 == 1, which is the same predicate
+# residue the [1, 17] tail cases above already reach, and because
+# _sample_uniform reseeds from the fixed seed on every call, each _wide_tail_
+# case is its _wide_ sibling plus exactly one appended sample (x = -4.2986 for
+# f32, -4.2969 for f16). They are kept for consistency with the file's
+# aligned/tail convention at ~2% added runtime, not because they reach a
+# distinct code path.
+#
+# Tolerances below were measured, not assumed, by sweeping the comparison
+# tolerance on the real Corstone-300 FVP until each case flipped pass/fail, on
+# both the MVE leg and the scalar-fallback leg. Per-leg tolerances are not
+# expressible here, so each value has to cover whichever leg is worse.
+# ---------------------------------------------------------------------------
+operator: NNActivationFloat
+name: nn_activation_float_tanh_wide_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 64]
+input_min: -8.0
+input_max: 8.0
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+# Measured max |actual-expected| is in (2.0e-5, 2.2e-5] -- identical on
+# m55-f32-mvef and m55-f32-fallback, as expected since both paths interpolate
+# the same arm_nn_tanh_lut384_f32 table. This is the 1/64-step linear
+# interpolation error and it peaks inside |x| < 4. The FP32 defaults
+# (atol 5e-5 / rtol 2e-5) clear that floor by ~2.8x, so no override.
+# Coverage caveat: this case alone only detects a window regression down to
+# XMAX ~ 4.90 (see the header). The lutband pair below carries the rest.
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_wide_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 65]
+input_min: -8.0
+input_max: 8.0
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+# Same measured floor as nn_activation_float_tanh_wide_f32: (2.0e-5, 2.2e-5] on
+# both m55-f32 legs, ~2.8x inside the FP32 defaults. Partially-predicated final
+# vector; see the header note on the _wide_tail_ variants.
+---
+# Dedicated cover for the LUT band that ns-cmsis-nn#303 added. Every sample
+# lands in 4 <= |x| <= 6.5, so a tighter atol is affordable here than on the
+# +/-8 cases, whose tolerance has to accommodate the much larger interpolation
+# error near |x| < 4. Split into two single-signed cases because input_min /
+# input_max describe one contiguous range and both saturation signs matter.
+# Measured max |actual-expected| is 1.19e-5 on both m55-f32 legs (identical --
+# shared LUT); atol 2.0e-5 with rtol 0 keeps ~1.7x margin. rtol is pinned to 0
+# deliberately: |expected| ~ 1 here, so a nonzero rtol would re-inflate the
+# tolerance back toward the 5e-5-class floor this pair exists to avoid.
+# Together with the +/-8 cases this moves the detectable window regression from
+# XMAX 4.90 out to XMAX 5.70, measured by rebuilding the kernel across a range
+# of XMAX values (table regenerated to match each one) and finding where these
+# cases stop failing: the pair still fails at 5.70 and passes at 5.75.
+# The 1.19e-5 floor is NOT an f32 precision limit -- it is imposed by this
+# case's own input_max of 6.5. It comes from a single sample at x = +6.0148
+# (-6.0160 in the negative case) that correctly saturates, so what is being
+# scored there is 1 - tanh(6.0148), i.e. legitimate kernel behaviour rather
+# than interpolation error. The non-saturating samples over this range carry
+# only 1.19e-7 of pure LUT-interpolation error, but that is not what a test can
+# observe: once the 6-decimal expected array is in the loop (see the lutedge
+# comment below) their observable diff is ~5.4e-7, so the saturating sample is
+# ~20x worse than the rest, not a hundredfold. Size any new |expected| ~ 1 case
+# from the ~5.4e-7 figure, not the 1.19e-7 one. The lutedge pair below exploits
+# the gap by stopping short of 6.0.
+operator: NNActivationFloat
+name: nn_activation_float_tanh_lutband_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 64]
+input_min: 4.0
+input_max: 6.5
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+comparison:
+  atol: 2.0e-5
+  rtol: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_lutband_neg_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 64]
+input_min: -6.5
+input_max: -4.0
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+# Negative-sign counterpart of nn_activation_float_tanh_lutband_f32; same
+# measured floor (1.19e-5 on both m55-f32 legs) and same ~1.7x margin.
+comparison:
+  atol: 2.0e-5
+  rtol: 0.0
+---
+# Top-of-band cover. Where the lutband pair's tolerance is floored by its
+# saturating samples, this pair stops below 6.0 so that NO sample saturates and
+# every one is a genuine interpolation result. tanh is almost flat here, so the
+# LUT itself is near-exact (interpolation error ~6e-8) and the tolerance can
+# drop roughly 20x below lutband's, which is what buys detection across the
+# rest of the band.
+# Measured max |actual-expected| by sweep on the FVP: fails at atol 5.0e-7,
+# passes at 1.0e-6 -- identical on both m55-f32 legs. atol 2.0e-6 with rtol 0
+# keeps ~2x margin. rtol is pinned to 0 because |expected| ~ 1 across the range
+# and any nonzero rtol would swamp an atol this small.
+# That ~6e-7 floor is NOT f32 precision (an ulp below 1.0 is 5.96e-8) and NOT
+# the kernel. It is the harness: format_array_as_c_literal writes the expected
+# array with 6 decimal places, which for values this close to 1.0 costs up to
+# 4.77e-7 of rounding before the kernel is even called -- exactly 2^-21, i.e.
+# 8 ulp, for expected values in [0.5, 1.0). Anything targeting
+# |expected| ~ 1 is capped near 1e-6 until that formatter carries more digits;
+# with full f32 literals this pair could tighten another ~10x.
+# This pair extends detection from XMAX 5.70 to XMAX 5.96 (it still fails at
+# 5.96 and passes at 5.97), which together with the cases above guards
+# essentially the whole widened 4..6 band. Detection survives the loose-ish
+# atol because a wrongly-saturating sample jumps to ~1.3e-5 of error, still
+# ~6x above the tolerance. The residual limit is now simply the largest sample
+# drawn (|x| = 5.9694), not anything about f32.
+operator: NNActivationFloat
+name: nn_activation_float_tanh_lutedge_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 64]
+input_min: 5.5
+input_max: 5.98
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+comparison:
+  atol: 2.0e-6
+  rtol: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_lutedge_neg_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 64]
+input_min: -5.98
+input_max: -5.5
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+# Negative-sign counterpart of nn_activation_float_tanh_lutedge_f32, sharing
+# its atol. The (5.0e-7, 1.0e-6] bracket quoted there is the PAIR's, and at
+# atol 5.0e-7 it is the positive case that fails (5.36e-7); this case's own
+# worst diff is 4.77e-7, which still passes at 5.0e-7. It does set the
+# detection limit though, since its largest sample (5.9694) exceeds the
+# positive case's (5.9534).
+comparison:
+  atol: 2.0e-6
+  rtol: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_sigmoid_wide_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 64]
+input_min: -8.0
+input_max: 8.0
+activation_type: ARM_NN_FLT_ACT_SIGMOID
+act_param: 0.0
+# Measured max |actual-expected| is in (5.0e-7, 1.0e-6], identical on
+# m55-f32-mvef and m55-f32-fallback. f32 sigmoid is exp-based rather than
+# LUT-based, so it stays far more accurate than tanh over this range; the FP32
+# defaults clear the floor by >50x and no override is needed. Unlike the f16
+# sigmoid cases below, no sample here is vacuous (0 of 64 would pass with the
+# output hardwired to 0.0 or 1.0), and the +/-8 range does newly exercise exp
+# range-reduction over roughly [-12, 12].
+---
+operator: NNActivationFloat
+name: nn_activation_float_sigmoid_wide_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 65]
+input_min: -8.0
+input_max: 8.0
+activation_type: ARM_NN_FLT_ACT_SIGMOID
+act_param: 0.0
+# Same measured floor as nn_activation_float_sigmoid_wide_f32:
+# (5.0e-7, 1.0e-6] on both m55-f32 legs, >50x inside the FP32 defaults.
+# Partially-predicated final vector; see the header note.
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_wide_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 64]
+input_min: -8.0
+input_max: 8.0
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+# Sized for the m55-f16-fallback leg, exactly like the narrow tanh_f16 case
+# above, but the floor is higher here and had to be measured separately rather
+# than copied. Expectations are generated from the MVE LUT model (cortex-m55
+# reports has_mve), while the fallback leg compiles the scalar rational fit
+# x*(27+x^2)/(27+9x^2) with its own |x| > 3 cutoff -- two different algorithms,
+# and widening the input range to +/-8 walks straight through the region where
+# they disagree most.
+# Measured by tolerance sweep on the FVP, atol held at 0.001:
+#   m55-f16-mvef     : passes at rtol 0.0 (expectations match the MVE path
+#                      bit-for-bit, so this leg contributes no constraint)
+#   m55-f16-fallback : fails at rtol 0.020, passes at rtol 0.025
+# rtol 0.035 gives ~1.4x margin over that (0.020, 0.025] floor. Do not tighten
+# this to 0.02: that is the narrow case's value and it fails here.
+#
+# BLIND SPOT -- do not read this case as covering the widened f16 window. The
+# rtol needed for the fallback leg is large enough that 43 of the 64 samples
+# (44 of 65 in the tail variant) would still pass with the output hardwired to
+# +/-1.0; the smallest vacuous |x| is 2.0957. Real discrimination is confined
+# to roughly 1 < |x| < 2.1. Mutating the f16 MVE LUT cutoff from 4.0 to 3.0 or
+# even 2.0, or perturbing the index scale from 64 to 63 (the f16 analogue of
+# the bug class ns-cmsis-nn#303 addressed), produces zero failures here. The
+# case is kept because 1 < |x| < 2.1 is genuinely new coverage and it still
+# catches gross breakage -- but the f16 window itself is currently unguarded.
+comparison:
+  atol: 0.001
+  rtol: 0.035
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_wide_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 65]
+input_min: -8.0
+input_max: 8.0
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+# Same measured floor as nn_activation_float_tanh_wide_f16: m55-f16-fallback
+# fails at rtol 0.020 and passes at rtol 0.025 (atol 0.001), while m55-f16-mvef
+# passes at rtol 0.0. rtol 0.035 keeps ~1.4x margin. The same |x| >= 2.1 blind
+# spot applies (44 of 65 samples vacuous) -- see the sibling case above.
+comparison:
+  atol: 0.001
+  rtol: 0.035
+---
+operator: NNActivationFloat
+name: nn_activation_float_sigmoid_wide_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 64]
+input_min: -8.0
+input_max: 8.0
+activation_type: ARM_NN_FLT_ACT_SIGMOID
+act_param: 0.0
+# Measured max |actual-expected| is in (2.5e-4, 5.0e-4], identical on
+# m55-f16-mvef and m55-f16-fallback -- f16 sigmoid has no separate MVE path, so
+# both legs run the same exp-based scalar kernel and no override is needed. The
+# FP16 defaults (atol 1e-3 / rtol 1e-3) clear that floor by >2x.
+# Caveat: 9 of the 64 samples are vacuous at FP16 precision (3 would pass with
+# the output hardwired to 0.0, 6 with it hardwired to 1.0), and +/-8 does not
+# reach any sigmoid window edge -- the exp path clamps at +/-80, far outside
+# this range. Treat this as mid-range coverage, not full-domain coverage.
+---
+operator: NNActivationFloat
+name: nn_activation_float_sigmoid_wide_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 65]
+input_min: -8.0
+input_max: 8.0
+activation_type: ARM_NN_FLT_ACT_SIGMOID
+act_param: 0.0
+# Same measured floor as nn_activation_float_sigmoid_wide_f16:
+# (2.5e-4, 5.0e-4] on both m55-f16 legs, >2x inside the FP16 defaults, and the
+# same 9-vacuous-sample caveat.
