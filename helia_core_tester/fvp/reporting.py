@@ -15,7 +15,7 @@ from helia_core_tester.reporting.models import DescriptorResult, TestReport, Tes
 from helia_core_tester.reporting.descriptor_tracker import DescriptorTracker
 from helia_core_tester.reporting.generator import ReportGenerator
 
-from .cmake import cmake_build, cmake_configure, find_elves
+from .cmake import cmake_build, cmake_configure, find_elves, manifest_test_names
 from .coverage import generate_coverage_reports, new_coverage_context
 from .env import REPO_ROOT, get_git_sha
 from .runner import ProcessSupervisor, run_elf_jobs_with_reporting
@@ -87,7 +87,7 @@ def run_tests_with_reporting(
         if args.no_run:
             continue
 
-        elves = find_elves(build_dir)
+        elves = find_elves(build_dir, manifest_test_names(cpu_generated_tests_dir))
         if not elves:
             if verbosity >= 1:
                 print(f"(no .elf found under {build_dir}, nothing to run)")

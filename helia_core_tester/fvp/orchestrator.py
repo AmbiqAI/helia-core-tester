@@ -9,7 +9,7 @@ from helia_core_tester.core.cpu_targets import parse_cpu_list
 from helia_core_tester.core.path_layout import build_dir as canonical_build_dir
 
 from .cli import build_arg_parser
-from .cmake import cmake_build, cmake_configure, find_elves
+from .cmake import cmake_build, cmake_configure, find_elves, manifest_test_names
 from .coverage import generate_coverage_reports, new_coverage_context
 from .env import DEFAULT_DL, DEFAULT_SOURCE, REPO_ROOT, detect_paths, is_linux, resolve_gcov_tool
 from .errors import FvpScriptError
@@ -111,7 +111,7 @@ def run_main(argv: List[str]) -> int:
             if args.no_run:
                 continue
 
-            elves = find_elves(build_dir)
+            elves = find_elves(build_dir, manifest_test_names(cpu_generated_tests_dir))
             if not elves:
                 if verbosity >= 1:
                     print(f"(no .elf found under {build_dir}, nothing to run)")

@@ -5,6 +5,7 @@ Thin generator that discovers YAML descriptors and generates TFLite models.
 
 import hashlib
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,42 @@ def _descriptor_test_dir(root_dir: Path, desc: Dict[str, Any]) -> Path:
 
 def _descriptor_suite(desc: Dict[str, Any]) -> str:
     return str(desc.get("_descriptor_suite") or desc.get("suite") or "default")
+
+
+def _prune_stale_test_dirs(top_generated: Path, keep_descriptors: List[Dict[str, Any]]) -> List[Path]:
+    """Remove per-case directories left under ``top_generated`` by an earlier
+    run whose filter admitted cases the current run's filter does not.
+
+    A filtered run (``--name``, ``--float-precision``, ``--op``, ``--dtype``,
+    ``--limit``) rewrites ``manifest.json`` / ``tests.cmake`` from *this* run's
+    entries, but never deletes the case directories a prior, wider run wrote
+    into the same ``generated_tests/<suite>/<cpu>/`` tree. Those orphans are
+    still counted by the descriptor-aware reporting pass (reported case totals
+    exceed the filter) and can still be compiled against a newer kernel. Prune
+    them here so the on-disk tree always matches the active filter -- and do it
+    inside ``test_generation`` rather than relying on the pytest session-level
+    conftest cleanup, which does not run for ``--skip-generation``, a direct
+    ``helia_core_tester build``, or a programmatic call. See issue #66.
+    """
+    if not top_generated.exists():
+        return []
+    keep = {_descriptor_test_dir(top_generated, desc).resolve() for desc in keep_descriptors}
+    removed: List[Path] = []
+    for descriptor_file in sorted(top_generated.rglob("descriptor.yaml")):
+        case_dir = descriptor_file.parent
+        if case_dir.resolve() in keep:
+            continue
+        # No ignore_errors: a failed removal (permissions, open handle) must
+        # surface as a generation failure, not be silently left as stale state
+        # a later build/report step then consumes.
+        shutil.rmtree(case_dir)
+        removed.append(case_dir)
+    # Drop family directories left empty by the prune so the tree does not
+    # accrete husks across repeated filtered runs.
+    for family_dir in sorted((p for p in top_generated.iterdir() if p.is_dir()), reverse=True):
+        if not any(family_dir.iterdir()):
+            family_dir.rmdir()
+    return removed
 
 
 def _suite_mode(filters: Dict[str, Any]) -> str:
@@ -312,6 +349,12 @@ def test_generation(test_filters):
     )
     top_generated.mkdir(parents=True, exist_ok=True)
     print(f"Generated tests output dir: {top_generated}")
+    pruned_dirs = _prune_stale_test_dirs(top_generated, filtered_descriptors)
+    if pruned_dirs:
+        print(
+            f"Pruned {len(pruned_dirs)} stale test dir(s) outside the active filter: "
+            + ", ".join(sorted(p.name for p in pruned_dirs))
+        )
     repo_root = find_repo_root()
     report_dir = generation_report_dir(repo_root, target_cpu, suite=suite_mode)
     report_dir.mkdir(parents=True, exist_ok=True)

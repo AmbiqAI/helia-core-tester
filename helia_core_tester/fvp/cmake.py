@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from .env import REPO_ROOT
 from .errors import FvpScriptError
@@ -37,6 +38,52 @@ def read_cmake_cache_path(build_dir: Path, key: str) -> Optional[Path]:
     return None
 
 
+def manifest_test_names(generated_tests_dir: Optional[Path]) -> Optional[Set[str]]:
+    """Return the set of test-case names in a generated-tests ``manifest.json``,
+    or ``None`` when there is no usable manifest to constrain against.
+
+    Keeps build/run keyed to the *active* filter: a filtered run
+    (``--float-precision``, ``--name``, ``--limit``, ...) rewrites the manifest
+    to its own entries, but stale ``*.elf`` files from an earlier, wider run can
+    still sit in the build tree (CMake does not delete the output of a target it
+    no longer defines). ``None`` preserves the historical "use whatever is on
+    disk" behaviour for callers with no manifest (e.g. ``--skip-generation``).
+    """
+    if generated_tests_dir is None:
+        return None
+    manifest_path = Path(generated_tests_dir) / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, ValueError):
+        return None
+    names = {str(entry["name"]) for entry in manifest.get("tests", []) if entry.get("name")}
+    return names or None
+
+
+def _prune_stale_test_elves(
+    build_dir: Path, allowed_names: Optional[Set[str]], verbosity: int = 0
+) -> List[Path]:
+    """Delete ``build_dir/tests/**/*.elf`` files whose stem is not in the active
+    run's manifest, so a filtered rebuild in a tree a wider run already built
+    does not leave excluded-case binaries behind for ELF discovery or the
+    descriptor-aware reporting pass to pick up. No-op when ``allowed_names`` is
+    ``None`` (no manifest to judge against). See issue #66.
+    """
+    tests_dir = build_dir / "tests"
+    if allowed_names is None or not tests_dir.exists():
+        return []
+    removed: List[Path] = []
+    for elf in tests_dir.rglob("*.elf"):
+        if elf.is_file() and elf.stem not in allowed_names:
+            elf.unlink()
+            removed.append(elf)
+    if removed and verbosity >= 1:
+        print(f"Pruned {len(removed)} stale test ELF(s) outside the active filter under {tests_dir}")
+    return removed
+
+
 def cmake_configure(
     source_dir: Path,
     build_dir: Path,
@@ -59,6 +106,8 @@ def cmake_configure(
 
     if enable_coverage:
         _clear_stale_gcda(build_dir)
+
+    _prune_stale_test_elves(build_dir, manifest_test_names(generated_tests_dir), verbosity)
 
     cmd = [
         "cmake",
@@ -96,8 +145,10 @@ def cmake_build(build_dir: Path, verbosity: int, env: dict, jobs: Optional[int])
         raise FvpScriptError(f"CMake build failed (rc={rc})")
 
 
-def find_elves(build_dir: Path) -> List[Path]:
+def find_elves(build_dir: Path, allowed_names: Optional[Set[str]] = None) -> List[Path]:
     tests_dir = build_dir / "tests"
-    if tests_dir.exists():
-        return [path for path in tests_dir.rglob("*.elf") if path.is_file()]
-    return [path for path in build_dir.rglob("*.elf") if path.is_file()]
+    root = tests_dir if tests_dir.exists() else build_dir
+    elves = [path for path in root.rglob("*.elf") if path.is_file()]
+    if allowed_names is not None:
+        elves = [path for path in elves if path.stem in allowed_names]
+    return elves
