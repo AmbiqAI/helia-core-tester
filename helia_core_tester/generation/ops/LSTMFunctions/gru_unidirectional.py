@@ -117,6 +117,15 @@ class OpGRUUnidirectional(OperationBase):
         hidden_size = int(self.desc.get("units", self.desc.get("hidden_size", 1)))
         time_major = bool(self.desc.get("time_major", False))
         reset_after = bool(self.desc.get("reset_after", True))
+        # Issue #56: use_bias: false exercises the NULL-safe bias branches in
+        # arm_nn_gru_step_*.c (`gate->input_bias ? gate->input_bias[h] : 0.0f`,
+        # same for hidden_bias, all three gates) -- a real Keras GRU config
+        # (use_bias=False), previously untested. Zero-valued bias is
+        # mathematically identical to omitting it, so the golden computation
+        # below needs no other change; only the C side needs to actually pass
+        # NULL to exercise the guarded branch (done via the `use_bias`
+        # template flag, not by zeroing the pointer).
+        use_bias = bool(self.desc.get("use_bias", True))
 
         activation_dtype = self.tensor_dtype("input", default="FP32")
         if activation_dtype == "FP32":
@@ -151,6 +160,8 @@ class OpGRUUnidirectional(OperationBase):
             return self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(float_dtype)
 
         def bias():
+            if not use_bias:
+                return np.zeros((hidden_size,), dtype=float_dtype)
             return self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
 
         update_w_in, update_w_hidden = w_in(), w_hidden()
@@ -219,6 +230,7 @@ class OpGRUUnidirectional(OperationBase):
             "hidden_state_size": batch_size * hidden_size,
             "dst_size": batch_size * time_steps * hidden_size,
             "expected_status": expected_status,
+            "use_bias": use_bias,
         }
 
         if fault:

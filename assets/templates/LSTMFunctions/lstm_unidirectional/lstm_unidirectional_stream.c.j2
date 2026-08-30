@@ -5,13 +5,27 @@ static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
 static {{ data_dtype }} {{ name }}_temp1[{{ cell_state_size }}];
 static {{ data_dtype }} {{ name }}_temp2[{{ cell_state_size }}];
 static {{ data_dtype }} {{ name }}_cell_state[{{ cell_state_size }}];
+static {{ data_dtype }} {{ name }}_hidden_state[{{ cell_state_size }}];
 
-static int32_t run_lstm(void)
+/*
+ * Streaming/stateful test case: replays the full sequence across
+ * {{ chunk_lengths | length }} chunked calls, carrying hidden_state
+ * between calls (batch_size == 1 only), and validates the concatenated
+ * chunked output against the single-shot golden reference.
+ *
+ * Unlike GRU, LSTM's cell_state is also caller-owned state, not just
+ * hidden_state: per arm_lstm_unidirectional_f32.c, the kernel only zeroes
+ * cell_state itself when hidden_state == NULL (single-shot mode). In
+ * streaming mode (hidden_state != NULL throughout, as here) cell_state is
+ * treated as in/out and must be seeded to zero once by the caller and then
+ * left alone across chunk boundaries -- it is NOT re-zeroed per chunk.
+ */
+static int32_t run_lstm_chunk(int32_t chunk_time_steps, int32_t input_offset, int32_t output_offset)
 {
     const {{ lstm_params_type }} params = {
         .time_major = {{ time_major_literal }},
         .batch_size = {{ batch_size }},
-        .time_steps = {{ time_steps }},
+        .time_steps = chunk_time_steps,
         .input_size = {{ input_size }},
         .hidden_size = {{ hidden_size }},
         .cell_clip = {{ cell_clip_literal }},
@@ -44,15 +58,33 @@ static int32_t run_lstm(void)
         .temp1 = {{ name }}_temp1,
         .temp2 = {{ name }}_temp2,
         .cell_state = {{ name }}_cell_state,
+        .hidden_state = {{ name }}_hidden_state,
     };
 
-    return {{ kernel_fn }}({{ name }}_input_tensor, {{ name }}_output, &params, &buffers);
+    return {{ kernel_fn }}(
+        {{ name }}_input_tensor + input_offset,
+        {{ name }}_output + output_offset,
+        &params,
+        &buffers);
 }
 
 int32_t {{ name }}_test_case_run(void)
 {
-    int32_t status = run_lstm();
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);
+    /* Fresh streaming state for this sequence: both hidden_state and
+     * cell_state start at zero, matching the kernel's own single-shot
+     * zero-init (see comment above) -- but seeded once here since the
+     * kernel will not zero cell_state itself once hidden_state is non-NULL. */
+    for (int32_t h = 0; h < {{ cell_state_size }}; h++)
+    {
+        {{ name }}_hidden_state[h] = ({{ data_dtype }})0;
+        {{ name }}_cell_state[h] = ({{ data_dtype }})0;
+    }
+
+    int32_t status;
+{% for length in chunk_lengths %}
+    status = run_lstm_chunk({{ length }}, {{ chunk_input_offsets[loop.index0] }}, {{ chunk_output_offsets[loop.index0] }});
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }} (chunk {{ loop.index0 }})", status);
+{% endfor %}
 
     int failures = 0;
     HELIA_VALIDATE_OUTPUTS(

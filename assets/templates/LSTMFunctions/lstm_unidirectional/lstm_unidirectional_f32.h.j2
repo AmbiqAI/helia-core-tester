@@ -44,6 +44,7 @@ static const {{ data_dtype }} {{ name }}_output_gate_hidden_weights[] = {
 {{ output_gate_hidden_weights_array }}
 };
 
+{% if use_bias | default(true) %}
 static const {{ data_dtype }} {{ name }}_forget_gate_bias[] = {
 {{ forget_gate_bias_array }}
 };
@@ -59,5 +60,6 @@ static const {{ data_dtype }} {{ name }}_cell_gate_bias[] = {
 static const {{ data_dtype }} {{ name }}_output_gate_bias[] = {
 {{ output_gate_bias_array }}
 };
+{% endif %}
 
 #endif

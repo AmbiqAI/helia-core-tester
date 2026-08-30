@@ -16,20 +16,20 @@ static int32_t run_gru(void)
         .update_gate = {
             .input_weights = {{ name }}_update_gate_input_weights,
             .hidden_weights = {{ name }}_update_gate_hidden_weights,
-            .input_bias = {{ name }}_update_gate_input_bias,
-            .hidden_bias = {{ name }}_update_gate_hidden_bias,
+            .input_bias = {% if use_bias | default(true) %}{{ name }}_update_gate_input_bias{% else %}NULL{% endif %},
+            .hidden_bias = {% if use_bias | default(true) %}{{ name }}_update_gate_hidden_bias{% else %}NULL{% endif %},
         },
         .reset_gate = {
             .input_weights = {{ name }}_reset_gate_input_weights,
             .hidden_weights = {{ name }}_reset_gate_hidden_weights,
-            .input_bias = {{ name }}_reset_gate_input_bias,
-            .hidden_bias = {{ name }}_reset_gate_hidden_bias,
+            .input_bias = {% if use_bias | default(true) %}{{ name }}_reset_gate_input_bias{% else %}NULL{% endif %},
+            .hidden_bias = {% if use_bias | default(true) %}{{ name }}_reset_gate_hidden_bias{% else %}NULL{% endif %},
         },
         .candidate_gate = {
             .input_weights = {{ name }}_candidate_gate_input_weights,
             .hidden_weights = {{ name }}_candidate_gate_hidden_weights,
-            .input_bias = {{ name }}_candidate_gate_input_bias,
-            .hidden_bias = {{ name }}_candidate_gate_hidden_bias,
+            .input_bias = {% if use_bias | default(true) %}{{ name }}_candidate_gate_input_bias{% else %}NULL{% endif %},
+            .hidden_bias = {% if use_bias | default(true) %}{{ name }}_candidate_gate_hidden_bias{% else %}NULL{% endif %},
         },
     };
     {{ gru_context_type }} buffers = {

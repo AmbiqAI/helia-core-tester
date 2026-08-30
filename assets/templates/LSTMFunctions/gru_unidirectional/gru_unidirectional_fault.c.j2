@@ -5,7 +5,7 @@
    a NULL-substituted buffer would otherwise be an unused static
    (-Wunused-variable), which becomes a hard error under -Werror. #}
 {% if fault != "null_output" %}static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
-{% endif %}{% if fault != "missing_temp1_prereset" %}static {{ data_dtype }} {{ name }}_temp1[{{ hidden_state_size }}];
+{% endif %}{% if fault not in ["missing_temp1_prereset", "null_buffers"] %}static {{ data_dtype }} {{ name }}_temp1[{{ hidden_state_size }}];
 {% endif %}{% if fault == "stateful_batch_gt1" %}static {{ data_dtype }} {{ name }}_hidden_state[{{ hidden_state_size }}];
 {% endif %}
 
@@ -25,32 +25,33 @@ static int32_t run_gru(void)
         .update_gate = {
             .input_weights = {{ name }}_update_gate_input_weights,
             .hidden_weights = {{ name }}_update_gate_hidden_weights,
-            .input_bias = {{ name }}_update_gate_input_bias,
-            .hidden_bias = {{ name }}_update_gate_hidden_bias,
+            .input_bias = {% if use_bias | default(true) %}{{ name }}_update_gate_input_bias{% else %}NULL{% endif %},
+            .hidden_bias = {% if use_bias | default(true) %}{{ name }}_update_gate_hidden_bias{% else %}NULL{% endif %},
         },
         .reset_gate = {
             .input_weights = {{ name }}_reset_gate_input_weights,
             .hidden_weights = {{ name }}_reset_gate_hidden_weights,
-            .input_bias = {{ name }}_reset_gate_input_bias,
-            .hidden_bias = {{ name }}_reset_gate_hidden_bias,
+            .input_bias = {% if use_bias | default(true) %}{{ name }}_reset_gate_input_bias{% else %}NULL{% endif %},
+            .hidden_bias = {% if use_bias | default(true) %}{{ name }}_reset_gate_hidden_bias{% else %}NULL{% endif %},
         },
         .candidate_gate = {
             .input_weights = {{ name }}_candidate_gate_input_weights,
             .hidden_weights = {{ name }}_candidate_gate_hidden_weights,
-            .input_bias = {{ name }}_candidate_gate_input_bias,
-            .hidden_bias = {{ name }}_candidate_gate_hidden_bias,
+            .input_bias = {% if use_bias | default(true) %}{{ name }}_candidate_gate_input_bias{% else %}NULL{% endif %},
+            .hidden_bias = {% if use_bias | default(true) %}{{ name }}_candidate_gate_hidden_bias{% else %}NULL{% endif %},
         },
     };
-{% endif %}    {{ gru_context_type }} buffers = {
+{% endif %}{% if fault != "null_buffers" %}    {{ gru_context_type }} buffers = {
         .temp1 = {% if fault == "missing_temp1_prereset" %}NULL{% else %}{{ name }}_temp1{% endif %},
         .hidden_state = {% if fault == "stateful_batch_gt1" %}{{ name }}_hidden_state{% else %}NULL{% endif %},
     };
-
+{% endif %}
     const {{ data_dtype }} *input_arg = {% if fault == "null_input" %}NULL{% else %}{{ name }}_input_tensor{% endif %};
     {{ data_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};
     const {{ gru_params_type }} *params_arg = {% if fault == "null_params" %}NULL{% else %}&params{% endif %};
+    {{ gru_context_type }} *buffers_arg = {% if fault == "null_buffers" %}NULL{% else %}&buffers{% endif %};
 
-    return {{ kernel_fn }}(input_arg, output_arg, params_arg, &buffers);
+    return {{ kernel_fn }}(input_arg, output_arg, params_arg, buffers_arg);
 }
 
 int32_t {{ name }}_test_case_run(void)
