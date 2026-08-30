@@ -27,13 +27,22 @@ def active_test_list(generated_tests_dir: Optional[Path]) -> Optional[Set[str]]:
     carried from generation into the build and run steps, which never see the
     filter directly (they run as separate subprocess invocations). ``None``
     preserves the historical "use whatever is on disk" behaviour when there is
-    no manifest to consult (e.g. a tree never generated through this pipeline).
+    no manifest to consult (e.g. a tree never generated through this pipeline)
+    -- but ``None`` is reserved strictly for that "no manifest file" case.
 
     A manifest that exists but admitted zero cases (every descriptor
     capability-skipped for this cpu, e.g. the float suite on cortex-m0) is a
     real, empty active list, not "no constraint" -- it must return ``set()``,
     not ``None``, or build/run would fall back to unfiltered discovery and
     happily prune nothing / run every stale ``.elf`` in the tree.
+
+    A manifest that exists but is unreadable, not valid JSON, or not shaped
+    the way this pipeline always writes it (a JSON object with a ``tests``
+    list of objects) fails closed with ``FvpScriptError`` rather than falling
+    back to ``None`` -- a corrupt manifest is itself a sign something already
+    went wrong (a crash mid-write, concurrent runs sharing a tree, ...), and
+    silently disabling the very pruning/filtering this function exists for at
+    that moment would be worse than surfacing it loudly.
     See issue #66.
     """
     if generated_tests_dir is None:
@@ -43,9 +52,29 @@ def active_test_list(generated_tests_dir: Optional[Path]) -> Optional[Set[str]]:
         return None
     try:
         manifest = json.loads(manifest_path.read_text())
-    except (OSError, ValueError):
-        return None
-    return {str(entry["name"]) for entry in manifest.get("tests", []) if entry.get("name")}
+    except OSError as exc:
+        raise FvpScriptError(f"Could not read manifest {manifest_path}: {exc}") from exc
+    except ValueError as exc:
+        raise FvpScriptError(f"Manifest {manifest_path} is not valid JSON: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise FvpScriptError(
+            f"Manifest {manifest_path} must be a JSON object, got {type(manifest).__name__}"
+        )
+    tests = manifest.get("tests", [])
+    if not isinstance(tests, list):
+        raise FvpScriptError(
+            f"Manifest {manifest_path} field 'tests' must be a list, got {type(tests).__name__}"
+        )
+    names: Set[str] = set()
+    for entry in tests:
+        if not isinstance(entry, dict):
+            raise FvpScriptError(
+                f"Manifest {manifest_path} has a 'tests' entry that is not an object: {entry!r}"
+            )
+        name = entry.get("name")
+        if name:
+            names.add(str(name))
+    return names
 
 
 def _prune_stale_test_elves(

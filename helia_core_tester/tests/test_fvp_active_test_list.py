@@ -25,7 +25,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from helia_core_tester.fvp.cmake import active_test_list, cmake_configure, find_elves
+from helia_core_tester.fvp.errors import FvpScriptError
 
 
 def _touch(path: Path) -> Path:
@@ -77,6 +80,45 @@ def test_active_test_list_empty_set_when_manifest_admits_nothing(tmp_path: Path)
 
     assert result == set()
     assert result is not None
+
+
+def test_active_test_list_fails_closed_on_invalid_json(tmp_path: Path) -> None:
+    """A corrupt manifest (crash mid-write, disk issue, ...) must not fall
+    back to None -- silently disabling pruning/filtering at the exact moment
+    something has already gone wrong is worse than raising loudly."""
+    generated_tests_dir = tmp_path / "generated_tests" / "int" / "cortex-m55"
+    generated_tests_dir.mkdir(parents=True, exist_ok=True)
+    (generated_tests_dir / "manifest.json").write_text("{not valid json")
+
+    with pytest.raises(FvpScriptError):
+        active_test_list(generated_tests_dir)
+
+
+def test_active_test_list_fails_closed_on_non_object_manifest(tmp_path: Path) -> None:
+    generated_tests_dir = tmp_path / "generated_tests" / "int" / "cortex-m55"
+    generated_tests_dir.mkdir(parents=True, exist_ok=True)
+    (generated_tests_dir / "manifest.json").write_text(json.dumps(["not", "an", "object"]))
+
+    with pytest.raises(FvpScriptError):
+        active_test_list(generated_tests_dir)
+
+
+def test_active_test_list_fails_closed_on_non_list_tests_field(tmp_path: Path) -> None:
+    generated_tests_dir = tmp_path / "generated_tests" / "int" / "cortex-m55"
+    generated_tests_dir.mkdir(parents=True, exist_ok=True)
+    (generated_tests_dir / "manifest.json").write_text(json.dumps({"tests": "not-a-list"}))
+
+    with pytest.raises(FvpScriptError):
+        active_test_list(generated_tests_dir)
+
+
+def test_active_test_list_fails_closed_on_non_object_test_entry(tmp_path: Path) -> None:
+    generated_tests_dir = tmp_path / "generated_tests" / "int" / "cortex-m55"
+    generated_tests_dir.mkdir(parents=True, exist_ok=True)
+    (generated_tests_dir / "manifest.json").write_text(json.dumps({"tests": ["not-an-object"]}))
+
+    with pytest.raises(FvpScriptError):
+        active_test_list(generated_tests_dir)
 
 
 # --------------------------------------------------------------------------- #
