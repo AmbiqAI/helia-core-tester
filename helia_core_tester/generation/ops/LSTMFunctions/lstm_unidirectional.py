@@ -212,6 +212,11 @@ class OpLSTMUnidirectional(OperationBase):
             hidden_size = int(self.desc.get("units", self.desc.get("hidden_size", 1)))
             time_major = bool(self.desc.get("time_major", False))
             cell_clip = float(self.desc.get("cell_clip", 0.0))
+            # Issue #56: use_bias: false exercises the NULL-safe bias branch
+            # in arm_nn_lstm_step_*.c (`gate->bias ? gate->bias[h_idx] :
+            # 0.0f`, all four gates), a real Keras LSTM config, previously
+            # untested. Mirrors the GRU use_bias handling.
+            use_bias = bool(self.desc.get("use_bias", True))
 
             rng_state = self.rng.__getstate__()
             self.rng = np.random.default_rng(self.seed)
@@ -227,10 +232,21 @@ class OpLSTMUnidirectional(OperationBase):
             input_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(float_dtype)
             cell_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(float_dtype)
             output_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(float_dtype)
-            forget_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
-            input_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
-            cell_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
-            output_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
+            if use_bias:
+                forget_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
+                input_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
+                cell_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
+                output_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
+            else:
+                # Zero-valued bias is mathematically identical to omitting
+                # it, so the golden below needs no other change; the C side
+                # separately passes NULL (not a zero array) to actually
+                # exercise the guarded branch -- see the `use_bias` template
+                # flag below.
+                forget_bias = np.zeros((hidden_size,), dtype=float_dtype)
+                input_bias = np.zeros((hidden_size,), dtype=float_dtype)
+                cell_bias = np.zeros((hidden_size,), dtype=float_dtype)
+                output_bias = np.zeros((hidden_size,), dtype=float_dtype)
             self.rng.__setstate__(rng_state)
 
             output_ref = self._generate_lstm_expected_f32(
@@ -285,13 +301,28 @@ class OpLSTMUnidirectional(OperationBase):
                 "output_gate_bias_array": builder.format_array_as_c_literal(output_bias),
                 "cell_state_size": batch_size * hidden_size,
                 "dst_size": batch_size * time_steps * hidden_size,
+                "use_bias": use_bias,
             }
+
+            # Issue #56: port of the GRU fault: mechanism
+            # (gru_unidirectional.py) -- LSTM previously had no
+            # argument-validation coverage at all.
+            fault = self.desc.get("fault")
+            expected_status = str(self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
+            if fault:
+                context["fault"] = fault
+                context["expected_status"] = expected_status
+                h_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.h.j2"
+                c_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_fault.c.j2"
+            else:
+                h_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.h.j2"
+                c_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.c.j2"
 
             self._write_op_outputs(
                 Path(output_dir),
                 "lstm_unidirectional",
-                "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.h.j2",
-                "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.c.j2",
+                h_tpl,
+                c_tpl,
                 context,
                 {
                     "name": name,

@@ -20,6 +20,7 @@ static const {{ data_dtype }} {{ name }}_update_gate_hidden_weights[] = {
 {{ update_gate_hidden_weights_array }}
 };
 
+{% if use_bias | default(true) %}
 static const {{ data_dtype }} {{ name }}_update_gate_input_bias[] = {
 {{ update_gate_input_bias_array }}
 };
@@ -27,6 +28,7 @@ static const {{ data_dtype }} {{ name }}_update_gate_input_bias[] = {
 static const {{ data_dtype }} {{ name }}_update_gate_hidden_bias[] = {
 {{ update_gate_hidden_bias_array }}
 };
+{% endif %}
 
 static const {{ data_dtype }} {{ name }}_reset_gate_input_weights[] = {
 {{ reset_gate_input_weights_array }}
@@ -36,6 +38,7 @@ static const {{ data_dtype }} {{ name }}_reset_gate_hidden_weights[] = {
 {{ reset_gate_hidden_weights_array }}
 };
 
+{% if use_bias | default(true) %}
 static const {{ data_dtype }} {{ name }}_reset_gate_input_bias[] = {
 {{ reset_gate_input_bias_array }}
 };
@@ -43,6 +46,7 @@ static const {{ data_dtype }} {{ name }}_reset_gate_input_bias[] = {
 static const {{ data_dtype }} {{ name }}_reset_gate_hidden_bias[] = {
 {{ reset_gate_hidden_bias_array }}
 };
+{% endif %}
 
 static const {{ data_dtype }} {{ name }}_candidate_gate_input_weights[] = {
 {{ candidate_gate_input_weights_array }}
@@ -52,6 +56,7 @@ static const {{ data_dtype }} {{ name }}_candidate_gate_hidden_weights[] = {
 {{ candidate_gate_hidden_weights_array }}
 };
 
+{% if use_bias | default(true) %}
 static const {{ data_dtype }} {{ name }}_candidate_gate_input_bias[] = {
 {{ candidate_gate_input_bias_array }}
 };
@@ -59,5 +64,6 @@ static const {{ data_dtype }} {{ name }}_candidate_gate_input_bias[] = {
 static const {{ data_dtype }} {{ name }}_candidate_gate_hidden_bias[] = {
 {{ candidate_gate_hidden_bias_array }}
 };
+{% endif %}
 
 #endif

@@ -227,3 +227,273 @@ comparison:
   rtol: 0.01
 hint:
   force_cmsis: true
+---
+# Issue #56: time_steps == 0 is a documented-legal streaming no-op for LSTM
+# too (same "empty sequence returns SUCCESS" contract as the GRU kernel).
+# See gru_unidirectional_float_zero_time_steps_f32 for the zero-length
+# static array caveat (GNU C extension, accepted only because this repo's
+# CMake build enables neither -pedantic-errors nor -Werror).
+operator: LSTMUnidirectional
+name: lstm_unidirectional_float_zero_time_steps_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 0
+feature_size: 4
+units: 3
+time_major: false
+input_shape: [1, 0, 4]
+hint:
+  force_cmsis: true
+---
+operator: LSTMUnidirectional
+name: lstm_unidirectional_float_zero_time_steps_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 0
+feature_size: 4
+units: 3
+time_major: false
+input_shape: [1, 0, 4]
+comparison:
+  atol: 0.01
+  rtol: 0.01
+hint:
+  force_cmsis: true
+---
+# Issue #56: use_bias: false is a real Keras LSTM configuration with zero
+# coverage today. The kernel is NULL-safe per-gate (`gate->bias ?
+# gate->bias[h_idx] : 0.0f` in arm_nn_lstm_step_f32.c, all four gates:
+# forget/input/cell/output), previously untested. Golden computed with
+# bias genuinely zeroed; generator passes NULL bias pointers (not
+# zero-valued arrays) so this exercises the guarded branch.
+operator: LSTMUnidirectional
+name: lstm_unidirectional_float_no_bias_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 3
+feature_size: 4
+units: 3
+time_major: false
+use_bias: false
+input_shape: [1, 3, 4]
+hint:
+  force_cmsis: true
+---
+operator: LSTMUnidirectional
+name: lstm_unidirectional_float_no_bias_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 3
+feature_size: 4
+units: 3
+time_major: false
+use_bias: false
+input_shape: [1, 3, 4]
+comparison:
+  atol: 0.01
+  rtol: 0.01
+hint:
+  force_cmsis: true
+---
+# Issue #56: LSTM previously had no fault: mechanism at all -- these three
+# mirror the GRU error_null_input/_output/_params cases (which already
+# existed), using the newly-ported lstm_unidirectional_fault.c.j2 template.
+operator: LSTMUnidirectional
+name: lstm_unidirectional_error_null_input_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+input_shape: [1, 2, 2]
+fault: null_input
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+operator: LSTMUnidirectional
+name: lstm_unidirectional_error_null_output_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+input_shape: [1, 2, 2]
+fault: null_output
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+operator: LSTMUnidirectional
+name: lstm_unidirectional_error_null_params_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+input_shape: [1, 2, 2]
+fault: null_params
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+# LSTM-specific: unlike GRU, buffers (and buffers->cell_state) are always
+# required -- there is no reset_after-style legal NULL path. See
+# arm_lstm_unidirectional_f32.c: "if (!input || !output || !params ||
+# !buffers || !buffers->cell_state) return ARM_CMSIS_NN_ARG_ERROR;".
+operator: LSTMUnidirectional
+name: lstm_unidirectional_error_null_buffers_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+input_shape: [1, 2, 2]
+fault: null_buffers
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+operator: LSTMUnidirectional
+name: lstm_unidirectional_error_null_input_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+input_shape: [1, 2, 2]
+fault: null_input
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+operator: LSTMUnidirectional
+name: lstm_unidirectional_error_null_output_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+input_shape: [1, 2, 2]
+fault: null_output
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+operator: LSTMUnidirectional
+name: lstm_unidirectional_error_null_params_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+input_shape: [1, 2, 2]
+fault: null_params
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+operator: LSTMUnidirectional
+name: lstm_unidirectional_error_null_buffers_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+input_shape: [1, 2, 2]
+fault: null_buffers
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
