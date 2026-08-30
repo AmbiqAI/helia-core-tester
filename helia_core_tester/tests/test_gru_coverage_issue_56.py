@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from helia_core_tester.generation.io.descriptors import load_descriptor
+from helia_core_tester.generation.ops.LSTMFunctions.gru_unidirectional import OpGRUUnidirectional
+from helia_core_tester.generation.ops.LSTMFunctions.lstm_unidirectional import OpLSTMUnidirectional
 
 
 def _repo_root() -> Path:
@@ -98,6 +100,43 @@ def test_lstm_fault_mechanism_ported_from_gru() -> None:
         desc = _load_lstm(name)
         assert desc["fault"] == expected_fault
         assert desc["expected_status"] == "ARM_CMSIS_NN_ARG_ERROR"
+
+
+def test_gru_fault_and_no_bias_compose(tmp_path: Path) -> None:
+    # Copilot review on the PR that introduced fault: and use_bias support
+    # (#56): the fault template referenced `{{name}}_*_bias` unconditionally
+    # while the header only declares those arrays when use_bias is true, so
+    # a descriptor combining both would generate C that references an
+    # undeclared identifier. This exercises that exact combination
+    # end-to-end and inspects the rendered C, not just descriptor fields.
+    desc = _load_gru("gru_unidirectional_error_null_input_no_bias_f32")
+    assert desc["fault"] == "null_input"
+    assert desc["use_bias"] is False
+
+    op = OpGRUUnidirectional(desc, seed=1, target_cpu="cortex-m55")
+    op.generate_c_files(tmp_path)
+    c_path = next(tmp_path.rglob("*.c"))
+    rendered = c_path.read_text()
+
+    # Every bias field must be NULL, not a reference to an array the header
+    # never declares.
+    assert rendered.count(".input_bias = NULL,") == 3
+    assert rendered.count(".hidden_bias = NULL,") == 3
+    assert "_bias," not in rendered  # no leftover bare bias-array references
+
+
+def test_lstm_fault_and_no_bias_compose(tmp_path: Path) -> None:
+    desc = _load_lstm("lstm_unidirectional_error_null_input_no_bias_f32")
+    assert desc["fault"] == "null_input"
+    assert desc["use_bias"] is False
+
+    op = OpLSTMUnidirectional(desc, seed=1, target_cpu="cortex-m55")
+    op.generate_c_files(tmp_path)
+    c_path = next(tmp_path.rglob("*.c"))
+    rendered = c_path.read_text()
+
+    assert rendered.count(".bias = NULL,") == 4
+    assert "_bias," not in rendered
 
 
 def test_gru_f16_twins_exist_for_all_new_issue_56_cases() -> None:

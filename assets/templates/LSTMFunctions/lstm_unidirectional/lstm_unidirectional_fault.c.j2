@@ -28,25 +28,25 @@ static int32_t run_lstm(void)
         .forget_gate = {
             .input_weights = {{ name }}_forget_gate_input_weights,
             .hidden_weights = {{ name }}_forget_gate_hidden_weights,
-            .bias = {{ name }}_forget_gate_bias,
+            .bias = {% if use_bias | default(true) %}{{ name }}_forget_gate_bias{% else %}NULL{% endif %},
             .activation_type = ARM_NN_FLT_ACT_SIGMOID,
         },
         .input_gate = {
             .input_weights = {{ name }}_input_gate_input_weights,
             .hidden_weights = {{ name }}_input_gate_hidden_weights,
-            .bias = {{ name }}_input_gate_bias,
+            .bias = {% if use_bias | default(true) %}{{ name }}_input_gate_bias{% else %}NULL{% endif %},
             .activation_type = ARM_NN_FLT_ACT_SIGMOID,
         },
         .cell_gate = {
             .input_weights = {{ name }}_cell_gate_input_weights,
             .hidden_weights = {{ name }}_cell_gate_hidden_weights,
-            .bias = {{ name }}_cell_gate_bias,
+            .bias = {% if use_bias | default(true) %}{{ name }}_cell_gate_bias{% else %}NULL{% endif %},
             .activation_type = ARM_NN_FLT_ACT_TANH,
         },
         .output_gate = {
             .input_weights = {{ name }}_output_gate_input_weights,
             .hidden_weights = {{ name }}_output_gate_hidden_weights,
-            .bias = {{ name }}_output_gate_bias,
+            .bias = {% if use_bias | default(true) %}{{ name }}_output_gate_bias{% else %}NULL{% endif %},
             .activation_type = ARM_NN_FLT_ACT_SIGMOID,
         },
     };
