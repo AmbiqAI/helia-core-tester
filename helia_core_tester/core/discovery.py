@@ -14,28 +14,35 @@ from helia_core_tester.core.path_layout import build_dir as canonical_build_dir
 from helia_core_tester.core.path_layout import generated_tests_dir as canonical_generated_tests_dir
 
 
-# Marker files/directories that indicate the repository root
+# Marker files/directories that indicate the repository root. All three are
+# required (see _is_repo_root): pyproject.toml + CMakeLists.txt alone are not
+# enough to identify *this* repo -- the sibling ns-cmsis-nn kernel checkout
+# has both of those too (it's a CMake/scikit-build-core Python project in its
+# own right), so CMSIS_NN_REPO_ROOT pointed at a kernel checkout used to
+# falsely validate as this tool's own root (issue #65). helia_core_tester/ is
+# this tool's own package directory and is what actually disambiguates it.
 REPO_MARKERS = [
-    "pyproject.toml",  # Tests/CodeGen/pyproject.toml
-    "CMakeLists.txt",  # Tests/CodeGen/CMakeLists.txt
-    ".git",            # Root .git directory
+    "pyproject.toml",     # Tests/helia-core-tester/pyproject.toml
+    "CMakeLists.txt",     # Tests/helia-core-tester/CMakeLists.txt
+    "helia_core_tester",  # Tests/helia-core-tester/helia_core_tester/ (this tool's own package)
 ]
 
 
 def find_repo_root(start_path: Optional[Path] = None) -> Path:
     """
     Find the repository root by walking up from start_path looking for markers.
-    
-    The repository root is identified as Tests/CodeGen/ directory, which contains:
-    - pyproject.toml
-    - CMakeLists.txt
-    
+
+    The repository root is this tool's own checkout (helia-core-tester,
+    normally nested at <ns-cmsis-nn>/Tests/helia-core-tester), identified by
+    REPO_MARKERS: pyproject.toml, CMakeLists.txt, and the helia_core_tester/
+    package directory.
+
     Args:
         start_path: Starting directory (default: current working directory)
         
     Returns:
-        Path to the repository root (Tests/CodeGen/)
-        
+        Path to the repository root (helia-core-tester's own checkout)
+
     Raises:
         RepoRootNotFoundError: If repository root cannot be found
     """
@@ -50,8 +57,14 @@ def find_repo_root(start_path: Optional[Path] = None) -> Path:
         env_path = Path(env_root).resolve()
         if _is_repo_root(env_path):
             return env_path
+        missing = _missing_repo_markers(env_path)
         raise RepoRootNotFoundError(
-            f"Environment variable CMSIS_NN_REPO_ROOT points to invalid location: {env_root}"
+            f"Environment variable CMSIS_NN_REPO_ROOT points to invalid location: {env_root}\n"
+            f"  Missing: {', '.join(missing)}.\n"
+            f"  Note: CMSIS_NN_REPO_ROOT must point at this tool's own checkout "
+            f"(helia-core-tester), not an ns-cmsis-nn kernel checkout -- despite the name. "
+            f"If you meant to point at a kernel checkout, use --cmsis-nn-root / the "
+            f"CMSIS_NN_ROOT CMake variable instead; that is unrelated to this override."
         )
     
     # Walk up from start_path
@@ -72,29 +85,40 @@ def find_repo_root(start_path: Optional[Path] = None) -> Path:
     # (but this should rarely be needed)
     raise RepoRootNotFoundError(
         f"Could not find repository root starting from {start_path}. "
-        f"Looking for one of: {', '.join(REPO_MARKERS)}. "
-        f"Set CMSIS_NN_REPO_ROOT environment variable to override."
+        f"Looking for all of: {', '.join(REPO_MARKERS)}.\n"
+        f"  This normally auto-resolves when helia-core-tester is checked out "
+        f"nested at <ns-cmsis-nn>/Tests/helia-core-tester (no environment "
+        f"variable needed). If it's checked out standalone elsewhere, set "
+        f"CMSIS_NN_REPO_ROOT to point at that checkout directly."
     )
+
+
+def _missing_repo_markers(path: Path) -> list:
+    """Return the REPO_MARKERS entries not present under path, for error messages."""
+    if not path.is_dir():
+        return ["(not a directory)"]
+    return [marker for marker in REPO_MARKERS if not (path / marker).exists()]
 
 
 def _is_repo_root(path: Path) -> bool:
     """
-    Check if a path is the repository root (Tests/CodeGen/).
-    
+    Check if a path is the repository root (Tests/helia-core-tester/).
+
+    Requires all of REPO_MARKERS to be present, notably the tool's own
+    helia_core_tester/ package directory -- pyproject.toml + CMakeLists.txt
+    alone are not sufficient to identify this repo, since the sibling
+    ns-cmsis-nn kernel checkout has both of those too (see issue #65).
+
     Args:
         path: Path to check
-        
+
     Returns:
         True if path appears to be the repository root
     """
     if not path.is_dir():
         return False
-    
-    # Check for key markers
-    has_pyproject = (path / "pyproject.toml").exists()
-    has_cmake = (path / "CMakeLists.txt").exists()
-    
-    return bool(has_pyproject and has_cmake)
+
+    return not _missing_repo_markers(path)
 
 
 def _resolve_repo_root(repo_root: Optional[Path] = None) -> Path:
