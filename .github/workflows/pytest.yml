@@ -23,7 +23,10 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only cancel in-progress runs for superseded pushes on a PR branch.
+  # Never cancel a push-to-main run -- each merged commit must report on
+  # its own, or a regression on that commit can slip through unreported.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   pytest:
