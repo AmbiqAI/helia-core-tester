@@ -1,0 +1,45 @@
+name: Pytest
+
+# Closes helia-core-tester#57: the #55 fix (closing #54, "56% of float cases
+# compare as truncated integers") shipped a pytest regression lock, but
+# nothing in this repo's CI ever invoked pytest -- self-validate.yml (#50/
+# #61) only generates + compiles against ns-cmsis-nn, it never runs the unit
+# suite. So the regression lock only protected the suite when a contributor
+# remembered to run pytest locally before pushing.
+#
+# This is a separate, lighter workflow from self-validate.yml on purpose:
+# the pytest suite is pure Python (no ns-cmsis-nn checkout, no ARM
+# toolchain, no FVP), so it should report and fail fast on its own rather
+# than being bundled with the heavier generate+compile matrix.
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout helia-core-tester
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python dependencies (no ARM toolchain needed)
+        run: ./scripts/setup_ci.sh --skip-build-deps
+
+      - name: Run pytest
+        run: uv run pytest helia_core_tester/tests -q
