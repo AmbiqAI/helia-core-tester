@@ -309,13 +309,36 @@ class OpLSTMUnidirectional(OperationBase):
             # argument-validation coverage at all.
             fault = self.desc.get("fault")
             expected_status = str(self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
+            # Follow-up to #56: port of the GRU stream: mechanism -- LSTM
+            # previously had zero hidden_state/cell_state streaming coverage.
+            # See arm_lstm_unidirectional_f32.c: cell_state is caller-owned
+            # state too when hidden_state != NULL (not just hidden_state, as
+            # for GRU), so the stream template seeds and preserves both.
+            stream = bool(self.desc.get("hint", {}).get("stream", False))
+            h_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.h.j2"
             if fault:
                 context["fault"] = fault
                 context["expected_status"] = expected_status
-                h_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.h.j2"
                 c_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_fault.c.j2"
+            elif stream:
+                if batch_size != 1:
+                    raise ValueError("LSTMUnidirectional streaming descriptors require batch_size == 1.")
+                chunk_lengths = self.desc.get("stream_chunk_lengths")
+                if not chunk_lengths:
+                    half = time_steps // 2
+                    chunk_lengths = [half, time_steps - half]
+                if sum(chunk_lengths) != time_steps:
+                    raise ValueError("stream_chunk_lengths must sum to time_steps.")
+                chunk_offsets = []
+                offset = 0
+                for length in chunk_lengths:
+                    chunk_offsets.append(offset)
+                    offset += length
+                context["chunk_lengths"] = chunk_lengths
+                context["chunk_input_offsets"] = [c * input_size for c in chunk_offsets]
+                context["chunk_output_offsets"] = [c * hidden_size for c in chunk_offsets]
+                c_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_stream.c.j2"
             else:
-                h_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.h.j2"
                 c_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.c.j2"
 
             self._write_op_outputs(

@@ -139,6 +139,92 @@ def test_lstm_fault_and_no_bias_compose(tmp_path: Path) -> None:
     assert "_bias," not in rendered
 
 
+def test_gru_no_bias_combines_with_pre_reset_time_major_and_streaming() -> None:
+    # Follow-up to #56: use_bias: false was only ever tested with the
+    # baseline flag set. This is the completion of that gap -- every other
+    # flag axis now has a no_bias combination.
+    pre_reset = _load_gru("gru_unidirectional_float_no_bias_pre_reset_f32")
+    assert pre_reset["use_bias"] is False
+    assert pre_reset["reset_after"] is False
+
+    time_major = _load_gru("gru_unidirectional_float_no_bias_time_major_f32")
+    assert time_major["use_bias"] is False
+    assert time_major["time_major"] is True
+
+    stream = _load_gru("gru_unidirectional_float_no_bias_stream_f32")
+    assert stream["use_bias"] is False
+    assert stream["hint"]["stream"] is True
+
+
+def test_lstm_no_bias_combines_with_time_major() -> None:
+    desc = _load_lstm("lstm_unidirectional_float_no_bias_time_major_f32")
+    assert desc["use_bias"] is False
+    assert desc["time_major"] is True
+
+
+def test_gru_no_bias_stream_composes_end_to_end(tmp_path: Path) -> None:
+    # The stream template (gru_unidirectional_stream.c.j2) had the same
+    # unconditional bias-symbol reference Copilot flagged in the fault
+    # template -- it wasn't exercised by the original PR because no
+    # descriptor combined use_bias: false with streaming. Fixed alongside
+    # this case; verify end-to-end like the fault+no_bias tests above.
+    desc = _load_gru("gru_unidirectional_float_no_bias_stream_f32")
+    op = OpGRUUnidirectional(desc, seed=1, target_cpu="cortex-m55")
+    op.generate_c_files(tmp_path)
+    c_path = next(tmp_path.rglob("*.c"))
+    rendered = c_path.read_text()
+
+    assert rendered.count(".input_bias = NULL,") == 3
+    assert rendered.count(".hidden_bias = NULL,") == 3
+    assert "_bias," not in rendered
+
+
+def test_lstm_streaming_carries_both_hidden_and_cell_state(tmp_path: Path) -> None:
+    # LSTM previously had zero hidden_state/cell_state streaming coverage at
+    # all (unlike GRU). Unlike GRU, LSTM's cell_state is also caller-owned
+    # state once hidden_state != NULL (arm_lstm_unidirectional_f32.c only
+    # auto-zeroes cell_state in single-shot/NULL-hidden_state mode) -- the
+    # new stream template must seed AND preserve cell_state across chunks,
+    # not just hidden_state. Verify the rendered C actually does this.
+    desc = _load_lstm("lstm_unidirectional_float_stream_f32")
+    assert desc["hint"]["stream"] is True
+    assert desc["batch_size"] == 1
+
+    op = OpLSTMUnidirectional(desc, seed=1, target_cpu="cortex-m55")
+    op.generate_c_files(tmp_path)
+    c_path = next(tmp_path.rglob("*.c"))
+    rendered = c_path.read_text()
+
+    # Both state buffers seeded to zero once, and both passed (by name, not
+    # NULL) into every chunk call -- not re-zeroed between chunks.
+    assert rendered.count("hidden_state[h] = (float)0;") == 1
+    assert rendered.count("cell_state[h] = (float)0;") == 1
+    assert f".hidden_state = {desc['name']}_hidden_state," in rendered
+    assert f".cell_state = {desc['name']}_cell_state," in rendered
+    assert rendered.count("run_lstm_chunk(") >= 3  # 1 definition + >=2 call sites (chunk_lengths: [2, 2])
+
+
+def test_lstm_streaming_combines_with_time_major_and_no_bias() -> None:
+    time_major = _load_lstm("lstm_unidirectional_float_stream_time_major_f32")
+    assert time_major["hint"]["stream"] is True
+    assert time_major["time_major"] is True
+
+    no_bias = _load_lstm("lstm_unidirectional_float_no_bias_stream_f32")
+    assert no_bias["hint"]["stream"] is True
+    assert no_bias["use_bias"] is False
+
+
+def test_lstm_no_bias_stream_composes_end_to_end(tmp_path: Path) -> None:
+    desc = _load_lstm("lstm_unidirectional_float_no_bias_stream_f32")
+    op = OpLSTMUnidirectional(desc, seed=1, target_cpu="cortex-m55")
+    op.generate_c_files(tmp_path)
+    c_path = next(tmp_path.rglob("*.c"))
+    rendered = c_path.read_text()
+
+    assert rendered.count(".bias = NULL,") == 4
+    assert "_bias," not in rendered
+
+
 def test_gru_f16_twins_exist_for_all_new_issue_56_cases() -> None:
     for f32_name in [
         "gru_unidirectional_float_pre_reset_time_major_f32",
@@ -147,7 +233,22 @@ def test_gru_f16_twins_exist_for_all_new_issue_56_cases() -> None:
         "gru_unidirectional_float_zero_time_steps_f32",
         "gru_unidirectional_float_null_buffers_reset_after_f32",
         "gru_unidirectional_float_no_bias_f32",
+        "gru_unidirectional_float_no_bias_pre_reset_f32",
+        "gru_unidirectional_float_no_bias_time_major_f32",
+        "gru_unidirectional_float_no_bias_stream_f32",
     ]:
         f16_name = f32_name[: -len("_f32")] + "_f16"
         _load_gru(f32_name)
         _load_gru(f16_name)  # raises AssertionError if missing
+
+
+def test_lstm_f16_twins_exist_for_all_new_follow_up_cases() -> None:
+    for f32_name in [
+        "lstm_unidirectional_float_no_bias_time_major_f32",
+        "lstm_unidirectional_float_stream_f32",
+        "lstm_unidirectional_float_stream_time_major_f32",
+        "lstm_unidirectional_float_no_bias_stream_f32",
+    ]:
+        f16_name = f32_name[: -len("_f32")] + "_f16"
+        _load_lstm(f32_name)
+        _load_lstm(f16_name)  # raises AssertionError if missing
