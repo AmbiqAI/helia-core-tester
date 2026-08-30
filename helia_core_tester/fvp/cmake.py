@@ -28,6 +28,12 @@ def active_test_list(generated_tests_dir: Optional[Path]) -> Optional[Set[str]]:
     filter directly (they run as separate subprocess invocations). ``None``
     preserves the historical "use whatever is on disk" behaviour when there is
     no manifest to consult (e.g. a tree never generated through this pipeline).
+
+    A manifest that exists but admitted zero cases (every descriptor
+    capability-skipped for this cpu, e.g. the float suite on cortex-m0) is a
+    real, empty active list, not "no constraint" -- it must return ``set()``,
+    not ``None``, or build/run would fall back to unfiltered discovery and
+    happily prune nothing / run every stale ``.elf`` in the tree.
     See issue #66.
     """
     if generated_tests_dir is None:
@@ -39,8 +45,7 @@ def active_test_list(generated_tests_dir: Optional[Path]) -> Optional[Set[str]]:
         manifest = json.loads(manifest_path.read_text())
     except (OSError, ValueError):
         return None
-    names = {str(entry["name"]) for entry in manifest.get("tests", []) if entry.get("name")}
-    return names or None
+    return {str(entry["name"]) for entry in manifest.get("tests", []) if entry.get("name")}
 
 
 def _prune_stale_test_elves(

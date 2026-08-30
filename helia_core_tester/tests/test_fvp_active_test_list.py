@@ -65,6 +65,20 @@ def test_active_test_list_none_without_manifest(tmp_path: Path) -> None:
     assert active_test_list(None) is None
 
 
+def test_active_test_list_empty_set_when_manifest_admits_nothing(tmp_path: Path) -> None:
+    """A manifest that exists but lists zero tests (every descriptor
+    capability-skipped for this cpu, e.g. the float suite on cortex-m0) is a
+    real, empty active list -- distinct from "no manifest" -- so it must NOT
+    be folded into None (which would fall back to unfiltered discovery)."""
+    generated_tests_dir = tmp_path / "generated_tests" / "float" / "cortex-m0"
+    _write_manifest(generated_tests_dir, [])
+
+    result = active_test_list(generated_tests_dir)
+
+    assert result == set()
+    assert result is not None
+
+
 # --------------------------------------------------------------------------- #
 # cmake_configure pruning
 # --------------------------------------------------------------------------- #
@@ -96,6 +110,36 @@ def test_cmake_configure_prunes_elf_outside_active_test_list(tmp_path: Path, mon
     )
 
     assert keep.exists()
+    assert not stale.exists()
+
+
+def test_cmake_configure_prunes_everything_when_manifest_admits_nothing(tmp_path: Path, monkeypatch) -> None:
+    """A manifest with zero admitted tests must prune ALL build-tree ELFs, not
+    fall back to keeping everything on disk (which is what happens if the
+    empty active list were folded into None)."""
+    _stub_configure_subprocess(monkeypatch)
+
+    build_dir = tmp_path / "build-float-cortex-m0-gcc"
+    stale = _touch(build_dir / "tests" / "ActivationFunctions" / "nn_activation_float_tanh_f16.elf")
+
+    generated_tests_dir = tmp_path / "generated_tests" / "float" / "cortex-m0"
+    _write_manifest(generated_tests_dir, [])
+
+    cmake_configure(
+        source_dir=tmp_path / "src",
+        build_dir=build_dir,
+        toolchain_file=tmp_path / "toolchain.cmake",
+        cpu="cortex-m0",
+        cmsis5=tmp_path / "CMSIS_5",
+        optimization="-Ofast",
+        extra_defs=[],
+        generator=None,
+        generated_tests_dir=generated_tests_dir,
+        enable_coverage=False,
+        verbosity=0,
+        env={},
+    )
+
     assert not stale.exists()
 
 
@@ -151,3 +195,15 @@ def test_find_elves_unfiltered_without_active_test_list(tmp_path: Path) -> None:
 
     assert active_test_list(tmp_path / "nope") is None
     assert {p.stem for p in find_elves(build_dir, None)} == {"one", "two"}
+
+
+def test_find_elves_empty_when_manifest_admits_nothing(tmp_path: Path) -> None:
+    """Must find nothing, not fall back to unfiltered discovery, when the
+    manifest exists but legitimately admitted zero cases."""
+    build_dir = tmp_path / "build-float-cortex-m0-gcc"
+    _touch(build_dir / "tests" / "ActivationFunctions" / "nn_activation_float_tanh_f16.elf")
+
+    generated_tests_dir = tmp_path / "generated_tests" / "float" / "cortex-m0"
+    _write_manifest(generated_tests_dir, [])
+
+    assert find_elves(build_dir, active_test_list(generated_tests_dir)) == []
