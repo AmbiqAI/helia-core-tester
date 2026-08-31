@@ -441,9 +441,15 @@ class TemplateContextBuilder:
         if np.issubdtype(np_dtype, np.integer):
             return str(int(value))
         if np_dtype == np.float16:
-            return f"(float16_t){float(value):.6f}f"
+            # Issue #64: was `.6f` (6 decimal places -- only ~6-7 significant
+            # figures, up to ~4.8e-7 of rounding error for values near 1.0),
+            # which put a hard floor of ~1e-6 on achievable atol for any
+            # saturating output (tanh/sigmoid/normalized). format_float_literal
+            # already gives full float32 round-trip precision and guarantees
+            # valid C float syntax (decimal point/exponent always present).
+            return f"(float16_t){TemplateContextBuilder.format_float_literal(value)}"
         if np.issubdtype(np_dtype, np.floating):
-            return f"{float(value):.6f}f"
+            return TemplateContextBuilder.format_float_literal(value)
         return str(value)
 
     @staticmethod
