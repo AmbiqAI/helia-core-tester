@@ -364,6 +364,17 @@ def run_generated(
     test_name: Optional[str] = typer.Option(None, "--test-name", help="Only bridge generated tests whose directory name contains this substring."),
     limit: Optional[int] = typer.Option(None, "--limit", help="Only bridge the first N discovered generated tests."),
     suite: str = typer.Option("int", "--suite", help="Generated-test suite to bridge: 'int' (S8/S16/S32/S4, default) or 'float' (FP16/FP32)."),
+    require_fvp_pass: bool = typer.Option(
+        True,
+        "--require-fvp-pass/--no-require-fvp-pass",
+        help=(
+            "Require each case's most recent FVP report to record a matching PASS before bridging it "
+            "onto hardware (default: on). Pass --no-require-fvp-pass to bridge every case with real "
+            "firmware dispatch support regardless -- e.g. on hosts that cannot run the Linux-only "
+            "Corstone-300 FVP model at all, where a fresh/matching FVP report can never be produced "
+            "locally and the gate would otherwise skip every case."
+        ),
+    ),
 ):
     """Stream real `helia_core_tester generate`-produced kernel tests (real golden data,
     not synthetic demo data) to already-flashed hardware over HCTP/RTT and check correctness.
@@ -392,7 +403,8 @@ def run_generated(
     # [N/total] counter and case_id columns from the very first printed line instead of
     # widening them as longer names are discovered mid-run.
     preview_bundles, _preview_skipped = build_generated_test_case_bundles(
-        repo_root, cpu=cpu, family=family, name_filter=test_name, limit=limit, suite=suite
+        repo_root, cpu=cpu, family=family, name_filter=test_name, limit=limit, suite=suite,
+        require_fvp_pass=require_fvp_pass,
     )
     id_width = max((len(b.case_id) for b in preview_bundles), default=0)
 
@@ -412,6 +424,7 @@ def run_generated(
             name_filter=test_name,
             limit=limit,
             suite=suite,
+            require_fvp_pass=require_fvp_pass,
             on_case_complete=on_case_complete,
         )
     except RuntimeError as exc:

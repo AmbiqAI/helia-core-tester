@@ -234,6 +234,7 @@ def build_generated_test_case_bundles(
     name_filter: str | None = None,
     limit: int | None = None,
     suite: str = "int",
+    require_fvp_pass: bool = True,
 ) -> tuple[list[CaseBundle], list[tuple[GeneratedTestCase, str]]]:
     """Discover generated (`helia_core_tester generate`) kernel tests and bridge the
     ones with real perf-stream firmware dispatch support into CaseBundles.
@@ -245,6 +246,13 @@ def build_generated_test_case_bundles(
     `suite="int"` (default) discovers under artifacts/generated_tests/int; `suite="float"`
     discovers the FP16/FP32 tree instead -- the two suites are never mixed in one call.
 
+    `require_fvp_pass` (default True) is forwarded to
+    `build_case_bundle_from_generated_test`'s Phase 2 FVP-pass gate. Set to False to
+    bridge every case with real firmware dispatch support regardless of whether a
+    matching FVP report exists -- e.g. on hosts that cannot run the (Linux-only)
+    Corstone-300 FVP model at all, where a fresh FVP report can never be produced
+    locally and the gate would otherwise skip every case.
+
     Returns (bridged_case_bundles, [(skipped_test, reason), ...]).
     """
     families = bridged_families() if family is None else [family]
@@ -254,7 +262,7 @@ def build_generated_test_case_bundles(
         discovered = discover_generated_tests(project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite)
         for test in discovered:
             try:
-                bundles.append(build_case_bundle_from_generated_test(project_root, test))
+                bundles.append(build_case_bundle_from_generated_test(project_root, test, require_fvp_pass=require_fvp_pass))
             except UnsupportedGeneratedTestError as exc:
                 skipped.append((test, str(exc)))
     return bundles, skipped
@@ -274,6 +282,7 @@ def run_apollo510_generated_test_session(
     name_filter: str | None = None,
     limit: int | None = None,
     suite: str = "int",
+    require_fvp_pass: bool = True,
     on_case_complete: Callable[[CaseRunResult], None] | None = None,
 ) -> tuple[SessionResult, Path, list[tuple[GeneratedTestCase, str]]]:
     """Run real `helia_core_tester generate`-produced kernel tests (with their real golden
@@ -283,7 +292,9 @@ def run_apollo510_generated_test_session(
     `family=None` bridges every family with real firmware dispatch support (see
     `build_generated_test_case_bundles`), i.e. runs the complete hardware-supported suite
     in one session (transparently batched). `suite="int"` (default) or `suite="float"`
-    selects which generated-test tree to discover from.
+    selects which generated-test tree to discover from. `require_fvp_pass` (default True)
+    is forwarded to `build_generated_test_case_bundles` -- set to False on hosts that
+    cannot run the FVP model at all (see its own docstring).
 
     Transparently splits the discovered/bridged cases into batches of at most
     MAX_CASES_PER_SESSION (matching firmware HCT_SERVER_MAX_CASES) and runs one
@@ -292,7 +303,8 @@ def run_apollo510_generated_test_session(
     causes the firmware to silently drop the plan and hang the host.
     """
     bundles, skipped = build_generated_test_case_bundles(
-        project_root, cpu=cpu, family=family, name_filter=name_filter, limit=limit, suite=suite
+        project_root, cpu=cpu, family=family, name_filter=name_filter, limit=limit, suite=suite,
+        require_fvp_pass=require_fvp_pass,
     )
     if not bundles:
         raise RuntimeError(
