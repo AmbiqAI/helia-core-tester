@@ -335,7 +335,10 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
     target_compile_options(${target_name} PRIVATE -Wno-cast-function-type)
 
     if(HELIA_HARDWARE_BUILD)
-      target_link_libraries(${target_name} PRIVATE cmsis-nn nsx::board nsx::core nsx::perf)
+      # nsx::cmsis_startup provides Reset_Handler/startup + system source
+      # (NSX_STARTUP_SOURCE/NSX_SYSTEM_SOURCE, see nsx-cmsis-startup module);
+      # without it the link fails with missing Reset_Handler/__bss_start__.
+      target_link_libraries(${target_name} PRIVATE cmsis-nn nsx::board nsx::core nsx::perf nsx::cmsis_startup)
       nsx_finalize_app(${target_name})
     else()
       target_link_options(${target_name} PRIVATE -T ${LINK_FILE})

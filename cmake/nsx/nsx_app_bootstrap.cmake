@@ -14,6 +14,14 @@
 
 include("${CMAKE_CURRENT_LIST_DIR}/nsx_helpers.cmake")
 
+# Detects NSX_TOOLCHAIN_FAMILY from the active CMake compiler (gcc/armclang/
+# atfe) and provides a fallback nsx_apply_toolchain_flags(); board.cmake later
+# includes the SDK's own richer nsx_toolchain_flags.cmake (via NSX_CMAKE_DIR),
+# which redefines nsx_apply_toolchain_flags() but still requires
+# NSX_TOOLCHAIN_FAMILY to already be set -- this app-level file is that
+# single source for the detection step.
+include("${CMAKE_CURRENT_LIST_DIR}/nsx_toolchain_flags.cmake")
+
 # nsx_bootstrap_app(APP_ROOT <dir> BOARD <name> MODULES <name> [<name>...])
 #
 # Resolves NSX_ROOT/NSX_CMAKE_DIR/NSX_AMBIQSUITE_ROOT/NSX_SDK_PROVIDER, brings
@@ -46,6 +54,16 @@ macro(nsx_bootstrap_app)
             "nsx_bootstrap_app: ${NSX_CMAKE_DIR} does not look like an nsx-ambiq-sdk "
             "checkout (missing nsx_toolchain_flags.cmake).")
     endif()
+
+    # Auto-include every top-level cmake/*.cmake helper the SDK ships (e.g.
+    # nsx_soc_facts.cmake's nsx_load_soc_facts()/nsx_soc_flags_target()), per
+    # modules/nsx-ambiq-sdk/cmake/README.md's "Single Source Of Truth For SoC
+    # Facts" contract, before board.cmake (which calls nsx_load_soc_facts()
+    # via its soc.cmake fragment) is included below.
+    file(GLOB _nsx_top_level_cmake_files "${NSX_CMAKE_DIR}/*.cmake")
+    foreach(_nsx_top_level_cmake_file IN LISTS _nsx_top_level_cmake_files)
+        include("${_nsx_top_level_cmake_file}")
+    endforeach()
 
     # Only the ambiqsuite SDK provider is currently wired up.
     set(NSX_SDK_PROVIDER "ambiqsuite")
@@ -96,7 +114,17 @@ function(nsx_finalize_app target)
     # nsx_assert_file_exists() in cmake/socs/<skew>.cmake) but never applies it --
     # unlike the FVP path's own explicit `-T ${LINK_FILE}` in this repo's
     # CMakeLists.txt, that's left to the app/target integration layer.
-    target_link_options(${target} PRIVATE -T "${NSX_LINKER_SCRIPT}")
+    #
+    # -nostartfiles/--entry=Reset_Handler are required alongside -T: without
+    # them the linker still pulls in newlib's default crt0.o (_mainCRTStartup)
+    # next to nsx-cmsis-startup's Reset_Handler-based startup_gcc.c, causing
+    # "multiple definition of `_init'/`_fini'" and unresolved
+    # __bss_start__/__bss_end__ (those symbols are only defined by the custom
+    # linker script's SECTIONS, which newlib's own crt0 doesn't use).
+    target_link_options(${target} PRIVATE
+        -nostartfiles
+        -Wl,--entry=Reset_Handler
+        -T "${NSX_LINKER_SCRIPT}")
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND "${CMAKE_OBJCOPY}" -O binary "$<TARGET_FILE:${target}>" "$<TARGET_FILE_DIR:${target}>/${target}.bin"
         COMMENT "Generating ${target}.bin"
