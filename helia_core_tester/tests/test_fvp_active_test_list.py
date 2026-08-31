@@ -121,6 +121,34 @@ def test_active_test_list_fails_closed_on_non_object_test_entry(tmp_path: Path) 
         active_test_list(generated_tests_dir)
 
 
+def test_active_test_list_fails_closed_on_missing_tests_field(tmp_path: Path) -> None:
+    """A manifest object with no 'tests' field at all is schema drift/
+    corruption, not "zero tests admitted" -- must raise, not silently
+    default to an empty active list (which would prune/refuse to run
+    everything as if the filter legitimately admitted nothing)."""
+    generated_tests_dir = tmp_path / "generated_tests" / "int" / "cortex-m55"
+    generated_tests_dir.mkdir(parents=True, exist_ok=True)
+    (generated_tests_dir / "manifest.json").write_text(json.dumps({"skipped": []}))
+
+    with pytest.raises(FvpScriptError):
+        active_test_list(generated_tests_dir)
+
+
+def test_active_test_list_fails_closed_on_entry_with_no_name(tmp_path: Path) -> None:
+    """An entry present in 'tests' but missing (or with an empty) 'name'
+    must raise rather than being silently dropped from the active list --
+    dropping it would mean its still-on-disk .elf gets pruned/never run as
+    if the filter had excluded it, when it was actually admitted."""
+    generated_tests_dir = tmp_path / "generated_tests" / "int" / "cortex-m55"
+    generated_tests_dir.mkdir(parents=True, exist_ok=True)
+    (generated_tests_dir / "manifest.json").write_text(
+        json.dumps({"tests": [{"name": "add_s8_broadcast"}, {"operator": "Conv"}]})
+    )
+
+    with pytest.raises(FvpScriptError):
+        active_test_list(generated_tests_dir)
+
+
 # --------------------------------------------------------------------------- #
 # cmake_configure pruning
 # --------------------------------------------------------------------------- #

@@ -37,12 +37,14 @@ def active_test_list(generated_tests_dir: Optional[Path]) -> Optional[Set[str]]:
     happily prune nothing / run every stale ``.elf`` in the tree.
 
     A manifest that exists but is unreadable, not valid JSON, or not shaped
-    the way this pipeline always writes it (a JSON object with a ``tests``
-    list of objects) fails closed with ``FvpScriptError`` rather than falling
-    back to ``None`` -- a corrupt manifest is itself a sign something already
-    went wrong (a crash mid-write, concurrent runs sharing a tree, ...), and
-    silently disabling the very pruning/filtering this function exists for at
-    that moment would be worse than surfacing it loudly.
+    the way this pipeline always writes it -- a JSON object with a ``tests``
+    list of objects, each carrying a non-empty ``name`` -- fails closed with
+    ``FvpScriptError`` rather than falling back to ``None`` or quietly
+    treating the gap as "no test here". A corrupt manifest is itself a sign
+    something already went wrong (a crash mid-write, concurrent runs sharing
+    a tree, schema drift, ...), and silently under-counting the active list at
+    that moment -- pruning or refusing to run a case that was actually meant
+    to be there -- would be worse than surfacing it loudly.
     See issue #66.
     """
     if generated_tests_dir is None:
@@ -60,7 +62,9 @@ def active_test_list(generated_tests_dir: Optional[Path]) -> Optional[Set[str]]:
         raise FvpScriptError(
             f"Manifest {manifest_path} must be a JSON object, got {type(manifest).__name__}"
         )
-    tests = manifest.get("tests", [])
+    if "tests" not in manifest:
+        raise FvpScriptError(f"Manifest {manifest_path} is missing required field 'tests'")
+    tests = manifest["tests"]
     if not isinstance(tests, list):
         raise FvpScriptError(
             f"Manifest {manifest_path} field 'tests' must be a list, got {type(tests).__name__}"
@@ -72,8 +76,11 @@ def active_test_list(generated_tests_dir: Optional[Path]) -> Optional[Set[str]]:
                 f"Manifest {manifest_path} has a 'tests' entry that is not an object: {entry!r}"
             )
         name = entry.get("name")
-        if name:
-            names.add(str(name))
+        if not name:
+            raise FvpScriptError(
+                f"Manifest {manifest_path} has a 'tests' entry with no non-empty 'name': {entry!r}"
+            )
+        names.add(str(name))
     return names
 
 
