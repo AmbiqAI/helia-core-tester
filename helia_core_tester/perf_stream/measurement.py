@@ -81,7 +81,7 @@ class NormalizedSample:
 @dataclass(frozen=True)
 class SampleStatistics:
     sample_count: int
-    min_cycles: int
+    min_cycles: float
     median_cycles: float
     p90_cycles: float
     p99_cycles: float
@@ -190,10 +190,18 @@ def normalize_samples(samples: Iterable[RawSample]) -> list[NormalizedSample]:
 
 
 def compute_sample_statistics(samples: Iterable[NormalizedSample]) -> SampleStatistics:
+    """Aggregate per-sample cycle counts into summary statistics.
+
+    Uses each sample's `cycles_per_invocation` (already normalized by `iterations` in
+    `normalize_samples()`), not raw `cycles` -- every case bundle sends a fixed
+    `iterations_per_sample` (never 0, so firmware's own on-device calibration never
+    triggers), so aggregating raw `cycles` here previously reported every statistic at
+    ~`iterations`x the true per-invocation cost.
+    """
     materialized = list(samples)
     if not materialized:
-        return SampleStatistics(0, 0, 0.0, 0.0, 0.0, 0.0, False, False, ())
-    cycle_values = [sample.cycles for sample in materialized]
+        return SampleStatistics(0, 0.0, 0.0, 0.0, 0.0, 0.0, False, False, ())
+    cycle_values = [sample.cycles_per_invocation for sample in materialized]
     median_cycles = float(statistics.median(cycle_values))
     abs_deviation = [abs(value - median_cycles) for value in cycle_values]
     unsupported = sorted({name for sample in materialized for name in sample.unsupported_counters})
@@ -211,7 +219,7 @@ def compute_sample_statistics(samples: Iterable[NormalizedSample]) -> SampleStat
     )
 
 
-def _percentile(values: list[int], percentile: float) -> float:
+def _percentile(values: list[float], percentile: float) -> float:
     ordered = sorted(values)
     if len(ordered) == 1:
         return float(ordered[0])

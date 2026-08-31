@@ -837,7 +837,12 @@ def _build_convolve_case(
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    comparison = dict(descriptor.get("resolved_comparison", {"mode": "exact_int"}))
+    # Falls back to bit-exact only for integer activations; FP16/FP32 Convolve
+    # legitimately diverges between MVE and scalar accumulation and must use a float
+    # atol/rtol default instead (matches the DepthwiseConv builder's same policy).
+    comparison = dict(
+        descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else {"mode": "float", "atol": 0.001, "rtol": 0.001})
+    )
     manifest = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,
@@ -3177,7 +3182,12 @@ def _build_abs_case(
         "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        # Falls back to bit-exact only for integer activations; FP16/FP32 Abs
+        # legitimately diverges between MVE and scalar accumulation and must use a float
+        # atol/rtol default instead (matches the Convolve/DepthwiseConv builders' policy).
+        "correctness_comparison": dict(
+            descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else {"mode": "float", "atol": 0.001, "rtol": 0.001})
+        ),
         "scratch_buffer": {"bytes": 0},
         "required_target_capabilities": [cmsis_function],
         "repeated_invocation_safe": True,
@@ -3584,7 +3594,7 @@ def _write_elementwise_binary_bundle(
     include_output_n: bool = False,
 ) -> CaseBundle:
     """Shared CaseBundle assembly for BasicMathFunctions binary elementwise ops
-    (Add/Sub/Mul/Maximum/Minimum), parameterized over activation_dtype (S8 or S16)."""
+    (Add/Sub/Mul/Maximum/Minimum), parameterized over activation_dtype (S8, S16, FP32, or FP16)."""
     descriptor = generated_test.descriptor
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
@@ -3628,7 +3638,13 @@ def _write_elementwise_binary_bundle(
         "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
         "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
         "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        # Falls back to bit-exact only for integer activations; FP16/FP32 Add/Sub/Mul/
+        # Maximum/Minimum legitimately diverge between MVE and scalar accumulation and must
+        # use a float atol/rtol default instead (matches the Convolve/DepthwiseConv/Abs
+        # builders' policy).
+        "correctness_comparison": dict(
+            descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else {"mode": "float", "atol": 0.001, "rtol": 0.001})
+        ),
         "scratch_buffer": {"bytes": 0},
         "required_target_capabilities": [f"{cmsis_function}"],
         "repeated_invocation_safe": True,
