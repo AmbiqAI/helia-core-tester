@@ -140,6 +140,19 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("BasicMathFunctions/mul.yaml", "BasicMathFunctions/mul_float.yaml"),
         template_relpath="BasicMathFunctions/mul",
     ),
+    "ChunkedEquivalence": _spec(
+        "ChunkedEquivalence",
+        "BasicMathFunctions",
+        "chunked_equivalence",
+        "OpChunkedEquivalence",
+        "BasicMathFunctions/chunked_equivalence.yaml",
+        "BasicMathFunctions/chunked_equivalence",
+        rationale=(
+            "Block-size invariance property cases (issue #81): one full-length elementwise "
+            "call is the bit-exact reference for chunked calls over the same data, so "
+            "packed-vs-tail defects like ns-cmsis-nn#343 are caught without golden data."
+        ),
+    ),
     "Maximum": _spec(
         "Maximum",
         "BasicMathFunctions",

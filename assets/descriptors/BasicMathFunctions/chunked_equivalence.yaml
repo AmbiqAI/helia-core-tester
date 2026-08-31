@@ -1,0 +1,112 @@
+# Chunked-equivalence (block-size invariance) property cases, issue #81.
+#
+# Each case runs the SAME input data through (a) one full-length elementwise
+# call over element_count elements and (b) a sequence of calls over
+# consecutive slices (chunk_sizes), asserting bit-exact equality. (a) IS the
+# reference for (b): no golden data is used. Generation plants sign-diverse
+# operands inside the packed region and fails if value + input_offset does
+# not span negative and positive there (the ns-cmsis-nn#343 trigger was
+# sign-dependent and lived only in the packed DSP loop).
+#
+# Two chunk patterns per kernel/dtype keep runtime bounded:
+#   singles: [1] * N        -> pass (b) is pure scalar-tail; pass (a) runs the
+#                              packed loop for the aligned prefix. This is the
+#                              exact ns-cmsis-nn#343 discriminator.
+#   offcut:  mixed sizes    -> packed loops start on odd boundaries; every
+#                              mod-4 and mod-2 (s16 dual-halfword) tail length
+#                              is exercised.
+operator: ChunkedEquivalence
+name: chunked_equivalence_add_singles_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: add
+element_count: 23
+chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_add_offcut_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: add
+element_count: 29
+chunk_sizes: [3, 8, 7, 5, 4, 2]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_sub_singles_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: sub
+element_count: 23
+chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_sub_offcut_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: sub
+element_count: 29
+chunk_sizes: [3, 8, 7, 5, 4, 2]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_mul_singles_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: mul
+element_count: 23
+chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_mul_offcut_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: mul
+element_count: 29
+chunk_sizes: [3, 8, 7, 5, 4, 2]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_add_singles_s16
+activation_dtype: S16
+weight_dtype: S8
+kernel: add
+element_count: 23
+chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_add_offcut_s16
+activation_dtype: S16
+weight_dtype: S8
+kernel: add
+element_count: 29
+chunk_sizes: [3, 8, 7, 5, 4, 2]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_sub_singles_s16
+activation_dtype: S16
+weight_dtype: S8
+kernel: sub
+element_count: 23
+chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_sub_offcut_s16
+activation_dtype: S16
+weight_dtype: S8
+kernel: sub
+element_count: 29
+chunk_sizes: [3, 8, 7, 5, 4, 2]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_mul_singles_s16
+activation_dtype: S16
+weight_dtype: S8
+kernel: mul
+element_count: 23
+chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_mul_offcut_s16
+activation_dtype: S16
+weight_dtype: S8
+kernel: mul
+element_count: 29
+chunk_sizes: [3, 8, 7, 5, 4, 2]
