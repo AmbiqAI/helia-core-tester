@@ -11,8 +11,14 @@ skipped.
 
 Grounding of the v1 entries:
 
-- drop_conv_bias:        tester#77 (int conv suite ships all-zero bias, so a
-                         kernel that drops the bias term still passes).
+- drop_conv_bias:        tester#77. The s8/s16 int conv suite ships all-zero
+                         bias, so every s8/s16 case that executes the mutated
+                         code passes with the bias term deleted; the s4 suite
+                         ships nonzero bias and detects the drop. Covers the
+                         s8_s16 kernel, the s4 kernel, the 1xN/1x1 non-fast
+                         route (arm_nn_mat_mult_nt_t_s8), the grouped
+                         row-offset kernel, and the arm_convolve_s8 leftover
+                         loop.
 - packed_sign_mask_343:  ns-cmsis-nn#343 (packed DSP loop masked the
                          sign-extended halfword with & 0x0FFFF, disagreeing
                          with its own scalar tail). The patch removes the
@@ -87,8 +93,29 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
                 replacement="sum = 0; /* MUTANT drop_conv_bias */",
                 count=1,
             ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_nn_mat_mult_kernel_s4_s16.c",
+                pattern="const int32_t *bias = output_bias;",
+                replacement="const int32_t *bias = 0; (void)output_bias; /* MUTANT drop_conv_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_nn_mat_mult_kernel_row_offset_s8_s16.c",
+                pattern="const int32_t *bias = output_bias;",
+                replacement="const int32_t *bias = 0; (void)output_bias; /* MUTANT drop_conv_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/NNSupportFunctions/arm_nn_mat_mult_nt_t_s8.c",
+                pattern="    (void)lhs_offset;",
+                replacement="    (void)lhs_offset;\n    bias = 0; /* MUTANT drop_conv_bias */",
+                count=1,
+            ),
         ),
-        expected_detected_by="int conv golden cases with a nonzero bias (tester#77 predicts none exist)",
+        expected_detected_by=(
+            "conv golden cases with a nonzero bias: the s4 suite ships nonzero bias and kills it; "
+            "every s8/s16 case that executes the mutated code survives (tester#77)"
+        ),
         refs=("AmbiqAI/helia-core-tester#77",),
     ),
     Mutant(
@@ -99,7 +126,7 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             Edit(
                 relpath="Source/BasicMathFunctions/arm_elementwise_add_s8.c",
                 pattern=r"\(int16_t\)\((?P<lane>[ab]_[12]) & 0x0FFFF\)",
-                replacement=r"(\g<lane> & 0x0FFFF)",
+                replacement=r"(\g<lane> & 0x0FFFF) /* MUTANT packed_sign_mask_343 */",
                 count=4,
                 regex=True,
             ),
@@ -167,13 +194,13 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             Edit(
                 relpath="Include/Internal/arm_nn_broadcast_walk.h",
                 pattern=r"bw_r_1 = bw_p_1 \+ bw_h \* bw_h_stride_1;",
-                replacement="bw_r_1 = bw_p_1 + 0 * bw_h_stride_1;",
+                replacement="bw_r_1 = bw_p_1 + 0 * bw_h_stride_1; /* MUTANT broadcast_row_reuse */",
                 count=1,
                 regex=True,
             ),
         ),
         expected_detected_by="broadcast cases where input 1 has more than one row and the walk descends to rows",
-        refs=(),
+        refs=("ns-cmsis-nn#321",),
     ),
 )
 

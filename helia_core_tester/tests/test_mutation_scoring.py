@@ -7,21 +7,35 @@ not compile kernels and need neither gcc nor an ns-cmsis-nn checkout.
 """
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
 from helia_core_tester.mutation.catalog import MUTANTS_V1, Edit, Mutant, get_mutants
-from helia_core_tester.mutation.host_build import CaseResult, discover_cases
-from helia_core_tester.mutation.patching import AppliedMutant, MutantApplyError
+from helia_core_tester.mutation.host_build import (
+    KIND_CASE_FAIL,
+    KIND_COMPILE_FAILED,
+    KIND_NO_SOURCE,
+    KIND_PASS,
+    KIND_TIMEOUT,
+    CaseResult,
+    build_and_run_case,
+    discover_cases,
+)
+from helia_core_tester.mutation.patching import AppliedMutant, MutantApplyError, verify_pristine
 from helia_core_tester.mutation.runner import (
     STATUS_APPLY_FAILED,
+    STATUS_BUILD_FAILED,
     STATUS_KILLED,
     STATUS_SURVIVED,
     MutantOutcome,
     MutationReport,
     prepare_tree,
+    run_mutation_scoring,
 )
+
+TESTER_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _mutant(edits) -> Mutant:
@@ -199,3 +213,166 @@ class TestReportFormat:
         )
         assert [o.mutant.mutant_id for o in report.apply_failures] == ["tail_loop_off_by_one"]
         assert "APPLY_FAILED" in report.render_text()
+
+
+class TestFailureKinds:
+    def test_killed_only_for_behavioural_failures(self):
+        assert CaseResult("c", "F", False, kind=KIND_CASE_FAIL).killed
+        assert CaseResult("c", "F", False, kind=KIND_TIMEOUT).killed
+        assert not CaseResult("c", "F", False, kind=KIND_COMPILE_FAILED).killed
+        assert not CaseResult("c", "F", False, kind=KIND_NO_SOURCE).killed
+        assert not CaseResult("c", "F", True, kind=KIND_PASS).killed
+
+    def test_compile_failure_is_tagged_not_killed(self, tmp_path: Path):
+        """A case binary whose compile fails must come back KIND_COMPILE_FAILED."""
+        case = tmp_path / "Fam" / "case_a"
+        (case / "includes").mkdir(parents=True)
+        (case / "case_a.c").write_text("int main(void){return 0;}\n")
+        (tmp_path / "tree" / "Include").mkdir(parents=True)
+        result = build_and_run_case(
+            case,
+            tmp_path / "tree",
+            tmp_path / "lib.a",
+            tmp_path / "runtime.o",
+            TESTER_ROOT,
+            tmp_path / "bin",
+            cc="/bin/false",  # every compile invocation fails
+        )
+        assert not result.passed
+        assert result.kind == KIND_COMPILE_FAILED
+        assert not result.killed
+
+    def test_missing_source_is_tagged(self, tmp_path: Path):
+        case = tmp_path / "Fam" / "empty_case"
+        (case / "includes").mkdir(parents=True)
+        result = build_and_run_case(
+            case, tmp_path, tmp_path / "lib.a", tmp_path / "rt.o", TESTER_ROOT, tmp_path / "bin"
+        )
+        assert result.kind == KIND_NO_SOURCE
+        assert not result.killed
+
+
+def _crafted_checkout(tmp_path: Path) -> Path:
+    """A minimal fake ns-cmsis-nn checkout with one host-compilable kernel."""
+    checkout = tmp_path / "checkout"
+    for sub in (
+        "Source/BasicMathFunctions",
+        "Source/ConvolutionFunctions",
+        "Source/NNSupportFunctions",
+        "Source/FullyConnectedFunctions",
+        "Source/ActivationFunctions",
+    ):
+        (checkout / sub).mkdir(parents=True)
+    (checkout / "Include").mkdir()
+    (checkout / "Source" / "BasicMathFunctions" / "kernel.c").write_text(
+        "#include <stdint.h>\n"
+        "int32_t helia_mut_test_kernel(void) { return 42; }\n"
+    )
+    return checkout
+
+
+def _crafted_case(tmp_path: Path) -> Path:
+    case = tmp_path / "cases" / "CraftedFamily" / "crafted_case"
+    (case / "includes").mkdir(parents=True)
+    (case / "crafted_case.c").write_text(
+        "#include <stdint.h>\n"
+        "extern void helia_test_finish(int32_t failures);\n"
+        "int32_t helia_mut_test_kernel(void);\n"
+        "int main(void) { helia_test_finish(helia_mut_test_kernel() == 42 ? 0 : 1); return 0; }\n"
+    )
+    return case
+
+
+_LINK_BREAKER = Mutant(
+    mutant_id="link_breaker",
+    description="renames the kernel symbol so every case binary fails to link",
+    family="Test",
+    edits=(
+        Edit(
+            "Source/BasicMathFunctions/kernel.c",
+            "helia_mut_test_kernel(void) { return 42; }",
+            "helia_mut_test_kernel_gone(void) { return 42; } /* MUTANT link_breaker */",
+            count=1,
+        ),
+    ),
+    expected_detected_by="nothing: this must be BUILD_FAILED, not a kill",
+)
+
+_WRONG_VALUE = Mutant(
+    mutant_id="wrong_value",
+    description="kernel returns the wrong value",
+    family="Test",
+    edits=(
+        Edit(
+            "Source/BasicMathFunctions/kernel.c",
+            "return 42;",
+            "return 41; /* MUTANT wrong_value */",
+            count=1,
+        ),
+    ),
+    expected_detected_by="the crafted case",
+)
+
+needs_gcc = pytest.mark.skipif(shutil.which("gcc") is None, reason="host gcc required")
+
+
+@needs_gcc
+class TestRunnerFailureClassification:
+    """End-to-end crafted-mutant runs on a fabricated checkout (host gcc)."""
+
+    def test_all_cases_compile_failing_is_build_failed_not_killed(self, tmp_path: Path):
+        checkout = _crafted_checkout(tmp_path)
+        case = _crafted_case(tmp_path)
+        report = run_mutation_scoring(
+            cmsis_nn_root=checkout,
+            case_dirs=[case],
+            mutants=[_LINK_BREAKER, _WRONG_VALUE],
+            tester_root=TESTER_ROOT,
+            workdir=tmp_path / "work",
+            log=lambda *_: None,
+        )
+        by_id = {o.mutant.mutant_id: o for o in report.outcomes}
+        broken = by_id["link_breaker"]
+        assert broken.status == STATUS_BUILD_FAILED
+        assert broken.killed_by == []
+        assert "failed to compile/link" in broken.detail
+        # BUILD_FAILED surfaces alongside APPLY_FAILED so the run exits nonzero.
+        assert broken in report.apply_failures
+        # The genuine behavioural mutant is still killed by the same case.
+        assert by_id["wrong_value"].status == STATUS_KILLED
+        assert by_id["wrong_value"].killed_by == ["crafted_case"]
+
+    def test_poisoned_restore_raises(self, tmp_path: Path, monkeypatch):
+        """verify_pristine must abort the run when a restore leaves mutant markers."""
+        checkout = _crafted_checkout(tmp_path)
+        case = _crafted_case(tmp_path)
+        monkeypatch.setattr(AppliedMutant, "_restore", lambda self: None)
+        with pytest.raises(RuntimeError, match="not pristine"):
+            run_mutation_scoring(
+                cmsis_nn_root=checkout,
+                case_dirs=[case],
+                mutants=[_WRONG_VALUE],
+                tester_root=TESTER_ROOT,
+                workdir=tmp_path / "work",
+                log=lambda *_: None,
+            )
+
+
+class TestVerifyPristine:
+    def test_raises_on_leftover_marker(self, tree: Path):
+        target = tree / "Source" / "BasicMathFunctions" / "kernel.c"
+        target.write_text(target.read_text() + "/* MUTANT leftover */\n")
+        with pytest.raises(RuntimeError, match="not pristine"):
+            verify_pristine(tree, MUTANTS_V1)
+
+    def test_passes_on_clean_tree(self, tree: Path):
+        verify_pristine(tree, MUTANTS_V1)
+
+    def test_every_v1_edit_leaves_a_marker_for_verify_pristine(self):
+        """verify_pristine can only catch a poisoned restore if every
+        replacement carries the MUTANT marker it scans for."""
+        for mutant in MUTANTS_V1:
+            for edit in mutant.edits:
+                assert "/* MUTANT " in edit.replacement, (
+                    f"{mutant.mutant_id}: replacement for {edit.relpath} has no marker"
+                )

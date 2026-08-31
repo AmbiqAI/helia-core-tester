@@ -47,12 +47,30 @@ class HostBuildError(RuntimeError):
     pass
 
 
+# Failure kinds for CaseResult. Only genuine behavioural divergence
+# (KIND_CASE_FAIL) or a hang (KIND_TIMEOUT) may count as a mutant kill; a
+# case binary that fails to compile or link under a mutant proves nothing
+# about the case's discriminating power and must never be scored as a kill.
+KIND_PASS = "pass"
+KIND_CASE_FAIL = "case_fail"
+KIND_TIMEOUT = "timeout"
+KIND_COMPILE_FAILED = "compile_failed"
+KIND_NO_SOURCE = "no_source"
+KILL_KINDS = (KIND_CASE_FAIL, KIND_TIMEOUT)
+
+
 @dataclass
 class CaseResult:
     name: str
     family: str
     passed: bool
     detail: str = ""
+    kind: str = KIND_CASE_FAIL
+
+    @property
+    def killed(self) -> bool:
+        """True when this failure is evidence against the mutant."""
+        return not self.passed and self.kind in KILL_KINDS
 
 
 def _run(cmd: Sequence[str], **kwargs) -> subprocess.CompletedProcess:
@@ -166,7 +184,7 @@ def build_and_run_case(
     family = case_dir.parent.name
     sources = sorted(case_dir.glob("*.c"))
     if not sources:
-        return CaseResult(name, family, False, "no case source found")
+        return CaseResult(name, family, False, "no case source found", kind=KIND_NO_SOURCE)
     binary = bin_dir / name
     cmd = [
         cc,
@@ -187,15 +205,15 @@ def build_and_run_case(
     ]
     proc = _run(cmd)
     if proc.returncode != 0:
-        return CaseResult(name, family, False, f"compile failed:\n{proc.stderr[-2000:]}")
+        return CaseResult(name, family, False, f"compile failed:\n{proc.stderr[-2000:]}", kind=KIND_COMPILE_FAILED)
     try:
         run_proc = _run([str(binary)], timeout=timeout_s)
     except subprocess.TimeoutExpired:
-        return CaseResult(name, family, False, f"timeout after {timeout_s}s")
+        return CaseResult(name, family, False, f"timeout after {timeout_s}s", kind=KIND_TIMEOUT)
     if run_proc.returncode != 0:
         tail = (run_proc.stdout or "").strip().splitlines()
-        return CaseResult(name, family, False, tail[-1] if tail else f"exit {run_proc.returncode}")
-    return CaseResult(name, family, True)
+        return CaseResult(name, family, False, tail[-1] if tail else f"exit {run_proc.returncode}", kind=KIND_CASE_FAIL)
+    return CaseResult(name, family, True, kind=KIND_PASS)
 
 
 def run_all_cases(

@@ -15,7 +15,11 @@ Given an ns-cmsis-nn checkout and a set of generated cases, the runner:
    mutants (vacuous-case candidates).
 
 A mutant whose patch fails to apply is reported as APPLY_FAILED and makes
-the run exit nonzero; source drift must be loud.
+the run exit nonzero; source drift must be loud. A mutant under which every
+case binary fails to compile/link is BUILD_FAILED, never a kill -- a compile
+failure proves nothing about a case's discriminating power. After every
+mutant's restore the tree is checked for leftover mutant markers
+(verify_pristine); a poisoned restore aborts the run.
 """
 
 from __future__ import annotations
@@ -29,12 +33,13 @@ from typing import Dict, List, Optional, Sequence
 
 from helia_core_tester.mutation.catalog import Mutant
 from helia_core_tester.mutation.host_build import (
+    KIND_COMPILE_FAILED,
     CaseResult,
     build_kernel_lib,
     build_runtime_obj,
     run_all_cases,
 )
-from helia_core_tester.mutation.patching import AppliedMutant, MutantApplyError
+from helia_core_tester.mutation.patching import AppliedMutant, MutantApplyError, verify_pristine
 
 STATUS_KILLED = "KILLED"
 STATUS_SURVIVED = "SURVIVED"
@@ -79,7 +84,7 @@ class MutationReport:
             "baseline": {
                 "total_cases": self.baseline_total,
                 "failed_cases": [
-                    {"name": r.name, "family": r.family, "detail": r.detail}
+                    {"name": r.name, "family": r.family, "kind": r.kind, "detail": r.detail}
                     for r in self.baseline_failed
                 ],
                 "scored_cases": self.scored_cases,
@@ -195,10 +200,29 @@ def run_mutation_scoring(
         except MutantApplyError as exc:
             outcomes.append(MutantOutcome(mutant, STATUS_APPLY_FAILED, detail=str(exc)))
             log(f"[mutation] APPLY FAILED: {exc}")
+            verify_pristine(tree, mutants)
             continue
-        killed_by = [r.name for r in results if not r.passed]
+        # The mutant is restored here; a poisoned restore must fail loudly
+        # before the next mutant builds on top of it.
+        verify_pristine(tree, mutants)
+        # A case binary that fails to compile/link under the mutant proves
+        # nothing about the case -- only genuine behavioural divergence (or a
+        # hang) counts as a kill.
+        compile_failed = [r for r in results if r.kind == KIND_COMPILE_FAILED]
+        killed_by = [r.name for r in results if r.killed]
+        if compile_failed and len(compile_failed) == len(results):
+            detail = (
+                f"all {len(results)} case binaries failed to compile/link under this mutant; "
+                f"first: {compile_failed[0].name}: {compile_failed[0].detail[:1000]}"
+            )
+            outcomes.append(MutantOutcome(mutant, STATUS_BUILD_FAILED, detail=detail))
+            log(f"[mutation] mutant {mutant.mutant_id}: {STATUS_BUILD_FAILED} (every case binary)")
+            continue
         status = STATUS_KILLED if killed_by else STATUS_SURVIVED
-        outcomes.append(MutantOutcome(mutant, status, killed_by=killed_by))
+        detail = ""
+        if compile_failed:
+            detail = f"{len(compile_failed)} case binary(ies) failed to compile/link (not counted as kills)"
+        outcomes.append(MutantOutcome(mutant, status, killed_by=killed_by, detail=detail))
         log(f"[mutation] mutant {mutant.mutant_id}: {status} ({len(killed_by)} case(s))")
 
     # The pristine library is rebuilt from the restored tree so a later
