@@ -888,6 +888,12 @@ def test_top_level_cmake_no_longer_uses_unity() -> None:
     assert "target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn retarget cmsis_startup helia_test_runtime)" in text
     assert "target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn nsx::board nsx::core nsx::perf helia_test_runtime)" in text
     assert "target_compile_definitions(helia_test_runtime PRIVATE $<IF:$<BOOL:${HELIA_HARDWARE_BUILD}>,HELIA_HARDWARE_BUILD,USING_FVP_CORSTONE_300>)" in text
+    # helia_test_runtime no longer carries its own arm_nn_abs_f32/f16 compat
+    # wrapper around arm_abs_f32/f16 -- that pre-rename CMSIS-NN pair no longer
+    # exists in the checked-in ns-cmsis-nn revision, which now exports the
+    # "stable" arm_nn_abs_f32/f16 names directly (see arm_nnfunctions_flt.h),
+    # making the wrapper both dead code and (once ARM_NN_ENABLE_F32/F16 are
+    # on) a duplicate-symbol link error against the real function.
     runtime = (_repo_root() / "src" / "test_runtime" / "helia_test_runtime.c").read_text()
-    assert "arm_nn_abs_f32" in runtime and "arm_abs_f32" in runtime
-    assert "arm_nn_abs_f16" in runtime and "arm_abs_f16" in runtime
+    assert "arm_abs_f32" not in runtime
+    assert "arm_abs_f16" not in runtime
