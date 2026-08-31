@@ -1,0 +1,97 @@
+#include "{{ name }}_chunked_equivalence.h"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+/*
+ * Chunked-equivalence (block-size invariance) case, helia-core-tester issue #81.
+ *
+ * Processing N elements in one call must be bit-identical to processing the
+ * same data as consecutive slices. The full call is the reference for the
+ * chunked pass: no golden data is used or needed. A kernel whose
+ * packed/vectorised loop disagrees with its own scalar tail on the same
+ * operands (e.g. the sign-dropping DSP loops of ns-cmsis-nn#343) fails here
+ * with any chunk pattern that changes which path an element takes.
+ */
+
+static {{ output_dtype }} {{ name }}_output_full[{{ name|upper }}_ELEMENT_COUNT];
+static {{ output_dtype }} {{ name }}_output_chunked[{{ name|upper }}_ELEMENT_COUNT];
+
+static int32_t {{ name }}_kernel_call(
+    const {{ input_dtype }} *input1,
+    const {{ input_dtype }} *input2,
+    {{ output_dtype }} *output,
+    int32_t block_size)
+{
+    {% if call_style == 'addsub' %}
+    return {{ kernel_fn }}(
+        input1,
+        input2,
+        {{ input_1_offset }},      // input_1_offset
+        {{ input_1_mult }},        // input_1_mult
+        {{ input_1_shift }},       // input_1_shift
+        {{ input_2_offset }},      // input_2_offset
+        {{ input_2_mult }},        // input_2_mult
+        {{ input_2_shift }},       // input_2_shift
+        {{ left_shift }},          // left_shift
+        output,
+        {{ out_offset }},          // out_offset
+        {{ out_mult }},            // out_mult
+        {{ out_shift }},           // out_shift
+        {{ out_activation_min }},  // out_activation_min
+        {{ out_activation_max }},  // out_activation_max
+        block_size
+    );
+    {% else %}
+    return {{ kernel_fn }}(
+        input1,
+        input2,
+        {{ input_1_offset }},      // input_1_offset
+        {{ input_2_offset }},      // input_2_offset
+        output,
+        {{ out_offset }},          // out_offset
+        {{ out_mult }},            // out_mult
+        {{ out_shift }},           // out_shift
+        {{ out_activation_min }},  // out_activation_min
+        {{ out_activation_max }},  // out_activation_max
+        block_size
+    );
+    {% endif %}
+}
+
+int32_t {{ name }}_test_case_run(void)
+{
+    // (a) Reference: one full-length call over all elements.
+    int32_t status = {{ name }}_kernel_call(
+        {{ name }}_input1, {{ name }}_input2,
+        {{ name }}_output_full, {{ name|upper }}_ELEMENT_COUNT);
+    HELIA_VALIDATE_STATUS("{{ validation_label }} full", status);
+
+    // (b) Same data, processed as consecutive slices with varied block sizes.
+    int32_t offset = 0;
+    for (int32_t chunk = 0; chunk < {{ name|upper }}_CHUNK_COUNT; ++chunk)
+    {
+        const int32_t chunk_size = {{ name }}_chunk_sizes[chunk];
+        status = {{ name }}_kernel_call(
+            {{ name }}_input1 + offset, {{ name }}_input2 + offset,
+            {{ name }}_output_chunked + offset, chunk_size);
+        HELIA_VALIDATE_STATUS("{{ validation_label }} chunk", status);
+        offset += chunk_size;
+    }
+
+    // (a) and (b) must agree bit-exactly on every element.
+    int failures = 0;
+    HELIA_VALIDATE_OUTPUTS(
+        {{ validation_mode_token | default("EXACT_INT") }},
+        {{ name }}_output_chunked,
+        {{ name }}_output_full,
+        {{ name|upper }}_ELEMENT_COUNT,
+        {{ validation_tolerance | default(0) }},
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
+        {{ validation_report_limit | default(20) }},
+        failures
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
+}
+
+{% include "common/standalone/main.j2" %}
