@@ -38,6 +38,12 @@ CMakeCache.txt
 CMakeFiles/
 *.cmake
 !CMakeLists.txt
+# App-owned NSX hardware-build glue (not vendor/generated -- see
+# cmake/nsx/nsx_app_bootstrap.cmake's own header comment). Everything else
+# under cmake/nsx/ (toolchains/, socs -> symlink into modules/nsx-ambiq-sdk)
+# stays ignored: machine-specific or vendored.
+!cmake/nsx/nsx_app_bootstrap.cmake
+!cmake/nsx/nsx_helpers.cmake
 *.a
 *.o
 *.elf
