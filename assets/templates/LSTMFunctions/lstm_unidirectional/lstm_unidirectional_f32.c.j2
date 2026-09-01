@@ -1,10 +1,58 @@
 #include "{{ name }}_lstm_unidirectional.h"
 {% include "common/standalone/runtime_common.j2" %}
 
+{% if temp_sizers_available %}
+/*
+ * ns-cmsis-nn temp-buffer sizer detection: DETECTED at generation time --
+ * {{ kernel_fn }}_temp{1,2}_get_buffer_size() were found in the configured
+ * ns-cmsis-nn checkout's public Include/ headers. The float LSTM kernels
+ * never touch temp1/temp2 (the sizers report 0), so this test passes NULL
+ * for both -- proving that contract on-target -- and
+ * {{ name }}_check_temp_sizers() asserts the sizer results before the kernel
+ * runs. Refs AmbiqAI/ns-cmsis-nn#377, helia-core-tester#71.
+ */
+{% endif %}
 static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
+{% if not temp_sizers_available %}
 static {{ data_dtype }} {{ name }}_temp1[{{ cell_state_size }}];
 static {{ data_dtype }} {{ name }}_temp2[{{ cell_state_size }}];
+{% endif %}
 static {{ data_dtype }} {{ name }}_cell_state[{{ cell_state_size }}];
+{% if temp_sizers_available %}
+
+static int {{ name }}_check_temp_sizers(void)
+{
+    static {{ lstm_params_type }} sizer_params;
+    sizer_params.time_major = {{ time_major_literal }};
+    sizer_params.batch_size = {{ batch_size }};
+    sizer_params.time_steps = {{ time_steps }};
+    sizer_params.input_size = {{ input_size }};
+    sizer_params.hidden_size = {{ hidden_size }};
+
+    /* The float LSTM steps compute their gates in automatics; temp1/temp2 are
+     * never dereferenced, so both sizers report 0 for any valid params. */
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp1_bytes",
+                                 0,
+                                 {{ kernel_fn }}_temp1_get_buffer_size(&sizer_params));
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp2_bytes",
+                                 0,
+                                 {{ kernel_fn }}_temp2_get_buffer_size(&sizer_params));
+
+    /* Contract edge: NULL params reports -1. */
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp1_null_params",
+                                 -1,
+                                 {{ kernel_fn }}_temp1_get_buffer_size(NULL));
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp2_null_params",
+                                 -1,
+                                 {{ kernel_fn }}_temp2_get_buffer_size(NULL));
+
+    return 0;
+}
+{% endif %}
 
 static int32_t run_lstm(void)
 {
@@ -41,8 +89,14 @@ static int32_t run_lstm(void)
         },
     };
     {{ lstm_context_type }} buffers = {
+{% if temp_sizers_available %}
+        /* Sized by {{ kernel_fn }}_temp{1,2}_get_buffer_size(): 0 bytes. */
+        .temp1 = NULL,
+        .temp2 = NULL,
+{% else %}
         .temp1 = {{ name }}_temp1,
         .temp2 = {{ name }}_temp2,
+{% endif %}
         .cell_state = {{ name }}_cell_state,
     };
 
@@ -51,6 +105,14 @@ static int32_t run_lstm(void)
 
 int32_t {{ name }}_test_case_run(void)
 {
+{% if temp_sizers_available %}
+    int sizer_failures = {{ name }}_check_temp_sizers();
+    if (sizer_failures != 0)
+    {
+        return sizer_failures;
+    }
+
+{% endif %}
     int32_t status = run_lstm();
     HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);
 

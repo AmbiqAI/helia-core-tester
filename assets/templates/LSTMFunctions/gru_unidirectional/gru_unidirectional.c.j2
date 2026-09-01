@@ -1,8 +1,76 @@
 #include "{{ name }}_gru_unidirectional.h"
 {% include "common/standalone/runtime_common.j2" %}
 
+{% if temp_sizers_available %}
+/*
+ * ns-cmsis-nn temp-buffer sizer detection: DETECTED at generation time --
+ * {{ kernel_fn }}_temp1_get_buffer_size() was found in the configured
+ * ns-cmsis-nn checkout's public Include/ headers, so this test sizes temp1
+ * from the sizer contract (reset_after != 0 ? 0 : hidden_size elements)
+ * instead of the legacy batch_size * hidden_size heuristic, and
+ * {{ name }}_check_temp_sizers() validates the sizer on-target before the
+ * kernel runs. Refs AmbiqAI/ns-cmsis-nn#377, helia-core-tester#71.
+ */
+{% endif %}
 static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
+{% if temp_sizers_available %}
+{% if reset_after %}
+/* {{ kernel_fn }}_temp1_get_buffer_size() reports 0 for reset_after layers:
+ * temp1 is never dereferenced, so NULL is passed below to prove it. */
+{% else %}
+/* Static worst-case allocation of exactly the expected sizer result
+ * ({{ gru_temp1_expected_bytes }} bytes); equality with the on-target sizer
+ * is asserted in {{ name }}_check_temp_sizers(). */
+static {{ data_dtype }} {{ name }}_temp1[{{ hidden_size }}];
+{% endif %}
+
+static int {{ name }}_check_temp_sizers(void)
+{
+    static {{ gru_params_type }} sizer_params;
+    sizer_params.time_major = {{ time_major_literal }};
+    sizer_params.batch_size = {{ batch_size }};
+    sizer_params.time_steps = {{ time_steps }};
+    sizer_params.input_size = {{ input_size }};
+    sizer_params.hidden_size = {{ hidden_size }};
+    sizer_params.reset_after = {{ reset_after_literal }};
+
+    HELIA_VALIDATE_SCALAR_EQ_INT("GRU_TEMP_SIZERS",
+                                 "temp1_bytes",
+                                 {{ gru_temp1_expected_bytes }},
+                                 {{ kernel_fn }}_temp1_get_buffer_size(&sizer_params));
+{% if not reset_after %}
+    HELIA_VALIDATE_SCALAR_EQ_INT("GRU_TEMP_SIZERS",
+                                 "temp1_capacity_bytes",
+                                 (int)sizeof({{ name }}_temp1),
+                                 {{ kernel_fn }}_temp1_get_buffer_size(&sizer_params));
+{% endif %}
+
+    /* Flipping reset_after exercises the other branch of the sizer's
+     * reset_after != 0 ? 0 : hidden_size * element contract in this run. */
+    sizer_params.reset_after = !{{ reset_after_literal }};
+    HELIA_VALIDATE_SCALAR_EQ_INT("GRU_TEMP_SIZERS",
+                                 "temp1_bytes_flipped_reset_after",
+                                 {{ gru_temp1_expected_bytes_flipped }},
+                                 {{ kernel_fn }}_temp1_get_buffer_size(&sizer_params));
+    sizer_params.reset_after = {{ reset_after_literal }};
+
+    /* Contract edges: NULL params and a negative hidden_size report -1. */
+    HELIA_VALIDATE_SCALAR_EQ_INT("GRU_TEMP_SIZERS",
+                                 "temp1_null_params",
+                                 -1,
+                                 {{ kernel_fn }}_temp1_get_buffer_size(NULL));
+    sizer_params.hidden_size = -1;
+    HELIA_VALIDATE_SCALAR_EQ_INT("GRU_TEMP_SIZERS",
+                                 "temp1_negative_hidden",
+                                 -1,
+                                 {{ kernel_fn }}_temp1_get_buffer_size(&sizer_params));
+    sizer_params.hidden_size = {{ hidden_size }};
+
+    return 0;
+}
+{% else %}
 static {{ data_dtype }} {{ name }}_temp1[{{ hidden_state_size }}];
+{% endif %}
 
 static int32_t run_gru(void)
 {
@@ -33,7 +101,12 @@ static int32_t run_gru(void)
         },
     };
     {{ gru_context_type }} buffers = {
+{% if temp_sizers_available and reset_after %}
+        /* Sized by {{ kernel_fn }}_temp1_get_buffer_size(): 0 bytes. */
+        .temp1 = NULL,
+{% else %}
         .temp1 = {{ name }}_temp1,
+{% endif %}
         .hidden_state = NULL,
     };
 
@@ -42,6 +115,14 @@ static int32_t run_gru(void)
 
 int32_t {{ name }}_test_case_run(void)
 {
+{% if temp_sizers_available %}
+    int sizer_failures = {{ name }}_check_temp_sizers();
+    if (sizer_failures != 0)
+    {
+        return sizer_failures;
+    }
+
+{% endif %}
     int32_t status = run_gru();
     HELIA_VALIDATE_STATUS("{{ validation_label | default("GRU") }}", status);
 
