@@ -233,6 +233,28 @@ class OpGRUUnidirectional(OperationBase):
             "use_bias": use_bias,
         }
 
+        # ns-cmsis-nn#377 / tester#71: generation-time feature probe for the
+        # temp-buffer sizer added by ns-cmsis-nn#381. Detected -> the main
+        # template emits the sizer-calling, sizer-validating variant; absent
+        # -> byte-identical legacy output (safe against ns-cmsis-nn main).
+        from helia_core_tester.generation.utils.temp_sizer_probe import (
+            detect_temp_sizers,
+            gru_temp1_expected_bytes,
+        )
+
+        elem_bytes = 2 if suffix == "f16" else 4
+        context["reset_after"] = reset_after
+        context["temp_sizers_available"] = detect_temp_sizers(
+            [f"{kernel_fn}_temp1_get_buffer_size"],
+            f"GRUUnidirectional[{name}]",
+        )
+        context["gru_temp1_expected_bytes"] = gru_temp1_expected_bytes(
+            reset_after=reset_after, hidden_size=hidden_size, elem_bytes=elem_bytes
+        )
+        context["gru_temp1_expected_bytes_flipped"] = gru_temp1_expected_bytes(
+            reset_after=not reset_after, hidden_size=hidden_size, elem_bytes=elem_bytes
+        )
+
         if fault:
             context["fault"] = fault
             h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.h.j2"

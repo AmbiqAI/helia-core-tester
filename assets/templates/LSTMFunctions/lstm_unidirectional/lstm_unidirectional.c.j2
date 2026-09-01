@@ -2,13 +2,93 @@
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
 
+{% if temp_sizers_available %}
+/*
+ * ns-cmsis-nn temp-buffer sizer detection: DETECTED at generation time --
+ * arm_lstm_unidirectional_{{ dtype }}_temp{1,2}_get_buffer_size() were found in the
+ * configured ns-cmsis-nn checkout's public Include/ headers, so this test
+ * sizes temp1/temp2 from the sizer contract instead of the legacy
+ * LSTM_BUFFER_SIZE heuristic and validates the sizers on-target before the
+ * kernel runs. Refs AmbiqAI/ns-cmsis-nn#377.
+ */
+{% endif %}
 #define LSTM_BUFFER_SIZE ({{ macro_prefix }}HIDDEN_SIZE * {{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS)
 #define LSTM_OUTPUT_SIZE ({{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS * {{ macro_prefix }}HIDDEN_SIZE)
 
+{% if temp_sizers_available %}
+/* Expected sizer results, derived at generation time from this case's shape:
+ * (time_major != 0 ? batch_size : 1) * hidden_size * sizeof(int16_t) -- both
+ * integer LSTM datatypes stage int16_t gate vectors. The buffers are static
+ * worst-case allocations of exactly that figure (bare-metal: no heap), and
+ * {{ name }}_check_temp_sizers() asserts the on-target sizer results match
+ * both the constants and the capacities before run_lstm() uses the buffers. */
+#define LSTM_TEMP_EXPECTED_BYTES {{ lstm_temp_expected_bytes }}
+#define LSTM_TEMP_FLIPPED_EXPECTED_BYTES {{ lstm_temp_expected_bytes_flipped }}
+
+static int16_t buffer1[LSTM_TEMP_EXPECTED_BYTES / 2];
+static int16_t buffer2[LSTM_TEMP_EXPECTED_BYTES / 2];
+{% else %}
 static {{ output_dtype }} buffer1[LSTM_BUFFER_SIZE];
 static {{ output_dtype }} buffer2[LSTM_BUFFER_SIZE];
+{% endif %}
 static {{ output_dtype }} buffer3[LSTM_BUFFER_SIZE];
 static {{ output_dtype }} {{ name }}_output[LSTM_OUTPUT_SIZE];
+{% if temp_sizers_available %}
+
+static int {{ name }}_check_temp_sizers(void)
+{
+    static cmsis_nn_lstm_params sizer_params;
+    sizer_params.time_major = {{ macro_prefix }}TIME_MAJOR;
+    sizer_params.batch_size = {{ macro_prefix }}BATCH_SIZE;
+    sizer_params.time_steps = {{ macro_prefix }}TIME_STEPS;
+    sizer_params.input_size = {{ macro_prefix }}INPUT_SIZE;
+    sizer_params.hidden_size = {{ macro_prefix }}HIDDEN_SIZE;
+
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp1_bytes",
+                                 LSTM_TEMP_EXPECTED_BYTES,
+                                 arm_lstm_unidirectional_{{ dtype }}_temp1_get_buffer_size(&sizer_params));
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp2_bytes",
+                                 LSTM_TEMP_EXPECTED_BYTES,
+                                 arm_lstm_unidirectional_{{ dtype }}_temp2_get_buffer_size(&sizer_params));
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp1_capacity_bytes",
+                                 (int)sizeof(buffer1),
+                                 arm_lstm_unidirectional_{{ dtype }}_temp1_get_buffer_size(&sizer_params));
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp2_capacity_bytes",
+                                 (int)sizeof(buffer2),
+                                 arm_lstm_unidirectional_{{ dtype }}_temp2_get_buffer_size(&sizer_params));
+
+    /* Flipping time_major exercises the other gate_batch branch of the sizer
+     * ((time_major ? batch_size : 1) * hidden_size * sizeof(int16_t)). */
+    sizer_params.time_major = !{{ macro_prefix }}TIME_MAJOR;
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp1_bytes_flipped_time_major",
+                                 LSTM_TEMP_FLIPPED_EXPECTED_BYTES,
+                                 arm_lstm_unidirectional_{{ dtype }}_temp1_get_buffer_size(&sizer_params));
+    sizer_params.time_major = {{ macro_prefix }}TIME_MAJOR;
+
+    /* Contract edges: NULL params and a negative dimension report -1. */
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp1_null_params",
+                                 -1,
+                                 arm_lstm_unidirectional_{{ dtype }}_temp1_get_buffer_size(NULL));
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp2_null_params",
+                                 -1,
+                                 arm_lstm_unidirectional_{{ dtype }}_temp2_get_buffer_size(NULL));
+    sizer_params.hidden_size = -1;
+    HELIA_VALIDATE_SCALAR_EQ_INT("LSTM_TEMP_SIZERS",
+                                 "temp1_negative_hidden",
+                                 -1,
+                                 arm_lstm_unidirectional_{{ dtype }}_temp1_get_buffer_size(&sizer_params));
+    sizer_params.hidden_size = {{ macro_prefix }}HIDDEN_SIZE;
+
+    return 0;
+}
+{% endif %}
 
 static int32_t run_lstm(void)
 {
@@ -242,6 +322,14 @@ static int32_t run_lstm(void)
 
 int32_t {{ name }}_test_case_run(void)
 {
+{% if temp_sizers_available %}
+    int sizer_failures = {{ name }}_check_temp_sizers();
+    if (sizer_failures != 0)
+    {
+        return sizer_failures;
+    }
+
+{% endif %}
     int32_t status = run_lstm();
     HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);
 

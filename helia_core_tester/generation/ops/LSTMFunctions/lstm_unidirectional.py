@@ -304,6 +304,22 @@ class OpLSTMUnidirectional(OperationBase):
                 "use_bias": use_bias,
             }
 
+            # ns-cmsis-nn#377 / tester#71: generation-time feature probe for
+            # the float LSTM temp-buffer sizers added by ns-cmsis-nn#381
+            # (they report 0 -- the float steps never touch temp1/temp2).
+            # Detected -> the main template calls and validates the sizers
+            # and passes NULL temp buffers; absent -> byte-identical legacy
+            # output (safe against ns-cmsis-nn main).
+            from helia_core_tester.generation.utils.temp_sizer_probe import detect_temp_sizers
+
+            context["temp_sizers_available"] = detect_temp_sizers(
+                [
+                    f"{kernel_fn}_temp1_get_buffer_size",
+                    f"{kernel_fn}_temp2_get_buffer_size",
+                ],
+                f"LSTMUnidirectional[{name}]",
+            )
+
             # Issue #56: port of the GRU fault: mechanism
             # (gru_unidirectional.py) -- LSTM previously had no
             # argument-validation coverage at all.
@@ -448,6 +464,32 @@ class OpLSTMUnidirectional(OperationBase):
             "cell_gate_bias_array": fmt(data.tensors["cell_gate_bias"], dtype=bias_cast),
             "output_gate_bias_array": fmt(data.tensors["output_gate_bias"], dtype=bias_cast),
         })
+
+        # ns-cmsis-nn#377 / tester#71: generation-time feature probe for the
+        # integer LSTM temp-buffer sizers added by ns-cmsis-nn#381. Detected
+        # -> the template sizes temp1/temp2 from the sizer contract
+        # ((time_major ? batch_size : 1) * hidden_size * sizeof(int16_t))
+        # and validates the sizers on-target; absent -> byte-identical legacy
+        # output (safe against ns-cmsis-nn main).
+        from helia_core_tester.generation.utils.temp_sizer_probe import (
+            detect_temp_sizers,
+            lstm_int_temp_expected_bytes,
+        )
+
+        dtype_suffix = "s16" if activation_dtype == "S16" else "s8"
+        context["temp_sizers_available"] = detect_temp_sizers(
+            [
+                f"arm_lstm_unidirectional_{dtype_suffix}_temp1_get_buffer_size",
+                f"arm_lstm_unidirectional_{dtype_suffix}_temp2_get_buffer_size",
+            ],
+            f"LSTMUnidirectional[{name}]",
+        )
+        context["lstm_temp_expected_bytes"] = lstm_int_temp_expected_bytes(
+            time_major=time_major, batch_size=batch_size, hidden_size=hidden_size
+        )
+        context["lstm_temp_expected_bytes_flipped"] = lstm_int_temp_expected_bytes(
+            time_major=not time_major, batch_size=batch_size, hidden_size=hidden_size
+        )
 
         output_dir = Path(output_dir)
         includes_api_dir = output_dir / "includes"
