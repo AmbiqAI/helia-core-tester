@@ -9,7 +9,7 @@
  * never touch temp1/temp2 (the sizers report 0), so this test passes NULL
  * for both -- proving that contract on-target -- and
  * {{ name }}_check_temp_sizers() asserts the sizer results before the kernel
- * runs. Refs AmbiqAI/ns-cmsis-nn#377, helia-core-tester#71.
+ * runs. Refs AmbiqAI/ns-cmsis-nn#377.
  */
 {% endif %}
 static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];

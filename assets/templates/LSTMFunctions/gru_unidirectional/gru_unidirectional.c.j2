@@ -9,7 +9,7 @@
  * from the sizer contract (reset_after != 0 ? 0 : hidden_size elements)
  * instead of the legacy batch_size * hidden_size heuristic, and
  * {{ name }}_check_temp_sizers() validates the sizer on-target before the
- * kernel runs. Refs AmbiqAI/ns-cmsis-nn#377, helia-core-tester#71.
+ * kernel runs. Refs AmbiqAI/ns-cmsis-nn#377.
  */
 {% endif %}
 static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];

@@ -10,8 +10,8 @@ checkouts that predate them (a hard circular dependency: this repo's CI pins
 ns-cmsis-nn main, and ns-cmsis-nn#381 cannot merge with failing testers).
 
 So the switch is a generation-time feature probe: grep the configured
-ns-cmsis-nn checkout's public ``Include/`` headers for the exact sizer
-symbols. All symbols present -> the templates emit the sizer-calling,
+ns-cmsis-nn checkout's public ``Include/`` headers for declarations of the
+exact sizer symbols. All symbols present -> the templates emit the sizer-calling,
 sizer-validating variant. Any symbol absent (or no checkout resolvable at
 all) -> the templates emit byte-identical legacy output, so a generate
 against ns-cmsis-nn main is unchanged down to the last byte.
@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -60,14 +61,26 @@ def resolve_cmsis_nn_root() -> Optional[Path]:
     return root
 
 
-def probe_header_symbols(symbols: Iterable[str], cmsis_nn_root: Optional[Path] = None) -> bool:
-    """True iff every symbol appears in the checkout's public Include/ headers.
+def _symbol_declared(symbol: str, text: str) -> bool:
+    """True iff ``symbol`` appears in declaration shape: the symbol followed
+    (modulo whitespace) by an opening parenthesis, at a word boundary.
 
-    A plain substring scan is deliberate: the declarations are plain C
-    prototypes, and a substring is exactly what a wrong-guess probe must not
-    depend on (no regexes over doxygen formatting). Missing checkout, missing
-    Include/, or unreadable headers all mean False -- the legacy templates
-    are always a safe answer.
+    A bare substring scan is not enough: a doxygen comment merely *mentioning*
+    a sizer name (``/* see arm_..._get_buffer_size for details */``) would
+    flip the probe to the sizer variant against a checkout that never declares
+    it -- caught loudly at link time, but the probe should not guess wrong in
+    the first place. Requiring ``symbol(`` pins the match to a prototype (or
+    call), which the public headers only contain as declarations.
+    """
+    return re.search(rf"\b{re.escape(symbol)}\s*\(", text) is not None
+
+
+def probe_header_symbols(symbols: Iterable[str], cmsis_nn_root: Optional[Path] = None) -> bool:
+    """True iff every symbol is declared in the checkout's public Include/
+    headers (declaration shape: ``symbol(`` -- see _symbol_declared).
+
+    Missing checkout, missing Include/, or unreadable headers all mean False
+    -- the legacy templates are always a safe answer.
     """
     root = cmsis_nn_root if cmsis_nn_root is not None else resolve_cmsis_nn_root()
     if root is None or not (root / "Include").is_dir():
@@ -85,7 +98,7 @@ def probe_header_symbols(symbols: Iterable[str], cmsis_nn_root: Optional[Path] =
     if not corpus:
         return False
     text = "\n".join(corpus)
-    return all(symbol in text for symbol in symbols)
+    return all(_symbol_declared(symbol, text) for symbol in symbols)
 
 
 def lstm_int_temp_expected_bytes(*, time_major: bool, batch_size: int, hidden_size: int) -> int:

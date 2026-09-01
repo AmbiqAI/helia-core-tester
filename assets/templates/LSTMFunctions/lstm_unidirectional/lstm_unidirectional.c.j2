@@ -9,7 +9,7 @@
  * configured ns-cmsis-nn checkout's public Include/ headers, so this test
  * sizes temp1/temp2 from the sizer contract instead of the legacy
  * LSTM_BUFFER_SIZE heuristic and validates the sizers on-target before the
- * kernel runs. Refs AmbiqAI/ns-cmsis-nn#377, helia-core-tester#71.
+ * kernel runs. Refs AmbiqAI/ns-cmsis-nn#377.
  */
 {% endif %}
 #define LSTM_BUFFER_SIZE ({{ macro_prefix }}HIDDEN_SIZE * {{ macro_prefix }}BATCH_SIZE * {{ macro_prefix }}TIME_STEPS)

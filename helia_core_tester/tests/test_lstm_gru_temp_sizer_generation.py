@@ -80,6 +80,46 @@ def test_probe_missing_checkout_is_absent(tmp_path: Path) -> None:
     assert probe.probe_header_symbols(SIZER_SYMBOLS, cmsis_nn_root=tmp_path / "nope") is False
 
 
+def test_probe_ignores_comment_only_mentions(tmp_path: Path) -> None:
+    """A header that merely *mentions* every sizer symbol in prose (doxygen
+    comments, changelog notes) must NOT flip the probe: the match requires
+    declaration shape (``symbol(``), not a substring."""
+    root = _make_checkout(tmp_path, with_sizers=False)
+    include = root / "Include"
+    comment_lines = ["/*", " * Changelog: ns-cmsis-nn#381 will add these queries:"]
+    comment_lines += [f" *   {sym} -- see the sizer contract." for sym in SIZER_SYMBOLS]
+    comment_lines += [" */", ""]
+    for name in ("arm_nnfunctions.h", "arm_nnfunctions_flt.h"):
+        header = include / name
+        header.write_text("\n".join(comment_lines) + header.read_text())
+    for sym in SIZER_SYMBOLS:
+        assert probe.probe_header_symbols([sym], cmsis_nn_root=root) is False
+    assert probe.probe_header_symbols(SIZER_SYMBOLS, cmsis_nn_root=root) is False
+
+
+def test_probe_accepts_declaration_with_whitespace_before_paren(tmp_path: Path) -> None:
+    """Declarations split as ``int32_t sym (args)`` or across lines still count."""
+    root = _make_checkout(tmp_path, with_sizers=False)
+    include = root / "Include"
+    decls = [f"int32_t {sym}\n    (const void *params);" for sym in SIZER_SYMBOLS]
+    (include / "arm_nnfunctions.h").write_text("\n".join(decls) + "\n")
+    assert probe.probe_header_symbols(SIZER_SYMBOLS, cmsis_nn_root=root) is True
+
+
+def test_probe_rejects_prefix_extended_symbol(tmp_path: Path) -> None:
+    """A longer symbol containing a probed name as a prefix-plus-suffix (e.g.
+    ``<sym>_v2(``) must not satisfy the probe for ``<sym>``... but note the
+    word boundary sits at the *front*; a declared ``x_<sym>(`` must not match
+    either."""
+    root = _make_checkout(tmp_path, with_sizers=False)
+    include = root / "Include"
+    sym = SIZER_SYMBOLS[0]
+    (include / "arm_nnfunctions.h").write_text(
+        f"int32_t {sym}_v2(const void *params);\nint32_t x_{sym}(const void *params);\n"
+    )
+    assert probe.probe_header_symbols([sym], cmsis_nn_root=root) is False
+
+
 def test_resolve_root_honors_cmsis_nn_root_env(tmp_path: Path, monkeypatch) -> None:
     root = _make_checkout(tmp_path, with_sizers=True)
     monkeypatch.setenv("CMSIS_NN_ROOT", str(root))
