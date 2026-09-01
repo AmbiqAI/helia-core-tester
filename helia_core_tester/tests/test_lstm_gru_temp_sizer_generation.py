@@ -15,7 +15,6 @@ legacy output when it does not (ns-cmsis-nn main). These tests pin:
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -95,6 +94,23 @@ def test_probe_ignores_comment_only_mentions(tmp_path: Path) -> None:
     for sym in SIZER_SYMBOLS:
         assert probe.probe_header_symbols([sym], cmsis_nn_root=root) is False
     assert probe.probe_header_symbols(SIZER_SYMBOLS, cmsis_nn_root=root) is False
+
+
+def test_probe_ignores_code_form_comment_mentions(tmp_path: Path) -> None:
+    """A doxygen mention in CODE form -- the symbol WITH parens inside a
+    block or line comment -- must not read as a declaration either: the
+    probe strips comments before matching (independently flagged by review
+    round 2 and Copilot)."""
+    root = _make_checkout(tmp_path, with_sizers=False)
+    include = root / "Include"
+    lines = ["/* Call " + SIZER_SYMBOLS[0] + "(&params) before allocating. */"]
+    lines += ["// " + sym + "(NULL) returns -1." for sym in SIZER_SYMBOLS]
+    lines += [""]
+    for name in ("arm_nnfunctions.h", "arm_nnfunctions_flt.h"):
+        header = include / name
+        header.write_text("\n".join(lines) + header.read_text())
+    for sym in SIZER_SYMBOLS:
+        assert probe.probe_header_symbols([sym], cmsis_nn_root=root) is False
 
 
 def test_probe_accepts_declaration_with_whitespace_before_paren(tmp_path: Path) -> None:

@@ -61,18 +61,26 @@ def resolve_cmsis_nn_root() -> Optional[Path]:
     return root
 
 
-def _symbol_declared(symbol: str, text: str) -> bool:
-    """True iff ``symbol`` appears in declaration shape: the symbol followed
-    (modulo whitespace) by an opening parenthesis, at a word boundary.
+_COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
 
-    A bare substring scan is not enough: a doxygen comment merely *mentioning*
-    a sizer name (``/* see arm_..._get_buffer_size for details */``) would
-    flip the probe to the sizer variant against a checkout that never declares
-    it -- caught loudly at link time, but the probe should not guess wrong in
-    the first place. Requiring ``symbol(`` pins the match to a prototype (or
-    call), which the public headers only contain as declarations.
+
+def _strip_comments(text: str) -> str:
+    """Remove C block and line comments so a doxygen mention -- even in
+    code-form, ``arm_..._get_buffer_size(...)`` -- can never look like a
+    declaration. (String literals do not occur in these headers, so the
+    naive regex is exact here.)"""
+    return _COMMENT_RE.sub(" ", text)
+
+
+def _symbol_declared(symbol: str, text: str) -> bool:
+    """True iff ``symbol`` appears in declaration shape -- the symbol
+    followed (modulo whitespace) by an opening parenthesis, at a word
+    boundary -- in the comment-stripped header text. Comment stripping
+    closes the code-form-mention false positive twice flagged in review;
+    the remaining residual (a function-like ``#define symbol(x)``) would
+    still fail loudly at link time.
     """
-    return re.search(rf"\b{re.escape(symbol)}\s*\(", text) is not None
+    return re.search(rf"\b{re.escape(symbol)}\s*\(", _strip_comments(text)) is not None
 
 
 def probe_header_symbols(symbols: Iterable[str], cmsis_nn_root: Optional[Path] = None) -> bool:
