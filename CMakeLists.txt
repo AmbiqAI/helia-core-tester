@@ -31,7 +31,7 @@ set(HELIA_BENCHMARK_MEASURED_RUNS "10" CACHE STRING "Timed measured iterations p
 
 # --hardware support: build generated test executables against real Apollo510
 # hardware (the vendored NSX board bring-up under boards/apollo510_evb +
-# modules/nsx-ambiq-sdk) instead of the FVP/ethos-u-core-platform toolchain.
+# the fetched nsx-ambiq-sdk) instead of the FVP/ethos-u-core-platform toolchain.
 # See scripts/test_s4_conv_benchmark.sh --hardware for the driving script.
 #
 # UPDATE (2026-08-04): configure + cross-compile build verified end-to-end
@@ -55,17 +55,26 @@ endif()
 
 if(HELIA_HARDWARE_BUILD)
   set(NSX_APP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
-  set(NSX_AMBIQ_SDK_DIR "modules/nsx-ambiq-sdk")
+  # Repo-relative (nsx_bootstrap_app() resolves it as ${NSX_APP_ROOT}/${dir}),
+  # and fetched by helia_core_tester/scripts/setup_dependencies.py alongside
+  # CMSIS_5/Corstone-300/neuralspotx. Keep this default in sync with that
+  # script's nsx_ambiq_sdk_dir(). Override only to point at a hand-managed
+  # checkout; the default deliberately stays inside the tester repo so a build
+  # can't silently pick up an unrelated SDK tree from elsewhere on the machine.
+  set(NSX_AMBIQ_SDK_DIR "artifacts/downloads/nsx-ambiq-sdk" CACHE PATH
+      "Repo-relative path to the nsx-ambiq-sdk checkout for HELIA_HARDWARE_BUILD")
   if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${NSX_AMBIQ_SDK_DIR}/modules")
     message(FATAL_ERROR
       "HELIA_HARDWARE_BUILD=ON but ${NSX_AMBIQ_SDK_DIR}/modules is missing. "
-      "This consolidated SDK bundle is vendored/fetched separately (not "
-      "tracked in git) -- ensure it has been bootstrapped before configuring.")
+      "The consolidated SDK bundle is fetched, not tracked in git -- run "
+      "`uv run python -m helia_core_tester.scripts.setup_dependencies` "
+      "(or any `helia_core_tester perf-stream` hardware command, which fetches "
+      "it lazily) before configuring.")
   endif()
 
   # "Consolidated SDK bundle" overlay (see nsx_app_bootstrap.cmake's
   # nsx_module_dir_for_name() comment): every module below actually lives
-  # under modules/nsx-ambiq-sdk/modules/<name>, not the flat modules/<name>
+  # under ${NSX_AMBIQ_SDK_DIR}/modules/<name>, not the flat modules/<name>
   # nsx_bootstrap_app() defaults to, so redirect each one explicitly.
   set(NSX_APP_PROJECT_DIRS "${NSX_AMBIQ_SDK_DIR}")
   file(GLOB _nsx_bundle_module_dirs RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/${NSX_AMBIQ_SDK_DIR}/modules"
@@ -78,7 +87,7 @@ if(HELIA_HARDWARE_BUILD)
   endforeach()
 
   # Dependency order derived from each module's own nsx_require_target()/
-  # FATAL_ERROR checks (modules/nsx-ambiq-sdk/modules/<name>/CMakeLists.txt):
+  # FATAL_ERROR checks (${NSX_AMBIQ_SDK_DIR}/modules/<name>/CMakeLists.txt):
   #   nsx-cmsis-core  : no deps (INTERFACE target nsx::cmsis_core)
   #   nsx-ambiqsuite  : no deps (defines nsx_sdk_ambiqsuite / NSX_SELECTED_SDK_TARGET)
   #   nsx-ambiq-hal   : needs nsx::board_flags + NSX_AMBIQSUITE_ROOT + NSX_AMBIQ_* HAL paths (board.cmake)

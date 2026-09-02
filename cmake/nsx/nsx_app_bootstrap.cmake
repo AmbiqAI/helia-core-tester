@@ -1,7 +1,7 @@
 # App-side NSX bootstrap glue, consumed by this repo's top-level CMakeLists.txt
 # for HELIA_HARDWARE_BUILD=ON.
 #
-# Not part of the vendored modules/nsx-ambiq-sdk package. That SDK exposes only
+# Not part of the fetched nsx-ambiq-sdk package. That SDK exposes only
 # the low-level SoC/board/module CMake contract documented in its own
 # cmake/README.md (toolchain -> SoC family -> SoC skew -> board layers, plus
 # each module's own nsx_require_target()/FATAL_ERROR dependency checks) --
@@ -26,7 +26,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/nsx_toolchain_flags.cmake")
 #
 # Resolves NSX_ROOT/NSX_CMAKE_DIR/NSX_AMBIQSUITE_ROOT/NSX_SDK_PROVIDER, brings
 # in the board descriptor (which transitively loads the SoC descriptor, SoC
-# facts, and toolchain-flags helpers -- see modules/nsx-ambiq-sdk/cmake/
+# facts, and toolchain-flags helpers -- see ${NSX_AMBIQ_SDK_DIR}/cmake/
 # README.md's Selection Order), then add_subdirectory()s each requested
 # module in the caller-given (dependency) order.
 macro(nsx_bootstrap_app)
@@ -41,7 +41,7 @@ macro(nsx_bootstrap_app)
     set(NSX_APP_ROOT "${NSX_BOOTSTRAP_APP_ROOT}")
 
     # NSX_ROOT is the "consolidated SDK bundle" package root (the actual
-    # modules/nsx-ambiq-sdk checkout), not the consuming app's own root --
+    # nsx-ambiq-sdk checkout, per NSX_AMBIQ_SDK_DIR), not the consuming app's own root --
     # cmake/socs/<skew>.cmake resolves its startup/linker-script sources as
     # "${NSX_ROOT}/modules/nsx-core/src/<skew>/...". NSX_APP_PROJECT_DIRS is
     # set by the caller (CMakeLists.txt) to the same bundle-relative path;
@@ -57,7 +57,7 @@ macro(nsx_bootstrap_app)
 
     # Auto-include every top-level cmake/*.cmake helper the SDK ships (e.g.
     # nsx_soc_facts.cmake's nsx_load_soc_facts()/nsx_soc_flags_target()), per
-    # modules/nsx-ambiq-sdk/cmake/README.md's "Single Source Of Truth For SoC
+    # ${NSX_AMBIQ_SDK_DIR}/cmake/README.md's "Single Source Of Truth For SoC
     # Facts" contract, before board.cmake (which calls nsx_load_soc_facts()
     # via its soc.cmake fragment) is included below.
     file(GLOB _nsx_top_level_cmake_files "${NSX_CMAKE_DIR}/*.cmake")

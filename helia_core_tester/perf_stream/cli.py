@@ -43,32 +43,44 @@ def _ensure_hardware_dependencies(repo_root: Path) -> None:
     manual bootstrap step. `helia_core_tester scripts.setup_dependencies --with-hardware`
     does the same thing ahead of time if you'd rather pre-fetch.
     """
-    from ..scripts.setup_dependencies import setup_nsx_ambiq_sdk, setup_nsx_toolchain, setup_neuralspotx
+    from ..scripts.setup_dependencies import (
+        nsx_ambiq_sdk_dir,
+        setup_neuralspotx,
+        setup_nsx_ambiq_sdk,
+        setup_nsx_toolchain,
+    )
 
     downloads_dir = repo_root / _DOWNLOADS_DIR
     downloads_dir.mkdir(parents=True, exist_ok=True)
 
-    sdk_modules_dir = repo_root / "modules" / "nsx-ambiq-sdk" / "modules"
+    sdk_modules_dir = nsx_ambiq_sdk_dir(repo_root, downloads_dir) / "modules"
     # Not just the SDK checkout: also the local symlinks that redirect
     # boards/apollo510_evb + cmake/socs + cmake/nsx_soc_facts.cmake into it (see
     # setup_nsx_ambiq_sdk()'s _ensure_nsx_sdk_symlinks() call) -- an SDK checkout
     # that predates those symlinks, or one whose symlinks got removed, needs
     # setup_nsx_ambiq_sdk() re-run too, not just skipped as "already installed".
+    # Resolved, not just `.exists()`: a link left over from an earlier setup can
+    # point at an SDK checkout outside the tester repo and would otherwise pass
+    # as healthy, quietly building against that tree instead of the managed one.
     board_symlink = repo_root / "boards" / "apollo510_evb"
+    board_link_ok = (
+        board_symlink.exists()
+        and board_symlink.resolve().is_relative_to(nsx_ambiq_sdk_dir(repo_root, downloads_dir).resolve())
+    )
     neuralspotx_examples_dir = downloads_dir / "neuralspotx" / "examples"
     toolchain_file = repo_root / _TOOLCHAIN_FILE
 
     if (
         sdk_modules_dir.is_dir()
-        and board_symlink.exists()
+        and board_link_ok
         and neuralspotx_examples_dir.is_dir()
         and toolchain_file.exists()
     ):
         return
 
     typer.echo("[perf-stream] Hardware-build dependencies not found -- fetching them now (first run only)...")
-    if not sdk_modules_dir.is_dir() or not board_symlink.exists():
-        setup_nsx_ambiq_sdk(repo_root)
+    if not sdk_modules_dir.is_dir() or not board_link_ok:
+        setup_nsx_ambiq_sdk(repo_root, downloads_dir)
     if not neuralspotx_examples_dir.is_dir():
         setup_neuralspotx(downloads_dir)
     if not toolchain_file.exists():

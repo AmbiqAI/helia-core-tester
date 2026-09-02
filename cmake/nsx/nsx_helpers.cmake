@@ -2,7 +2,7 @@ set(_NSX_HELPERS_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 # App-side NSX helpers consumed by nsx_app_bootstrap.cmake.
 #
-# Not part of the vendored modules/nsx-ambiq-sdk package (that SDK provides
+# Not part of the fetched nsx-ambiq-sdk package (that SDK provides
 # only the low-level SoC/board/module CMake contract documented in its own
 # cmake/README.md); this file is the thin, app-owned glue that resolves a
 # "consolidated SDK bundle" module name to its on-disk directory and wires the
@@ -14,7 +14,7 @@ set(_NSX_HELPERS_DIR "${CMAKE_CURRENT_LIST_DIR}")
 # Resolve the source directory for NSX module <name> (e.g. "nsx-cmsis-core"):
 #   1. An explicit NSX_APP_MODULE_DIR_<name-with-underscores> override, if set
 #      (see CMakeLists.txt's "consolidated SDK bundle" overlay loop, which
-#      redirects every module under modules/nsx-ambiq-sdk/modules/<name>
+#      redirects every module under ${NSX_AMBIQ_SDK_DIR}/modules/<name>
 #      rather than the flat default below).
 #   2. Each directory in NSX_APP_PROJECT_DIRS, tried as "<dir>/modules/<name>".
 #   3. The flat default "modules/<name>" (a plain, non-bundled module tree).

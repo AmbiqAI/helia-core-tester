@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from .phase0 import _parse_memory_regions, _parse_size_a, _parse_top_symbols, _repo_root, _retained_kernel_count
+from ..scripts.setup_dependencies import nsx_ambiq_sdk_dir
 
 
 _SELECTED_ADAPTERS = (
@@ -33,7 +34,7 @@ def generate_benchmark_server_memory_report(*, build_dir: Path | None = None, ou
     out_root.mkdir(parents=True, exist_ok=True)
 
     elf = build_root / "perf_stream" / "hct_benchmark_server.elf"
-    linker_script = repo_root / "modules" / "nsx-ambiq-sdk" / "modules" / "nsx-core" / "src" / "apollo510" / "gcc" / "linker_script_sbl.ld"
+    linker_script = nsx_ambiq_sdk_dir(repo_root) / "modules" / "nsx-core" / "src" / "apollo510" / "gcc" / "linker_script_sbl.ld"
     size_default = _probe_binary("arm-none-eabi-size", [str(elf)])
     size_sections = _probe_binary("arm-none-eabi-size", ["-A", str(elf)])
     nm_size_sort = _probe_binary("arm-none-eabi-nm", ["-S", "--size-sort", str(elf)])
