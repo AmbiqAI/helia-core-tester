@@ -307,10 +307,30 @@ def run_apollo510_generated_test_session(
         require_fvp_pass=require_fvp_pass,
     )
     if not bundles:
-        raise RuntimeError(
-            f"No bridgeable generated tests found for cpu={cpu} family={family if family is not None else '<all bridged families>'} "
-            f"name_filter={name_filter!r} suite={suite!r} (skipped {len(skipped)}); run `helia_core_tester generate` first."
+        base = (
+            f"No bridgeable generated tests found for cpu={cpu} "
+            f"family={family if family is not None else '<all bridged families>'} "
+            f"name_filter={name_filter!r} suite={suite!r} (skipped {len(skipped)})"
         )
+        if not skipped:
+            raise RuntimeError(f"{base}; run `helia_core_tester generate` first.")
+        # Cases were discovered but every one was rejected, so "run generate"
+        # is the wrong remedy. Lead with the actual reasons -- an all-FVP-gate
+        # rejection in particular is fixed by refreshing or bypassing the gate,
+        # not by regenerating.
+        fvp_skips = [(t, r) for t, r in skipped if "FVP" in r or "artifact" in r]
+        detail = "\n".join(f"  - {t.name}: {r}" for t, r in skipped[:5])
+        if len(skipped) > 5:
+            detail += f"\n  ... and {len(skipped) - 5} more"
+        hint = ""
+        if len(fvp_skips) == len(skipped):
+            hint = (
+                "\nEvery case was rejected by the FVP-pass gate. Either refresh the report "
+                "(`uv run helia_core_tester build && uv run helia_core_tester run`) or bypass "
+                "the gate (--no-require-fvp-pass, or --skip-fvp-gate via "
+                "scripts/run_hardware_perf_suite.sh)."
+            )
+        raise RuntimeError(f"{base}:\n{detail}{hint}")
     result, bundle_root = _run_case_bundles_in_batches(
         project_root,
         bundles,

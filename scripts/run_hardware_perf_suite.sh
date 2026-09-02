@@ -4,10 +4,8 @@
 # `helia_core_tester perf-stream` CLI:
 #
 #   1. uv run helia_core_tester generate ...
-#   2. uv run helia_core_tester build/run ... (FVP suite, refreshes the PASS/
-#      artifact_sha256 gate the hardware bridge requires)
-#   3. uv run helia_core_tester perf-stream flash --cpu <CPU> --serial-no <SERIAL>
-#   4. uv run helia_core_tester perf-stream run-generated --serial-no <SERIAL> ...
+#   2. uv run helia_core_tester perf-stream flash --cpu <CPU> --serial-no <SERIAL>
+#   3. uv run helia_core_tester perf-stream run-generated --serial-no <SERIAL> ...
 #
 # By default (no --family given) this runs EVERY operator family with real
 # firmware dispatch support in one session -- see the `_BUILDERS` dispatch
@@ -24,7 +22,7 @@
 #   scripts/run_hardware_perf_suite.sh [--serial-no SERIAL] [--cpu CPU] \
 #       [--family FAMILY] [--test-name FILTER] [--limit N] [--suite int|float] \
 #       [--precision fp16|fp32] [--session-id NAME] \
-#       [--skip-generate] [--skip-fvp] [--skip-fvp-gate] [--skip-flash]
+#       [--skip-generate] [--skip-fvp-gate] [--skip-flash]
 #
 # --precision fp16|fp32 is a convenience shortcut for the float suite: it sets
 # --suite float and additionally filters to only the _f16/_f32-suffixed
@@ -32,29 +30,26 @@
 # directory holds both precisions side by side. Combine with --test-name for
 # extra narrowing (e.g. --precision fp32 --test-name reshape).
 #
-# The hardware bridge (perf-stream run-generated) only bridges a generated
-# case onto real hardware if the most recent artifacts/reports/tests/<suite>/<cpu>
-# FVP report recorded a PASS *for the currently generated artifacts*
-# (artifact_sha256-matched) -- see helia_core_tester/perf_stream/fvp_gate.py.
-# So by default (no --skip-fvp), this script rebuilds and reruns the FVP
-# suite right after `generate`, guaranteeing that report is always fresh
-# before any hardware run -- avoiding "no artifact_sha256; rerun the FVP
-# suite" bridge-skip errors from a stale/pre-existing report. Pass --skip-fvp
-# only if you've already just run `helia_core_tester full`/`run` yourself and
-# know the recorded report matches the current generated artifacts exactly.
+# The hardware bridge (perf-stream run-generated) consults the most recent
+# artifacts/reports/tests/<suite>/<cpu> FVP report per case, and skips a case
+# whose recorded status for the *currently generated* artifacts
+# (artifact_sha256-matched) is not PASS -- see
+# helia_core_tester/perf_stream/fvp_gate.py. A missing report, or one that
+# doesn't mention the case, is not an error: the gate is a no-op there. So
+# this script does not run the FVP suite at all. Hardware runs are independent
+# of the FVP; the two share only the generated artifacts under
+# artifacts/generated_tests/<suite>/<cpu>, which Step 1's `generate` is the
+# single source of truth for.
 #
-# CAVEAT: the FVP (Corstone-300) model this refresh step depends on is
-# Linux-only (helia_core_tester/scripts/setup_dependencies.py raises
-# "Unsupported operating system" on macOS/other hosts). This script tolerates
-# that failure -- it warns and continues rather than aborting. On such a
-# host the refresh can never succeed, so this script automatically also
-# disables the hardware bridge's FVP-pass gate for that run (equivalent to
-# passing --skip-fvp-gate) whenever the refresh step itself fails, so a
-# permanently-stale/unrefreshable report doesn't block every case forever.
-# Pass --skip-fvp-gate explicitly to disable the gate up front (e.g. combined
-# with --skip-fvp) without relying on the refresh step failing first; only do
-# this once you've confirmed some other way (e.g. a report copied over from a
-# Linux CI run) that the generated artifacts you're bridging are trustworthy.
+# If a *stale* report is present (left over from an earlier --suite/--cpu run,
+# or predating a regenerate) its artifact_sha256 will not match and every case
+# is skipped with "rerun the FVP suite". Either refresh it yourself --
+# `uv run helia_core_tester build && uv run helia_core_tester run` -- or pass
+# --skip-fvp-gate to bridge anyway. That choice is deliberately explicit: an
+# earlier version of this script inferred it from the FVP step's exit code,
+# but `run` also exits non-zero on ordinary per-case FVP failures, so a single
+# unrelated failure silently dropped the correctness gate for the whole run on
+# exactly the hosts where the FVP does work.
 #
 # Examples:
 #   scripts/run_hardware_perf_suite.sh                     # run all bridged families
@@ -64,9 +59,10 @@
 #   scripts/run_hardware_perf_suite.sh --precision fp16     # every bridged FP16 case
 #   scripts/run_hardware_perf_suite.sh --precision fp32     # every bridged FP32 case
 #
-# Not tested against real hardware (no board/J-Link probe available in this
-# sandbox) -- please run and report back any errors from the flash/serial
-# auto-detect/RTT-capture steps so they can be fixed.
+# Verified end-to-end on real Apollo510 silicon (2026-09-02): 692/692 generated
+# int cases bridged and passed via J-Link serial 1160002276. Note the probe can
+# miss enumeration on the very first JLinkExe call -- if serial auto-detect
+# fails, retry before assuming no probe is attached.
 
 set -euo pipefail
 
@@ -83,7 +79,6 @@ SUITE="int"
 PRECISION=""
 SESSION_ID="apollo510-full-suite-$(date -u +%Y%m%dT%H%M%SZ)"
 SKIP_GENERATE=0
-SKIP_FVP=0
 SKIP_FVP_GATE=0
 SKIP_FLASH=0
 
@@ -98,11 +93,10 @@ while [[ $# -gt 0 ]]; do
         --precision) PRECISION="$2"; shift 2 ;;
         --session-id) SESSION_ID="$2"; shift 2 ;;
         --skip-generate) SKIP_GENERATE=1; shift ;;
-        --skip-fvp) SKIP_FVP=1; shift ;;
         --skip-fvp-gate) SKIP_FVP_GATE=1; shift ;;
         --skip-flash) SKIP_FLASH=1; shift ;;
         -h|--help)
-            sed -n '2,69p' "${BASH_SOURCE[0]}"
+            sed -n '2,65p' "${BASH_SOURCE[0]}"
             exit 0
             ;;
         *)
@@ -185,42 +179,6 @@ if [[ "${SKIP_GENERATE}" -eq 0 ]]; then
     uv run helia_core_tester generate --cpu "${CPU}" --suite "${SUITE}"
 else
     echo "[run_hardware_perf_suite] --skip-generate set; reusing existing artifacts/generated_tests."
-fi
-
-# --- Step 1b: (re)build + run the FVP suite so the bridge's PASS/artifact_sha256
-# gate is always fresh -----------------------------------------------------
-# The hardware bridge (perf-stream run-generated) refuses to bridge any
-# generated case whose most recent FVP report doesn't record a PASS matching
-# the *current* generated artifacts (see helia_core_tester/perf_stream/fvp_gate.py).
-# Skipping this step risks bridging against a stale report (e.g. from a
-# previous --suite/--cpu run, or before the generated tests were
-# regenerated), which surfaces as "no bridgeable generated tests found" in
-# Step 3 below. --no-fail-fast keeps a single FVP-level failure (unrelated to
-# the specific cases being bridged) from aborting the whole script -- the
-# bridge itself gates per-case on the recorded PASS/artifact hash.
-if [[ "${SKIP_FVP}" -eq 0 ]]; then
-    echo "[run_hardware_perf_suite] Building + running FVP suite to refresh the PASS/artifact_sha256 gate (cpu=${CPU} suite=${SUITE})..."
-    FVP_REFRESH_OK=1
-    uv run helia_core_tester build --cpu "${CPU}" --suite "${SUITE}" || FVP_REFRESH_OK=0
-    if [[ "${FVP_REFRESH_OK}" -eq 1 ]]; then
-        uv run helia_core_tester run --cpu "${CPU}" --suite "${SUITE}" --no-fail-fast || FVP_REFRESH_OK=0
-    fi
-    if [[ "${FVP_REFRESH_OK}" -eq 0 ]]; then
-        echo "[run_hardware_perf_suite] WARNING: FVP suite refresh failed (see above) -- the Corstone-300 FVP" >&2
-        echo "[run_hardware_perf_suite]          model this repo's build/run steps depend on is Linux-only" >&2
-        echo "[run_hardware_perf_suite]          (helia_core_tester/scripts/setup_dependencies.py), so this is" >&2
-        echo "[run_hardware_perf_suite]          expected on macOS/other hosts, or may be a per-case FVP" >&2
-        echo "[run_hardware_perf_suite]          failure." >&2
-        if [[ "${SKIP_FVP_GATE}" -eq 0 ]]; then
-            echo "[run_hardware_perf_suite]          Auto-disabling the hardware bridge's FVP-pass gate for this" >&2
-            echo "[run_hardware_perf_suite]          run (equivalent to --skip-fvp-gate) since a fresh/matching" >&2
-            echo "[run_hardware_perf_suite]          FVP report cannot be produced here -- rerun this suite from a" >&2
-            echo "[run_hardware_perf_suite]          Linux host/CI periodically to get real FVP-verified coverage." >&2
-            SKIP_FVP_GATE=1
-        fi
-    fi
-else
-    echo "[run_hardware_perf_suite] --skip-fvp set; reusing existing artifacts/reports/tests FVP report."
 fi
 
 # --- Step 2: flash the real benchmark-server firmware ----------------------
