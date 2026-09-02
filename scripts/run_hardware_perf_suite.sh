@@ -20,9 +20,9 @@
 #
 # Usage:
 #   scripts/run_hardware_perf_suite.sh [--serial-no SERIAL] [--cpu CPU] \
-#       [--family FAMILY] [--test-name FILTER] [--limit N] [--suite int|float] \
+#       [--family FAMILY] [--test-name FILTER] [--limit N] [--suite int|float|both] \
 #       [--precision fp16|fp32] [--session-id NAME] \
-#       [--skip-generate] [--skip-fvp-gate] [--skip-flash]
+#       [--skip-generate] [--skip-fvp-gate] [--fvp-gate off|advisory|strict] [--skip-flash]
 #
 # --precision fp16|fp32 is a convenience shortcut for the float suite: it sets
 # --suite float and additionally filters to only the _f16/_f32-suffixed
@@ -30,29 +30,35 @@
 # directory holds both precisions side by side. Combine with --test-name for
 # extra narrowing (e.g. --precision fp32 --test-name reshape).
 #
-# The hardware bridge (perf-stream run-generated) consults the most recent
-# artifacts/reports/tests/<suite>/<cpu> FVP report per case, and skips a case
-# whose recorded status for the *currently generated* artifacts
-# (artifact_sha256-matched) is not PASS -- see
-# helia_core_tester/perf_stream/fvp_gate.py. A missing report, or one that
-# doesn't mention the case, is not an error: the gate is a no-op there. So
-# this script does not run the FVP suite at all. Hardware runs are independent
-# of the FVP; the two share only the generated artifacts under
-# artifacts/generated_tests/<suite>/<cpu>, which Step 1's `generate` is the
-# single source of truth for.
+# The hardware bridge (perf-stream run-generated) records, per case, what the
+# most recent artifacts/reports/tests/<suite>/<cpu> FVP report says about it --
+# pass / failed / stale / absent -- in the result bundle's case_summary.csv
+# fvp_status column. How much that is allowed to *block* a run is set by
+# --fvp-gate:
 #
-# If a *stale* report is present (left over from an earlier --suite/--cpu run,
-# or predating a regenerate) its artifact_sha256 will not match and every case
-# is skipped with "rerun the FVP suite". Either refresh it yourself --
-# `uv run helia_core_tester build && uv run helia_core_tester run` -- or pass
-# --skip-fvp-gate to bridge anyway. That choice is deliberately explicit: an
-# earlier version of this script inferred it from the FVP step's exit code,
-# but `run` also exits non-zero on ordinary per-case FVP failures, so a single
-# unrelated failure silently dropped the correctness gate for the whole run on
-# exactly the hosts where the FVP does work.
+#   advisory (default) : skip only cases the FVP recorded as FAILING for these
+#                        exact artifacts (artifact_sha256-matched). That is real
+#                        evidence the kernel is wrong. A stale or missing report
+#                        is a statement about the report, not the kernel, so
+#                        those cases still run -- tagged stale/absent.
+#   strict             : also skip stale/absent cases. For a CI job that has just
+#                        run the FVP suite and wants full corroboration.
+#   off                : never block; record provenance only.
+#
+# So this script does not run the FVP suite at all, and a stale report no longer
+# blocks anything by default. Hardware runs are independent of the FVP; the two
+# share only the generated artifacts under artifacts/generated_tests/<suite>/<cpu>,
+# which Step 1's `generate` is the single source of truth for.
+#
+# --skip-fvp-gate is kept as a shorthand for --fvp-gate off. An earlier version
+# of this script set that automatically whenever the FVP refresh step exited
+# non-zero, but `helia_core_tester run` also exits non-zero on ordinary per-case
+# FVP failures, so one unrelated failure silently dropped the correctness gate
+# for a whole run on exactly the hosts where the FVP does work.
 #
 # Examples:
-#   scripts/run_hardware_perf_suite.sh                     # run all bridged families
+#   scripts/run_hardware_perf_suite.sh                     # run all bridged families (int)
+#   scripts/run_hardware_perf_suite.sh --suite both        # int + float, one flash, one bundle
 #   scripts/run_hardware_perf_suite.sh --serial-no 1160002276
 #   scripts/run_hardware_perf_suite.sh --family ConvolutionFunctions --test-name convolve_generic_s4
 #   scripts/run_hardware_perf_suite.sh --suite float --family PoolingFunctions --test-name _f32
@@ -80,6 +86,7 @@ PRECISION=""
 SESSION_ID="apollo510-full-suite-$(date -u +%Y%m%dT%H%M%SZ)"
 SKIP_GENERATE=0
 SKIP_FVP_GATE=0
+FVP_GATE=""
 SKIP_FLASH=0
 
 while [[ $# -gt 0 ]]; do
@@ -94,9 +101,10 @@ while [[ $# -gt 0 ]]; do
         --session-id) SESSION_ID="$2"; shift 2 ;;
         --skip-generate) SKIP_GENERATE=1; shift ;;
         --skip-fvp-gate) SKIP_FVP_GATE=1; shift ;;
+        --fvp-gate) FVP_GATE="$2"; shift 2 ;;
         --skip-flash) SKIP_FLASH=1; shift ;;
         -h|--help)
-            sed -n '2,65p' "${BASH_SOURCE[0]}"
+            sed -n '2,71p' "${BASH_SOURCE[0]}"
             exit 0
             ;;
         *)
@@ -106,7 +114,21 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+case "${SUITE}" in
+    int|float|both) ;;
+    *)
+        echo "ERROR: --suite must be 'int', 'float' or 'both' (got '${SUITE}')." >&2
+        exit 1
+        ;;
+esac
+
 if [[ -n "${PRECISION}" ]]; then
+    if [[ "${SUITE}" == "both" ]]; then
+        # --precision is a float-only narrowing shortcut; pairing it with a run
+        # that is meant to span int as well is contradictory.
+        echo "ERROR: --precision cannot be combined with --suite both (it selects float cases only)." >&2
+        exit 1
+    fi
     case "${PRECISION}" in
         fp16|FP16) PRECISION_SUFFIX="_f16" ;;
         fp32|FP32) PRECISION_SUFFIX="_f32" ;;
@@ -170,7 +192,7 @@ fi
 echo
 echo "[run_hardware_perf_suite] Config:"
 echo "  serial_no=${SERIAL_NO} cpu=${CPU} family=${FAMILY:-<all bridged families>} test_name=${TEST_NAME:-<all>} limit=${LIMIT:-<all>} suite=${SUITE} precision=${PRECISION:-<n/a>}"
-echo "  session_id=${SESSION_ID} skip_fvp_gate=${SKIP_FVP_GATE}"
+echo "  session_id=${SESSION_ID} skip_fvp_gate=${SKIP_FVP_GATE} fvp_gate=${FVP_GATE:-<advisory default>}"
 echo
 
 # --- Step 1: generate the test suite ---------------------------------------
@@ -205,8 +227,10 @@ RUN_GENERATED_ARGS=(
 [[ -n "${FAMILY}" ]] && RUN_GENERATED_ARGS+=(--family "${FAMILY}")
 [[ -n "${TEST_NAME}" ]] && RUN_GENERATED_ARGS+=(--test-name "${TEST_NAME}")
 [[ -n "${LIMIT}" ]] && RUN_GENERATED_ARGS+=(--limit "${LIMIT}")
-if [[ "${SKIP_FVP_GATE}" -eq 1 ]]; then
-    RUN_GENERATED_ARGS+=(--no-require-fvp-pass)
+if [[ -n "${FVP_GATE}" ]]; then
+    RUN_GENERATED_ARGS+=(--fvp-gate "${FVP_GATE}")
+elif [[ "${SKIP_FVP_GATE}" -eq 1 ]]; then
+    RUN_GENERATED_ARGS+=(--fvp-gate off)
 fi
 
 uv run helia_core_tester "${RUN_GENERATED_ARGS[@]}"

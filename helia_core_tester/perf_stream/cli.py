@@ -375,16 +375,33 @@ def run_generated(
     family: Optional[str] = typer.Option(None, "--family", help="Operator family under artifacts/generated_tests to bridge. Omit to bridge every family with real firmware dispatch support (see generated_test_bridge.bridged_families())."),
     test_name: Optional[str] = typer.Option(None, "--test-name", help="Only bridge generated tests whose directory name contains this substring."),
     limit: Optional[int] = typer.Option(None, "--limit", help="Only bridge the first N discovered generated tests."),
-    suite: str = typer.Option("int", "--suite", help="Generated-test suite to bridge: 'int' (S8/S16/S32/S4, default) or 'float' (FP16/FP32)."),
+    suite: str = typer.Option(
+        "int",
+        "--suite",
+        help=(
+            "Generated-test suite to bridge: 'int' (S8/S16/S32/S4, default), 'float' (FP16/FP32), "
+            "or 'both' to run int and float in one session -- one flash, one result bundle, with "
+            "each case still gated and reported against its own suite."
+        ),
+    ),
     require_fvp_pass: bool = typer.Option(
         True,
         "--require-fvp-pass/--no-require-fvp-pass",
         help=(
-            "Require each case's most recent FVP report to record a matching PASS before bridging it "
-            "onto hardware (default: on). Pass --no-require-fvp-pass to bridge every case with real "
-            "firmware dispatch support regardless -- e.g. on hosts that cannot run the Linux-only "
-            "Corstone-300 FVP model at all, where a fresh/matching FVP report can never be produced "
-            "locally and the gate would otherwise skip every case."
+            "Deprecated alias for --fvp-gate: --require-fvp-pass means 'advisory', "
+            "--no-require-fvp-pass means 'off'. Ignored when --fvp-gate is given explicitly."
+        ),
+    ),
+    fvp_gate: Optional[str] = typer.Option(
+        None,
+        "--fvp-gate",
+        help=(
+            "How much the FVP report is allowed to block a hardware run. 'advisory' (the default) "
+            "skips only cases the FVP recorded as FAILING for these exact artifacts -- real evidence "
+            "the kernel is wrong -- and runs cases whose report is merely stale or missing. 'strict' "
+            "also skips stale/missing ones, for a CI job that just ran the FVP suite and wants full "
+            "corroboration. 'off' consults the report for provenance only and never blocks. Every "
+            "case's outcome is recorded in case_summary.csv's fvp_status column regardless."
         ),
     ),
 ):
@@ -410,6 +427,15 @@ def run_generated(
     resolved_build_dir = build_dir if build_dir.is_absolute() else repo_root / build_dir
     groups = tuple(g.strip() for g in pmu_groups.split(",") if g.strip())
 
+    if fvp_gate is not None:
+        from .fvp_gate import GATE_POLICIES
+
+        if fvp_gate not in GATE_POLICIES:
+            typer.echo(
+                f"✗ --fvp-gate must be one of {', '.join(GATE_POLICIES)} (got {fvp_gate!r})", err=True
+            )
+            sys.exit(1)
+
     # Discover the bridgeable case count/case_ids up front (cheap: just descriptor/header
     # parsing, no hardware I/O) purely so the live progress printer can align its
     # [N/total] counter and case_id columns from the very first printed line instead of
@@ -417,6 +443,7 @@ def run_generated(
     preview_bundles, _preview_skipped = build_generated_test_case_bundles(
         repo_root, cpu=cpu, family=family, name_filter=test_name, limit=limit, suite=suite,
         require_fvp_pass=require_fvp_pass,
+        fvp_gate=fvp_gate,
     )
     id_width = max((len(b.case_id) for b in preview_bundles), default=0)
 
@@ -437,6 +464,7 @@ def run_generated(
             limit=limit,
             suite=suite,
             require_fvp_pass=require_fvp_pass,
+            fvp_gate=fvp_gate,
             on_case_complete=on_case_complete,
         )
     except RuntimeError as exc:

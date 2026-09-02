@@ -19,6 +19,7 @@ from .generated_test_bridge import (
 from .result_bundle import write_result_bundle
 from .session import CaseRunResult, HostSession, SessionResult
 from .transport import JLinkRttTransport, symbol_address_from_elf
+from ..core.config import VALID_SUITE_MODES
 
 # Must match HCT_SERVER_MAX_CASES in cmake/perf_stream/benchmark_server_session.h.
 # The firmware allocates fixed-size `planned_case_ids`/`planned_kernel_ids` arrays
@@ -226,6 +227,22 @@ def run_apollo510_stream_session(
     )
 
 
+def normalize_suites(suite: str) -> tuple[str, ...]:
+    """Expand a --suite value into the concrete generated-test trees to walk.
+
+    "both" runs int and float in a single session. That is safe because the two
+    trees live side by side under artifacts/generated_tests/<suite>/<cpu>, every
+    case is bridged and FVP-gated against its own suite, and case_ids are unique
+    across suites -- so one flash and one result bundle can cover both.
+    """
+    normalized = str(suite).strip().lower()
+    if normalized not in VALID_SUITE_MODES:
+        raise ValueError(
+            f"Invalid suite: {suite!r} (expected one of: {', '.join(sorted(VALID_SUITE_MODES))})"
+        )
+    return ("int", "float") if normalized == "both" else (normalized,)
+
+
 def build_generated_test_case_bundles(
     project_root: Path,
     *,
@@ -235,6 +252,7 @@ def build_generated_test_case_bundles(
     limit: int | None = None,
     suite: str = "int",
     require_fvp_pass: bool = True,
+    fvp_gate: str | None = None,
 ) -> tuple[list[CaseBundle], list[tuple[GeneratedTestCase, str]]]:
     """Discover generated (`helia_core_tester generate`) kernel tests and bridge the
     ones with real perf-stream firmware dispatch support into CaseBundles.
@@ -244,7 +262,9 @@ def build_generated_test_case_bundles(
     i.e. runs the complete set of hardware-supported kernels across all families.
     `limit`, if given, is applied per-family (not globally) when `family=None`.
     `suite="int"` (default) discovers under artifacts/generated_tests/int; `suite="float"`
-    discovers the FP16/FP32 tree instead -- the two suites are never mixed in one call.
+    discovers the FP16/FP32 tree; `suite="both"` walks both in one call, so a single
+    flash and a single result bundle cover int and float together. `limit`, when given,
+    applies per (suite, family).
 
     `require_fvp_pass` (default True) is forwarded to
     `build_case_bundle_from_generated_test`'s Phase 2 FVP-pass gate. Set to False to
@@ -258,13 +278,17 @@ def build_generated_test_case_bundles(
     families = bridged_families() if family is None else [family]
     bundles: list[CaseBundle] = []
     skipped: list[tuple[GeneratedTestCase, str]] = []
-    for fam in families:
-        discovered = discover_generated_tests(project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite)
-        for test in discovered:
-            try:
-                bundles.append(build_case_bundle_from_generated_test(project_root, test, require_fvp_pass=require_fvp_pass))
-            except UnsupportedGeneratedTestError as exc:
-                skipped.append((test, str(exc)))
+    for suite_name in normalize_suites(suite):
+        for fam in families:
+            discovered = discover_generated_tests(
+                project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite_name
+            )
+            for test in discovered:
+                try:
+                    bundles.append(build_case_bundle_from_generated_test(
+                        project_root, test, require_fvp_pass=require_fvp_pass, fvp_gate=fvp_gate))
+                except UnsupportedGeneratedTestError as exc:
+                    skipped.append((test, str(exc)))
     return bundles, skipped
 
 
@@ -283,6 +307,7 @@ def run_apollo510_generated_test_session(
     limit: int | None = None,
     suite: str = "int",
     require_fvp_pass: bool = True,
+    fvp_gate: str | None = None,
     on_case_complete: Callable[[CaseRunResult], None] | None = None,
 ) -> tuple[SessionResult, Path, list[tuple[GeneratedTestCase, str]]]:
     """Run real `helia_core_tester generate`-produced kernel tests (with their real golden
@@ -305,6 +330,7 @@ def run_apollo510_generated_test_session(
     bundles, skipped = build_generated_test_case_bundles(
         project_root, cpu=cpu, family=family, name_filter=name_filter, limit=limit, suite=suite,
         require_fvp_pass=require_fvp_pass,
+        fvp_gate=fvp_gate,
     )
     if not bundles:
         base = (
@@ -324,12 +350,23 @@ def run_apollo510_generated_test_session(
             detail += f"\n  ... and {len(skipped) - 5} more"
         hint = ""
         if len(fvp_skips) == len(skipped):
-            hint = (
-                "\nEvery case was rejected by the FVP-pass gate. Either refresh the report "
-                "(`uv run helia_core_tester build && uv run helia_core_tester run`) or bypass "
-                "the gate (--no-require-fvp-pass, or --skip-fvp-gate via "
-                "scripts/run_hardware_perf_suite.sh)."
-            )
+            stale_only = all("does not match" in r or "no artifact_sha256" in r for _, r in fvp_skips)
+            if stale_only:
+                # Only --fvp-gate strict blocks on staleness, so the useful
+                # advice is "stop being strict", not "bypass the gate".
+                hint = (
+                    "\nEvery case was rejected as stale by --fvp-gate strict. Either refresh the "
+                    "report (`uv run helia_core_tester build && uv run helia_core_tester run`) or "
+                    "drop back to --fvp-gate advisory, which runs stale cases and records them as "
+                    "stale in case_summary.csv."
+                )
+            else:
+                hint = (
+                    "\nEvery case was rejected by the FVP gate because the FVP recorded a FAILURE "
+                    "for these exact artifacts -- that is evidence the kernel is wrong, not a stale "
+                    "report. Investigate before overriding; --fvp-gate off will run them anyway and "
+                    "record fvp_status=failed in case_summary.csv."
+                )
         raise RuntimeError(f"{base}:\n{detail}{hint}")
     result, bundle_root = _run_case_bundles_in_batches(
         project_root,

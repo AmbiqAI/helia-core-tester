@@ -75,6 +75,15 @@ class CaseBundle:
         return int(self.manifest["kernel_id"])
 
     @property
+    def fvp_status(self) -> str:
+        """How well the FVP corroborates this case: pass/failed/stale/absent.
+
+        Stamped by build_case_bundle_from_generated_test(); defaults to
+        "absent" for hand-authored bundles that never went through the gate.
+        """
+        return str(self.manifest.get("fvp_status", "absent"))
+
+    @property
     def streamable_blobs(self) -> tuple[BlobInfo, ...]:
         return tuple(blob for blob in self.blobs if not blob.host_only)
 

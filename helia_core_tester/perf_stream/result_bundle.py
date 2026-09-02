@@ -62,6 +62,7 @@ def write_result_bundle(
                 "p90_cycles": case.statistics.p90_cycles,
                 "p99_cycles": case.statistics.p99_cycles,
                 "mad_cycles": case.statistics.mad_cycles,
+                "fvp_status": case.case_bundle.fvp_status,
                 "unsupported_counters": list(case.statistics.unsupported_counters),
             }
         )
@@ -76,6 +77,7 @@ def write_result_bundle(
                 "mad_cycles": case.statistics.mad_cycles,
                 "p90_cycles": case.statistics.p90_cycles,
                 "p99_cycles": case.statistics.p99_cycles,
+                "fvp_status": case.case_bundle.fvp_status,
             }
         )
         (bundle_root / "outputs" / f"{case.case_bundle.case_id}.bin").write_bytes(case.output_bytes)
@@ -139,6 +141,7 @@ def write_result_bundle(
             "mad_cycles",
             "p90_cycles",
             "p99_cycles",
+            "fvp_status",
         ]
         writer = csv.DictWriter(handle, fieldnames=case_summary_fieldnames)
         writer.writeheader()

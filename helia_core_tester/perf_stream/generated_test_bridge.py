@@ -585,6 +585,7 @@ def build_case_bundle_from_generated_test(
     *,
     output_root: Path | None = None,
     require_fvp_pass: bool = True,
+    fvp_gate: str | None = None,
 ) -> CaseBundle:
     """Convert one real generated CMSIS-NN kernel test (with its real golden data) into a
     streamable perf-stream CaseBundle. Dispatches to a per-(family, operator) builder
@@ -601,30 +602,39 @@ def build_case_bundle_from_generated_test(
     `require_fvp_pass=False` to skip the check entirely (e.g. for host-only bridge unit
     tests that don't have a real FVP report to check against).
     """
-    from .fvp_gate import FvpCaseFailedGateError, require_fvp_pass as _require_fvp_pass
+    from .fvp_gate import GATE_POLICIES, evaluate_fvp_gate
     from .known_limitations import lookup_known_limitation
 
     known_limitation = lookup_known_limitation(generated_test.name)
     if known_limitation is not None:
         raise UnsupportedGeneratedTestError(f"{generated_test.name}: {known_limitation.reason}")
 
-    if require_fvp_pass:
-        try:
-            _require_fvp_pass(
-                project_root,
-                generated_test.name,
-                cpu=generated_test.cpu,
-                suite=generated_test.suite,
-                allow_missing_report=True,
-                case_dir=generated_test.directory,
-            )
-        except FvpCaseFailedGateError as exc:
-            # Re-raise as UnsupportedGeneratedTestError so existing callers
-            # (which only catch that one exception type to skip/report
-            # unbridgeable cases) handle an FVP-gate rejection the same way
-            # as any other "not bridgeable" reason, without needing to learn
-            # about a second exception type.
-            raise UnsupportedGeneratedTestError(str(exc)) from exc
+    policy = fvp_gate if fvp_gate is not None else ("advisory" if require_fvp_pass else "off")
+    if policy not in GATE_POLICIES:
+        raise ValueError(f"fvp_gate must be one of {GATE_POLICIES}, got {policy!r}")
+
+    # Always classify, even under "off": the result is recorded as per-case
+    # provenance on the bundle regardless of whether it is enforced, so a
+    # result bundle can always say how well corroborated each number is.
+    outcome = evaluate_fvp_gate(
+        project_root,
+        generated_test.name,
+        cpu=generated_test.cpu,
+        suite=generated_test.suite,
+        case_dir=generated_test.directory,
+    )
+    if policy != "off":
+        # A recorded FAIL for these exact artifacts is evidence the kernel is
+        # wrong, so it blocks under every enforcing policy. "stale"/"absent"
+        # are statements about the report's freshness, not about the kernel --
+        # only "strict" (e.g. a CI job that just ran the FVP suite) treats
+        # those as blocking.
+        blocked = outcome.status == "failed" or (policy == "strict" and outcome.status in ("stale", "absent"))
+        if blocked:
+            # Raised as UnsupportedGeneratedTestError so existing callers (which
+            # only catch that one type to skip/report unbridgeable cases) handle
+            # a gate rejection like any other "not bridgeable" reason.
+            raise UnsupportedGeneratedTestError(outcome.detail)
 
     descriptor = generated_test.descriptor
     operator = str(descriptor.get("operator", ""))
@@ -637,6 +647,8 @@ def build_case_bundle_from_generated_test(
         )
     bundle = builder(project_root, generated_test, output_root=output_root)
     _check_case_arena_capacity(generated_test, bundle.manifest, bundle.blobs)
+    # Stamped centrally rather than in each of the ~12 per-family builders.
+    bundle.manifest["fvp_status"] = outcome.status
     return bundle
 
 

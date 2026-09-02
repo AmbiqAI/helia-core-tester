@@ -207,3 +207,104 @@ def test_real_stale_fvp_report_recognizes_grouped_conv_case_pass() -> None:
     if status is None:
         pytest.skip("no FVP report present for cortex-m55/int in this environment")
     assert status.passed
+
+
+# --- Tri-state --fvp-gate policy -------------------------------------------
+# "failed" is evidence the kernel is wrong and blocks under every enforcing
+# policy; "stale"/"absent" describe the report's freshness, not the kernel, and
+# only block under "strict". Every case is classified regardless of policy so
+# the result bundle can record fvp_status provenance.
+
+
+def _stale_report_for(tmp_path: Path, case) -> Path:
+    return _write_fake_report(
+        tmp_path,
+        case.cpu,
+        case.suite,
+        {case.name: {"test_result": {"status": "PASS"}, "artifact_sha256": "de" * 32}},
+    )
+
+
+def _abs_default_s8_case():
+    cases = discover_generated_tests(
+        PROJECT_ROOT, family="BasicMathFunctions", name_filter="abs_default_s8"
+    )
+    assert cases, "expected a discoverable BasicMathFunctions abs_default_s8 case"
+    return cases[0]
+
+
+def _pin_report(monkeypatch: pytest.MonkeyPatch, report_path: Path) -> None:
+    import helia_core_tester.perf_stream.fvp_gate as fvp_gate_module
+
+    monkeypatch.setattr(fvp_gate_module, "find_latest_fvp_report", lambda *a, **k: report_path)
+
+
+def test_evaluate_classifies_stale_absent_failed_and_pass(tmp_path: Path) -> None:
+    from helia_core_tester.perf_stream.fvp_gate import evaluate_fvp_gate
+
+    assert evaluate_fvp_gate(tmp_path, "nope").status == "absent"
+
+    _write_fake_report(tmp_path, "cortex-m55", "int", {"c": {"test_result": {"status": "FAIL"}}})
+    assert evaluate_fvp_gate(tmp_path, "c").status == "failed"
+
+
+def test_advisory_runs_stale_case_and_tags_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _abs_default_s8_case()
+    _pin_report(monkeypatch, _stale_report_for(tmp_path, case))
+    bundle = build_case_bundle_from_generated_test(
+        PROJECT_ROOT, case, output_root=tmp_path / "adv", fvp_gate="advisory"
+    )
+    assert bundle.fvp_status == "stale"
+
+
+def test_strict_blocks_stale_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _abs_default_s8_case()
+    _pin_report(monkeypatch, _stale_report_for(tmp_path, case))
+    with pytest.raises(UnsupportedGeneratedTestError, match="does not match"):
+        build_case_bundle_from_generated_test(
+            PROJECT_ROOT, case, output_root=tmp_path / "strict", fvp_gate="strict"
+        )
+
+
+def test_recorded_failure_blocks_even_under_advisory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _abs_default_s8_case()
+    digest = generated_case_artifact_sha256(case.directory)
+    _pin_report(
+        monkeypatch,
+        _write_fake_report(
+            tmp_path,
+            case.cpu,
+            case.suite,
+            {case.name: {"test_result": {"status": "FAIL"}, "artifact_sha256": digest}},
+        ),
+    )
+    with pytest.raises(UnsupportedGeneratedTestError, match="recorded FVP status"):
+        build_case_bundle_from_generated_test(
+            PROJECT_ROOT, case, output_root=tmp_path / "fail", fvp_gate="advisory"
+        )
+
+
+def test_off_never_blocks_but_still_records_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _abs_default_s8_case()
+    digest = generated_case_artifact_sha256(case.directory)
+    _pin_report(
+        monkeypatch,
+        _write_fake_report(
+            tmp_path,
+            case.cpu,
+            case.suite,
+            {case.name: {"test_result": {"status": "FAIL"}, "artifact_sha256": digest}},
+        ),
+    )
+    bundle = build_case_bundle_from_generated_test(
+        PROJECT_ROOT, case, output_root=tmp_path / "off", fvp_gate="off"
+    )
+    assert bundle.fvp_status == "failed"
+
+
+def test_unknown_policy_is_rejected(tmp_path: Path) -> None:
+    case = _abs_default_s8_case()
+    with pytest.raises(ValueError, match="fvp_gate must be one of"):
+        build_case_bundle_from_generated_test(
+            PROJECT_ROOT, case, output_root=tmp_path / "bad", fvp_gate="sometimes"
+        )
