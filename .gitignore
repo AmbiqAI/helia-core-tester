@@ -39,11 +39,14 @@ CMakeFiles/
 *.cmake
 !CMakeLists.txt
 # App-owned NSX hardware-build glue (not vendor/generated -- see
-# cmake/nsx/nsx_app_bootstrap.cmake's own header comment). Everything else
-# under cmake/nsx/ (toolchains/, socs -> symlink into modules/nsx-ambiq-sdk)
-# stays ignored: machine-specific or vendored.
+# cmake/nsx/nsx_app_bootstrap.cmake's own header comment). nsx_toolchain_flags
+# is whitelisted too: nsx_app_bootstrap.cmake include()s it unconditionally at
+# file scope, so a clone without it cannot configure HELIA_HARDWARE_BUILD=ON at
+# all. Everything else under cmake/nsx/ (toolchains/, the nsx_soc_facts.cmake and
+# socs symlinks into the fetched SDK) stays ignored: machine-specific or vendored.
 !cmake/nsx/nsx_app_bootstrap.cmake
 !cmake/nsx/nsx_helpers.cmake
+!cmake/nsx/nsx_toolchain_flags.cmake
 *.a
 *.o
 *.elf

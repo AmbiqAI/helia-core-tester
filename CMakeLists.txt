@@ -61,8 +61,18 @@ if(HELIA_HARDWARE_BUILD)
   # script's nsx_ambiq_sdk_dir(). Override only to point at a hand-managed
   # checkout; the default deliberately stays inside the tester repo so a build
   # can't silently pick up an unrelated SDK tree from elsewhere on the machine.
-  set(NSX_AMBIQ_SDK_DIR "artifacts/downloads/nsx-ambiq-sdk" CACHE PATH
+  # CACHE STRING, not CACHE PATH: CMake absolutizes -D values for PATH-typed
+  # cache entries against the invoking cwd, which would silently turn a
+  # relative override into an absolute path and corrupt every
+  # "${CMAKE_CURRENT_SOURCE_DIR}/${NSX_AMBIQ_SDK_DIR}" join below.
+  set(NSX_AMBIQ_SDK_DIR "artifacts/downloads/nsx-ambiq-sdk" CACHE STRING
       "Repo-relative path to the nsx-ambiq-sdk checkout for HELIA_HARDWARE_BUILD")
+  # Accept an absolute override too, by folding it back to repo-relative --
+  # nsx_bootstrap_app() resolves module dirs as "${NSX_APP_ROOT}/${dir}", so a
+  # bare absolute value cannot be used as-is.
+  if(IS_ABSOLUTE "${NSX_AMBIQ_SDK_DIR}")
+    file(RELATIVE_PATH NSX_AMBIQ_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}" "${NSX_AMBIQ_SDK_DIR}")
+  endif()
   if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${NSX_AMBIQ_SDK_DIR}/modules")
     message(FATAL_ERROR
       "HELIA_HARDWARE_BUILD=ON but ${NSX_AMBIQ_SDK_DIR}/modules is missing. "
