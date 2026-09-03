@@ -145,6 +145,32 @@ def missing_header_symbols(symbols: Iterable[str], cmsis_nn_root: Optional[Path]
     return [symbol for symbol in ordered if not _symbol_declared(symbol, text)]
 
 
+def kernel_source_exists(symbol: str, cmsis_nn_root: Optional[Path] = None) -> bool:
+    """True iff the checkout ships a kernel source file named after ``symbol``
+    (``Source/**/<symbol>.c``).
+
+    Backstop for the per-symbol declaration probe: kernel sources in
+    ns-cmsis-nn are named after their public symbol, so a symbol that is
+    "undeclared" per the probed public headers while its source file exists
+    means the probe missed a declaration (renamed symbol, or a public header
+    outside _PUBLIC_HEADER_NAMES) -- a contradiction the caller must surface
+    loudly instead of silently skipping every dependent test case.
+    """
+    name = str(symbol).strip()
+    if not name:
+        return False
+    root = cmsis_nn_root if cmsis_nn_root is not None else resolve_cmsis_nn_root()
+    if root is None:
+        return False
+    source_root = root / "Source"
+    if not source_root.is_dir():
+        return False
+    try:
+        return next(source_root.rglob(f"{name}.c"), None) is not None
+    except OSError:
+        return False
+
+
 def lstm_int_temp_expected_bytes(*, time_major: bool, batch_size: int, hidden_size: int) -> int:
     """Expected arm_lstm_unidirectional_{s8,s16}_temp{1,2}_get_buffer_size().
 

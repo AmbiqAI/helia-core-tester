@@ -26,11 +26,17 @@ from helia_core_tester.generation.utils.temp_sizer_probe import missing_header_s
 TESTER_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _fake_cmsis_nn_root(tmp_path: Path, header_text: str) -> Path:
+def _fake_cmsis_nn_root(
+    tmp_path: Path, header_text: str, source_symbols: tuple[str, ...] = ()
+) -> Path:
     root = tmp_path / "ns-cmsis-nn-fake"
     include = root / "Include"
     include.mkdir(parents=True, exist_ok=True)
     (include / "arm_nnfunctions.h").write_text(header_text)
+    for symbol in source_symbols:
+        source_dir = root / "Source" / "BasicMathFunctions"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        (source_dir / f"{symbol}.c").write_text(f"/* {symbol} kernel */\n")
     return root
 
 
@@ -155,7 +161,9 @@ def _run_generation(tmp_path, monkeypatch, cmsis_nn_root: Path):
 def test_generation_skips_descriptor_when_kernel_symbol_is_undeclared(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = _fake_cmsis_nn_root(tmp_path, "/* no float mean here */\n")
+    root = _fake_cmsis_nn_root(
+        tmp_path, "/* no float mean here */\n", source_symbols=("arm_mean_s8",)
+    )
     generated, summary, manifest, generated_tests_dir = _run_generation(tmp_path, monkeypatch, root)
 
     assert generated == []
@@ -190,6 +198,51 @@ def test_generation_generates_descriptor_when_kernel_symbol_is_declared(
     assert summary["counts"]["generated"] == 1
     assert summary["counts"]["skipped_kernel_symbol"] == 0
     assert manifest["skipped_count"] == 0
+
+
+def test_generation_fails_loudly_when_undeclared_symbol_has_kernel_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """hct#92 review backstop: declaration missing from the probed public
+    headers while Source/**/<symbol>.c ships means the probe missed a
+    declaration (renamed symbol / unprobed header). That must fail generation
+    with a nonzero outcome, never silently skip with green CI."""
+    root = _fake_cmsis_nn_root(
+        tmp_path,
+        "/* declaration lives in some unprobed header */\n",
+        source_symbols=("arm_nn_mean_f32",),
+    )
+
+    # With every filtered descriptor contradicted, the run has zero generated
+    # models and zero skips, so the "no generated tests" guard fires first;
+    # either way the generation step exits nonzero and the failure report
+    # below carries the loud per-descriptor message.
+    with pytest.raises(
+        AssertionError,
+        match="No TFLite models were generated|Generation failures occurred",
+    ):
+        _run_generation(tmp_path, monkeypatch, root)
+
+    repo_root = tmp_path / "repo"
+    report_dir = repo_root / "artifacts" / "reports" / "generation" / "float" / "cortex-m55"
+    failures = json.loads((report_dir / "generation_failures.json").read_text())
+    assert len(failures) == 1
+    assert failures[0]["name"] == "mean_float_axis_c_f32"
+    assert failures[0]["stage"] == "kernel_symbol_probe"
+    assert "arm_nn_mean_f32" in failures[0]["exception"]
+    # The contradicted descriptor is a failure, not a skip.
+    summary = json.loads((report_dir / "generation_summary.json").read_text())
+    assert summary["counts"]["skipped_kernel_symbol"] == 0
+    assert summary["counts"]["generation_failures"] == 1
+
+
+def test_kernel_source_exists_matches_only_shipped_sources(tmp_path: Path) -> None:
+    from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists
+
+    root = _fake_cmsis_nn_root(tmp_path, "", source_symbols=("arm_nn_mean_f32",))
+    assert kernel_source_exists("arm_nn_mean_f32", cmsis_nn_root=root) is True
+    assert kernel_source_exists("arm_hard_swish_f32", cmsis_nn_root=root) is False
+    assert kernel_source_exists("arm_nn_mean_f32", cmsis_nn_root=tmp_path / "nope") is False
 
 
 # ---------------------------------------------------------------------------

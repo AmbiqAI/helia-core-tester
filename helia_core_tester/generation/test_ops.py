@@ -18,7 +18,7 @@ from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filt
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.core.path_layout import generation_report_dir
 from helia_core_tester.generation.ops import get_op_map, get_operator_spec
-from helia_core_tester.generation.utils.temp_sizer_probe import missing_header_symbols
+from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists, missing_header_symbols
 
 
 def _descriptor_family(desc: Dict[str, Any]) -> str:
@@ -362,6 +362,7 @@ def test_generation(test_filters):
     # Per-run cache for the per-symbol codegen probe (one header scan per
     # distinct kernel symbol, however many descriptors require it).
     symbol_declared_cache: Dict[str, bool] = {}
+    symbol_source_cache: Dict[str, bool] = {}
     for desc in filtered_descriptors:
         missing_capabilities = missing_required_capabilities(target_cpu, _required_capabilities(desc))
         if missing_capabilities:
@@ -383,6 +384,36 @@ def test_generation(test_filters):
                 symbol_declared_cache[symbol] = not missing_header_symbols([symbol])
             if not symbol_declared_cache[symbol]:
                 missing_symbols.append(symbol)
+        # Backstop (hct#92 review): a symbol the header probe reports as
+        # undeclared while its kernel source ships in the checkout means the
+        # probe missed a declaration (renamed symbol, or a public header
+        # outside the probed set). Silently skipping would delete every
+        # dependent case with exit 0 and green CI, so fail generation loudly
+        # instead. Genuinely absent kernels (no source file) keep the skip.
+        contradicted_symbols: List[str] = []
+        for symbol in missing_symbols:
+            if symbol not in symbol_source_cache:
+                symbol_source_cache[symbol] = kernel_source_exists(symbol)
+            if symbol_source_cache[symbol]:
+                contradicted_symbols.append(symbol)
+        if contradicted_symbols:
+            message = (
+                f"Kernel symbol probe contradiction for {desc['name']}: "
+                f"{', '.join(contradicted_symbols)} declared in no probed public header, "
+                f"but the checkout ships Source/**/<symbol>.c. The probe missed a "
+                f"declaration (renamed symbol or unprobed public header); refusing to "
+                f"silently skip. Update _PUBLIC_HEADER_NAMES / required_kernel_symbols."
+            )
+            print(f"ERROR: {message}")
+            generation_failures.append({
+                "name": desc.get("name"),
+                "operator": desc.get("operator"),
+                "family": _descriptor_family(desc),
+                "parity_kind": _descriptor_parity_kind(desc),
+                "stage": "kernel_symbol_probe",
+                "exception": message,
+            })
+            continue
         if missing_symbols:
             skipped_entries.append(
                 _skip_manifest_entry(
