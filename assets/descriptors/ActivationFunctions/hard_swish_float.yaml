@@ -8,9 +8,11 @@
 # construction and the curved region sits well inside the repo's default
 # float tolerances (measured max error 1.24e-7 f32 / 3.4e-4 f16 in #413).
 #
-# Inputs sample [-8, 8] so every region (zero, curved, identity) is
-# exercised; tail sizes are coprime to the MVE vector widths (4 f32 lanes,
-# 8 f16 lanes) so the tail-predicated epilogue executes.
+# Inputs sample [-8, 8]. The default (128-element) cases exercise every
+# region (zero, curved, identity); the tail cases exist to execute the
+# tail-predicated epilogue, with sizes coprime to the MVE vector widths
+# (4 f32 lanes, 8 f16 lanes) -- their few samples are not guaranteed to
+# reach every region (e.g. the f32 tail draw never lands below -3).
 #
 # required_kernel_symbols gates each case on the target ns-cmsis-nn
 # checkout declaring the kernel (per-symbol codegen probe), so one tester

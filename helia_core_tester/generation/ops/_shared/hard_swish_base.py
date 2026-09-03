@@ -27,7 +27,7 @@ class HardSwishFamilyBase(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization (plain float for FP32/FP16)."""
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input", default="S8")
         if self.variant_name() == "compat" and str(activation_dtype).upper() != "S8":
             raise NotImplementedError("HardSwishCompat is only supported for S8.")
         if str(activation_dtype).upper() in ("FP32", "FP16"):
@@ -44,9 +44,7 @@ class HardSwishFamilyBase(OperationBase):
         # Create converter
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
-        # Apply quantization based on activation_dtype
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        
+        # Apply quantization based on the resolved activation dtype
         if activation_dtype == 'S8':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_types = [tf.int8]
