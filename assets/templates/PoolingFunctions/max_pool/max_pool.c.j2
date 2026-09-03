@@ -33,6 +33,17 @@ int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input,
     {{ output_dtype }}* __restrict output
 ) {
+    {% if buffer_size_max > 0 %}
+    // Armed unconditionally: declared/checked whenever buffer_size_max > 0,
+    // even for kernel variants that never query a buffer size and leave
+    // ctx.buf NULL below -- poisoning an unused buffer here is harmless,
+    // and keeps this in lockstep with the CHECK in _test_case_run instead
+    // of leaving its canary unstamped whenever kernel_get_buffer_size_fn
+    // is absent. (buffer_size_max is always 0 for max pooling today, so
+    // this is dead code here, but keeps the template correct if that
+    // ever changes.)
+    HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
+    {% endif %}
     {% if kernel_get_buffer_size_fn %}
     // Calculate required buffer size (for average pooling)
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
@@ -48,7 +59,6 @@ int32_t {{ name }}_run(
     // Initialize context buffer
     {{ name }}_ctx.buf = {{ name }}_buffer;
     {{ name }}_ctx.size = required_buffer_size;
-    HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
     {% else %}
     // Max pooling doesn't need a buffer
     {{ name }}_ctx.buf = NULL;
