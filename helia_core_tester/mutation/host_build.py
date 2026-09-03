@@ -133,7 +133,7 @@ def build_kernel_lib(tree_root: Path, out_dir: Path, cc: str = "gcc", jobs: int 
     return lib
 
 
-def build_runtime_obj(tester_root: Path, out_dir: Path, cc: str = "gcc") -> Path:
+def build_runtime_obj(tester_root: Path, tree_root: Path, out_dir: Path, cc: str = "gcc") -> Path:
     """Compile the shared test runtime once, with helia_test_finish renamed away
     so the exiting host implementation in host_finish.c takes its place."""
     src = tester_root / "src" / "test_runtime" / "helia_test_runtime.c"
@@ -146,6 +146,10 @@ def build_runtime_obj(tester_root: Path, out_dir: Path, cc: str = "gcc") -> Path
             "-Dhelia_test_finish=helia_test_finish_fvp_unused",
             "-I",
             str(tester_root / "src"),
+            # helia_test_runtime.h pulls in arm_nnfunctions.h (for
+            # ARM_CMSIS_NN_SUCCESS), so it needs the kernel tree's Include dir too.
+            "-I",
+            str(tree_root / "Include"),
             str(src),
             "-o",
             str(obj),

@@ -264,6 +264,14 @@ def _crafted_checkout(tmp_path: Path) -> Path:
     ):
         (checkout / sub).mkdir(parents=True)
     (checkout / "Include").mkdir()
+    # helia_test_runtime.h includes arm_nnfunctions.h for ARM_CMSIS_NN_SUCCESS;
+    # stub just that out rather than depending on a real ns-cmsis-nn checkout.
+    (checkout / "Include" / "arm_nnfunctions.h").write_text(
+        "#ifndef ARM_NNFUNCTIONS_H\n"
+        "#define ARM_NNFUNCTIONS_H\n"
+        "typedef enum { ARM_CMSIS_NN_SUCCESS = 0 } arm_cmsis_nn_status;\n"
+        "#endif\n"
+    )
     (checkout / "Source" / "BasicMathFunctions" / "kernel.c").write_text(
         "#include <stdint.h>\n"
         "int32_t helia_mut_test_kernel(void) { return 42; }\n"
