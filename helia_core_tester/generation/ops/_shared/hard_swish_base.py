@@ -26,10 +26,17 @@ class HardSwishFamilyBase(OperationBase):
         return model
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        """Convert Keras model to TFLite with quantization (plain float for FP32/FP16)."""
+        activation_dtype = self.tensor_dtype("input", default="S8")
         if self.variant_name() == "compat" and str(activation_dtype).upper() != "S8":
             raise NotImplementedError("HardSwishCompat is only supported for S8.")
+        if str(activation_dtype).upper() in ("FP32", "FP16"):
+            # arm_hard_swish_f32/f16 parity cases: plain float model, no
+            # quantization (mirrors the other float-suite conversions).
+            converter = tf.lite.TFLiteConverter.from_keras_model(model)
+            tflite_model = converter.convert()
+            self._write_tflite_bytes(out_path, tflite_model)
+            return
         if self.variant_name() == "precise" and str(activation_dtype).upper() == "S16":
             # TFLite quantization for HARD_SWISH int16 is not supported.
             # Skip TFLite generation and rely on descriptor-provided scales.
@@ -37,9 +44,7 @@ class HardSwishFamilyBase(OperationBase):
         # Create converter
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
-        # Apply quantization based on activation_dtype
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        
+        # Apply quantization based on the resolved activation dtype
         if activation_dtype == 'S8':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_types = [tf.int8]
@@ -82,7 +87,7 @@ class HardSwishFamilyBase(OperationBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input", default="S8")
         variant = self.variant_name()
         
         if activation_dtype == 'S8':
@@ -102,6 +107,22 @@ class HardSwishFamilyBase(OperationBase):
                 'kernel_fn': 'arm_hard_swish_precise_s16',
                 'input_c_type': 'int16_t',
                 'output_c_type': 'int16_t'
+            }
+        elif activation_dtype in ('FP32', 'FP16'):
+            if variant == "compat":
+                raise NotImplementedError("HardSwishCompat is only supported for S8.")
+            if activation_dtype == 'FP32':
+                return {
+                    'kernel_fn': 'arm_hard_swish_f32',
+                    'input_c_type': 'float',
+                    'output_c_type': 'float',
+                    'float_kernel': True,
+                }
+            return {
+                'kernel_fn': 'arm_hard_swish_f16',
+                'input_c_type': 'float16_t',
+                'output_c_type': 'float16_t',
+                'float_kernel': True,
             }
         else:
             raise NotImplementedError(f"Unsupported HardSwish dtype: {activation_dtype}")
@@ -299,6 +320,10 @@ class HardSwishFamilyBase(OperationBase):
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_hard_swish_kernel()
         variant = self.variant_name()
+        
+        if kernel_info.get('float_kernel'):
+            self._generate_float_c_files(output_dir, kernel_info)
+            return
         
         input_shape = tuple(self.desc['input_shape'])
         output_shape = input_shape
@@ -506,3 +531,70 @@ class HardSwishFamilyBase(OperationBase):
             cmake_context,
         )
         
+
+    def _generate_float_c_files(self, output_dir: Path, kernel_info: Dict[str, str]) -> None:
+        """
+        Generate C/H files for arm_hard_swish_f32/f16 (ns-cmsis-nn #413).
+
+        The kernels compute x * min(max(x + 3, 0), 6) / 6 elementwise as
+        x * clamp(fma(x, 1/6, 0.5), 0, 1): x >= 3 returns x bit-exactly,
+        x <= -3 returns exact zero, and the f16 kernel evaluates in float32
+        with a single narrowing. The golden is the float64 reference cast
+        once to the output dtype; both saturated regions agree bit-exactly
+        with the kernel by construction and the curved region sits well
+        inside the repo's default float tolerances (#413 measured max error
+        1.24e-7 f32 / 3.4e-4 f16 against a float64 reference).
+        """
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        name = self.desc['name']
+        float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+
+        input_shape = tuple(self.desc['input_shape'])
+
+        builder = TemplateContextBuilder()
+        input_dims = builder.nhwc_to_cmsis_dims(input_shape)
+        output_dims = builder.nhwc_to_cmsis_dims(input_shape)
+
+        # Sample [-8, 8] so the zero region (x <= -3), the curved region,
+        # and the bit-exact identity region (x >= 3) all execute.
+        input_data = self._sample_uniform(
+            input_shape,
+            low=float(self.desc.get("input_min", -8.0)),
+            high=float(self.desc.get("input_max", 8.0)),
+            dtype=float_dtype,
+        )
+
+        reference = input_data.astype(np.float64)
+        output_data = (
+            reference * np.clip(reference + 3.0, 0.0, 6.0) / 6.0
+        ).astype(float_dtype)
+
+        size = int(np.prod(input_shape))
+        context = {
+            'name': name,
+            'input_dims': input_dims,
+            'output_dims': output_dims,
+            'output_size': size,
+            'input_data_array': builder.format_array_as_c_literal(input_data),
+            'expected_output_array': builder.format_array_as_c_literal(output_data),
+            'input_dtype': kernel_info["input_c_type"],
+            'output_dtype': kernel_info["output_c_type"],
+            'kernel_fn': kernel_info["kernel_fn"],
+            'float_kernel': True,
+            'validation_mode': 'float',
+        }
+
+        cmake_context = {
+            'name': name,
+            'operator': self.desc.get('operator', self.OPERATOR_NAME),
+            'operator_name': 'hard_swish',
+        }
+        self._write_op_outputs(
+            output_dir,
+            "hard_swish",
+            "ActivationFunctions/hard_swish/hard_swish.h.j2",
+            "ActivationFunctions/hard_swish/hard_swish_float.c.j2",
+            context,
+            cmake_context,
+        )

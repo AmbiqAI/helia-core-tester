@@ -33,8 +33,16 @@ class OpMean(OperationBase):
         model = tf.keras.Model(inputs=inputs, outputs=output)
         return model
 
+    def _is_float_kernel(self) -> bool:
+        return self.tensor_dtype("input", default="S8") in ("FP32", "FP16")
+
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
+        """Convert Keras model to TFLite (plain float model for FP32/FP16)."""
+        if self._is_float_kernel():
+            converter = tf.lite.TFLiteConverter.from_keras_model(model)
+            tflite_model = converter.convert()
+            self._write_tflite_bytes(out_path, tflite_model)
+            return
         super().convert_to_tflite(model, out_path, rep_seed)
     
     def _select_cmsis_mean_kernel(self) -> Dict[str, str]:
@@ -44,7 +52,7 @@ class OpMean(OperationBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input", default="S8")
         
         if activation_dtype == 'S8':
             return {
@@ -57,6 +65,20 @@ class OpMean(OperationBase):
                 'kernel_fn': 'arm_mean_s16',
                 'input_c_type': 'int16_t',
                 'output_c_type': 'int16_t'
+            }
+        elif activation_dtype == 'FP32':
+            return {
+                'kernel_fn': 'arm_nn_mean_f32',
+                'input_c_type': 'float',
+                'output_c_type': 'float',
+                'float_kernel': True,
+            }
+        elif activation_dtype == 'FP16':
+            return {
+                'kernel_fn': 'arm_nn_mean_f16',
+                'input_c_type': 'float16_t',
+                'output_c_type': 'float16_t',
+                'float_kernel': True,
             }
         else:
             raise NotImplementedError(f"Unsupported Mean dtype: {activation_dtype}")
@@ -75,6 +97,10 @@ class OpMean(OperationBase):
         
         # Select CMSIS kernel + types
         kernel_info = self._select_cmsis_mean_kernel()
+        
+        if kernel_info.get('float_kernel'):
+            self._generate_float_c_files(output_dir, kernel_info)
+            return
         
         # Load LiteRT model for shape and quantization extraction
         from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
@@ -256,3 +282,78 @@ class OpMean(OperationBase):
         with open(cmake_path, 'w') as f:
             f.write(cmake_content)
         
+
+    def _generate_float_c_files(self, output_dir: Path, kernel_info: Dict[str, str]) -> None:
+        """
+        Generate C/H files for arm_nn_mean_f32/f16 (ns-cmsis-nn #414/#412).
+
+        Mirrors OpReduceSum's float path: same call shape (4D NHWC input
+        dims + 4D binary axis mask + 4D output dims), with the kernel
+        dividing by the reduction count before the single store. Goldens
+        accumulate in float32 for both dtypes and divide in float32,
+        matching the kernels' documented semantics (the f16 kernel widens
+        to float32 and rounds once after the divide).
+        """
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        name = self.desc['name']
+        float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+
+        input_shape = tuple(self.desc['input_shape'])
+
+        builder = TemplateContextBuilder()
+        input_dims = builder.nhwc_to_cmsis_dims(input_shape)
+
+        axes = self.desc.get('axes', [1, 2])
+        if not isinstance(axes, list):
+            axes = [axes]
+
+        # Keep CMSIS output dims 4D even when TFLite output rank is reduced
+        normalized_axes = builder.normalize_reduction_axes(len(input_shape), axes)
+        axis_dims_cmsis = builder.build_reduce_axis_dims(len(input_shape), normalized_axes)
+        output_dims = builder.build_reduce_output_dims(
+            input_shape=input_shape,
+            axes=normalized_axes,
+            keepdims=bool(self.desc.get('keepdims', True))
+        )
+
+        input_q = self._sample_uniform(input_shape, dtype=float_dtype)
+
+        reduction_count = 1
+        for axis in normalized_axes:
+            reduction_count *= int(input_shape[axis])
+
+        # Golden with float32 accumulation and a float32 divide for both
+        # dtypes (single final rounding for f16).
+        output_data = (
+            np.sum(input_q.astype(np.float32), axis=tuple(normalized_axes), keepdims=True)
+            / np.float32(reduction_count)
+        ).astype(float_dtype)
+
+        context = {
+            'name': name,
+            'input_dims': input_dims,
+            'output_dims': output_dims,
+            'axis_dims': axis_dims_cmsis,
+            'input_data_array': builder.format_array_as_c_literal(input_q),
+            'expected_output_array': builder.format_array_as_c_literal(output_data),
+            'input_dtype': kernel_info["input_c_type"],
+            'output_dtype': kernel_info["output_c_type"],
+            'kernel_fn': kernel_info["kernel_fn"],
+            'float_kernel': True,
+            'validation_mode': 'float',
+        }
+
+        cmake_context = {
+            'name': name,
+            'operator': self.desc.get('operator', 'Mean'),
+            'operator_name': 'mean',
+        }
+        self._write_op_outputs(
+            output_dir,
+            "mean",
+            "BasicMathFunctions/mean/mean_float.h.j2",
+            "BasicMathFunctions/mean/mean_float.c.j2",
+            context,
+            cmake_context,
+        )

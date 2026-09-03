@@ -1,0 +1,93 @@
+# Float Mean parity cases for arm_nn_mean_f32 / arm_nn_mean_f16
+# (ns-cmsis-nn PRs #414 / #412). Same call shape as arm_reduce_sum_f32/f16:
+# 4D NHWC input dims + 4D binary axis mask + 4D output dims. The kernels
+# accumulate in float32 (the f16 kernel widens and rounds once) and divide
+# by the reduction count before the single store, so goldens are
+# numpy sum with float32 accumulation divided by the reduction count.
+#
+# required_kernel_symbols gates each case on the target ns-cmsis-nn
+# checkout actually declaring the kernel (per-symbol codegen probe): one
+# tester pin serves the f32 branch, the f16 branch, and main (which has
+# neither) without generating tests that reference missing symbols.
+# Axis picks cover both kernel paths: [3] and [1, 2, 3] flatten to the
+# contiguous-suffix fast path (MVE tail predication), [1, 2] and [1] force
+# the generic strided walk.
+operator: Mean
+name: mean_float_axis_c_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 3, 4, 5]
+axes: [3]
+required_kernel_symbols: [arm_nn_mean_f32]
+---
+operator: Mean
+name: mean_float_axis_hwc_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 8, 8, 16]
+axes: [1, 2, 3]
+required_kernel_symbols: [arm_nn_mean_f32]
+---
+operator: Mean
+name: mean_float_axis_hw_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 8, 8, 16]
+axes: [1, 2]
+required_kernel_symbols: [arm_nn_mean_f32]
+---
+operator: Mean
+name: mean_float_axis_h_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 3, 4, 5]
+axes: [1]
+required_kernel_symbols: [arm_nn_mean_f32]
+---
+operator: Mean
+name: mean_float_axis_c_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 3, 4, 5]
+axes: [3]
+required_kernel_symbols: [arm_nn_mean_f16]
+---
+operator: Mean
+name: mean_float_axis_hwc_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 8, 8, 16]
+axes: [1, 2, 3]
+required_kernel_symbols: [arm_nn_mean_f16]
+---
+operator: Mean
+name: mean_float_axis_hw_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 8, 8, 16]
+axes: [1, 2]
+required_kernel_symbols: [arm_nn_mean_f16]
+---
+operator: Mean
+name: mean_float_axis_h_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 3, 4, 5]
+axes: [1]
+required_kernel_symbols: [arm_nn_mean_f16]

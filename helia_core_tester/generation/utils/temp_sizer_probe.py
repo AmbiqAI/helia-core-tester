@@ -83,6 +83,26 @@ def _symbol_declared(symbol: str, text: str) -> bool:
     return re.search(rf"\b{re.escape(symbol)}\s*\(", _strip_comments(text)) is not None
 
 
+def _public_header_corpus(cmsis_nn_root: Optional[Path]) -> Optional[str]:
+    """Comment-bearing concatenation of the checkout's public Include/ headers,
+    or None when no header is readable (callers must treat None as "every
+    symbol absent" -- skipping is always the safe answer)."""
+    if cmsis_nn_root is None or not (cmsis_nn_root / "Include").is_dir():
+        return None
+    corpus = []
+    for header_name in _PUBLIC_HEADER_NAMES:
+        header = cmsis_nn_root / "Include" / header_name
+        if not header.is_file():
+            continue
+        try:
+            corpus.append(header.read_text(errors="replace"))
+        except OSError:
+            continue
+    if not corpus:
+        return None
+    return "\n".join(corpus)
+
+
 def probe_header_symbols(symbols: Iterable[str], cmsis_nn_root: Optional[Path] = None) -> bool:
     """True iff every symbol is declared in the checkout's public Include/
     headers (declaration shape: ``symbol(`` -- see _symbol_declared).
@@ -91,22 +111,64 @@ def probe_header_symbols(symbols: Iterable[str], cmsis_nn_root: Optional[Path] =
     -- the legacy templates are always a safe answer.
     """
     root = cmsis_nn_root if cmsis_nn_root is not None else resolve_cmsis_nn_root()
-    if root is None or not (root / "Include").is_dir():
+    text = _public_header_corpus(root)
+    if text is None:
         return False
-
-    corpus = []
-    for header_name in _PUBLIC_HEADER_NAMES:
-        header = root / "Include" / header_name
-        if not header.is_file():
-            continue
-        try:
-            corpus.append(header.read_text(errors="replace"))
-        except OSError:
-            continue
-    if not corpus:
-        return False
-    text = "\n".join(corpus)
     return all(_symbol_declared(symbol, text) for symbol in symbols)
+
+
+def missing_header_symbols(symbols: Iterable[str], cmsis_nn_root: Optional[Path] = None) -> list[str]:
+    """Return the subset of ``symbols`` NOT declared in the checkout's public
+    Include/ headers, preserving input order (deduplicated).
+
+    Per-symbol sibling of probe_header_symbols() for descriptor-level gating
+    (helia-core-tester float mean / hard_swish support): one tester pin is
+    used across several in-flight ns-cmsis-nn kernel branches, each declaring
+    only its own kernels, so generation must skip exactly the descriptors
+    whose kernels the target checkout does not declare. Missing checkout,
+    missing Include/, or unreadable headers mean every symbol is reported
+    missing -- skipping is always the safe answer.
+    """
+    ordered: list[str] = []
+    seen = set()
+    for symbol in symbols:
+        name = str(symbol).strip()
+        if name and name not in seen:
+            ordered.append(name)
+            seen.add(name)
+    if not ordered:
+        return []
+    root = cmsis_nn_root if cmsis_nn_root is not None else resolve_cmsis_nn_root()
+    text = _public_header_corpus(root)
+    if text is None:
+        return list(ordered)
+    return [symbol for symbol in ordered if not _symbol_declared(symbol, text)]
+
+
+def kernel_source_exists(symbol: str, cmsis_nn_root: Optional[Path] = None) -> bool:
+    """True iff the checkout ships a kernel source file named after ``symbol``
+    (``Source/**/<symbol>.c``).
+
+    Backstop for the per-symbol declaration probe: kernel sources in
+    ns-cmsis-nn are named after their public symbol, so a symbol that is
+    "undeclared" per the probed public headers while its source file exists
+    means the probe missed a declaration (renamed symbol, or a public header
+    outside _PUBLIC_HEADER_NAMES) -- a contradiction the caller must surface
+    loudly instead of silently skipping every dependent test case.
+    """
+    name = str(symbol).strip()
+    if not name:
+        return False
+    root = cmsis_nn_root if cmsis_nn_root is not None else resolve_cmsis_nn_root()
+    if root is None:
+        return False
+    source_root = root / "Source"
+    if not source_root.is_dir():
+        return False
+    try:
+        return next(source_root.rglob(f"{name}.c"), None) is not None
+    except OSError:
+        return False
 
 
 def lstm_int_temp_expected_bytes(*, time_major: bool, batch_size: int, hidden_size: int) -> int:

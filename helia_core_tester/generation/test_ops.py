@@ -18,6 +18,7 @@ from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filt
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.core.path_layout import generation_report_dir
 from helia_core_tester.generation.ops import get_op_map, get_operator_spec
+from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists, missing_header_symbols
 
 
 def _descriptor_family(desc: Dict[str, Any]) -> str:
@@ -131,6 +132,31 @@ def _required_capabilities(desc: Dict[str, Any]) -> list[str]:
     return normalized
 
 
+def _required_kernel_symbols(desc: Dict[str, Any]) -> list[str]:
+    """Public ns-cmsis-nn kernel symbols a descriptor's generated test calls.
+
+    Descriptors listing ``required_kernel_symbols`` are generated only when
+    every symbol is declared in the target ns-cmsis-nn checkout's public
+    headers (per-symbol codegen probe, see temp_sizer_probe). This lets one
+    tester pin serve several in-flight ns-cmsis-nn kernel branches: each
+    branch declares only its own kernels and the rest skip cleanly instead
+    of failing the build with references to missing symbols.
+    """
+    raw = desc.get("required_kernel_symbols")
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    ordered: list[str] = []
+    seen = set()
+    for symbol in raw:
+        name = str(symbol).strip()
+        if name and name not in seen:
+            ordered.append(name)
+            seen.add(name)
+    return ordered
+
+
 def _resolved_tensor_dtypes(desc: Dict[str, Any]) -> Dict[str, str]:
     return dict(desc.get("resolved_tensor_dtypes") or resolve_tensor_dtypes(desc))
 
@@ -139,8 +165,15 @@ def _resolved_comparison(desc: Dict[str, Any]) -> Dict[str, Any]:
     return dict(desc.get("resolved_comparison") or resolve_comparison(desc, _resolved_tensor_dtypes(desc)))
 
 
-def _skip_manifest_entry(desc: Dict[str, Any], *, cpu: str, missing_capabilities: list[str]) -> Dict[str, Any]:
-    return {
+def _skip_manifest_entry(
+    desc: Dict[str, Any],
+    *,
+    cpu: str,
+    missing_capabilities: list[str],
+    status: str = "skipped_capability",
+    missing_kernel_symbols: Optional[list[str]] = None,
+) -> Dict[str, Any]:
+    entry = {
         "name": desc.get("name"),
         "operator": desc.get("operator"),
         "family": _descriptor_family(desc),
@@ -152,10 +185,14 @@ def _skip_manifest_entry(desc: Dict[str, Any], *, cpu: str, missing_capabilities
         "descriptor_relpath": desc.get("_source_relpath"),
         "suite": _descriptor_suite(desc),
         "cpu": cpu,
-        "status": "skipped_capability",
+        "status": status,
         "missing_capabilities": missing_capabilities,
         "required_capabilities": _required_capabilities(desc),
+        "required_kernel_symbols": _required_kernel_symbols(desc),
     }
+    if missing_kernel_symbols is not None:
+        entry["missing_kernel_symbols"] = missing_kernel_symbols
+    return entry
 
 
 def generate_test(
@@ -322,6 +359,10 @@ def test_generation(test_filters):
     skipped_entries: List[Dict[str, Any]] = []
     conversion_failures: List[Dict[str, Any]] = []
     generation_failures: List[Dict[str, Any]] = []
+    # Per-run cache for the per-symbol codegen probe (one header scan per
+    # distinct kernel symbol, however many descriptors require it).
+    symbol_declared_cache: Dict[str, bool] = {}
+    symbol_source_cache: Dict[str, bool] = {}
     for desc in filtered_descriptors:
         missing_capabilities = missing_required_capabilities(target_cpu, _required_capabilities(desc))
         if missing_capabilities:
@@ -335,6 +376,57 @@ def test_generation(test_filters):
             print(
                 f"Skipping {desc['name']} on {target_cpu}: missing capabilities "
                 f"{', '.join(missing_capabilities)}"
+            )
+            continue
+        missing_symbols: List[str] = []
+        for symbol in _required_kernel_symbols(desc):
+            if symbol not in symbol_declared_cache:
+                symbol_declared_cache[symbol] = not missing_header_symbols([symbol])
+            if not symbol_declared_cache[symbol]:
+                missing_symbols.append(symbol)
+        # Backstop (hct#92 review): a symbol the header probe reports as
+        # undeclared while its kernel source ships in the checkout means the
+        # probe missed a declaration (renamed symbol, or a public header
+        # outside the probed set). Silently skipping would delete every
+        # dependent case with exit 0 and green CI, so fail generation loudly
+        # instead. Genuinely absent kernels (no source file) keep the skip.
+        contradicted_symbols: List[str] = []
+        for symbol in missing_symbols:
+            if symbol not in symbol_source_cache:
+                symbol_source_cache[symbol] = kernel_source_exists(symbol)
+            if symbol_source_cache[symbol]:
+                contradicted_symbols.append(symbol)
+        if contradicted_symbols:
+            message = (
+                f"Kernel symbol probe contradiction for {desc['name']}: "
+                f"{', '.join(contradicted_symbols)} declared in no probed public header, "
+                f"but the checkout ships Source/**/<symbol>.c. The probe missed a "
+                f"declaration (renamed symbol or unprobed public header); refusing to "
+                f"silently skip. Update _PUBLIC_HEADER_NAMES / required_kernel_symbols."
+            )
+            print(f"ERROR: {message}")
+            generation_failures.append({
+                "name": desc.get("name"),
+                "operator": desc.get("operator"),
+                "family": _descriptor_family(desc),
+                "parity_kind": _descriptor_parity_kind(desc),
+                "stage": "kernel_symbol_probe",
+                "exception": message,
+            })
+            continue
+        if missing_symbols:
+            skipped_entries.append(
+                _skip_manifest_entry(
+                    desc,
+                    cpu=target_cpu,
+                    missing_capabilities=[],
+                    status="skipped_kernel_symbol",
+                    missing_kernel_symbols=missing_symbols,
+                )
+            )
+            print(
+                f"Skipping {desc['name']}: ns-cmsis-nn checkout does not declare "
+                f"{', '.join(missing_symbols)}"
             )
             continue
         try:
@@ -480,7 +572,12 @@ def test_generation(test_filters):
             "descriptors_total": len(descriptors),
             "descriptors_after_filters": len(filtered_descriptors),
             "generated": generated_count,
-            "skipped_capability": len(skipped_entries),
+            "skipped_capability": sum(
+                1 for entry in skipped_entries if entry.get("status") == "skipped_capability"
+            ),
+            "skipped_kernel_symbol": sum(
+                1 for entry in skipped_entries if entry.get("status") == "skipped_kernel_symbol"
+            ),
             "conversion_failures": len(conversion_failures),
             "generation_failures": len(generation_failures),
         },

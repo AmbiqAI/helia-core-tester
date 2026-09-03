@@ -1,0 +1,42 @@
+#include "{{ name }}_hard_swish.h"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+#define {{ name|upper }}_OUTPUT_SIZE {{ output_size }}
+static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+
+int32_t {{ name }}_run(
+    const {{ input_dtype }}* __restrict input,
+    {{ output_dtype }}* __restrict output
+) {
+    // Call float HardSwish kernel: x * min(max(x + 3, 0), 6) / 6
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        input,
+        output,
+        {{ output_size }}        // size
+    );
+
+    return kernel_status;
+}
+
+int32_t {{ name }}_test_case_run(void)
+{
+    int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("HardSwish") }}", status);
+
+    int failures = 0;
+    HELIA_VALIDATE_OUTPUTS(
+        {{ validation_mode_token | default("FLOAT") }},
+        {{ name }}_output,
+        {{ name }}_expected_output,
+        {{ name|upper }}_OUTPUT_SIZE,
+        {{ validation_tolerance | default(1) }},
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
+        {{ validation_report_limit | default(20) }},
+        failures
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
+}
+
+{% include "common/standalone/main.j2" %}
