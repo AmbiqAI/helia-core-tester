@@ -355,6 +355,16 @@ before encoding them into the plan.**
   accounted for**.
 
 ### Hardware toolchain unblocked (2nd session segment)
+
+> **Superseded (2026-09-02).** The manual, out-of-repo wiring described below is
+> no longer how this works. `setup_dependencies.py` now clones
+> `AmbiqAI/nsx-ambiq-sdk` into `artifacts/downloads/nsx-ambiq-sdk` as a regular
+> dependency (alongside CMSIS-5/Corstone-300/neuralspotx), and `CMakeLists.txt`'s
+> `NSX_AMBIQ_SDK_DIR` defaults there, so the hardware build links against the
+> pipeline-managed clone instead of a checkout elsewhere on the machine. The
+> `modules/nsx-ambiq-sdk` path and the hand-made absolute symlinks below are
+> vestigial; `_ensure_nsx_sdk_symlinks()` now repoints any stale ones it finds.
+
 The user cloned the vendor NSX SDK to
 `/Users/mohammed.abuhussein/workspace/nsx-ambiq-sdk`. Wired it into this repo
 with local, uncommitted symlinks/copies (nothing pushed, per constraint):

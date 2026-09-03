@@ -13,6 +13,7 @@ docs/performance-streaming-report.md for exactly what is real vs simulated.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -32,6 +33,59 @@ app = typer.Typer(
 
 _DEFAULT_BUILD_DIR = "build/perf_stream/benchmark_server_gcc2"
 _TOOLCHAIN_FILE = "cmake/nsx/toolchains/arm-none-eabi-gcc.cmake"
+_DOWNLOADS_DIR = "artifacts/downloads"
+
+
+def _ensure_hardware_dependencies(repo_root: Path) -> None:
+    """Lazily fetch the real Apollo510/Cortex-M55 hardware-build dependencies
+    (nsx-ambiq-sdk, neuralspotx, the generated NSX toolchain file) the first time
+    any perf-stream hardware command needs them, instead of requiring a separate
+    manual bootstrap step. `helia_core_tester scripts.setup_dependencies --with-hardware`
+    does the same thing ahead of time if you'd rather pre-fetch.
+    """
+    from ..scripts.setup_dependencies import (
+        nsx_ambiq_sdk_dir,
+        setup_neuralspotx,
+        setup_nsx_ambiq_sdk,
+        setup_nsx_toolchain,
+    )
+
+    downloads_dir = repo_root / _DOWNLOADS_DIR
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+
+    sdk_modules_dir = nsx_ambiq_sdk_dir(repo_root, downloads_dir) / "modules"
+    # Not just the SDK checkout: also the local symlinks that redirect
+    # boards/apollo510_evb + cmake/socs + cmake/nsx_soc_facts.cmake into it (see
+    # setup_nsx_ambiq_sdk()'s _ensure_nsx_sdk_symlinks() call) -- an SDK checkout
+    # that predates those symlinks, or one whose symlinks got removed, needs
+    # setup_nsx_ambiq_sdk() re-run too, not just skipped as "already installed".
+    # Resolved, not just `.exists()`: a link left over from an earlier setup can
+    # point at an SDK checkout outside the tester repo and would otherwise pass
+    # as healthy, quietly building against that tree instead of the managed one.
+    board_symlink = repo_root / "boards" / "apollo510_evb"
+    board_link_ok = (
+        board_symlink.exists()
+        and board_symlink.resolve().is_relative_to(nsx_ambiq_sdk_dir(repo_root, downloads_dir).resolve())
+    )
+    neuralspotx_examples_dir = downloads_dir / "neuralspotx" / "examples"
+    toolchain_file = repo_root / _TOOLCHAIN_FILE
+
+    if (
+        sdk_modules_dir.is_dir()
+        and board_link_ok
+        and neuralspotx_examples_dir.is_dir()
+        and toolchain_file.exists()
+    ):
+        return
+
+    typer.echo("[perf-stream] Hardware-build dependencies not found -- fetching them now (first run only)...")
+    if not sdk_modules_dir.is_dir() or not board_link_ok:
+        setup_nsx_ambiq_sdk(repo_root, downloads_dir)
+    if not neuralspotx_examples_dir.is_dir():
+        setup_neuralspotx(downloads_dir)
+    if not toolchain_file.exists():
+        setup_nsx_toolchain(repo_root, downloads_dir)
+    typer.echo("[perf-stream] Hardware-build dependencies ready.")
 
 
 def _format_case_line(case, *, id_width: int = 0) -> str:
@@ -166,6 +220,7 @@ def _cached_var(cache_text: str, name: str) -> Optional[str]:
 
 def _configure(build_dir: Path, cpu: str, board: str, force: bool, serial_no: Optional[int] = None) -> None:
     repo_root = _repo_root()
+    _ensure_hardware_dependencies(repo_root)
     cache = build_dir / "CMakeCache.txt"
     if cache.exists() and not force:
         # A build dir configured before ARM_NN_ENABLE_F16 was added here would
@@ -176,10 +231,17 @@ def _configure(build_dir: Path, cpu: str, board: str, force: bool, serial_no: Op
         # in cmake/nsx/nsx_helpers.cmake), so switching --serial-no against an
         # already-configured build dir requires a reconfigure to take effect.
         serial_stale = serial_no is not None and _cached_var(cache_text, "NSX_JLINK_SERIAL") != str(serial_no)
+        # Still re-run cmake below in every case (cheap, <1s) rather than skipping
+        # outright when already-configured: relying on `cmake --build`'s own
+        # internal cmake_check_build_system re-check to be the first
+        # post-cache-write reconfigure has been observed to intermittently fail
+        # on a relative-path EXISTS() check (CMakeLists.txt's CMSIS_PATH
+        # validation) that a direct `cmake -S -B` invocation here never
+        # reproduces -- doing that direct invocation unconditionally sidesteps
+        # it instead of chasing the underlying CMake behavior.
         if "ARM_NN_ENABLE_F16:BOOL=ON" in cache_text and not serial_stale:
             typer.echo(f"[perf-stream] Reusing existing configured build dir: {build_dir}")
-            return
-        if serial_stale:
+        elif serial_stale:
             typer.echo(f"[perf-stream] Requested --serial-no {serial_no} differs from configured build dir -- reconfiguring.")
         else:
             typer.echo(f"[perf-stream] Existing build dir at {build_dir} predates ARM_NN_ENABLE_F16 -- reconfiguring.")
@@ -196,6 +258,10 @@ def _configure(build_dir: Path, cpu: str, board: str, force: bool, serial_no: Op
         f"-DTARGET_CPU={cpu}",
         "-DARM_NN_ENABLE_F32=ON",
         "-DARM_NN_ENABLE_F16=ON",
+        # Overrides CMakeLists.txt's fragile "3 levels up, outside the repo" default
+        # (${CMAKE_CURRENT_SOURCE_DIR}/../../../neuralspotx) with the copy
+        # _ensure_hardware_dependencies() fetches into artifacts/downloads/.
+        f"-DNEURALSPOTX_ROOT={repo_root / _DOWNLOADS_DIR / 'neuralspotx'}",
     ]
     if serial_no is not None:
         cmd.append(f"-DNSX_JLINK_SERIAL={serial_no}")
@@ -208,7 +274,14 @@ def _build(build_dir: Path, target: str, jobs: Optional[int]) -> None:
     if jobs:
         cmd += ["-j", str(jobs)]
     typer.echo(f"[perf-stream] Building: {' '.join(cmd)}")
-    subprocess.run(cmd, cwd=_repo_root(), check=True)
+    # generate_kernel_symbol_refs.py (run as a build step) shells out to the
+    # bare command name "arm-none-eabi-nm" -- the toolchain file points CMake's
+    # own compiler/linker/objcopy invocations at absolute paths, but this one
+    # still needs the toolchain's bin/ on PATH.
+    env = os.environ.copy()
+    toolchain_bin = str((_repo_root() / _DOWNLOADS_DIR / "arm_gcc_download" / "bin").resolve())
+    env["PATH"] = f"{toolchain_bin}{os.pathsep}{env.get('PATH', '')}"
+    subprocess.run(cmd, cwd=_repo_root(), check=True, env=env)
 
 
 @app.command()
@@ -302,7 +375,35 @@ def run_generated(
     family: Optional[str] = typer.Option(None, "--family", help="Operator family under artifacts/generated_tests to bridge. Omit to bridge every family with real firmware dispatch support (see generated_test_bridge.bridged_families())."),
     test_name: Optional[str] = typer.Option(None, "--test-name", help="Only bridge generated tests whose directory name contains this substring."),
     limit: Optional[int] = typer.Option(None, "--limit", help="Only bridge the first N discovered generated tests."),
-    suite: str = typer.Option("int", "--suite", help="Generated-test suite to bridge: 'int' (S8/S16/S32/S4, default) or 'float' (FP16/FP32)."),
+    suite: str = typer.Option(
+        "int",
+        "--suite",
+        help=(
+            "Generated-test suite to bridge: 'int' (S8/S16/S32/S4, default), 'float' (FP16/FP32), "
+            "or 'both' to run int and float in one session -- one flash, one result bundle, with "
+            "each case still gated and reported against its own suite."
+        ),
+    ),
+    require_fvp_pass: bool = typer.Option(
+        True,
+        "--require-fvp-pass/--no-require-fvp-pass",
+        help=(
+            "Deprecated alias for --fvp-gate: --require-fvp-pass means 'advisory', "
+            "--no-require-fvp-pass means 'off'. Ignored when --fvp-gate is given explicitly."
+        ),
+    ),
+    fvp_gate: Optional[str] = typer.Option(
+        None,
+        "--fvp-gate",
+        help=(
+            "How much the FVP report is allowed to block a hardware run. 'advisory' (the default) "
+            "skips only cases the FVP recorded as FAILING for these exact artifacts -- real evidence "
+            "the kernel is wrong -- and runs cases whose report is merely stale or missing. 'strict' "
+            "also skips stale/missing ones, for a CI job that just ran the FVP suite and wants full "
+            "corroboration. 'off' consults the report for provenance only and never blocks. Every "
+            "case's outcome is recorded in case_summary.csv's fvp_status column regardless."
+        ),
+    ),
 ):
     """Stream real `helia_core_tester generate`-produced kernel tests (real golden data,
     not synthetic demo data) to already-flashed hardware over HCTP/RTT and check correctness.
@@ -326,12 +427,23 @@ def run_generated(
     resolved_build_dir = build_dir if build_dir.is_absolute() else repo_root / build_dir
     groups = tuple(g.strip() for g in pmu_groups.split(",") if g.strip())
 
+    if fvp_gate is not None:
+        from .fvp_gate import GATE_POLICIES
+
+        if fvp_gate not in GATE_POLICIES:
+            typer.echo(
+                f"✗ --fvp-gate must be one of {', '.join(GATE_POLICIES)} (got {fvp_gate!r})", err=True
+            )
+            sys.exit(1)
+
     # Discover the bridgeable case count/case_ids up front (cheap: just descriptor/header
     # parsing, no hardware I/O) purely so the live progress printer can align its
     # [N/total] counter and case_id columns from the very first printed line instead of
     # widening them as longer names are discovered mid-run.
     preview_bundles, _preview_skipped = build_generated_test_case_bundles(
-        repo_root, cpu=cpu, family=family, name_filter=test_name, limit=limit, suite=suite
+        repo_root, cpu=cpu, family=family, name_filter=test_name, limit=limit, suite=suite,
+        require_fvp_pass=require_fvp_pass,
+        fvp_gate=fvp_gate,
     )
     id_width = max((len(b.case_id) for b in preview_bundles), default=0)
 
@@ -351,6 +463,8 @@ def run_generated(
             name_filter=test_name,
             limit=limit,
             suite=suite,
+            require_fvp_pass=require_fvp_pass,
+            fvp_gate=fvp_gate,
             on_case_complete=on_case_complete,
         )
     except RuntimeError as exc:

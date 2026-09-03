@@ -10,6 +10,7 @@ Dependencies downloaded:
 - ARM GCC toolchain
 - CMSIS-5 library
 - Ethos-U core platform
+- nsx-ambiq-sdk (real-hardware board bring-up; --skip-nsx-sdk to opt out)
 - Python virtual environment with requirements
 
 Usage:
@@ -18,6 +19,7 @@ Usage:
 
 import argparse
 import hashlib
+import os
 import platform
 import shutil
 import subprocess
@@ -369,6 +371,222 @@ def setup_ethos_u_platform(downloads_dir: Path, force: bool = False) -> None:
     print("Ethos-U core platform setup complete")
 
 
+DEFAULT_DOWNLOADS_DIR = Path("artifacts/downloads")
+NSX_AMBIQ_SDK_DIRNAME = "nsx-ambiq-sdk"
+
+
+def nsx_ambiq_sdk_dir(project_root: Path, downloads_dir: Optional[Path] = None) -> Path:
+    """Single source of truth for where the NSX Ambiq SDK checkout lives.
+
+    It is fetched into artifacts/downloads/ alongside CMSIS_5/Corstone-300/
+    neuralspotx so the hardware build always links against a pipeline-managed
+    clone rather than whatever happens to sit outside the tester repo. Must stay
+    in sync with CMakeLists.txt's NSX_AMBIQ_SDK_DIR default.
+    """
+    if downloads_dir is None:
+        downloads_dir = DEFAULT_DOWNLOADS_DIR
+    if not downloads_dir.is_absolute():
+        downloads_dir = project_root / downloads_dir
+    return downloads_dir / NSX_AMBIQ_SDK_DIRNAME
+
+
+def _ensure_nsx_sdk_symlinks(project_root: Path, sdk_dir: Path) -> None:
+    """(Re-)create the local symlinks the top-level CMakeLists.txt/cmake/nsx glue
+    expects at fixed, repo-relative paths, pointing into the fetched SDK checkout:
+
+      boards/apollo510_evb      -> <sdk_dir>/boards/apollo510_evb
+      cmake/socs                -> <sdk_dir>/cmake/socs
+      cmake/nsx_soc_facts.cmake -> <sdk_dir>/cmake/nsx_soc_facts.cmake
+
+    Idempotent and always re-run (not just on a fresh clone), and a symlink that
+    already points somewhere else is repointed rather than left alone -- links
+    created by an earlier setup (typically absolute ones into an out-of-repo SDK
+    checkout) would otherwise keep the build silently compiling against that
+    outside tree. Only the link itself is ever removed, never its target.
+    """
+    links = {
+        project_root / "boards" / "apollo510_evb": sdk_dir / "boards" / "apollo510_evb",
+        project_root / "cmake" / "socs": sdk_dir / "cmake" / "socs",
+        project_root / "cmake" / "nsx_soc_facts.cmake": sdk_dir / "cmake" / "nsx_soc_facts.cmake",
+    }
+    for link_path, target_path in links.items():
+        relative_target = os.path.relpath(target_path, start=link_path.parent)
+        if link_path.is_symlink():
+            if os.readlink(link_path) == relative_target:
+                continue
+            print(
+                f"Repointing stale {link_path.relative_to(project_root)} "
+                f"({os.readlink(link_path)} -> {relative_target})"
+            )
+            link_path.unlink()
+        elif link_path.exists():
+            # A real (non-symlink) file/dir here is a deliberately vendored copy;
+            # leave it alone rather than clobbering it.
+            continue
+        if not target_path.exists():
+            # Don't leave a dangling link behind for an SDK layout that simply
+            # doesn't ship this path.
+            print(f"Skipping {link_path.relative_to(project_root)}: {target_path} does not exist")
+            continue
+        link_path.parent.mkdir(parents=True, exist_ok=True)
+        link_path.symlink_to(relative_target, target_is_directory=target_path.is_dir())
+        print(f"Linked {link_path.relative_to(project_root)} -> {relative_target}")
+
+
+def _warn_on_legacy_nsx_sdk_dir(project_root: Path) -> None:
+    """Flag the pre-existing modules/nsx-ambiq-sdk location, which nothing reads
+    any more now that the SDK is a pipeline-managed dependency under
+    artifacts/downloads/. Historically this was often a hand-made symlink to an
+    SDK checkout outside the tester repo; say so plainly instead of leaving the
+    user guessing which of the two trees the build actually used. Left in place
+    rather than deleted -- it may be someone's real working checkout.
+    """
+    legacy_dir = project_root / "modules" / NSX_AMBIQ_SDK_DIRNAME
+    if not (legacy_dir.is_symlink() or legacy_dir.exists()):
+        return
+    if legacy_dir.is_symlink():
+        detail = f"a symlink to {os.readlink(legacy_dir)}"
+    else:
+        detail = "a local checkout"
+    print(
+        f"NOTE: {legacy_dir.relative_to(project_root)} ({detail}) is no longer used by the "
+        f"build; the SDK is now fetched into artifacts/downloads/{NSX_AMBIQ_SDK_DIRNAME}. "
+        "You can delete it."
+    )
+
+
+def setup_nsx_ambiq_sdk(project_root: Path, downloads_dir: Optional[Path] = None,
+                        force: bool = False) -> None:
+    """Clone the vendor NSX Ambiq SDK (board bring-up, HAL/BSP, CMSIS-Core, SoC
+    descriptors) needed for HELIA_HARDWARE_BUILD=ON. Not a fixed-checksum tarball
+    like the other deps here -- it's a large, actively-developed monorepo, so this
+    pins to a shallow clone of its default branch rather than a specific commit.
+    Lives under artifacts/downloads/ with the other fetched dependencies, matching
+    CMakeLists.txt's NSX_AMBIQ_SDK_DIR default. Also (re-)creates the local
+    symlinks (boards/apollo510_evb, cmake/socs, cmake/nsx_soc_facts.cmake) that
+    redirect into it -- see _ensure_nsx_sdk_symlinks().
+    """
+    sdk_dir = nsx_ambiq_sdk_dir(project_root, downloads_dir)
+
+    # A symlink here means an earlier setup pointed this slot at an SDK tree
+    # outside the tester repo. Never treat that as a managed install (and never
+    # rmtree through it -- that would delete someone else's checkout); drop the
+    # link and clone properly in its place.
+    if sdk_dir.is_symlink():
+        print(f"Replacing out-of-repo nsx-ambiq-sdk symlink ({os.readlink(sdk_dir)}) with a managed clone...")
+        sdk_dir.unlink()
+
+    is_valid_install = sdk_dir.exists() and (
+        (sdk_dir / ".git").exists() or
+        (sdk_dir / "modules").exists()
+    )
+
+    if is_valid_install and not force:
+        print("nsx-ambiq-sdk already installed. If you wish to install a new version, please delete the old folder.")
+        _ensure_nsx_sdk_symlinks(project_root, sdk_dir)
+        _warn_on_legacy_nsx_sdk_dir(project_root)
+        return
+
+    if force and sdk_dir.exists():
+        print("Removing existing nsx-ambiq-sdk installation...")
+        shutil.rmtree(sdk_dir)
+    elif sdk_dir.exists() and not is_valid_install:
+        print("Removing invalid/empty nsx-ambiq-sdk directory...")
+        shutil.rmtree(sdk_dir)
+
+    sdk_dir.parent.mkdir(parents=True, exist_ok=True)
+    print("Cloning nsx-ambiq-sdk (this is a large monorepo; may take a while)...")
+    run_command(
+        ["git", "clone", "--quiet", "--depth=1",
+         "https://github.com/AmbiqAI/nsx-ambiq-sdk.git", sdk_dir.name],
+        cwd=sdk_dir.parent,
+        description="Cloning nsx-ambiq-sdk"
+    )
+    _ensure_nsx_sdk_symlinks(project_root, sdk_dir)
+    _warn_on_legacy_nsx_sdk_dir(project_root)
+
+    print("nsx-ambiq-sdk setup complete")
+
+
+def setup_neuralspotx(downloads_dir: Path, force: bool = False) -> None:
+    """Clone the neuralspotx (NSX workspace tooling) repo for its RTT sources
+    (examples/coremark/src/rtt/SEGGER_RTT.*), consumed by the perf-stream hardware
+    firmware build. NOT AmbiqAI/neuralSPOT (capital SPOT, the separate C SDK/example
+    repo) -- that repo has a different layout and lacks this path entirely.
+    """
+    neuralspotx_dir = downloads_dir / "neuralspotx"
+
+    is_valid_install = neuralspotx_dir.exists() and (
+        (neuralspotx_dir / ".git").exists() or
+        (neuralspotx_dir / "examples").exists()
+    )
+
+    if is_valid_install and not force:
+        print("neuralspotx already installed. If you wish to install a new version, please delete the old folder.")
+        return
+
+    if force and neuralspotx_dir.exists():
+        print("Removing existing neuralspotx installation...")
+        shutil.rmtree(neuralspotx_dir)
+    elif neuralspotx_dir.exists() and not is_valid_install:
+        print("Removing invalid/empty neuralspotx directory...")
+        shutil.rmtree(neuralspotx_dir)
+
+    print("Cloning neuralspotx...")
+    run_command(
+        ["git", "clone", "--quiet", "--depth=1", "https://github.com/AmbiqAI/neuralspotx.git"],
+        cwd=downloads_dir,
+        description="Cloning neuralspotx"
+    )
+
+    print("neuralspotx setup complete")
+
+
+def setup_nsx_toolchain(project_root: Path, downloads_dir: Path, force: bool = False) -> None:
+    """Generate cmake/nsx/toolchains/arm-none-eabi-gcc.cmake from the already-downloaded
+    ARM GCC toolchain, via nsx-ambiq-sdk's own generator script. Requires
+    setup_arm_gcc() and setup_nsx_ambiq_sdk() to have already run. This file is
+    machine-specific (bakes in an absolute --gcc-root path) so it stays gitignored
+    (*.cmake) and is always regenerated here rather than tracked.
+    """
+    toolchain_file = project_root / "cmake" / "nsx" / "toolchains" / "arm-none-eabi-gcc.cmake"
+    gcc_dir = downloads_dir / "arm_gcc_download"
+    generator = nsx_ambiq_sdk_dir(project_root, downloads_dir) / "tools" / "nsx_toolchain_file.py"
+
+    if toolchain_file.exists() and not force:
+        print("NSX arm-none-eabi-gcc toolchain file already generated. Pass --force to regenerate.")
+        return
+    if not gcc_dir.exists():
+        raise RuntimeError(f"setup_nsx_toolchain: {gcc_dir} does not exist -- run setup_arm_gcc() first.")
+    if not generator.exists():
+        raise RuntimeError(f"setup_nsx_toolchain: {generator} does not exist -- run setup_nsx_ambiq_sdk() first.")
+
+    toolchain_file.parent.mkdir(parents=True, exist_ok=True)
+    print("Generating NSX arm-none-eabi-gcc toolchain file...")
+    run_command(
+        [
+            sys.executable, str(generator),
+            "--toolchain-family", "gcc",
+            "--gcc-root", str(gcc_dir.resolve()),
+            "--output", str(toolchain_file),
+        ],
+        cwd=project_root,
+        description="Generating NSX toolchain file"
+    )
+    # Not emitted by nsx_toolchain_file.py itself: nsx-ambiq-sdk's own
+    # cmake/nsx_toolchain_flags.cmake requires this to resolve prebuilt AmbiqSuite
+    # artifact/library paths and toolchain-specific compile/link flags.
+    with toolchain_file.open("a", encoding="utf-8") as f:
+        f.write(
+            "\n"
+            "# Appended (not generated by nsx_toolchain_file.py): required by\n"
+            "# nsx-ambiq-sdk's cmake/nsx_toolchain_flags.cmake.\n"
+            'set(NSX_TOOLCHAIN_FAMILY "gcc")\n'
+        )
+
+    print("NSX toolchain file generated")
+
+
 def setup_python_venv(downloads_dir: Path, force: bool = False) -> None:
     """Setup Python virtual environment using uv (required)."""
     venv_dir = downloads_dir / "cmsis_nn_venv"
@@ -442,7 +660,7 @@ Examples:
     parser.add_argument(
         "--downloads-dir",
         type=Path,
-        default=Path("artifacts/downloads"),
+        default=DEFAULT_DOWNLOADS_DIR,
         help="Directory to store downloaded dependencies (default: artifacts/downloads)"
     )
     parser.add_argument(
@@ -471,20 +689,48 @@ Examples:
         help="Skip Ethos-U core platform download"
     )
     parser.add_argument(
+        "--skip-nsx-sdk",
+        action="store_true",
+        help="Skip the nsx-ambiq-sdk clone (needed only for real-hardware builds)"
+    )
+    parser.add_argument(
         "--skip-python",
         action="store_true",
         help="Skip Python virtual environment setup"
     )
-    
+    parser.add_argument(
+        "--with-hardware",
+        action="store_true",
+        help="Also fetch the remaining real-hardware build dependencies (neuralspotx and "
+        "the generated NSX toolchain file). The nsx-ambiq-sdk clone itself is fetched by "
+        "default now -- pass --skip-nsx-sdk to opt out. `helia_core_tester perf-stream "
+        "flash/build-firmware/run-generated` also fetch these lazily on first use if "
+        "missing, so this flag is only needed to pre-fetch them ahead of time."
+    )
+
     args = parser.parse_args()
     
-    # Validate system
+    # Validate system. Only the two prebuilt-binary downloads (Corstone-300 FVP
+    # and the ARM GCC tarball) are Linux-only; the git-clone dependencies
+    # (CMSIS-5, Ethos-U core platform, nsx-ambiq-sdk) install anywhere. Treat an
+    # unsupported OS as "skip those two", not as a hard failure -- aborting here
+    # left non-Linux hosts with no way to fetch the SDK through the pipeline at
+    # all, which is what drove people to wire it up by hand instead.
     try:
-        get_os()
         get_architecture()
     except RuntimeError as e:
         print(f"Error: {e}")
         return 1
+
+    host_os_supported = True
+    try:
+        get_os()
+    except RuntimeError as e:
+        host_os_supported = False
+        print(f"NOTE: {e}.")
+        print("      Skipping the Linux-only prebuilt downloads (Corstone-300 FVP, ARM GCC);")
+        print("      supply those yourself. All other dependencies still install.")
+        print()
     
     # Create downloads directory
     args.downloads_dir.mkdir(parents=True, exist_ok=True)
@@ -496,11 +742,11 @@ Examples:
     print("=" * 80)
     
     try:
-        if not args.skip_corstone:
+        if host_os_supported and not args.skip_corstone:
             setup_corstone300(args.downloads_dir, args.force)
             print()
         
-        if not args.skip_gcc:
+        if host_os_supported and not args.skip_gcc:
             setup_arm_gcc(args.downloads_dir, args.force)
             print()
         
@@ -515,8 +761,18 @@ Examples:
         if not args.skip_python:
             setup_python_venv(args.downloads_dir, args.force)
             print()
-        
-        
+
+        if not args.skip_nsx_sdk:
+            setup_nsx_ambiq_sdk(find_repo_root(), args.downloads_dir, args.force)
+            print()
+
+        if args.with_hardware:
+            project_root = find_repo_root()
+            setup_neuralspotx(args.downloads_dir, args.force)
+            print()
+            setup_nsx_toolchain(project_root, args.downloads_dir, args.force)
+            print()
+
         print("=" * 80)
         print("All dependencies setup complete!")
         print("=" * 80)

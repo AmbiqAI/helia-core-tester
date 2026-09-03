@@ -114,10 +114,14 @@ def test_normalization_and_statistics() -> None:
 
     assert normalized[0].cycles_per_invocation == 100.0
     assert normalized[1].counters_per_invocation["ARM_PMU_CPU_CYCLES"] == 440.0
-    assert stats.median_cycles == 440.0
-    assert stats.mad_cycles == 40.0
-    assert stats.p90_cycles == pytest.approx(504.0)
-    assert stats.p99_cycles == pytest.approx(518.4)
+    # stats.* are per-invocation (cycles / iterations = [100.0, 110.0, 130.0] here), not
+    # raw per-sample totals ([400, 440, 520]) -- every case bundle sends a fixed, nonzero
+    # iterations_per_sample, so firmware's own on-device calibration never runs and this is
+    # the only place that division happens.
+    assert stats.median_cycles == 110.0
+    assert stats.mad_cycles == 10.0
+    assert stats.p90_cycles == pytest.approx(126.0)
+    assert stats.p99_cycles == pytest.approx(129.6)
 
 
 

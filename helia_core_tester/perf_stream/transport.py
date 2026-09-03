@@ -50,12 +50,19 @@ class JLinkRttTransport:
         self._poll_interval_s = poll_interval_s
         self._jlink = pylink.JLink()
         self._jlink.open(serial_no=serial_no)
-        self._jlink.set_tif(pylink.enums.JLinkInterfaces.SWD)
-        self._jlink.connect(chip_name, speed=speed_khz, verbose=True)
-        if reset_on_open:
-            self._jlink.reset(halt=False)
-            time.sleep(reset_delay_s)
-        self._jlink.rtt_start(block_address=rtt_address)
+        try:
+            self._jlink.set_tif(pylink.enums.JLinkInterfaces.SWD)
+            self._jlink.connect(chip_name, speed=speed_khz, verbose=True)
+            if reset_on_open:
+                self._jlink.reset(halt=False)
+                time.sleep(reset_delay_s)
+            self._jlink.rtt_start(block_address=rtt_address)
+        except Exception:
+            # open() already claimed the JLink USB/DLL handle -- a failure in any step
+            # after it (bad chip name, comm failure, RTT discovery timeout) must not leak
+            # that handle, or the probe can require a process restart to reuse.
+            self._jlink.close()
+            raise
 
     def write(self, payload: bytes) -> None:
         remaining = payload

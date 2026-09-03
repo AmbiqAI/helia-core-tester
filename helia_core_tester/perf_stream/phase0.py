@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from ..scripts.setup_dependencies import nsx_ambiq_sdk_dir
+
 
 @dataclass(frozen=True)
 class Variant:
@@ -139,7 +141,7 @@ def build_variant(variant: Variant) -> Path:
 
     out_dir = build_dir / "probe"
     elf = out_dir / "hct_universal_size_probe.elf"
-    linker_script = repo_root / "modules" / "nsx-ambiq-sdk" / "modules" / "nsx-core" / "src" / "apollo510" / "gcc" / "linker_script_sbl.ld"
+    linker_script = nsx_ambiq_sdk_dir(repo_root) / "modules" / "nsx-core" / "src" / "apollo510" / "gcc" / "linker_script_sbl.ld"
 
     size_default = _probe_binary("arm-none-eabi-size", [str(elf)])
     size_sections = _probe_binary("arm-none-eabi-size", ["-A", str(elf)])

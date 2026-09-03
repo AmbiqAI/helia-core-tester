@@ -124,6 +124,84 @@ def lookup_fvp_case_status(
     )
 
 
+GATE_POLICIES = ("off", "advisory", "strict")
+
+
+@dataclass(frozen=True)
+class FvpGateOutcome:
+    """What the FVP report says about one case, as data rather than an exception.
+
+    status is one of:
+      "pass"   -- recorded PASS, and (when a case_dir was given) for these exact
+                  artifacts.
+      "failed" -- recorded a non-PASS status. Real evidence the kernel is wrong.
+      "stale"  -- recorded PASS, but for different artifacts (or with no
+                  artifact_sha256 recorded at all).
+      "absent" -- no report at all, or the report does not mention this case.
+
+    Only "failed" is evidence about correctness; "stale"/"absent" are statements
+    about the *report*, which is why the two are enforced differently.
+    """
+
+    status: str
+    detail: str
+
+    @property
+    def corroborated(self) -> bool:
+        return self.status == "pass"
+
+    @property
+    def blocks_by_default(self) -> bool:
+        return self.status == "failed"
+
+
+def evaluate_fvp_gate(
+    project_root: Path,
+    case_name: str,
+    *,
+    cpu: str = "cortex-m55",
+    suite: str = "int",
+    case_dir: Path | None = None,
+) -> FvpGateOutcome:
+    """Classify `case_name` against the most recent FVP report without raising.
+
+    This is the primitive the bridge uses so it can both enforce a policy and
+    record per-case provenance; require_fvp_pass() below is a thin wrapper that
+    turns the same outcome into the historical exceptions.
+    """
+    fvp_status = lookup_fvp_case_status(project_root, case_name, cpu=cpu, suite=suite)
+    if fvp_status is None:
+        return FvpGateOutcome(
+            "absent",
+            f"{case_name}: no recorded FVP test result found under "
+            f"artifacts/reports/tests/{suite}/{cpu}/test_report_{cpu}_*.json -- "
+            f"run the FVP suite before bridging this case onto hardware, or "
+            f"pass allow_missing_report=True to skip this gate.",
+        )
+    if not fvp_status.passed:
+        return FvpGateOutcome(
+            "failed",
+            f"{case_name}: recorded FVP status is {fvp_status.status!r} (not PASS) in "
+            f"{fvp_status.report_path} -- refusing to bridge a case FVP itself does not "
+            f"believe is correct onto real hardware.",
+        )
+    if case_dir is not None:
+        current_digest = generated_case_artifact_sha256(case_dir)
+        if fvp_status.artifact_sha256 is None:
+            return FvpGateOutcome(
+                "stale",
+                f"{case_name}: recorded PASS in {fvp_status.report_path} has no artifact_sha256; "
+                "rerun the FVP suite before bridging this case.",
+            )
+        if fvp_status.artifact_sha256 != current_digest:
+            return FvpGateOutcome(
+                "stale",
+                f"{case_name}: recorded PASS artifact {fvp_status.artifact_sha256} does not match "
+                f"current generated artifact {current_digest}; rerun the FVP suite.",
+            )
+    return FvpGateOutcome("pass", f"{case_name}: recorded PASS in {fvp_status.report_path}.")
+
+
 def require_fvp_pass(
     project_root: Path,
     case_name: str,
@@ -141,31 +219,12 @@ def require_fvp_pass(
     sandbox) -- otherwise raises FvpReportUnavailableError so callers that
     want a strict "must have a recorded FVP pass" gate can opt into that.
     """
-    fvp_status = lookup_fvp_case_status(project_root, case_name, cpu=cpu, suite=suite)
-    if fvp_status is None:
+    outcome = evaluate_fvp_gate(project_root, case_name, cpu=cpu, suite=suite, case_dir=case_dir)
+    if outcome.status == "absent":
         if allow_missing_report:
             return
-        raise FvpReportUnavailableError(
-            f"{case_name}: no recorded FVP test result found under "
-            f"artifacts/reports/tests/{suite}/{cpu}/test_report_{cpu}_*.json -- "
-            f"run the FVP suite before bridging this case onto hardware, or "
-            f"pass allow_missing_report=True to skip this gate."
-        )
-    if not fvp_status.passed:
-        raise FvpCaseFailedGateError(
-            f"{case_name}: recorded FVP status is {fvp_status.status!r} (not PASS) in "
-            f"{fvp_status.report_path} -- refusing to bridge a case FVP itself does not "
-            f"believe is correct onto real hardware."
-        )
-    if case_dir is not None:
-        current_digest = generated_case_artifact_sha256(case_dir)
-        if fvp_status.artifact_sha256 is None:
-            raise FvpCaseStaleGateError(
-                f"{case_name}: recorded PASS in {fvp_status.report_path} has no artifact_sha256; "
-                "rerun the FVP suite before bridging this case."
-            )
-        if fvp_status.artifact_sha256 != current_digest:
-            raise FvpCaseStaleGateError(
-                f"{case_name}: recorded PASS artifact {fvp_status.artifact_sha256} does not match "
-                f"current generated artifact {current_digest}; rerun the FVP suite."
-            )
+        raise FvpReportUnavailableError(outcome.detail)
+    if outcome.status == "failed":
+        raise FvpCaseFailedGateError(outcome.detail)
+    if outcome.status == "stale":
+        raise FvpCaseStaleGateError(outcome.detail)
