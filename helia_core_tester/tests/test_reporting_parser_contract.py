@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import helia_core_tester.reporting.models as reporting_models
 import helia_core_tester.reporting.parser as reporting_parser
 
@@ -57,3 +59,121 @@ def test_parser_keeps_legacy_unity_fallback() -> None:
         exit_code=0,
     )
     assert result.status == reporting_models.TestStatus.PASS
+
+
+def test_parser_extracts_float_maxdiff_headroom() -> None:
+    # issue #53: HELIA_FLOAT_MAXDIFF is the mechanical headroom-measurement hook.
+    parser = reporting_parser.TestResultParser()
+    result = parser.parse_fvp_output(
+        output="HELIA_FLOAT_MAXDIFF maxdiff=4.99963760e-04 maxfrac=0.499964 n=3\n0 Failures\n",
+        elf_path=Path("nn_activation_float_tanh_f16.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.PASS
+    assert result.max_diff == pytest.approx(4.99963760e-04)
+    assert result.max_tolerance_fraction == pytest.approx(0.499964)
+
+
+def test_parser_float_maxdiff_takes_worst_case_across_multiple_lines() -> None:
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "HELIA_FLOAT_MAXDIFF maxdiff=1.0e-05 maxfrac=0.1 n=4\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=2.0e-05 maxfrac=0.4 n=4\n"
+        "0 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("multi_output.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.max_diff == pytest.approx(2.0e-05)
+    assert result.max_tolerance_fraction == pytest.approx(0.4)
+
+
+def test_parser_float_maxdiff_zero_tolerance_violation_is_sentinel() -> None:
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "Mismatch[0]: exp=0.000000 got=0.001000 (diff=0.001000, tol=0.000000)\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=1.00000005e-03 maxfrac=-1.000000 n=1\n"
+        "1 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("edge_case.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.max_diff == pytest.approx(1.00000005e-03)
+    assert result.max_tolerance_fraction == -1.0
+
+
+def test_parser_float_maxdiff_nonfinite_is_sentinel() -> None:
+    # issue #75: a NaN/Inf-producing kernel emits the -1.0 / -2.0 sentinel pair;
+    # it must not be reported as benign near-zero headroom.
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "NonFinite[7]: exp=0.500000 got=nan\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=64\n"
+        "1 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("logistic_f16.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.max_diff == -1.0
+    assert result.max_tolerance_fraction == -2.0
+
+
+def test_parser_float_maxdiff_nonfinite_wins_over_finite_line() -> None:
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "HELIA_FLOAT_MAXDIFF maxdiff=2.0e-05 maxfrac=0.4 n=4\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=4\n"
+        "1 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("multi_output.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.max_diff == -1.0
+    assert result.max_tolerance_fraction == -2.0
+
+
+def test_parser_float_maxdiff_literal_nan_token_is_sentinel() -> None:
+    # Defensive: the macro substitutes negative sentinels and never prints a
+    # literal nan/inf, but a stray token must still be caught, not dropped.
+    parser = reporting_parser.TestResultParser()
+    output = "HELIA_FLOAT_MAXDIFF maxdiff=nan maxfrac=nan n=16\n1 Failures\n"
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("stray.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.max_diff == -1.0
+    assert result.max_tolerance_fraction == -2.0
+
+
+def test_parser_no_maxdiff_line_yields_none() -> None:
+    parser = reporting_parser.TestResultParser()
+    result = parser.parse_fvp_output(
+        output="0 Failures\n",
+        elf_path=Path("int_case.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.max_diff is None
+    assert result.max_tolerance_fraction is None

@@ -2,12 +2,108 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from .env import REPO_ROOT
 from .errors import FvpScriptError
+
+
+def active_test_list(generated_tests_dir: Optional[Path]) -> Optional[Set[str]]:
+    """Return the set of test-case names the last generation run for
+    ``generated_tests_dir`` admitted, or ``None`` when there is no such list
+    to constrain against.
+
+    ``manifest.json`` is rewritten from scratch by every generation run
+    (``generation/test_ops.py::test_generation``) to hold exactly the cases
+    the active filter (``--op``, ``--name``, ``--float-precision``, ...)
+    produced. Build and run steps key their working trees on cpu+suite only
+    (see ``core/path_layout.py``), not on that filter, so a build/run against
+    a narrower filter can still see binaries a previous, wider run left in the
+    same tree -- CMake never deletes the output of a target it no longer
+    defines. Reading the manifest back out here is how that active list is
+    carried from generation into the build and run steps, which never see the
+    filter directly (they run as separate subprocess invocations). ``None``
+    preserves the historical "use whatever is on disk" behaviour when there is
+    no manifest to consult (e.g. a tree never generated through this pipeline)
+    -- but ``None`` is reserved strictly for that "no manifest file" case.
+
+    A manifest that exists but admitted zero cases (every descriptor
+    capability-skipped for this cpu, e.g. the float suite on cortex-m0) is a
+    real, empty active list, not "no constraint" -- it must return ``set()``,
+    not ``None``, or build/run would fall back to unfiltered discovery and
+    happily prune nothing / run every stale ``.elf`` in the tree.
+
+    A manifest that exists but is unreadable, not valid JSON, or not shaped
+    the way this pipeline always writes it -- a JSON object with a ``tests``
+    list of objects, each carrying a non-empty ``name`` -- fails closed with
+    ``FvpScriptError`` rather than falling back to ``None`` or quietly
+    treating the gap as "no test here". A corrupt manifest is itself a sign
+    something already went wrong (a crash mid-write, concurrent runs sharing
+    a tree, schema drift, ...), and silently under-counting the active list at
+    that moment -- pruning or refusing to run a case that was actually meant
+    to be there -- would be worse than surfacing it loudly.
+    See issue #66.
+    """
+    if generated_tests_dir is None:
+        return None
+    manifest_path = Path(generated_tests_dir) / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except OSError as exc:
+        raise FvpScriptError(f"Could not read manifest {manifest_path}: {exc}") from exc
+    except ValueError as exc:
+        raise FvpScriptError(f"Manifest {manifest_path} is not valid JSON: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise FvpScriptError(
+            f"Manifest {manifest_path} must be a JSON object, got {type(manifest).__name__}"
+        )
+    if "tests" not in manifest:
+        raise FvpScriptError(f"Manifest {manifest_path} is missing required field 'tests'")
+    tests = manifest["tests"]
+    if not isinstance(tests, list):
+        raise FvpScriptError(
+            f"Manifest {manifest_path} field 'tests' must be a list, got {type(tests).__name__}"
+        )
+    names: Set[str] = set()
+    for entry in tests:
+        if not isinstance(entry, dict):
+            raise FvpScriptError(
+                f"Manifest {manifest_path} has a 'tests' entry that is not an object: {entry!r}"
+            )
+        name = entry.get("name")
+        if not name:
+            raise FvpScriptError(
+                f"Manifest {manifest_path} has a 'tests' entry with no non-empty 'name': {entry!r}"
+            )
+        names.add(str(name))
+    return names
+
+
+def _prune_stale_test_elves(
+    build_dir: Path, active_names: Optional[Set[str]], verbosity: int = 0
+) -> List[Path]:
+    """Delete ``build_dir/tests/**/*.elf`` files that fell out of the active
+    test list before a (re)configure, so a filtered build in a tree a wider
+    run already built does not leave excluded-case binaries behind for a
+    later ``--no-build`` run step to discover and execute. No-op when
+    ``active_names`` is ``None`` (no list to prune against). See issue #66.
+    """
+    tests_dir = build_dir / "tests"
+    if active_names is None or not tests_dir.exists():
+        return []
+    removed: List[Path] = []
+    for elf in tests_dir.rglob("*.elf"):
+        if elf.is_file() and elf.stem not in active_names:
+            elf.unlink()
+            removed.append(elf)
+    if removed and verbosity >= 1:
+        print(f"Pruned {len(removed)} stale test ELF(s) outside the active test list under {tests_dir}")
+    return removed
 
 
 def _clear_stale_gcda(build_dir: Path) -> None:
@@ -60,6 +156,8 @@ def cmake_configure(
     if enable_coverage:
         _clear_stale_gcda(build_dir)
 
+    _prune_stale_test_elves(build_dir, active_test_list(generated_tests_dir), verbosity)
+
     cmd = [
         "cmake",
         "-S", str(source_dir),
@@ -96,8 +194,18 @@ def cmake_build(build_dir: Path, verbosity: int, env: dict, jobs: Optional[int])
         raise FvpScriptError(f"CMake build failed (rc={rc})")
 
 
-def find_elves(build_dir: Path) -> List[Path]:
+def find_elves(build_dir: Path, active_names: Optional[Set[str]] = None) -> List[Path]:
+    """Discover built test ELFs under ``build_dir``.
+
+    ``active_names``, when given, restricts discovery to the current run's
+    active test list (see ``active_test_list``) so a stale binary left behind
+    by a wider previous run -- e.g. a ``--no-build`` run step that never gets
+    a chance to prune -- is never picked up and executed, even though it is
+    still on disk. Purely a discovery-time filter: it never deletes anything.
+    """
     tests_dir = build_dir / "tests"
-    if tests_dir.exists():
-        return [path for path in tests_dir.rglob("*.elf") if path.is_file()]
-    return [path for path in build_dir.rglob("*.elf") if path.is_file()]
+    root = tests_dir if tests_dir.exists() else build_dir
+    elves = [path for path in root.rglob("*.elf") if path.is_file()]
+    if active_names is not None:
+        elves = [path for path in elves if path.stem in active_names]
+    return elves

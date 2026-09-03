@@ -22,8 +22,9 @@ SQDIFF_DESCRIPTOR_PATH = (
     TESTER_ROOT / "assets" / "descriptors" / "BasicMathFunctions" / "squared_difference.yaml"
 )
 SQDIFF_PARITY_CASES = (
-    ("squared_difference_scalar_s8", "S8", (1, 2, 3, 4), (1, 1, 1, 1), "arm_squared_difference_s8"),
     ("squared_difference_ident_s8", "S8", (1, 2, 3, 4), (1, 2, 3, 4), "arm_squared_difference_s8"),
+    ("squared_difference_scalar_input1_s8", "S8", (1, 1, 1, 1), (1, 2, 3, 4), "arm_squared_difference_s8"),
+    ("squared_difference_scalar_input2_s8", "S8", (1, 2, 3, 4), (1, 1, 1, 1), "arm_squared_difference_s8"),
     ("squared_difference_broadcast_n_s8", "S8", (1, 2, 3, 4), (2, 2, 3, 4), "arm_squared_difference_s8"),
     ("squared_difference_broadcast_h_s8", "S8", (1, 1, 2, 3), (1, 4, 2, 3), "arm_squared_difference_s8"),
     ("squared_difference_broadcast_w_s8", "S8", (1, 2, 3, 4), (1, 2, 1, 4), "arm_squared_difference_s8"),
@@ -35,8 +36,9 @@ SQDIFF_PARITY_CASES = (
     ("squared_difference_row_scalar_input2_s8", "S8", (1, 2, 3, 4), (1, 2, 1, 1), "arm_squared_difference_s8"),
     ("squared_difference_batch_broadcast_input1_s8", "S8", (1, 2, 3, 4), (2, 2, 3, 4), "arm_squared_difference_s8"),
     ("squared_difference_batch_broadcast_input2_s8", "S8", (2, 2, 3, 4), (1, 2, 3, 4), "arm_squared_difference_s8"),
-    ("squared_difference_scalar_s16", "S16", (1, 2, 3, 4), (1, 1, 1, 1), "arm_squared_difference_s16"),
     ("squared_difference_ident_s16", "S16", (1, 2, 3, 4), (1, 2, 3, 4), "arm_squared_difference_s16"),
+    ("squared_difference_scalar_input1_s16", "S16", (1, 1, 1, 1), (1, 2, 3, 4), "arm_squared_difference_s16"),
+    ("squared_difference_scalar_input2_s16", "S16", (1, 2, 3, 4), (1, 1, 1, 1), "arm_squared_difference_s16"),
     ("squared_difference_broadcast_n_s16", "S16", (1, 2, 3, 4), (2, 2, 3, 4), "arm_squared_difference_s16"),
     ("squared_difference_broadcast_h_s16", "S16", (1, 1, 2, 3), (1, 4, 2, 3), "arm_squared_difference_s16"),
     ("squared_difference_broadcast_w_s16", "S16", (1, 2, 3, 4), (1, 2, 1, 4), "arm_squared_difference_s16"),
@@ -48,6 +50,10 @@ SQDIFF_PARITY_CASES = (
     ("squared_difference_row_scalar_input2_s16", "S16", (1, 2, 3, 4), (1, 2, 1, 1), "arm_squared_difference_s16"),
     ("squared_difference_batch_broadcast_input1_s16", "S16", (1, 2, 3, 4), (2, 2, 3, 4), "arm_squared_difference_s16"),
     ("squared_difference_batch_broadcast_input2_s16", "S16", (2, 2, 3, 4), (1, 2, 3, 4), "arm_squared_difference_s16"),
+    ("squared_difference_row_scalar_channel_s8", "S8", (1, 3, 1, 1), (1, 3, 1, 4), "arm_squared_difference_s8"),
+    ("squared_difference_row_scalar_channel_reverse_s8", "S8", (1, 3, 1, 4), (1, 3, 1, 1), "arm_squared_difference_s8"),
+    ("squared_difference_row_scalar_channel_s16", "S16", (1, 3, 1, 1), (1, 3, 1, 4), "arm_squared_difference_s16"),
+    ("squared_difference_row_scalar_channel_reverse_s16", "S16", (1, 3, 1, 4), (1, 3, 1, 1), "arm_squared_difference_s16"),
 )
 
 
@@ -89,7 +95,12 @@ def test_squared_difference_descriptors_match_unit_test_parity() -> None:
         assert desc["weight_dtype"] == "S8"
         assert tuple(desc["input_1_shape"]) == input_1_shape
         assert tuple(desc["input_2_shape"]) == input_2_shape
-        assert desc.get("hint", {}) == {}
+        # squared_difference_ident_s16 opts into the Keras fake-quant S16
+        # builder; every other case has no descriptor-level hint.
+        if name == "squared_difference_ident_s16":
+            assert desc.get("hint", {}) == {"s16_builder": "keras_fake_quant"}
+        else:
+            assert desc.get("hint", {}) == {}
 
 
 def test_squared_difference_quant_params_s8_match_expected_shape() -> None:
@@ -195,7 +206,8 @@ def test_squared_difference_parity_descriptors_generate_wrapper_c(
 
     op = OpSquaredDifference(desc, seed=1, target_cpu="cortex-m55")
     tflite_path = tmp_path / f"{name}.tflite"
-    op.convert_to_tflite(None, str(tflite_path), 1)
+    keras_model = op.build_keras_model() if op.needs_keras_model() else None
+    op.convert_to_tflite(keras_model, str(tflite_path), 1)
 
     if dtype == "S16" and input_1_shape == input_2_shape:
         fake_output = np.zeros(input_1_shape, dtype=np.int16)

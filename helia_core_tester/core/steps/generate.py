@@ -2,6 +2,7 @@
 TFLite model generation step.
 """
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -69,6 +70,15 @@ class GenerateStep(StepBase):
         """Execute TFLite model generation."""
         if self.config.verbosity >= 1:
             self.logger.info("Generating TensorFlow Lite models using pytest")
+        # Propagate an overridden CMSIS-NN root (--cmsis-nn-root) so LSTM
+        # unit-test data lookups (lstm_data.py) resolve against it instead of
+        # assuming the repo is nested under ns-cmsis-nn/Tests/. Uses
+        # CMSIS_NN_ROOT (matching the CMake cache var name), distinct from
+        # CMSIS_NN_REPO_ROOT which overrides helia-core-tester's own repo
+        # root discovery.
+        subprocess_env = None
+        if self.config.cmsis_nn_root:
+            subprocess_env = {**os.environ, "CMSIS_NN_ROOT": str(self.config.cmsis_nn_root)}
         try:
             commands = []
             generation_targets = self.config.iter_generation_targets()
@@ -85,7 +95,8 @@ class GenerateStep(StepBase):
                 run_command(
                     cmd,
                     cwd=self.config.generation_dir,
-                    verbosity=self.config.verbosity
+                    verbosity=self.config.verbosity,
+                    env=subprocess_env,
                 )
             if self.config.verbosity >= 1:
                 self.logger.info(

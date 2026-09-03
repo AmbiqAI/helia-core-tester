@@ -212,6 +212,11 @@ class OpLSTMUnidirectional(OperationBase):
             hidden_size = int(self.desc.get("units", self.desc.get("hidden_size", 1)))
             time_major = bool(self.desc.get("time_major", False))
             cell_clip = float(self.desc.get("cell_clip", 0.0))
+            # Issue #56: use_bias: false exercises the NULL-safe bias branch
+            # in arm_nn_lstm_step_*.c (`gate->bias ? gate->bias[h_idx] :
+            # 0.0f`, all four gates), a real Keras LSTM config, previously
+            # untested. Mirrors the GRU use_bias handling.
+            use_bias = bool(self.desc.get("use_bias", True))
 
             rng_state = self.rng.__getstate__()
             self.rng = np.random.default_rng(self.seed)
@@ -227,10 +232,21 @@ class OpLSTMUnidirectional(OperationBase):
             input_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(float_dtype)
             cell_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(float_dtype)
             output_w_hidden = self.rng.uniform(-0.5, 0.5, size=(hidden_size, hidden_size)).astype(float_dtype)
-            forget_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
-            input_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
-            cell_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
-            output_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
+            if use_bias:
+                forget_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
+                input_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
+                cell_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
+                output_bias = self.rng.uniform(-0.25, 0.25, size=(hidden_size,)).astype(float_dtype)
+            else:
+                # Zero-valued bias is mathematically identical to omitting
+                # it, so the golden below needs no other change; the C side
+                # separately passes NULL (not a zero array) to actually
+                # exercise the guarded branch -- see the `use_bias` template
+                # flag below.
+                forget_bias = np.zeros((hidden_size,), dtype=float_dtype)
+                input_bias = np.zeros((hidden_size,), dtype=float_dtype)
+                cell_bias = np.zeros((hidden_size,), dtype=float_dtype)
+                output_bias = np.zeros((hidden_size,), dtype=float_dtype)
             self.rng.__setstate__(rng_state)
 
             output_ref = self._generate_lstm_expected_f32(
@@ -285,13 +301,67 @@ class OpLSTMUnidirectional(OperationBase):
                 "output_gate_bias_array": builder.format_array_as_c_literal(output_bias),
                 "cell_state_size": batch_size * hidden_size,
                 "dst_size": batch_size * time_steps * hidden_size,
+                "use_bias": use_bias,
             }
+
+            # ns-cmsis-nn#377 / tester#71: generation-time feature probe for
+            # the float LSTM temp-buffer sizers added by ns-cmsis-nn#381
+            # (they report 0 -- the float steps never touch temp1/temp2).
+            # Detected -> the main template calls and validates the sizers
+            # and passes NULL temp buffers; absent -> byte-identical legacy
+            # output (safe against ns-cmsis-nn main).
+            from helia_core_tester.generation.utils.temp_sizer_probe import detect_temp_sizers
+
+            context["temp_sizers_available"] = detect_temp_sizers(
+                [
+                    f"{kernel_fn}_temp1_get_buffer_size",
+                    f"{kernel_fn}_temp2_get_buffer_size",
+                ],
+                f"LSTMUnidirectional[{name}]",
+            )
+
+            # Issue #56: port of the GRU fault: mechanism
+            # (gru_unidirectional.py) -- LSTM previously had no
+            # argument-validation coverage at all.
+            fault = self.desc.get("fault")
+            expected_status = str(self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
+            # Follow-up to #56: port of the GRU stream: mechanism -- LSTM
+            # previously had zero hidden_state/cell_state streaming coverage.
+            # See arm_lstm_unidirectional_f32.c: cell_state is caller-owned
+            # state too when hidden_state != NULL (not just hidden_state, as
+            # for GRU), so the stream template seeds and preserves both.
+            stream = bool(self.desc.get("hint", {}).get("stream", False))
+            h_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.h.j2"
+            if fault:
+                context["fault"] = fault
+                context["expected_status"] = expected_status
+                c_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_fault.c.j2"
+            elif stream:
+                if batch_size != 1:
+                    raise ValueError("LSTMUnidirectional streaming descriptors require batch_size == 1.")
+                chunk_lengths = self.desc.get("stream_chunk_lengths")
+                if not chunk_lengths:
+                    half = time_steps // 2
+                    chunk_lengths = [half, time_steps - half]
+                if sum(chunk_lengths) != time_steps:
+                    raise ValueError("stream_chunk_lengths must sum to time_steps.")
+                chunk_offsets = []
+                offset = 0
+                for length in chunk_lengths:
+                    chunk_offsets.append(offset)
+                    offset += length
+                context["chunk_lengths"] = chunk_lengths
+                context["chunk_input_offsets"] = [c * input_size for c in chunk_offsets]
+                context["chunk_output_offsets"] = [c * hidden_size for c in chunk_offsets]
+                c_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_stream.c.j2"
+            else:
+                c_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.c.j2"
 
             self._write_op_outputs(
                 Path(output_dir),
                 "lstm_unidirectional",
-                "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.h.j2",
-                "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.c.j2",
+                h_tpl,
+                c_tpl,
                 context,
                 {
                     "name": name,
@@ -394,6 +464,32 @@ class OpLSTMUnidirectional(OperationBase):
             "cell_gate_bias_array": fmt(data.tensors["cell_gate_bias"], dtype=bias_cast),
             "output_gate_bias_array": fmt(data.tensors["output_gate_bias"], dtype=bias_cast),
         })
+
+        # ns-cmsis-nn#377 / tester#71: generation-time feature probe for the
+        # integer LSTM temp-buffer sizers added by ns-cmsis-nn#381. Detected
+        # -> the template sizes temp1/temp2 from the sizer contract
+        # ((time_major ? batch_size : 1) * hidden_size * sizeof(int16_t))
+        # and validates the sizers on-target; absent -> byte-identical legacy
+        # output (safe against ns-cmsis-nn main).
+        from helia_core_tester.generation.utils.temp_sizer_probe import (
+            detect_temp_sizers,
+            lstm_int_temp_expected_bytes,
+        )
+
+        dtype_suffix = "s16" if activation_dtype == "S16" else "s8"
+        context["temp_sizers_available"] = detect_temp_sizers(
+            [
+                f"arm_lstm_unidirectional_{dtype_suffix}_temp1_get_buffer_size",
+                f"arm_lstm_unidirectional_{dtype_suffix}_temp2_get_buffer_size",
+            ],
+            f"LSTMUnidirectional[{name}]",
+        )
+        context["lstm_temp_expected_bytes"] = lstm_int_temp_expected_bytes(
+            time_major=time_major, batch_size=batch_size, hidden_size=hidden_size
+        )
+        context["lstm_temp_expected_bytes_flipped"] = lstm_int_temp_expected_bytes(
+            time_major=not time_major, batch_size=batch_size, hidden_size=hidden_size
+        )
 
         output_dir = Path(output_dir)
         includes_api_dir = output_dir / "includes"

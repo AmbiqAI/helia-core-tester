@@ -129,6 +129,32 @@ def test_build_step_int_suite_disables_float_cmake_defines(tmp_path: Path) -> No
     assert "ARM_NN_ENABLE_F16=OFF" in cmd
 
 
+def test_build_step_emits_cmsis_nn_root_cmake_define(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+    cmsis_nn_root = tmp_path / "ns-cmsis-nn-scratch"
+    cmsis_nn_root.mkdir(parents=True, exist_ok=True)
+    cfg = Config(
+        project_root=root,
+        suite="int",
+        cmsis_nn_root=cmsis_nn_root,
+        _explicit_overrides={"project_root", "suite", "cmsis_nn_root"},
+    )
+
+    cmd = BuildStep(cfg)._plan_details().commands[0]
+
+    assert "--cmake-def" in cmd
+    assert f"CMSIS_NN_ROOT={cmsis_nn_root}" in cmd
+
+
+def test_build_step_omits_cmsis_nn_root_cmake_define_when_unset(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+    cfg = Config(project_root=root, suite="int", _explicit_overrides={"project_root", "suite"})
+
+    cmd = BuildStep(cfg)._plan_details().commands[0]
+
+    assert not any(str(arg).startswith("CMSIS_NN_ROOT=") for arg in cmd)
+
+
 def test_build_step_splits_float_commands_by_effective_precision(tmp_path: Path) -> None:
     root = _init_repo_root(tmp_path)
     cfg = Config(

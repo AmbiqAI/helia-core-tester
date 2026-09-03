@@ -665,3 +665,489 @@ comparison:
   rtol: 0.01
 hint:
   force_cmsis: true
+
+---
+# Issue #56: flag-combination coverage. Individually, pre-reset (see
+# gru_unidirectional_float_pre_reset_f32) and time-major (see
+# gru_unidirectional_float_time_major_f32) are each tested, but never
+# together -- this exercises the pre-reset candidate-gate formulation with
+# time-major input/output addressing in the same call.
+operator: GRUUnidirectional
+name: gru_unidirectional_float_pre_reset_time_major_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 2
+time_steps: 3
+feature_size: 3
+units: 4
+time_major: true
+reset_after: false
+input_shape: [3, 2, 3]
+hint:
+  force_cmsis: true
+---
+# Issue #56: flag-combination coverage. Streaming (see
+# gru_unidirectional_float_stream_f32) is only ever tested with
+# reset_after: true -- this replays a pre-reset sequence across two
+# chunked calls, carrying hidden_state between them, to catch any bug
+# where the pre-reset temp1 scratch isn't correctly preserved/reused
+# across a chunk boundary.
+operator: GRUUnidirectional
+name: gru_unidirectional_float_pre_reset_stream_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 4
+feature_size: 3
+units: 4
+time_major: false
+reset_after: false
+input_shape: [1, 4, 3]
+stream_chunk_lengths: [2, 2]
+hint:
+  force_cmsis: true
+  stream: true
+---
+# Issue #56: flag-combination coverage. Streaming is only ever tested
+# batch-major -- this exercises chunked streaming with time-major
+# input/output addressing.
+operator: GRUUnidirectional
+name: gru_unidirectional_float_time_major_stream_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 4
+feature_size: 3
+units: 4
+time_major: true
+reset_after: true
+input_shape: [4, 1, 3]
+stream_chunk_lengths: [2, 2]
+hint:
+  force_cmsis: true
+  stream: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_pre_reset_time_major_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 2
+time_steps: 3
+feature_size: 3
+units: 4
+time_major: true
+reset_after: false
+input_shape: [3, 2, 3]
+comparison:
+  atol: 0.01
+  rtol: 0.01
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_pre_reset_stream_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 4
+feature_size: 3
+units: 4
+time_major: false
+reset_after: false
+input_shape: [1, 4, 3]
+stream_chunk_lengths: [2, 2]
+comparison:
+  atol: 0.01
+  rtol: 0.01
+hint:
+  force_cmsis: true
+  stream: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_time_major_stream_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 4
+feature_size: 3
+units: 4
+time_major: true
+reset_after: true
+input_shape: [4, 1, 3]
+stream_chunk_lengths: [2, 2]
+comparison:
+  atol: 0.01
+  rtol: 0.01
+hint:
+  force_cmsis: true
+  stream: true
+---
+# Issue #56: time_steps == 0 is a documented-legal streaming no-op
+# (see arm_gru_unidirectional_f32.c: "a zero-length streaming chunk is a
+# well-defined no-op") and currently has zero coverage. There is nothing
+# to compare numerically (the input/output arrays are zero-length), so
+# this case's job is solely to confirm the kernel returns
+# ARM_CMSIS_NN_SUCCESS instead of rejecting a 0 time_steps call.
+#
+# Caveat verified by generation: a 0 time_steps case compiles to
+# zero-length static arrays (`float32_t foo[] = { };`). That is a GNU C
+# extension, not ISO C99/C11 -- accepted here because this repo's CMake
+# build enables neither -pedantic-errors nor -Werror, but flag if that
+# ever changes.
+operator: GRUUnidirectional
+name: gru_unidirectional_float_zero_time_steps_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 0
+feature_size: 3
+units: 4
+time_major: false
+reset_after: true
+input_shape: [1, 0, 3]
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_zero_time_steps_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 0
+feature_size: 3
+units: 4
+time_major: false
+reset_after: true
+input_shape: [1, 0, 3]
+comparison:
+  atol: 0.01
+  rtol: 0.01
+hint:
+  force_cmsis: true
+---
+# Issue #56: buffers == NULL is legal when reset_after: true (the pre-reset
+# formulation is the only thing that needs buffers->temp1 -- see
+# arm_gru_unidirectional_f32.c:70 and arm_nn_gru_step_f32.c:130-139, both
+# gated on `!reset_after`). No existing descriptor passes the whole
+# `buffers` pointer as NULL -- the other fault cases only null individual
+# fields of an otherwise-valid struct. expected_status is SUCCESS (the
+# default): this is a legal-path regression guard, not an error-injection
+# case, reusing the fault: mechanism's status-check plumbing.
+operator: GRUUnidirectional
+name: gru_unidirectional_float_null_buffers_reset_after_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: true
+input_shape: [1, 2, 2]
+fault: null_buffers
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_null_buffers_reset_after_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: true
+input_shape: [1, 2, 2]
+fault: null_buffers
+hint:
+  force_cmsis: true
+---
+# Issue #56: use_bias: false is a real Keras GRU configuration with zero
+# coverage today -- every existing case always populates full bias arrays.
+# The kernel is NULL-safe per-gate (`gate->input_bias ? gate->input_bias[h]
+# : 0.0f` in arm_nn_gru_step_f32.c, same for hidden_bias, all three gates:
+# update/reset/candidate), but that branch is dead code as far as this
+# suite is concerned until now. The golden here is computed with the bias
+# terms genuinely zeroed (mathematically identical to omitting them); the
+# generator passes NULL bias pointers to the kernel rather than
+# zero-valued arrays, so this actually exercises the guarded branch.
+operator: GRUUnidirectional
+name: gru_unidirectional_float_no_bias_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 4
+feature_size: 3
+units: 4
+time_major: false
+reset_after: true
+use_bias: false
+input_shape: [1, 4, 3]
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_no_bias_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 4
+feature_size: 3
+units: 4
+time_major: false
+reset_after: true
+use_bias: false
+input_shape: [1, 4, 3]
+comparison:
+  atol: 0.01
+  rtol: 0.01
+hint:
+  force_cmsis: true
+---
+# Copilot review on the PR that added `fault:`/`use_bias` support (#56):
+# the fault template referenced `{{name}}_*_bias` unconditionally while the
+# header only declares those arrays when use_bias is true -- a descriptor
+# combining both would generate non-compiling C (undeclared identifier).
+# This case is that combination, so the gap can't silently reappear.
+operator: GRUUnidirectional
+name: gru_unidirectional_error_null_input_no_bias_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 2
+feature_size: 2
+units: 2
+time_major: false
+reset_after: true
+use_bias: false
+input_shape: [1, 2, 2]
+fault: null_input
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+hint:
+  force_cmsis: true
+---
+# Follow-up to #56: use_bias: false was only ever tested with the baseline
+# flag set (reset_after: true, time_major: false, no stream). This combines
+# it with the pre-reset formulation.
+operator: GRUUnidirectional
+name: gru_unidirectional_float_no_bias_pre_reset_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 3
+feature_size: 4
+units: 3
+time_major: false
+reset_after: false
+use_bias: false
+input_shape: [1, 3, 4]
+hint:
+  force_cmsis: true
+---
+# Follow-up to #56: use_bias: false combined with time-major addressing.
+operator: GRUUnidirectional
+name: gru_unidirectional_float_no_bias_time_major_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 2
+time_steps: 3
+feature_size: 3
+units: 4
+time_major: true
+reset_after: true
+use_bias: false
+input_shape: [3, 2, 3]
+hint:
+  force_cmsis: true
+---
+# Follow-up to #56: use_bias: false combined with streaming (hidden_state
+# populated, carried across chunk boundaries) -- confirms the NULL bias
+# pointers stay correctly NULL across repeated chunked calls, not just a
+# single-shot call.
+operator: GRUUnidirectional
+name: gru_unidirectional_float_no_bias_stream_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+batch_size: 1
+time_steps: 4
+feature_size: 3
+units: 4
+time_major: false
+reset_after: true
+use_bias: false
+input_shape: [1, 4, 3]
+stream_chunk_lengths: [2, 2]
+hint:
+  force_cmsis: true
+  stream: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_no_bias_pre_reset_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 3
+feature_size: 4
+units: 3
+time_major: false
+reset_after: false
+use_bias: false
+input_shape: [1, 3, 4]
+comparison:
+  atol: 0.01
+  rtol: 0.01
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_no_bias_time_major_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 2
+time_steps: 3
+feature_size: 3
+units: 4
+time_major: true
+reset_after: true
+use_bias: false
+input_shape: [3, 2, 3]
+comparison:
+  atol: 0.01
+  rtol: 0.01
+hint:
+  force_cmsis: true
+---
+operator: GRUUnidirectional
+name: gru_unidirectional_float_no_bias_stream_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+batch_size: 1
+time_steps: 4
+feature_size: 3
+units: 4
+time_major: false
+reset_after: true
+use_bias: false
+input_shape: [1, 4, 3]
+stream_chunk_lengths: [2, 2]
+comparison:
+  atol: 0.01
+  rtol: 0.01
+hint:
+  force_cmsis: true
+  stream: true

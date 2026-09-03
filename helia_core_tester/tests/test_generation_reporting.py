@@ -51,6 +51,10 @@ def test_generation_emits_canonical_report_files(tmp_path: Path, monkeypatch: py
         test_dir = Path(out_dir) / desc["_family"] / desc["name"]
         test_dir.mkdir(parents=True, exist_ok=True)
         (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
+        # tests.cmake only lists directories with runnable c_sources (see
+        # test_ops.py's runnable_entries filter), so the fake must emit a .c
+        # file too for this test to exercise the real tests.cmake contract.
+        (test_dir / f"{desc['name']}_{desc['operator'].lower()}.c").write_text("// fake generated harness\n")
 
     monkeypatch.setattr(generation_module, "generate_test", _fake_generate_test)
 

@@ -1,0 +1,28 @@
+#ifndef {{ name|upper }}_CHUNKED_EQUIVALENCE_H
+#define {{ name|upper }}_CHUNKED_EQUIVALENCE_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+
+// Total number of elements processed by the full-length reference call
+#define {{ name|upper }}_ELEMENT_COUNT ({{ element_count }})
+
+// Chunk sizes for the sliced pass; they sum to the element count.
+// The full-length call over the same data is the reference: any kernel
+// whose packed/vectorised loop disagrees with its scalar tail fails here.
+#define {{ name|upper }}_CHUNK_COUNT ({{ chunk_count }})
+static const int32_t {{ name }}_chunk_sizes[{{ name|upper }}_CHUNK_COUNT] = {
+    {{ chunk_sizes_array }}
+};
+
+// Input 1 data (sign-diverse post-offset inside the packed region)
+static const {{ input_dtype }} {{ name }}_input1[{{ name|upper }}_ELEMENT_COUNT] = {
+{{ input1_data_array }}
+};
+
+// Input 2 data (sign-diverse post-offset inside the packed region)
+static const {{ input_dtype }} {{ name }}_input2[{{ name|upper }}_ELEMENT_COUNT] = {
+{{ input2_data_array }}
+};
+
+#endif

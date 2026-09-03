@@ -1,0 +1,80 @@
+#include "{{ name }}_lstm_unidirectional.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+{# Issue #56: port of the GRU fault-injection pattern
+   (gru_unidirectional_fault.c.j2) to LSTM. Declare only the buffers this
+   fault mode actually passes to the kernel: a NULL-substituted buffer would
+   otherwise be an unused static (-Wunused-variable), which becomes a hard
+   error under -Werror. #}
+{% if fault != "null_output" %}static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
+{% endif %}{% if fault != "null_buffers" %}static {{ data_dtype }} {{ name }}_temp1[{{ cell_state_size }}];
+static {{ data_dtype }} {{ name }}_temp2[{{ cell_state_size }}];
+static {{ data_dtype }} {{ name }}_cell_state[{{ cell_state_size }}];
+{% endif %}
+
+/*
+ * Fault-injection test case: exercises an {{ kernel_fn }}
+ * argument-validation branch. Fault mode: {{ fault }}.
+ */
+static int32_t run_lstm(void)
+{
+{% if fault != "null_params" %}    const {{ lstm_params_type }} params = {
+        .time_major = {{ time_major_literal }},
+        .batch_size = {{ batch_size }},
+        .time_steps = {{ time_steps }},
+        .input_size = {{ input_size }},
+        .hidden_size = {{ hidden_size }},
+        .cell_clip = {{ cell_clip_literal }},
+        .forget_gate = {
+            .input_weights = {{ name }}_forget_gate_input_weights,
+            .hidden_weights = {{ name }}_forget_gate_hidden_weights,
+            .bias = {% if use_bias | default(true) %}{{ name }}_forget_gate_bias{% else %}NULL{% endif %},
+            .activation_type = ARM_NN_FLT_ACT_SIGMOID,
+        },
+        .input_gate = {
+            .input_weights = {{ name }}_input_gate_input_weights,
+            .hidden_weights = {{ name }}_input_gate_hidden_weights,
+            .bias = {% if use_bias | default(true) %}{{ name }}_input_gate_bias{% else %}NULL{% endif %},
+            .activation_type = ARM_NN_FLT_ACT_SIGMOID,
+        },
+        .cell_gate = {
+            .input_weights = {{ name }}_cell_gate_input_weights,
+            .hidden_weights = {{ name }}_cell_gate_hidden_weights,
+            .bias = {% if use_bias | default(true) %}{{ name }}_cell_gate_bias{% else %}NULL{% endif %},
+            .activation_type = ARM_NN_FLT_ACT_TANH,
+        },
+        .output_gate = {
+            .input_weights = {{ name }}_output_gate_input_weights,
+            .hidden_weights = {{ name }}_output_gate_hidden_weights,
+            .bias = {% if use_bias | default(true) %}{{ name }}_output_gate_bias{% else %}NULL{% endif %},
+            .activation_type = ARM_NN_FLT_ACT_SIGMOID,
+        },
+    };
+{% endif %}
+    const {{ data_dtype }} *input_arg = {% if fault == "null_input" %}NULL{% else %}{{ name }}_input_tensor{% endif %};
+    {{ data_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};
+    const {{ lstm_params_type }} *params_arg = {% if fault == "null_params" %}NULL{% else %}&params{% endif %};
+{% if fault == "null_buffers" %}    {{ lstm_context_type }} *buffers_arg = NULL;
+{% else %}    {{ lstm_context_type }} buffers = {
+        .temp1 = {{ name }}_temp1,
+        .temp2 = {{ name }}_temp2,
+        .cell_state = {{ name }}_cell_state,
+        .hidden_state = NULL,
+    };
+    {{ lstm_context_type }} *buffers_arg = &buffers;
+{% endif %}
+    return {{ kernel_fn }}(input_arg, output_arg, params_arg, buffers_arg);
+}
+
+int32_t {{ name }}_test_case_run(void)
+{
+    int32_t status = run_lstm();
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ validation_label | default("LSTM") }}",
+        status,
+        {{ expected_status | default("ARM_CMSIS_NN_SUCCESS") }}
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(0);
+}
+
+{% include "common/standalone/main.j2" %}

@@ -17,7 +17,7 @@ from helia_core_tester.reporting.descriptor_tracker import DescriptorTracker
 from helia_core_tester.reporting.generator import ReportGenerator
 from helia_core_tester.generation.artifact_identity import generated_case_artifact_sha256
 
-from .cmake import cmake_build, cmake_configure, find_elves
+from .cmake import active_test_list, cmake_build, cmake_configure, find_elves
 from .coverage import generate_coverage_reports, new_coverage_context
 from .env import REPO_ROOT, get_git_sha
 from .runner import ProcessSupervisor, run_elf_jobs_with_reporting
@@ -104,7 +104,8 @@ def run_tests_with_reporting(
         if args.no_run:
             continue
 
-        elves = find_elves(build_dir)
+        active_names = active_test_list(cpu_generated_tests_dir)
+        elves = find_elves(build_dir, active_names)
         if not elves:
             if verbosity >= 1:
                 print(f"(no .elf found under {build_dir}, nothing to run)")
@@ -144,6 +145,14 @@ def run_tests_with_reporting(
 
         active_descriptors: set[str] = set(test_result_map.keys())
         for desc_name in all_descriptors_dict.keys():
+            # A descriptor outside the active test list must never re-enter
+            # the report via a stale artifact still on disk (e.g. a build_dir
+            # never reconfigured/pruned this run, such as --skip-build +
+            # --skip-generation reusing an older, wider build) -- otherwise
+            # the descriptor-aware count above can exceed the active filter
+            # even though find_elves() correctly never ran it. See issue #66.
+            if active_names is not None and desc_name not in active_names:
+                continue
             generated_test_dir = tracker.generated_test_dir_for(desc_name, cpu_generated_tests_dir)
             tflite_file = generated_test_dir / f"{desc_name}.tflite"
             includes_dir = generated_test_dir / "includes"

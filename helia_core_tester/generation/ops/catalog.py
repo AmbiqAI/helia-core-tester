@@ -105,8 +105,11 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "ActivationFunctions",
         "hard_swish_precise",
         "OpHardSwishPrecise",
-        "ActivationFunctions/hard_swish_precise.yaml",
-        "ActivationFunctions/hard_swish",
+        descriptor_relpaths=(
+            "ActivationFunctions/hard_swish_precise.yaml",
+            "ActivationFunctions/hard_swish_float.yaml",
+        ),
+        template_relpath="ActivationFunctions/hard_swish",
     ),
     "Abs": _spec(
         "Abs",
@@ -140,6 +143,19 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("BasicMathFunctions/mul.yaml", "BasicMathFunctions/mul_float.yaml"),
         template_relpath="BasicMathFunctions/mul",
     ),
+    "ChunkedEquivalence": _spec(
+        "ChunkedEquivalence",
+        "BasicMathFunctions",
+        "chunked_equivalence",
+        "OpChunkedEquivalence",
+        "BasicMathFunctions/chunked_equivalence.yaml",
+        "BasicMathFunctions/chunked_equivalence",
+        rationale=(
+            "Block-size invariance property cases (issue #81): one full-length elementwise "
+            "call is the bit-exact reference for chunked calls over the same data, so "
+            "packed-vs-tail defects like ns-cmsis-nn#343 are caught without golden data."
+        ),
+    ),
     "Maximum": _spec(
         "Maximum",
         "BasicMathFunctions",
@@ -156,7 +172,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("BasicMathFunctions/minimum.yaml", "BasicMathFunctions/minimum_float.yaml"),
         template_relpath="BasicMathFunctions/minmax",
     ),
-    "Mean": _spec("Mean", "BasicMathFunctions", "mean", "OpMean", "BasicMathFunctions/mean.yaml", "BasicMathFunctions/mean"),
+    "Mean": _spec(
+        "Mean",
+        "BasicMathFunctions",
+        "mean",
+        "OpMean",
+        descriptor_relpaths=("BasicMathFunctions/mean.yaml", "BasicMathFunctions/mean_float.yaml"),
+        template_relpath="BasicMathFunctions/mean",
+    ),
     "ReduceMax": _spec("ReduceMax", "BasicMathFunctions", "reduce_max", "OpReduceMax", "BasicMathFunctions/reduce_max.yaml", "BasicMathFunctions/reduce_max"),
     "ReduceSum": _spec(
         "ReduceSum",

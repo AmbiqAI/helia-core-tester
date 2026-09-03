@@ -117,8 +117,26 @@ def test_template_context_formats_float16_literals() -> None:
         np.array([0.5, -1.25], dtype=np.float16)
     )
 
-    assert "(float16_t)0.500000f" in rendered
-    assert "(float16_t)-1.250000f" in rendered
+    # Issue #64: array literals go through format_float_literal now (full
+    # float32 round-trip precision, trailing zeros stripped), not a fixed
+    # `.6f` -- 0.5/-1.25 are exact, so this also covers the "shorter, not
+    # longer" case for round values.
+    assert "(float16_t)0.5f" in rendered
+    assert "(float16_t)-1.25f" in rendered
+
+
+def test_template_context_array_literals_carry_full_float32_precision() -> None:
+    # Issue #64: 6-decimal-place serialization capped detectable accuracy at
+    # ~1e-6 for values near saturation (tanh/sigmoid). A value that isn't a
+    # clean decimal at 6dp must now round-trip far more tightly.
+    true_value = float(np.tanh(np.float32(5.98)))
+    rendered = TemplateContextBuilder.format_array_as_c_literal(
+        np.array([true_value], dtype=np.float32)
+    )
+    literal = rendered.strip().rstrip(",").rstrip("f")
+
+    assert abs(float(literal) - true_value) < 1e-8
+    assert "0.999987f" not in rendered  # the old 6dp literal
 
 
 def test_template_context_formats_standalone_float_literals_for_c() -> None:
@@ -136,7 +154,7 @@ def _load_nn_activation_float_module(monkeypatch):
     fake_tf = SimpleNamespace(
         keras=SimpleNamespace(
             Model=object,
-            activations=SimpleNamespace(sigmoid=lambda x: x, tanh=lambda x: x),
+            activations=SimpleNamespace(sigmoid=lambda x: x, tanh=lambda x: x, linear=lambda x: x),
         ),
         nn=SimpleNamespace(),
     )

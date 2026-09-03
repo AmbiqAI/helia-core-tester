@@ -25,6 +25,7 @@
         "BatchMatMul",
         "BatchToSpaceND",
         "BroadcastTo",
+        "ChunkedEquivalence",
         "Clamp",
         "Comparison",
         "Concatenation",
@@ -309,6 +310,20 @@
           }
         }
       }
+    },
+    "kernel": {
+      "type": "string",
+      "enum": ["add", "sub", "mul"],
+      "description": "ChunkedEquivalence: elementwise kernel family to exercise."
+    },
+    "element_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "ChunkedEquivalence: total number of elements for the full-length reference call."
+    },
+    "chunk_sizes": {
+      "$ref": "#/$defs/intArray",
+      "description": "ChunkedEquivalence: consecutive slice sizes for the chunked pass; must sum to element_count."
     }
   },
   "$defs": {
@@ -656,6 +671,11 @@
       "$comment": "BroadcastTo requires output_shape",
       "if": { "properties": { "operator": { "const": "BroadcastTo" } } },
       "then": { "required": ["output_shape"] }
+    },
+    {
+      "$comment": "ChunkedEquivalence requires kernel, element_count and chunk_sizes",
+      "if": { "properties": { "operator": { "const": "ChunkedEquivalence" } } },
+      "then": { "required": ["kernel", "element_count", "chunk_sizes"] }
     },
     {
       "$comment": "Tile requires multiples",

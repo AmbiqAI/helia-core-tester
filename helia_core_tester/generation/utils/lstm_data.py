@@ -358,8 +358,27 @@ def _parse_c_array(file_path: Path) -> np.ndarray:
     return np.asarray(numbers, dtype=np_dtype)
 
 
+def _unit_test_data_root() -> Path:
+    """Resolve the ns-cmsis-nn UnitTest/TestCases/TestData directory.
+
+    Honors CMSIS_NN_ROOT (an ns-cmsis-nn checkout root, e.g. set via
+    Config.cmsis_nn_root / --cmsis-nn-root) so this works when
+    helia-core-tester is checked out standalone rather than nested under
+    ns-cmsis-nn/Tests/. Note: this is distinct from CMSIS_NN_REPO_ROOT, which
+    overrides discovery of the helia-core-tester repo root itself (see
+    helia_core_tester.core.discovery.find_repo_root). Falls back to the
+    historical parents[4]-relative layout
+    (ns-cmsis-nn/Tests/helia-core-tester/helia_core_tester/...) for backward
+    compatibility.
+    """
+    env_root = os.environ.get("CMSIS_NN_ROOT")
+    if env_root:
+        return Path(env_root).resolve() / "Tests" / "UnitTest" / "TestCases" / "TestData"
+    return Path(__file__).resolve().parents[4] / "UnitTest" / "TestCases" / "TestData"
+
+
 def _load_unit_test_data(dataset: str) -> LstmGeneratedData:
-    base = Path(__file__).resolve().parents[4] / "UnitTest" / "TestCases" / "TestData" / dataset
+    base = _unit_test_data_root() / dataset
     config = base / "config_data.h"
     if not config.exists():
         raise FileNotFoundError(f"Missing UnitTest config_data.h for {dataset}")
