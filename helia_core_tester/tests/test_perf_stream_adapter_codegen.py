@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from helia_core_tester.perf_stream.adapter_specs import (
     FIRMWARE_ADAPTERS,
     GENERATED_BLOCK_BEGIN,
@@ -47,6 +49,12 @@ from helia_core_tester.perf_stream.generated_test_bridge import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+pytestmark = pytest.mark.skipif(
+    not (PROJECT_ROOT / "artifacts" / "generated_tests").is_dir(),
+    reason="no generated-test artifacts under artifacts/generated_tests/ "
+    "(artifacts/ is gitignored -- run `helia_core_tester generate` first)",
+)
 SESSION_C_PATH = PROJECT_ROOT / "cmake" / "perf_stream" / "benchmark_server_session.c"
 GENERATOR_SCRIPT = PROJECT_ROOT / "scripts" / "generate_perf_stream_adapters.py"
 

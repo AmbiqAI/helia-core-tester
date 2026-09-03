@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
+
+import pytest
 
 from helia_core_tester.perf_stream.benchmark_firmware_report import generate_benchmark_server_memory_report
 from helia_core_tester.perf_stream.case_bundle import build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
@@ -10,6 +13,14 @@ from helia_core_tester.perf_stream.result_bundle import write_result_bundle
 from helia_core_tester.perf_stream.session import HostSession, SessionResult
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# generate_benchmark_server_memory_report() shells out to arm-none-eabi-size/nm/objdump
+# against an already-built firmware ELF; both are unavailable in a pure-Python
+# environment (e.g. the pytest.yml CI job, which intentionally skips the ARM toolchain).
+pytestmark = pytest.mark.skipif(
+    shutil.which("arm-none-eabi-size") is None,
+    reason="ARM GCC toolchain (arm-none-eabi-*) not installed",
+)
 
 
 

@@ -13,6 +13,12 @@ from helia_core_tester.perf_stream.generated_test_bridge import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+pytestmark = pytest.mark.skipif(
+    not (PROJECT_ROOT / "artifacts" / "generated_tests").is_dir(),
+    reason="no generated-test artifacts under artifacts/generated_tests/ "
+    "(artifacts/ is gitignored -- run `helia_core_tester generate` first)",
+)
 _STATUS_CASES = [
     ("BroadcastFunctions", "broadcast_to_null_input_s16"),
     ("BroadcastFunctions", "broadcast_to_null_input_s8"),

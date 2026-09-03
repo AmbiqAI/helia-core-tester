@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from helia_core_tester.perf_stream.generated_test_bridge import (
     build_case_bundle_from_generated_test,
     discover_generated_tests,
@@ -27,6 +29,12 @@ from helia_core_tester.perf_stream.case_bundle import load_case_bundle
 from helia_core_tester.perf_stream.kernel_registry import lookup_kernel_id
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+pytestmark = pytest.mark.skipif(
+    not (PROJECT_ROOT / "artifacts" / "generated_tests").is_dir(),
+    reason="no generated-test artifacts under artifacts/generated_tests/ "
+    "(artifacts/ is gitignored -- run `helia_core_tester generate` first)",
+)
 
 
 def _bridge(tmp_path: Path, name_filter: str) -> dict[str, object]:

@@ -15,6 +15,8 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path) -
     cc = shutil.which("cc")
     if cc is None:
         pytest.skip("host C compiler not available")
+    if not (CMSIS_NN_ROOT / "Include" / "arm_nnfunctions.h").is_file():
+        pytest.skip(f"no real ns-cmsis-nn checkout found at {CMSIS_NN_ROOT}")
 
     binary = tmp_path / "session_harness"
     subprocess.run(

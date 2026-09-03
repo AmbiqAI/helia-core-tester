@@ -32,6 +32,12 @@ from helia_core_tester.perf_stream.generated_test_bridge import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+pytestmark = pytest.mark.skipif(
+    not (PROJECT_ROOT / "artifacts" / "generated_tests").is_dir(),
+    reason="no generated-test artifacts under artifacts/generated_tests/ "
+    "(artifacts/ is gitignored -- run `helia_core_tester generate` first)",
+)
+
 
 def _write_fake_report(root: Path, cpu: str, suite: str, descriptor_results: dict) -> Path:
     report_dir = root / "artifacts" / "reports" / "tests" / suite / cpu
