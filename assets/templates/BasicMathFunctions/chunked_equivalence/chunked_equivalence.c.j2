@@ -1,6 +1,7 @@
 #include "{{ name }}_chunked_equivalence.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 /*
  * Chunked-equivalence (block-size invariance) case, helia-core-tester issue #81.
@@ -13,8 +14,8 @@
  * with any chunk pattern that changes which path an element takes.
  */
 
-static {{ output_dtype }} {{ name }}_output_full[{{ name|upper }}_ELEMENT_COUNT];
-static {{ output_dtype }} {{ name }}_output_chunked[{{ name|upper }}_ELEMENT_COUNT];
+{{ helia_guard_declare(output_dtype, name ~ "_output_full", name|upper ~ "_ELEMENT_COUNT") }}
+{{ helia_guard_declare(output_dtype, name ~ "_output_chunked", name|upper ~ "_ELEMENT_COUNT") }}
 
 static int32_t {{ name }}_kernel_call(
     const {{ input_dtype }} *input1,
@@ -60,6 +61,9 @@ static int32_t {{ name }}_kernel_call(
 
 int32_t {{ name }}_test_case_run(void)
 {
+    HELIA_GUARD_ARM({{ name }}_output_full, false /* real output, not scratch: don't poison */);
+    HELIA_GUARD_ARM({{ name }}_output_chunked, false /* real output, not scratch: don't poison */);
+
     // (a) Reference: one full-length call over all elements.
     int32_t status = {{ name }}_kernel_call(
         {{ name }}_input1, {{ name }}_input2,
@@ -80,6 +84,8 @@ int32_t {{ name }}_test_case_run(void)
 
     // (a) and (b) must agree bit-exactly on every element.
     int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_output_full, "{{ validation_label }} output_full", failures);
+    HELIA_GUARD_CHECK({{ name }}_output_chunked, "{{ validation_label }} output_chunked", failures);
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("EXACT_INT") }},
         {{ name }}_output_chunked,

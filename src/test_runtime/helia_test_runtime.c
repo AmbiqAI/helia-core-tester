@@ -1,6 +1,7 @@
 #include "test_runtime/helia_test_runtime.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #ifdef USING_FVP_CORSTONE_300
 extern void uart_init(void);
@@ -71,4 +72,35 @@ int helia_test_finish_validation(int failures)
 double helia_test_float_tolerance(double expected, double atol, double rtol)
 {
     return (atol + (rtol * fabs(expected)));
+}
+
+void helia_guard_arm(uint8_t *head, uint8_t *tail, void *body, size_t body_bytes, bool poison_body)
+{
+    memset(head, HELIA_GUARD_CANARY_BYTE, HELIA_GUARD_BYTES);
+    memset(tail, HELIA_GUARD_CANARY_BYTE, HELIA_GUARD_BYTES);
+    if (poison_body && body != NULL && body_bytes != 0) {
+        memset(body, HELIA_GUARD_POISON_BYTE, body_bytes);
+    }
+}
+
+void helia_guard_check(const char *label, const uint8_t *head, const uint8_t *tail, int *failures)
+{
+    unsigned int i;
+    int breach = 0;
+    for (i = 0; i < HELIA_GUARD_BYTES; ++i) {
+        if (head[i] != HELIA_GUARD_CANARY_BYTE) {
+            breach = 1;
+            break;
+        }
+    }
+    for (i = 0; i < HELIA_GUARD_BYTES; ++i) {
+        if (tail[i] != HELIA_GUARD_CANARY_BYTE) {
+            breach = 1;
+            break;
+        }
+    }
+    if (breach) {
+        ++(*failures);
+        printf("GuardBreach[%s]: buffer overrun detected (canary corrupted)\r\n", label);
+    }
 }

@@ -1,10 +1,11 @@
 #include "{{ name }}_split.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 {% for out in outputs %}
 #define {{ out.name|upper }}_OUTPUT_SIZE ({{ out.size }})
-static {{ output_dtype }} {{ out.name }}_output[{{ out.name|upper }}_OUTPUT_SIZE];
+{{ helia_guard_declare(output_dtype, out.name ~ "_output", out.name|upper ~ "_OUTPUT_SIZE") }}
 {% endfor %}
 
 static {{ output_dtype }}* {{ name }}_output_ptrs[] = {
@@ -16,6 +17,9 @@ static {{ output_dtype }}* {{ name }}_output_ptrs[] = {
 int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input
 ) {
+    {% for out in outputs %}
+    HELIA_GUARD_ARM({{ out.name }}_output, false /* real output, not scratch: don't poison */);
+    {% endfor %}
     // Call Split kernel
     // Note: Split has multiple outputs, but we only handle the first one for now
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
@@ -38,6 +42,7 @@ int32_t {{ name }}_test_case_run(void)
 
     int failures = 0;
     {% for out in outputs %}
+    HELIA_GUARD_CHECK({{ out.name }}_output, "{{ validation_label | default("Split") }} {{ out.name }} output", failures);
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("TOLERANT_INT") }},
         {{ out.name }}_output,

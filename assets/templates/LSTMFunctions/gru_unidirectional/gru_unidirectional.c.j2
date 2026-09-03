@@ -1,5 +1,6 @@
 #include "{{ name }}_gru_unidirectional.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 {% if temp_sizers_available %}
 /*
@@ -12,7 +13,7 @@
  * kernel runs. Refs AmbiqAI/ns-cmsis-nn#377.
  */
 {% endif %}
-static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
+{{ helia_guard_declare(data_dtype, name ~ "_output", dst_size) }}
 {% if temp_sizers_available %}
 {% if reset_after %}
 /* {{ kernel_fn }}_temp1_get_buffer_size() reports 0 for reset_after layers:
@@ -21,7 +22,7 @@ static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
 /* Static worst-case allocation of exactly the expected sizer result
  * ({{ gru_temp1_expected_bytes }} bytes); equality with the on-target sizer
  * is asserted in {{ name }}_check_temp_sizers(). */
-static {{ data_dtype }} {{ name }}_temp1[{{ hidden_size }}];
+{{ helia_guard_declare(data_dtype, name ~ "_temp1", hidden_size) }}
 {% endif %}
 
 static int {{ name }}_check_temp_sizers(void)
@@ -69,11 +70,16 @@ static int {{ name }}_check_temp_sizers(void)
     return 0;
 }
 {% else %}
-static {{ data_dtype }} {{ name }}_temp1[{{ hidden_state_size }}];
+{{ helia_guard_declare(data_dtype, name ~ "_temp1", hidden_state_size) }}
 {% endif %}
 
 static int32_t run_gru(void)
 {
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
+    {% if not (temp_sizers_available and reset_after) %}
+    HELIA_GUARD_ARM({{ name }}_temp1, true /* pure scratch: poison to catch read-before-write */);
+    {% endif %}
+
     const {{ gru_params_type }} params = {
         .time_major = {{ time_major_literal }},
         .batch_size = {{ batch_size }},
@@ -127,6 +133,10 @@ int32_t {{ name }}_test_case_run(void)
     HELIA_VALIDATE_STATUS("{{ validation_label | default("GRU") }}", status);
 
     int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("GRU") }} output", failures);
+    {% if not (temp_sizers_available and reset_after) %}
+    HELIA_GUARD_CHECK({{ name }}_temp1, "{{ validation_label | default("GRU") }} temp1", failures);
+    {% endif %}
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("FLOAT") }},
         {{ name }}_output,

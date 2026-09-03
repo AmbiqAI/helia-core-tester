@@ -1,9 +1,12 @@
 #include "{{ name }}_gru_unidirectional.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
-static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
-static {{ data_dtype }} {{ name }}_temp1[{{ hidden_state_size }}];
-static {{ data_dtype }} {{ name }}_hidden_state[{{ hidden_state_size }}];
+{{ helia_guard_declare(data_dtype, name ~ "_output", dst_size) }}
+{{ helia_guard_declare(data_dtype, name ~ "_temp1", hidden_state_size) }}
+{# hidden_state is explicitly zero-seeded once below and carried across
+   chunk calls: guarded but never poisoned. #}
+{{ helia_guard_declare(data_dtype, name ~ "_hidden_state", hidden_state_size) }}
 
 /*
  * Streaming/stateful test case: replays the full sequence across
@@ -13,6 +16,8 @@ static {{ data_dtype }} {{ name }}_hidden_state[{{ hidden_state_size }}];
  */
 static int32_t run_gru_chunk(int32_t chunk_time_steps, int32_t input_offset, int32_t output_offset)
 {
+    HELIA_GUARD_ARM({{ name }}_temp1, true /* pure scratch: poison to catch read-before-write */);
+
     const {{ gru_params_type }} params = {
         .time_major = {{ time_major_literal }},
         .batch_size = {{ batch_size }},
@@ -53,6 +58,9 @@ static int32_t run_gru_chunk(int32_t chunk_time_steps, int32_t input_offset, int
 
 int32_t {{ name }}_test_case_run(void)
 {
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
+    HELIA_GUARD_ARM({{ name }}_hidden_state, false /* zero-seeded below: don't poison */);
+
     /* Fresh streaming state for this sequence. */
     for (int32_t h = 0; h < {{ hidden_state_size }}; h++)
     {
@@ -66,6 +74,9 @@ int32_t {{ name }}_test_case_run(void)
 {% endfor %}
 
     int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("GRU") }} output", failures);
+    HELIA_GUARD_CHECK({{ name }}_temp1, "{{ validation_label | default("GRU") }} temp1", failures);
+    HELIA_GUARD_CHECK({{ name }}_hidden_state, "{{ validation_label | default("GRU") }} hidden_state", failures);
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("FLOAT") }},
         {{ name }}_output,

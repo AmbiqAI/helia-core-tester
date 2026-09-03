@@ -1,6 +1,7 @@
 #include "{{ name }}_add.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 {% if legacy_fp16_kernel %}
 extern arm_cmsis_nn_status arm_elementwise_add_fp16(const float16_t *input_1_vect,
                                                     const float16_t *input_2_vect,
@@ -11,7 +12,7 @@ extern arm_cmsis_nn_status arm_elementwise_add_fp16(const float16_t *input_1_vec
 {% endif %}
 
 #define {{ name|upper }}_OUTPUT_SIZE ({{ output_dims.n }} * {{ output_dims.h }} * {{ output_dims.w }} * {{ output_dims.c }})
-static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+{{ helia_guard_declare(output_dtype, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
 
 int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input1,
@@ -56,10 +57,12 @@ int32_t {{ name }}_run(
 
 int32_t {{ name }}_test_case_run(void)
 {
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     int32_t status = {{ name }}_run({{ name }}_input1, {{ name }}_input2, {{ name }}_output);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("Add") }}", status);
 
     int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Add") }} output", failures);
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("TOLERANT_INT") }},
         {{ name }}_output,

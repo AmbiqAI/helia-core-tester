@@ -1,6 +1,7 @@
 #include "{{ name }}_lstm_unidirectional.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 {% if temp_sizers_available %}
 /*
@@ -25,14 +26,17 @@
 #define LSTM_TEMP_EXPECTED_BYTES {{ lstm_temp_expected_bytes }}
 #define LSTM_TEMP_FLIPPED_EXPECTED_BYTES {{ lstm_temp_expected_bytes_flipped }}
 
-static int16_t buffer1[LSTM_TEMP_EXPECTED_BYTES / 2];
-static int16_t buffer2[LSTM_TEMP_EXPECTED_BYTES / 2];
+{{ helia_guard_declare("int16_t", "buffer1", "LSTM_TEMP_EXPECTED_BYTES / 2") }}
+{{ helia_guard_declare("int16_t", "buffer2", "LSTM_TEMP_EXPECTED_BYTES / 2") }}
 {% else %}
-static {{ output_dtype }} buffer1[LSTM_BUFFER_SIZE];
-static {{ output_dtype }} buffer2[LSTM_BUFFER_SIZE];
+{{ helia_guard_declare(output_dtype, "buffer1", "LSTM_BUFFER_SIZE") }}
+{{ helia_guard_declare(output_dtype, "buffer2", "LSTM_BUFFER_SIZE") }}
 {% endif %}
-static {{ output_dtype }} buffer3[LSTM_BUFFER_SIZE];
-static {{ output_dtype }} {{ name }}_output[LSTM_OUTPUT_SIZE];
+{# buffer3 is the LSTM cell_state: a static array starts zero-initialized,
+   which *is* the recurrent initial cell state this kernel expects, so it
+   must not be poisoned like buffer1/buffer2 (pure temp scratch). #}
+{{ helia_guard_declare(output_dtype, "buffer3", "LSTM_BUFFER_SIZE") }}
+{{ helia_guard_declare(output_dtype, name ~ "_output", "LSTM_OUTPUT_SIZE") }}
 {% if temp_sizers_available %}
 
 static int {{ name }}_check_temp_sizers(void)
@@ -305,6 +309,11 @@ static int32_t run_lstm(void)
                                           gate_cell,
                                           gate_output };
 
+    HELIA_GUARD_ARM(buffer1, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_ARM(buffer2, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_ARM(buffer3, false /* cell_state: zero-init is the real recurrent initial state */);
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
+
     cmsis_nn_lstm_context buffers = {0};
     buffers.temp1 = buffer1;
     buffers.temp2 = buffer2;
@@ -334,6 +343,10 @@ int32_t {{ name }}_test_case_run(void)
     HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);
 
     int failures = 0;
+    HELIA_GUARD_CHECK(buffer1, "{{ validation_label | default("LSTM") }} temp1", failures);
+    HELIA_GUARD_CHECK(buffer2, "{{ validation_label | default("LSTM") }} temp2", failures);
+    HELIA_GUARD_CHECK(buffer3, "{{ validation_label | default("LSTM") }} cell_state", failures);
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("LSTM") }} output", failures);
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("EXACT_INT") }},
         {{ name }}_output,

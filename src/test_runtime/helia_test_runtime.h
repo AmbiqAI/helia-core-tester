@@ -22,6 +22,7 @@
 
 #include <math.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -49,9 +50,47 @@ int helia_test_scalar_int_mismatch(const char *label, const char *subject, int e
 int helia_test_finish_validation(int failures);
 double helia_test_float_tolerance(double expected, double atol, double rtol);
 
+/* ---------------------------------------------------------------------- */
+/* Buffer overrun guards (issue #68)                                      */
+/*                                                                        */
+/* Generated harnesses give the kernel exact-sized statics with nothing   */
+/* read back afterward, so an out-of-bounds write is invisible unless it  */
+/* happens to land in the compared output. helia_guard_declare (a Jinja   */
+/* macro in common/standalone/runtime_common.j2, not a C one -- it must   */
+/* emit a #define, which a C macro cannot do) wraps a buffer in a fixed   */
+/* canary region on both sides and #defines the buffer's own name to read */
+/* through to the guarded body, so every existing reference to it keeps   */
+/* compiling unchanged. HELIA_GUARD_ARM stamps both canaries (and, for    */
+/* pure scratch, poisons the body so a read-before-write produces a       */
+/* deterministic wrong answer instead of an incidentally correct one);    */
+/* HELIA_GUARD_CHECK verifies the canaries survived the kernel call and   */
+/* reports a breach as its own failure kind, distinct from a value        */
+/* mismatch.                                                              */
+/* ---------------------------------------------------------------------- */
+
+#define HELIA_GUARD_BYTES 16u
+#define HELIA_GUARD_CANARY_BYTE 0xA5u
+#define HELIA_GUARD_POISON_BYTE 0x5Au
+
+void helia_guard_arm(uint8_t *head, uint8_t *tail, void *body, size_t body_bytes, bool poison_body);
+void helia_guard_check(const char *label, const uint8_t *head, const uint8_t *tail, int *failures);
+
 #ifdef __cplusplus
 }
 #endif
+
+/*
+ * ident must name a HELIA_GUARD_DECLARE'd buffer. Declared as a Jinja macro
+ * (common/standalone/runtime_common.j2: helia_guard_declare/_arm/_check) so
+ * every template shares one definition; these C macros just keep the
+ * generated call sites free of repeated `ident##_guard.head[0]` plumbing.
+ */
+#define HELIA_GUARD_ARM(ident, poison_body) \
+    helia_guard_arm(&(ident##_guard.head[0]), &(ident##_guard.tail[0]), \
+                     (ident##_guard.body), sizeof(ident##_guard.body), (poison_body))
+
+#define HELIA_GUARD_CHECK(ident, label, failures) \
+    helia_guard_check((label), &(ident##_guard.head[0]), &(ident##_guard.tail[0]), &(failures))
 
 #define HELIA_VALIDATE_EXPECTED_STATUS(label, status, expected_status) \
     do { \
