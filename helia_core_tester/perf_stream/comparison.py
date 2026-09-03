@@ -47,6 +47,10 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
     elif mode == "bool":
         diffs = actual_np.astype(bool) != expected_np.astype(bool)
         max_abs_diff = float(np.max(diffs.astype(np.int32))) if actual_np.size else 0.0
+    elif mode == "none":
+        # Intentionally unvalidated (HELIA_VALIDATE_OUTPUTS=NONE). Report a pass
+        # without diffing rather than crashing the session.
+        return ComparisonResult(passed=True, mismatch_count=0, max_abs_diff=0.0, mode=mode)
     else:
         raise ValueError(f"Unsupported comparison mode: {mode}")
 

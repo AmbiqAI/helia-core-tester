@@ -27,6 +27,21 @@ def resolve_generated_tests_dir(source_dir: Path, cpu: str, suite: str) -> Path:
     return canonical_generated_tests_dir(source_dir, cpu, suite=suite)
 
 
+def _best_effort_artifact_sha256(generated_test_dir: Path) -> Optional[str]:
+    """Compute the artifact digest, leaving it unset if outputs are missing.
+
+    ``generated_case_artifact_sha256`` raises when ``generated_test_dir`` doesn't
+    exist or has no deterministic files yet -- e.g. for failures that occur
+    before generation/build outputs are produced. That's expected here, not a
+    reporting bug, so treat the digest as best-effort rather than aborting
+    report generation.
+    """
+    try:
+        return generated_case_artifact_sha256(generated_test_dir)
+    except (OSError, ValueError):
+        return None
+
+
 def _tests_report_dir(cpu: str, suite: str) -> Path:
     return canonical_tests_report_dir(REPO_ROOT, cpu, suite=suite)
 
@@ -161,7 +176,7 @@ def run_tests_with_reporting(
                 test_result=test_result,
                 failure_stage=failure_stage,
                 failure_reason=failure_reason,
-                artifact_sha256=generated_case_artifact_sha256(generated_test_dir),
+                artifact_sha256=_best_effort_artifact_sha256(generated_test_dir),
             )
 
         for result in cpu_results:
@@ -188,7 +203,7 @@ def run_tests_with_reporting(
                 test_result=result,
                 failure_stage=failure_stage,
                 failure_reason=failure_reason,
-                artifact_sha256=generated_case_artifact_sha256(
+                artifact_sha256=_best_effort_artifact_sha256(
                     tracker.generated_test_dir_for(desc_name, cpu_generated_tests_dir)
                 ),
             )

@@ -100,6 +100,7 @@ FULL_ARGS=(
     --suite both
     --float-precision both
     --coverage
+    --jobs "${JOBS}"
     --run-jobs "${RUN_JOBS}"
     --no-fail-fast
     -v 3
