@@ -13,17 +13,26 @@ from typing import Optional
 import typer
 
 from helia_core_tester.core.config import Config
+from helia_core_tester.core.discovery import ensure_arm_toolchain_on_path
 from helia_core_tester.core.logging import setup_logger
 from helia_core_tester.core.path_layout import artifacts_root
 from helia_core_tester.core.pipeline import FullTestPipeline
 from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, RunStep
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
+from helia_core_tester.perf_stream.cli import app as perf_stream_app
+
+# Once, for every subcommand (including perf-stream's) for the lifetime of this
+# process -- see ensure_arm_toolchain_on_path()'s own docstring for why this can't
+# just live at each subprocess call site.
+ensure_arm_toolchain_on_path()
 
 app = typer.Typer(
     name="helia_core_tester",
     help="CMSIS-NN testing toolkit - generate, build, and run tests for CMSIS-NN kernels",
     add_completion=False,
 )
+
+app.add_typer(perf_stream_app, name="perf-stream")
 
 
 def _print_plan_item(plan_item) -> None:

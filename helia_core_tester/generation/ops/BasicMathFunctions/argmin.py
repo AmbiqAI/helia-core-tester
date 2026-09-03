@@ -140,27 +140,17 @@ class OpArgMin(OperationBase):
             'output_size': int(np.prod(output_shape)),
         }
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("BasicMathFunctions/argmin/argmin.h.j2", context)
-        h_path = includes_api_dir / f"{name}_argmin.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("BasicMathFunctions/argmin/argmin.c.j2", context)
-        c_path = output_dir / f"{name}_argmin.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'ArgMin'),
             'operator_name': 'argmin'
         }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self._write_op_outputs(
+            output_dir,
+            "argmin",
+            "BasicMathFunctions/argmin/argmin.h.j2",
+            "BasicMathFunctions/argmin/argmin.c.j2",
+            context,
+            cmake_context,
+        )
         

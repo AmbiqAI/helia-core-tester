@@ -121,6 +121,7 @@ class DescriptorResult:
     test_result: Optional[TestResult] = None
     failure_stage: Optional[str] = None
     failure_reason: Optional[str] = None
+    artifact_sha256: Optional[str] = None
     project_root: Optional[Path] = None  # For making paths relative
     
     def _make_path_relative(self, path: Path) -> str:
@@ -154,6 +155,8 @@ class DescriptorResult:
             "descriptor_path": self._make_path_relative(self.descriptor_path),
             "descriptor_content": descriptor_content,
         }
+        if self.artifact_sha256 is not None:
+            result["artifact_sha256"] = self.artifact_sha256
 
         family = self.descriptor_content.get("_family")
         if family is not None:

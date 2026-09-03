@@ -8,12 +8,14 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from helia_core_tester.core.discovery import find_descriptors_dir
+from helia_core_tester.core.cpu_targets import target_cpu_cmake_value
 from helia_core_tester.core.path_layout import build_dir as canonical_build_dir
 from helia_core_tester.core.path_layout import generated_tests_dir as canonical_generated_tests_dir
 from helia_core_tester.core.path_layout import tests_report_dir as canonical_tests_report_dir
 from helia_core_tester.reporting.models import DescriptorResult, TestReport, TestResult, TestStatus
 from helia_core_tester.reporting.descriptor_tracker import DescriptorTracker
 from helia_core_tester.reporting.generator import ReportGenerator
+from helia_core_tester.generation.artifact_identity import generated_case_artifact_sha256
 
 from .cmake import active_test_list, cmake_build, cmake_configure, find_elves
 from .coverage import generate_coverage_reports, new_coverage_context
@@ -23,6 +25,21 @@ from .runner import ProcessSupervisor, run_elf_jobs_with_reporting
 
 def resolve_generated_tests_dir(source_dir: Path, cpu: str, suite: str) -> Path:
     return canonical_generated_tests_dir(source_dir, cpu, suite=suite)
+
+
+def _best_effort_artifact_sha256(generated_test_dir: Path) -> Optional[str]:
+    """Compute the artifact digest, leaving it unset if outputs are missing.
+
+    ``generated_case_artifact_sha256`` raises when ``generated_test_dir`` doesn't
+    exist or has no deterministic files yet -- e.g. for failures that occur
+    before generation/build outputs are produced. That's expected here, not a
+    reporting bug, so treat the digest as best-effort rather than aborting
+    report generation.
+    """
+    try:
+        return generated_case_artifact_sha256(generated_test_dir)
+    except (OSError, ValueError):
+        return None
 
 
 def _tests_report_dir(cpu: str, suite: str) -> Path:
@@ -72,7 +89,7 @@ def run_tests_with_reporting(
                 source_dir=source_dir,
                 build_dir=build_dir,
                 toolchain_file=toolchain_file,
-                cpu=cpu,
+                cpu=target_cpu_cmake_value(cpu),
                 cmsis5=cmsis5,
                 optimization=args.opt,
                 extra_defs=args.cmake_def,
@@ -159,6 +176,7 @@ def run_tests_with_reporting(
                 generated_tests_dir=cpu_generated_tests_dir,
             )
             desc_path = tracker.get_descriptor_path(desc_name)
+            generated_test_dir = tracker.generated_test_dir_for(desc_name, cpu_generated_tests_dir)
             descriptor_results[desc_name] = DescriptorResult(
                 descriptor_name=desc_name,
                 descriptor_path=desc_path,
@@ -167,6 +185,7 @@ def run_tests_with_reporting(
                 test_result=test_result,
                 failure_stage=failure_stage,
                 failure_reason=failure_reason,
+                artifact_sha256=_best_effort_artifact_sha256(generated_test_dir),
             )
 
         for result in cpu_results:
@@ -193,6 +212,9 @@ def run_tests_with_reporting(
                 test_result=result,
                 failure_stage=failure_stage,
                 failure_reason=failure_reason,
+                artifact_sha256=_best_effort_artifact_sha256(
+                    tracker.generated_test_dir_for(desc_name, cpu_generated_tests_dir)
+                ),
             )
 
         metadata = {

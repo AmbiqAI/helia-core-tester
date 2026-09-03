@@ -45,7 +45,7 @@ usage() {
     echo "  --run-jobs N           Parallel FVP run jobs, 0 = auto (default: ${RUN_JOBS})"
     echo "  --skip-generation      Reuse already-generated TFLite/C test artifacts"
     echo "  --help                 Show this help message"
-    exit 0
+    exit "${1:-0}"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -71,7 +71,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}" >&2
-            usage
+            usage 1
             ;;
     esac
 done
@@ -100,8 +100,9 @@ FULL_ARGS=(
     --suite both
     --float-precision both
     --coverage
+    --jobs "${JOBS}"
     --run-jobs "${RUN_JOBS}"
-    # --no-fail-fast
+    --no-fail-fast
     -v 3
 )
 

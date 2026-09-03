@@ -2,6 +2,7 @@
 
 from typing import Dict, Any, Optional
 from pathlib import Path
+import os
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
@@ -228,6 +229,7 @@ class OpConvolve(OperationBase):
         info.setdefault("buffer_size_needs_layout", info["input_c_type"] in {"float", "float16_t"})
 
         hint = self._hint()
+
         variant = str(hint.get("kernel_variant", "")).lower()
         if not variant:
             return info
@@ -663,6 +665,11 @@ class OpConvolve(OperationBase):
                 else ('cmsis_nn_conv_params_f32' if float_kernel else 'cmsis_nn_conv_params')
             ),
             'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
+            # Selects common/standalone/benchmark.j2's backend: "fvp" (default,
+            # DWT-only) or "hardware" (DWT + PMU, Apollo510/Cortex-M55 real
+            # silicon). No CLI flag exists yet for this -- set via env var so
+            # benchmarking scripts can select it without deeper Config/CLI plumbing.
+            'benchmark_target': os.environ.get("HELIA_BENCH_TARGET", "fvp"),
         }
         if float_kernel:
             context['conv_activation_min_literal'] = builder.format_float_literal(conv_params['activation_min'])

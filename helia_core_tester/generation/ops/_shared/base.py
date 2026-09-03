@@ -3,6 +3,7 @@ Simplified base operation class for TFLite model generation.
 All operations inherit from this and implement build_keras_model().
 """
 
+import json
 import numpy as np
 from typing import Dict, Any, Optional, Tuple, Iterator
 from abc import ABC, abstractmethod
@@ -25,6 +26,33 @@ try:
     import tensorflow as tf
 except Exception:
     tf = None
+
+# Context keys whose values are bulk C array literals (large multi-line
+# strings holding the full input/expected-output tensor data as C source
+# text). These are already present verbatim in the generated .c file, so the
+# sidecar deliberately excludes them by suffix convention to stay small and
+# avoid duplicating tensor payload data across two artifacts.
+_BULK_ARRAY_FIELD_SUFFIXES: Tuple[str, ...] = (
+    "_data_array",
+    "_array_str",
+    "expected_output_array",
+)
+
+
+def _is_bulk_array_field(key: str, value: Any) -> bool:
+    if any(key.endswith(suffix) for suffix in _BULK_ARRAY_FIELD_SUFFIXES):
+        return True
+    # Fallback heuristic: any very long string value is almost certainly a
+    # C array literal blob rather than a meaningful scalar/name field.
+    return isinstance(value, str) and len(value) > 500
+
+
+def _is_json_serializable(value: Any) -> bool:
+    try:
+        json.dumps(value)
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 class OperationBase(ABC):
@@ -413,16 +441,67 @@ class OperationBase(ABC):
         context: Dict[str, Any],
         cmake_context: Dict[str, Any],
     ) -> None:
-        """Write .h, .c, and CMakeLists.txt from templates."""
+        """Write .h, .c, CMakeLists.txt, and a structured JSON sidecar from templates.
+
+        The sidecar (Phase 1 of the generation/bridge unification plan) is
+        rendered from the *same* fully-resolved render context used to
+        produce the .c file -- including the validation_*/comparison fields
+        computed by TemplateContextBuilder.build_validation_context() -- so it
+        is provably in sync with what actually got compiled/executed, instead
+        of being re-derived independently (as the hardware bridge's 22
+        hand-written regex extractors currently do). It is intended to
+        eventually let the hardware perf-stream bridge look up kernel name,
+        call args, and tensor roles/tolerance structurally rather than
+        re-parsing generated C source.
+        """
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)
         name = context["name"]
         h_content = self.render_template(h_tpl, context)
         (includes_api_dir / f"{name}_{op_suffix}.h").write_text(h_content)
-        c_content = self.render_template(c_tpl, context)
+        c_content, resolved_c_context = self.render_template(
+            c_tpl, context, return_context=True
+        )
         (output_dir / f"{name}_{op_suffix}.c").write_text(c_content)
         cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
         (output_dir / "CMakeLists.txt").write_text(cmake_content)
+        sidecar_content = self._build_generation_sidecar(op_suffix, resolved_c_context)
+        (output_dir / f"{name}_{op_suffix}.sidecar.json").write_text(
+            json.dumps(sidecar_content, indent=2, sort_keys=True) + "\n"
+        )
+
+    def _build_generation_sidecar(self, op_suffix: str, resolved_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Build the structured sidecar payload for a generated test case from
+        the fully-resolved context that actually rendered the .c file.
+
+        Strips out bulk C array-literal fields (already present verbatim in
+        the generated .c file, no need to duplicate/bloat the sidecar with
+        them) and any non-JSON-serializable values. What remains is the
+        single source of truth for this exact case's: kernel name, scalar
+        call args, tensor dtypes/roles, and resolved comparison/tolerance
+        policy -- the latter guaranteed identical to the hardware bridge
+        manifest's since both now derive from dtypes.py's unified table (see
+        the tolerance-policy-unification work in this same phase).
+        """
+        name = resolved_context.get("name", "")
+        operator = str(self.desc.get("operator", ""))
+        comparison = self.comparison_config()
+        scalars: Dict[str, Any] = {}
+        for key, value in resolved_context.items():
+            if _is_bulk_array_field(key, value):
+                continue
+            if not _is_json_serializable(value):
+                continue
+            scalars[key] = value
+        return {
+            "name": name,
+            "operator": operator,
+            "op_suffix": op_suffix,
+            "kernel_fn": resolved_context.get("kernel_fn"),
+            "comparison": comparison,
+            "resolved_tensor_dtypes": self.resolved_tensor_dtypes(),
+            "scalars": scalars,
+        }
 
     def generate_input_data(self) -> np.ndarray:
         """
@@ -434,9 +513,17 @@ class OperationBase(ABC):
         input_shape = self.desc.get('input_shape', [1, 1, 1, 1])
         return self._seeded_rng().integers(-32, 32, size=input_shape).astype(np.float32)
     
-    def render_template(self, template_path: str, context: Dict[str, Any]) -> str:
+    def render_template(
+        self, template_path: str, context: Dict[str, Any], return_context: bool = False
+    ):
         """
         Render Jinja template with context. Environment is cached per template directory.
+
+        If ``return_context`` is True, returns ``(rendered_text, resolved_context)``
+        where ``resolved_context`` is the exact context dict used for rendering
+        (post build_validation_context() resolution for .c templates) -- this is
+        what the generation sidecar is built from, so the sidecar is guaranteed
+        to reflect what was actually rendered rather than a re-derived copy.
         """
         template_dir = str(find_tester_templates_dir())
         if template_dir not in _JINJA2_ENV_CACHE:
@@ -457,7 +544,8 @@ class OperationBase(ABC):
         for candidate in template_candidates(operator, template_path):
             try:
                 template = env.get_template(candidate)
-                return template.render(**render_context)
+                rendered = template.render(**render_context)
+                return (rendered, render_context) if return_context else rendered
             except jinja2.TemplateNotFound:
                 continue
         raise jinja2.TemplateNotFound(template_path)

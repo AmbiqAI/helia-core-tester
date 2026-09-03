@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-from helia_core_tester.core.cpu_targets import parse_cpu_list
+from helia_core_tester.core.cpu_targets import parse_cpu_list, target_cpu_cmake_value
 from helia_core_tester.core.path_layout import build_dir as canonical_build_dir
 
 from .cli import build_arg_parser
@@ -25,7 +25,12 @@ def run_main(argv: List[str]) -> int:
     parser = build_arg_parser(default_downloads_dir=DEFAULT_DL, default_source_dir=DEFAULT_SOURCE)
     args = parser.parse_args(argv)
 
-    if not is_linux():
+    # The FVP binaries are Linux-only prebuilt executables (matching the
+    # original bash script). --no-run skips the FVP entirely (e.g. a
+    # cross-compile-only build, or a real-hardware flash/benchmark flow
+    # driven separately), so only enforce the Linux requirement when the
+    # FVP is actually going to be invoked.
+    if not args.no_run and not is_linux():
         raise FvpScriptError("This script supports Linux only (matching the original bash script).")
 
     if not args.no_setup:
@@ -96,7 +101,7 @@ def run_main(argv: List[str]) -> int:
                     source_dir=source_dir,
                     build_dir=build_dir,
                     toolchain_file=toolchain_file,
-                    cpu=cpu,
+                    cpu=target_cpu_cmake_value(cpu),
                     cmsis5=cmsis5,
                     optimization=args.opt,
                     extra_defs=args.cmake_def,

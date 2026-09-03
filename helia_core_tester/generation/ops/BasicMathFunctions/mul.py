@@ -159,27 +159,27 @@ class OpMul(BinaryBasicMathBase):
             input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
             input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
 
-            if input1_shape == input2_shape:
-                interpreter = self.load_litert_interpreter(str(tflite_path))
-                input_details = interpreter.get_input_details()
-                output_details = interpreter.get_output_details()
-                interpreter.set_tensor(input_details[0]['index'], input1_q)
-                interpreter.set_tensor(input_details[1]['index'], input2_q)
-                interpreter.invoke()
-                output_data = np.array(interpreter.get_tensor(output_details[0]['index']))
-            else:
-                output_data = self._simulate_mul_quantized(
-                    input1_q,
-                    input2_q,
-                    input1_offset=-int(input1_zp),
-                    input2_offset=-int(input2_zp),
-                    out_offset=int(output_zp),
-                    out_mult=int(output_mult),
-                    out_shift=int(output_shift),
-                    out_activation_min=int(activation_min),
-                    out_activation_max=int(activation_max),
-                    out_dtype=np_in_dtype,
-                )
+            # Always compute the golden via the CMSIS-NN-matching fixed-point simulation
+            # (_simulate_mul_quantized), not the TFLite interpreter, even when the two
+            # input shapes happen to be equal: TFLite's internal requantize rounds
+            # half-to-even, while CMSIS-NN's arm_nn_requantize rounds half-away-from-zero
+            # (single 31-bit doubling-high-mult shift). The two disagree exactly at exact
+            # tie-boundary products (product % 8 == +-4 for this shift), which real
+            # Apollo510 hardware then flags as byte-exact mismatches against a
+            # TFLite-derived golden -- see mul_default_s8_hw_generated's 19/160 mismatch
+            # investigation.
+            output_data = self._simulate_mul_quantized(
+                input1_q,
+                input2_q,
+                input1_offset=-int(input1_zp),
+                input2_offset=-int(input2_zp),
+                out_offset=int(output_zp),
+                out_mult=int(output_mult),
+                out_shift=int(output_shift),
+                out_activation_min=int(activation_min),
+                out_activation_max=int(activation_max),
+                out_dtype=np_in_dtype,
+            )
         
         # Format arrays
         input1_array_str = builder.format_array_as_c_literal(input1_q)

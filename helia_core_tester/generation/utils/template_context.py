@@ -7,7 +7,12 @@ import numpy as np
 from pathlib import PurePosixPath
 from typing import Dict, Any, List, Tuple
 
-from helia_core_tester.generation.io.dtypes import default_comparison_for_dtype, resolve_comparison
+from helia_core_tester.generation.io.dtypes import (
+    default_comparison_for_dtype,
+    default_int_tolerance,
+    has_int_tolerance_override,
+    resolve_comparison,
+)
 
 class TemplateContextBuilder:
     """
@@ -96,16 +101,6 @@ class TemplateContextBuilder:
         if isinstance(value, (list, tuple)):
             return default if len(value) == 0 else value[0]
         return value
-
-    _TOLERANCE_OVERRIDES = {
-        "ActivationFunctions/prelu/prelu.c.j2": 2,
-    }
-
-    _INT16_TOLERANCE_OVERRIDES = {
-        "BasicMathFunctions/abs/abs.c.j2": 2,
-        "BasicMathFunctions/add/add.c.j2": 3,
-        "BasicMathFunctions/squared_difference/squared_difference.c.j2": 3,
-    }
 
     _VALIDATION_HELPERS_BY_MODE = {
         "exact_int": ["exact_int"],
@@ -198,7 +193,9 @@ class TemplateContextBuilder:
         return int(cls._REPORT_LIMIT_OVERRIDES.get(normalized_path, 20))
 
     @classmethod
-    def infer_validation_tolerance(cls, template_path: str, context: Dict[str, Any], mode: str) -> int:
+    def infer_validation_tolerance(
+        cls, template_path: str, context: Dict[str, Any], mode: str, desc: Dict[str, Any] | None = None
+    ) -> int:
         explicit = context.get("validation_tolerance")
         if explicit is not None:
             return int(explicit)
@@ -208,14 +205,16 @@ class TemplateContextBuilder:
         if mode != "tolerant_int":
             return 1
 
-        normalized_path = cls._normalize_template_path(template_path)
-        if normalized_path in cls._TOLERANCE_OVERRIDES:
-            return int(cls._TOLERANCE_OVERRIDES[normalized_path])
-
+        # Reads dtypes.py's single-source-of-truth per-operator tolerance
+        # table so FVP and hardware always validate a case identically.
+        operator = str((desc or {}).get("operator") or context.get("operator") or "")
         output_dtype = str(context.get("output_dtype", "")).strip()
-        if output_dtype == "int16_t" and normalized_path in cls._INT16_TOLERANCE_OVERRIDES:
-            return int(cls._INT16_TOLERANCE_OVERRIDES[normalized_path])
+        dtype_token = "S16" if output_dtype == "int16_t" else "S8"
+        if operator and has_int_tolerance_override(operator, dtype_token):
+            return default_int_tolerance(operator, dtype_token)
 
+        # KNOWN GAP: no operator-level override exists -- see dtypes.py's
+        # _OPERATOR_TOLERANCE_OVERRIDES for unaudited operators.
         return 1
 
     @classmethod
@@ -266,7 +265,16 @@ class TemplateContextBuilder:
         desc: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         resolved = dict(context)
-        mode = cls.infer_validation_mode(template_path, resolved)
+        comparison: Dict[str, Any] | None = None
+        if desc is not None:
+            raw_comparison = desc.get("resolved_comparison")
+            comparison = dict(raw_comparison) if isinstance(raw_comparison, dict) else resolve_comparison(desc)
+        comparison_mode = str((comparison or {}).get("mode", ""))
+        if comparison_mode in {"exact_int", "tolerant_int", "float", "bool", "none"}:
+            mode = comparison_mode
+            resolved["validation_mode"] = mode
+        else:
+            mode = cls.infer_validation_mode(template_path, resolved)
         # Invariant (issue #54): a float-typed output must never be validated
         # by an integer comparison — the (long long) cast makes it vacuous.
         # This also rejects coercion via an explicit validation_mode override.
@@ -282,8 +290,8 @@ class TemplateContextBuilder:
                 f"Status-only fault templates should simply not invoke output "
                 f"validation rather than coercing the mode."
             )
-        resolved.setdefault("validation_mode", mode)
-        resolved.setdefault("validation_mode_token", mode.upper())
+        resolved["validation_mode"] = mode
+        resolved["validation_mode_token"] = mode.upper()
         resolved.setdefault(
             "validation_label",
             cls.infer_validation_label(template_path, resolved, desc),
@@ -292,10 +300,13 @@ class TemplateContextBuilder:
             "validation_report_limit",
             cls.infer_validation_report_limit(template_path, resolved),
         )
-        resolved.setdefault(
-            "validation_tolerance",
-            cls.infer_validation_tolerance(template_path, resolved, mode),
-        )
+        if comparison_mode == "tolerant_int":
+            resolved["validation_tolerance"] = int(comparison.get("tolerance", 0))
+        else:
+            resolved.setdefault(
+                "validation_tolerance",
+                cls.infer_validation_tolerance(template_path, resolved, mode, desc),
+            )
         float_defaults = cls.infer_float_comparison_defaults(resolved, desc)
         resolved.setdefault(
             "validation_atol",
@@ -793,12 +804,29 @@ class TemplateContextBuilder:
         For S16 (int16_t):
           MVE: 4 * ceil((input_c * filter_w * filter_h) / 8) * 8 * sizeof(int16_t)
           DSP: 2 * input_c * filter_w * filter_h * sizeof(int16_t)
+
+        For FP32/FP16 (float32_t/float16_t):
+          CMSIS-NN's real arm_convolve_f32/f16_get_buffer_size() falls back, for the
+          general (non-1x1, non-1xn) case, to the patch-gemm tile formula:
+              ARM_NN_CONV_NHWC_PATCH_GEMM_{F32,F16}_MAX_TILE_ROWS(8) * filter_h * filter_w
+              * input_c * sizeof(element)
+          This is strictly >= every other float Convolve buffer-size specialization
+          (1x1, 1xN, depthwise NT_T, packed-weight direct k3/k5), so it is used
+          unconditionally here as the conservative upper bound, matching the S8/S16
+          "max of known formulas" philosophy above. Previously this function silently
+          fell through to the S8 (int8) formula for FP32/FP16 callers, undersizing the
+          scratch buffer by 2x-4x (elem_size=1 assumed instead of 2 or 4) and causing
+          real hardware ARM_CMSIS_NN_ARG_ERROR rejections for float Convolve cases.
         """
         input_c = input_dims['c']
         filter_w = filter_dims['w']
         filter_h = filter_dims['h']
-        
-        if output_dtype == 'S16':
+
+        if output_dtype in ('FP32', 'FP16'):
+            elem_size = 4 if output_dtype == 'FP32' else 2
+            max_tile_rows = 8
+            return max_tile_rows * filter_h * filter_w * input_c * elem_size
+        elif output_dtype == 'S16':
             # S16 buffer size calculation
             # MVE: 4 * ceil((input_c * filter_w * filter_h) / 8) * 8 * sizeof(int16_t)
             col_length_mve = input_c * filter_w * filter_h

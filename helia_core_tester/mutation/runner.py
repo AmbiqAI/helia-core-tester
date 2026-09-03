@@ -171,7 +171,7 @@ def run_mutation_scoring(
     tree = prepare_tree(cmsis_nn_root, workdir)
     build_dir = workdir / "build"
     build_dir.mkdir(exist_ok=True)
-    runtime_obj = build_runtime_obj(tester_root, build_dir, cc=cc)
+    runtime_obj = build_runtime_obj(tester_root, tree, build_dir, cc=cc)
 
     log(f"[mutation] baseline: building pristine kernel library + {len(case_dirs)} case(s)")
     lib = build_kernel_lib(tree, build_dir, cc=cc, jobs=jobs)

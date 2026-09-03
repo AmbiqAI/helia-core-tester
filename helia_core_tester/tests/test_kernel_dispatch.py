@@ -10,6 +10,7 @@ def test_convolve_dispatch_uses_cpu_specific_buffer_api():
     m4 = resolve_convolve_kernel("S8", "S8", "cortex-m4")
     m0 = resolve_convolve_kernel("S8", "S8", "cortex-m0")
     s16 = resolve_convolve_kernel("S16", "S8", "cortex-m0")
+    s4 = resolve_convolve_kernel("S8", "S4", "cortex-m55")
 
     assert m55["kernel_get_buffer_size_fn"].endswith("_mve")
     assert m4["kernel_get_buffer_size_fn"].endswith("_dsp")
@@ -18,25 +19,31 @@ def test_convolve_dispatch_uses_cpu_specific_buffer_api():
     assert m4["call_style"] == "baseline"
     assert m0["weight_c_type"] == "int8_t"
     assert s16["weight_c_type"] == "int8_t"
+    assert s4["kernel_fn"] == "arm_convolve_wrapper_s4"
 
 
 def test_depthwise_conv_dispatch_uses_cpu_specific_buffer_api():
     m55 = resolve_depthwise_conv_kernel("S16", "S8", "m55")
     m4 = resolve_depthwise_conv_kernel("S16", "S8", "m4")
     s8 = resolve_depthwise_conv_kernel("S8", "S8", "cortex-m0")
+    s4 = resolve_depthwise_conv_kernel("S8", "S4", "cortex-m55")
 
     assert m55["kernel_get_buffer_size_fn"].endswith("_mve")
     assert m4["kernel_get_buffer_size_fn"].endswith("_dsp")
     assert m55["weight_c_type"] == "int8_t"
     assert s8["weight_c_type"] == "int8_t"
+    assert s4["kernel_fn"] == "arm_depthwise_conv_wrapper_s4"
 
 
 def test_fully_connected_dispatch_uses_cpu_specific_buffer_api():
     m55 = resolve_fully_connected_kernel("S8", "S8", "cortex-m55")
     m0 = resolve_fully_connected_kernel("S8", "S8", "cortex-m0")
+    s4 = resolve_fully_connected_kernel("S8", "S4", "cortex-m55")
 
     assert m55["kernel_get_buffer_size_fn"].endswith("_mve")
     assert m0["kernel_get_buffer_size_fn"] == "arm_fully_connected_s8_get_buffer_size"
+    assert s4["kernel_fn"] == "arm_fully_connected_s4"
+    assert s4["kernel_get_buffer_size_fn"] is None
 
 
 def test_fully_connected_float_dispatch_exposes_layout_and_params_type():

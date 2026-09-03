@@ -15,7 +15,35 @@ _CPU_ALIASES = {
     "cortex-m0": "cortex-m0",
     "cortex-m4": "cortex-m4",
     "cortex-m55": "cortex-m55",
+    # Same physical Cortex-M55/Apollo510 silicon as "cortex-m55", but built
+    # with MVE force-disabled (compiler flag `-mcpu=cortex-m55+nomve`, see
+    # _TARGET_CPU_CMAKE_OVERRIDES below) so the DSP-only fallback code path
+    # can be benchmarked/tested on the same hardware as the MVE path, rather
+    # than only comparing across different chips (e.g. m4 vs. m55).
+    "m55-dsp": "cortex-m55-dsp",
+    "cortex-m55-dsp": "cortex-m55-dsp",
 }
+
+# Maps a canonical cpu name (as used for test generation, build-dir naming,
+# and generated_tests_dir layout) to the actual `-mcpu=...`/`TARGET_CPU`
+# CMake value passed to the compiler, when they differ. "cortex-m55-dsp" is
+# a helia-core-tester-only pseudo target: identical generated test sources
+# and identical physical target as "cortex-m55", just compiled with MVE
+# disabled -- see CMakeLists.txt's ARM_CPU/ARM_FEATURES derivation, which
+# strips this "+nomve" suffix before selecting the CMSIS device header
+# (the physical chip doesn't change, only the instruction-set the compiler
+# targets).
+_TARGET_CPU_CMAKE_OVERRIDES = {
+    "cortex-m55-dsp": "cortex-m55+nomve",
+}
+
+
+def target_cpu_cmake_value(cpu: str) -> str:
+    """Returns the value to pass as `-DTARGET_CPU=...` for a canonical cpu
+    name, translating helia-core-tester-only pseudo targets (like
+    "cortex-m55-dsp") to the real `-mcpu` value GCC expects."""
+    canon = normalize_cpu(cpu)
+    return _TARGET_CPU_CMAKE_OVERRIDES.get(canon, canon)
 
 
 @dataclass(frozen=True)
@@ -69,6 +97,13 @@ def get_cpu_profile(cpu: str) -> CpuProfile:
             has_dsp=True,
             has_mve=True,
             capabilities=frozenset({"dsp", "mve", "fp32_execution", "fp16_execution"}),
+        )
+    if canon == "cortex-m55-dsp":
+        return CpuProfile(
+            cpu=canon,
+            has_dsp=True,
+            has_mve=False,
+            capabilities=frozenset({"dsp", "fp32_execution", "fp16_execution"}),
         )
     if canon == "cortex-m4":
         return CpuProfile(

@@ -1,0 +1,1073 @@
+# Shared kernel-id registry for the perf_stream hardware bridge.
+#
+# This is the single source of truth mapping a bridged (family, operator, dtype[, weight_dtype])
+# tuple to the numeric `kernel_id` sent over HCTP in CASE_META and dispatched by firmware in
+# `cmake/perf_stream/benchmark_server_session.c`'s `run_kernel_once()`. Host
+# (`helia_core_tester/perf_stream/kernel_registry.py`) and firmware
+# (`cmake/perf_stream/benchmark_server_session.h`'s `HCT_KERNEL_ID_*` defines) must agree on
+# these numbers -- `test_kernel_registry.py` cross-checks the Python side against this file,
+# and a comment in benchmark_server_session.h points back here.
+#
+# When adding a new bridged kernel:
+#   1. Reserve the next kernel_id here.
+#   2. Add a matching `HCT_KERNEL_ID_*` #define in benchmark_server_session.h.
+#   3. Add a `run_<kernel>_once()` firmware handler + a case in `run_kernel_once()`'s switch.
+#   4. Add a builder function in generated_test_bridge.py's `_BUILDERS` dispatch table.
+
+kernels:
+  - kernel_id: 1
+    family: BasicMathFunctions
+    operator: Abs
+    dtype: S8
+    cmsis_function: arm_abs_s8
+    note: "Shared by the synthetic demo bundle and the generated-test bridge."
+
+  - kernel_id: 2
+    family: ConvolutionFunctions
+    operator: Convolve
+    dtype: S8
+    cmsis_function: arm_convolve_s8
+
+  - kernel_id: 3
+    family: BasicMathFunctions
+    operator: Add
+    dtype: S8
+    cmsis_function: arm_add_s8
+
+  - kernel_id: 4
+    family: BasicMathFunctions
+    operator: Sub
+    dtype: S8
+    cmsis_function: arm_sub_s8
+
+  - kernel_id: 5
+    family: BasicMathFunctions
+    operator: Mul
+    dtype: S8
+    cmsis_function: arm_mul_s8
+
+  - kernel_id: 6
+    family: BasicMathFunctions
+    operator: Maximum
+    dtype: S8
+    cmsis_function: arm_maximum_s8
+
+  - kernel_id: 7
+    family: BasicMathFunctions
+    operator: Minimum
+    dtype: S8
+    cmsis_function: arm_minimum_s8
+
+  - kernel_id: 8
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: S8
+    cmsis_function: arm_depthwise_conv_s8
+
+  - kernel_id: 9
+    family: BasicMathFunctions
+    operator: Add
+    dtype: S16
+    cmsis_function: arm_add_s16
+
+  - kernel_id: 10
+    family: BasicMathFunctions
+    operator: Sub
+    dtype: S16
+    cmsis_function: arm_sub_s16
+
+  - kernel_id: 11
+    family: BasicMathFunctions
+    operator: Mul
+    dtype: S16
+    cmsis_function: arm_mul_s16
+
+  - kernel_id: 12
+    family: BasicMathFunctions
+    operator: Maximum
+    dtype: S16
+    cmsis_function: arm_maximum_s16
+
+  - kernel_id: 13
+    family: BasicMathFunctions
+    operator: Minimum
+    dtype: S16
+    cmsis_function: arm_minimum_s16
+
+  - kernel_id: 14
+    family: ConvolutionFunctions
+    operator: Convolve
+    dtype: S16
+    cmsis_function: arm_convolve_wrapper_s16
+
+  - kernel_id: 15
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: S16
+    cmsis_function: arm_depthwise_conv_wrapper_s16
+
+  - kernel_id: 16
+    family: PoolingFunctions
+    operator: AvgPool
+    dtype: S8
+    cmsis_function: arm_avgpool_s8
+
+  - kernel_id: 17
+    family: PoolingFunctions
+    operator: MaxPool
+    dtype: S8
+    cmsis_function: arm_max_pool_s8
+
+  - kernel_id: 18
+    family: PoolingFunctions
+    operator: AvgPool
+    dtype: S16
+    cmsis_function: arm_avgpool_s16
+
+  - kernel_id: 19
+    family: PoolingFunctions
+    operator: MaxPool
+    dtype: S16
+    cmsis_function: arm_max_pool_s16
+
+  - kernel_id: 20
+    family: ActivationFunctions
+    operator: Relu
+    dtype: S8
+    cmsis_function: arm_relu_s8
+
+  - kernel_id: 21
+    family: ActivationFunctions
+    operator: Relu
+    dtype: S16
+    cmsis_function: arm_relu_s16
+
+  - kernel_id: 22
+    family: ActivationFunctions
+    operator: Relu6
+    dtype: S8
+    cmsis_function: arm_relu_generic_s8
+
+  - kernel_id: 23
+    family: ActivationFunctions
+    operator: Relu6
+    dtype: S16
+    cmsis_function: arm_relu_generic_s16
+
+  - kernel_id: 24
+    family: ActivationFunctions
+    operator: Clamp
+    dtype: S8
+    cmsis_function: arm_clamp_s8
+
+  - kernel_id: 25
+    family: ActivationFunctions
+    operator: Clamp
+    dtype: S16
+    cmsis_function: arm_clamp_s16
+
+  - kernel_id: 26
+    family: ActivationFunctions
+    operator: LeakyRelu
+    dtype: S8
+    cmsis_function: arm_leaky_relu_s8
+
+  - kernel_id: 27
+    family: ActivationFunctions
+    operator: LeakyRelu
+    dtype: S16
+    cmsis_function: arm_leaky_relu_s16
+
+  - kernel_id: 28
+    family: ActivationFunctions
+    operator: Logistic
+    dtype: S16
+    cmsis_function: arm_logistic_s16
+
+  - kernel_id: 29
+    family: ActivationFunctions
+    operator: Tanh
+    dtype: S16
+    cmsis_function: arm_tanh_s16
+
+  - kernel_id: 30
+    family: ActivationFunctions
+    operator: HardSwishCompat
+    dtype: S8
+    cmsis_function: arm_hard_swish_compat_s8
+
+  - kernel_id: 31
+    family: ActivationFunctions
+    operator: HardSwishPrecise
+    dtype: S8
+    cmsis_function: arm_hard_swish_precise_s8
+
+  - kernel_id: 32
+    family: ActivationFunctions
+    operator: HardSwishPrecise
+    dtype: S16
+    cmsis_function: arm_hard_swish_precise_s16
+
+  - kernel_id: 33
+    family: ActivationFunctions
+    operator: PReLU
+    dtype: S8
+    cmsis_function: arm_prelu_s8
+
+  - kernel_id: 34
+    family: ActivationFunctions
+    operator: PReLU
+    dtype: S16
+    cmsis_function: arm_prelu_s16
+
+  - kernel_id: 35
+    family: ActivationFunctions
+    operator: PReLUScalar
+    dtype: S8
+    cmsis_function: arm_prelu_scalar_s8
+
+  - kernel_id: 36
+    family: ActivationFunctions
+    operator: PReLUScalar
+    dtype: S16
+    cmsis_function: arm_prelu_scalar_s16
+
+  - kernel_id: 37
+    family: QuantizationFunctions
+    operator: Quantize
+    dtype: S8
+    cmsis_function: arm_quantize_f32_s8
+
+  - kernel_id: 38
+    family: QuantizationFunctions
+    operator: Quantize
+    dtype: S16
+    cmsis_function: arm_quantize_f32_s16
+
+  - kernel_id: 39
+    family: QuantizationFunctions
+    operator: Dequantize
+    dtype: S8
+    cmsis_function: arm_dequantize_s8_f32
+
+  - kernel_id: 40
+    family: QuantizationFunctions
+    operator: Dequantize
+    dtype: S16
+    cmsis_function: arm_dequantize_s16_f32
+
+  - kernel_id: 41
+    family: SoftmaxFunctions
+    operator: Softmax
+    dtype: S8
+    cmsis_function: arm_softmax_s8
+
+  - kernel_id: 42
+    family: SoftmaxFunctions
+    operator: Softmax
+    dtype: S16
+    cmsis_function: arm_softmax_s16
+
+  - kernel_id: 43
+    family: SoftmaxFunctions
+    operator: SoftmaxS8S16
+    dtype: S8
+    cmsis_function: arm_softmax_s8_s16
+
+  - kernel_id: 44
+    family: FullyConnectedFunctions
+    operator: FullyConnected
+    dtype: S8
+    cmsis_function: arm_fully_connected_wrapper_s8
+
+  - kernel_id: 45
+    family: FullyConnectedFunctions
+    operator: FullyConnected
+    dtype: S16
+    cmsis_function: arm_fully_connected_wrapper_s16
+
+  - kernel_id: 46
+    family: FullyConnectedFunctions
+    operator: BatchMatMul
+    dtype: S8
+    cmsis_function: arm_batch_matmul_s8
+
+  - kernel_id: 47
+    family: FullyConnectedFunctions
+    operator: BatchMatMul
+    dtype: S16
+    cmsis_function: arm_batch_matmul_s16
+
+  - kernel_id: 48
+    family: BasicMathFunctions
+    operator: Abs
+    dtype: S16
+    cmsis_function: arm_abs_s16
+
+  - kernel_id: 49
+    family: BasicMathFunctions
+    operator: ArgMax
+    dtype: S8
+    cmsis_function: arm_argmax_s8
+
+  - kernel_id: 50
+    family: BasicMathFunctions
+    operator: ArgMax
+    dtype: S16
+    cmsis_function: arm_argmax_s16
+
+  - kernel_id: 51
+    family: BasicMathFunctions
+    operator: ArgMin
+    dtype: S8
+    cmsis_function: arm_argmin_s8
+
+  - kernel_id: 52
+    family: BasicMathFunctions
+    operator: ArgMin
+    dtype: S16
+    cmsis_function: arm_argmin_s16
+
+  - kernel_id: 53
+    family: BasicMathFunctions
+    operator: Mean
+    dtype: S8
+    cmsis_function: arm_mean_s8
+
+  - kernel_id: 54
+    family: BasicMathFunctions
+    operator: Mean
+    dtype: S16
+    cmsis_function: arm_mean_s16
+
+  - kernel_id: 55
+    family: BasicMathFunctions
+    operator: ReduceMax
+    dtype: S8
+    cmsis_function: arm_reduce_max_s8
+
+  - kernel_id: 56
+    family: BasicMathFunctions
+    operator: ReduceMax
+    dtype: S16
+    cmsis_function: arm_reduce_max_s16
+
+  - kernel_id: 57
+    family: BasicMathFunctions
+    operator: ReduceMin
+    dtype: S8
+    cmsis_function: arm_reduce_min_s8
+
+  - kernel_id: 58
+    family: BasicMathFunctions
+    operator: ReduceMin
+    dtype: S16
+    cmsis_function: arm_reduce_min_s16
+
+  - kernel_id: 59
+    family: BasicMathFunctions
+    operator: Rsqrt
+    dtype: S16
+    cmsis_function: arm_rsqrt_s16_per_op
+    note: "Covers per_op and universal generated variants; builder selects the right streamed LUT/scalars."
+
+  - kernel_id: 60
+    family: BasicMathFunctions
+    operator: RsqrtUniversal
+    dtype: S16
+    cmsis_function: arm_rsqrt_s16_universal
+
+  - kernel_id: 61
+    family: BasicMathFunctions
+    operator: Sqrt
+    dtype: S8
+    cmsis_function: arm_sqrt_s8
+
+  - kernel_id: 62
+    family: BasicMathFunctions
+    operator: Sqrt
+    dtype: S16
+    cmsis_function: arm_sqrt_s16
+
+  - kernel_id: 63
+    family: BasicMathFunctions
+    operator: SquaredDifference
+    dtype: S8
+    cmsis_function: arm_squared_difference_s8
+
+  - kernel_id: 64
+    family: BasicMathFunctions
+    operator: SquaredDifference
+    dtype: S16
+    cmsis_function: arm_squared_difference_s16
+
+  - kernel_id: 65
+    family: NNSupportFunctions
+    operator: Requantize
+    dtype: S8
+    cmsis_function: arm_requantize_s8_s8
+
+  - kernel_id: 66
+    family: NNSupportFunctions
+    operator: Requantize
+    dtype: S16
+    cmsis_function: arm_requantize_s16_s16
+
+  - kernel_id: 67
+    family: ComparisonFunctions
+    operator: Equal
+    dtype: S8
+    cmsis_function: arm_equal_s8
+
+  - kernel_id: 68
+    family: ComparisonFunctions
+    operator: Equal
+    dtype: S16
+    cmsis_function: arm_equal_s16
+
+  - kernel_id: 69
+    family: ComparisonFunctions
+    operator: NotEqual
+    dtype: S8
+    cmsis_function: arm_not_equal_s8
+
+  - kernel_id: 70
+    family: ComparisonFunctions
+    operator: NotEqual
+    dtype: S16
+    cmsis_function: arm_not_equal_s16
+
+  - kernel_id: 71
+    family: ComparisonFunctions
+    operator: Greater
+    dtype: S8
+    cmsis_function: arm_greater_s8
+
+  - kernel_id: 72
+    family: ComparisonFunctions
+    operator: Greater
+    dtype: S16
+    cmsis_function: arm_greater_s16
+
+  - kernel_id: 73
+    family: ComparisonFunctions
+    operator: GreaterEqual
+    dtype: S8
+    cmsis_function: arm_greater_equal_s8
+
+  - kernel_id: 74
+    family: ComparisonFunctions
+    operator: GreaterEqual
+    dtype: S16
+    cmsis_function: arm_greater_equal_s16
+
+  - kernel_id: 75
+    family: ComparisonFunctions
+    operator: Less
+    dtype: S8
+    cmsis_function: arm_less_s8
+
+  - kernel_id: 76
+    family: ComparisonFunctions
+    operator: Less
+    dtype: S16
+    cmsis_function: arm_less_s16
+
+  - kernel_id: 77
+    family: ComparisonFunctions
+    operator: LessEqual
+    dtype: S8
+    cmsis_function: arm_less_equal_s8
+
+  - kernel_id: 78
+    family: ComparisonFunctions
+    operator: LessEqual
+    dtype: S16
+    cmsis_function: arm_less_equal_s16
+
+  - kernel_id: 79
+    family: ConvolutionFunctions
+    operator: TransposeConv
+    dtype: S8
+    cmsis_function: arm_transpose_conv_wrapper_s8
+
+  - kernel_id: 80
+    family: ReshapeFunctions
+    operator: Reshape
+    dtype: S8
+    cmsis_function: arm_reshape_s8
+
+  - kernel_id: 81
+    family: TesterExtensions
+    operator: Squeeze
+    dtype: S8
+    cmsis_function: arm_reshape_s8
+
+  - kernel_id: 82
+    family: TransposeFunctions
+    operator: Transpose
+    dtype: S8
+    cmsis_function: arm_transpose_s8
+
+  - kernel_id: 83
+    family: TransposeFunctions
+    operator: Transpose
+    dtype: S16
+    cmsis_function: arm_transpose_s16
+
+  - kernel_id: 84
+    family: PadFunctions
+    operator: Pad
+    dtype: S8
+    cmsis_function: arm_pad_s8
+
+  - kernel_id: 85
+    family: PadFunctions
+    operator: Pad
+    dtype: S16
+    cmsis_function: arm_pad_s16
+
+  - kernel_id: 86
+    family: PadFunctions
+    operator: MirrorPad
+    dtype: S8
+    cmsis_function: arm_mirror_pad_s8
+
+  - kernel_id: 87
+    family: PadFunctions
+    operator: MirrorPad
+    dtype: S16
+    cmsis_function: arm_mirror_pad_s16
+
+  - kernel_id: 88
+    family: ConcatenationFunctions
+    operator: Concatenation
+    dtype: S8
+    cmsis_function: arm_concatenation_s8
+
+  - kernel_id: 89
+    family: ConcatenationFunctions
+    operator: Concatenation
+    dtype: S16
+    cmsis_function: arm_concatenation_s16
+
+  - kernel_id: 90
+    family: ConcatenationFunctions
+    operator: Concatenation
+    dtype: S32
+    cmsis_function: arm_concatenation_s32
+
+  - kernel_id: 91
+    family: ConcatenationFunctions
+    operator: Split
+    dtype: S8
+    cmsis_function: arm_split_s8
+
+  - kernel_id: 92
+    family: ConcatenationFunctions
+    operator: Split
+    dtype: S16
+    cmsis_function: arm_split_s16
+
+  - kernel_id: 93
+    family: ReshapeFunctions
+    operator: BatchToSpaceND
+    dtype: S8
+    cmsis_function: arm_batch_to_space_nd_s8
+
+  - kernel_id: 94
+    family: ReshapeFunctions
+    operator: BatchToSpaceND
+    dtype: S16
+    cmsis_function: arm_batch_to_space_nd_s16
+
+  - kernel_id: 95
+    family: ReshapeFunctions
+    operator: SpaceToBatchND
+    dtype: S8
+    cmsis_function: arm_space_to_batch_nd_s8
+
+  - kernel_id: 96
+    family: ReshapeFunctions
+    operator: SpaceToBatchND
+    dtype: S16
+    cmsis_function: arm_space_to_batch_nd_s16
+
+  - kernel_id: 97
+    family: ReshapeFunctions
+    operator: SpaceToDepth
+    dtype: S8
+    cmsis_function: arm_space_to_depth_s8
+
+  - kernel_id: 98
+    family: ReshapeFunctions
+    operator: SpaceToDepth
+    dtype: S16
+    cmsis_function: arm_space_to_depth_s16
+
+  - kernel_id: 99
+    family: ReshapeFunctions
+    operator: DepthToSpace
+    dtype: S8
+    cmsis_function: arm_depth_to_space_s8
+
+  - kernel_id: 100
+    family: ReshapeFunctions
+    operator: DepthToSpace
+    dtype: S16
+    cmsis_function: arm_depth_to_space_s16
+
+  - kernel_id: 101
+    family: ReshapeFunctions
+    operator: ResizeNearestNeighbor
+    dtype: S8
+    cmsis_function: arm_resize_nearest_neighbor_s8
+
+  - kernel_id: 102
+    family: ReshapeFunctions
+    operator: ResizeNearestNeighbor
+    dtype: S16
+    cmsis_function: arm_resize_nearest_neighbor_s16
+
+  - kernel_id: 103
+    family: TileFunctions
+    operator: Tile
+    dtype: S8
+    cmsis_function: arm_tile_s8
+
+  - kernel_id: 104
+    family: TileFunctions
+    operator: Tile
+    dtype: S16
+    cmsis_function: arm_tile_s16
+
+  - kernel_id: 105
+    family: GatherFunctions
+    operator: Gather
+    dtype: S8
+    cmsis_function: arm_gather_s8
+
+  - kernel_id: 106
+    family: GatherFunctions
+    operator: Gather
+    dtype: S16
+    cmsis_function: arm_gather_s16
+
+  - kernel_id: 107
+    family: GatherFunctions
+    operator: GatherND
+    dtype: S8
+    cmsis_function: arm_gather_nd_s8
+
+  - kernel_id: 108
+    family: GatherFunctions
+    operator: GatherND
+    dtype: S16
+    cmsis_function: arm_gather_nd_s16
+
+  - kernel_id: 109
+    family: SelectFunctions
+    operator: Where
+    dtype: S8
+    cmsis_function: arm_where_s8
+
+  - kernel_id: 110
+    family: SelectFunctions
+    operator: Where
+    dtype: S16
+    cmsis_function: arm_where_s16
+
+  - kernel_id: 111
+    family: SelectFunctions
+    operator: SelectV2
+    dtype: S8
+    cmsis_function: arm_select_v2_s8
+
+  - kernel_id: 112
+    family: SelectFunctions
+    operator: SelectV2
+    dtype: S16
+    cmsis_function: arm_select_v2_s16
+
+  - kernel_id: 113
+    family: ReverseSequenceFunctions
+    operator: ReverseSequence
+    dtype: S8
+    cmsis_function: arm_reverse_sequence_s8
+
+  - kernel_id: 114
+    family: ReverseSequenceFunctions
+    operator: ReverseSequence
+    dtype: S16
+    cmsis_function: arm_reverse_sequence_s16
+
+  - kernel_id: 115
+    family: ScatterFunctions
+    operator: ScatterNd
+    dtype: S8
+    cmsis_function: arm_scatter_nd_s8
+
+  - kernel_id: 116
+    family: ScatterFunctions
+    operator: ScatterNd
+    dtype: S16
+    cmsis_function: arm_scatter_nd_s16
+
+  - kernel_id: 117
+    family: BroadcastFunctions
+    operator: BroadcastTo
+    dtype: S8
+    cmsis_function: arm_broadcast_to_s8
+
+  - kernel_id: 118
+    family: BroadcastFunctions
+    operator: BroadcastTo
+    dtype: S16
+    cmsis_function: arm_broadcast_to_s16
+
+  - kernel_id: 119
+    family: DynamicUpdateSliceFunctions
+    operator: DynamicUpdateSlice
+    dtype: S8
+    cmsis_function: arm_dynamic_update_slice_s8
+
+  - kernel_id: 120
+    family: DynamicUpdateSliceFunctions
+    operator: DynamicUpdateSlice
+    dtype: S16
+    cmsis_function: arm_dynamic_update_slice_s16
+
+  - kernel_id: 121
+    family: StridedSliceFunctions
+    operator: StridedSlice
+    dtype: S8
+    cmsis_function: arm_strided_slice_s8
+
+  - kernel_id: 122
+    family: StridedSliceFunctions
+    operator: StridedSlice
+    dtype: S16
+    cmsis_function: arm_strided_slice_s16
+
+  - kernel_id: 123
+    family: StridedSliceFunctions
+    operator: StridedSlice
+    dtype: S32
+    cmsis_function: arm_strided_slice_s32
+
+  - kernel_id: 124
+    family: ConvolutionFunctions
+    operator: Convolve
+    dtype: S8
+    weight_dtype: S4
+    cmsis_function: arm_convolve_wrapper_s4
+
+  - kernel_id: 125
+    family: FullyConnectedFunctions
+    operator: FullyConnected
+    dtype: S8
+    weight_dtype: S4
+    cmsis_function: arm_fully_connected_s4
+
+  - kernel_id: 126
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: S8
+    weight_dtype: S4
+    cmsis_function: arm_depthwise_conv_wrapper_s4
+
+  - kernel_id: 127
+    family: PoolingFunctions
+    operator: AvgPool
+    dtype: FP32
+    cmsis_function: arm_avg_pool_f32
+
+  - kernel_id: 128
+    family: PoolingFunctions
+    operator: MaxPool
+    dtype: FP32
+    cmsis_function: arm_max_pool_f32
+
+  - kernel_id: 129
+    family: ReshapeFunctions
+    operator: Reshape
+    dtype: FP32
+    cmsis_function: arm_reshape_f32
+
+  - kernel_id: 130
+    family: ReshapeFunctions
+    operator: Reshape
+    dtype: FP16
+    cmsis_function: arm_reshape_f16
+
+  - kernel_id: 131
+    family: TransposeFunctions
+    operator: Transpose
+    dtype: FP32
+    cmsis_function: arm_transpose_f32
+
+  - kernel_id: 132
+    family: TransposeFunctions
+    operator: Transpose
+    dtype: FP16
+    cmsis_function: arm_transpose_f16
+
+  - kernel_id: 133
+    family: PadFunctions
+    operator: Pad
+    dtype: FP32
+    cmsis_function: arm_pad_f32
+
+  - kernel_id: 134
+    family: PadFunctions
+    operator: Pad
+    dtype: FP16
+    cmsis_function: arm_pad_f16
+
+  - kernel_id: 135
+    family: StridedSliceFunctions
+    operator: StridedSlice
+    dtype: FP32
+    cmsis_function: arm_strided_slice_f32
+
+  - kernel_id: 136
+    family: StridedSliceFunctions
+    operator: StridedSlice
+    dtype: FP16
+    cmsis_function: arm_strided_slice_f16
+
+  - kernel_id: 137
+    family: ConcatenationFunctions
+    operator: Concatenation
+    dtype: FP32
+    # covers all 4 arm_concatenation_f32_{w,x,y,z} style entrypoints -- the style is
+    # selected at build time from the generated source's call-site function name suffix,
+    # same convention as the existing S8 style-suffixed variants.
+    cmsis_function: arm_concatenation_f32_w
+
+  - kernel_id: 138
+    family: ConcatenationFunctions
+    operator: Concatenation
+    dtype: FP16
+    cmsis_function: arm_concatenation_f16_w
+
+  - kernel_id: 139
+    family: ConcatenationFunctions
+    operator: Split
+    dtype: FP16
+    cmsis_function: arm_split_f16
+
+  - kernel_id: 140
+    family: BasicMathFunctions
+    operator: Abs
+    dtype: FP32
+    cmsis_function: arm_nn_abs_f32
+
+  - kernel_id: 141
+    family: BasicMathFunctions
+    operator: Abs
+    dtype: FP16
+    cmsis_function: arm_nn_abs_f16
+
+  - kernel_id: 142
+    family: BasicMathFunctions
+    operator: Add
+    dtype: FP32
+    cmsis_function: arm_elementwise_add_f32
+
+  - kernel_id: 143
+    family: BasicMathFunctions
+    operator: Add
+    dtype: FP16
+    cmsis_function: arm_elementwise_add_f16
+
+  - kernel_id: 144
+    family: BasicMathFunctions
+    operator: Sub
+    dtype: FP32
+    cmsis_function: arm_elementwise_sub_f32
+
+  - kernel_id: 145
+    family: BasicMathFunctions
+    operator: Sub
+    dtype: FP16
+    cmsis_function: arm_elementwise_sub_f16
+
+  - kernel_id: 146
+    family: BasicMathFunctions
+    operator: Mul
+    dtype: FP32
+    cmsis_function: arm_elementwise_mul_f32
+
+  - kernel_id: 147
+    family: BasicMathFunctions
+    operator: Mul
+    dtype: FP16
+    cmsis_function: arm_elementwise_mul_f16
+
+  - kernel_id: 148
+    family: BasicMathFunctions
+    operator: Maximum
+    dtype: FP32
+    cmsis_function: arm_maximum_f32
+
+  - kernel_id: 149
+    family: BasicMathFunctions
+    operator: Maximum
+    dtype: FP16
+    cmsis_function: arm_maximum_f16
+
+  - kernel_id: 150
+    family: BasicMathFunctions
+    operator: Minimum
+    dtype: FP32
+    cmsis_function: arm_minimum_f32
+
+  - kernel_id: 151
+    family: BasicMathFunctions
+    operator: Minimum
+    dtype: FP16
+    cmsis_function: arm_minimum_f16
+
+  - kernel_id: 152
+    family: ActivationFunctions
+    operator: PReLU
+    dtype: FP32
+    cmsis_function: arm_prelu_f32
+
+  - kernel_id: 153
+    family: ActivationFunctions
+    operator: PReLU
+    dtype: FP16
+    cmsis_function: arm_prelu_f16
+
+  - kernel_id: 154
+    family: SoftmaxFunctions
+    operator: Softmax
+    dtype: FP32
+    cmsis_function: arm_softmax_f32
+
+  - kernel_id: 155
+    family: SoftmaxFunctions
+    operator: Softmax
+    dtype: FP16
+    cmsis_function: arm_softmax_f16
+
+  - kernel_id: 156
+    family: PoolingFunctions
+    operator: AvgPool
+    dtype: FP16
+    cmsis_function: arm_avg_pool_f16
+
+  - kernel_id: 157
+    family: PoolingFunctions
+    operator: MaxPool
+    dtype: FP16
+    cmsis_function: arm_max_pool_f16
+
+  - kernel_id: 158
+    family: ActivationFunctions
+    operator: NNActivationFloat
+    dtype: FP32
+    cmsis_function: arm_nn_activation_f32
+
+  - kernel_id: 159
+    family: ActivationFunctions
+    operator: NNActivationFloat
+    dtype: FP16
+    cmsis_function: arm_nn_activation_f16
+
+  - kernel_id: 160
+    family: BasicMathFunctions
+    operator: ReduceSum
+    dtype: FP32
+    cmsis_function: arm_reduce_sum_f32
+
+  - kernel_id: 161
+    family: BasicMathFunctions
+    operator: ReduceSum
+    dtype: FP16
+    cmsis_function: arm_reduce_sum_f16
+
+  - kernel_id: 162
+    family: NNSupportFunctions
+    operator: BatchNorm
+    dtype: FP32
+    cmsis_function: arm_batch_norm_f32
+
+  - kernel_id: 163
+    family: NNSupportFunctions
+    operator: BatchNorm
+    dtype: FP16
+    cmsis_function: arm_batch_norm_f16
+
+  - kernel_id: 164
+    family: FullyConnectedFunctions
+    operator: FullyConnected
+    dtype: FP32
+    weight_dtype: FP32
+    cmsis_function: arm_fully_connected_f32
+
+  - kernel_id: 165
+    family: FullyConnectedFunctions
+    operator: FullyConnected
+    dtype: FP16
+    weight_dtype: FP16
+    cmsis_function: arm_fully_connected_f16
+
+  - kernel_id: 166
+    family: ConvolutionFunctions
+    operator: TransposeConv
+    dtype: FP32
+    weight_dtype: FP32
+    cmsis_function: arm_transpose_conv_f32
+
+  - kernel_id: 167
+    family: ConvolutionFunctions
+    operator: TransposeConv
+    dtype: FP16
+    weight_dtype: FP16
+    cmsis_function: arm_transpose_conv_f16
+
+
+  - kernel_id: 168
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: FP32
+    weight_dtype: FP32
+    cmsis_function: arm_depthwise_conv_f32
+
+  - kernel_id: 169
+    family: ConvolutionFunctions
+    operator: DepthwiseConv
+    dtype: FP16
+    weight_dtype: FP16
+    cmsis_function: arm_depthwise_conv_f16
+
+  - kernel_id: 170
+    family: FullyConnectedFunctions
+    operator: BatchMatMul
+    dtype: FP32
+    weight_dtype: FP32
+    cmsis_function: arm_batch_matmul_f32
+
+  - kernel_id: 171
+    family: FullyConnectedFunctions
+    operator: BatchMatMul
+    dtype: FP16
+    weight_dtype: FP16
+    cmsis_function: arm_batch_matmul_f16
+
+  - kernel_id: 172
+    family: ConvolutionFunctions
+    operator: Convolve
+    dtype: FP32
+    weight_dtype: FP32
+    cmsis_function: arm_convolve_f32
+
+  - kernel_id: 173
+    family: ConvolutionFunctions
+    operator: Convolve
+    dtype: FP16
+    weight_dtype: FP16
+    cmsis_function: arm_convolve_f16

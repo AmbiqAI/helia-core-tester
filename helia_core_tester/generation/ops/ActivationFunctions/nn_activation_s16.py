@@ -56,7 +56,9 @@ class OpNNActivationS16(OperationBase):
 
         out = np.empty_like(input_data, dtype=np.int16)
         flat_in = input_data.flatten()
-        flat_out = out.flatten()
+        # .flatten() returns a copy; use .reshape(-1) to get a view so writes
+        # to flat_out propagate back into `out` instead of being discarded.
+        flat_out = out.reshape(-1)
 
         for i, val in enumerate(flat_in):
             input_data_i = (int(val) * input_multiplier + rounding) >> abs_left_shift

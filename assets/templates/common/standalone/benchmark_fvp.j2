@@ -1,0 +1,84 @@
+{#
+  FVP-target DWT-based op-level benchmarking harness (benchmark_target == "fvp").
+
+  This is one of two interchangeable benchmark backends selected by
+  common/standalone/benchmark.j2 (the dispatcher) based on the
+  `benchmark_target` context variable ("fvp" [default] or "hardware" -- see
+  benchmark_hw.j2 for the Apollo510/PMU backend). Op templates never include
+  this file directly -- they always include benchmark.j2 and stay agnostic to
+  which physical/simulated target is active.
+
+  Included by op templates that have split their kernel invocation into
+  `{{name}}_bench_init()` (one-time buffer/context/weight-sum setup, untimed)
+  and `{{name}}_bench_op()` (only the kernel call, timed). Templates opt in by
+  setting `supports_benchmark = true` before including common/standalone/main.j2
+  (see ConvolutionFunctions/convolve/convolve.c.j2 for the reference pattern).
+
+  Entirely compiled out unless HELIA_BENCHMARK_MODE is defined (wired via
+  `helia_core_tester build/run/full --benchmark`, see
+  helia_core_tester/core/steps/build.py), so templates that include this file
+  are unaffected when --benchmark is not requested.
+
+  Uses the DWT cycle counter only -- not cycle-accurate on FVP, intended for
+  quick relative before/after comparisons during development. For
+  cycle-accurate/PMU-based measurement on real Apollo510 hardware, see
+  benchmark_hw.j2.
+
+  Output format is consumed by helia_core_tester.reporting.parser.TestResultParser:
+    [BENCH] <name> warmup_runs=<W> measured_runs=<M>
+    [PERF] <name>: <cycles> cycles     (repeated M times, one per measured run)
+#}
+#ifdef HELIA_BENCHMARK_MODE
+
+#ifndef HELIA_BENCHMARK_WARMUP_RUNS
+#define HELIA_BENCHMARK_WARMUP_RUNS 3
+#endif
+#ifndef HELIA_BENCHMARK_MEASURED_RUNS
+#define HELIA_BENCHMARK_MEASURED_RUNS 10
+#endif
+
+#if !defined(__CORTEX_M) || (__CORTEX_M < 4)
+#error "HELIA_BENCHMARK_MODE requires a Cortex-M4/M55 target with a DWT cycle counter; cortex-m0 has none (see Config._validate_hardware_benchmark)."
+#endif
+
+typedef int32_t (*helia_bench_op_fn)(void);
+
+static inline void helia_dwt_enable(void)
+{
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+static inline uint32_t helia_dwt_cycles(void)
+{
+    return DWT->CYCCNT;
+}
+
+/*
+ * Runs `op` HELIA_BENCHMARK_WARMUP_RUNS times untimed (cache/branch-predictor
+ * warmup, no cycle counting), then HELIA_BENCHMARK_MEASURED_RUNS times timed
+ * via the DWT cycle counter. Only the op call itself is timed -- never
+ * `_bench_init()` (buffer setup / weight-sum precompute) and never output
+ * validation/compare, which happen separately in the non-benchmark path.
+ */
+static inline void helia_benchmark_run(const char *name, helia_bench_op_fn op)
+{
+    helia_dwt_enable();
+
+    for (int i = 0; i < HELIA_BENCHMARK_WARMUP_RUNS; i++) {
+        (void)op();
+    }
+
+    printf("[BENCH] %s warmup_runs=%d measured_runs=%d\r\n",
+           name, HELIA_BENCHMARK_WARMUP_RUNS, HELIA_BENCHMARK_MEASURED_RUNS);
+
+    for (int i = 0; i < HELIA_BENCHMARK_MEASURED_RUNS; i++) {
+        uint32_t start = helia_dwt_cycles();
+        (void)op();
+        uint32_t end = helia_dwt_cycles();
+        printf("[PERF] %s: %lu cycles\r\n", name, (unsigned long)(end - start));
+    }
+}
+
+#endif // HELIA_BENCHMARK_MODE

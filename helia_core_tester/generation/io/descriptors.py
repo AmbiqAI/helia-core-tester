@@ -283,6 +283,34 @@ def _validate_and_normalize_descriptor(desc: Dict[str, Any]) -> Dict[str, Any]:
     for shape_key in ['input_shape', 'filter_shape', 'input_1_shape', 'input_2_shape', 'pool_size', 'indices_shape']:
         if shape_key in normalized:
             normalized[shape_key] = list(normalized[shape_key])
+            # Only filter/kernel-size dimensions are required to be strictly
+            # positive here; some operators (e.g. Reshape) intentionally test
+            # zero-sized input/output tensors as edge cases.
+            if shape_key in ('filter_shape', 'pool_size') and any(
+                int(dim) <= 0 for dim in normalized[shape_key]
+            ):
+                raise ValueError(
+                    f"Descriptor '{normalized.get('name', '<unnamed>')}' has non-positive "
+                    f"dimension(s) in {shape_key}: {normalized[shape_key]}"
+                )
+
+    if operator == 'DepthwiseConv' and 'input_shape' in normalized and 'filter_shape' in normalized:
+        input_channels = int(normalized['input_shape'][-1])
+        filter_channels = int(normalized['filter_shape'][-2])
+        depth_multiplier = int(normalized.get('depth_multiplier', 1))
+        filter_multiplier = int(normalized['filter_shape'][-1])
+        if filter_channels != input_channels:
+            raise ValueError(
+                f"Descriptor '{normalized.get('name', '<unnamed>')}': DepthwiseConv filter_shape "
+                f"input-channel dimension ({filter_channels}) must match input_shape channels "
+                f"({input_channels})"
+            )
+        if filter_multiplier != depth_multiplier:
+            raise ValueError(
+                f"Descriptor '{normalized.get('name', '<unnamed>')}': DepthwiseConv filter_shape "
+                f"depth-multiplier dimension ({filter_multiplier}) must equal depth_multiplier "
+                f"({depth_multiplier})"
+            )
 
     if 'hint' not in normalized:
         normalized['hint'] = {}
@@ -416,7 +444,24 @@ def expand_descriptor_variations(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
     return expanded_descriptors
 
 
-def load_all_descriptors(descriptors_dir: str) -> List[Dict[str, Any]]:
+class DescriptorLoadError(Exception):
+    """
+    Raised by load_all_descriptors() when one or more descriptor files fail
+    to load/validate and best_effort mode was not explicitly requested.
+
+    Aggregates every failing path and its cause so a single run surfaces the
+    complete set of problems instead of failing on (and hiding) just the first.
+    """
+
+    def __init__(self, failures: List[Tuple[str, Exception]]):
+        self.failures = failures
+        message = "Failed to load {} descriptor file(s):\n".format(len(failures)) + "\n".join(
+            f"  - {path}: {exc}" for path, exc in failures
+        )
+        super().__init__(message)
+
+
+def load_all_descriptors(descriptors_dir: str, best_effort: bool = False) -> List[Dict[str, Any]]:
     """
     Load and validate all descriptors in directory.
     Supports multiple descriptors per YAML file (separated by ---).
@@ -426,11 +471,17 @@ def load_all_descriptors(descriptors_dir: str) -> List[Dict[str, Any]]:
     
     Args:
         descriptors_dir: Directory containing YAML descriptors
+        best_effort: When False (default), any descriptor file that fails to
+            load/validate raises DescriptorLoadError aggregating all failures,
+            so generation/CI never silently proceeds with a partial corpus.
+            Set True only for local, interactive descriptor authoring where a
+            partial list (with warnings printed) is acceptable.
         
     Returns:
         List of validated descriptor dictionaries (expanded from variations)
     """
     descriptors = []
+    failures: List[Tuple[str, Exception]] = []
     desc_paths = discover_descriptors(descriptors_dir)
     
     for desc_path in desc_paths:
@@ -455,7 +506,8 @@ def load_all_descriptors(descriptors_dir: str) -> List[Dict[str, Any]]:
                     # If name exists, keep it as-is (preserve original meaningful names)
                     
                     expanded_descs = expand_descriptor_variations(desc_copy)
-                    descriptors.extend(expanded_descs)
+                    for expanded in expanded_descs:
+                        descriptors.append(expanded)
             else:
                 # Single descriptor - preserve original name if present
                 for desc in descs:
@@ -466,11 +518,16 @@ def load_all_descriptors(descriptors_dir: str) -> List[Dict[str, Any]]:
                     # Otherwise, keep the original name
                     
                     expanded_descs = expand_descriptor_variations(desc)
-                    descriptors.extend(expanded_descs)
+                    for expanded in expanded_descs:
+                        descriptors.append(expanded)
         except Exception as e:
+            failures.append((str(desc_path), e))
             print(f"Warning: Failed to load descriptor {desc_path}: {e}")
             continue
-            
+
+    if failures and not best_effort:
+        raise DescriptorLoadError(failures)
+
     return descriptors
 
 

@@ -214,3 +214,29 @@ def find_setup_dependencies_script(repo_root: Optional[Path] = None) -> Optional
     repo_root = _resolve_repo_root(repo_root)
     script = repo_root / "helia_core_tester" / "scripts" / "setup_dependencies.py"
     return script if script.exists() else None
+
+
+def ensure_arm_toolchain_on_path(repo_root: Optional[Path] = None) -> None:
+    """Prepend the downloaded ARM GCC toolchain's bin/ to this process's PATH, once,
+    for the lifetime of the whole `helia_core_tester` invocation.
+
+    Several call sites across both the FVP and perf-stream/hardware paths (memory
+    reports, kernel-symbol-ref generation, RTT address discovery) shell out to bare
+    `arm-none-eabi-{nm,size,objdump}` -- CMake's own compiler/linker/objcopy
+    invocations use absolute paths from the toolchain file, but these don't. Calling
+    this once at CLI startup (see cli.py's module-level call) covers all of them,
+    instead of patching each subprocess call's env individually. Silently a no-op if
+    the toolchain hasn't been downloaded yet (setup_dependencies.py not run) --
+    whichever command actually needs it will fail with its own clear error.
+    """
+    try:
+        repo_root = _resolve_repo_root(repo_root)
+    except RepoRootNotFoundError:
+        return
+    toolchain_bin = repo_root / "artifacts" / "downloads" / "arm_gcc_download" / "bin"
+    if not toolchain_bin.is_dir():
+        return
+    toolchain_bin_str = str(toolchain_bin.resolve())
+    path_entries = os.environ.get("PATH", "").split(os.pathsep)
+    if toolchain_bin_str not in path_entries:
+        os.environ["PATH"] = os.pathsep.join([toolchain_bin_str, *path_entries])

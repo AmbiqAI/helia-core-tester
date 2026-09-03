@@ -25,6 +25,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "arm_nnfunctions.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
