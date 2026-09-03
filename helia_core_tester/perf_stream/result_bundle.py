@@ -10,6 +10,23 @@ from xml.etree.ElementTree import Element, SubElement, ElementTree
 from .session import SessionResult
 
 
+def _split_protocol_trace_entry(entry: str) -> tuple[int | None, str, str]:
+    """Parse one protocol_trace entry.
+
+    A single-session run records "direction:message_type" (see Session._trace).
+    hardware_run's batched runner prefixes each entry with "batchN:" before
+    merging traces across sessions, giving "batchN:direction:message_type" --
+    splitting on the first colon alone would misparse that as
+    direction="batchN", message_type="direction:message_type".
+    """
+    prefix, sep, rest = entry.partition(":")
+    if sep and prefix.startswith("batch") and prefix[len("batch"):].isdigit():
+        direction, message_type = rest.split(":", 1)
+        return int(prefix[len("batch"):]), direction, message_type
+    direction, message_type = entry.split(":", 1)
+    return None, direction, message_type
+
+
 
 def write_result_bundle(
     result: SessionResult,
@@ -166,8 +183,11 @@ def write_result_bundle(
 
     with (bundle_root / "protocol_trace.jsonl").open("w", encoding="utf-8", newline="") as handle:
         for index, entry in enumerate(result.protocol_trace):
-            direction, message_type = entry.split(":", 1)
-            handle.write(json.dumps({"index": index, "direction": direction, "message_type": message_type}) + "\n")
+            batch_index, direction, message_type = _split_protocol_trace_entry(entry)
+            record = {"index": index, "direction": direction, "message_type": message_type}
+            if batch_index is not None:
+                record["batch"] = batch_index
+            handle.write(json.dumps(record) + "\n")
 
     testsuite = Element("testsuite", name="performance_stream", tests=str(len(result.cases)), failures=str(len(result.cases) - passed))
     for case in result.cases:
