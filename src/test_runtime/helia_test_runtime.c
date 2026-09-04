@@ -86,21 +86,29 @@ void helia_guard_arm(uint8_t *head, uint8_t *tail, void *body, size_t body_bytes
 void helia_guard_check(const char *label, const uint8_t *head, const uint8_t *tail, int *failures)
 {
     unsigned int i;
-    int breach = 0;
+    int head_breach = 0;
+    int tail_breach = 0;
     for (i = 0; i < HELIA_GUARD_BYTES; ++i) {
         if (head[i] != HELIA_GUARD_CANARY_BYTE) {
-            breach = 1;
+            head_breach = 1;
             break;
         }
     }
     for (i = 0; i < HELIA_GUARD_BYTES; ++i) {
         if (tail[i] != HELIA_GUARD_CANARY_BYTE) {
-            breach = 1;
+            tail_breach = 1;
             break;
         }
     }
-    if (breach) {
+    if (head_breach || tail_breach) {
         ++(*failures);
-        printf("GuardBreach[%s]: buffer overrun detected (canary corrupted)\r\n", label);
+        /* A corrupted head canary is a write before the buffer (underrun); a
+         * corrupted tail canary is a write past it (overrun). Report which
+         * so the direction of the boundary defect isn't misidentified. */
+        printf("GuardBreach[%s]: %s%s%s detected (canary corrupted)\r\n",
+               label,
+               head_breach ? "underrun" : "",
+               (head_breach && tail_breach) ? " and " : "",
+               tail_breach ? "overrun" : "");
     }
 }

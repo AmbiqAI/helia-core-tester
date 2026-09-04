@@ -68,14 +68,18 @@ int32_t {{ name }}_test_case_run(void)
     }
 
     int32_t status;
+    int failures = 0;
 {% for length in chunk_lengths %}
     status = run_gru_chunk({{ length }}, {{ chunk_input_offsets[loop.index0] }}, {{ chunk_output_offsets[loop.index0] }});
     HELIA_VALIDATE_STATUS("{{ validation_label | default("GRU") }} (chunk {{ loop.index0 }})", status);
+    // temp1 is re-armed (re-poisoned) at the top of the next chunk's
+    // run_gru_chunk() call, which would erase any breach from *this* chunk
+    // before a single post-loop check ever saw it -- so check it here, once
+    // per chunk, immediately after each kernel call.
+    HELIA_GUARD_CHECK({{ name }}_temp1, "{{ validation_label | default("GRU") }} temp1 (chunk {{ loop.index0 }})", failures);
 {% endfor %}
 
-    int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("GRU") }} output", failures);
-    HELIA_GUARD_CHECK({{ name }}_temp1, "{{ validation_label | default("GRU") }} temp1", failures);
     HELIA_GUARD_CHECK({{ name }}_hidden_state, "{{ validation_label | default("GRU") }} hidden_state", failures);
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("FLOAT") }},

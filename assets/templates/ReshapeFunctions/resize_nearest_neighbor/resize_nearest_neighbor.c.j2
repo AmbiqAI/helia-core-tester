@@ -5,7 +5,7 @@
 
 #define {{ name|upper }}_OUTPUT_SIZE ({{ output_size }})
 {{ helia_guard_declare(output_dtype, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
-static int32_t {{ name }}_buffer[{{ buffer_size }}];
+{{ helia_guard_declare("int32_t", name ~ "_buffer", buffer_size) }}
 
 static cmsis_nn_context {{ name }}_ctx = {
     .buf = {{ name }}_buffer,
@@ -21,6 +21,7 @@ int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input,
     {{ output_dtype }}* __restrict output
 ) {
+    HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         &{{ name }}_ctx,
         &{{ name }}_params,
@@ -41,6 +42,7 @@ int32_t {{ name }}_test_case_run(void)
     HELIA_VALIDATE_STATUS("{{ validation_label | default("ResizeNearestNeighbor") }}", status);
 
     int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("ResizeNearestNeighbor") }} scratch", failures);
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("ResizeNearestNeighbor") }} output", failures);
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("EXACT_INT") }},

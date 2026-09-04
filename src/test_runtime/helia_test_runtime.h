@@ -80,10 +80,12 @@ void helia_guard_check(const char *label, const uint8_t *head, const uint8_t *ta
 #endif
 
 /*
- * ident must name a HELIA_GUARD_DECLARE'd buffer. Declared as a Jinja macro
- * (common/standalone/runtime_common.j2: helia_guard_declare/_arm/_check) so
- * every template shares one definition; these C macros just keep the
- * generated call sites free of repeated `ident##_guard.head[0]` plumbing.
+ * ident must name a buffer declared via helia_guard_declare, the Jinja
+ * macro in common/standalone/runtime_common.j2 that every template shares
+ * (see that file for why the declaration itself has to be a Jinja macro,
+ * not a C one). HELIA_GUARD_ARM/HELIA_GUARD_CHECK are plain C macros --
+ * they just keep the generated call sites free of repeated
+ * `ident##_guard.head[0]` plumbing.
  */
 #define HELIA_GUARD_ARM(ident, poison_body) \
     helia_guard_arm(&(ident##_guard.head[0]), &(ident##_guard.tail[0]), \

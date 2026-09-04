@@ -716,7 +716,14 @@ def test_broadcast_to_expected_error_generation_renders_rank_override(tmp_path: 
     source = (tmp_path / "broadcast_to_rank9_smoke_broadcast_to.c").read_text()
     assert ".rank = 9" in header
     assert "ARM_CMSIS_NN_ARG_ERROR" in source
-    assert "HELIA_VALIDATE_RETURN_FAILURES(0)" in source
+    # Guard-wrapped (issue #68): the expected-error case still checks the
+    # output canary unconditionally (a kernel that correctly rejects the call
+    # can still have corrupted the boundary on the way there) but skips the
+    # value comparison, so it returns whatever the guard check accumulated
+    # into `failures` rather than a hardcoded 0.
+    assert "HELIA_GUARD_CHECK(" in source
+    assert "HELIA_VALIDATE_OUTPUTS(" not in source
+    assert "HELIA_VALIDATE_RETURN_FAILURES(failures)" in source
 
 
 def test_dynamic_update_slice_expected_error_generation_renders_rank_override(tmp_path: Path) -> None:
@@ -741,7 +748,14 @@ def test_dynamic_update_slice_expected_error_generation_renders_rank_override(tm
     source = (tmp_path / "dynamic_update_slice_rank0_smoke_dynamic_update_slice.c").read_text()
     assert ".rank = 0" in header
     assert "ARM_CMSIS_NN_ARG_ERROR" in source
-    assert "HELIA_VALIDATE_RETURN_FAILURES(0)" in source
+    # Guard-wrapped (issue #68): the expected-error case still checks the
+    # output canary unconditionally (a kernel that correctly rejects the call
+    # can still have corrupted the boundary on the way there) but skips the
+    # value comparison, so it returns whatever the guard check accumulated
+    # into `failures` rather than a hardcoded 0.
+    assert "HELIA_GUARD_CHECK(" in source
+    assert "HELIA_VALIDATE_OUTPUTS(" not in source
+    assert "HELIA_VALIDATE_RETURN_FAILURES(failures)" in source
 
 
 def test_lstm_and_svdf_keep_specialized_shared_validation_contracts() -> None:

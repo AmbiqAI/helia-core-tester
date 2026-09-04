@@ -2,13 +2,14 @@
 #include "arm_nnfunctions.h"
 #include <string.h>
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 #define SVDF_OUTPUT_SIZE ({{ name|upper }}_INPUT_BATCHES * {{ name|upper }}_UNIT_COUNT)
-static {{ output_dtype }} {{ name }}_output[SVDF_OUTPUT_SIZE];
+{{ helia_guard_declare(output_dtype, name ~ "_output", "SVDF_OUTPUT_SIZE") }}
 
 /*
- * These scratch contexts are malloc'd (sized from a runtime buffer-size
- * query), not static arrays, so they can't use HELIA_GUARD_DECLARE's
+ * The scratch contexts below are malloc'd (sized from a runtime buffer-size
+ * query), not static arrays, so they can't use helia_guard_declare's
  * #define-the-name trick (issue #68). Instead each allocation grows by
  * 2*HELIA_GUARD_BYTES, the caller-visible ctx.buf points past the head
  * canary, and *_guard_base is kept aside so free() still targets the real
@@ -91,6 +92,7 @@ static int32_t run_svdf(void)
     {{ state_dtype }} state_data[{{ name|upper }}_INPUT_BATCHES * {{ name|upper }}_FEATURE_BATCHES * {{ name|upper }}_TIME_BATCHES];
     memcpy(state_data, {{ name }}_state_init, sizeof({{ name }}_state_init));
 
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, zero-seeded below: don't poison */);
     memset({{ name }}_output, 0, sizeof({{ name }}_output));
 
 {% if has_ctx %}
@@ -140,6 +142,7 @@ static int32_t run_svdf(void)
                                                  {{ name }}_output);
 {% endif %}
 
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("SVDF") }} output", {{ name }}_guard_failures);
     if ({{ name }}_input_ctx_guard_base) {
         helia_guard_check("{{ validation_label | default("SVDF") }} input scratch",
                           {{ name }}_input_ctx_guard_base,

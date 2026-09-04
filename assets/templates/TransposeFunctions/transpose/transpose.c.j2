@@ -47,9 +47,13 @@ int32_t {{ name }}_test_case_run(void)
         {{ expected_status | default("ARM_CMSIS_NN_SUCCESS") }}
     );
 
-{% if expected_status | default("ARM_CMSIS_NN_SUCCESS") == "ARM_CMSIS_NN_SUCCESS" %}
     int failures = 0;
+    // Checked unconditionally, even for expected-error cases: a kernel that
+    // correctly rejects the call can still have corrupted the output boundary
+    // on the way there, and that must not be masked by the "no output
+    // comparison for error cases" branch below.
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Transpose") }} output", failures);
+{% if expected_status | default("ARM_CMSIS_NN_SUCCESS") == "ARM_CMSIS_NN_SUCCESS" %}
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("TOLERANT_INT") }},
         {{ name }}_output,
@@ -61,10 +65,8 @@ int32_t {{ name }}_test_case_run(void)
         {{ validation_report_limit | default(20) }},
         failures
     );
-    HELIA_VALIDATE_RETURN_FAILURES(failures);
-{% else %}
-    HELIA_VALIDATE_RETURN_FAILURES(0);
 {% endif %}
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 
 {% include "common/standalone/main.j2" %}
