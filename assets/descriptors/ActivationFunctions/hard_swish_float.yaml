@@ -52,3 +52,29 @@ tensor_dtypes:
   output: FP16
 input_shape: [1, 1, 1, 13]
 required_kernel_symbols: [arm_hard_swish_f16]
+---
+# Non-finite input cover for arm_hard_swish_f32 / _f16. The kernel evaluates
+# x * clamp(x/6 + 0.5, 0, 1), so +Inf saturates the clamp to 1 and returns +Inf,
+# while -Inf drives the clamp to 0 and yields -Inf * 0 = NaN. That NaN is an
+# arithmetic consequence of the clamp form rather than a documented intent --
+# #240 does not name the -Inf case -- so if the kernel ever grows an explicit
+# -Inf arm these expectations have to be regenerated.
+operator: HardSwishPrecise
+name: hard_swish_float_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+required_kernel_symbols: [arm_hard_swish_f32]
+---
+operator: HardSwishPrecise
+name: hard_swish_float_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+required_kernel_symbols: [arm_hard_swish_f16]

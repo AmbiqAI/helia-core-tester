@@ -634,3 +634,179 @@ act_param: 0.0
 # Same measured floor as nn_activation_float_sigmoid_wide_f16:
 # (2.5e-4, 5.0e-4] on both m55-f16 legs, >2x inside the FP16 defaults, and the
 # same 9-vacuous-sample caveat.
+---
+# ---------------------------------------------------------------------------
+# Non-finite input cases (input_mode: nonfinite_sweep).
+#
+# Flat elements 0..3 of the input are overwritten with NaN, -NaN, +Inf and
+# -Inf; the rest keep their uniform draw, so each case is a mixed tensor. That
+# mix is the point: a kernel that predicates a whole vector off on a NaN lane,
+# or that corrupts the lanes neighbouring one, fails differently from a kernel
+# that merely mishandles the token itself.
+#
+# Two distinct contracts are being pinned here, per ns-cmsis-nn#240:
+#   - Propagation: NaN in gives NaN out (tanh, sigmoid, relu, leaky_relu).
+#     The comparison macro treats both-NaN as equal and same-sign Inf as equal
+#     (ns-cmsis-nn tester #75), so these lanes assert identity, not tolerance.
+#   - Clamping: where the kernel's domain reduction bounds a non-finite input
+#     to a finite result -- tanh(+-Inf) = +-1, sigmoid(+Inf) = 1,
+#     sigmoid(-Inf) = 0, relu6(+Inf) = 6, relu(-Inf) = 0 -- the expected value
+#     is finite and ordinary dtype tolerance applies.
+#
+# Why these belong on cortex-m0 specifically: m0 is the only soft-float leg,
+# so it is the only one where a float->int conversion inside a LUT index
+# calculation goes through __aeabi_f2iz (which returns INT32_MAX for a quiet
+# NaN) rather than VCVT.S32.F32 (which saturates NaN to 0). A NaN case that
+# passes on m55/m4 can still read far out of bounds here -- see
+# ns-cmsis-nn#314, which these cases are the regression guard for.
+#
+# hardswish is deliberately included despite an awkward value: the reference
+# and the kernel both evaluate x * clamp(x/6 + 0.5, 0, 1), so -Inf yields
+# -Inf * 0 = NaN rather than -Inf or 0. That is arithmetic consequence, not a
+# documented intent, and #240 does not name the case; if the kernel is ever
+# given an explicit -Inf arm these expectations must be regenerated.
+operator: NNActivationFloat
+name: nn_activation_float_tanh_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_sigmoid_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+activation_type: ARM_NN_FLT_ACT_SIGMOID
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_relu_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 16]
+input_min: -4.0
+input_max: 4.0
+input_mode: nonfinite_sweep
+activation_type: ARM_NN_FLT_ACT_RELU
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_relu6_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 16]
+input_min: -2.0
+input_max: 8.0
+input_mode: nonfinite_sweep
+activation_type: ARM_NN_FLT_ACT_RELU6
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_hardswish_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+activation_type: ARM_NN_FLT_ACT_HARDSWISH
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_leaky_relu_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+activation_type: ARM_NN_FLT_ACT_LEAKY_RELU
+act_param: 0.125
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+# Same scalar-fallback floor as the other narrow tanh_f16 cases: the
+# m55-f16-fallback leg runs the rational fit, not the MVE LUT the goldens are
+# built from, and the two disagree by up to 1.03e-2 over |x| <= 1.
+comparison:
+  atol: 0.001
+  rtol: 0.02
+---
+operator: NNActivationFloat
+name: nn_activation_float_sigmoid_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+activation_type: ARM_NN_FLT_ACT_SIGMOID
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_relu_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 16]
+input_min: -4.0
+input_max: 4.0
+input_mode: nonfinite_sweep
+activation_type: ARM_NN_FLT_ACT_RELU
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_relu6_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 16]
+input_min: -2.0
+input_max: 8.0
+input_mode: nonfinite_sweep
+activation_type: ARM_NN_FLT_ACT_RELU6
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_hardswish_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+activation_type: ARM_NN_FLT_ACT_HARDSWISH
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_leaky_relu_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+activation_type: ARM_NN_FLT_ACT_LEAKY_RELU
+act_param: 0.125

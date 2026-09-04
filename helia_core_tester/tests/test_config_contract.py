@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from helia_core_tester.core import config as config_module
 from helia_core_tester.core.config import Config
 from helia_core_tester.core.errors import ConfigurationError
 
@@ -70,11 +72,14 @@ def test_suite_both_routes_float_by_cpu_capability(tmp_path: Path) -> None:
         _explicit_overrides={"project_root", "cpu", "suite", "float_precision"},
     )
 
-    assert cfg.effective_suites_for_cpu("cortex-m0") == ["int"]
+    assert cfg.effective_suites_for_cpu("cortex-m0") == ["int", "float"]
     assert cfg.effective_suites_for_cpu("cortex-m4") == ["int", "float"]
     assert cfg.effective_suites_for_cpu("cortex-m55") == ["int", "float"]
 
-    assert cfg.effective_float_precision_for_cpu("cortex-m0", suite="float") is None
+    # m0 and m4 narrow to f32 for opposite reasons -- m4 has a single-precision FPU,
+    # m0 has none and runs f32 through the soft-float ABI -- but neither has an f16 path,
+    # so the requested f16 precision must not reach them.
+    assert cfg.effective_float_precision_for_cpu("cortex-m0", suite="float") == "f32"
     assert cfg.effective_float_precision_for_cpu("cortex-m4", suite="float") == "f32"
     assert cfg.effective_float_precision_for_cpu("cortex-m55", suite="float") == "both"
 
@@ -92,8 +97,39 @@ def test_float_f16_rejected_for_cpus_without_fp16_execution(tmp_path: Path) -> N
         )
 
 
-def test_float_suite_rejected_for_cpu_without_fp32_execution(tmp_path: Path) -> None:
+def test_float_f32_suite_accepts_the_soft_float_cpu(tmp_path: Path) -> None:
     root = _init_repo_root(tmp_path)
+
+    cfg = Config(
+        project_root=root,
+        cpu="cortex-m0,cortex-m55",
+        suite="float",
+        float_precision="f32",
+        _explicit_overrides={"project_root", "cpu", "suite", "float_precision"},
+    )
+
+    assert cfg.cpus == ["cortex-m0", "cortex-m55"]
+
+
+def test_float_suite_rejected_for_cpu_without_fp32_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every shipped profile now has fp32_execution, so the guard needs a stand-in.
+
+    Keeping it covered matters because the guard is what turns an unsupported
+    (cpu, precision) pair into a configuration error instead of a build that emits
+    kernels the target cannot execute.
+    """
+    root = _init_repo_root(tmp_path)
+    real_profile = config_module.get_cpu_profile
+
+    def _stripped(cpu: str):
+        profile = real_profile(cpu)
+        if profile.cpu == "cortex-m0":
+            return replace(profile, capabilities=frozenset())
+        return profile
+
+    monkeypatch.setattr(config_module, "get_cpu_profile", _stripped)
 
     with pytest.raises(ConfigurationError, match="requires FP32 execution support"):
         Config(

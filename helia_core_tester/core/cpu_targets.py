@@ -113,11 +113,16 @@ def get_cpu_profile(cpu: str) -> CpuProfile:
             capabilities=frozenset({"dsp", "fp32_execution"}),
         )
     if canon == "cortex-m0":
+        # fp32_execution without fp16_execution: v6-m has no FPU at all, so f32 runs
+        # through the soft-float ABI (-mfloat-abi=soft) and is a shipped configuration,
+        # while f16 has no kernel path here. This is the only soft-float leg in the
+        # matrix, which makes it the only one that exercises __aeabi_* float conversion
+        # rather than VCVT -- the two differ on non-finite operands.
         return CpuProfile(
             cpu=canon,
             has_dsp=False,
             has_mve=False,
-            capabilities=frozenset(),
+            capabilities=frozenset({"fp32_execution"}),
         )
     raise ValueError(f"Unsupported CPU target: {cpu}")
 

@@ -31,7 +31,7 @@ def active_test_list(generated_tests_dir: Optional[Path]) -> Optional[Set[str]]:
     -- but ``None`` is reserved strictly for that "no manifest file" case.
 
     A manifest that exists but admitted zero cases (every descriptor
-    capability-skipped for this cpu, e.g. the float suite on cortex-m0) is a
+    capability-skipped for this cpu, e.g. the f16 float suite on cortex-m0) is a
     real, empty active list, not "no constraint" -- it must return ``set()``,
     not ``None``, or build/run would fall back to unfiltered discovery and
     happily prune nothing / run every stale ``.elf`` in the tree.

@@ -104,3 +104,33 @@ input_1_shape: [1, 1, 1, 9]
 input_2_shape: [1, 1, 1, 9]
 hint:
   kernel_variant: legacy_fp16
+---
+# Non-finite propagation sanity for the float add kernels. Only the left
+# operand carries the sweep (elements 0..3 = NaN, -NaN, +Inf, -Inf); the right
+# stays finite, so each lane is an unambiguous single-token check rather than a
+# mix whose result would not say which operand drove it.
+#
+# The +-Inf lanes assert the activation clamp, not Inf propagation: these
+# kernels apply MIN/MAX against act_min/act_max, which default to +-1e30 here,
+# so f32 expects +-1e30 rather than +-Inf. In f16 that same bound is itself
+# Inf once narrowed, so the f16 case does assert Inf passthrough. The NaN lanes
+# are the propagation check on both dtypes.
+operator: Add
+name: add_float_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 4, 4, 8]
+input_2_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+---
+operator: Add
+name: add_float_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 4, 4, 8]
+input_2_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep

@@ -3,6 +3,8 @@ Template context builder for Jinja templates.
 Handles dimension conversions, quantization parameters, and array formatting.
 """
 
+import math
+
 import numpy as np
 from pathlib import PurePosixPath
 from typing import Dict, Any, List, Tuple
@@ -469,6 +471,18 @@ class TemplateContextBuilder:
         Format a standalone floating-point scalar as a valid C literal.
         """
         numeric = float(value)
+
+        # NAN/INFINITY are float-typed C99 macros expanding to compiler builtins, so
+        # they stay valid data under -Ofast/-ffinite-math-only: that flag licenses the
+        # optimizer to assume operands are finite, but it does not stop a builtin from
+        # materializing the bit pattern. Emitting them unsuffixed is deliberate --
+        # `NANf` is not a token, and the decimal path below would otherwise produce
+        # `nan.0f` or split-crash on `inf` (no exponent to unpack).
+        if math.isnan(numeric):
+            return "-NAN" if math.copysign(1.0, numeric) < 0 else "NAN"
+        if math.isinf(numeric):
+            return "-INFINITY" if numeric < 0 else "INFINITY"
+
         abs_numeric = abs(numeric)
         use_scientific = abs_numeric >= 1.0e6 or (abs_numeric != 0.0 and abs_numeric < 1.0e-4)
 

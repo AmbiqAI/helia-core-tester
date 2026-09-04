@@ -167,6 +167,11 @@
     "input_shape": {
       "$ref": "#/$defs/intArray"
     },
+    "input_mode": {
+      "description": "Input generation mode. 'uniform' draws from input_min/input_max. 'nonfinite_sweep' additionally overwrites the leading elements with NaN, -NaN, +Inf and -Inf, leaving the remaining draws finite; float tensors only, minimum 4 elements.",
+      "type": "string",
+      "enum": ["uniform", "nonfinite_sweep"]
+    },
     "filter_shape": {
       "$ref": "#/$defs/intArray"
     },

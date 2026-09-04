@@ -98,6 +98,19 @@ Future ops should consume resolved tensor roles rather than raw legacy dtype fie
 - `self.tensor_litert_dtype("input")`
 - `self.comparison_config()`
 
+### Non-finite inputs
+
+A float descriptor can set `input_mode: nonfinite_sweep` to overwrite the first four flat
+elements of its input with NaN, -NaN, +Inf and -Inf, leaving the remaining elements as ordinary
+uniform draws. Expected outputs come from the same reference path the descriptor already uses, so
+propagation cases (NaN in, NaN out) and clamping cases (`tanh(+Inf)` is 1, `relu6(+Inf)` is 6) are
+both expressed as normal goldens; the clamping ones are finite and compare under ordinary
+tolerance. Serialized arrays carry the C99 `NAN` and `INFINITY` macros, which survive the `-Ofast`
+build. The mode applies to the input tensor only, so weights, alpha and second operands stay
+finite and each swept element isolates a single token. `cortex-m0` runs the f32 float suite
+through the soft-float ABI, which is the only leg where float-to-integer conversion goes through
+`__aeabi_*` rather than a VFP instruction, and the two differ on non-finite operands.
+
 To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
 
 Generated LiteRT-only ops should route through `build_<op>_op()` and resolve tensor roles from
