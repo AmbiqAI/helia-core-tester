@@ -223,8 +223,9 @@ def test_parser_keeps_finite_mismatch_classification() -> None:
 
 
 def test_parser_passes_matched_nonfinite_case_with_unmeasurable_headroom() -> None:
-    # NaN in / NaN out is the propagation contract (AmbiqAI/ns-cmsis-nn#240):
-    # the case passes, and only the headroom is unmeasurable.
+    # ns-cmsis-nn's Include/arm_nnfunctions_flt.h guarantees NaN-ness and not
+    # payload (AmbiqAI/ns-cmsis-nn#333), so a matched NaN passes and only the
+    # headroom is unmeasurable.
     parser = reporting_parser.TestResultParser()
     output = (
         "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=8\n"
@@ -239,5 +240,33 @@ def test_parser_passes_matched_nonfinite_case_with_unmeasurable_headroom() -> No
     )
     assert result.status == reporting_models.TestStatus.PASS
     assert result.error_type is None
+    assert result.max_diff == -1.0
+    assert result.max_tolerance_fraction == -2.0
+
+
+def test_parser_classifies_sentinel_carrying_result_without_a_printed_line() -> None:
+    # The runtime reports elements only while failures stay within the case's
+    # report limit (20 by default), so finite overruns ahead of the non-finite
+    # element consume the budget and the sentinel is the only evidence left.
+    parser = reporting_parser.TestResultParser()
+    reported = "\n".join(
+        f"Mismatch[{i}]: exp=1.000000 got=2.000000 (diff=1.000000, tol=0.000011)"
+        for i in range(20)
+    )
+    output = (
+        f"{reported}\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=64\n"
+        "21 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("logistic_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "nonfinite_mismatch"
+    assert "21 element(s)" in result.failure_reason
     assert result.max_diff == -1.0
     assert result.max_tolerance_fraction == -2.0

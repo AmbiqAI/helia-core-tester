@@ -80,6 +80,11 @@ double helia_test_float_tolerance(double expected, double atol, double rtol)
     return (atol + (rtol * fabs(expected)));
 }
 
+/*
+ * %.6g rather than %.6f: the finite half of a mixed pairing is often at the
+ * extremes of the range (FLT_MAX against +Inf), where a fixed-point rendering
+ * runs to 39 integer digits and truncates into a mangled number.
+ */
 static const char *helia_test_float_token(double value, char *buffer, size_t buffer_size)
 {
     switch (helia_test_float_class(value)) {
@@ -92,14 +97,14 @@ static const char *helia_test_float_token(double value, char *buffer, size_t buf
         default:
             break;
     }
-    snprintf(buffer, buffer_size, "%.6f", value);
+    snprintf(buffer, buffer_size, "%.6g", value);
     return buffer;
 }
 
 void helia_test_nonfinite_mismatch(int index, double expected, double actual)
 {
-    char expected_text[32];
-    char actual_text[32];
+    char expected_text[64];
+    char actual_text[64];
     printf(
         "HELIA_NONFINITE_MISMATCH[%d]: exp=%s got=%s\r\n",
         index,

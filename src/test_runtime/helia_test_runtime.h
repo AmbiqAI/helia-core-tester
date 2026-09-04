@@ -55,11 +55,12 @@ void helia_test_nonfinite_mismatch(int index, double expected, double actual);
  * Non-finite classification (issue #75).
  *
  * Deliberately bit-pattern based rather than isnan()/isinf(): generated tests
- * build at -Ofast, which implies -ffinite-math-only and licenses the compiler
- * to fold every library non-finite predicate to a constant false (the
- * mechanism behind AmbiqAI/ns-cmsis-nn#314). The macros below expand in the
- * generated harness translation unit, so the check has to survive whatever
- * flags that TU is compiled with, not just the ones this runtime uses.
+ * build at -Ofast or -O3 -ffast-math (both imply -ffinite-math-only), which
+ * licenses the compiler to fold every library non-finite predicate to a
+ * constant false (the mechanism behind AmbiqAI/ns-cmsis-nn#314). The macros
+ * below expand in the generated harness translation unit, so the check has to
+ * survive whatever flags that TU is compiled with, not just the ones this
+ * runtime uses.
  *
  * IEEE-754 binary64: a maximal exponent field means Inf when the significand
  * is zero and NaN otherwise.
@@ -199,27 +200,31 @@ static inline int helia_test_float_class(double value)
  *                   rather than a real headroom number. helia_max_frac itself
  *                   stays at 0.0; helia_zero_tol_violation gates the -1.0 at
  *                   print time.
- *   maxdiff = -1.0, maxfrac = -2.0  at least one actual or expected element was
- *                   non-finite (NaN/Inf), so headroom is unmeasurable for this
- *                   tensor. The sentinel is emitted whether or not the
- *                   non-finite elements matched, and keeps NaN/Inf out of the
- *                   printf entirely.
+ *   maxdiff = -1.0, maxfrac = -2.0  headroom is unmeasurable for this tensor:
+ *                   a non-finite element mismatched, or no finite element was
+ *                   compared at all. Matched non-finite elements are skipped
+ *                   rather than voiding the measurement, so a tensor carrying a
+ *                   few NaN lanes and finite values elsewhere still reports real
+ *                   headroom for the finite ones. Either way NaN/Inf stays out
+ *                   of the printf.
  *
  * Non-finite elements (issue #75) are classified before the tolerance is
  * computed, because the tolerance is what goes bad: rtol * |Inf| is Inf and
  * 0 * |Inf| is NaN, and `diff > tol` is false against either, so a tolerance
  * derived from a non-finite expected value can never be exceeded. A matched
- * pair (both NaN, or infinities of the same sign) passes -- NaN in, NaN out is
- * the propagation contract in AmbiqAI/ns-cmsis-nn#240. Any other pairing,
- * including infinities of opposite sign, is a failure reported through
- * helia_test_nonfinite_mismatch() rather than the %f mismatch line.
+ * pair (both NaN, or infinities of the same sign) passes: ns-cmsis-nn's
+ * Include/arm_nnfunctions_flt.h guarantees NaN-ness, not payload, so a matched
+ * NaN passes regardless of sign or payload (see AmbiqAI/ns-cmsis-nn#333). Any
+ * other pairing, including infinities of opposite sign, is a failure reported
+ * through helia_test_nonfinite_mismatch() rather than the %f mismatch line.
  */
 #define HELIA_VALIDATE_FLOATS(actual, expected, size, atol, rtol, max_reports, failures) \
     do { \
         double helia_max_diff = 0.0; \
         double helia_max_frac = 0.0; \
         int helia_zero_tol_violation = 0; \
-        int helia_nonfinite = 0; \
+        int helia_nonfinite_mismatch = 0; \
+        int helia_finite_compared = 0; \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
             double helia_act_val = (double)((actual)[helia_i]); \
             double helia_exp_val = (double)((expected)[helia_i]); \
@@ -227,8 +232,8 @@ static inline int helia_test_float_class(double value)
             int helia_exp_class = helia_test_float_class(helia_exp_val); \
             if (helia_act_class != HELIA_FLOAT_CLASS_FINITE \
                 || helia_exp_class != HELIA_FLOAT_CLASS_FINITE) { \
-                helia_nonfinite = 1; \
                 if (helia_act_class != helia_exp_class) { \
+                    helia_nonfinite_mismatch = 1; \
                     ++(failures); \
                     if ((failures) <= (max_reports)) { \
                         helia_test_nonfinite_mismatch(helia_i, helia_exp_val, helia_act_val); \
@@ -236,6 +241,7 @@ static inline int helia_test_float_class(double value)
                 } \
                 continue; \
             } \
+            helia_finite_compared = 1; \
             double helia_diff = fabs(helia_act_val - helia_exp_val); \
             double helia_tol = helia_test_float_tolerance( \
                 helia_exp_val, \
@@ -267,10 +273,11 @@ static inline int helia_test_float_class(double value)
                 } \
             } \
         } \
+        int helia_unmeasurable = (helia_nonfinite_mismatch || !helia_finite_compared); \
         printf( \
             "HELIA_FLOAT_MAXDIFF maxdiff=%.8e maxfrac=%.6f n=%d\r\n", \
-            helia_nonfinite ? -1.0 : helia_max_diff, \
-            helia_nonfinite ? -2.0 : (helia_zero_tol_violation ? -1.0 : helia_max_frac), \
+            helia_unmeasurable ? -1.0 : helia_max_diff, \
+            helia_unmeasurable ? -2.0 : (helia_zero_tol_violation ? -1.0 : helia_max_frac), \
             (int)(size) \
         ); \
     } while (0)

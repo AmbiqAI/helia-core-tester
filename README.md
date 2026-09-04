@@ -109,16 +109,22 @@ Float outputs are compared element by element against `atol + rtol * |expected|`
 element is classified before that tolerance is computed. A NaN or infinite operand is never
 run through the tolerance, because `rtol * |Inf|` is `Inf` and `0 * |Inf|` is `NaN`, and
 `diff > tol` is false against either. Matched non-finite operands pass: NaN against NaN, or
-two infinities of the same sign. Every other pairing fails, including infinities of opposite
-sign and a non-finite value against a finite one, and is reported on a
+two infinities of the same sign. ns-cmsis-nn's `Include/arm_nnfunctions_flt.h` guarantees the
+NaN-ness of an element and not its payload, so a matched NaN passes regardless of sign or
+payload (see AmbiqAI/ns-cmsis-nn#333). Every other pairing fails, including infinities of
+opposite sign and a non-finite value against a finite one, and is reported on a
 `HELIA_NONFINITE_MISMATCH[i]` line that prints `nan`/`+inf`/`-inf` symbolically; the reporting
-parser classifies those results as `nonfinite_mismatch`. A tensor containing any non-finite
-element reports the `maxdiff=-1.0 maxfrac=-2.0` headroom sentinel, matched or not, because
-headroom is unmeasurable there.
+parser classifies those results as `nonfinite_mismatch`.
+
+Matched non-finite elements are excluded from the headroom measurement rather than voiding it,
+so a tensor with a few NaN lanes and finite values elsewhere still reports real `maxdiff` and
+`maxfrac` for the finite elements. The `maxdiff=-1.0 maxfrac=-2.0` headroom sentinel is
+reported only when a non-finite element mismatched or when no finite element was compared.
 
 The classification reads the IEEE-754 exponent and significand bits rather than calling
-`isnan`/`isinf`: generated tests build at `-Ofast`, which implies `-ffinite-math-only` and lets
-the compiler fold the library predicates to a constant false.
+`isnan`/`isinf`: generated tests build at `-Ofast` or `-O3 -ffast-math` (both imply
+`-ffinite-math-only`), which lets the compiler fold the library predicates to a constant
+false.
 
 ## Coverage Merge
 

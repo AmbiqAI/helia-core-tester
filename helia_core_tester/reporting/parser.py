@@ -26,8 +26,8 @@ class TestResultParser:
         # Headroom instrumentation (issue #53): HELIA_FLOAT_MAXDIFF summary line
         # emitted once per float-validated case by HELIA_VALIDATE_FLOATS. The
         # numeric fields also accept a literal nan/inf defensively -- the macro
-        # never prints those (it substitutes negative sentinels for a non-finite
-        # element, issue #75), but a stray one must not make the whole line
+        # never prints those (it excludes non-finite elements from the
+        # measurement, issue #75), but a stray one must not make the whole line
         # unmatchable and silently drop the headroom data.
         _num = r'[-+]?(?:[0-9.]+(?:[eE][-+]?[0-9]+)?|nan|inf)'
         self.float_maxdiff_pattern = re.compile(
@@ -157,6 +157,18 @@ class TestResultParser:
                     None,
                     "nonfinite_mismatch",
                 )
+            if self._has_unmeasurable_headroom_sentinel(output):
+                # The runtime reports individual elements only while failures
+                # stay within the case's report limit (20 by default), so a
+                # tensor with enough finite overruns ahead of the non-finite
+                # element carries the sentinel and no printed line.
+                return (
+                    TestStatus.FAIL,
+                    f"Non-finite output mismatch: {failure_count} element(s) differ from expected "
+                    "(non-finite element beyond the per-case report limit)",
+                    None,
+                    "nonfinite_mismatch",
+                )
             return TestStatus.FAIL, f"Output mismatch: {failure_count} element(s) differ from expected", None, "output_mismatch"
 
         fail_matches = self.test_fail_pattern.findall(output)
@@ -174,6 +186,18 @@ class TestResultParser:
 
         return TestStatus.ERROR, "Unknown test status", None, "unknown"
     
+    def _has_unmeasurable_headroom_sentinel(self, output: str) -> bool:
+        """True when any HELIA_FLOAT_MAXDIFF line carries the -1.0/-2.0 sentinel."""
+        for diff_str, frac_str, _n_str in self.float_maxdiff_pattern.findall(output):
+            try:
+                diff_val = float(diff_str)
+                frac_val = float(frac_str)
+            except ValueError:
+                continue
+            if diff_val <= -1.0 and frac_val <= -2.0:
+                return True
+        return False
+
     def _extract_failure_reason(self, output: str, lines: List[str]) -> str:
         """Extract detailed failure reason from legacy assertion-style output."""
         assertion_matches = self.assertion_pattern.findall(output)
@@ -226,14 +250,15 @@ class TestResultParser:
         severe one from any single line wins over any finite measurement:
           maxfrac == -1.0             a zero-width tolerance budget was violated
                                       (undefined/infinite fraction, not "small")
-          maxdiff == -1.0, frac -2.0  a non-finite (NaN/Inf) element was seen
-                                      (issue #75); headroom is unmeasurable.
-                                      Reported back as (-1.0, -2.0) so no
-                                      consumer can read it as benign near-zero
-                                      headroom. Emitted whether or not the
-                                      non-finite operands matched, so it is an
-                                      unmeasurable marker rather than a verdict;
-                                      the verdict is the failure count.
+          maxdiff == -1.0, frac -2.0  headroom is unmeasurable (issue #75): a
+                                      non-finite (NaN/Inf) element mismatched,
+                                      or the tensor had no finite element to
+                                      measure. Reported back as (-1.0, -2.0) so
+                                      no consumer can read it as benign
+                                      near-zero headroom. Matched non-finite
+                                      elements do not raise it -- a tensor with
+                                      NaN lanes and finite lanes reports real
+                                      headroom for the finite ones.
         A literal nan/inf token (which the macro does not emit) is treated the
         same as the non-finite sentinel.
         """
