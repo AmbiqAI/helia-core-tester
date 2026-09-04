@@ -70,5 +70,40 @@ int helia_test_finish_validation(int failures)
 
 double helia_test_float_tolerance(double expected, double atol, double rtol)
 {
+    // A tolerance derived from a non-finite expected value is itself Inf or
+    // NaN, and `diff > tol` is false against either -- a budget that can never
+    // be exceeded (issue #75). Callers classify non-finite elements before
+    // reaching here; this keeps the function safe for any other caller.
+    if (helia_test_float_class(expected) != HELIA_FLOAT_CLASS_FINITE) {
+        return atol;
+    }
     return (atol + (rtol * fabs(expected)));
+}
+
+static const char *helia_test_float_token(double value, char *buffer, size_t buffer_size)
+{
+    switch (helia_test_float_class(value)) {
+        case HELIA_FLOAT_CLASS_NAN:
+            return "nan";
+        case HELIA_FLOAT_CLASS_POS_INF:
+            return "+inf";
+        case HELIA_FLOAT_CLASS_NEG_INF:
+            return "-inf";
+        default:
+            break;
+    }
+    snprintf(buffer, buffer_size, "%.6f", value);
+    return buffer;
+}
+
+void helia_test_nonfinite_mismatch(int index, double expected, double actual)
+{
+    char expected_text[32];
+    char actual_text[32];
+    printf(
+        "HELIA_NONFINITE_MISMATCH[%d]: exp=%s got=%s\r\n",
+        index,
+        helia_test_float_token(expected, expected_text, sizeof(expected_text)),
+        helia_test_float_token(actual, actual_text, sizeof(actual_text))
+    );
 }

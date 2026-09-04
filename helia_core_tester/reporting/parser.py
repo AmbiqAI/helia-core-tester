@@ -44,6 +44,12 @@ class TestResultParser:
         self.zero_failures_pattern = re.compile(r'^0\s+Failures\s*$', re.MULTILINE | re.IGNORECASE)
         # Pattern for "X Failures" where X > 0
         self.nonzero_failures_pattern = re.compile(r'^(\d+)\s+Failures\s*$', re.MULTILINE | re.IGNORECASE)
+        # Non-finite operand mismatch (issue #75): emitted by
+        # helia_test_nonfinite_mismatch() instead of the %f "Mismatch[...]"
+        # line, because a NaN/Inf operand renders unhelpfully as a number.
+        self.nonfinite_mismatch_pattern = re.compile(
+            r'HELIA_NONFINITE_MISMATCH\[(\d+)\]:\s*exp=(\S+)\s+got=(\S+)'
+        )
         # Pattern for "Convolution failed" or API errors
         self.api_error_pattern = re.compile(
             r'(?P<label>[A-Za-z][A-Za-z0-9 _-]*)\s+failed with status\s+(?P<status>-?\d+)',
@@ -141,6 +147,16 @@ class TestResultParser:
         nonzero_match = self.nonzero_failures_pattern.search(output)
         if nonzero_match:
             failure_count = int(nonzero_match.group(1))
+            nonfinite = self.nonfinite_mismatch_pattern.findall(output)
+            if nonfinite:
+                index, expected, actual = nonfinite[0]
+                return (
+                    TestStatus.FAIL,
+                    f"Non-finite output mismatch: {failure_count} element(s) differ from expected "
+                    f"(first at [{index}]: expected {expected}, got {actual})",
+                    None,
+                    "nonfinite_mismatch",
+                )
             return TestStatus.FAIL, f"Output mismatch: {failure_count} element(s) differ from expected", None, "output_mismatch"
 
         fail_matches = self.test_fail_pattern.findall(output)
@@ -211,10 +227,13 @@ class TestResultParser:
           maxfrac == -1.0             a zero-width tolerance budget was violated
                                       (undefined/infinite fraction, not "small")
           maxdiff == -1.0, frac -2.0  a non-finite (NaN/Inf) element was seen
-                                      (issue #75); headroom is unmeasurable and
-                                      the kernel output is broken. Reported back
-                                      as (-1.0, -2.0) so no consumer can read it
-                                      as benign near-zero headroom.
+                                      (issue #75); headroom is unmeasurable.
+                                      Reported back as (-1.0, -2.0) so no
+                                      consumer can read it as benign near-zero
+                                      headroom. Emitted whether or not the
+                                      non-finite operands matched, so it is an
+                                      unmeasurable marker rather than a verdict;
+                                      the verdict is the failure count.
         A literal nan/inf token (which the macro does not emit) is treated the
         same as the non-finite sentinel.
         """

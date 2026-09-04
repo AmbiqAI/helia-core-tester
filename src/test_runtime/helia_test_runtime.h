@@ -24,6 +24,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "arm_nnfunctions.h"
 
@@ -48,6 +49,43 @@ int helia_test_expected_status_failure(const char *label, int status, int expect
 int helia_test_scalar_int_mismatch(const char *label, const char *subject, int expected, int actual);
 int helia_test_finish_validation(int failures);
 double helia_test_float_tolerance(double expected, double atol, double rtol);
+void helia_test_nonfinite_mismatch(int index, double expected, double actual);
+
+/*
+ * Non-finite classification (issue #75).
+ *
+ * Deliberately bit-pattern based rather than isnan()/isinf(): generated tests
+ * build at -Ofast, which implies -ffinite-math-only and licenses the compiler
+ * to fold every library non-finite predicate to a constant false (the
+ * mechanism behind AmbiqAI/ns-cmsis-nn#314). The macros below expand in the
+ * generated harness translation unit, so the check has to survive whatever
+ * flags that TU is compiled with, not just the ones this runtime uses.
+ *
+ * IEEE-754 binary64: a maximal exponent field means Inf when the significand
+ * is zero and NaN otherwise.
+ */
+enum {
+    HELIA_FLOAT_CLASS_FINITE = 0,
+    HELIA_FLOAT_CLASS_NAN = 1,
+    HELIA_FLOAT_CLASS_POS_INF = 2,
+    HELIA_FLOAT_CLASS_NEG_INF = 3
+};
+
+_Static_assert(sizeof(double) == sizeof(uint64_t),
+               "helia_test_float_class() decodes IEEE-754 binary64; this target's double is not 64-bit");
+
+static inline int helia_test_float_class(double value)
+{
+    uint64_t helia_bits = 0;
+    memcpy(&helia_bits, &value, sizeof(helia_bits));
+    if (((helia_bits >> 52) & 0x7FFu) != 0x7FFu) {
+        return HELIA_FLOAT_CLASS_FINITE;
+    }
+    if ((helia_bits & 0x000FFFFFFFFFFFFFull) != 0ull) {
+        return HELIA_FLOAT_CLASS_NAN;
+    }
+    return (helia_bits >> 63) ? HELIA_FLOAT_CLASS_NEG_INF : HELIA_FLOAT_CLASS_POS_INF;
+}
 
 #ifdef __cplusplus
 }
@@ -162,13 +200,19 @@ double helia_test_float_tolerance(double expected, double atol, double rtol);
  *                   stays at 0.0; helia_zero_tol_violation gates the -1.0 at
  *                   print time.
  *   maxdiff = -1.0, maxfrac = -2.0  at least one actual or expected element was
- *                   non-finite (NaN/Inf). fabs(NaN - x) is NaN, which compares
- *                   false against every threshold, so without this guard a
- *                   NaN-/Inf-producing kernel regression would not be counted
- *                   as a failure and the summary would stay pinned at 0.0 --
- *                   i.e. report maximum headroom for a broken kernel (issue
- *                   #75). Such elements are counted as failures and excluded
- *                   from the max trackers so NaN/Inf never reaches printf.
+ *                   non-finite (NaN/Inf), so headroom is unmeasurable for this
+ *                   tensor. The sentinel is emitted whether or not the
+ *                   non-finite elements matched, and keeps NaN/Inf out of the
+ *                   printf entirely.
+ *
+ * Non-finite elements (issue #75) are classified before the tolerance is
+ * computed, because the tolerance is what goes bad: rtol * |Inf| is Inf and
+ * 0 * |Inf| is NaN, and `diff > tol` is false against either, so a tolerance
+ * derived from a non-finite expected value can never be exceeded. A matched
+ * pair (both NaN, or infinities of the same sign) passes -- NaN in, NaN out is
+ * the propagation contract in AmbiqAI/ns-cmsis-nn#240. Any other pairing,
+ * including infinities of opposite sign, is a failure reported through
+ * helia_test_nonfinite_mismatch() rather than the %f mismatch line.
  */
 #define HELIA_VALIDATE_FLOATS(actual, expected, size, atol, rtol, max_reports, failures) \
     do { \
@@ -179,16 +223,16 @@ double helia_test_float_tolerance(double expected, double atol, double rtol);
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
             double helia_act_val = (double)((actual)[helia_i]); \
             double helia_exp_val = (double)((expected)[helia_i]); \
-            if (!isfinite(helia_act_val) || !isfinite(helia_exp_val)) { \
-                ++(failures); \
+            int helia_act_class = helia_test_float_class(helia_act_val); \
+            int helia_exp_class = helia_test_float_class(helia_exp_val); \
+            if (helia_act_class != HELIA_FLOAT_CLASS_FINITE \
+                || helia_exp_class != HELIA_FLOAT_CLASS_FINITE) { \
                 helia_nonfinite = 1; \
-                if ((failures) <= (max_reports)) { \
-                    printf( \
-                        "NonFinite[%d]: exp=%.6f got=%.6f\r\n", \
-                        helia_i, \
-                        helia_exp_val, \
-                        helia_act_val \
-                    ); \
+                if (helia_act_class != helia_exp_class) { \
+                    ++(failures); \
+                    if ((failures) <= (max_reports)) { \
+                        helia_test_nonfinite_mismatch(helia_i, helia_exp_val, helia_act_val); \
+                    } \
                 } \
                 continue; \
             } \

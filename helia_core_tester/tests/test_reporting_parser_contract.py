@@ -117,7 +117,7 @@ def test_parser_float_maxdiff_nonfinite_is_sentinel() -> None:
     # it must not be reported as benign near-zero headroom.
     parser = reporting_parser.TestResultParser()
     output = (
-        "NonFinite[7]: exp=0.500000 got=nan\n"
+        "HELIA_NONFINITE_MISMATCH[7]: exp=0.500000 got=nan\n"
         "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=64\n"
         "1 Failures\n"
     )
@@ -177,3 +177,67 @@ def test_parser_no_maxdiff_line_yields_none() -> None:
     )
     assert result.max_diff is None
     assert result.max_tolerance_fraction is None
+
+
+def test_parser_classifies_nonfinite_mismatch_distinctly() -> None:
+    # issue #75: a NaN/Inf operand mismatch is a different defect from a
+    # tolerance overrun and must not be flattened into "output_mismatch".
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "HELIA_NONFINITE_MISMATCH[3]: exp=+inf got=-inf\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=8\n"
+        "1 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("logistic_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "nonfinite_mismatch"
+    assert result.failure_reason == (
+        "Non-finite output mismatch: 1 element(s) differ from expected "
+        "(first at [3]: expected +inf, got -inf)"
+    )
+
+
+def test_parser_keeps_finite_mismatch_classification() -> None:
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "Mismatch[3]: exp=1.000000 got=2.000000 (diff=1.000000, tol=0.000011)\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=1.00000000e+00 maxfrac=90909.090909 n=8\n"
+        "1 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("logistic_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.error_type == "output_mismatch"
+    assert result.max_diff == pytest.approx(1.0)
+    assert result.max_tolerance_fraction == pytest.approx(90909.090909)
+
+
+def test_parser_passes_matched_nonfinite_case_with_unmeasurable_headroom() -> None:
+    # NaN in / NaN out is the propagation contract (AmbiqAI/ns-cmsis-nn#240):
+    # the case passes, and only the headroom is unmeasurable.
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=8\n"
+        "0 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("logistic_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.PASS
+    assert result.error_type is None
+    assert result.max_diff == -1.0
+    assert result.max_tolerance_fraction == -2.0

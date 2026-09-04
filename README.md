@@ -99,8 +99,26 @@ Future ops should consume resolved tensor roles rather than raw legacy dtype fie
 - `self.comparison_config()`
 
 To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
+
 Generated LiteRT-only ops should route through `build_<op>_op()` and resolve tensor roles from
 `tensor_dtypes` or the normalized descriptor metadata instead of hand-parsing legacy dtype fields.
+
+### Non-finite float comparison
+
+Float outputs are compared element by element against `atol + rtol * |expected|`, but each
+element is classified before that tolerance is computed. A NaN or infinite operand is never
+run through the tolerance, because `rtol * |Inf|` is `Inf` and `0 * |Inf|` is `NaN`, and
+`diff > tol` is false against either. Matched non-finite operands pass: NaN against NaN, or
+two infinities of the same sign. Every other pairing fails, including infinities of opposite
+sign and a non-finite value against a finite one, and is reported on a
+`HELIA_NONFINITE_MISMATCH[i]` line that prints `nan`/`+inf`/`-inf` symbolically; the reporting
+parser classifies those results as `nonfinite_mismatch`. A tensor containing any non-finite
+element reports the `maxdiff=-1.0 maxfrac=-2.0` headroom sentinel, matched or not, because
+headroom is unmeasurable there.
+
+The classification reads the IEEE-754 exponent and significand bits rather than calling
+`isnan`/`isinf`: generated tests build at `-Ofast`, which implies `-ffinite-math-only` and lets
+the compiler fold the library predicates to a constant false.
 
 ## Coverage Merge
 
