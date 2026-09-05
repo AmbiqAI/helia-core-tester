@@ -26,8 +26,8 @@ class TestResultParser:
         # Headroom instrumentation (issue #53): HELIA_FLOAT_MAXDIFF summary line
         # emitted once per float-validated case by HELIA_VALIDATE_FLOATS. The
         # numeric fields also accept a literal nan/inf defensively -- the macro
-        # never prints those (it substitutes negative sentinels for a non-finite
-        # element, issue #75), but a stray one must not make the whole line
+        # never prints those (it excludes non-finite elements from the
+        # measurement, issue #75), but a stray one must not make the whole line
         # unmatchable and silently drop the headroom data.
         _num = r'[-+]?(?:[0-9.]+(?:[eE][-+]?[0-9]+)?|nan|inf)'
         self.float_maxdiff_pattern = re.compile(
@@ -44,6 +44,18 @@ class TestResultParser:
         self.zero_failures_pattern = re.compile(r'^0\s+Failures\s*$', re.MULTILINE | re.IGNORECASE)
         # Pattern for "X Failures" where X > 0
         self.nonzero_failures_pattern = re.compile(r'^(\d+)\s+Failures\s*$', re.MULTILINE | re.IGNORECASE)
+        # Non-finite operand mismatch (issue #75): emitted by
+        # helia_test_nonfinite_mismatch() instead of the %f "Mismatch[...]"
+        # line, because a NaN/Inf operand renders unhelpfully as a number.
+        self.nonfinite_mismatch_pattern = re.compile(
+            r'HELIA_NONFINITE_MISMATCH\[(\d+)\]:\s*exp=(\S+)\s+got=(\S+)'
+        )
+        # Per-tensor count of mismatched non-finite elements. Printed whenever
+        # one occurred, including when the per-element reports above were used
+        # up by earlier failures, so this is the reliable classifier.
+        self.nonfinite_summary_pattern = re.compile(
+            r'HELIA_NONFINITE_MISMATCHES\s+n=(\d+)'
+        )
         # Pattern for "Convolution failed" or API errors
         self.api_error_pattern = re.compile(
             r'(?P<label>[A-Za-z][A-Za-z0-9 _-]*)\s+failed with status\s+(?P<status>-?\d+)',
@@ -141,6 +153,33 @@ class TestResultParser:
         nonzero_match = self.nonzero_failures_pattern.search(output)
         if nonzero_match:
             failure_count = int(nonzero_match.group(1))
+            nonfinite = self.nonfinite_mismatch_pattern.findall(output)
+            if nonfinite:
+                index, expected, actual = nonfinite[0]
+                return (
+                    TestStatus.FAIL,
+                    f"Non-finite output mismatch: {failure_count} element(s) differ from expected "
+                    f"(first at [{index}]: expected {expected}, got {actual})",
+                    None,
+                    "nonfinite_mismatch",
+                )
+            nonfinite_counts = self.nonfinite_summary_pattern.findall(output)
+            if nonfinite_counts:
+                # The runtime reports individual elements only while failures
+                # stay within the case's report limit (20 by default), so a
+                # tensor with enough finite overruns ahead of the non-finite
+                # element carries only the per-tensor count. The headroom
+                # sentinel cannot stand in for it: the sentinel also fires when
+                # a tensor had no finite element to measure, which would
+                # mislabel a finite overrun in a multi-output case.
+                nonfinite_total = sum(int(count) for count in nonfinite_counts)
+                return (
+                    TestStatus.FAIL,
+                    f"Non-finite output mismatch: {failure_count} element(s) differ from expected "
+                    f"({nonfinite_total} non-finite, reported beyond the per-case report limit)",
+                    None,
+                    "nonfinite_mismatch",
+                )
             return TestStatus.FAIL, f"Output mismatch: {failure_count} element(s) differ from expected", None, "output_mismatch"
 
         fail_matches = self.test_fail_pattern.findall(output)
@@ -210,17 +249,33 @@ class TestResultParser:
         severe one from any single line wins over any finite measurement:
           maxfrac == -1.0             a zero-width tolerance budget was violated
                                       (undefined/infinite fraction, not "small")
-          maxdiff == -1.0, frac -2.0  a non-finite (NaN/Inf) element was seen
-                                      (issue #75); headroom is unmeasurable and
-                                      the kernel output is broken. Reported back
-                                      as (-1.0, -2.0) so no consumer can read it
-                                      as benign near-zero headroom.
+          maxdiff == -1.0, frac -2.0  headroom is unmeasurable (issue #75): a
+                                      non-finite (NaN/Inf) element mismatched,
+                                      or the tensor had no finite element to
+                                      measure. Reported back as (-1.0, -2.0) so
+                                      no consumer can read it as benign
+                                      near-zero headroom. Matched non-finite
+                                      elements do not raise it -- a tensor with
+                                      NaN lanes and finite lanes reports real
+                                      headroom for the finite ones.
         A literal nan/inf token (which the macro does not emit) is treated the
         same as the non-finite sentinel.
+
+        Lines with n=0 measured nothing, so they are ignored while any other
+        line is present.
         """
         matches = self.float_maxdiff_pattern.findall(output)
         if not matches:
             return None, None
+
+        # A zero-length tensor always reports the sentinel -- it compared
+        # nothing -- and a split-style case emits one line per output tensor
+        # into the same output. Letting an empty sibling void the measured
+        # headroom of the tensors that did compare would lose the measurement
+        # for the whole case, so empty lines only speak when nothing else does.
+        measured = [match for match in matches if match[2] != '0']
+        if measured:
+            matches = measured
 
         max_diff = 0.0
         max_frac = 0.0
@@ -247,16 +302,23 @@ class TestResultParser:
         return max_diff, (-1.0 if saw_zero_tol_violation else max_frac)
 
     def _extract_relevant_lines(self, lines: List[str]) -> List[str]:
-        """Extract relevant output lines for debugging."""
+        """Extract relevant output lines for debugging.
+
+        `helia_` is a keyword because the runtime's evidence lines
+        (HELIA_NONFINITE_MISMATCH, HELIA_NONFINITE_MISMATCHES,
+        HELIA_FLOAT_MAXDIFF) carry none of the others and are printed before
+        the failure count, so without it they fall outside the retained
+        section and the report keeps the verdict but drops the evidence.
+        """
         relevant = []
         in_test_section = False
-        
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-                
-            if any(keyword in line.lower() for keyword in ['test', 'fail', 'pass', 'error', 'assert']):
+
+            if any(keyword in line.lower() for keyword in ['test', 'fail', 'pass', 'error', 'assert', 'helia_']):
                 in_test_section = True
             
             if in_test_section:

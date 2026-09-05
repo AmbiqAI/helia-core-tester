@@ -117,7 +117,7 @@ def test_parser_float_maxdiff_nonfinite_is_sentinel() -> None:
     # it must not be reported as benign near-zero headroom.
     parser = reporting_parser.TestResultParser()
     output = (
-        "NonFinite[7]: exp=0.500000 got=nan\n"
+        "HELIA_NONFINITE_MISMATCH[7]: exp=0.500000 got=nan\n"
         "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=64\n"
         "1 Failures\n"
     )
@@ -177,3 +177,204 @@ def test_parser_no_maxdiff_line_yields_none() -> None:
     )
     assert result.max_diff is None
     assert result.max_tolerance_fraction is None
+
+
+def test_parser_classifies_nonfinite_mismatch_distinctly() -> None:
+    # issue #75: a NaN/Inf operand mismatch is a different defect from a
+    # tolerance overrun and must not be flattened into "output_mismatch".
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "HELIA_NONFINITE_MISMATCH[3]: exp=+inf got=-inf\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=8\n"
+        "1 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("logistic_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "nonfinite_mismatch"
+    assert result.failure_reason == (
+        "Non-finite output mismatch: 1 element(s) differ from expected "
+        "(first at [3]: expected +inf, got -inf)"
+    )
+
+
+def test_parser_keeps_finite_mismatch_classification() -> None:
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "Mismatch[3]: exp=1.000000 got=2.000000 (diff=1.000000, tol=0.000011)\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=1.00000000e+00 maxfrac=90909.090909 n=8\n"
+        "1 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("logistic_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.error_type == "output_mismatch"
+    assert result.max_diff == pytest.approx(1.0)
+    assert result.max_tolerance_fraction == pytest.approx(90909.090909)
+
+
+def test_parser_passes_matched_nonfinite_case_with_unmeasurable_headroom() -> None:
+    # ns-cmsis-nn's Include/arm_nnfunctions_flt.h guarantees NaN-ness and not
+    # payload (AmbiqAI/ns-cmsis-nn#333), so a matched NaN passes and only the
+    # headroom is unmeasurable.
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=8\n"
+        "0 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("logistic_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.PASS
+    assert result.error_type is None
+    assert result.max_diff == -1.0
+    assert result.max_tolerance_fraction == -2.0
+
+
+def test_parser_classifies_on_the_count_line_without_a_printed_element() -> None:
+    # The runtime reports elements only while failures stay within the case's
+    # report limit (20 by default), so finite overruns ahead of the non-finite
+    # element consume the budget and the per-tensor count line is the only
+    # evidence left.
+    parser = reporting_parser.TestResultParser()
+    reported = "\n".join(
+        f"Mismatch[{i}]: exp=1.000000 got=2.000000 (diff=1.000000, tol=0.000011)"
+        for i in range(20)
+    )
+    output = (
+        f"{reported}\n"
+        "HELIA_NONFINITE_MISMATCHES n=1\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=64\n"
+        "21 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("logistic_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "nonfinite_mismatch"
+    assert "21 element(s)" in result.failure_reason
+    assert "1 non-finite" in result.failure_reason
+    assert result.max_diff == -1.0
+    assert result.max_tolerance_fraction == -2.0
+
+
+def test_parser_does_not_read_the_sentinel_as_a_nonfinite_mismatch() -> None:
+    # A multi-output case shares one failure counter across tensors, so a
+    # finite overrun in one tensor can coexist with a second tensor that had no
+    # finite element to measure. The sentinel alone is not evidence of a
+    # non-finite mismatch; the HELIA_NONFINITE_MISMATCHES line is.
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "Mismatch[2]: exp=1.000000 got=2.000000 (diff=1.000000, tol=0.000011)\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=1.00000000e+00 maxfrac=90909.090909 n=8\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=0\n"
+        "1 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("split_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "output_mismatch"
+
+
+def test_parser_float_maxdiff_literal_inf_token_is_sentinel() -> None:
+    # Same defensive path as the nan token: an inf maxdiff is unmeasurable
+    # headroom, never a large-but-real measurement.
+    parser = reporting_parser.TestResultParser()
+    output = "HELIA_FLOAT_MAXDIFF maxdiff=inf maxfrac=inf n=16\n1 Failures\n"
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("stray_inf.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.max_diff == -1.0
+    assert result.max_tolerance_fraction == -2.0
+
+
+def test_parser_keeps_the_helia_evidence_lines_in_the_report() -> None:
+    # The HELIA_* lines are the only record of which element went non-finite
+    # and by how much the finite ones missed; the report is the artifact a
+    # reader gets, so a verdict without them is not actionable.
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "HELIA_NONFINITE_MISMATCH[0]: exp=1 got=nan\n"
+        "HELIA_NONFINITE_MISMATCHES n=1\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=8\n"
+        "1 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("logistic_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert "HELIA_NONFINITE_MISMATCH[0]: exp=1 got=nan" in result.output_lines
+    assert "HELIA_NONFINITE_MISMATCHES n=1" in result.output_lines
+    assert (
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=8"
+        in result.output_lines
+    )
+
+
+def test_parser_empty_tensor_does_not_void_sibling_tensor_headroom() -> None:
+    # A split-style case validates several output tensors into one output
+    # stream. A zero-length tensor compares nothing and always reports the
+    # sentinel, which must not erase headroom the other tensors measured.
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=0\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=4.20000000e-04 maxfrac=0.420000 n=8\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=1.00000000e-04 maxfrac=0.100000 n=8\n"
+        "0 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("split_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.PASS
+    assert result.max_diff == pytest.approx(4.2e-04)
+    assert result.max_tolerance_fraction == pytest.approx(0.42)
+
+
+def test_parser_lone_empty_tensor_still_reports_the_sentinel() -> None:
+    # With nothing else to speak for the case, the empty tensor's sentinel is
+    # the honest answer: no headroom was measured.
+    parser = reporting_parser.TestResultParser()
+    output = "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=0\n0 Failures\n"
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("empty_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.PASS
+    assert result.max_diff == -1.0
+    assert result.max_tolerance_fraction == -2.0
