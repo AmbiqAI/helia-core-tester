@@ -19,12 +19,11 @@ from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.core.path_layout import generation_report_dir
 from helia_core_tester.generation.ops import get_op_map, get_operator_spec
 from helia_core_tester.generation.reuse import (
-    case_artifacts_present,
+    case_reusable,
     case_stamp,
     clear_stamp,
     generator_version_hash,
     prune_unlisted_cases,
-    read_stamp,
     write_stamp,
 )
 from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists, missing_header_symbols
@@ -514,11 +513,7 @@ def test_generation(test_filters):
             else default_seed_for_case(case_name),
             version_hash=version_hash,
         )
-        if (
-            not force_generate
-            and read_stamp(test_dir) == stamp
-            and case_artifacts_present(test_dir, case_name)
-        ):
+        if not force_generate and case_reusable(test_dir, stamp):
             reused_entry = _reused_manifest_entry(
                 test_dir, generated_tests_dir=Path(top_generated), cpu=target_cpu
             )
@@ -611,7 +606,11 @@ def test_generation(test_filters):
         print("Capability skips (0)")
 
     manifest_path: Optional[Path] = None
-    if produced_count > 0 or skipped_entries:
+    # Pruning alone is reason enough to rewrite: a filter that matched nothing
+    # empties the tree, and an empty manifest is the correct record of that. A
+    # stale manifest left next to a pruned tree would send build and run after
+    # cases that no longer exist.
+    if produced_count > 0 or skipped_entries or pruned_count:
         manifest_path = _write_manifest_and_cmake(
             manifest_entries,
             skipped_entries,
