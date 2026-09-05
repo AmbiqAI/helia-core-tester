@@ -31,6 +31,12 @@ FALSE_VALUES = {"0", "false", "no", "off"}
 VALID_SUITE_MODES = {"int", "float", "both"}
 VALID_FLOAT_PRECISION = {"f16", "f32", "both"}
 
+# FVP boot dominates per-case wall time, so parallel run jobs are the lever that
+# matters -- but an unbounded default on a shared or metered runner is a cost
+# risk, so the default caps out well below a big host's core count. run_jobs=0
+# stays as the explicit opt-in for "use every core". See issue #107.
+DEFAULT_RUN_JOBS_CAP = 4
+
 PATH_KEYS = frozenset(
     {
         "project_root",
@@ -42,6 +48,11 @@ PATH_KEYS = frozenset(
         "cmsis_nn_root",
     }
 )
+
+
+def default_run_jobs() -> int:
+    """Bounded parallel FVP run jobs for this host."""
+    return min(os.cpu_count() or 1, DEFAULT_RUN_JOBS_CAP)
 
 
 @dataclass
@@ -68,7 +79,7 @@ class Config:
 
     timeout: float = 0.0
     fail_fast: bool = True
-    run_jobs: int = 1
+    run_jobs: Optional[int] = None
     verbosity: int = 0
     dry_run: bool = False
     plan: bool = False
@@ -265,7 +276,7 @@ class Config:
             self.jobs = os.cpu_count() or 4
 
         if self.run_jobs is None:
-            self.run_jobs = 1
+            self.run_jobs = default_run_jobs()
         if self.run_jobs < 0:
             raise ValueError(f"run_jobs must be >= 0, got {self.run_jobs}")
         if self.run_jobs == 0:

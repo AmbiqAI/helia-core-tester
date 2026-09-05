@@ -34,14 +34,33 @@ def _runtime_env(root: Path) -> RuntimeEnvContext:
     )
 
 
-def test_config_run_jobs_default_and_auto(tmp_path: Path, monkeypatch) -> None:
+def test_config_run_jobs_default_is_bounded_and_zero_is_unbounded(tmp_path: Path, monkeypatch) -> None:
     root = _make_config_root(tmp_path)
-    cfg_default = Config(project_root=root, run_jobs=1)
-    assert cfg_default.run_jobs == 1
+    monkeypatch.setattr("helia_core_tester.core.config.os.cpu_count", lambda: 12)
+
+    assert Config(project_root=root).run_jobs == 4
+    assert Config(project_root=root, run_jobs=1).run_jobs == 1
+    assert Config(project_root=root, run_jobs=0).run_jobs == 12
+
+    monkeypatch.setattr("helia_core_tester.core.config.os.cpu_count", lambda: 2)
+    assert Config(project_root=root).run_jobs == 2
+
+    monkeypatch.setattr("helia_core_tester.core.config.os.cpu_count", lambda: None)
+    assert Config(project_root=root).run_jobs == 1
+
+
+def test_config_run_jobs_env_override_beats_the_bounded_default(tmp_path: Path, monkeypatch) -> None:
+    root = _make_config_root(tmp_path)
+    monkeypatch.setenv("HELIA_CORE_TESTER_RUN_JOBS", "7")
+    assert Config(project_root=root).run_jobs == 7
+
+
+def test_fvp_cli_run_jobs_default_matches_the_bounded_config_default(monkeypatch, tmp_path: Path) -> None:
+    from helia_core_tester.fvp.cli import build_arg_parser
 
     monkeypatch.setattr("helia_core_tester.core.config.os.cpu_count", lambda: 12)
-    cfg_auto = Config(project_root=root, run_jobs=0)
-    assert cfg_auto.run_jobs == 12
+    args = build_arg_parser(tmp_path, tmp_path).parse_args([])
+    assert args.run_jobs == 4
 
 
 def test_config_run_jobs_negative_rejected(tmp_path: Path) -> None:

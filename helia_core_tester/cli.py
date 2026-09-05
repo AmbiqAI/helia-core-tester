@@ -12,7 +12,7 @@ from typing import Optional
 
 import typer
 
-from helia_core_tester.core.config import Config
+from helia_core_tester.core.config import DEFAULT_RUN_JOBS_CAP, Config
 from helia_core_tester.core.discovery import ensure_arm_toolchain_on_path
 from helia_core_tester.core.logging import setup_logger
 from helia_core_tester.core.path_layout import artifacts_root
@@ -199,7 +199,7 @@ def build(
 def run(
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     timeout: float = typer.Option(0.0, help="Per-test timeout in seconds (0 = none)"),
-    run_jobs: int = typer.Option(1, "--run-jobs", help="Parallel FVP run jobs (0 = auto/use all host cores)"),
+    run_jobs: Optional[int] = typer.Option(None, "--run-jobs", help=f"Parallel FVP run jobs (default: min(host cores, {DEFAULT_RUN_JOBS_CAP}); 0 = every host core). FVP boot dominates per-case time so parallelism is the lever, but unbounded jobs on a shared or metered runner is a cost risk"),
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Do not stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Collect and merge ns-cmsis-nn gcov streams"),
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Write MVE float coverage to the float-mve report lane"),
@@ -251,7 +251,7 @@ def full(
     opt: str = typer.Option("-Ofast", help="Optimization level"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     timeout: float = typer.Option(0.0, help="Per-test timeout in seconds (0 = none)"),
-    run_jobs: int = typer.Option(1, "--run-jobs", help="Parallel FVP run jobs (0 = auto/use all host cores)"),
+    run_jobs: Optional[int] = typer.Option(None, "--run-jobs", help=f"Parallel FVP run jobs (default: min(host cores, {DEFAULT_RUN_JOBS_CAP}); 0 = every host core). FVP boot dominates per-case time so parallelism is the lever, but unbounded jobs on a shared or metered runner is a cost risk"),
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Do not stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn coverage collection/reporting"),
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Enable Cortex-M55 float MVE paths during coverage builds"),
