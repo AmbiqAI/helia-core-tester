@@ -37,6 +37,13 @@ VALID_FLOAT_PRECISION = {"f16", "f32", "both"}
 # stays as the explicit opt-in for "use every core". See issue #107.
 DEFAULT_RUN_JOBS_CAP = 4
 
+# A kernel that spins has no other backstop: without a per-case timeout the FVP
+# subprocess blocks until the CI job cap and the whole leg ends as a cancelled
+# job with no per-case result. Sized well above the slowest known case so a
+# genuine long run is not clipped. timeout=0 is the explicit opt-out.
+# See issue #99.
+DEFAULT_TIMEOUT_SECONDS = 180.0
+
 PATH_KEYS = frozenset(
     {
         "project_root",
@@ -77,7 +84,7 @@ class Config:
     suites: list[str] = field(default_factory=list)
     float_precision: str = "both"
 
-    timeout: float = 0.0
+    timeout: float = DEFAULT_TIMEOUT_SECONDS
     fail_fast: bool = True
     run_jobs: Optional[int] = None
     verbosity: int = 0

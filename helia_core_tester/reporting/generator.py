@@ -11,6 +11,10 @@ from typing import List, Dict
 
 from helia_core_tester.reporting.models import TestReport, TestStatus
 
+# Distinct JUnit message so a hung kernel is triaged as its own class of
+# defect rather than folded in with assertion failures.
+TIMEOUT_FAILURE_PREFIX = "per-case FVP timeout"
+
 
 class ReportGenerator:
     """Generate test reports in multiple formats."""
@@ -150,8 +154,14 @@ class ReportGenerator:
             {
                 "name": f"helia_core_tester_{report.cpu}",
                 "tests": str(report.total_tests),
-                "failures": str(report.failed + report.build_failed + report.generation_failed + report.conversion_failed),
-                "errors": str(report.errors + report.timed_out),
+                "failures": str(
+                    report.failed
+                    + report.timed_out
+                    + report.build_failed
+                    + report.generation_failed
+                    + report.conversion_failed
+                ),
+                "errors": str(report.errors),
                 "skipped": str(report.skipped + report.not_run),
                 "time": f"{report.duration:.2f}",
             },
@@ -191,7 +201,18 @@ class ReportGenerator:
                 failure = ET.SubElement(testcase, "failure", {"message": reason or status.value})
                 if reason:
                     failure.text = reason
-            elif status in (TestStatus.ERROR, TestStatus.TIMEOUT):
+            elif status == TestStatus.TIMEOUT:
+                # A timeout is the failure mode the per-case timeout exists to
+                # surface (#99); as a JUnit <error> or <skipped> it reads as
+                # infrastructure noise and gets triaged away.
+                message = reason or "Test execution timed out"
+                failure = ET.SubElement(
+                    testcase,
+                    "failure",
+                    {"message": f"{TIMEOUT_FAILURE_PREFIX}: {message}", "type": "timeout"},
+                )
+                failure.text = message
+            elif status == TestStatus.ERROR:
                 err = ET.SubElement(testcase, "error", {"message": reason or status.value})
                 if reason:
                     err.text = reason
