@@ -191,6 +191,20 @@ ROUTED_CASES = [
     ("strided_slice_float_whole_slab_f32", "strided_slice"),
     ("sub_float_default_f32", "sub"),
     ("transpose_float_default_f32", "transpose"),
+    # Phase 2c adds the recurrent float families. The streaming cases stand in for LSTM
+    # and GRU because the single-shot templates branch on a generation-time probe of the
+    # configured ns-cmsis-nn checkout (the temp-buffer sizers of ns-cmsis-nn#381), which
+    # would make their .c text a property of the machine rather than of this repo. The
+    # streaming and single-shot paths share the sampling and the header template, so the
+    # tensors and goldens under test are the same ones.
+    #
+    # These three fixtures were generated at 4b5fcbe and then had the <math.h> include
+    # this change adds to the three header templates inserted by hand; that include is
+    # the only difference between the emitted text before and after the change, and the
+    # .c files are byte-identical.
+    ("lstm_unidirectional_float_stream_f32", "lstm_unidirectional"),
+    ("gru_unidirectional_float_stream_f32", "gru_unidirectional"),
+    ("svdf_float_default_f32", "svdf"),
 ]
 ROUTED_CPU = "cortex-m55"
 
