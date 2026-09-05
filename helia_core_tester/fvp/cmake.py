@@ -136,8 +136,8 @@ def resolve_compiler_launcher() -> Optional[str]:
 
     ``HELIA_CORE_TESTER_COMPILER_LAUNCHER`` names a specific tool, or is set to
     ``none`` (or empty) to disable caching outright even where ccache is on
-    ``PATH`` -- a build that has to be reproducible or instrumented for coverage
-    wants the compiler invoked directly. A name that is not on ``PATH`` raises:
+    ``PATH`` -- a build that has to be reproducible wants the compiler invoked
+    directly. A name that is not on ``PATH`` raises:
     silently building uncached under a launcher the caller explicitly asked for
     hides exactly the misconfiguration the override exists to express.
     """
