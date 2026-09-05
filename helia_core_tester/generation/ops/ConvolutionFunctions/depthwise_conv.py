@@ -77,9 +77,9 @@ class OpDepthwiseConv(OperationBase):
             'padding': padding,
             'depth_multiplier': self.desc.get('depth_multiplier', 1),
             'use_bias': self.desc.get('use_bias', True),
-            # Unseeded initializers draw from the Keras global RNG, so the same
-            # descriptor produced different weights (and different goldens) run to
-            # run; pinning them keeps generation reproducible across processes.
+            # Fixed seeds keep the weights a function of the descriptor alone, so the
+            # goldens reproduce regardless of case order or the Keras global RNG state
+            # the process happens to be in.
             'depthwise_initializer': tf.keras.initializers.GlorotUniform(seed=1234),
             'name': 'depthwise_conv'
         }

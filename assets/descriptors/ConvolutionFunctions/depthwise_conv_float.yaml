@@ -624,6 +624,8 @@ depth_multiplier: 1
 # FP16 default budget; the tokens play no part, and a token-free case of this shape
 # fails at the same lane with the same numbers. The override is sized off the worst
 # fraction seen across several generation seeds, not off one run.
+# Whether the f16 depthwise family should carry a tolerance of this shape at family
+# level, rather than case by case, is a Lane C policy call.
 comparison:
   atol: 0.002
   rtol: 0.002
@@ -652,6 +654,8 @@ depth_multiplier: 1
 # FP16 default budget; the tokens play no part, and a token-free case of this shape
 # fails at the same lane with the same numbers. The override is sized off the worst
 # fraction seen across several generation seeds, not off one run.
+# Whether the f16 depthwise family should carry a tolerance of this shape at family
+# level, rather than case by case, is a Lane C policy call.
 comparison:
   atol: 0.002
   rtol: 0.002
@@ -680,6 +684,8 @@ depth_multiplier: 1
 # FP16 default budget; the tokens play no part, and a token-free case of this shape
 # fails at the same lane with the same numbers. The override is sized off the worst
 # fraction seen across several generation seeds, not off one run.
+# Whether the f16 depthwise family should carry a tolerance of this shape at family
+# level, rather than case by case, is a Lane C policy call.
 comparison:
   atol: 0.002
   rtol: 0.002

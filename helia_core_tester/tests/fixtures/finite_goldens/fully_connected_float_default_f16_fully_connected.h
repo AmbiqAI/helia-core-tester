@@ -2,8 +2,8 @@
 #define FULLY_CONNECTED_FLOAT_DEFAULT_F16_FULLY_CONNECTED_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
@@ -42,13 +42,15 @@ static const cmsis_nn_fc_params_f16 fully_connected_float_default_f16_fc_params 
 
 // Weights
 static const float16_t fully_connected_float_default_f16_weights[] = {
-    (float16_t)-0.045379639f, (float16_t)-0.233032227f, (float16_t)0.062103271f, (float16_t)-0.12286377f, (float16_t)0.075561523f, (float16_t)0.400146484f, (float16_t)-0.213623047f, (float16_t)-0.55078125f, (float16_t)0.394042969f, (float16_t)-0.076049805f, (float16_t)-0.126464844f, (float16_t)0.278076172f, (float16_t)-0.12298584f, (float16_t)0.17980957f, (float16_t)0.044128418f, (float16_t)0.274414062f,
-    (float16_t)-0.511230469f, (float16_t)-0.104553223f, (float16_t)0.454345703f, (float16_t)0.019256592f, (float16_t)0.072143555f, (float16_t)0.273681641f, (float16_t)0.076904297f, (float16_t)0.112487793f, (float16_t)-0.102172852f, (float16_t)-0.354980469f, (float16_t)0.391845703f, (float16_t)0.019638062f, (float16_t)0.141723633f, (float16_t)-0.219482422f, (float16_t)-0.540039062f, (float16_t)-0.193481445f,
-    (float16_t)-0.100341797f, (float16_t)-0.139038086f, (float16_t)-0.082641602f, (float16_t)-0.185058594f, (float16_t)-0.225097656f, (float16_t)0.013877869f, (float16_t)0.331054688f, (float16_t)0.011940002f, (float16_t)0.373535156f, (float16_t)0.107299805f, (float16_t)0.162109375f, (float16_t)0.035949707f, (float16_t)-0.172973633f, (float16_t)0.501464844f, (float16_t)0.317138672f, (float16_t)0.483154297f,
-    (float16_t)-0.210327148f, (float16_t)0.017288208f, (float16_t)-0.5625f, (float16_t)0.020462036f, (float16_t)-0.192871094f, (float16_t)-0.574707031f, (float16_t)0.129638672f, (float16_t)0.552246094f, (float16_t)-0.477783203f, (float16_t)0.314941406f, (float16_t)0.436767578f, (float16_t)-0.042572021f
+    (float16_t)0.287109375f, (float16_t)-0.342529297f, (float16_t)-0.026535034f, (float16_t)-0.272705078f, (float16_t)0.510253906f, (float16_t)0.150390625f, (float16_t)0.467041016f, (float16_t)-0.188354492f, (float16_t)-0.520996094f, (float16_t)-0.51171875f, (float16_t)0.390136719f, (float16_t)0.430664062f, (float16_t)0.560546875f, (float16_t)-0.037384033f, (float16_t)0.084106445f, (float16_t)0.14050293f,
+    (float16_t)0.347167969f, (float16_t)0.122924805f, (float16_t)0.545410156f, (float16_t)-0.418212891f, (float16_t)-0.110351562f, (float16_t)-0.005901337f, (float16_t)-0.254394531f, (float16_t)0.541992188f, (float16_t)-0.352539062f, (float16_t)0.579589844f, (float16_t)-0.234985352f, (float16_t)-0.061340332f, (float16_t)0.212402344f, (float16_t)-0.354003906f, (float16_t)-0.119384766f, (float16_t)0.294677734f,
+    (float16_t)0.585449219f, (float16_t)0.505371094f, (float16_t)0.519042969f, (float16_t)0.258056641f, (float16_t)0.33984375f, (float16_t)0.568847656f, (float16_t)0.368652344f, (float16_t)0.391113281f, (float16_t)-0.232543945f, (float16_t)0.247802734f, (float16_t)0.560058594f, (float16_t)-0.173461914f, (float16_t)0.052185059f, (float16_t)-0.027099609f, (float16_t)0.182617188f, (float16_t)0.366210938f,
+    (float16_t)-0.095214844f, (float16_t)-0.336181641f, (float16_t)-0.098449707f, (float16_t)0.30859375f, (float16_t)0.517578125f, (float16_t)-0.035003662f, (float16_t)0.044342041f, (float16_t)-0.016281128f, (float16_t)0.040222168f, (float16_t)0.092712402f, (float16_t)-0.248901367f, (float16_t)-0.2578125f
 };
 
-// Biases
+// Biases. Emitted whenever bias data exists, including when the kernel is
+// called with a NULL bias because the bias is folded into the weight sum:
+// consumers read the bias out of this decl.
 static const float16_t fully_connected_float_default_f16_biases[] = {
     (float16_t)0.080871582f, (float16_t)-0.224975586f, (float16_t)0.219482422f, (float16_t)0.21472168f, (float16_t)0.221557617f
 };
@@ -61,7 +63,7 @@ static const float16_t fully_connected_float_default_f16_input[] = {
 
 // Expected output (golden)
 static const float16_t fully_connected_float_default_f16_expected_output[] = {
-    (float16_t)-0.825195312f, (float16_t)0.308349609f, (float16_t)-0.212768555f, (float16_t)-0.716308594f, (float16_t)0.289794922f
+    (float16_t)0.150878906f, (float16_t)-0.185791016f, (float16_t)-0.840820312f, (float16_t)1.377929688f, (float16_t)-0.284179688f
 };
 
 #endif

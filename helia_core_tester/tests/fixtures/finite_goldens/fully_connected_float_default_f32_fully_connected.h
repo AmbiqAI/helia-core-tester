@@ -2,8 +2,8 @@
 #define FULLY_CONNECTED_FLOAT_DEFAULT_F32_FULLY_CONNECTED_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
@@ -42,13 +42,15 @@ static const cmsis_nn_fc_params_f32 fully_connected_float_default_f32_fc_params 
 
 // Weights
 static const float fully_connected_float_default_f32_weights[] = {
-    -0.473706365f, 0.546016574f, 0.14284724f, 0.259765327f, 0.223671138f, 0.329569042f, 0.327856302f, -0.102112502f, -0.091846168f, 0.052331269f, -0.546234488f, -0.21741271f, -0.443819404f, 0.219174623f, -0.129366517f, -0.298815638f,
-    -0.217593163f, -0.019773185f, 0.086775839f, 0.248784542f, 0.103772998f, 0.004890203f, -0.465551078f, -0.065797269f, 0.36142242f, -0.385493457f, 0.347569585f, 0.100618303f, 0.553967834f, 0.546589255f, -0.017306209f, -0.160514534f,
-    -0.446270376f, 0.118290126f, 0.153360784f, 0.537892938f, 0.240467727f, -0.202074915f, 0.362178802f, 0.034498394f, -0.221545249f, -0.131926686f, 0.07861048f, -0.411204278f, 0.449667692f, -0.156533808f, -0.479073763f, 0.108982146f,
-    -0.068009019f, 0.045535386f, -0.267778546f, -0.056851149f, -0.016631305f, 0.253105462f, 0.395894349f, -0.128010988f, 0.165942252f, 0.467531562f, -0.126936346f, -0.008867621f
+    0.287148476f, -0.342412829f, -0.026528358f, -0.272790104f, 0.510272861f, 0.150348067f, 0.467027664f, -0.188357174f, -0.520859063f, -0.51187259f, 0.390116215f, 0.430709243f, 0.560541034f, -0.03737545f, 0.084123135f, 0.140521646f,
+    0.347124994f, 0.122952104f, 0.545341015f, -0.418229401f, -0.110372066f, -0.005901337f, -0.254301608f, 0.542200327f, -0.352578461f, 0.579705358f, -0.235002786f, -0.061338961f, 0.212362766f, -0.35408622f, -0.119413614f, 0.294668496f,
+    0.585405469f, 0.505181909f, 0.518861055f, 0.258029878f, 0.339790463f, 0.56861949f, 0.368746042f, 0.391123712f, -0.232502669f, 0.247765243f, 0.560053587f, -0.173419505f, 0.052180946f, -0.027092934f, 0.182569146f, 0.366213918f,
+    -0.095229f, -0.336113453f, -0.098455459f, 0.308493018f, 0.517726064f, -0.034999371f, 0.044348478f, -0.016274333f, 0.040222168f, 0.09273994f, -0.24884218f, -0.257869989f
 };
 
-// Biases
+// Biases. Emitted whenever bias data exists, including when the kernel is
+// called with a NULL bias because the bias is folded into the weight sum:
+// consumers read the bias out of this decl.
 static const float fully_connected_float_default_f32_biases[] = {
     -0.128519893f, 0.028359354f, -0.226798117f, 0.017792165f, -0.151638269f
 };
@@ -61,7 +63,7 @@ static const float fully_connected_float_default_f32_input[] = {
 
 // Expected output (golden)
 static const float fully_connected_float_default_f32_expected_output[] = {
-    0.522731006f, 0.630026996f, 0.264863849f, 0.230960205f, -0.498260587f
+    -0.123398639f, -0.306719899f, -1.50585866f, -0.745988011f, 0.130703077f
 };
 
 #endif
