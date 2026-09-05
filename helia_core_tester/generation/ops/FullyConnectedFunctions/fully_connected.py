@@ -70,9 +70,10 @@ class OpFullyConnected(OperationBase):
         # The quantized magnitude has to clear one output quantization step,
         # or a dropped bias-add still reproduces the golden bit for bit. FC
         # sums far fewer terms than conv does, so the int suite's calibrated
-        # output range here is 3.1..6.7 rather than conv's 33..195, and the
-        # floor scales down with it: 0.125 buys over four output steps at the
-        # widest range while costing under a tenth of the dynamic range.
+        # output range here is 3.9..6.7 rather than conv's 33..195, and the
+        # floor scales down with it: at 0.125 the least detectable channel of
+        # any int FC case still shifts by 7.6 output steps, while the bias
+        # costs under a tenth of the calibrated dynamic range.
         _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
         if not use_bias:
             bias_initializer = 'zeros'
@@ -86,6 +87,7 @@ class OpFullyConnected(OperationBase):
             output_units,
             activation=None,
             use_bias=use_bias,
+            kernel_initializer=keras.initializers.GlorotUniform(seed=1234),
             bias_initializer=bias_initializer,
             name='dense'
         )(x)
@@ -649,6 +651,7 @@ class OpFullyConnected(OperationBase):
                 'weights_array': weights_array_str,
                 'biases_array': biases_array_str,
                 'has_biases': has_biases,
+                'has_bias_array': has_biases,
                 'input_data_array': input_data_array_str,
                 'expected_output_array': expected_output_array_str,
                 'input_dtype': kernel_info["input_c_type"],
@@ -804,6 +807,7 @@ class OpFullyConnected(OperationBase):
         # Compute weight sum if needed
         weight_sum = None
         has_weight_sum = False
+        folded_bias = None
         if weight_dtype != "S4" and self._should_precompute_weight_sum(weights, output_dtype):
             from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import vector_sum_s8
             
@@ -833,6 +837,7 @@ class OpFullyConnected(OperationBase):
             
             # If weight_sum is precomputed, biases are consumed into it
             if bias_data is not None:
+                folded_bias = bias_data
                 biases = None
         
         # Format arrays
@@ -867,7 +872,17 @@ class OpFullyConnected(OperationBase):
                 biases = biases.astype(np.int32)
             if has_biases:
                 biases_array_str = builder.format_array_as_c_literal(biases)
-        
+
+        # A bias folded into the kernel sum still has to appear as an array in
+        # the header. The kernel keeps taking a NULL bias pointer, but the
+        # perf-stream bridge reads the bias back out of the header decl, and a
+        # NULL decl is indistinguishable there from a zero bias, so the bridge
+        # would rebuild the kernel sum without the bias term.
+        has_bias_array = has_biases
+        if has_weight_sum and folded_bias is not None:
+            biases_array_str = builder.format_array_as_c_literal(folded_bias.astype(np.int32))
+            has_bias_array = True
+
         weight_sum_array_str = builder.format_array_as_c_literal(weight_sum) if weight_sum is not None else ""
         
         # Generate input data and run inference
@@ -975,6 +990,7 @@ class OpFullyConnected(OperationBase):
             'weights_array': weights_array_str,
             'biases_array': biases_array_str,
             'has_biases': has_biases,
+            'has_bias_array': has_bias_array,
             'input_data_array': input_data_array_str,
             'expected_output_array': expected_output_array_str,
             'input_dtype': kernel_info["input_c_type"],
