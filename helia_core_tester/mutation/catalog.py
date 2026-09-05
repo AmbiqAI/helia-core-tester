@@ -135,8 +135,8 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             "use_bias: false cases, the s16 convs, the five s4 cases that do not execute "
             "a mutated route (convolve_1x1_fast_s4, convolve_1x1_stride_s4, "
             "convolve_even_rhs50_lhs1_bias_s4, convolve_odd_rhs3_lhs1_bias_s4 and "
-            "convolve_odd_rhs5_lhs1_bias_s4 -- no s16 conv kernel and no "
-            "arm_nn_mat_mult_nt_t_s4 route is patched), and the FullyConnected cases "
+            "convolve_odd_rhs5_lhs1_bias_s4 -- no s4 route through "
+            "arm_nn_mat_mult_nt_t_s4 is patched), and the FullyConnected cases "
             "(the mutant touches conv kernels only) (tester#77)"
         ),
         refs=("AmbiqAI/helia-core-tester#77",),
