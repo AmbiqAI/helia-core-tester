@@ -118,7 +118,7 @@ class OpConvolve(OperationBase):
         # ADD whose operand lives in the output quantization domain, not at
         # accumulator scale. The golden is read from the model output, so a
         # nonzero bias there would disagree with the zero bias the kernel is
-        # handed. TODO(AmbiqAI/helia-core-tester#77): lift once the hoisted
+        # handed. TODO(#77): lift once the hoisted
         # operand can be converted back to an int32 accumulator bias.
         _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
         _bias_hoisted_by_lowering = not _case_is_float and any(d != 1 for d in dilation)

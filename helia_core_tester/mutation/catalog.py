@@ -11,16 +11,18 @@ skipped.
 
 Grounding of the v1 entries:
 
-- drop_conv_bias:        tester#77. The s8 and s4 int conv cases ship nonzero
-                         bias and detect the drop. Quantized dilated convs
-                         still survive it: the TFLite converter hoists their
-                         bias into a trailing Add, leaving the CONV_2D op a
-                         zero placeholder. No s16 conv kernel is mutated, so
-                         s16 cases never reach the deleted term. Covers the
-                         s8_s16 kernel, the s4 kernel, the 1xN/1x1 non-fast
-                         route (arm_nn_mat_mult_nt_t_s8), the grouped
-                         row-offset kernel, and the arm_convolve_s8 leftover
-                         loop.
+- drop_conv_bias:        tester#77. Measured against ns-cmsis-nn main in
+                         ghcr.io/ambiqai/ns-cmsis-nn-ci:latest on cortex-m4:
+                         44 cases kill it, 24 non-dilated s8 Convolve cases
+                         plus 20 s4 cases. Three groups survive by
+                         construction: quantized dilated convs, whose bias
+                         the TFLite converter hoists into a trailing Add and
+                         leaves as a zero placeholder on the CONV_2D op;
+                         use_bias: false cases; and every s16 case, because
+                         no s16 conv kernel is mutated. Covers the s8_s16
+                         kernel, the s4 kernel, the 1xN/1x1 non-fast route
+                         (arm_nn_mat_mult_nt_t_s8), the grouped row-offset
+                         kernel, and the arm_convolve_s8 leftover loop.
 - packed_sign_mask_343:  ns-cmsis-nn#343 (packed DSP loop masked the
                          sign-extended halfword with & 0x0FFFF, disagreeing
                          with its own scalar tail). The patch removes the
@@ -115,9 +117,11 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             ),
         ),
         expected_detected_by=(
-            "conv golden cases with a nonzero bias: the s8 and s4 suites kill it; quantized "
-            "dilated convs carry a zero bias the converter hoisted into a trailing Add and "
-            "survive, and no s16 conv kernel is mutated (tester#77)"
+            "conv golden cases with a nonzero bias. Measured on cortex-m4 against "
+            "ns-cmsis-nn main: 44 killers, 24 non-dilated s8 Convolve cases plus 20 s4 "
+            "cases. Survivors are the quantized dilated convs (bias hoisted into a "
+            "trailing Add by the converter), the use_bias: false cases, and all s16 "
+            "cases (no s16 conv kernel is mutated) (tester#77)"
         ),
         refs=("AmbiqAI/helia-core-tester#77",),
     ),
