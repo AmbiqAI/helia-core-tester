@@ -101,7 +101,7 @@ class TestResultParser:
         cycles = self._extract_cycles(output)
         memory_usage = self._extract_memory_usage(output)
         max_diff, max_tolerance_fraction = self._extract_float_maxdiff(output)
-        masked_lanes = self._extract_masked_lanes(output)
+        masked_lanes, masked_lanes_total = self._extract_masked_lanes(output)
 
         relevant_lines = self._extract_relevant_lines(lines)
         
@@ -133,6 +133,7 @@ class TestResultParser:
             max_diff=max_diff,
             max_tolerance_fraction=max_tolerance_fraction,
             masked_lanes=masked_lanes,
+            masked_lanes_total=masked_lanes_total,
         )
     
     def _extract_test_name(self, elf_path: Path) -> str:
@@ -308,17 +309,32 @@ class TestResultParser:
             return -1.0, -2.0
         return max_diff, (-1.0 if saw_zero_tol_violation else max_frac)
 
-    def _extract_masked_lanes(self, output: str) -> Optional[int]:
-        """Total don't-care lanes across every masked tensor, or None if unmasked.
+    def _extract_masked_lanes(self, output: str) -> Tuple[Optional[int], Optional[int]]:
+        """Masked lanes and the total they are out of, or (None, None) if unmasked.
 
-        A case with several validated outputs prints one line each, so the counts
+        A case with several validated outputs prints one line each, so both counts
         are summed; the plain validator prints nothing, which is what separates
-        "no lane was masked" (0) from "this case has no mask" (None).
+        "no lane was masked" (0) from "this case has no mask" (None). The total
+        travels with the count because k alone cannot distinguish one masked lane
+        in a thousand from one in two.
         """
         matches = self.masked_lanes_pattern.findall(output)
         if not matches:
-            return None
-        return sum(int(masked) for masked, _total in matches)
+            return None, None
+        masked_total = 0
+        lane_total = 0
+        for masked, total in matches:
+            masked_count, lane_count = int(masked), int(total)
+            if masked_count > lane_count:
+                # Only a corrupted or interleaved capture can produce this, and a
+                # masked fraction above 1 would be read as a real measurement.
+                raise ValueError(
+                    f"HELIA_MASKED_LANES reported {masked_count} masked lanes of "
+                    f"{lane_count}; the harness cannot mask more lanes than it compared"
+                )
+            masked_total += masked_count
+            lane_total += lane_count
+        return masked_total, lane_total
 
     def _extract_relevant_lines(self, lines: List[str]) -> List[str]:
         """Extract relevant output lines for debugging.

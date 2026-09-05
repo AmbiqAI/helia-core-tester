@@ -66,17 +66,19 @@ def test_finite_case_header_matches_the_checked_in_fixture(tmp_path: Path) -> No
         )
 
 
-# Phase 2a of #74 routes nine more operators through the shared sampler and moves
-# six validation call sites onto a shared Jinja macro. Both are refactors that must
-# not move a single finite golden, so one case per operator is pinned here -- .h for
-# the tensor data the sampling change could perturb, .c for the call site the macro
-# change could perturb. The fixtures were generated from the branch point before the
-# change; regenerating them is a deliberate act, not a way to make this pass.
+# Phase 2a of #74 routes more operators through the shared sampler and moves their
+# validation call sites onto a shared Jinja macro. Both are refactors that must not
+# move a single finite golden, so one case per operator is pinned here -- .h for the
+# tensor data the sampling change could perturb, .c for the call site the macro change
+# could perturb. Every fixture was generated from the state before the change it
+# guards; regenerating one is a deliberate act, not a way to make this pass.
 ROUTED_CASES = [
     ("abs_float_default_f32", "abs"),
     ("avg_pool_float_default_f32", "avg_pool"),
+    ("batch_norm_default_f32", "batch_norm"),
     ("concatenation_axis_x_f32", "concatenation"),
     ("max_pool_float_default_f32", "max_pool"),
+    ("minimum_float_default_f32", "minmax"),
     ("reduce_sum_float_axis_c_f32", "reduce_sum"),
     ("softmax_float_default_f32", "softmax"),
     ("split_float_channels_pairs_f16", "split"),

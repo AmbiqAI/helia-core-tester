@@ -197,9 +197,12 @@ input_2_shape: [1, 2, 3, 4]
 # zeros of opposite sign, and for any non-finite input, is unspecified", and goes on
 # to say the answer differs between the Helium leg (IEEE maxNum/minNum, which
 # suppress NaN) and the scalar leg, and between optimization levels, because the
-# shipped -Ofast implies -ffinite-math-only. So nonfinite_policy is mask: the
-# non-finite reference lanes are don't-care and the case asserts SUCCESS, no fault,
-# no hang, and that the finite lanes beside the tokens are untouched.
+# shipped -Ofast implies -ffinite-math-only. So nonfinite_policy is mask: the three
+# token lanes are don't-care -- min/max is pointwise, so a token reaches its own lane
+# and no other -- and the case asserts SUCCESS, no fault, no hang, and that the 125
+# finite lanes beside the tokens are untouched. Note this covers the -Inf lane too,
+# where min(-Inf, finite) is a perfectly finite reference: what the header declines to
+# specify is the kernel's choice there, not just the non-finite results.
 #
 # Only the left operand carries the sweep; the right stays finite, which is also the
 # pairing the header discusses (non-NaN operand versus NaN operand).

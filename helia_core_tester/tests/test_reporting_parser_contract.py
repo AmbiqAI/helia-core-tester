@@ -383,9 +383,9 @@ def test_parser_lone_empty_tensor_still_reports_the_sentinel() -> None:
 def test_parser_records_masked_lane_count_and_still_requires_success() -> None:
     # A mask-policy case (issue #74) passes on the same terms as any other: the
     # kernel returned SUCCESS and the harness printed zero failures. The mask
-    # only removes lanes from the comparison, so the count is recorded to keep
-    # "passed with one lane masked" distinguishable from "passed with all of
-    # them masked".
+    # only removes lanes from the comparison, so the count and the total it is
+    # out of are both recorded: "passed with 3 of 128 masked" and "passed with
+    # 3 of 4 masked" are different claims and k alone cannot tell them apart.
     parser = reporting_parser.TestResultParser()
     result = parser.parse_fvp_output(
         output=(
@@ -400,10 +400,16 @@ def test_parser_records_masked_lane_count_and_still_requires_success() -> None:
     )
     assert result.status == reporting_models.TestStatus.PASS
     assert result.masked_lanes == 3
+    assert result.masked_lanes_total == 128
     assert result.to_dict()["masked_lanes"] == 3
+    assert result.to_dict()["masked_lanes_total"] == 128
 
 
 def test_parser_sums_masked_lane_lines_across_outputs() -> None:
+    # One summary line per validated output tensor, so a case with several outputs
+    # prints several and both the counts and the totals have to add up. No shipped
+    # mask-policy case has more than one output yet; the parser has to be right
+    # before one does.
     parser = reporting_parser.TestResultParser()
     result = parser.parse_fvp_output(
         output=(
@@ -411,12 +417,28 @@ def test_parser_sums_masked_lane_lines_across_outputs() -> None:
             "HELIA_MASKED_LANES: 1 of 8\n"
             "0 Failures\n"
         ),
-        elf_path=Path("split_float_nonfinite_f32.elf"),
+        elf_path=Path("max_pool_float_nonfinite_nan_f32.elf"),
         cpu="cortex-m55",
         duration=0.1,
         exit_code=0,
     )
     assert result.masked_lanes == 3
+    assert result.masked_lanes_total == 16
+
+
+def test_parser_rejects_more_masked_lanes_than_compared() -> None:
+    # k > n cannot come from the runtime, so it means the capture is corrupt or
+    # interleaved; silently recording a masked fraction above 1 would read as a
+    # measurement.
+    parser = reporting_parser.TestResultParser()
+    with pytest.raises(ValueError, match="cannot mask more lanes than it compared"):
+        parser.parse_fvp_output(
+            output="HELIA_MASKED_LANES: 9 of 8\n0 Failures\n",
+            elf_path=Path("max_pool_float_nonfinite_nan_f32.elf"),
+            cpu="cortex-m55",
+            duration=0.1,
+            exit_code=0,
+        )
 
 
 def test_parser_leaves_masked_lanes_unset_without_the_summary_line() -> None:
@@ -429,7 +451,9 @@ def test_parser_leaves_masked_lanes_unset_without_the_summary_line() -> None:
         exit_code=0,
     )
     assert result.masked_lanes is None
+    assert result.masked_lanes_total is None
     assert "masked_lanes" not in result.to_dict()
+    assert "masked_lanes_total" not in result.to_dict()
 
 
 def test_parser_fails_a_masked_case_that_faults_or_times_out() -> None:

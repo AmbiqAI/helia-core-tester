@@ -198,6 +198,7 @@ paddings:
   - [0, 0]
 pad_value: 0.25
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 ---
 operator: Pad
 name: pad_float_nonfinite_f16
@@ -213,3 +214,4 @@ paddings:
   - [0, 0]
 pad_value: 0.25
 input_mode: nonfinite_sweep
+nonfinite_policy: strict

@@ -121,6 +121,7 @@ tensor_dtypes:
 input_shape: [1, 2, 4, 3]
 target_shape: [1, 4, 2, 3]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 ---
 operator: Reshape
 name: reshape_float_nonfinite_f16
@@ -131,3 +132,4 @@ tensor_dtypes:
 input_shape: [1, 2, 4, 3]
 target_shape: [1, 4, 2, 3]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict

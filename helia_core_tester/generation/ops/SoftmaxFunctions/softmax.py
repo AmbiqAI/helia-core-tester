@@ -403,9 +403,13 @@ class OpSoftmax(OperationBase):
             self.rng.__setstate__(rng_state)
 
         if float_kernel:
-            shifted = input_q.astype(np.float32) - np.max(input_q.astype(np.float32), axis=-1, keepdims=True)
-            exp_vals = np.exp(shifted)
-            output_data = (exp_vals / np.sum(exp_vals, axis=-1, keepdims=True)).astype(input_q.dtype)
+            def float_reference(operands, _dtype=input_q.dtype):
+                values = operands[0].astype(np.float32)
+                shifted = values - np.max(values, axis=-1, keepdims=True)
+                exp_vals = np.exp(shifted)
+                return (exp_vals / np.sum(exp_vals, axis=-1, keepdims=True)).astype(_dtype)
+
+            output_data = float_reference([input_q])
         elif force_cmsis:
             hint = self.desc.get("hint", {})
             if isinstance(hint, dict) and "diff_min" in hint:
@@ -435,7 +439,12 @@ class OpSoftmax(OperationBase):
             output_data = np.array(output_data)
         
         # Format arrays
-        output_data, nonfinite_context = self.apply_nonfinite_policy(output_data)
+        if float_kernel:
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=float_reference, inputs=[input_q]
+            )
+        else:
+            nonfinite_context = {}
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
         

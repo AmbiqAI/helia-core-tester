@@ -162,10 +162,12 @@ class OpMinMax(BinaryBasicMathBase):
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
             input1_q = input1_data.astype(float_dtype)
             input2_q = input2_data.astype(float_dtype)
-            if op_name == "Maximum":
-                output_data = np.maximum(input1_q, input2_q).astype(float_dtype)
-            else:
-                output_data = np.minimum(input1_q, input2_q).astype(float_dtype)
+
+            def float_reference(operands, _dtype=float_dtype, _op=op_name):
+                combine = np.maximum if _op == "Maximum" else np.minimum
+                return combine(operands[0], operands[1]).astype(_dtype)
+
+            output_data = float_reference([input1_q, input2_q])
         elif kernel_info["input_c_type"] == "int8_t":
             np_in_dtype = np.int8
             qmin, qmax = -128, 127
@@ -209,6 +211,11 @@ class OpMinMax(BinaryBasicMathBase):
                         interpreter.invoke()
                         output_data = np.array(interpreter.get_tensor(output_details[0]['index']))
                     except (ValueError, RuntimeError):
+                        if self.input_mode() == "nonfinite_sweep":
+                            # A mask is only meaningful if one reference produced it. Falling
+                            # back here would make the don't-care set depend on whether the
+                            # generation host's interpreter accepted the model.
+                            raise
                         output_data = np.maximum(input1_q, input2_q) if op_name == "Maximum" else np.minimum(input1_q, input2_q)
                 else:
                     output_data = np.maximum(input1_q, input2_q) if op_name == "Maximum" else np.minimum(input1_q, input2_q)
@@ -216,7 +223,12 @@ class OpMinMax(BinaryBasicMathBase):
                 output_data = np.maximum(input1_q, input2_q) if op_name == "Maximum" else np.minimum(input1_q, input2_q)
         
         # Format arrays
-        output_data, nonfinite_context = self.apply_nonfinite_policy(output_data)
+        if float_kernel:
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=float_reference, inputs=[input1_q, input2_q]
+            )
+        else:
+            nonfinite_context = {}
         input1_array_str = builder.format_array_as_c_literal(input1_q)
         input2_array_str = builder.format_array_as_c_literal(input2_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)

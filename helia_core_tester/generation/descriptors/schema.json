@@ -183,7 +183,7 @@
       "uniqueItems": true
     },
     "nonfinite_policy": {
-      "description": "How the golden is compared for a 'nonfinite_sweep' case. 'strict' (default) asserts the reference value on every lane, and is only legitimate where ns-cmsis-nn documents the behaviour or the operator is pure data movement. 'mask' marks the lanes whose reference output is non-finite as don't-care and asserts SUCCESS plus every finite lane, for kernels that document nothing or declare the result unspecified. Only meaningful with input_mode 'nonfinite_sweep'.",
+      "description": "How the golden is compared for a 'nonfinite_sweep' case; required whenever input_mode is 'nonfinite_sweep' and rejected otherwise. 'strict' asserts the reference value on every lane, and is only legitimate where ns-cmsis-nn documents the behaviour or the operator is pure data movement. 'mask' marks as don't-care every lane whose reference output is non-finite and every lane a token can reach, and asserts SUCCESS plus every remaining finite lane, for kernels that document nothing or declare the result unspecified.",
       "type": "string",
       "enum": ["strict", "mask"]
     },
@@ -721,6 +721,16 @@
       "$comment": "DynamicUpdateSlice requires operand_shape, update_shape, start_indices",
       "if": { "properties": { "operator": { "const": "DynamicUpdateSlice" } } },
       "then": { "required": ["operand_shape", "update_shape", "start_indices"] }
+    },
+    {
+      "$comment": "A sweep case has to say how its golden is compared. There is no safe default: 'strict' pins a value ns-cmsis-nn may not contract, 'mask' drops lanes a contracted kernel should be asserting, and which one applies is a per-kernel question the descriptor author has to answer.",
+      "if": {
+        "properties": { "input_mode": { "const": "nonfinite_sweep" } },
+        "required": ["input_mode"]
+      },
+      "then": {
+        "required": ["nonfinite_policy"]
+      }
     }
   ]
 }

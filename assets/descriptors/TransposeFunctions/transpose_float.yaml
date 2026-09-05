@@ -217,8 +217,9 @@ hint:
 # Non-finite cover for the float transpose kernels. A permutation is a bijection on
 # the elements, so bit-exact pass-through of NaN, +Inf and -Inf is the only correct
 # behaviour and the policy is strict. No contract citation is available or needed: a
-# copy has nothing to specify. The tokens sit at input flat positions 0..2 and the
-# golden places them wherever the permutation sends them.
+# copy has nothing to specify. The permutation is pinned to [0, 3, 1, 2] so the three
+# tokens at input flat 0..2 land at output flat 0, 6 and 12: a kernel that copied
+# straight through instead of permuting would leave them at 0..2 and fail.
 operator: Transpose
 name: transpose_float_nonfinite_f32
 suite: float
@@ -227,6 +228,9 @@ tensor_dtypes:
   output: FP32
 input_shape: [1, 2, 3, 4]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
+hint:
+  force_permutation: [0, 3, 1, 2]
 ---
 operator: Transpose
 name: transpose_float_nonfinite_f16
@@ -236,3 +240,6 @@ tensor_dtypes:
   output: FP16
 input_shape: [1, 2, 3, 4]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
+hint:
+  force_permutation: [0, 3, 1, 2]

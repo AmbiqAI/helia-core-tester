@@ -223,6 +223,11 @@ activation_max: 3.4028234663852886e+38
 # depends on where in the window the NaN falls; the kernel's own MVE leg uses VMAXNM
 # (IEEE maxNum), which suppresses NaN and returns the numeric operand. The two need
 # not agree, which is exactly why the affected window is masked instead of pinned.
+#
+# The -Inf case is the same problem with a finite reference: max(-Inf, x) is just x,
+# so nothing in the golden looks non-finite, yet which value the kernel writes there
+# still depends on a fold order the header does not specify. The mask covers every
+# lane a token can reach, not only the lanes where the reference went non-finite.
 operator: MaxPool
 name: max_pool_float_nonfinite_nan_f32
 suite: float

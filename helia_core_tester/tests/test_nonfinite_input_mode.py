@@ -176,11 +176,21 @@ def test_a_requested_sweep_that_no_helper_consumed_is_a_generation_error() -> No
     guard a nonfinite_sweep descriptor on one of them would generate an ordinary finite
     case and pass on hardware while asserting nothing about non-finite behaviour.
     """
-    unconsumed = _op(name="never_swept", input_mode="nonfinite_sweep", suite="float")
+    unconsumed = _op(
+        name="never_swept",
+        input_mode="nonfinite_sweep",
+        nonfinite_policy="strict",
+        suite="float",
+    )
     with pytest.raises(ValueError, match="never applied it"):
         unconsumed.assert_input_mode_consumed()
 
-    consumed = _op(name="swept", input_mode="nonfinite_sweep", suite="float")
+    consumed = _op(
+        name="swept",
+        input_mode="nonfinite_sweep",
+        nonfinite_policy="strict",
+        suite="float",
+    )
     consumed._sample_uniform((1, 8))
     consumed.assert_input_mode_consumed()
 
@@ -206,32 +216,141 @@ def test_every_descriptor_nonfinite_policy_value_is_in_the_schema_enum() -> None
             assert doc.get("input_mode") == "nonfinite_sweep", (path.name, doc.get("name"))
 
 
-def test_policy_defaults_to_strict_and_emits_no_mask() -> None:
-    op = _op(name="plain", input_mode="nonfinite_sweep", suite="float")
+def test_every_sweep_descriptor_declares_a_policy() -> None:
+    """A sweep case with no policy would be answered by a default, and which policy
+    applies is a per-kernel contract question no default can answer."""
+    seen = 0
+    for path in sorted((_repo_root() / "assets" / "descriptors").rglob("*.yaml")):
+        for doc in yaml.safe_load_all(path.read_text()):
+            if not isinstance(doc, dict) or doc.get("input_mode") != "nonfinite_sweep":
+                continue
+            seen += 1
+            assert "nonfinite_policy" in doc, (path.name, doc.get("name"))
+    assert seen
+
+
+def test_schema_requires_a_policy_alongside_a_sweep() -> None:
+    gates = [
+        block
+        for block in _schema()["allOf"]
+        if block.get("then", {}).get("required") == ["nonfinite_policy"]
+    ]
+    assert len(gates) == 1
+    assert gates[0]["if"] == {
+        "properties": {"input_mode": {"const": "nonfinite_sweep"}},
+        "required": ["input_mode"],
+    }
+
+
+def test_a_sweep_without_a_policy_is_rejected() -> None:
+    with pytest.raises(ValueError, match="without nonfinite_policy"):
+        _op(name="plain", input_mode="nonfinite_sweep", suite="float").nonfinite_policy()
+
+
+def test_strict_policy_emits_no_mask() -> None:
+    op = _op(
+        name="plain",
+        input_mode="nonfinite_sweep",
+        nonfinite_policy="strict",
+        suite="float",
+    )
     assert op.nonfinite_policy() == "strict"
     reference = np.array([float("nan"), 1.0, 2.0], dtype=np.float32)
-    emitted, context = op.apply_nonfinite_policy(reference)
+    emitted, context = op.apply_nonfinite_policy(
+        reference, reference=lambda operands: reference, inputs=[reference]
+    )
     assert context == {}
     assert emitted is reference
 
 
-def test_mask_policy_marks_the_nonfinite_reference_lanes_and_zeroes_them() -> None:
-    op = _op(
+def _masking_op():
+    return _op(
         name="masked",
         input_mode="nonfinite_sweep",
         nonfinite_policy="mask",
         suite="float",
     )
-    reference = np.array(
-        [float("nan"), float("inf"), float("-inf"), 1.5], dtype=np.float32
+
+
+def test_mask_covers_a_finite_lane_the_token_reaches() -> None:
+    """The max_pool -Inf shape: every window output is finite, so a mask built from
+    the reference alone would be empty and the case would pin the kernel's own fold
+    order for the window that saw the token."""
+    op = _masking_op()
+    swept = np.array([float("-inf"), 1.0, 2.0, 3.0], dtype=np.float32)
+
+    def windowed_max(operands):
+        values = operands[0]
+        return np.array(
+            [np.max(values[index : index + 2]) for index in range(3)], dtype=np.float32
+        )
+
+    golden = windowed_max([swept])
+    assert np.isfinite(golden).all()
+
+    emitted, context = op.apply_nonfinite_policy(
+        golden, reference=windowed_max, inputs=[swept]
     )
-    emitted, context = op.apply_nonfinite_policy(reference)
+
+    assert context["nonfinite_masked_lanes"] == 1
+    assert _mask_bytes(context) == [1, 0, 0]
+    assert emitted.tolist() == [0.0, 2.0, 3.0]
+
+
+def test_mask_covers_the_nonfinite_reference_lanes_and_zeroes_them() -> None:
+    op = _masking_op()
+    swept = np.array([float("nan"), float("inf"), float("-inf"), 1.5], dtype=np.float32)
+
+    def passthrough(operands):
+        return operands[0].astype(np.float32)
+
+    emitted, context = op.apply_nonfinite_policy(
+        passthrough([swept]), reference=passthrough, inputs=[swept]
+    )
 
     assert context["nonfinite_masked_lanes"] == 3
-    assert [int(v) for v in context["nonfinite_mask_array_str"].replace(",", " ").split()] == [1, 1, 1, 0]
+    assert _mask_bytes(context) == [1, 1, 1, 0]
     # The header must stay finite-only: the masked entries are written as zero.
     assert emitted.tolist() == [0.0, 0.0, 0.0, 1.5]
     assert emitted.dtype == np.float32
+
+
+def test_reachability_survives_a_symmetric_reference() -> None:
+    """Two probes of opposite sign coincide under abs, which would read as
+    unreachable; the third probe is what breaks the tie."""
+    op = _masking_op()
+    swept = np.array([float("nan"), 1.0, 2.0, 3.0], dtype=np.float32)
+
+    reachable = op._nonfinite_reachable_lanes(
+        lambda operands: np.abs(operands[0]).astype(np.float32), [swept], (4,)
+    )
+    assert reachable.tolist() == [True, False, False, False]
+
+
+def test_mask_policy_needs_an_input_carrying_a_token() -> None:
+    op = _masking_op()
+    finite = np.array([1.0, 2.0], dtype=np.float32)
+    with pytest.raises(ValueError, match="no input handed to apply_nonfinite_policy"):
+        op.apply_nonfinite_policy(
+            finite, reference=lambda operands: operands[0], inputs=[finite]
+        )
+
+
+def test_a_fully_masked_case_fails_generation() -> None:
+    """Masking every lane leaves nothing but SUCCESS asserted, which is a case that
+    passes whatever the kernel writes."""
+    op = _masking_op()
+    swept = np.array([float("nan"), 1.0], dtype=np.float32)
+
+    def total(operands):
+        return np.array([np.sum(operands[0])] * 2, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="masks all 2 output lanes"):
+        op.apply_nonfinite_policy(total([swept]), reference=total, inputs=[swept])
+
+
+def _mask_bytes(context) -> list[int]:
+    return [int(v) for v in context["nonfinite_mask_array_str"].replace(",", " ").split()]
 
 
 def test_mask_policy_without_a_sweep_is_rejected() -> None:
@@ -265,15 +384,21 @@ def test_a_mask_policy_the_op_never_applied_is_a_generation_error() -> None:
     with pytest.raises(ValueError, match="never called apply_nonfinite_policy"):
         op.assert_input_mode_consumed()
 
-    op.apply_nonfinite_policy(np.array([float("nan"), 1.0], dtype=np.float32))
+    swept = np.array([float("nan"), 1.0], dtype=np.float32)
+    op.apply_nonfinite_policy(
+        swept, reference=lambda operands: operands[0].astype(np.float32), inputs=[swept]
+    )
     op.assert_input_mode_consumed()
 
 
-def test_spreading_descriptors_sweep_a_single_token() -> None:
-    """A reduction group holding both infinities would make the golden say
-    (+Inf) + (-Inf) instead of anything about the kernel."""
+def test_strict_spreading_descriptors_sweep_a_single_token() -> None:
+    """A strict reduction group holding both infinities would make the golden say
+    (+Inf) + (-Inf) instead of anything about the kernel. Under mask the group is
+    don't-care, so several tokens in one group are allowed -- that is how the
+    AmbiqAI/ns-cmsis-nn#429 shape is built."""
     spreading_prefixes = ("mean_", "reduce_sum_", "softmax_", "avg_pool_", "max_pool_")
     seen = 0
+    multi_token_masked = 0
     for path in sorted((_repo_root() / "assets" / "descriptors").rglob("*.yaml")):
         for doc in yaml.safe_load_all(path.read_text()):
             if not isinstance(doc, dict) or doc.get("input_mode") != "nonfinite_sweep":
@@ -282,8 +407,13 @@ def test_spreading_descriptors_sweep_a_single_token() -> None:
             if not name.startswith(spreading_prefixes):
                 continue
             seen += 1
-            assert len(doc.get("nonfinite_tokens", [])) == 1, name
+            tokens = doc.get("nonfinite_tokens", [])
+            if doc["nonfinite_policy"] == "mask" and len(tokens) > 1:
+                multi_token_masked += 1
+                continue
+            assert len(tokens) == 1, name
     assert seen
+    assert multi_token_masked == 4, "the #429 mean/reduce_sum pairs went missing"
 
 
 # --- C serialization --------------------------------------------------------

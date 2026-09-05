@@ -92,15 +92,18 @@ input_shape: [1, 3, 4, 5]
 axes: [1]
 required_kernel_symbols: [arm_nn_mean_f16]
 ---
-# Non-finite cover for the float Mean kernels. ns-cmsis-nn
-# Include/arm_nnfunctions_flt.h:1261-1313 documents "NaN and Inf propagate" for
-# arm_reduce_sum_f32/f16 and arm_nn_mean_f32/f16, so these lanes are strict.
+# Non-finite cover for the float Mean kernels. The arm_reduce_sum_f32 and
+# arm_nn_mean_f32 doxygen blocks in ns-cmsis-nn Include/arm_nnfunctions_flt.h both
+# state "NaN and Inf propagate" (the f16 entries @copydoc them), so these lanes are
+# strict.
 #
-# One token per case, deliberately. A reduction folds a whole group into one output
-# element, so a case carrying both +Inf and -Inf would put them in the same group and
-# the golden would be NaN from the (+Inf) + (-Inf) alone -- a result about IEEE
-# addition, not about the kernel. With one token the swept group's expected value is
-# the token itself and every other group stays finite and fully asserted.
+# One token per case for the strict cases, deliberately. A reduction folds a whole
+# group into one output element, so a case carrying both +Inf and -Inf would put them
+# in the same group and the golden would be NaN from the (+Inf) + (-Inf) alone -- a
+# result about IEEE addition, not about the kernel. With one token the swept group's
+# expected value is the token itself and every other group stays finite and fully
+# asserted. The two-token pair at the end of this file is the deliberate exception and
+# masks that one group instead of pinning it.
 #
 # The same header warns that the float32 accumulator can itself saturate to +/-Inf
 # depending on accumulation order, and that vector and scalar builds may disagree
@@ -115,6 +118,7 @@ tensor_dtypes:
 input_shape: [1, 3, 4, 5]
 axes: [3]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 nonfinite_tokens: [nan]
 required_kernel_symbols: [arm_nn_mean_f32]
 ---
@@ -127,6 +131,7 @@ tensor_dtypes:
 input_shape: [1, 3, 4, 5]
 axes: [3]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 nonfinite_tokens: [inf]
 required_kernel_symbols: [arm_nn_mean_f32]
 ---
@@ -139,6 +144,7 @@ tensor_dtypes:
 input_shape: [1, 3, 4, 5]
 axes: [3]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 nonfinite_tokens: [-inf]
 required_kernel_symbols: [arm_nn_mean_f32]
 ---
@@ -151,6 +157,7 @@ tensor_dtypes:
 input_shape: [1, 3, 4, 5]
 axes: [3]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 nonfinite_tokens: [nan]
 required_kernel_symbols: [arm_nn_mean_f16]
 ---
@@ -163,6 +170,7 @@ tensor_dtypes:
 input_shape: [1, 3, 4, 5]
 axes: [3]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 nonfinite_tokens: [inf]
 required_kernel_symbols: [arm_nn_mean_f16]
 ---
@@ -175,5 +183,41 @@ tensor_dtypes:
 input_shape: [1, 3, 4, 5]
 axes: [3]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 nonfinite_tokens: [-inf]
+required_kernel_symbols: [arm_nn_mean_f16]
+---
+# The AmbiqAI/ns-cmsis-nn#429 shape: +Inf and -Inf inside ONE reduction group, which
+# is what the issue reports hanging the f16 reduction at -Ofast. The single-token
+# cases above cannot produce it, because a group needs both infinities before the
+# fold can reach Inf + (-Inf). Group 0 (the leading five elements of the last axis)
+# therefore holds both tokens and its reference is NaN, so this pair is the one place
+# the reduction descriptors use nonfinite_policy: mask -- NaN is what IEEE addition
+# gives, not something the header contracts about the kernel's fold order. The other
+# eleven groups stay finite and fully asserted, and the case asserts SUCCESS and no
+# timeout, which is the part that would catch #429.
+operator: Mean
+name: mean_float_nonfinite_two_token_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 3, 4, 5]
+axes: [3]
+input_mode: nonfinite_sweep
+nonfinite_policy: mask
+nonfinite_tokens: [inf, -inf]
+required_kernel_symbols: [arm_nn_mean_f32]
+---
+operator: Mean
+name: mean_float_nonfinite_two_token_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 3, 4, 5]
+axes: [3]
+input_mode: nonfinite_sweep
+nonfinite_policy: mask
+nonfinite_tokens: [inf, -inf]
 required_kernel_symbols: [arm_nn_mean_f16]

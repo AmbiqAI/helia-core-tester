@@ -219,12 +219,23 @@ class PoolFamilyBase(OperationBase):
         
         if float_kernel:
             interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
-            output_data = self.run_inference(str(tflite_path), input_q.astype(interpreter_input_dtype)).astype(float_dtype)
+
+            def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
+                return self.run_inference(
+                    str(tflite_path), operands[0].astype(_in_dtype)
+                ).astype(_dtype)
+
+            output_data = float_reference([input_q])
         else:
             output_data = self.run_inference(str(tflite_path), input_q)
         
         # Format input and output arrays
-        output_data, nonfinite_context = self.apply_nonfinite_policy(output_data)
+        if float_kernel:
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=float_reference, inputs=[input_q]
+            )
+        else:
+            nonfinite_context = {}
         input_data_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
         

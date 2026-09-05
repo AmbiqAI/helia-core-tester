@@ -289,6 +289,7 @@ begin: [0, 0, 0, 0]
 end: [2, 3, 4, 2]
 strides: [1, 1, 1, 1]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 ---
 operator: StridedSlice
 name: strided_slice_float_nonfinite_f16
@@ -301,3 +302,4 @@ begin: [0, 0, 0, 0]
 end: [2, 3, 4, 2]
 strides: [1, 1, 1, 1]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict

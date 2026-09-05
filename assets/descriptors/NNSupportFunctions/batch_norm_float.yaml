@@ -83,9 +83,10 @@ input_shape: [1, 2, 2, 9]
 layout: ARM_NN_LAYOUT_NHWC
 ---
 # Non-finite cover for the float batch-norm kernels. arm_batch_norm_f32/f16 document
-# no non-finite behaviour, so nonfinite_policy is mask: the lanes whose reference
-# output is non-finite are don't-care and the case asserts SUCCESS, no fault, no
-# hang, and correct finite lanes around the tokens.
+# no non-finite behaviour, so nonfinite_policy is mask: the three token lanes are
+# don't-care -- the scale-and-shift is pointwise, so a token reaches its own lane and
+# no other -- and the case asserts SUCCESS, no fault, no hang, and correct values in
+# every finite lane around the tokens.
 operator: BatchNorm
 name: batch_norm_nonfinite_f32
 suite: float

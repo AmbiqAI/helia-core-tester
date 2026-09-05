@@ -105,9 +105,15 @@ class OpReduceSum(OperationBase):
 
         # Golden with float32 accumulation for both dtypes, matching the
         # kernels' documented semantics (single final rounding for f16).
-        output_data = np.sum(
-            input_q.astype(np.float32), axis=tuple(axes), keepdims=True
-        ).astype(float_dtype)
+        def reference(operands):
+            return np.sum(
+                operands[0].astype(np.float32), axis=tuple(axes), keepdims=True
+            ).astype(float_dtype)
+
+        output_data = reference([input_q])
+        output_data, nonfinite_context = self.apply_nonfinite_policy(
+            output_data, reference=reference, inputs=[input_q]
+        )
 
         context = {
             'name': name,
@@ -122,6 +128,7 @@ class OpReduceSum(OperationBase):
             'float_kernel': True,
             'validation_mode': 'float',
         }
+        context.update(nonfinite_context)
 
         cmake_context = {
             'name': name,

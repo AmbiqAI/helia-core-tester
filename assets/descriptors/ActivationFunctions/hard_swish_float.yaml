@@ -71,6 +71,7 @@ tensor_dtypes:
   output: FP32
 input_shape: [1, 4, 4, 8]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 required_kernel_symbols: [arm_hard_swish_f32]
 ---
 operator: HardSwishPrecise
@@ -81,4 +82,5 @@ tensor_dtypes:
   output: FP16
 input_shape: [1, 4, 4, 8]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 required_kernel_symbols: [arm_hard_swish_f16]
