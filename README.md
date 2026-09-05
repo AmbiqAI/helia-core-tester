@@ -256,6 +256,31 @@ smaller probes stay correct on the same compiler either way. The Arm targets are
 their classification call sites counted, not executed, with the toolchains and results recorded
 in the pull request.
 
+## Pipeline efficiency
+
+Defaults chosen so a repeat run is cheap and a hung kernel cannot wedge a leg.
+
+Generation reuse:
+- each generated case carries a `.stamp` over its descriptor document, the case name, target CPU, suite, float precision, seed, and a generator-version hash (the generation sources, the templates under `assets/`, and the pinned TensorFlow/LiteRT versions).
+- a case whose stamp still matches is reused: no TFLite conversion, no inference, no file emission. Its manifest entry is rebuilt from the on-disk sidecar, so build and run see the same tree either way.
+- capability and kernel-symbol skips are re-evaluated every run, because a different ns-cmsis-nn checkout can add or remove a symbol.
+- `generation_summary.json` and `manifest.json` record generated versus reused counts.
+- `--force-generate` (also `force_generate` in `helia_core_tester.toml`, `HELIA_CORE_TESTER_FORCE_GENERATE`) regenerates everything.
+- cases outside the active filter are pruned from the tree at the end of a run.
+
+Parallel FVP runs:
+- `--run-jobs` defaults to `min(host cores, 4)`. FVP boot dominates per-case time, so parallelism is the lever that matters, but an unbounded default on a shared or metered runner is a cost risk.
+- `--run-jobs 0` is the explicit opt-in for every host core; `HELIA_CORE_TESTER_RUN_JOBS` overrides either way.
+
+Per-case timeout:
+- `--timeout` defaults to 180 seconds per case. A timed-out case is reported as a `TIMEOUT` case and rendered as a JUnit failure with its own message, rather than blocking the run until the CI job cap with no per-case result.
+- `--timeout 0` disables it. The masked non-finite policy's "returns SUCCESS and does not time out" only holds with a timeout in force.
+
+Compiler cache (opt-in):
+- when `ccache` or `sccache` is on `PATH`, the CMake configure adds `CMAKE_C_COMPILER_LAUNCHER` (and the ASM launcher on CMake versions that honour it) and logs which launcher it picked.
+- `HELIA_CORE_TESTER_COMPILER_LAUNCHER` names a specific tool.
+- no image ships either tool; a host without one builds exactly as before.
+
 ## Coverage Merge
 
 ```bash
