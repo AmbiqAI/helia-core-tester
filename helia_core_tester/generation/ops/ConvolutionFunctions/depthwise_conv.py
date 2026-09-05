@@ -102,7 +102,7 @@ class OpDepthwiseConv(OperationBase):
             # the DEPTHWISE_CONV_2D op a zero placeholder bias and moves the
             # real one into the trailing Add at output quantization scale. Those
             # cases ship an all-zero bias whatever is set here, and cannot
-            # detect a dropped bias-add. TODO(#77): lift once the hoisted
+            # detect a dropped bias-add. TODO(#98): lift once the hoisted
             # operand can be converted back to an int32 accumulator bias.
             dwconv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(minval=-1.0, maxval=1.0)
         
