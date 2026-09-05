@@ -262,6 +262,12 @@ class OpConcatenation(OperationBase):
                     input_q = self.rng.uniform(-2.0, 2.0, size=input_shape).astype(np_in_dtype)
                 else:
                     input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
+            # Only the first operand carries a non-finite sweep: concatenation is a
+            # copy, so one token-bearing operand is enough to see whether the tokens
+            # arrive intact, and the untouched operands stay available as finite
+            # neighbours that must not be disturbed.
+            if i == 0:
+                input_q = self._maybe_apply_input_mode(input_q)
             input_q_list.append(input_q)
             input_array_strs.append(builder.format_array_as_c_literal(input_q))
         

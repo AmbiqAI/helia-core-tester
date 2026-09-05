@@ -48,6 +48,8 @@ class OpBatchNorm(OperationBase):
             + bias.astype(np.float32).reshape((1, 1, 1, channels))
         ).astype(float_dtype)
 
+        output_data, nonfinite_context = self.apply_nonfinite_policy(output_data)
+
         builder = TemplateContextBuilder()
         context = {
             "name": name,
@@ -62,6 +64,7 @@ class OpBatchNorm(OperationBase):
             "output_dtype": data_dtype,
             "kernel_fn": kernel_fn,
         }
+        context.update(nonfinite_context)
 
         cmake_context = {
             "name": name,

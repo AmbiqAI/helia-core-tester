@@ -1,3 +1,8 @@
+# Non-finite inputs are not possible for this operator and no case is added. The
+# dequantize kernels take S8 or S16 and every value in those types is finite; the
+# output is a scale-and-offset of a finite integer, so no NaN or infinity can enter
+# or leave. The float non-finite sweep has nothing to write here.
+
 operator: Dequantize
 name: dequantize_float_s8_f32_vec17
 suite: float

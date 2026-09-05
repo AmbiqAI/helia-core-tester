@@ -64,3 +64,66 @@ def test_finite_case_header_matches_the_checked_in_fixture(tmp_path: Path) -> No
             f"({_fixture_path()}); sha256 {hashlib.sha256(emitted.encode()).hexdigest()} "
             f"vs {hashlib.sha256(expected.encode()).hexdigest()}"
         )
+
+
+# Phase 2a of #74 routes nine more operators through the shared sampler and moves
+# six validation call sites onto a shared Jinja macro. Both are refactors that must
+# not move a single finite golden, so one case per operator is pinned here -- .h for
+# the tensor data the sampling change could perturb, .c for the call site the macro
+# change could perturb. The fixtures were generated from the branch point before the
+# change; regenerating them is a deliberate act, not a way to make this pass.
+ROUTED_CASES = [
+    ("abs_float_default_f32", "abs"),
+    ("avg_pool_float_default_f32", "avg_pool"),
+    ("concatenation_axis_x_f32", "concatenation"),
+    ("max_pool_float_default_f32", "max_pool"),
+    ("reduce_sum_float_axis_c_f32", "reduce_sum"),
+    ("softmax_float_default_f32", "softmax"),
+    ("split_float_channels_pairs_f16", "split"),
+    ("strided_slice_float_whole_slab_f32", "strided_slice"),
+    ("sub_float_default_f32", "sub"),
+    ("transpose_float_default_f32", "transpose"),
+]
+ROUTED_CPU = "cortex-m55"
+
+
+def _finite_golden_dir() -> Path:
+    return _repo_root() / "helia_core_tester" / "tests" / "fixtures" / "finite_goldens"
+
+
+@pytest.fixture(scope="module")
+def routed_case_outputs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    from helia_core_tester.core.discovery import find_descriptors_dir
+    from helia_core_tester.generation.io.descriptors import load_all_descriptors
+    import helia_core_tester.generation.test_ops as generation_module
+
+    descriptors = {
+        desc["name"]: desc for desc in load_all_descriptors(str(find_descriptors_dir()))
+    }
+    out_dir = tmp_path_factory.mktemp("routed_goldens")
+    emitted: dict[str, Path] = {}
+    for case_name, _suffix in ROUTED_CASES:
+        desc = descriptors[case_name]
+        generation_module.generate_test(desc, str(out_dir), cpu=ROUTED_CPU)
+        emitted[case_name] = out_dir / desc["_family"] / case_name
+    return emitted
+
+
+@pytest.mark.parametrize("case_name,op_suffix", ROUTED_CASES)
+@pytest.mark.parametrize("kind", ["h", "c"])
+def test_routed_operator_keeps_its_finite_golden(
+    routed_case_outputs: dict[str, Path], case_name: str, op_suffix: str, kind: str
+) -> None:
+    test_dir = routed_case_outputs[case_name]
+    filename = f"{case_name}_{op_suffix}.{kind}"
+    emitted_path = test_dir / "includes" / filename if kind == "h" else test_dir / filename
+    emitted = emitted_path.read_text()
+    fixture = _finite_golden_dir() / filename
+    expected = fixture.read_text()
+
+    if emitted != expected:
+        pytest.fail(
+            f"generated {filename} drifted from the fixture ({fixture}); sha256 "
+            f"{hashlib.sha256(emitted.encode()).hexdigest()} vs "
+            f"{hashlib.sha256(expected.encode()).hexdigest()}"
+        )

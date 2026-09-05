@@ -1,6 +1,7 @@
 #include "{{ name }}_abs.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/validation.j2" import validation_outputs with context %}
 
 #define {{ name|upper }}_OUTPUT_SIZE ({{ output_dims.n }} * {{ output_dims.h }} * {{ output_dims.w }} * {{ output_dims.c }})
 static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
@@ -40,17 +41,7 @@ int32_t {{ name }}_test_case_run(void)
     HELIA_VALIDATE_STATUS("{{ validation_label | default("Abs") }}", status);
 
     int failures = 0;
-    HELIA_VALIDATE_OUTPUTS(
-        {{ validation_mode_token | default("TOLERANT_INT") }},
-        {{ name }}_output,
-        {{ name }}_expected_output,
-        {{ name|upper }}_OUTPUT_SIZE,
-        {{ validation_tolerance | default(1) }},
-        {{ validation_atol }}f,
-        {{ validation_rtol }}f,
-        {{ validation_report_limit | default(20) }},
-        failures
-    );
+{{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 

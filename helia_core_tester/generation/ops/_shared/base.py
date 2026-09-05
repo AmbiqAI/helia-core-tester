@@ -79,7 +79,8 @@ class OperationBase(ABC):
         self._litert_interpreter = None
         self._tflite_path = None
         self._input_mode_consumed = False
-        
+        self._nonfinite_policy_applied = False
+
     @abstractmethod
     def build_keras_model(self):
         """
@@ -183,6 +184,50 @@ class OperationBase(ABC):
             raise ValueError(f"nonfinite_tokens must be unique, got {list(tokens)}")
         return tokens
 
+    def nonfinite_policy(self) -> str:
+        """Return how a non-finite sweep's golden is compared: 'strict' or 'mask'."""
+        policy = str(self.desc.get("nonfinite_policy", "strict")).strip().lower()
+        if policy not in ("strict", "mask"):
+            raise ValueError(
+                f"Unsupported nonfinite_policy {policy!r}; expected 'strict' or 'mask'"
+            )
+        if policy != "strict" and self.input_mode() != "nonfinite_sweep":
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} sets nonfinite_policy {policy!r} "
+                "without input_mode 'nonfinite_sweep'; the policy only governs the "
+                "comparison of a swept case"
+            )
+        return policy
+
+    def apply_nonfinite_policy(
+        self, output_data: np.ndarray
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Return the golden to emit and the template context the policy adds.
+
+        Under 'mask' the lanes whose reference output is non-finite become
+        don't-care: the runtime skips them, and the emitted golden carries 0.0
+        there so the generated header stays finite-only. Under 'strict' the
+        reference is emitted unchanged and nothing is added.
+        """
+        if self.nonfinite_policy() != "mask":
+            return output_data, {}
+        if not np.issubdtype(output_data.dtype, np.floating):
+            raise ValueError(
+                "nonfinite_policy 'mask' needs a float output to classify, got dtype "
+                f"{output_data.dtype}"
+            )
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        mask = ~np.isfinite(output_data)
+        masked_golden = np.where(mask, output_data.dtype.type(0.0), output_data)
+        self._nonfinite_policy_applied = True
+        return masked_golden, {
+            "nonfinite_mask_array": TemplateContextBuilder.format_array_as_c_literal(
+                mask.astype(np.uint8)
+            ),
+            "nonfinite_masked_lanes": int(mask.sum()),
+        }
+
     def nonfinite_sweep_positions(self) -> Tuple[int, ...]:
         """Return the flat indices the non-finite sweep overwrites."""
         return tuple(range(len(self.nonfinite_tokens())))
@@ -234,6 +279,13 @@ class OperationBase(ABC):
                 f"Descriptor {self.desc.get('name')!r} requested input_mode "
                 f"{self.input_mode()!r} but {type(self).__name__} never applied it; "
                 "the op samples its input outside the shared helpers"
+            )
+        # Same failure shape one step later: a mask-policy case whose op never asked for
+        # the mask would silently fall back to strict and pin an uncontracted value.
+        if self.nonfinite_policy() == "mask" and not self._nonfinite_policy_applied:
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} requested nonfinite_policy 'mask' "
+                f"but {type(self).__name__} never called apply_nonfinite_policy()"
             )
 
     def _sample_uniform(

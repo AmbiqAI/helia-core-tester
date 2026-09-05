@@ -208,3 +208,101 @@ strides: [1, 3]
 padding: VALID
 activation_min: -3.4028234663852886e+38
 activation_max: 3.4028234663852886e+38
+---
+# Non-finite cover for the float max_pool kernels. arm_max_pool_f32/f16 document no
+# non-finite behaviour, so nonfinite_policy is mask: the pooling windows that see a
+# token are don't-care and the case asserts SUCCESS, no fault, no hang, and correct
+# values in every window the token does not reach.
+#
+# One token per case, because a pooling window is a reduction group: with all three
+# tokens in the same window the golden would be a statement about how the maximum
+# combines +Inf with -Inf, not about the kernel.
+#
+# The NaN case is worth reading carefully. TensorFlow Lite's reference max pool folds
+# with std::max, which returns its first argument when either is NaN, so the golden
+# depends on where in the window the NaN falls; the kernel's own MVE leg uses VMAXNM
+# (IEEE maxNum), which suppresses NaN and returns the numeric operand. The two need
+# not agree, which is exactly why the affected window is masked instead of pinned.
+operator: MaxPool
+name: max_pool_float_nonfinite_nan_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 6, 6, 3]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+input_mode: nonfinite_sweep
+nonfinite_tokens: [nan]
+nonfinite_policy: mask
+---
+operator: MaxPool
+name: max_pool_float_nonfinite_inf_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 6, 6, 3]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+input_mode: nonfinite_sweep
+nonfinite_tokens: [inf]
+nonfinite_policy: mask
+---
+operator: MaxPool
+name: max_pool_float_nonfinite_neginf_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 6, 6, 3]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+input_mode: nonfinite_sweep
+nonfinite_tokens: [-inf]
+nonfinite_policy: mask
+---
+operator: MaxPool
+name: max_pool_float_nonfinite_nan_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 6, 6, 3]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+input_mode: nonfinite_sweep
+nonfinite_tokens: [nan]
+nonfinite_policy: mask
+---
+operator: MaxPool
+name: max_pool_float_nonfinite_inf_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 6, 6, 3]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+input_mode: nonfinite_sweep
+nonfinite_tokens: [inf]
+nonfinite_policy: mask
+---
+operator: MaxPool
+name: max_pool_float_nonfinite_neginf_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 6, 6, 3]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+input_mode: nonfinite_sweep
+nonfinite_tokens: [-inf]
+nonfinite_policy: mask

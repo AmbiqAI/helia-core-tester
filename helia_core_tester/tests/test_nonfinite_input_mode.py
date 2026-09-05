@@ -187,6 +187,105 @@ def test_a_requested_sweep_that_no_helper_consumed_is_a_generation_error() -> No
     _op(name="plain").assert_input_mode_consumed()
 
 
+# --- comparison policy ------------------------------------------------------
+
+
+def test_schema_declares_the_nonfinite_policy_enum() -> None:
+    prop = _schema()["properties"]["nonfinite_policy"]
+    assert prop["type"] == "string"
+    assert set(prop["enum"]) == {"strict", "mask"}
+
+
+def test_every_descriptor_nonfinite_policy_value_is_in_the_schema_enum() -> None:
+    allowed = set(_schema()["properties"]["nonfinite_policy"]["enum"])
+    for path in sorted((_repo_root() / "assets" / "descriptors").rglob("*.yaml")):
+        for doc in yaml.safe_load_all(path.read_text()):
+            if not isinstance(doc, dict) or "nonfinite_policy" not in doc:
+                continue
+            assert doc["nonfinite_policy"] in allowed, (path.name, doc.get("name"))
+            assert doc.get("input_mode") == "nonfinite_sweep", (path.name, doc.get("name"))
+
+
+def test_policy_defaults_to_strict_and_emits_no_mask() -> None:
+    op = _op(name="plain", input_mode="nonfinite_sweep", suite="float")
+    assert op.nonfinite_policy() == "strict"
+    reference = np.array([float("nan"), 1.0, 2.0], dtype=np.float32)
+    emitted, context = op.apply_nonfinite_policy(reference)
+    assert context == {}
+    assert emitted is reference
+
+
+def test_mask_policy_marks_the_nonfinite_reference_lanes_and_zeroes_them() -> None:
+    op = _op(
+        name="masked",
+        input_mode="nonfinite_sweep",
+        nonfinite_policy="mask",
+        suite="float",
+    )
+    reference = np.array(
+        [float("nan"), float("inf"), float("-inf"), 1.5], dtype=np.float32
+    )
+    emitted, context = op.apply_nonfinite_policy(reference)
+
+    assert context["nonfinite_masked_lanes"] == 3
+    assert [int(v) for v in context["nonfinite_mask_array"].replace(",", " ").split()] == [1, 1, 1, 0]
+    # The header must stay finite-only: the masked entries are written as zero.
+    assert emitted.tolist() == [0.0, 0.0, 0.0, 1.5]
+    assert emitted.dtype == np.float32
+
+
+def test_mask_policy_without_a_sweep_is_rejected() -> None:
+    with pytest.raises(ValueError, match="without input_mode"):
+        _op(name="no_sweep", nonfinite_policy="mask", suite="float").nonfinite_policy()
+
+
+def test_unknown_policy_is_rejected() -> None:
+    with pytest.raises(ValueError, match="Unsupported nonfinite_policy"):
+        _op(
+            name="bad",
+            input_mode="nonfinite_sweep",
+            nonfinite_policy="ignore",
+            suite="float",
+        ).nonfinite_policy()
+
+
+def test_a_mask_policy_the_op_never_applied_is_a_generation_error() -> None:
+    """Same failure shape as an unconsumed input_mode, one step later.
+
+    An op that sweeps its input but never asks for the mask would fall back to a
+    strict comparison and pin a value the kernel never promised.
+    """
+    op = _op(
+        name="masked",
+        input_mode="nonfinite_sweep",
+        nonfinite_policy="mask",
+        suite="float",
+    )
+    op._sample_uniform((1, 8))
+    with pytest.raises(ValueError, match="never called apply_nonfinite_policy"):
+        op.assert_input_mode_consumed()
+
+    op.apply_nonfinite_policy(np.array([float("nan"), 1.0], dtype=np.float32))
+    op.assert_input_mode_consumed()
+
+
+def test_spreading_descriptors_sweep_a_single_token() -> None:
+    """A reduction group holding both infinities would make the golden say
+    (+Inf) + (-Inf) instead of anything about the kernel."""
+    spreading_prefixes = ("mean_", "reduce_sum_", "softmax_", "avg_pool_", "max_pool_")
+    seen = 0
+    for path in sorted((_repo_root() / "assets" / "descriptors").rglob("*.yaml")):
+        for doc in yaml.safe_load_all(path.read_text()):
+            if not isinstance(doc, dict) or doc.get("input_mode") != "nonfinite_sweep":
+                continue
+            name = doc.get("name", "")
+            if not name.startswith(spreading_prefixes):
+                continue
+            seen += 1
+            assert len(doc.get("nonfinite_tokens", [])) == 1, name
+    assert seen
+
+
 # --- C serialization --------------------------------------------------------
 
 

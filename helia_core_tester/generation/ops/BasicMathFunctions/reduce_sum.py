@@ -101,10 +101,7 @@ class OpReduceSum(OperationBase):
             keepdims=bool(self.desc.get('keepdims', True))
         )
 
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-        input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(float_dtype)
-        self.rng.__setstate__(rng_state)
+        input_q = self._sample_uniform(input_shape, dtype=float_dtype)
 
         # Golden with float32 accumulation for both dtypes, matching the
         # kernels' documented semantics (single final rounding for f16).

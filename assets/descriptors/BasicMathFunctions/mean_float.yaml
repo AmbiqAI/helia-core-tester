@@ -91,3 +91,89 @@ tensor_dtypes:
 input_shape: [1, 3, 4, 5]
 axes: [1]
 required_kernel_symbols: [arm_nn_mean_f16]
+---
+# Non-finite cover for the float Mean kernels. ns-cmsis-nn
+# Include/arm_nnfunctions_flt.h:1261-1313 documents "NaN and Inf propagate" for
+# arm_reduce_sum_f32/f16 and arm_nn_mean_f32/f16, so these lanes are strict.
+#
+# One token per case, deliberately. A reduction folds a whole group into one output
+# element, so a case carrying both +Inf and -Inf would put them in the same group and
+# the golden would be NaN from the (+Inf) + (-Inf) alone -- a result about IEEE
+# addition, not about the kernel. With one token the swept group's expected value is
+# the token itself and every other group stays finite and fully asserted.
+#
+# The same header warns that the float32 accumulator can itself saturate to +/-Inf
+# depending on accumulation order, and that vector and scalar builds may disagree
+# when it does. These inputs are drawn from [-1, 1) in groups of 5, so no
+# accumulation order can overflow and the only non-finite output is the token's.
+operator: Mean
+name: mean_float_nonfinite_nan_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 3, 4, 5]
+axes: [3]
+input_mode: nonfinite_sweep
+nonfinite_tokens: [nan]
+required_kernel_symbols: [arm_nn_mean_f32]
+---
+operator: Mean
+name: mean_float_nonfinite_inf_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 3, 4, 5]
+axes: [3]
+input_mode: nonfinite_sweep
+nonfinite_tokens: [inf]
+required_kernel_symbols: [arm_nn_mean_f32]
+---
+operator: Mean
+name: mean_float_nonfinite_neginf_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 3, 4, 5]
+axes: [3]
+input_mode: nonfinite_sweep
+nonfinite_tokens: [-inf]
+required_kernel_symbols: [arm_nn_mean_f32]
+---
+operator: Mean
+name: mean_float_nonfinite_nan_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 3, 4, 5]
+axes: [3]
+input_mode: nonfinite_sweep
+nonfinite_tokens: [nan]
+required_kernel_symbols: [arm_nn_mean_f16]
+---
+operator: Mean
+name: mean_float_nonfinite_inf_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 3, 4, 5]
+axes: [3]
+input_mode: nonfinite_sweep
+nonfinite_tokens: [inf]
+required_kernel_symbols: [arm_nn_mean_f16]
+---
+operator: Mean
+name: mean_float_nonfinite_neginf_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 3, 4, 5]
+axes: [3]
+input_mode: nonfinite_sweep
+nonfinite_tokens: [-inf]
+required_kernel_symbols: [arm_nn_mean_f16]

@@ -42,3 +42,19 @@ size_splits:
 - 2
 - 1
 - 3
+---
+# Non-finite cover for the float split kernel. Split is pure data movement, so
+# bit-exact pass-through of NaN, +Inf and -Inf is the only correct behaviour and the
+# policy is strict. No contract citation is available or needed: a copy has nothing
+# to specify. Only f16 is covered because arm_split has no f32 leg in the generator's
+# kernel table.
+operator: Split
+name: split_float_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 2, 2, 4]
+axis: -1
+num_splits: 2
+input_mode: nonfinite_sweep

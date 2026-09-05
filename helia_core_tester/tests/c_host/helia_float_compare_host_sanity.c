@@ -242,6 +242,67 @@ static void helia_run_tensor_cases(void)
     helia_run_tensor_case("tensor_empty", actual, expected, 0);
 }
 
+/*
+ * Masked rows (issue #74): a don't-care lane must cost nothing -- no failure,
+ * no headroom contribution -- while the lanes beside it stay fully asserted.
+ */
+static void helia_run_masked_case(
+    const char *name,
+    const float *actual,
+    const float *expected,
+    const uint8_t *mask,
+    int size
+)
+{
+    int failures = 0;
+
+    printf("CASE %s\r\n", name);
+    HELIA_VALIDATE_FLOATS_MASKED(actual, expected, mask, size, 1e-5, 1e-5, failures, 8);
+    printf("RESULT %s failures=%d\r\n", name, failures);
+}
+
+static void helia_run_masked_cases(void)
+{
+    const float nan_value = helia_host_produce_f32('n', 0.0f);
+    float actual[3];
+    float expected[3];
+    uint8_t mask[3];
+
+    /* The generator zeroes a masked expected lane so the header stays finite. */
+    actual[0] = nan_value;
+    actual[1] = 1.0f;
+    actual[2] = 2.0f;
+    expected[0] = 0.0f;
+    expected[1] = 1.0f;
+    expected[2] = 2.0f;
+    mask[0] = 1;
+    mask[1] = 0;
+    mask[2] = 0;
+    helia_run_masked_case("masked_nonfinite_actual", actual, expected, mask, 3);
+
+    actual[1] = 2.0f;
+    helia_run_masked_case("masked_lane_with_unmasked_mismatch", actual, expected, mask, 3);
+
+    actual[0] = nan_value;
+    actual[1] = nan_value;
+    actual[2] = nan_value;
+    expected[0] = 0.0f;
+    expected[1] = 0.0f;
+    expected[2] = 0.0f;
+    mask[1] = 1;
+    mask[2] = 1;
+    helia_run_masked_case("masked_all_lanes", actual, expected, mask, 3);
+
+    /* A NULL mask is the plain validator: the summary line must stay absent. */
+    actual[0] = 1.0f;
+    actual[1] = 1.0f;
+    actual[2] = 1.0f;
+    expected[0] = 1.0f;
+    expected[1] = 1.0f;
+    expected[2] = 1.0f;
+    helia_run_masked_case("masked_null_is_plain", actual, expected, NULL, 3);
+}
+
 int main(void)
 {
     for (size_t i = 0; i < helia_case_count; ++i) {
@@ -254,6 +315,7 @@ int main(void)
     }
 
     helia_run_tensor_cases();
+    helia_run_masked_cases();
     helia_run_visible_cases_f32();
 
 #ifdef HELIA_HOST_HAVE_F16

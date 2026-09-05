@@ -253,7 +253,8 @@ def test_kernel_source_exists_matches_only_shipped_sources(tmp_path: Path) -> No
 def test_float_mean_descriptors_require_their_kernel_symbol() -> None:
     path = TESTER_ROOT / "assets" / "descriptors" / "BasicMathFunctions" / "mean_float.yaml"
     descriptors = load_descriptor(str(path))
-    assert len(descriptors) == 8
+    # Four axis picks plus three single-token non-finite cases (issue #74), per dtype.
+    assert len(descriptors) == 14
     for desc in descriptors:
         assert desc["operator"] == "Mean"
         assert desc["suite"] == "float"

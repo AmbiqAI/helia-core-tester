@@ -132,6 +132,7 @@ tensor_dtypes:
 input_1_shape: [1, 4, 4, 8]
 input_2_shape: [1, 4, 4, 8]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 act_min: -6.0
 act_max: 6.0
 ---

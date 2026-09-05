@@ -34,6 +34,11 @@ class TestResultParser:
             r'HELIA_FLOAT_MAXDIFF\s+maxdiff=(' + _num + r')\s+maxfrac=(' + _num + r')\s+n=(\d+)',
             re.IGNORECASE,
         )
+        # Don't-care lanes (issue #74): HELIA_VALIDATE_FLOATS_MASKED prints this
+        # once per masked tensor. Recording the count is what keeps a mask-policy
+        # case honest in the report -- "passed with every lane masked" and
+        # "passed with one lane masked" are very different claims.
+        self.masked_lanes_pattern = re.compile(r'HELIA_MASKED_LANES:\s*(\d+)\s+of\s+(\d+)')
         # Patterns for extracting output differences
         self.expected_pattern = re.compile(r'(?:Expected|Golden|Reference)[:\s]+([^\n]+)', re.IGNORECASE)
         self.actual_pattern = re.compile(r'(?:Actual|Got|Output|Result)[:\s]+([^\n]+)', re.IGNORECASE)
@@ -96,7 +101,8 @@ class TestResultParser:
         cycles = self._extract_cycles(output)
         memory_usage = self._extract_memory_usage(output)
         max_diff, max_tolerance_fraction = self._extract_float_maxdiff(output)
-        
+        masked_lanes = self._extract_masked_lanes(output)
+
         relevant_lines = self._extract_relevant_lines(lines)
         
         # Extract output differences if test failed
@@ -126,6 +132,7 @@ class TestResultParser:
             output_differences=output_differences,
             max_diff=max_diff,
             max_tolerance_fraction=max_tolerance_fraction,
+            masked_lanes=masked_lanes,
         )
     
     def _extract_test_name(self, elf_path: Path) -> str:
@@ -300,6 +307,18 @@ class TestResultParser:
         if saw_nonfinite:
             return -1.0, -2.0
         return max_diff, (-1.0 if saw_zero_tol_violation else max_frac)
+
+    def _extract_masked_lanes(self, output: str) -> Optional[int]:
+        """Total don't-care lanes across every masked tensor, or None if unmasked.
+
+        A case with several validated outputs prints one line each, so the counts
+        are summed; the plain validator prints nothing, which is what separates
+        "no lane was masked" (0) from "this case has no mask" (None).
+        """
+        matches = self.masked_lanes_pattern.findall(output)
+        if not matches:
+            return None
+        return sum(int(masked) for masked, _total in matches)
 
     def _extract_relevant_lines(self, lines: List[str]) -> List[str]:
         """Extract relevant output lines for debugging.

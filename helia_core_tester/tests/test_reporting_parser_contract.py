@@ -378,3 +378,79 @@ def test_parser_lone_empty_tensor_still_reports_the_sentinel() -> None:
     assert result.status == reporting_models.TestStatus.PASS
     assert result.max_diff == -1.0
     assert result.max_tolerance_fraction == -2.0
+
+
+def test_parser_records_masked_lane_count_and_still_requires_success() -> None:
+    # A mask-policy case (issue #74) passes on the same terms as any other: the
+    # kernel returned SUCCESS and the harness printed zero failures. The mask
+    # only removes lanes from the comparison, so the count is recorded to keep
+    # "passed with one lane masked" distinguishable from "passed with all of
+    # them masked".
+    parser = reporting_parser.TestResultParser()
+    result = parser.parse_fvp_output(
+        output=(
+            "HELIA_MASKED_LANES: 3 of 128\n"
+            "HELIA_FLOAT_MAXDIFF maxdiff=1.00000000e-06 maxfrac=0.100000 n=128\n"
+            "0 Failures\n"
+        ),
+        elf_path=Path("abs_float_nonfinite_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.PASS
+    assert result.masked_lanes == 3
+    assert result.to_dict()["masked_lanes"] == 3
+
+
+def test_parser_sums_masked_lane_lines_across_outputs() -> None:
+    parser = reporting_parser.TestResultParser()
+    result = parser.parse_fvp_output(
+        output=(
+            "HELIA_MASKED_LANES: 2 of 8\n"
+            "HELIA_MASKED_LANES: 1 of 8\n"
+            "0 Failures\n"
+        ),
+        elf_path=Path("split_float_nonfinite_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.masked_lanes == 3
+
+
+def test_parser_leaves_masked_lanes_unset_without_the_summary_line() -> None:
+    parser = reporting_parser.TestResultParser()
+    result = parser.parse_fvp_output(
+        output="HELIA_FLOAT_MAXDIFF maxdiff=0.00000000e+00 maxfrac=0.000000 n=8\n0 Failures\n",
+        elf_path=Path("relu.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.masked_lanes is None
+    assert "masked_lanes" not in result.to_dict()
+
+
+def test_parser_fails_a_masked_case_that_faults_or_times_out() -> None:
+    # Masking never rescues a case: status, HardFault and timeout are decided
+    # before any lane is compared.
+    parser = reporting_parser.TestResultParser()
+    timed_out = parser.parse_fvp_output(
+        output="HELIA_MASKED_LANES: 3 of 128\nTIMEOUT running abs\n",
+        elf_path=Path("abs_float_nonfinite_f32.elf"),
+        cpu="cortex-m0",
+        duration=60.0,
+        exit_code=124,
+    )
+    assert timed_out.status == reporting_models.TestStatus.TIMEOUT
+
+    bad_status = parser.parse_fvp_output(
+        output="HELIA_MASKED_LANES: 3 of 128\nAbs failed with status -1\n1 Failures\n",
+        elf_path=Path("abs_float_nonfinite_f32.elf"),
+        cpu="cortex-m0",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert bad_status.status == reporting_models.TestStatus.FAIL
+    assert bad_status.error_type == "api_error"

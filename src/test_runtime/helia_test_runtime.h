@@ -318,15 +318,31 @@ static inline int helia_test_float_class_binary64(const void *storage)
  * NaN passes regardless of sign or payload (see AmbiqAI/ns-cmsis-nn#333). Any
  * other pairing, including infinities of opposite sign, is a failure reported
  * through helia_test_nonfinite_mismatch() rather than the %f mismatch line.
+ *
+ * Masking (issue #74) covers the kernels whose header disclaims non-finite
+ * behaviour outright (min/max are "unspecified", most of the library documents
+ * nothing). Pinning the reference's value there would encode observed
+ * behaviour as a contract, and dropping the case would assert nothing, so a
+ * lane whose reference output is non-finite is marked don't-care instead: it is
+ * skipped entirely, not counted, and kept out of the headroom measurement,
+ * while every finite lane still has to match. What such a case asserts is that
+ * the kernel returns SUCCESS, does not fault or hang, and does not corrupt the
+ * lanes around the token. `mask` may be NULL, which compares every lane.
  */
-#define HELIA_VALIDATE_FLOATS(actual, expected, size, atol, rtol, max_reports, failures) \
+#define HELIA_VALIDATE_FLOATS_MASKED(actual, expected, mask, n, atol, rtol, failures, max_reports) \
     do { \
+        const uint8_t *helia_mask = (const uint8_t *)(mask); \
         double helia_max_diff = 0.0; \
         double helia_max_frac = 0.0; \
         int helia_zero_tol_violation = 0; \
         int helia_nonfinite_mismatches = 0; \
         int helia_finite_compared = 0; \
-        for (int helia_i = 0; helia_i < (size); ++helia_i) { \
+        int helia_masked_lanes = 0; \
+        for (int helia_i = 0; helia_i < (n); ++helia_i) { \
+            if (helia_mask != NULL && helia_mask[helia_i]) { \
+                ++helia_masked_lanes; \
+                continue; \
+            } \
             int helia_act_class = HELIA_FLOAT_CLASS_OF((actual)[helia_i]); \
             int helia_exp_class = HELIA_FLOAT_CLASS_OF((expected)[helia_i]); \
             if (helia_act_class != HELIA_FLOAT_CLASS_FINITE \
@@ -380,15 +396,21 @@ static inline int helia_test_float_class_binary64(const void *storage)
                 } \
             } \
         } \
+        if (helia_mask != NULL) { \
+            printf("HELIA_MASKED_LANES: %d of %d\r\n", helia_masked_lanes, (int)(n)); \
+        } \
         helia_test_nonfinite_mismatch_summary(helia_nonfinite_mismatches); \
         int helia_unmeasurable = (helia_nonfinite_mismatches > 0 || !helia_finite_compared); \
         printf( \
             "HELIA_FLOAT_MAXDIFF maxdiff=%.8e maxfrac=%.6f n=%d\r\n", \
             helia_unmeasurable ? -1.0 : helia_max_diff, \
             helia_unmeasurable ? -2.0 : (helia_zero_tol_violation ? -1.0 : helia_max_frac), \
-            (int)(size) \
+            (int)(n) \
         ); \
     } while (0)
+
+#define HELIA_VALIDATE_FLOATS(actual, expected, size, atol, rtol, max_reports, failures) \
+    HELIA_VALIDATE_FLOATS_MASKED((actual), (expected), NULL, (size), (atol), (rtol), (failures), (max_reports))
 
 #define HELIA_VALIDATE_BOOLEANS(actual, expected, size, max_reports, failures) \
     do { \

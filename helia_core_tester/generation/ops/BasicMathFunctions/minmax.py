@@ -216,6 +216,7 @@ class OpMinMax(BinaryBasicMathBase):
                 output_data = np.maximum(input1_q, input2_q) if op_name == "Maximum" else np.minimum(input1_q, input2_q)
         
         # Format arrays
+        output_data, nonfinite_context = self.apply_nonfinite_policy(output_data)
         input1_array_str = builder.format_array_as_c_literal(input1_q)
         input2_array_str = builder.format_array_as_c_literal(input2_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
@@ -234,7 +235,8 @@ class OpMinMax(BinaryBasicMathBase):
             'kernel_fn': kernel_info["kernel_fn"],
             'operator': op_name,
         }
-        
+        context.update(nonfinite_context)
+
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'MinMax'),

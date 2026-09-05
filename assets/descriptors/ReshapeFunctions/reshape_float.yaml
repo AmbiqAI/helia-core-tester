@@ -107,3 +107,27 @@ tensor_dtypes:
   output: FP16
 input_shape: [0]
 target_shape: [0]
+---
+# Non-finite cover for the float reshape kernels. Reshape only reinterprets the
+# dimensions of a contiguous buffer, so bit-exact pass-through of NaN, +Inf and -Inf
+# is the only correct behaviour and the policy is strict. No contract citation is
+# available or needed: a copy has nothing to specify.
+operator: Reshape
+name: reshape_float_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 2, 4, 3]
+target_shape: [1, 4, 2, 3]
+input_mode: nonfinite_sweep
+---
+operator: Reshape
+name: reshape_float_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 2, 4, 3]
+target_shape: [1, 4, 2, 3]
+input_mode: nonfinite_sweep

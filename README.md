@@ -127,6 +127,35 @@ under `--suite int` only, with its float legs on `cortex-m4` and `cortex-m55`. T
 ns-cmsis-nn#314 guard case therefore has no runner until that consumer workflow adds a
 `--cpu cortex-m0 --suite float --float-precision f32` leg.
 
+Spreading operators take one token per case. A reduction, a pooling window, a softmax row and a
+convolution accumulator all fold many input elements into one output element, so a case carrying
+`[nan, inf, -inf]` would put `+Inf` and `-Inf` in the same group and the golden would then be a
+statement about `(+Inf) + (-Inf)` rather than about the kernel. Those descriptors set
+`nonfinite_tokens` to a single token and there is one case per token, which also leaves the
+groups the token does not reach finite and fully asserted -- that is what catches a vector leg
+that poisons a whole register instead of one lane. Elementwise and pure-data-movement operators
+keep all three tokens in one case.
+
+`nonfinite_policy` decides how the golden is compared, and only means anything alongside
+`input_mode: nonfinite_sweep`.
+
+- `strict` (the default) asserts the reference value on every lane. It is only legitimate where
+  ns-cmsis-nn documents the behaviour -- the elementwise family, the standalone hard swish, the
+  RELU/RELU6/LEAKY_RELU activations, `arm_reduce_sum_*` and `arm_nn_mean_*` -- or where the
+  operator is pure data movement (pad, reshape, transpose, strided slice, concatenation, split),
+  since a copy has no freedom to specify.
+- `mask` marks the lanes whose *reference* output is non-finite as don't-care. Every finite lane
+  still has to match, and the case still has to return `ARM_CMSIS_NN_SUCCESS` without faulting or
+  timing out. This is for kernels that document nothing (abs, softmax, batch norm, pooling) or
+  that declare the result unspecified outright (`arm_minimum_*`/`arm_maximum_*`,
+  `Include/arm_nnfunctions_flt.h:658-703`). It asserts robustness and non-corruption of the
+  neighbouring lanes without encoding an uncontracted value as a golden.
+
+A masked case emits the mask alongside the golden, whose masked entries are written as `0.0f` so
+the generated header stays finite-only, and the harness prints `HELIA_MASKED_LANES: k of n`. The
+reporting parser records `k` on the result, because "passed with one lane masked" and "passed
+with every lane masked" are different claims.
+
 To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
 
 Generated LiteRT-only ops should route through `build_<op>_op()` and resolve tensor roles from
