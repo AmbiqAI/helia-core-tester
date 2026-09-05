@@ -303,6 +303,35 @@ def test_locally_visible_nonfinite_operand_is_still_classified(
     assert "HELIA_NONFINITE_MISMATCHES n=1" in block
 
 
+def test_masked_lane_absorbs_a_nonfinite_actual(host_sanity_output: str) -> None:
+    block = _case_block(host_sanity_output, "masked_nonfinite_actual")
+    assert _failure_counts(host_sanity_output)["masked_nonfinite_actual"] == 0
+    assert "HELIA_NONFINITE_MISMATCH" not in block
+    assert "HELIA_MASKED_LANES: 1 of 3" in block
+    # The two unmasked lanes still carry a real, measurable headroom number.
+    assert _headroom(block) == (0.0, 0.0)
+
+
+def test_masked_lane_does_not_excuse_an_unmasked_mismatch(host_sanity_output: str) -> None:
+    block = _case_block(host_sanity_output, "masked_lane_with_unmasked_mismatch")
+    assert _failure_counts(host_sanity_output)["masked_lane_with_unmasked_mismatch"] == 1
+    assert "Mismatch[1]: exp=1.000000 got=2.000000" in block
+    assert "HELIA_MASKED_LANES: 1 of 3" in block
+
+
+def test_fully_masked_tensor_passes_with_the_unmeasurable_sentinel(host_sanity_output: str) -> None:
+    block = _case_block(host_sanity_output, "masked_all_lanes")
+    assert _failure_counts(host_sanity_output)["masked_all_lanes"] == 0
+    assert "HELIA_MASKED_LANES: 3 of 3" in block
+    assert _headroom(block) == (-1.0, -2.0)
+
+
+def test_null_mask_emits_no_masked_lane_summary(host_sanity_output: str) -> None:
+    block = _case_block(host_sanity_output, "masked_null_is_plain")
+    assert _failure_counts(host_sanity_output)["masked_null_is_plain"] == 0
+    assert "HELIA_MASKED_LANES" not in block
+
+
 def test_float_validator_classifies_before_any_conversion() -> None:
     # -ffinite-math-only licenses the compiler to fold isnan/isinf to a
     # constant false, and to treat the result of a widening conversion as

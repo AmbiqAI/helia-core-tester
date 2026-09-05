@@ -112,6 +112,7 @@ tensor_dtypes:
 input_1_shape: [1, 4, 4, 8]
 input_2_shape: [1, 4, 4, 8]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 ---
 operator: Mul
 name: mul_float_nonfinite_f16
@@ -122,6 +123,7 @@ tensor_dtypes:
 input_1_shape: [1, 4, 4, 8]
 input_2_shape: [1, 4, 4, 8]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 ---
 operator: Mul
 name: mul_float_nonfinite_clamped_f16
@@ -132,6 +134,7 @@ tensor_dtypes:
 input_1_shape: [1, 4, 4, 8]
 input_2_shape: [1, 4, 4, 8]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 act_min: -6.0
 act_max: 6.0
 ---
@@ -144,6 +147,7 @@ tensor_dtypes:
 input_1_shape: [1, 4, 4, 8]
 input_2_shape: [1, 4, 4, 8]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 # The documented "no clamp" idiom, so the Inf lanes assert passthrough of
 # sign(Inf * finite) rather than the 1e30 default bound.
 act_min: -.inf

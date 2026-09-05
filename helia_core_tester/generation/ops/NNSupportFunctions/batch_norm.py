@@ -43,10 +43,17 @@ class OpBatchNorm(OperationBase):
         input_data = self._sample_uniform(input_shape, dtype=float_dtype)
         scale = np.linspace(0.5, 1.5, num=channels, dtype=float_dtype)
         bias = np.linspace(-0.25, 0.25, num=channels, dtype=float_dtype)
-        output_data = (
-            input_data.astype(np.float32) * scale.astype(np.float32).reshape((1, 1, 1, channels))
-            + bias.astype(np.float32).reshape((1, 1, 1, channels))
-        ).astype(float_dtype)
+        def reference(operands):
+            return (
+                operands[0].astype(np.float32)
+                * scale.astype(np.float32).reshape((1, 1, 1, channels))
+                + bias.astype(np.float32).reshape((1, 1, 1, channels))
+            ).astype(float_dtype)
+
+        output_data = reference([input_data])
+        output_data, nonfinite_context = self.apply_nonfinite_policy(
+            output_data, reference=reference, inputs=[input_data]
+        )
 
         builder = TemplateContextBuilder()
         context = {
@@ -62,6 +69,7 @@ class OpBatchNorm(OperationBase):
             "output_dtype": data_dtype,
             "kernel_fn": kernel_fn,
         }
+        context.update(nonfinite_context)
 
         cmake_context = {
             "name": name,

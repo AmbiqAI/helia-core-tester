@@ -193,10 +193,7 @@ class OpTranspose(OperationBase):
             output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         
         # Generate input data and quantize
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-        input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-        self.rng.__setstate__(rng_state)
+        input_data = self._sample_uniform(input_shape)
 
         # Quantize inputs
         if float_kernel:

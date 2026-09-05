@@ -698,6 +698,7 @@ tensor_dtypes:
   output: FP32
 input_shape: [1, 16]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 nonfinite_tokens: [inf, -inf]
 # No NaN lane: the MVE tanh legs saturate with vminnmq, which is IEEE minNum and
 # returns the numeric operand against a quiet NaN, so a NaN lane comes back as
@@ -715,6 +716,7 @@ tensor_dtypes:
   output: FP32
 input_shape: [1, 16]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 nonfinite_tokens: [nan]
 required_capabilities: [soft_float]
 # The ns-cmsis-nn#314 guard; the block comment above says why it is the only NaN
@@ -734,6 +736,7 @@ tensor_dtypes:
   output: FP32
 input_shape: [1, 16]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 nonfinite_tokens: [inf, -inf]
 # No NaN lane: arm_nnsupportfunctions_flt.h:184-186 records sigmoid(NaN) == 1.0f as a
 # "defined consequence" of exp(NaN) == exp(80) and states NaN is not a supported input
@@ -752,6 +755,7 @@ input_shape: [1, 16]
 input_min: -4.0
 input_max: 4.0
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 activation_type: ARM_NN_FLT_ACT_RELU
 act_param: 0.0
 ---
@@ -765,6 +769,7 @@ input_shape: [1, 16]
 input_min: -2.0
 input_max: 8.0
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 activation_type: ARM_NN_FLT_ACT_RELU6
 act_param: 0.0
 ---
@@ -776,6 +781,7 @@ tensor_dtypes:
   output: FP32
 input_shape: [1, 16]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 activation_type: ARM_NN_FLT_ACT_LEAKY_RELU
 act_param: 0.125
 ---
@@ -787,6 +793,7 @@ tensor_dtypes:
   output: FP16
 input_shape: [1, 16]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 nonfinite_tokens: [inf, -inf]
 # No NaN lane: the MVE tanh legs saturate with vminnmq, which is IEEE minNum and
 # returns the numeric operand against a quiet NaN, so a NaN lane comes back as
@@ -810,6 +817,7 @@ tensor_dtypes:
   output: FP16
 input_shape: [1, 16]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 nonfinite_tokens: [inf, -inf]
 # No NaN lane: arm_nnsupportfunctions_flt.h:184-186 records sigmoid(NaN) == 1.0f as a
 # "defined consequence" of exp(NaN) == exp(80) and states NaN is not a supported input
@@ -828,6 +836,7 @@ input_shape: [1, 16]
 input_min: -4.0
 input_max: 4.0
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 activation_type: ARM_NN_FLT_ACT_RELU
 act_param: 0.0
 ---
@@ -841,6 +850,7 @@ input_shape: [1, 16]
 input_min: -2.0
 input_max: 8.0
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 activation_type: ARM_NN_FLT_ACT_RELU6
 act_param: 0.0
 ---
@@ -852,5 +862,6 @@ tensor_dtypes:
   output: FP16
 input_shape: [1, 16]
 input_mode: nonfinite_sweep
+nonfinite_policy: strict
 activation_type: ARM_NN_FLT_ACT_LEAKY_RELU
 act_param: 0.125

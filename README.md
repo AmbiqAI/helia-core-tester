@@ -127,6 +127,68 @@ under `--suite int` only, with its float legs on `cortex-m4` and `cortex-m55`. T
 ns-cmsis-nn#314 guard case therefore has no runner until that consumer workflow adds a
 `--cpu cortex-m0 --suite float --float-precision f32` leg.
 
+Spreading operators with a `strict` golden take one token per case. A reduction, a pooling
+window, a softmax row and a convolution accumulator all fold many input elements into one output
+element, so a case carrying `[nan, inf, -inf]` would put `+Inf` and `-Inf` in the same group and
+the golden would then be a statement about `(+Inf) + (-Inf)` rather than about the kernel. Those
+descriptors set `nonfinite_tokens` to a single token and there is one case per token, which also
+leaves the groups the token does not reach finite and fully asserted -- that is what catches a
+vector leg that poisons a whole register instead of one lane. Elementwise and pure-data-movement
+operators keep all three tokens in one case. A `mask` case may carry several tokens in one group,
+because the group it lands in is don't-care anyway; `mean_float_nonfinite_two_token_*` and
+`reduce_sum_float_nonfinite_two_token_*` do exactly that to build a `+Inf` with `-Inf`
+reduction group, which is adjacent to AmbiqAI/ns-cmsis-nn#429 but not its input. #429 puts one
+token per group, so the `*_nonfinite_issue429_flatten_*` and `*_nonfinite_issue429_generic_*`
+cases carry that placement instead: `[inf, nan]` at flat positions 1 and 3 of four
+three-element groups on the innermost axis, and `[nan, inf]` at flat positions 0 and 7 of a
+`[1, 2, 2, 2]` input reduced over H, which is the non-innermost axis #429's generic case uses.
+
+`nonfinite_positions` is what places them. It defaults to the leading run `0..k-1` and pairs
+element for element with `nonfinite_tokens`; a descriptor sets it where that run cannot express
+the placement, either one token per reduction group or a pooling window that SAME padding only
+partly covers (`avg_pool_float_nonfinite_nan_same_odd_f32` and its max-pool twin put the token
+at flat index 72 of a `[1, 5, 5, 3]` input, the one real element of the bottom-right window).
+
+`nonfinite_policy` decides how the golden is compared. It is required whenever `input_mode` is
+`nonfinite_sweep` and rejected otherwise; there is no default, because whether an uncontracted
+non-finite output may be pinned is a per-kernel question.
+
+- `strict` asserts the reference value on every lane. It is only legitimate where ns-cmsis-nn
+  documents the behaviour -- the elementwise family, the standalone hard swish, the
+  RELU/RELU6/LEAKY_RELU activations, `arm_reduce_sum_*` and `arm_nn_mean_*` -- or where the
+  operator is pure data movement (pad, reshape, transpose, strided slice, concatenation, split),
+  since a copy has no freedom to specify.
+- `mask` marks as don't-care every lane whose *reference* output is non-finite **and** every lane
+  a swept token can reach. The second set is the larger one: a pooling window that sees `+Inf`
+  reduces to a finite number at the other lanes of its row, and which of them the token moves is
+  the kernel's own fold order, not a contract. Reachability is measured rather than declared --
+  the generator re-runs the op's reference with the token positions replaced by finite probes and
+  marks every output lane that moves. Every remaining lane still has to match, and the case still
+  has to return `ARM_CMSIS_NN_SUCCESS` without faulting or timing out. This is for kernels whose
+  doxygen block says nothing about non-finite input (the `arm_softmax_f32` block specifies
+  arguments and return status only, and abs and batch norm are the same), that declare the
+  result unspecified outright (the `arm_minimum_f32` and `arm_maximum_f32` blocks: "The result
+  ... for any non-finite input, is unspecified"), or that document legs which disagree: the
+  `arm_max_pool_f16` note calls the scalar leg's NaN behaviour unspecified at the shipped
+  `-Ofast` and declines to promise NaN propagation end to end, and the `arm_avg_pool_f16` note
+  has NaN propagating at every optimization level on non-MVE while the MVE clamp resolves it to
+  a bound. It asserts robustness and non-corruption of the neighbouring lanes without encoding an
+  uncontracted value as a golden. Two generation-time guards keep the measurement honest: a case
+  that ends up masking every lane fails, since it would assert nothing beyond `SUCCESS`, and so
+  does a case where no lane moves between the probes, since a two-sided activation clamp that
+  saturates all three probes to the same bound is not evidence that the token is confined.
+
+A masked case emits the mask alongside the golden, whose masked entries are written as `0.0f` so
+the golden stays finite -- the input arrays still carry the tokens -- and the harness prints
+`HELIA_MASKED_LANES: k of n`. The reporting parser records both `k` and `n`, because "passed with
+one lane masked" and "passed with every lane but one masked" are different claims; a capture
+reporting `k > n` cannot have come from the harness, so it is recorded as a failed case with a
+corrupted-capture reason rather than raising.
+
+`nonfinite_policy` is required by `OperationBase.nonfinite_policy()`, not by the schema: the
+`if`/`then` gate in `schema.json` is documentation until the descriptor loader validates the whole
+schema (#100).
+
 To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
 
 Generated LiteRT-only ops should route through `build_<op>_op()` and resolve tensor roles from

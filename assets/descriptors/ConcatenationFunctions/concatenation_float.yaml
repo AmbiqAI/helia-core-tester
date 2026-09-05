@@ -121,3 +121,45 @@ axis: 0
 input_shape: [1, 2, 2, 2]
 input_1_shape: [1, 2, 2, 2]
 input_2_shape: [2, 2, 2, 2]
+---
+# Non-finite cover for the float concatenation kernels. Concatenation is pure data
+# movement, so bit-exact pass-through of NaN, +Inf and -Inf is the only correct
+# behaviour and the policy is strict. No contract citation is available or needed: a
+# copy has nothing to specify. Only the first operand carries the sweep; the others
+# stay finite and assert that a token in one source buffer does not disturb the
+# copies of its neighbours.
+operator: Concatenation
+name: concatenation_nonfinite_axis_x_f32
+suite: float
+activation_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+activation: NONE
+hint:
+  call_style: axis_x
+axis: 2
+input_shape: [1, 2, 2, 3]
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 1, 3]
+input_3_shape: [1, 2, 3, 3]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+---
+operator: Concatenation
+name: concatenation_nonfinite_axis_x_f16
+suite: float
+activation_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+activation: NONE
+hint:
+  call_style: axis_x
+axis: 2
+input_shape: [1, 2, 2, 3]
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 1, 3]
+input_3_shape: [1, 2, 3, 3]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict

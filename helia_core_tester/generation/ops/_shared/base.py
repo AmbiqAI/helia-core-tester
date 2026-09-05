@@ -5,7 +5,7 @@ All operations inherit from this and implement build_keras_model().
 
 import json
 import numpy as np
-from typing import Dict, Any, Optional, Tuple, Iterator
+from typing import Callable, Dict, Any, Optional, Sequence, Tuple, Iterator
 from abc import ABC, abstractmethod
 from pathlib import Path
 import jinja2
@@ -48,8 +48,15 @@ def _is_bulk_array_field(key: str, value: Any) -> bool:
 
 
 def _is_json_serializable(value: Any) -> bool:
+    # allow_nan=False rejects NaN/Infinity, which Python emits as bare JSON
+    # literals that no strict parser accepts. A non-finite scalar reaching the
+    # context (the +/-INFINITY "no clamp" activation bounds do) is dropped from
+    # the sidecar rather than written as `Infinity`. Nothing is lost: the
+    # rendered form the .c file uses travels alongside as a string, e.g.
+    # out_activation_min is dropped while out_activation_min_literal keeps
+    # "-INFINITY".
     try:
-        json.dumps(value)
+        json.dumps(value, allow_nan=False)
         return True
     except (TypeError, ValueError):
         return False
@@ -79,7 +86,8 @@ class OperationBase(ABC):
         self._litert_interpreter = None
         self._tflite_path = None
         self._input_mode_consumed = False
-        
+        self._nonfinite_policy_applied = False
+
     @abstractmethod
     def build_keras_model(self):
         """
@@ -183,9 +191,188 @@ class OperationBase(ABC):
             raise ValueError(f"nonfinite_tokens must be unique, got {list(tokens)}")
         return tokens
 
+    def nonfinite_policy(self) -> str:
+        """Return how a non-finite sweep's golden is compared: 'strict' or 'mask'."""
+        declared = self.desc.get("nonfinite_policy")
+        if declared is None:
+            # No default: whether an uncontracted non-finite output may be pinned as a
+            # golden is a per-kernel contract question, and a silent 'strict' default
+            # answers it by accident for every descriptor that forgets to.
+            if self.input_mode() == "nonfinite_sweep":
+                raise ValueError(
+                    f"Descriptor {self.desc.get('name')!r} uses input_mode "
+                    "'nonfinite_sweep' without nonfinite_policy; declare 'strict' "
+                    "(the header contracts the value, or the op is pure data movement) "
+                    "or 'mask' (it does not)"
+                )
+            return "strict"
+        policy = str(declared).strip().lower()
+        if policy not in ("strict", "mask"):
+            raise ValueError(
+                f"Unsupported nonfinite_policy {policy!r}; expected 'strict' or 'mask'"
+            )
+        if policy != "strict" and self.input_mode() != "nonfinite_sweep":
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} sets nonfinite_policy {policy!r} "
+                "without input_mode 'nonfinite_sweep'; the policy only governs the "
+                "comparison of a swept case"
+            )
+        return policy
+
+    def apply_nonfinite_policy(
+        self,
+        output_data: np.ndarray,
+        *,
+        reference: Callable[[Sequence[np.ndarray]], np.ndarray],
+        inputs: Sequence[np.ndarray],
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Return the golden to emit and the template context the policy adds.
+
+        Under 'mask' the don't-care set is every lane whose reference output is
+        non-finite, plus every lane a swept token can reach. The two are not the
+        same set: a max-pool window holding +Inf reduces to a finite value at
+        every other lane of that window's row, and the kernel's own reduction
+        order decides which of them the token influences, so pinning those lanes
+        would encode an uncontracted value just as much as pinning the Inf lane.
+        Reachability is measured, not declared: the reference is re-run with the
+        token positions replaced by finite probes and any output lane that moves
+        between probes is reachable. Three probes rather than two because two can
+        coincide on a symmetric op (|+p| == |-p| for Abs), which would read as
+        unreachable. This is why the caller passes a reference callable instead
+        of a precomputed output -- it makes the window, row and receptive-field
+        cases fall out of whatever reference path the op already uses.
+
+        The emitted golden carries 0.0 in the masked lanes so the golden stays
+        finite; the input arrays still carry the tokens. Under 'strict' the
+        reference is emitted unchanged and nothing is added.
+        """
+        if self.nonfinite_policy() != "mask":
+            return output_data, {}
+        if not np.issubdtype(output_data.dtype, np.floating):
+            raise ValueError(
+                "nonfinite_policy 'mask' needs a float output to classify, got dtype "
+                f"{output_data.dtype}"
+            )
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        reachable = self._nonfinite_reachable_lanes(reference, inputs, output_data.shape)
+        mask = ~np.isfinite(output_data) | reachable
+        if mask.all():
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} masks all {mask.size} output "
+                "lanes, so the case would assert nothing beyond SUCCESS; widen the "
+                "tensor or move the tokens so finite lanes survive"
+            )
+        masked_golden = np.where(mask, output_data.dtype.type(0.0), output_data)
+        self._nonfinite_policy_applied = True
+        return masked_golden, {
+            "nonfinite_mask_array_str": TemplateContextBuilder.format_array_as_c_literal(
+                mask.astype(np.uint8)
+            ),
+            "nonfinite_masked_lanes": int(mask.sum()),
+        }
+
+    def _nonfinite_reachable_lanes(
+        self,
+        reference: Callable[[Sequence[np.ndarray]], np.ndarray],
+        inputs: Sequence[np.ndarray],
+        output_shape: Tuple[int, ...],
+    ) -> np.ndarray:
+        """Return the boolean lanes a swept token can influence."""
+        if reference is None or inputs is None:
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} uses nonfinite_policy 'mask', "
+                "which needs the op's reference callable and its input tensors to "
+                "measure which output lanes the tokens reach"
+            )
+        arrays = [np.asarray(arr) for arr in inputs]
+        token_sites = [
+            (index, ~np.isfinite(arr))
+            for index, arr in enumerate(arrays)
+            if np.issubdtype(arr.dtype, np.floating) and not np.isfinite(arr).all()
+        ]
+        if not token_sites:
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} uses nonfinite_policy 'mask' "
+                "but no input handed to apply_nonfinite_policy() carries a token; "
+                "the inputs passed are not the ones the sweep wrote"
+            )
+
+        # Probes sit just outside the sampled range so they are the extreme of every
+        # window or row they enter, which is what makes a reducing op's output move.
+        magnitude = 1.0
+        for arr in arrays:
+            if not np.issubdtype(arr.dtype, np.floating):
+                continue
+            finite = arr[np.isfinite(arr)]
+            if finite.size:
+                magnitude = max(magnitude, float(np.max(np.abs(finite.astype(np.float64)))))
+        probes = (magnitude + 1.0, -(magnitude + 1.0), magnitude + 2.0)
+
+        probe_outputs = []
+        for probe in probes:
+            probed = [np.array(arr, copy=True) for arr in arrays]
+            for index, sites in token_sites:
+                probed[index][sites] = probed[index].dtype.type(probe)
+            result = np.asarray(reference(probed))
+            probe_outputs.append(result.astype(np.float64).reshape(output_shape))
+
+        reachable = np.zeros(output_shape, dtype=bool)
+        for i in range(len(probe_outputs)):
+            for j in range(i + 1, len(probe_outputs)):
+                left, right = probe_outputs[i], probe_outputs[j]
+                # Two NaN lanes are the same verdict, not a difference; every other
+                # inequality counts, including a lane that is NaN under one probe only.
+                reachable |= (left != right) & ~(np.isnan(left) & np.isnan(right))
+        if not reachable.any():
+            # A token that moves no output lane means the probes were swallowed before
+            # they reached the output -- a two-sided activation clamp saturates all
+            # three to the same bound -- so the measurement is not evidence that the
+            # token is confined, and the mask it produces would be built from the
+            # reference lanes alone.
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} uses nonfinite_policy 'mask' but "
+                "no output lane moved between the finite probes, so reachability could "
+                "not be measured; place the tokens where the probes stay inside the "
+                "activation clamp, widen that clamp, or use 'strict' if the kernel does "
+                "contract the value there"
+            )
+        return reachable
+
     def nonfinite_sweep_positions(self) -> Tuple[int, ...]:
-        """Return the flat indices the non-finite sweep overwrites."""
-        return tuple(range(len(self.nonfinite_tokens())))
+        """Return the flat indices the non-finite sweep overwrites.
+
+        The default is the leading run 0..k-1. `nonfinite_positions` overrides it
+        element for element with `nonfinite_tokens`, which is the only way to reach
+        a placement the leading run cannot express: one token per reduction group
+        rather than all of them in group 0, or a pooling window that the padding
+        only partly covers.
+        """
+        tokens = self.nonfinite_tokens()
+        requested = self.desc.get("nonfinite_positions")
+        if requested is None:
+            return tuple(range(len(tokens)))
+        if self.input_mode() != "nonfinite_sweep":
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} sets nonfinite_positions without "
+                "input_mode 'nonfinite_sweep'; the positions only place a swept token"
+            )
+        positions = tuple(int(position) for position in requested)
+        if len(positions) != len(tokens):
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} lists {len(positions)} "
+                f"nonfinite_positions for {len(tokens)} nonfinite_tokens; the two are "
+                "paired element for element"
+            )
+        if len(set(positions)) != len(positions):
+            raise ValueError(
+                f"nonfinite_positions must be unique, got {list(positions)}"
+            )
+        if any(position < 0 for position in positions):
+            raise ValueError(
+                f"nonfinite_positions must be non-negative flat indices, got {list(positions)}"
+            )
+        return positions
 
     def _apply_nonfinite_sweep(self, arr: np.ndarray) -> np.ndarray:
         """Overwrite the leading elements of a float tensor with the non-finite tokens."""
@@ -194,9 +381,10 @@ class OperationBase(ABC):
                 f"input_mode 'nonfinite_sweep' requires a float tensor, got dtype {arr.dtype}"
             )
         tokens = self.nonfinite_tokens()
-        if arr.size < len(tokens):
+        positions = self.nonfinite_sweep_positions()
+        if arr.size < max(positions) + 1:
             raise ValueError(
-                f"input_mode 'nonfinite_sweep' needs at least {len(tokens)} elements, "
+                f"input_mode 'nonfinite_sweep' needs at least {max(positions) + 1} elements, "
                 f"got shape {tuple(arr.shape)}"
             )
         # Finite neighbours from the uniform draw are kept deliberately: a mixed tensor
@@ -204,7 +392,7 @@ class OperationBase(ABC):
         # whole vector off) from one that merely mishandles the token itself.
         swept = arr.copy()
         flat = swept.reshape(-1)
-        flat[: len(tokens)] = np.asarray(
+        flat[list(positions)] = np.asarray(
             [self.NONFINITE_TOKEN_VALUES[token] for token in tokens], dtype=arr.dtype
         )
         return swept
@@ -234,6 +422,13 @@ class OperationBase(ABC):
                 f"Descriptor {self.desc.get('name')!r} requested input_mode "
                 f"{self.input_mode()!r} but {type(self).__name__} never applied it; "
                 "the op samples its input outside the shared helpers"
+            )
+        # Same failure shape one step later: a mask-policy case whose op never asked for
+        # the mask would silently fall back to strict and pin an uncontracted value.
+        if self.nonfinite_policy() == "mask" and not self._nonfinite_policy_applied:
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} requested nonfinite_policy 'mask' "
+                f"but {type(self).__name__} never called apply_nonfinite_policy()"
             )
 
     def _sample_uniform(
@@ -571,7 +766,7 @@ class OperationBase(ABC):
         (output_dir / "CMakeLists.txt").write_text(cmake_content)
         sidecar_content = self._build_generation_sidecar(op_suffix, resolved_c_context)
         (output_dir / f"{name}_{op_suffix}.sidecar.json").write_text(
-            json.dumps(sidecar_content, indent=2, sort_keys=True) + "\n"
+            json.dumps(sidecar_content, indent=2, sort_keys=True, allow_nan=False) + "\n"
         )
 
     def _build_generation_sidecar(self, op_suffix: str, resolved_context: Dict[str, Any]) -> Dict[str, Any]:

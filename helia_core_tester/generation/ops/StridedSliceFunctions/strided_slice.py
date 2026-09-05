@@ -303,48 +303,49 @@ class OpStridedSlice(OperationBase):
             output_dims = builder.nhwc_to_cmsis_dims(output_shape)
         
         # Generate input data and quantize when required.
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-
         if kernel_info["input_c_type"] in ("float16_t", "float"):
             # StridedSlice is pure data movement, so the golden output can be
             # computed directly via numpy slicing without invoking a TFLite
             # interpreter (which has no reliable float activation path).
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
-            input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(float_dtype)
-        elif kernel_info["input_c_type"] == "int32_t":
-            input_q = self.rng.integers(-1000, 1001, size=input_shape, dtype=np.int32)
+            input_q = self._sample_uniform(input_shape, dtype=float_dtype)
         else:
-            input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
+            rng_state = self.rng.__getstate__()
+            self.rng = np.random.default_rng(self.seed)
 
-            # Extract quantization from LiteRT
-            input_quant = op_tensors['inputs'][0]['quantization']
-            input_scale = input_quant.get('scale', 1.0)
-            input_zp = input_quant.get('zero_point', 0)
-
-            # Handle per-channel quantization (convert to scalar)
-            if isinstance(input_scale, (list, np.ndarray)):
-                input_scale = float(input_scale[0]) if len(input_scale) > 0 else 1.0
-            if isinstance(input_zp, (list, np.ndarray)):
-                input_zp = int(input_zp[0]) if len(input_zp) > 0 else 0
-
-            input_scale = float(input_scale)
-            input_zp = int(input_zp)
-
-            # Quantize inputs
-            if kernel_info["input_c_type"] == "int8_t":
-                np_in_dtype = np.int8
-                qmin, qmax = -128, 127
-            elif kernel_info["input_c_type"] == "int16_t":
-                np_in_dtype = np.int16
-                qmin, qmax = -32768, 32767
+            if kernel_info["input_c_type"] == "int32_t":
+                input_q = self.rng.integers(-1000, 1001, size=input_shape, dtype=np.int32)
             else:
-                raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
+                input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
 
-            input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-            input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+                # Extract quantization from LiteRT
+                input_quant = op_tensors['inputs'][0]['quantization']
+                input_scale = input_quant.get('scale', 1.0)
+                input_zp = input_quant.get('zero_point', 0)
 
-        self.rng.__setstate__(rng_state)
+                # Handle per-channel quantization (convert to scalar)
+                if isinstance(input_scale, (list, np.ndarray)):
+                    input_scale = float(input_scale[0]) if len(input_scale) > 0 else 1.0
+                if isinstance(input_zp, (list, np.ndarray)):
+                    input_zp = int(input_zp[0]) if len(input_zp) > 0 else 0
+
+                input_scale = float(input_scale)
+                input_zp = int(input_zp)
+
+                # Quantize inputs
+                if kernel_info["input_c_type"] == "int8_t":
+                    np_in_dtype = np.int8
+                    qmin, qmax = -128, 127
+                elif kernel_info["input_c_type"] == "int16_t":
+                    np_in_dtype = np.int16
+                    qmin, qmax = -32768, 32767
+                else:
+                    raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
+
+                input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
+                input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+
+            self.rng.__setstate__(rng_state)
 
         if kernel_info["input_c_type"] in ("float16_t", "float") or batch_collapsed:
             # StridedSlice is pure data movement (no rescale -- output shares the

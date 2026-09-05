@@ -315,10 +315,20 @@ class OpMean(OperationBase):
 
         # Golden with float32 accumulation and a float32 divide for both
         # dtypes (single final rounding for f16).
-        output_data = (
-            np.sum(input_q.astype(np.float32), axis=tuple(normalized_axes), keepdims=True)
-            / np.float32(reduction_count)
-        ).astype(float_dtype)
+        def reference(operands):
+            return (
+                np.sum(
+                    operands[0].astype(np.float32),
+                    axis=tuple(normalized_axes),
+                    keepdims=True,
+                )
+                / np.float32(reduction_count)
+            ).astype(float_dtype)
+
+        output_data = reference([input_q])
+        output_data, nonfinite_context = self.apply_nonfinite_policy(
+            output_data, reference=reference, inputs=[input_q]
+        )
 
         context = {
             'name': name,
@@ -333,6 +343,7 @@ class OpMean(OperationBase):
             'float_kernel': True,
             'validation_mode': 'float',
         }
+        context.update(nonfinite_context)
 
         cmake_context = {
             'name': name,

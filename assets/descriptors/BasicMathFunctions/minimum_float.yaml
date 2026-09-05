@@ -191,3 +191,40 @@ tensor_dtypes:
   output: FP16
 input_1_shape: [1, 2, 3, 1]
 input_2_shape: [1, 2, 3, 4]
+---
+# Non-finite cover for the float minimum kernels. The arm_maximum_f32 and
+# arm_minimum_f32 doxygen blocks in ns-cmsis-nn Include/arm_nnfunctions_flt.h are
+# explicit: "The result for a tie between
+# zeros of opposite sign, and for any non-finite input, is unspecified", and goes on
+# to say the answer differs between the Helium leg (IEEE maxNum/minNum, which
+# suppress NaN) and the scalar leg, and between optimization levels, because the
+# shipped -Ofast implies -ffinite-math-only. So nonfinite_policy is mask: the three
+# token lanes are don't-care -- min/max is pointwise, so a token reaches its own lane
+# and no other -- and the case asserts SUCCESS, no fault, no hang, and that the 125
+# finite lanes beside the tokens are untouched. Note this covers the -Inf lane too,
+# where min(-Inf, finite) is a perfectly finite reference: what the header declines to
+# specify is the kernel's choice there, not just the non-finite results.
+#
+# Only the left operand carries the sweep; the right stays finite, which is also the
+# pairing the header discusses (non-NaN operand versus NaN operand).
+operator: Minimum
+name: minimum_float_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 4, 4, 8]
+input_2_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+nonfinite_policy: mask
+---
+operator: Minimum
+name: minimum_float_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 4, 4, 8]
+input_2_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+nonfinite_policy: mask

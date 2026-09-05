@@ -246,6 +246,16 @@ class OpSub(BinaryBasicMathBase):
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
         
         # Build template context
+        # Only the quantized path renders these as integers; the float path passes the
+        # bounds as literals instead, and the +/-INFINITY no-clamp idiom has no integer
+        # image at all, so casting it would raise rather than produce a dead field.
+        if kernel_info["float_kernel"]:
+            out_activation_min_ctx = activation_min
+            out_activation_max_ctx = activation_max
+        else:
+            out_activation_min_ctx = int(activation_min)
+            out_activation_max_ctx = int(activation_max)
+
         context = {
             'name': name,
             'input1_dims': input1_dims,
@@ -261,8 +271,8 @@ class OpSub(BinaryBasicMathBase):
             'out_offset': int(output_zp),
             'out_mult': int(output_mult),
             'out_shift': int(output_shift),
-            'out_activation_min': int(activation_min),
-            'out_activation_max': int(activation_max),
+            'out_activation_min': out_activation_min_ctx,
+            'out_activation_max': out_activation_max_ctx,
             'block_size': int(np.prod(output_shape)),
             'call_style': str(self.desc.get("hint", {}).get("call_style", "")),
             'input1_data_array': input1_array_str,

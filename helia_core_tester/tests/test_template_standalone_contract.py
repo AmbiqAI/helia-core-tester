@@ -51,7 +51,13 @@ def test_all_c_templates_use_standalone_harness_contract() -> None:
         # from the HELIA_VALIDATE_OUTPUTS requirement.
         is_fault_template = path.stem.endswith("_fault.c")
         if not is_fault_template:
-            assert "HELIA_VALIDATE_OUTPUTS(" in text, path
+            # Mask-policy operators (issue #74) reach the same validator through the
+            # shared common/standalone/validation.j2 macro, which picks the masked or
+            # the plain form from the render context.
+            assert (
+                "HELIA_VALIDATE_OUTPUTS(" in text
+                or "validation_outputs(" in text
+            ), path
         assert "HELIA_VALIDATE_RETURN_FAILURES(" in text, path
 
 

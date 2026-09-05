@@ -133,7 +133,7 @@ class OpSplit(OperationBase):
             input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
         elif kernel_info["input_c_type"] == "float16_t":
             np_in_dtype = np.float16
-            input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np_in_dtype)
+            input_q = self._sample_uniform(input_shape, dtype=np_in_dtype)
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
 
