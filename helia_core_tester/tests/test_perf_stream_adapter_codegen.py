@@ -50,9 +50,10 @@ from helia_core_tester.perf_stream.generated_test_bridge import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# Most tests here read a pre-generated artifacts/generated_tests/ tree, which is
-# gitignored; the bias-bridge regression below generates its own case instead, so
-# it must not inherit this skip.
+# The builder cross-checks read a pre-generated artifacts/generated_tests/ tree,
+# which is gitignored; the drift guards render straight from adapter_specs.py and
+# the bias-bridge regression generates its own case, so those must not inherit
+# this skip or they would never run in CI.
 requires_generated_artifacts = pytest.mark.skipif(
     not (PROJECT_ROOT / "artifacts" / "generated_tests").is_dir(),
     reason="no generated-test artifacts under artifacts/generated_tests/ "
@@ -62,7 +63,6 @@ SESSION_C_PATH = PROJECT_ROOT / "cmake" / "perf_stream" / "benchmark_server_sess
 GENERATOR_SCRIPT = PROJECT_ROOT / "scripts" / "generate_perf_stream_adapters.py"
 
 
-@requires_generated_artifacts
 def test_generated_block_is_present_exactly_once_in_session_c() -> None:
     text = SESSION_C_PATH.read_text(encoding="utf-8")
     assert text.count(GENERATED_BLOCK_BEGIN) == 1
@@ -70,7 +70,6 @@ def test_generated_block_is_present_exactly_once_in_session_c() -> None:
     assert text.index(GENERATED_BLOCK_BEGIN) < text.index(GENERATED_BLOCK_END)
 
 
-@requires_generated_artifacts
 def test_committed_session_c_matches_freshly_rendered_adapter_block() -> None:
     """Drift check: if adapter_specs.py is edited without rerunning the generator, the
     committed benchmark_server_session.c's generated block will no longer match a fresh
@@ -87,7 +86,6 @@ def test_committed_session_c_matches_freshly_rendered_adapter_block() -> None:
     )
 
 
-@requires_generated_artifacts
 def test_generator_script_check_mode_passes_on_committed_file() -> None:
     result = subprocess.run(
         [sys.executable, str(GENERATOR_SCRIPT), "--check"],
@@ -98,7 +96,6 @@ def test_generator_script_check_mode_passes_on_committed_file() -> None:
     assert result.returncode == 0, result.stderr
 
 
-@requires_generated_artifacts
 def test_data_movement_adapters_validate_all_meta_and_output_shapes() -> None:
     block = render_generated_adapters_block()
     assert "meta == NULL" not in block
@@ -110,7 +107,6 @@ def test_data_movement_adapters_validate_all_meta_and_output_shapes() -> None:
     assert "const size_t required_meta_ints = is_batch_to_space ? 6u : 7u;" in block
 
 
-@requires_generated_artifacts
 def test_every_registered_adapter_has_a_unique_function_name() -> None:
     names = [adapter.function_name for adapter in FIRMWARE_ADAPTERS]
     assert len(names) == len(set(names)), f"duplicate function_name entries: {names}"

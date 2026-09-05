@@ -8,9 +8,11 @@ quantization step.  See AmbiqAI/helia-core-tester#77.
 
 from __future__ import annotations
 
+import hashlib
 import re
+from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pytest
@@ -26,21 +28,34 @@ _SEED = 1
 _TARGETS = ("cortex-m55", "cortex-m4")
 
 
+@lru_cache(maxsize=1)
+def _all_descriptors() -> Tuple[Dict, ...]:
+    """Every case below needs the whole descriptor tree, which cannot change
+    mid-run; parsing it once keeps this module's runtime in the generation work
+    rather than in YAML."""
+    return tuple(load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors")))
+
+
+def _pipeline_default_seed(name: str) -> int:
+    """The seed the generation pipeline derives when none is passed on the
+    command line (see generation/test_ops.py)."""
+    return int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:4], "little")
+
+
 def _descriptor(name: str) -> Dict:
-    descriptors = load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors"))
-    for desc in descriptors:
+    for desc in _all_descriptors():
         if desc.get("name") == name:
             return desc
     raise AssertionError(f"descriptor {name} not found")
 
 
-def _generate(name: str, out_dir: Path, target_cpu: str) -> str:
+def _generate(name: str, out_dir: Path, target_cpu: str, seed: int = _SEED) -> str:
     """Generate one case for one target and return its emitted header text."""
     desc = _descriptor(name)
     op_cls = OpConvolve if desc["operator"] == "Convolve" else OpFullyConnected
-    op = op_cls(desc, seed=_SEED, target_cpu=target_cpu)
+    op = op_cls(desc, seed=seed, target_cpu=target_cpu)
     model = op.build_keras_model() if op.needs_keras_model() else None
-    op.convert_to_tflite(model, str(out_dir / f"{name}.tflite"), _SEED)
+    op.convert_to_tflite(model, str(out_dir / f"{name}.tflite"), seed)
     op.generate_c_files(out_dir)
     return (out_dir / "includes").glob(f"{name}_*.h").__next__().read_text()
 
@@ -88,7 +103,7 @@ def _bias_carrying_int_cases(*, weight_dtype_s4: bool) -> List[str]:
     (TODO(#98)).
     """
     names: List[str] = []
-    for desc in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors")):
+    for desc in _all_descriptors():
         if desc.get("operator") not in ("Convolve", "FullyConnected"):
             continue
         if str(desc.get("activation_dtype", "")).upper() in ("FP32", "FP16"):
@@ -134,6 +149,30 @@ def test_s4_bias_is_detectable_on_at_least_one_channel(case_name: str, tmp_path:
     assert max(_output_steps(header)) >= 1.0, (
         f"{case_name} bias is below one output quantization step on every channel, "
         f"so dropping the bias-add reproduces the golden exactly"
+    )
+
+
+# The Convolve and FullyConnected cases with the narrowest measured margin over
+# one output quantization step. The bias floor is a property of the case, not of
+# the seed a run happens to use, so hold the tightest two at the seed the rest of
+# this module pins and at the one the pipeline derives by default.
+@pytest.mark.parametrize("case_name", ["convolve_one_by_n_case_07_s8", "fully_connected_default_s8"])
+@pytest.mark.parametrize("seed", ["pinned", "pipeline_default"])
+def test_tightest_int_bias_margins_survive_the_pipeline_default_seed(
+    case_name: str, seed: str, tmp_path: Path
+) -> None:
+    seed_value = _SEED if seed == "pinned" else _pipeline_default_seed(case_name)
+    header = _generate(case_name, tmp_path, "cortex-m55", seed=seed_value)
+    biases = _int_array(header, "biases")
+
+    assert biases, f"{case_name} emits no bias array at seed {seed_value}"
+    assert all(bias != 0 for bias in biases), (
+        f"{case_name} ships a zero bias channel at seed {seed_value}"
+    )
+    assert min(_output_steps(header)) >= 1.0, (
+        f"{case_name} has a channel whose bias is below one output quantization "
+        f"step at seed {seed_value}, so dropping the bias-add reproduces that "
+        f"channel exactly"
     )
 
 
