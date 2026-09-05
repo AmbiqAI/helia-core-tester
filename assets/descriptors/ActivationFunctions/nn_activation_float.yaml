@@ -102,8 +102,10 @@ input_shape:
 activation_type: ARM_NN_FLT_ACT_TANH
 act_param: 0.0
 # Scalar-fallback floor, NOT the MVE floor: the m55-f16-fallback CI leg
-# compiles the kernel at -O0 with ARM_MATH_AUTOVECTORIZE (scalar f16 tanh),
-# where the worst measured diff is 1.03e-2 at |exp|=0.66 -- the MVE path
+# compiles the kernel at -O0 with ARM_MATH_AUTOVECTORIZE, so it runs
+# arm_nn_tanh_scalar_ref_f16, the scalar twin of the MVE LUT (same [0, 4]
+# 256-segment geometry, arm_nn_activation_flt.h:401-411, ns-cmsis-nn#407);
+# the worst measured diff there is 1.03e-2 at |exp|=0.66 -- the MVE path
 # measures ~0 error here, which is how an earlier audit mistook this
 # override for dead weight and removed it (third-round review caught the
 # fallback leg breaking). rtol 0.02 gives ~1.4x margin over that floor.
@@ -160,8 +162,10 @@ input_shape:
 activation_type: ARM_NN_FLT_ACT_TANH
 act_param: 0.0
 # Scalar-fallback floor, NOT the MVE floor: the m55-f16-fallback CI leg
-# compiles the kernel at -O0 with ARM_MATH_AUTOVECTORIZE (scalar f16 tanh),
-# where the worst measured diff is 1.03e-2 at |exp|=0.66 -- the MVE path
+# compiles the kernel at -O0 with ARM_MATH_AUTOVECTORIZE, so it runs
+# arm_nn_tanh_scalar_ref_f16, the scalar twin of the MVE LUT (same [0, 4]
+# 256-segment geometry, arm_nn_activation_flt.h:401-411, ns-cmsis-nn#407);
+# the worst measured diff there is 1.03e-2 at |exp|=0.66 -- the MVE path
 # measures ~0 error here, which is how an earlier audit mistook this
 # override for dead weight and removed it (third-round review caught the
 # fallback leg breaking). rtol 0.02 gives ~1.4x margin over that floor.
