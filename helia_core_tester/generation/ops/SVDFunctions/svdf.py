@@ -237,6 +237,10 @@ class OpSVDF(OperationBase):
             rng_state = self.rng.__getstate__()
             self.rng = np.random.default_rng(self.seed)
             input_sequence = self.rng.uniform(-1.0, 1.0, size=(sequence_steps, input_batches, input_height)).astype(float_dtype)
+            # The state, weight and bias draws below continue this same stream, so the
+            # sweep is applied to the tensor already drawn rather than resampled through
+            # _sample_uniform, which restarts the stream and would move all of them.
+            input_sequence = self._maybe_apply_input_mode(input_sequence)
             state_init = self.rng.uniform(-0.5, 0.5, size=(input_batches, feature_batches, time_batches)).astype(float_dtype)
             weights_feature = self.rng.uniform(-1.0, 1.0, size=(feature_batches, input_height)).astype(float_dtype)
             weights_time = self.rng.uniform(-1.0, 1.0, size=(feature_batches, time_batches)).astype(float_dtype)
@@ -254,13 +258,19 @@ class OpSVDF(OperationBase):
                 "output_activation_min": output_activation_min,
                 "output_activation_max": output_activation_max,
             }
-            expected_output = self._generate_svdf_expected_f32(
-                input_sequence=input_sequence,
-                state_init=state_init,
-                weights_feature=weights_feature,
-                weights_time=weights_time,
-                bias=bias,
-                params=params,
+            def float_reference(operands):
+                return self._generate_svdf_expected_f32(
+                    input_sequence=operands[0],
+                    state_init=state_init,
+                    weights_feature=weights_feature,
+                    weights_time=weights_time,
+                    bias=bias,
+                    params=params,
+                )
+
+            expected_output = float_reference([input_sequence])
+            expected_output, nonfinite_context = self.apply_nonfinite_policy(
+                expected_output, reference=float_reference, inputs=[input_sequence]
             )
 
             builder = TemplateContextBuilder()
@@ -294,6 +304,7 @@ class OpSVDF(OperationBase):
                 "output_activation_min_literal": builder.format_float_literal(output_activation_min),
                 "output_activation_max_literal": builder.format_float_literal(output_activation_max),
             }
+            context.update(nonfinite_context)
             self._write_op_outputs(
                 output_dir,
                 "svdf",

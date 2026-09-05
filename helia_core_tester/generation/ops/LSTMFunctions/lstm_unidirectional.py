@@ -224,6 +224,10 @@ class OpLSTMUnidirectional(OperationBase):
                 input_tensor = self.rng.uniform(-1.0, 1.0, size=(time_steps, batch_size, input_size)).astype(float_dtype)
             else:
                 input_tensor = self.rng.uniform(-1.0, 1.0, size=(batch_size, time_steps, input_size)).astype(float_dtype)
+            # The weight draws below continue this same stream, so the sweep is applied
+            # to the tensor already drawn rather than resampled through _sample_uniform,
+            # which restarts the stream and would move every weight.
+            input_tensor = self._maybe_apply_input_mode(input_tensor)
             forget_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(float_dtype)
             input_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(float_dtype)
             cell_w_in = self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(float_dtype)
@@ -249,26 +253,32 @@ class OpLSTMUnidirectional(OperationBase):
                 output_bias = np.zeros((hidden_size,), dtype=float_dtype)
             self.rng.__setstate__(rng_state)
 
-            output_ref = self._generate_lstm_expected_f32(
-                input_tensor,
-                forget_w_in,
-                input_w_in,
-                cell_w_in,
-                output_w_in,
-                forget_w_hidden,
-                input_w_hidden,
-                cell_w_hidden,
-                output_w_hidden,
-                forget_bias,
-                input_bias,
-                cell_bias,
-                output_bias,
-                batch_size=batch_size,
-                time_steps=time_steps,
-                input_size=input_size,
-                hidden_size=hidden_size,
-                time_major=time_major,
-                cell_clip=cell_clip,
+            def float_reference(operands):
+                return self._generate_lstm_expected_f32(
+                    operands[0],
+                    forget_w_in,
+                    input_w_in,
+                    cell_w_in,
+                    output_w_in,
+                    forget_w_hidden,
+                    input_w_hidden,
+                    cell_w_hidden,
+                    output_w_hidden,
+                    forget_bias,
+                    input_bias,
+                    cell_bias,
+                    output_bias,
+                    batch_size=batch_size,
+                    time_steps=time_steps,
+                    input_size=input_size,
+                    hidden_size=hidden_size,
+                    time_major=time_major,
+                    cell_clip=cell_clip,
+                )
+
+            output_ref = float_reference([input_tensor])
+            output_ref, nonfinite_context = self.apply_nonfinite_policy(
+                output_ref, reference=float_reference, inputs=[input_tensor]
             )
 
             builder = TemplateContextBuilder()
@@ -303,6 +313,7 @@ class OpLSTMUnidirectional(OperationBase):
                 "dst_size": batch_size * time_steps * hidden_size,
                 "use_bias": use_bias,
             }
+            context.update(nonfinite_context)
 
             # ns-cmsis-nn#377 / tester#71: generation-time feature probe for
             # the float LSTM temp-buffer sizers added by ns-cmsis-nn#381

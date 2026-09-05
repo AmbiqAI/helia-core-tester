@@ -152,6 +152,10 @@ class OpGRUUnidirectional(OperationBase):
             input_tensor = self.rng.uniform(-1.0, 1.0, size=(time_steps, batch_size, input_size)).astype(float_dtype)
         else:
             input_tensor = self.rng.uniform(-1.0, 1.0, size=(batch_size, time_steps, input_size)).astype(float_dtype)
+        # The weight draws below continue this same stream, so the sweep is applied to
+        # the tensor already drawn rather than resampled through _sample_uniform, which
+        # restarts the stream and would move every weight.
+        input_tensor = self._maybe_apply_input_mode(input_tensor)
 
         def w_in():
             return self.rng.uniform(-0.5, 0.5, size=(hidden_size, input_size)).astype(float_dtype)
@@ -173,26 +177,32 @@ class OpGRUUnidirectional(OperationBase):
 
         self.rng.__setstate__(rng_state)
 
-        output_ref = self._generate_gru_expected(
-            input_tensor,
-            update_w_in.astype(np.float32),
-            update_w_hidden.astype(np.float32),
-            update_b_in.astype(np.float32),
-            update_b_hidden.astype(np.float32),
-            reset_w_in.astype(np.float32),
-            reset_w_hidden.astype(np.float32),
-            reset_b_in.astype(np.float32),
-            reset_b_hidden.astype(np.float32),
-            cand_w_in.astype(np.float32),
-            cand_w_hidden.astype(np.float32),
-            cand_b_in.astype(np.float32),
-            cand_b_hidden.astype(np.float32),
-            batch_size=batch_size,
-            time_steps=time_steps,
-            input_size=input_size,
-            hidden_size=hidden_size,
-            time_major=time_major,
-            reset_after=reset_after,
+        def float_reference(operands):
+            return self._generate_gru_expected(
+                operands[0],
+                update_w_in.astype(np.float32),
+                update_w_hidden.astype(np.float32),
+                update_b_in.astype(np.float32),
+                update_b_hidden.astype(np.float32),
+                reset_w_in.astype(np.float32),
+                reset_w_hidden.astype(np.float32),
+                reset_b_in.astype(np.float32),
+                reset_b_hidden.astype(np.float32),
+                cand_w_in.astype(np.float32),
+                cand_w_hidden.astype(np.float32),
+                cand_b_in.astype(np.float32),
+                cand_b_hidden.astype(np.float32),
+                batch_size=batch_size,
+                time_steps=time_steps,
+                input_size=input_size,
+                hidden_size=hidden_size,
+                time_major=time_major,
+                reset_after=reset_after,
+            )
+
+        output_ref = float_reference([input_tensor])
+        output_ref, nonfinite_context = self.apply_nonfinite_policy(
+            output_ref, reference=float_reference, inputs=[input_tensor]
         )
 
         fault = self.desc.get("fault")
@@ -232,6 +242,7 @@ class OpGRUUnidirectional(OperationBase):
             "expected_status": expected_status,
             "use_bias": use_bias,
         }
+        context.update(nonfinite_context)
 
         # ns-cmsis-nn#377 / tester#71: generation-time feature probe for the
         # temp-buffer sizer added by ns-cmsis-nn#381. Detected -> the main

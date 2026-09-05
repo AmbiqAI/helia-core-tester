@@ -143,6 +143,17 @@ cases carry that placement instead: `[inf, nan]` at flat positions 1 and 3 of fo
 three-element groups on the innermost axis, and `[nan, inf]` at flat positions 0 and 7 of a
 `[1, 2, 2, 2]` input reduced over H, which is the non-innermost axis #429's generic case uses.
 
+A recurrent operator takes one token per case at the first time step of the first batch row.
+The recurrence carries whatever that produces into every later step of that row, so the token
+reaches the whole row and reachability masks it; the descriptors therefore use `batch_size: 2`
+(SVDF: `input_batches: 2`) so the other row stays finite and fully asserted, which is what
+catches a vector leg that poisons a whole register rather than one lane. The LSTM and GRU gates
+swallow an infinity by saturating -- `sigmoid` of an infinity is 1 or 0 and `tanh` of one is
+±1 -- so those cases have a finite reference and are masked purely by measured reachability,
+not by the finiteness of the golden. SVDF's default ±1e30 activation clamps do the same to the
+value, and its `time_batches` exceeds its `sequence_steps` so the step-0 column is still in the
+state ring when the last step produces the output.
+
 `nonfinite_positions` is what places them. It defaults to the leading run `0..k-1` and pairs
 element for element with `nonfinite_tokens`; a descriptor sets it where that run cannot express
 the placement, either one token per reduction group or a pooling window that SAME padding only
@@ -166,13 +177,15 @@ non-finite output may be pinned is a per-kernel question.
   marks every output lane that moves. Every remaining lane still has to match, and the case still
   has to return `ARM_CMSIS_NN_SUCCESS` without faulting or timing out. This is for kernels whose
   doxygen block says nothing about non-finite input (the `arm_softmax_f32` block specifies
-  arguments and return status only, and abs and batch norm are the same), that declare the
+  arguments and return status only, and abs, batch norm, `arm_lstm_unidirectional_f32`/`_f16`,
+  `arm_gru_unidirectional_f32`/`_f16` and `arm_svdf_f32` are the same), that declare the
   result unspecified outright (the `arm_minimum_f32` and `arm_maximum_f32` blocks: "The result
   ... for any non-finite input, is unspecified"), or that document legs which disagree: the
   `arm_max_pool_f16` note calls the scalar leg's NaN behaviour unspecified at the shipped
-  `-Ofast` and declines to promise NaN propagation end to end, and the `arm_avg_pool_f16` note
+  `-Ofast` and declines to promise NaN propagation end to end, the `arm_avg_pool_f16` note
   has NaN propagating at every optimization level on non-MVE while the MVE clamp resolves it to
-  a bound. It asserts robustness and non-corruption of the neighbouring lanes without encoding an
+  a bound, and the `arm_svdf_f16` note has NaN propagating through the input-activation clamp on
+  every build while the MVE output-activation clamp resolves it to a bound. It asserts robustness and non-corruption of the neighbouring lanes without encoding an
   uncontracted value as a golden. Two generation-time guards keep the measurement honest: a case
   that ends up masking every lane fails, since it would assert nothing beyond `SUCCESS`, and so
   does a case where no lane moves between the probes, since a two-sided activation clamp that
