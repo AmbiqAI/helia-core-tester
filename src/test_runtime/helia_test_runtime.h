@@ -329,7 +329,7 @@ static inline int helia_test_float_class_binary64(const void *storage)
  * the kernel returns SUCCESS, does not fault or hang, and does not corrupt the
  * lanes around the token. `mask` may be NULL, which compares every lane.
  */
-#define HELIA_VALIDATE_FLOATS_MASKED(actual, expected, mask, n, atol, rtol, failures, max_reports) \
+#define HELIA_VALIDATE_FLOATS_MASKED(actual, expected, mask, n, atol, rtol, max_reports, failures) \
     do { \
         const uint8_t *helia_mask = (const uint8_t *)(mask); \
         double helia_max_diff = 0.0; \
@@ -410,7 +410,7 @@ static inline int helia_test_float_class_binary64(const void *storage)
     } while (0)
 
 #define HELIA_VALIDATE_FLOATS(actual, expected, size, atol, rtol, max_reports, failures) \
-    HELIA_VALIDATE_FLOATS_MASKED((actual), (expected), NULL, (size), (atol), (rtol), (failures), (max_reports))
+    HELIA_VALIDATE_FLOATS_MASKED((actual), (expected), NULL, (size), (atol), (rtol), (max_reports), (failures))
 
 #define HELIA_VALIDATE_BOOLEANS(actual, expected, size, max_reports, failures) \
     do { \

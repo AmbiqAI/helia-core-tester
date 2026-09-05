@@ -257,7 +257,7 @@ static void helia_run_masked_case(
     int failures = 0;
 
     printf("CASE %s\r\n", name);
-    HELIA_VALIDATE_FLOATS_MASKED(actual, expected, mask, size, 1e-5, 1e-5, failures, 8);
+    HELIA_VALIDATE_FLOATS_MASKED(actual, expected, mask, size, 1e-5, 1e-5, 8, failures);
     printf("RESULT %s failures=%d\r\n", name, failures);
 }
 
