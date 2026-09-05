@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
-from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Set
 
 from .env import REPO_ROOT
 from .errors import FvpScriptError
@@ -126,9 +124,7 @@ def _clear_stale_gcda(build_dir: Path) -> None:
 
 _COMPILER_LAUNCHER_ENV = "HELIA_CORE_TESTER_COMPILER_LAUNCHER"
 _COMPILER_LAUNCHER_TOOLS = ("ccache", "sccache")
-# CMAKE_<LANG>_COMPILER_LAUNCHER gained ASM support in 3.4; on older CMake the
-# variable is silently ignored and the assembly objects miss the cache.
-_ASM_LAUNCHER_MIN_CMAKE = (3, 4)
+_COMPILER_LAUNCHER_OFF = ("", "none")
 
 
 def resolve_compiler_launcher() -> Optional[str]:
@@ -137,10 +133,27 @@ def resolve_compiler_launcher() -> Optional[str]:
     Opt-in by presence only: nothing here installs a tool and no image ships
     one, so a host that already has ccache or sccache gets warm rebuilds and a
     host that has neither builds exactly as before. See issue #107.
+
+    ``HELIA_CORE_TESTER_COMPILER_LAUNCHER`` names a specific tool, or is set to
+    ``none`` (or empty) to disable caching outright even where ccache is on
+    ``PATH`` -- a build that has to be reproducible or instrumented for coverage
+    wants the compiler invoked directly. A name that is not on ``PATH`` raises:
+    silently building uncached under a launcher the caller explicitly asked for
+    hides exactly the misconfiguration the override exists to express.
     """
-    override = os.environ.get(_COMPILER_LAUNCHER_ENV, "").strip()
-    if override:
-        return shutil.which(override) or override
+    override = os.environ.get(_COMPILER_LAUNCHER_ENV)
+    if override is not None:
+        override = override.strip()
+        if override.lower() in _COMPILER_LAUNCHER_OFF:
+            return None
+        resolved = shutil.which(override)
+        if resolved is None:
+            raise FvpScriptError(
+                f"{_COMPILER_LAUNCHER_ENV}={override!r} is not on PATH. "
+                f"Name a compiler launcher that is installed, or set it to "
+                f"'none' to build without one."
+            )
+        return resolved
     for tool in _COMPILER_LAUNCHER_TOOLS:
         found = shutil.which(tool)
         if found:
@@ -148,31 +161,14 @@ def resolve_compiler_launcher() -> Optional[str]:
     return None
 
 
-@lru_cache(maxsize=1)
-def _cmake_version() -> Optional[Tuple[int, int]]:
-    try:
-        completed = subprocess.run(
-            ["cmake", "--version"], capture_output=True, text=True, check=False
-        )
-    except OSError:
-        return None
-    match = re.search(r"cmake version (\d+)\.(\d+)", completed.stdout or "")
-    if not match:
-        return None
-    return int(match.group(1)), int(match.group(2))
-
-
-def compiler_launcher_args() -> List[str]:
+def compiler_launcher_args(verbosity: int = 0) -> List[str]:
     """CMake defines routing compilation through an available compiler cache."""
     launcher = resolve_compiler_launcher()
     if not launcher:
         return []
-    args = [f"-DCMAKE_C_COMPILER_LAUNCHER={launcher}"]
-    version = _cmake_version()
-    if version is not None and version >= _ASM_LAUNCHER_MIN_CMAKE:
-        args.append(f"-DCMAKE_ASM_COMPILER_LAUNCHER={launcher}")
-    print(f"Compiler launcher: {launcher}")
-    return args
+    if verbosity >= 1:
+        print(f"Compiler launcher: {launcher}")
+    return [f"-DCMAKE_C_COMPILER_LAUNCHER={launcher}"]
 
 
 def read_cmake_cache_path(build_dir: Path, key: str) -> Optional[Path]:
@@ -221,7 +217,7 @@ def cmake_configure(
         f"-DTARGET_CPU={cpu}",
         f"-DCMSIS_PATH={cmsis5}",
         f"-DCMSIS_OPTIMIZATION_LEVEL={optimization}",
-    ] + compiler_launcher_args() + [f"-D{item}" for item in extra_defs]
+    ] + compiler_launcher_args(verbosity) + [f"-D{item}" for item in extra_defs]
     if generated_tests_dir is not None:
         cmd.append(f"-DGENERATED_TESTS_DIR={generated_tests_dir}")
     if enable_coverage:

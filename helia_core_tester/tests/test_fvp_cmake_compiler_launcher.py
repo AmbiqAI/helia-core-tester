@@ -4,7 +4,10 @@ import os
 import stat
 from pathlib import Path
 
+import pytest
+
 from helia_core_tester.fvp import cmake as fvp_cmake
+from helia_core_tester.fvp.errors import FvpScriptError
 
 
 def _fake_tool(tmp_path: Path, name: str) -> Path:
@@ -23,26 +26,13 @@ def _isolate_path(monkeypatch, *dirs: Path) -> None:
 
 def test_no_launcher_on_path_leaves_the_configure_untouched(monkeypatch, tmp_path: Path) -> None:
     _isolate_path(monkeypatch, tmp_path / "empty")
-    monkeypatch.setattr(fvp_cmake, "_cmake_version", lambda: (3, 28))
 
     assert fvp_cmake.compiler_launcher_args() == []
 
 
-def test_ccache_on_path_is_passed_as_the_c_and_asm_launcher(monkeypatch, tmp_path: Path) -> None:
+def test_ccache_on_path_is_passed_as_the_c_launcher(monkeypatch, tmp_path: Path) -> None:
     tool = _fake_tool(tmp_path, "ccache")
     _isolate_path(monkeypatch, tool.parent)
-    monkeypatch.setattr(fvp_cmake, "_cmake_version", lambda: (3, 28))
-
-    assert fvp_cmake.compiler_launcher_args() == [
-        f"-DCMAKE_C_COMPILER_LAUNCHER={tool}",
-        f"-DCMAKE_ASM_COMPILER_LAUNCHER={tool}",
-    ]
-
-
-def test_asm_launcher_is_withheld_from_cmake_too_old_to_honour_it(monkeypatch, tmp_path: Path) -> None:
-    tool = _fake_tool(tmp_path, "ccache")
-    _isolate_path(monkeypatch, tool.parent)
-    monkeypatch.setattr(fvp_cmake, "_cmake_version", lambda: (3, 3))
 
     assert fvp_cmake.compiler_launcher_args() == [f"-DCMAKE_C_COMPILER_LAUNCHER={tool}"]
 
@@ -50,9 +40,8 @@ def test_asm_launcher_is_withheld_from_cmake_too_old_to_honour_it(monkeypatch, t
 def test_sccache_is_accepted_when_ccache_is_absent(monkeypatch, tmp_path: Path) -> None:
     tool = _fake_tool(tmp_path, "sccache")
     _isolate_path(monkeypatch, tool.parent)
-    monkeypatch.setattr(fvp_cmake, "_cmake_version", lambda: (3, 28))
 
-    assert fvp_cmake.compiler_launcher_args()[0] == f"-DCMAKE_C_COMPILER_LAUNCHER={tool}"
+    assert fvp_cmake.compiler_launcher_args() == [f"-DCMAKE_C_COMPILER_LAUNCHER={tool}"]
 
 
 def test_env_override_beats_path_discovery(monkeypatch, tmp_path: Path) -> None:
@@ -60,15 +49,44 @@ def test_env_override_beats_path_discovery(monkeypatch, tmp_path: Path) -> None:
     chosen = _fake_tool(tmp_path, "my-cache")
     _isolate_path(monkeypatch, on_path.parent)
     monkeypatch.setenv("HELIA_CORE_TESTER_COMPILER_LAUNCHER", "my-cache")
-    monkeypatch.setattr(fvp_cmake, "_cmake_version", lambda: (3, 28))
 
-    assert fvp_cmake.compiler_launcher_args()[0] == f"-DCMAKE_C_COMPILER_LAUNCHER={chosen}"
+    assert fvp_cmake.compiler_launcher_args() == [f"-DCMAKE_C_COMPILER_LAUNCHER={chosen}"]
 
 
-def test_configure_command_carries_the_launcher_defines(monkeypatch, tmp_path: Path) -> None:
+def test_override_naming_a_missing_tool_fails_the_configure(monkeypatch, tmp_path: Path) -> None:
+    on_path = _fake_tool(tmp_path, "ccache")
+    _isolate_path(monkeypatch, on_path.parent)
+    monkeypatch.setenv("HELIA_CORE_TESTER_COMPILER_LAUNCHER", "no-such-cache")
+
+    with pytest.raises(FvpScriptError, match="not on PATH"):
+        fvp_cmake.compiler_launcher_args()
+
+
+@pytest.mark.parametrize("value", ["none", "NONE", "", "  "])
+def test_override_can_switch_off_a_launcher_that_is_on_path(
+    monkeypatch, tmp_path: Path, value: str
+) -> None:
+    on_path = _fake_tool(tmp_path, "ccache")
+    _isolate_path(monkeypatch, on_path.parent)
+    monkeypatch.setenv("HELIA_CORE_TESTER_COMPILER_LAUNCHER", value)
+
+    assert fvp_cmake.compiler_launcher_args() == []
+
+
+def test_launcher_is_only_announced_at_verbosity(monkeypatch, tmp_path: Path, capsys) -> None:
     tool = _fake_tool(tmp_path, "ccache")
     _isolate_path(monkeypatch, tool.parent)
-    monkeypatch.setattr(fvp_cmake, "_cmake_version", lambda: (3, 28))
+
+    fvp_cmake.compiler_launcher_args(0)
+    assert "Compiler launcher" not in capsys.readouterr().out
+
+    fvp_cmake.compiler_launcher_args(1)
+    assert "Compiler launcher" in capsys.readouterr().out
+
+
+def test_configure_command_carries_the_launcher_define(monkeypatch, tmp_path: Path) -> None:
+    tool = _fake_tool(tmp_path, "ccache")
+    _isolate_path(monkeypatch, tool.parent)
 
     captured: dict = {}
 
@@ -95,6 +113,8 @@ def test_configure_command_carries_the_launcher_defines(monkeypatch, tmp_path: P
 
     cmd = captured["cmd"]
     assert f"-DCMAKE_C_COMPILER_LAUNCHER={tool}" in cmd
-    assert f"-DCMAKE_ASM_COMPILER_LAUNCHER={tool}" in cmd
+    # CMAKE_ASM_COMPILER_LAUNCHER is not a CMake variable: passing it only
+    # produced an unused-variable warning on every configure.
+    assert not any(item.startswith("-DCMAKE_ASM_COMPILER_LAUNCHER") for item in cmd)
     # Caller-supplied defines still win by coming later on the command line.
     assert cmd.index("-DFOO=BAR") > cmd.index(f"-DCMAKE_C_COMPILER_LAUNCHER={tool}")

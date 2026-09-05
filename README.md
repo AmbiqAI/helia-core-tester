@@ -277,8 +277,8 @@ Per-case timeout:
 - `--timeout 0` disables it: the value is always forwarded to the run step, so `0` really does hand the run back to the CI job cap as the only backstop. The masked non-finite policy's "returns SUCCESS and does not time out" only holds with a timeout in force.
 
 Compiler cache (opt-in):
-- when `ccache` or `sccache` is on `PATH`, the CMake configure adds `CMAKE_C_COMPILER_LAUNCHER` (and the ASM launcher on CMake versions that honour it) and logs which launcher it picked.
-- `HELIA_CORE_TESTER_COMPILER_LAUNCHER` names a specific tool.
+- when `ccache` or `sccache` is on `PATH`, the CMake configure adds `CMAKE_C_COMPILER_LAUNCHER` and, at verbosity 1 or higher, logs which launcher it picked.
+- `HELIA_CORE_TESTER_COMPILER_LAUNCHER` names a specific tool; a name that is not on `PATH` fails the configure rather than building uncached. Set it to `none` (or empty) to build without a launcher even where one is installed, which is what a coverage or reproducibility build wants.
 - no image ships either tool; a host without one builds exactly as before.
 
 ## Coverage Merge
