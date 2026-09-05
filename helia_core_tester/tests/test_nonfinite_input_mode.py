@@ -108,6 +108,51 @@ def test_a_descriptor_can_restrict_the_token_set() -> None:
     assert not np.isnan(flat).any()
 
 
+def test_nonfinite_positions_place_the_tokens_off_the_leading_run() -> None:
+    """The AmbiqAI/ns-cmsis-nn#429 placement: one token per reduction group, which the
+    default leading run cannot express."""
+    op = _op(
+        input_mode="nonfinite_sweep",
+        suite="float",
+        nonfinite_tokens=["inf", "nan"],
+        nonfinite_positions=[1, 3],
+    )
+    flat = op._sample_uniform((1, 12)).reshape(-1)
+
+    assert op.nonfinite_sweep_positions() == (1, 3)
+    assert np.isposinf(flat[1]) and np.isnan(flat[3])
+    assert np.isfinite(flat[[0, 2, 4, 5, 6, 7, 8, 9, 10, 11]]).all()
+
+
+def test_nonfinite_positions_must_pair_with_the_tokens() -> None:
+    with pytest.raises(ValueError, match="nonfinite_positions for"):
+        _op(
+            input_mode="nonfinite_sweep",
+            suite="float",
+            nonfinite_tokens=["inf", "nan"],
+            nonfinite_positions=[1],
+        )._sample_uniform((1, 8))
+    with pytest.raises(ValueError, match="nonfinite_positions must be unique"):
+        _op(
+            input_mode="nonfinite_sweep",
+            suite="float",
+            nonfinite_tokens=["inf", "nan"],
+            nonfinite_positions=[2, 2],
+        )._sample_uniform((1, 8))
+    with pytest.raises(ValueError, match="without input_mode 'nonfinite_sweep'"):
+        _op(suite="float", nonfinite_positions=[2]).nonfinite_sweep_positions()
+
+
+def test_a_tensor_too_short_for_the_furthest_position_is_rejected() -> None:
+    with pytest.raises(ValueError, match="needs at least 73 elements"):
+        _op(
+            input_mode="nonfinite_sweep",
+            suite="float",
+            nonfinite_tokens=["nan"],
+            nonfinite_positions=[72],
+        )._sample_uniform((1, 8))
+
+
 def test_unknown_and_duplicate_tokens_are_rejected() -> None:
     with pytest.raises(ValueError, match="Unsupported nonfinite_tokens"):
         _op(
@@ -310,7 +355,7 @@ def test_mask_covers_the_nonfinite_reference_lanes_and_zeroes_them() -> None:
 
     assert context["nonfinite_masked_lanes"] == 3
     assert _mask_bytes(context) == [1, 1, 1, 0]
-    # The header must stay finite-only: the masked entries are written as zero.
+    # The golden must stay finite: the masked entries are written as zero.
     assert emitted.tolist() == [0.0, 0.0, 0.0, 1.5]
     assert emitted.dtype == np.float32
 
@@ -333,6 +378,25 @@ def test_mask_policy_needs_an_input_carrying_a_token() -> None:
     with pytest.raises(ValueError, match="no input handed to apply_nonfinite_policy"):
         op.apply_nonfinite_policy(
             finite, reference=lambda operands: operands[0], inputs=[finite]
+        )
+
+
+def test_a_reference_that_swallows_every_probe_fails_generation() -> None:
+    """A two-sided output clamp can saturate all three probes to the same bound, so
+    every lane reads as unreachable and the measurement is not evidence that the token
+    is confined."""
+    op = _masking_op()
+    swept = np.array([float("inf"), 12.0, 11.0, 13.0], dtype=np.float32)
+
+    def clamped_window_max(operands):
+        values = operands[0].astype(np.float32)
+        return np.clip(
+            np.array([np.max(values[index : index + 2]) for index in range(3)]), -5.0, 5.0
+        ).astype(np.float32)
+
+    with pytest.raises(ValueError, match="no output lane moved between the finite probes"):
+        op.apply_nonfinite_policy(
+            clamped_window_max([swept]), reference=clamped_window_max, inputs=[swept]
         )
 
 
@@ -394,8 +458,8 @@ def test_a_mask_policy_the_op_never_applied_is_a_generation_error() -> None:
 def test_strict_spreading_descriptors_sweep_a_single_token() -> None:
     """A strict reduction group holding both infinities would make the golden say
     (+Inf) + (-Inf) instead of anything about the kernel. Under mask the group is
-    don't-care, so several tokens in one group are allowed -- that is how the
-    AmbiqAI/ns-cmsis-nn#429 shape is built."""
+    don't-care, so several tokens are allowed -- either in one group (the two_token
+    pairs) or one per group (the issue429 pairs)."""
     spreading_prefixes = ("mean_", "reduce_sum_", "softmax_", "avg_pool_", "max_pool_")
     seen = 0
     multi_token_masked = 0
@@ -413,7 +477,9 @@ def test_strict_spreading_descriptors_sweep_a_single_token() -> None:
                 continue
             assert len(tokens) == 1, name
     assert seen
-    assert multi_token_masked == 4, "the #429 mean/reduce_sum pairs went missing"
+    # Four two_token pairs plus eight issue429 cases, f32 and f16 for mean and
+    # reduce_sum on both the flatten and the generic reduced axis.
+    assert multi_token_masked == 12, "the multi-token mean/reduce_sum cases went missing"
 
 
 # --- C serialization --------------------------------------------------------

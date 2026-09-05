@@ -242,9 +242,9 @@ class OperationBase(ABC):
         of a precomputed output -- it makes the window, row and receptive-field
         cases fall out of whatever reference path the op already uses.
 
-        The emitted golden carries 0.0 in the masked lanes so the generated
-        header stays finite-only. Under 'strict' the reference is emitted
-        unchanged and nothing is added.
+        The emitted golden carries 0.0 in the masked lanes so the golden stays
+        finite; the input arrays still carry the tokens. Under 'strict' the
+        reference is emitted unchanged and nothing is added.
         """
         if self.nonfinite_policy() != "mask":
             return output_data, {}
@@ -324,11 +324,55 @@ class OperationBase(ABC):
                 # Two NaN lanes are the same verdict, not a difference; every other
                 # inequality counts, including a lane that is NaN under one probe only.
                 reachable |= (left != right) & ~(np.isnan(left) & np.isnan(right))
+        if not reachable.any():
+            # A token that moves no output lane means the probes were swallowed before
+            # they reached the output -- a two-sided activation clamp saturates all
+            # three to the same bound -- so the measurement is not evidence that the
+            # token is confined, and the mask it produces would be built from the
+            # reference lanes alone.
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} uses nonfinite_policy 'mask' but "
+                "no output lane moved between the finite probes, so reachability could "
+                "not be measured; place the tokens where the probes stay inside the "
+                "activation clamp, widen that clamp, or use 'strict' if the kernel does "
+                "contract the value there"
+            )
         return reachable
 
     def nonfinite_sweep_positions(self) -> Tuple[int, ...]:
-        """Return the flat indices the non-finite sweep overwrites."""
-        return tuple(range(len(self.nonfinite_tokens())))
+        """Return the flat indices the non-finite sweep overwrites.
+
+        The default is the leading run 0..k-1. `nonfinite_positions` overrides it
+        element for element with `nonfinite_tokens`, which is the only way to reach
+        a placement the leading run cannot express: one token per reduction group
+        rather than all of them in group 0, or a pooling window that the padding
+        only partly covers.
+        """
+        tokens = self.nonfinite_tokens()
+        requested = self.desc.get("nonfinite_positions")
+        if requested is None:
+            return tuple(range(len(tokens)))
+        if self.input_mode() != "nonfinite_sweep":
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} sets nonfinite_positions without "
+                "input_mode 'nonfinite_sweep'; the positions only place a swept token"
+            )
+        positions = tuple(int(position) for position in requested)
+        if len(positions) != len(tokens):
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} lists {len(positions)} "
+                f"nonfinite_positions for {len(tokens)} nonfinite_tokens; the two are "
+                "paired element for element"
+            )
+        if len(set(positions)) != len(positions):
+            raise ValueError(
+                f"nonfinite_positions must be unique, got {list(positions)}"
+            )
+        if any(position < 0 for position in positions):
+            raise ValueError(
+                f"nonfinite_positions must be non-negative flat indices, got {list(positions)}"
+            )
+        return positions
 
     def _apply_nonfinite_sweep(self, arr: np.ndarray) -> np.ndarray:
         """Overwrite the leading elements of a float tensor with the non-finite tokens."""
@@ -337,9 +381,10 @@ class OperationBase(ABC):
                 f"input_mode 'nonfinite_sweep' requires a float tensor, got dtype {arr.dtype}"
             )
         tokens = self.nonfinite_tokens()
-        if arr.size < len(tokens):
+        positions = self.nonfinite_sweep_positions()
+        if arr.size < max(positions) + 1:
             raise ValueError(
-                f"input_mode 'nonfinite_sweep' needs at least {len(tokens)} elements, "
+                f"input_mode 'nonfinite_sweep' needs at least {max(positions) + 1} elements, "
                 f"got shape {tuple(arr.shape)}"
             )
         # Finite neighbours from the uniform draw are kept deliberately: a mixed tensor
@@ -347,7 +392,7 @@ class OperationBase(ABC):
         # whole vector off) from one that merely mishandles the token itself.
         swept = arr.copy()
         flat = swept.reshape(-1)
-        flat[: len(tokens)] = np.asarray(
+        flat[list(positions)] = np.asarray(
             [self.NONFINITE_TOKEN_VALUES[token] for token in tokens], dtype=arr.dtype
         )
         return swept

@@ -136,8 +136,18 @@ leaves the groups the token does not reach finite and fully asserted -- that is 
 vector leg that poisons a whole register instead of one lane. Elementwise and pure-data-movement
 operators keep all three tokens in one case. A `mask` case may carry several tokens in one group,
 because the group it lands in is don't-care anyway; `mean_float_nonfinite_two_token_*` and
-`reduce_sum_float_nonfinite_two_token_*` do exactly that to build the `+Inf` with `-Inf`
-reduction group AmbiqAI/ns-cmsis-nn#429 reports hanging at `-Ofast`.
+`reduce_sum_float_nonfinite_two_token_*` do exactly that to build a `+Inf` with `-Inf`
+reduction group, which is adjacent to AmbiqAI/ns-cmsis-nn#429 but not its input. #429 puts one
+token per group, so the `*_nonfinite_issue429_flatten_*` and `*_nonfinite_issue429_generic_*`
+cases carry that placement instead: `[inf, nan]` at flat positions 1 and 3 of four
+three-element groups on the innermost axis, and `[nan, inf]` at flat positions 0 and 7 of a
+`[1, 2, 2, 2]` input reduced over H, which is the non-innermost axis #429's generic case uses.
+
+`nonfinite_positions` is what places them. It defaults to the leading run `0..k-1` and pairs
+element for element with `nonfinite_tokens`; a descriptor sets it where that run cannot express
+the placement, either one token per reduction group or a pooling window that SAME padding only
+partly covers (`avg_pool_float_nonfinite_nan_same_odd_f32` and its max-pool twin put the token
+at flat index 72 of a `[1, 5, 5, 3]` input, the one real element of the bottom-right window).
 
 `nonfinite_policy` decides how the golden is compared. It is required whenever `input_mode` is
 `nonfinite_sweep` and rejected otherwise; there is no default, because whether an uncontracted
@@ -154,17 +164,29 @@ non-finite output may be pinned is a per-kernel question.
   the kernel's own fold order, not a contract. Reachability is measured rather than declared --
   the generator re-runs the op's reference with the token positions replaced by finite probes and
   marks every output lane that moves. Every remaining lane still has to match, and the case still
-  has to return `ARM_CMSIS_NN_SUCCESS` without faulting or timing out. This is for kernels that
-  document nothing (abs, softmax, batch norm, pooling) or that declare the result unspecified
-  outright (`arm_minimum_*`/`arm_maximum_*`, `Include/arm_nnfunctions_flt.h:658-703`). It asserts
+  has to return `ARM_CMSIS_NN_SUCCESS` without faulting or timing out. This is for kernels whose
+  doxygen block says nothing about non-finite input (the `arm_softmax_f32` block specifies
+  arguments and return status only, and abs and batch norm are the same), that declare the
+  result unspecified outright (the `arm_minimum_f32` and `arm_maximum_f32` blocks: "The result
+  ... for any non-finite input, is unspecified"), or that document legs which disagree: the
+  `arm_max_pool_f16` note calls the scalar leg's NaN behaviour unspecified at the shipped
+  `-Ofast` and declines to promise NaN propagation end to end, and the `arm_avg_pool_f16` note
+  has NaN propagating at every optimization level on non-MVE while the MVE clamp resolves it to
+  a bound. It asserts
   robustness and non-corruption of the neighbouring lanes without encoding an uncontracted value
   as a golden. A case that ends up masking every lane fails generation, since it would assert
   nothing beyond `SUCCESS`.
 
 A masked case emits the mask alongside the golden, whose masked entries are written as `0.0f` so
-the generated header stays finite-only, and the harness prints `HELIA_MASKED_LANES: k of n`. The
-reporting parser records both `k` and `n`, because "passed with one lane masked" and "passed
-with every lane but one masked" are different claims.
+the golden stays finite -- the input arrays still carry the tokens -- and the harness prints
+`HELIA_MASKED_LANES: k of n`. The reporting parser records both `k` and `n`, because "passed with
+one lane masked" and "passed with every lane but one masked" are different claims; a capture
+reporting `k > n` cannot have come from the harness, so it is recorded as a failed case with a
+corrupted-capture reason rather than raising.
+
+`nonfinite_policy` is required by `OperationBase.nonfinite_policy()`, not by the schema: the
+`if`/`then` gate in `schema.json` is documentation until the descriptor loader validates the whole
+schema (#100).
 
 To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
 

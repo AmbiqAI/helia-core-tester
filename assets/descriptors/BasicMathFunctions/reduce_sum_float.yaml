@@ -159,15 +159,18 @@ input_mode: nonfinite_sweep
 nonfinite_policy: strict
 nonfinite_tokens: [-inf]
 ---
-# The AmbiqAI/ns-cmsis-nn#429 shape: +Inf and -Inf inside ONE reduction group, which
-# is what the issue reports hanging the f16 reduction at -Ofast. The single-token
-# cases above cannot produce it, because a group needs both infinities before the
-# fold can reach Inf + (-Inf). Group 0 (the leading five elements of the last axis)
-# therefore holds both tokens and its reference is NaN, so this pair is the one place
-# the reduction descriptors use nonfinite_policy: mask -- NaN is what IEEE addition
+# +Inf and -Inf inside ONE reduction group. The single-token cases above cannot
+# produce it, because a group needs both infinities before the fold can reach
+# Inf + (-Inf). Group 0 (the leading five elements of the last axis) therefore holds
+# both tokens and its reference is NaN, so this pair is one of the places the
+# reduction descriptors use nonfinite_policy: mask -- NaN is what IEEE addition
 # gives, not something the header contracts about the kernel's fold order. The other
 # eleven groups stay finite and fully asserted, and the case asserts SUCCESS and no
-# timeout, which is the part that would catch #429.
+# timeout.
+#
+# This is adjacent to AmbiqAI/ns-cmsis-nn#429 rather than its input. #429's two
+# cases put one token per group; the *_nonfinite_issue429_* cases below carry that
+# placement.
 operator: ReduceSum
 name: reduce_sum_float_nonfinite_two_token_f32
 suite: float
@@ -191,3 +194,68 @@ axes: [3]
 input_mode: nonfinite_sweep
 nonfinite_policy: mask
 nonfinite_tokens: [inf, -inf]
+---
+# The token placement AmbiqAI/ns-cmsis-nn#429 runs on, as closely as the generator
+# expresses it. #429's mean_f16_nan_inf reduces the innermost axis of a {1,1,2,3}
+# input holding {1, +Inf, 2, NaN, 1, 2}: the reduced groups are three elements long
+# and each token sits alone in a group, +Inf in group 0 and NaN in group 1, which the
+# flat 0..k-1 rule cannot express -- hence nonfinite_positions. The shape here is four
+# groups of three rather than two, because a case whose every output lane is masked
+# does not generate, so two of the four output lanes stay finite and asserted.
+# Both token groups reduce to a non-finite reference, so the policy is mask.
+operator: ReduceSum
+name: reduce_sum_float_nonfinite_issue429_flatten_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 1, 4, 3]
+axes: [3]
+input_mode: nonfinite_sweep
+nonfinite_policy: mask
+nonfinite_tokens: [inf, nan]
+nonfinite_positions: [1, 3]
+---
+operator: ReduceSum
+name: reduce_sum_float_nonfinite_issue429_flatten_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 1, 4, 3]
+axes: [3]
+input_mode: nonfinite_sweep
+nonfinite_policy: mask
+nonfinite_tokens: [inf, nan]
+nonfinite_positions: [1, 3]
+---
+# The same pairing on the reduced axis #429's mean_f16_generic_nan_inf uses: a
+# {1,2,2,2} input holding {NaN, 1, 2, 3, 4, 5, 6, +Inf} reduced over H, so the
+# reduced axis is not the innermost one and the kernel does not take its flatten
+# path. Shape, axis and both token positions match that case; NaN reaches output
+# lane 0 and +Inf lane 3, and the two clean lanes stay asserted.
+operator: ReduceSum
+name: reduce_sum_float_nonfinite_issue429_generic_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 2, 2, 2]
+axes: [1]
+input_mode: nonfinite_sweep
+nonfinite_policy: mask
+nonfinite_tokens: [nan, inf]
+nonfinite_positions: [0, 7]
+---
+operator: ReduceSum
+name: reduce_sum_float_nonfinite_issue429_generic_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 2, 2, 2]
+axes: [1]
+input_mode: nonfinite_sweep
+nonfinite_policy: mask
+nonfinite_tokens: [nan, inf]
+nonfinite_positions: [0, 7]

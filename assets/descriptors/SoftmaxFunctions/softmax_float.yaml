@@ -106,9 +106,9 @@ tensor_dtypes:
   output: FP32
 input_shape: [1, 2, 2, 8]
 ---
-# Non-finite cover for the float softmax kernels. arm_softmax_f32/f16 document no
-# non-finite behaviour (Include/arm_nnfunctions_flt.h:1258-1268 specifies arguments
-# and return status only), so nonfinite_policy is mask.
+# Non-finite cover for the float softmax kernels. The arm_softmax_f32 doxygen block
+# in ns-cmsis-nn Include/arm_nnfunctions_flt.h specifies arguments and return status
+# only and says nothing about non-finite input, so nonfinite_policy is mask.
 #
 # One token per case, because softmax is a spreading op: the row maximum and the
 # exponential sum fold the whole row, so a row holding both +Inf and -Inf would make

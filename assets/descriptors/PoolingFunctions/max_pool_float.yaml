@@ -209,10 +209,15 @@ padding: VALID
 activation_min: -3.4028234663852886e+38
 activation_max: 3.4028234663852886e+38
 ---
-# Non-finite cover for the float max_pool kernels. arm_max_pool_f32/f16 document no
-# non-finite behaviour, so nonfinite_policy is mask: the pooling windows that see a
-# token are don't-care and the case asserts SUCCESS, no fault, no hang, and correct
-# values in every window the token does not reach.
+# Non-finite cover for the float max_pool kernels. The arm_max_pool_f16 doxygen block
+# in ns-cmsis-nn Include/arm_nnfunctions_flt.h does document the kernel, and what it
+# documents is why the policy is mask rather than strict: the scalar reduction's
+# ordered compare drops a NaN window element and its NaN behaviour at the shipped
+# -Ofast is unspecified, the MVE leg's vmaxnmq reduction and vmaxnmq/vminnmq clamp
+# suppress NaN, and the note ends by declining to promise NaN propagation end to end.
+# The two legs disagree and neither answer is contracted, so the pooling windows that
+# see a token are don't-care and the case asserts SUCCESS, no fault, no hang, and
+# correct values in every window the token does not reach.
 #
 # One token per case, because a pooling window is a reduction group: with all three
 # tokens in the same window the golden would be a statement about how the maximum
@@ -310,4 +315,25 @@ strides: [2, 2]
 padding: VALID
 input_mode: nonfinite_sweep
 nonfinite_tokens: [-inf]
+nonfinite_policy: mask
+---
+# Edge cover: an odd input extent with SAME padding, so the last row and column of
+# windows are only partly inside the tensor. nonfinite_positions puts the NaN at
+# (h=4, w=4, c=0), flat index 72, which is the single real element of the bottom-right
+# window; the cases above all place their token in a fully covered window. What the
+# padded leg does with a window that is one element and a token is not something the
+# arm_max_pool_f16 note covers either, so the policy stays mask.
+operator: MaxPool
+name: max_pool_float_nonfinite_nan_same_odd_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 5, 5, 3]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: SAME
+input_mode: nonfinite_sweep
+nonfinite_tokens: [nan]
+nonfinite_positions: [72]
 nonfinite_policy: mask

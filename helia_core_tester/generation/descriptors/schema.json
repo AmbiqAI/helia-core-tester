@@ -182,6 +182,16 @@
       "minItems": 1,
       "uniqueItems": true
     },
+    "nonfinite_positions": {
+      "description": "Flat input indices the tokens are written to, paired element for element with nonfinite_tokens. Defaults to the leading run 0..k-1. Set it where the leading run cannot express the placement: one token per reduction group, or a pooling window the padding only partly covers.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
     "nonfinite_policy": {
       "description": "How the golden is compared for a 'nonfinite_sweep' case; required whenever input_mode is 'nonfinite_sweep' and rejected otherwise. 'strict' asserts the reference value on every lane, and is only legitimate where ns-cmsis-nn documents the behaviour or the operator is pure data movement. 'mask' marks as don't-care every lane whose reference output is non-finite and every lane a token can reach, and asserts SUCCESS plus every remaining finite lane, for kernels that document nothing or declare the result unspecified.",
       "type": "string",
@@ -723,7 +733,7 @@
       "then": { "required": ["operand_shape", "update_shape", "start_indices"] }
     },
     {
-      "$comment": "A sweep case has to say how its golden is compared. There is no safe default: 'strict' pins a value ns-cmsis-nn may not contract, 'mask' drops lanes a contracted kernel should be asserting, and which one applies is a per-kernel question the descriptor author has to answer.",
+      "$comment": "A sweep case has to say how its golden is compared. There is no safe default: 'strict' pins a value ns-cmsis-nn may not contract, 'mask' drops lanes a contracted kernel should be asserting, and which one applies is a per-kernel question the descriptor author has to answer. This if/then is not enforced by the descriptor loader, which validates a subset of the schema; the rule that actually fails a policy-less sweep is OperationBase.nonfinite_policy(). Enforcement moves here when #100 lands.",
       "if": {
         "properties": { "input_mode": { "const": "nonfinite_sweep" } },
         "required": ["input_mode"]
