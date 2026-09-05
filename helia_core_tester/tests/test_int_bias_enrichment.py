@@ -78,20 +78,38 @@ def _output_steps(header: str) -> List[float]:
     ]
 
 
-# One per int kernel family that takes a bias array: per-channel s8 and the
-# s16 int64-bias path.  Both are built from a Keras model whose bias comes
-# from SignedMagnitudeUniform, so every channel clears the detection floor.
-@pytest.mark.parametrize(
-    "case_name",
-    [
-        "convolve_default_s8",
-        "convolve_one_by_n_case_03_s8",
-        "convolve_kernel_support_groups2_s8",
-        "convolve_kernel_support_s16",
-        "convolve_requantize_s64_s16",
-    ],
-)
-def test_int_convolve_bias_is_detectable_on_every_channel(case_name: str, tmp_path: Path) -> None:
+def _bias_carrying_int_cases(*, weight_dtype_s4: bool) -> List[str]:
+    """Names of the int Convolve/FullyConnected cases whose bias must be detectable.
+
+    Derived from the descriptors rather than enumerated so a new case is held to
+    the floor the moment it is added.  Float cases have no quantization step to
+    clear, use_bias: false cases have no bias, and quantized dilated convs carry a
+    zero placeholder because the converter hoists the bias into a trailing Add
+    (TODO(#98)).
+    """
+    names: List[str] = []
+    for desc in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors")):
+        if desc.get("operator") not in ("Convolve", "FullyConnected"):
+            continue
+        if str(desc.get("activation_dtype", "")).upper() in ("FP32", "FP16"):
+            continue
+        if not desc.get("use_bias", True):
+            continue
+        dilation = desc.get("dilation", [1, 1])
+        dilation = [dilation, dilation] if isinstance(dilation, (int, float)) else list(dilation)
+        if any(int(d) != 1 for d in dilation):
+            continue
+        if (str(desc.get("weight_dtype", "S8")).upper() == "S4") is not weight_dtype_s4:
+            continue
+        names.append(desc["name"])
+    assert names, "descriptor sweep found no bias-carrying int cases"
+    return names
+
+
+# The per-channel s8 and s16 int64-bias paths are built from a Keras model whose
+# bias comes from SignedMagnitudeUniform, so every channel clears the floor.
+@pytest.mark.parametrize("case_name", _bias_carrying_int_cases(weight_dtype_s4=False))
+def test_int_bias_is_detectable_on_every_channel(case_name: str, tmp_path: Path) -> None:
     header = _generate(case_name, tmp_path, "cortex-m55")
     biases = _int_array(header, "biases")
 
@@ -106,7 +124,7 @@ def test_int_convolve_bias_is_detectable_on_every_channel(case_name: str, tmp_pa
 # The s4 path builds its tensors with LiteRT directly and draws the bias from
 # rng.integers(-128, 128), which can hand an individual channel a zero: only
 # the case as a whole is guaranteed to detect a dropped bias-add.
-@pytest.mark.parametrize("case_name", ["convolve_generic_s4", "fully_connected_tail_rows5_cols13_bias_s4"])
+@pytest.mark.parametrize("case_name", _bias_carrying_int_cases(weight_dtype_s4=True))
 def test_s4_bias_is_detectable_on_at_least_one_channel(case_name: str, tmp_path: Path) -> None:
     header = _generate(case_name, tmp_path, "cortex-m55")
     biases = _int_array(header, "biases")
