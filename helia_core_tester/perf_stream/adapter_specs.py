@@ -2362,6 +2362,15 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
         {
             const int32_t *bias_i32 = (bias != NULL) ? (const int32_t *)blob_ptr(session, bias) : NULL;
             uint32_t operand_bytes_needed;
+            /* arm_nn_vec_mat_mult_t{,_per_ch}_s8 reads the precomputed kernel sum and
+               ignores the bias pointer under MVE; every other build ignores the kernel
+               sum and adds the bias itself, so the bias has to reach the kernel there or
+               the bias-add is silently lost. */
+#if defined(ARM_MATH_MVEI)
+            const int32_t *kernel_bias = NULL;
+#else
+            const int32_t *kernel_bias = bias_i32;
+#endif
             quant_params.multiplier = (int32_t *)blob_ptr(session, multiplier);
             quant_params.shift = (int32_t *)blob_ptr(session, shift);
             quant_params.is_per_channel = 1;
@@ -2373,6 +2382,7 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
 
+#if defined(ARM_MATH_MVEI)
             if (arm_vector_sum_s8((int32_t *)ctx.buf,
                                   filter_dims.n,
                                   filter_dims.c,
@@ -2383,6 +2393,7 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
             }
+#endif
 
             if (!hct_checked_dims_bytes(&output_dims, sizeof(int8_t),
                                         session->output_capacity_bytes, &session->output_length))
@@ -2397,7 +2408,7 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
                                                   &filter_dims,
                                                   (const int8_t *)blob_ptr(session, weights),
                                                   &bias_dims,
-                                                  NULL,
+                                                  kernel_bias,
                                                   &output_dims,
                                                   (int8_t *)hct_output_ptr(session));
         }

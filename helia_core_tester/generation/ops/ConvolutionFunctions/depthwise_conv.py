@@ -97,6 +97,13 @@ class OpDepthwiseConv(OperationBase):
             dwconv_kwargs['dilation_rate'] = tuple(dilation)
         
         if dwconv_kwargs['use_bias']:
+            # A quantized dilated depthwise conv lowers to SpaceToBatchND ->
+            # DepthwiseConv2D -> BatchToSpaceND -> Add, so the converter leaves
+            # the DEPTHWISE_CONV_2D op a zero placeholder bias and moves the
+            # real one into the trailing Add at output quantization scale. Those
+            # cases ship an all-zero bias whatever is set here, and cannot
+            # detect a dropped bias-add. TODO(#98): lift once the hoisted
+            # operand can be converted back to an int32 accumulator bias.
             dwconv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(minval=-1.0, maxval=1.0)
         
         dwconv = tf.keras.layers.DepthwiseConv2D(**dwconv_kwargs)

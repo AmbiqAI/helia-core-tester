@@ -50,7 +50,11 @@ from helia_core_tester.perf_stream.generated_test_bridge import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-pytestmark = pytest.mark.skipif(
+# The builder cross-checks read a pre-generated artifacts/generated_tests/ tree,
+# which is gitignored; the drift guards render straight from adapter_specs.py and
+# the bias-bridge regression generates its own case, so those must not inherit
+# this skip or they would never run in CI.
+requires_generated_artifacts = pytest.mark.skipif(
     not (PROJECT_ROOT / "artifacts" / "generated_tests").is_dir(),
     reason="no generated-test artifacts under artifacts/generated_tests/ "
     "(artifacts/ is gitignored -- run `helia_core_tester generate` first)",
@@ -108,6 +112,7 @@ def test_every_registered_adapter_has_a_unique_function_name() -> None:
     assert len(names) == len(set(names)), f"duplicate function_name entries: {names}"
 
 
+@requires_generated_artifacts
 def test_convolve_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     """Cross-check: the Python bridge builder for Convolve must only send scalar keys the
     firmware's run_convolve_once() body (as documented in adapter_specs.py) actually reads --
@@ -131,6 +136,7 @@ def test_convolve_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fiel
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_depthwise_conv_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -144,6 +150,7 @@ def test_depthwise_conv_builder_scalar_keys_are_subset_of_firmware_adapter_scala
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_basic_math_reduction_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -155,6 +162,7 @@ def test_basic_math_reduction_builder_scalar_keys_are_subset_of_firmware_adapter
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_basic_math_lut_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -166,6 +174,7 @@ def test_basic_math_lut_builder_scalar_keys_are_subset_of_firmware_adapter_scala
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_squared_difference_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -179,6 +188,7 @@ def test_squared_difference_builder_scalar_keys_are_subset_of_firmware_adapter_s
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_requantize_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -190,6 +200,7 @@ def test_requantize_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fi
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_comparison_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -201,6 +212,7 @@ def test_comparison_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fi
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_transpose_conv_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -222,6 +234,7 @@ def test_transpose_conv_builder_scalar_keys_are_subset_of_firmware_adapter_scala
 # matching firmware entry would previously go undetected until a hardware run).
 
 
+@requires_generated_artifacts
 def test_fully_connected_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -233,6 +246,88 @@ def test_fully_connected_builder_scalar_keys_are_subset_of_firmware_adapter_scal
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+def test_s8_mve_fully_connected_bridges_the_generated_bias(tmp_path: Path) -> None:
+    """The bias an MVE s8 FC case folds into its weight sum still has to reach the adapter.
+
+    The firmware body rebuilds the kernel sum with arm_vector_sum_s8() from the bias blob,
+    so a missing or zero bias blob silently reproduces the golden minus the bias term -- an
+    error of many LSBs against a tolerance of 1.  See AmbiqAI/helia-core-tester#77.
+
+    Generates its own case so the regression runs without a pre-generated artifacts tree.
+    """
+    import numpy as np
+    import yaml
+
+    from helia_core_tester.generation.io.descriptors import load_all_descriptors
+    from helia_core_tester.generation.io.dtypes import resolve_comparison
+    from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import OpFullyConnected
+    from helia_core_tester.perf_stream.generated_test_bridge import (
+        GeneratedTestCase,
+        _build_fully_connected_case,
+        _extract_array,
+        _find_header_file,
+    )
+
+    case_name = "fully_connected_mve_case_01_s8"
+    descriptor = next(
+        desc
+        for desc in load_all_descriptors(str(PROJECT_ROOT / "assets" / "descriptors"))
+        if desc.get("name") == case_name
+    )
+
+    case_dir = tmp_path / case_name
+    case_dir.mkdir()
+    op = OpFullyConnected(descriptor, seed=1, target_cpu="cortex-m55")
+    model = op.build_keras_model() if op.needs_keras_model() else None
+    op.convert_to_tflite(model, str(case_dir / f"{case_name}.tflite"), 1)
+    op.generate_c_files(case_dir)
+    # The bridge reads (and hashes) the descriptor the generation pipeline drops next to
+    # the sources, so mirror that layout rather than the in-memory descriptor alone.
+    (case_dir / "descriptor.yaml").write_text(yaml.dump(descriptor, sort_keys=False), encoding="utf-8")
+
+    case = GeneratedTestCase(
+        name=case_name,
+        cpu="cortex-m55",
+        family="FullyConnectedFunctions",
+        directory=case_dir,
+        descriptor={
+            **descriptor,
+            "resolved_comparison": resolve_comparison(descriptor, descriptor.get("resolved_tensor_dtypes")),
+        },
+    )
+
+    header_text = _find_header_file(case.directory).read_text(encoding="utf-8")
+    generated_bias = np.array(_extract_array(header_text, f"{case.name}_biases"), dtype=np.int32)
+
+    bundle = _build_fully_connected_case(PROJECT_ROOT, case, output_root=tmp_path / "bundle")
+    bias_blobs = [blob for blob in bundle.blobs if blob.role == "bias"]
+    assert bias_blobs, "s8 MVE FC case bridged without a bias blob"
+
+    bridged_bias = np.frombuffer(bias_blobs[0].path.read_bytes(), dtype=np.int32)
+    assert np.any(bridged_bias != 0), "bridged bias blob is all zero"
+    assert np.array_equal(bridged_bias, generated_bias)
+
+
+def test_s8_fully_connected_firmware_body_gates_the_kernel_sum_on_mve() -> None:
+    """Non-MVE builds must get the bias pointer, not a NULL one.
+
+    arm_nn_vec_mat_mult_t{,_per_ch}_s8 ignores the bias under ARM_MATH_MVEI and ignores
+    the precomputed kernel sum otherwise, so folding the bias into the kernel sum
+    unconditionally would drop the bias-add on every DSP/scalar build.
+    """
+    body = next(spec for spec in FIRMWARE_ADAPTERS if spec.function_name == "run_fully_connected_once").c_body
+
+    mve_branch = body.split("#if defined(ARM_MATH_MVEI)")
+    assert len(mve_branch) == 3, "expected the s8 FC body to gate both the bias pointer and the vector sum"
+    guarded, fallback = mve_branch[1].split("#else", 1)
+    assert "kernel_bias = NULL" in guarded
+    assert "kernel_bias = bias_i32" in fallback.split("#endif", 1)[0]
+    assert "arm_vector_sum_s8" in mve_branch[2].split("#endif", 1)[0]
+    assert "arm_vector_sum_s8" not in mve_branch[0]
+    assert "kernel_bias," in body and body.count("arm_vector_sum_s8") == 1
+
+
+@requires_generated_artifacts
 def test_batch_matmul_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -244,6 +339,7 @@ def test_batch_matmul_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_quantize_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -259,6 +355,7 @@ def test_quantize_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fiel
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_dequantize_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -270,6 +367,7 @@ def test_dequantize_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fi
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_softmax_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -281,6 +379,7 @@ def test_softmax_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_field
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_pooling_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -292,6 +391,7 @@ def test_pooling_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_field
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_activation_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -303,6 +403,7 @@ def test_activation_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fi
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_prelu_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -314,6 +415,7 @@ def test_prelu_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_prelu_scalar_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     """PReLUScalar's C body lives in the same run_prelu_once() firmware function as
     general PReLU (see the c_body comment in adapter_specs.py), so it cross-checks against
@@ -330,6 +432,7 @@ def test_prelu_scalar_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_reduce_sum_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -343,6 +446,7 @@ def test_reduce_sum_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fi
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_batch_norm_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 
@@ -356,6 +460,7 @@ def test_batch_norm_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fi
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+@requires_generated_artifacts
 def test_nn_activation_float_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 

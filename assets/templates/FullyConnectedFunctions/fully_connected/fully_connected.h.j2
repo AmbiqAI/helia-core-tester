@@ -76,8 +76,10 @@ static const {{ weight_dtype | default("int8_t") }} {{ name }}_weights[] = {
 {{ weights_array }}
 };
 
-// Biases
-{% if has_biases %}
+// Biases. Emitted whenever bias data exists, including when the kernel is
+// called with a NULL bias because the bias is folded into the weight sum:
+// consumers read the bias out of this decl.
+{% if has_bias_array | default(has_biases) %}
 static const {{ bias_dtype }} {{ name }}_biases[] = {
 {{ biases_array }}
 };
