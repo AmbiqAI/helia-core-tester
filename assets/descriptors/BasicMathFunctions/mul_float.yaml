@@ -169,6 +169,8 @@ input_1_shape: [1, 2, 3, 4]
 input_2_shape: [1, 1, 1, 4]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f32]
+
 ---
 operator: Mul
 name: mul_float_bcast_channel_f16
@@ -180,6 +182,8 @@ input_1_shape: [1, 2, 3, 4]
 input_2_shape: [1, 1, 1, 4]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f16]
+
 ---
 # the mirror: input_1 is the broadcast operand (sub's rsub leaf, scalar - vec)
 operator: Mul
@@ -192,6 +196,8 @@ input_1_shape: [1, 1, 1, 4]
 input_2_shape: [1, 2, 3, 4]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f32]
+
 ---
 operator: Mul
 name: mul_float_bcast_channel_left_f16
@@ -203,6 +209,8 @@ input_1_shape: [1, 1, 1, 4]
 input_2_shape: [1, 2, 3, 4]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f16]
+
 ---
 # input_2 is one element
 operator: Mul
@@ -215,6 +223,8 @@ input_1_shape: [1, 2, 3, 4]
 input_2_shape: [1, 1, 1, 1]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f32]
+
 ---
 operator: Mul
 name: mul_float_bcast_scalar_f16
@@ -226,6 +236,8 @@ input_1_shape: [1, 2, 3, 4]
 input_2_shape: [1, 1, 1, 1]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f16]
+
 ---
 # input_1 is one element (sub's rsub leaf)
 operator: Mul
@@ -238,6 +250,8 @@ input_1_shape: [1, 1, 1, 1]
 input_2_shape: [1, 2, 3, 4]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f32]
+
 ---
 operator: Mul
 name: mul_float_bcast_scalar_left_f16
@@ -249,6 +263,8 @@ input_1_shape: [1, 1, 1, 1]
 input_2_shape: [1, 2, 3, 4]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f16]
+
 ---
 # input_1 broadcast along H only; full-width leaf per row
 operator: Mul
@@ -261,6 +277,8 @@ input_1_shape: [1, 1, 3, 4]
 input_2_shape: [1, 2, 3, 4]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f32]
+
 ---
 operator: Mul
 name: mul_float_bcast_height_f16
@@ -272,6 +290,8 @@ input_1_shape: [1, 1, 3, 4]
 input_2_shape: [1, 2, 3, 4]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f16]
+
 ---
 # one scalar per batch on the right
 operator: Mul
@@ -284,6 +304,8 @@ input_1_shape: [2, 2, 3, 4]
 input_2_shape: [2, 1, 1, 1]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f32]
+
 ---
 operator: Mul
 name: mul_float_bcast_batch_scalar_right_f16
@@ -295,6 +317,8 @@ input_1_shape: [2, 2, 3, 4]
 input_2_shape: [2, 1, 1, 1]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f16]
+
 ---
 # one scalar per H row on the right
 operator: Mul
@@ -307,6 +331,8 @@ input_1_shape: [1, 2, 3, 4]
 input_2_shape: [1, 2, 1, 1]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f32]
+
 ---
 operator: Mul
 name: mul_float_bcast_row_scalar_right_f16
@@ -318,6 +344,8 @@ input_1_shape: [1, 2, 3, 4]
 input_2_shape: [1, 2, 1, 1]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f16]
+
 ---
 # one scalar per pixel on the right (C run of 4 against 1)
 operator: Mul
@@ -330,6 +358,8 @@ input_1_shape: [1, 2, 3, 4]
 input_2_shape: [1, 2, 3, 1]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f32]
+
 ---
 operator: Mul
 name: mul_float_bcast_channel_scalar_right_f16
@@ -341,6 +371,8 @@ input_1_shape: [1, 2, 3, 4]
 input_2_shape: [1, 2, 3, 1]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f16]
+
 ---
 # both operands broadcast (H from input_1, W from input_2); C=5 is a tail on both the f32 and f16 lane counts
 operator: Mul
@@ -353,6 +385,8 @@ input_1_shape: [1, 3, 1, 5]
 input_2_shape: [1, 1, 2, 5]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f32]
+
 ---
 operator: Mul
 name: mul_float_bcast_both_tail_f16
@@ -364,6 +398,8 @@ input_1_shape: [1, 3, 1, 5]
 input_2_shape: [1, 1, 2, 5]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f16]
+
 ---
 # one scalar per pixel on the right with C=5: the vec-op-scalar leaf's predicated tail on both lane counts
 operator: Mul
@@ -376,6 +412,8 @@ input_1_shape: [1, 2, 3, 5]
 input_2_shape: [1, 2, 3, 1]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f32]
+
 ---
 operator: Mul
 name: mul_float_bcast_channel_scalar_right_tail_f16
@@ -387,6 +425,8 @@ input_1_shape: [1, 2, 3, 5]
 input_2_shape: [1, 2, 3, 1]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f16]
+
 ---
 # input_1 is one element and the run is 30: the scalar-op-vec leaf (sub's rsub) with a tail on both lane counts
 operator: Mul
@@ -399,6 +439,8 @@ input_1_shape: [1, 1, 1, 1]
 input_2_shape: [1, 2, 3, 5]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f32]
+
 ---
 operator: Mul
 name: mul_float_bcast_scalar_left_tail_f16
@@ -410,3 +452,4 @@ input_1_shape: [1, 1, 1, 1]
 input_2_shape: [1, 2, 3, 5]
 hint:
   call_style: broadcast
+required_kernel_symbols: [arm_elementwise_mul_broadcast_f16]

@@ -144,6 +144,17 @@ def checked_in_broadcast_cases() -> dict[str, dict]:
     return cases
 
 
+def test_checked_in_broadcast_cases_are_gated_on_their_kernel_symbol(
+    checked_in_broadcast_cases: dict[str, dict],
+) -> None:
+    # One tester pin serves ns-cmsis-nn main and the #415 branch alike: on a checkout
+    # whose headers do not declare the broadcast entry point the case must skip as
+    # skipped_kernel_symbol (hct#92) rather than fail to compile.
+    for name, desc in checked_in_broadcast_cases.items():
+        op, suffix = name.split("_")[0], name.rsplit("_", 1)[1]
+        assert desc.get("required_kernel_symbols") == [f"arm_elementwise_{op}_broadcast_{suffix}"], name
+
+
 @pytest.mark.parametrize(
     "case",
     [
