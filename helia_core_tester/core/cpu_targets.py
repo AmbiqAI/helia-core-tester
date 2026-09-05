@@ -27,12 +27,19 @@ _CPU_ALIASES = {
 # Maps a canonical cpu name (as used for test generation, build-dir naming,
 # and generated_tests_dir layout) to the actual `-mcpu=...`/`TARGET_CPU`
 # CMake value passed to the compiler, when they differ. "cortex-m55-dsp" is
-# a helia-core-tester-only pseudo target: identical generated test sources
-# and identical physical target as "cortex-m55", just compiled with MVE
-# disabled -- see CMakeLists.txt's ARM_CPU/ARM_FEATURES derivation, which
-# strips this "+nomve" suffix before selecting the CMSIS device header
-# (the physical chip doesn't change, only the instruction-set the compiler
-# targets).
+# a helia-core-tester-only pseudo target: the same physical target as
+# "cortex-m55", just compiled with MVE disabled -- see CMakeLists.txt's
+# ARM_CPU/ARM_FEATURES derivation, which strips this "+nomve" suffix before
+# selecting the CMSIS device header (the physical chip doesn't change, only
+# the instruction-set the compiler targets).
+#
+# The generated sources are the same for both targets except for s8
+# FullyConnected: the MVE kernel reads a precomputed kernel sum and ignores
+# the bias pointer, so the generator folds the bias into that sum for
+# "cortex-m55" and passes the bias through for "cortex-m55-dsp" (see
+# OpFullyConnected._supports_weight_sum()). A cycle delta between the two
+# targets on those cases therefore includes where the bias-add happens, not
+# only the instruction set.
 _TARGET_CPU_CMAKE_OVERRIDES = {
     "cortex-m55-dsp": "cortex-m55+nomve",
 }

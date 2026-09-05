@@ -11,18 +11,26 @@ skipped.
 
 Grounding of the v1 entries:
 
-- drop_conv_bias:        tester#77. Measured against ns-cmsis-nn main in
-                         ghcr.io/ambiqai/ns-cmsis-nn-ci:latest on cortex-m4:
-                         44 cases kill it, 24 non-dilated s8 Convolve cases
-                         plus 20 s4 cases. Three groups survive by
-                         construction: quantized dilated convs, whose bias
-                         the TFLite converter hoists into a trailing Add and
-                         leaves as a zero placeholder on the CONV_2D op;
-                         use_bias: false cases; and every s16 case, because
-                         no s16 conv kernel is mutated. Covers the s8_s16
-                         kernel, the s4 kernel, the 1xN/1x1 non-fast route
-                         (arm_nn_mat_mult_nt_t_s8), the grouped row-offset
-                         kernel, and the arm_convolve_s8 leftover loop.
+- drop_conv_bias:        tester#77. Measured against ns-cmsis-nn 18a89ff in
+                         ghcr.io/ambiqai/ns-cmsis-nn-ci:latest on cortex-m4,
+                         seed 500, over a 105-case baseline: 44 kill it (24
+                         non-dilated s8 Convolve cases plus 20 s4 cases).
+                         Every survivor is a survivor by construction:
+                         * quantized dilated convs -- the TFLite converter
+                           hoists the bias into a trailing Add and leaves a
+                           zero placeholder on the CONV_2D op (tester#98);
+                         * use_bias: false cases, which have no bias to drop;
+                         * s16 convs, because no s16 conv kernel is mutated;
+                         * the s4 cases that do not execute a mutated route,
+                           i.e. convolve_1x1_fast_s4, convolve_1x1_stride_s4
+                           and the even/odd rhs/lhs bias s4 cases (no s4
+                           route through arm_nn_mat_mult_nt_t_s4 is patched);
+                         * the FullyConnected cases in the baseline set --
+                           the mutant patches conv kernels only.
+                         Covers the s8_s16 kernel, the s4_s16 kernel, the
+                         1xN/1x1 non-fast route (arm_nn_mat_mult_nt_t_s8),
+                         the grouped row-offset kernel, and the
+                         arm_convolve_s8 leftover loop.
 - packed_sign_mask_343:  ns-cmsis-nn#343 (packed DSP loop masked the
                          sign-extended halfword with & 0x0FFFF, disagreeing
                          with its own scalar tail). The patch removes the
@@ -118,10 +126,13 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
         ),
         expected_detected_by=(
             "conv golden cases with a nonzero bias. Measured on cortex-m4 against "
-            "ns-cmsis-nn main: 44 killers, 24 non-dilated s8 Convolve cases plus 20 s4 "
-            "cases. Survivors are the quantized dilated convs (bias hoisted into a "
-            "trailing Add by the converter), the use_bias: false cases, and all s16 "
-            "cases (no s16 conv kernel is mutated) (tester#77)"
+            "ns-cmsis-nn 18a89ff (seed 500, 105 cases): 44 killers, 24 non-dilated s8 "
+            "Convolve cases plus 20 s4 cases. Survivors are the quantized dilated convs "
+            "(bias hoisted into a trailing Add by the converter, tester#98), the "
+            "use_bias: false cases, the s16 convs and the s4 cases that do not execute a "
+            "mutated route (no s16 conv kernel and no arm_nn_mat_mult_nt_t_s4 route is "
+            "patched), and the FullyConnected cases (the mutant touches conv kernels "
+            "only) (tester#77)"
         ),
         refs=("AmbiqAI/helia-core-tester#77",),
     ),

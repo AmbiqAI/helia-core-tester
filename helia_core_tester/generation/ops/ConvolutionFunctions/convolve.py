@@ -105,12 +105,13 @@ class OpConvolve(OperationBase):
         #
         # The quantized magnitude has to clear one output quantization step,
         # or a dropped bias-add still reproduces the golden bit for bit. The
-        # int suite calibrates from inputs in [-32, 32), which puts the
-        # calibrated conv output range at 33..195 for both S8 and S16, and
-        # the bias itself widens that range by 2*maxval. A floor of 2.0 keeps
-        # the shift above 2 output steps at the widest range while spending
-        # under a fifth of the dynamic range at the narrowest, and it is four
-        # orders of magnitude below the int32 accumulator's headroom.
+        # int suite calibrates from inputs in [-32, 32) and the bias itself
+        # widens the calibrated output range by 2*maxval, so the floor is set
+        # against the widest range a case can produce: every bias-carrying
+        # channel clears at least one output step with margin, the bias
+        # spends only a fraction of the dynamic range at the narrowest range,
+        # and it stays orders of magnitude below the int32 accumulator's
+        # headroom. The float range is unchanged.
         #
         # Quantized dilated convolutions are excluded: they lower to
         # SpaceToBatchND -> Conv2D -> BatchToSpaceND -> Add, which leaves the

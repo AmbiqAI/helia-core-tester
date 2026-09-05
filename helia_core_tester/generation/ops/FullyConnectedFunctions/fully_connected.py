@@ -69,11 +69,11 @@ class OpFullyConnected(OperationBase):
         #
         # The quantized magnitude has to clear one output quantization step,
         # or a dropped bias-add still reproduces the golden bit for bit. FC
-        # sums far fewer terms than conv does, so the int suite's calibrated
-        # output range here is 3.9..6.7 rather than conv's 33..195, and the
-        # floor scales down with it: at 0.125 the least detectable channel of
-        # any int FC case still shifts by 7.6 output steps, while the bias
-        # costs under a tenth of the calibrated dynamic range.
+        # sums far fewer terms than conv does, so its calibrated output range
+        # is much narrower and the floor scales down with it: every
+        # bias-carrying channel of an int FC case clears at least one output
+        # step with margin, while the bias costs only a small fraction of the
+        # calibrated dynamic range. The float range is unchanged.
         _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
         if not use_bias:
             bias_initializer = 'zeros'
