@@ -533,7 +533,7 @@ depth_multiplier: 1
 # and arm_depthwise_conv_f16 (Include/arm_nnfunctions_flt.h:103 and :1370, the f16 entry
 # a @copydoc of the f32 one) say nothing about NaN or Inf, so nonfinite_policy is mask:
 # the output positions whose receptive field contains the token are don't-care, and the
-# case asserts SUCCESS, no fault, no hang and exact values everywhere else.
+# case asserts SUCCESS, no fault, no hang and every other lane within the case tolerance.
 #
 # Depthwise keeps channels independent, so the token at input element 0 -- the
 # (h=0, w=0, c=0) corner -- reaches channel 0 of four output positions only: 4 of 1024
@@ -619,6 +619,14 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
+# The unmasked lanes here are a 9-tap f16 multiply-accumulate chain compared against a
+# float32 reference model, so the rounding floor of the accumulation alone consumes the
+# FP16 default budget; the tokens play no part, and a token-free case of this shape
+# fails at the same lane with the same numbers. The override is sized off the worst
+# fraction seen across several generation seeds, not off one run.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 input_mode: nonfinite_sweep
 nonfinite_tokens: [nan]
 nonfinite_policy: mask
@@ -639,6 +647,14 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
+# The unmasked lanes here are a 9-tap f16 multiply-accumulate chain compared against a
+# float32 reference model, so the rounding floor of the accumulation alone consumes the
+# FP16 default budget; the tokens play no part, and a token-free case of this shape
+# fails at the same lane with the same numbers. The override is sized off the worst
+# fraction seen across several generation seeds, not off one run.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 input_mode: nonfinite_sweep
 nonfinite_tokens: [inf]
 nonfinite_policy: mask
@@ -659,6 +675,14 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
+# The unmasked lanes here are a 9-tap f16 multiply-accumulate chain compared against a
+# float32 reference model, so the rounding floor of the accumulation alone consumes the
+# FP16 default budget; the tokens play no part, and a token-free case of this shape
+# fails at the same lane with the same numbers. The override is sized off the worst
+# fraction seen across several generation seeds, not off one run.
+comparison:
+  atol: 0.002
+  rtol: 0.002
 input_mode: nonfinite_sweep
 nonfinite_tokens: [-inf]
 nonfinite_policy: mask

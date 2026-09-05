@@ -2,8 +2,8 @@
 #define DEPTHWISE_CONV_FLOAT_DEFAULT_F16_DEPTHWISE_CONV2D_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
@@ -38,13 +38,13 @@ static const cmsis_nn_dw_conv_params_f16 depthwise_conv_float_default_f16_dw_con
 
 // Weights
 static const float16_t depthwise_conv_float_default_f16_weights[] = {
-    (float16_t)-0.239379883f, (float16_t)-0.148193359f, (float16_t)-0.092590332f, (float16_t)0.104797363f, (float16_t)-0.288818359f, (float16_t)0.270507812f, (float16_t)-0.3203125f, (float16_t)0.051422119f, (float16_t)-0.213134766f, (float16_t)-0.339355469f, (float16_t)-0.041320801f, (float16_t)0.376953125f, (float16_t)-0.213134766f, (float16_t)0.22265625f, (float16_t)-0.229980469f, (float16_t)0.157348633f,
-    (float16_t)0.055664062f, (float16_t)-0.209350586f, (float16_t)-0.117553711f, (float16_t)0.017913818f, (float16_t)-0.369628906f, (float16_t)-0.098999023f, (float16_t)-0.29296875f, (float16_t)0.052337646f, (float16_t)0.120300293f, (float16_t)-0.280029297f, (float16_t)0.171142578f
+    (float16_t)0.197265625f, (float16_t)0.385253906f, (float16_t)-0.24230957f, (float16_t)0.233520508f, (float16_t)-0.065429688f, (float16_t)-0.235351562f, (float16_t)-0.025680542f, (float16_t)0.3984375f, (float16_t)0.390625f, (float16_t)-0.230957031f, (float16_t)-0.018234253f, (float16_t)0.057800293f, (float16_t)-0.161499023f, (float16_t)0.253417969f, (float16_t)-0.067626953f, (float16_t)-0.1875f,
+    (float16_t)0.096557617f, (float16_t)-0.042144775f, (float16_t)0.268798828f, (float16_t)0.212036133f, (float16_t)0.350585938f, (float16_t)0.238525391f, (float16_t)0.145874023f, (float16_t)-0.159790039f, (float16_t)0.355712891f, (float16_t)0.10333252f, (float16_t)0.084472656f
 };
 
 // Biases
 static const float16_t depthwise_conv_float_default_f16_biases[] = {
-    (float16_t)0.201171875f, (float16_t)-0.391357422f, (float16_t)-0.619140625f
+    (float16_t)-0.842773438f, (float16_t)-0.380371094f, (float16_t)0.952148438f
 };
 
 // Weight sum (precomputed for S8 depthwise convolutions)
@@ -62,13 +62,13 @@ static const float16_t depthwise_conv_float_default_f16_input[] = {
 
 // Expected output (golden)
 static const float16_t depthwise_conv_float_default_f16_expected_output[] = {
-    (float16_t)0.375244141f, (float16_t)-0.474609375f, (float16_t)-0.779785156f, (float16_t)-0.042419434f, (float16_t)-0.258544922f, (float16_t)-1.01953125f, (float16_t)0.426513672f, (float16_t)-0.302978516f, (float16_t)0.044799805f, (float16_t)0.370117188f, (float16_t)-0.810058594f, (float16_t)-0.729980469f, (float16_t)0.151489258f, (float16_t)-0.212524414f, (float16_t)-1.383789062f, (float16_t)0.274414062f,
-    (float16_t)-0.057739258f, (float16_t)-0.372070312f, (float16_t)-0.223144531f, (float16_t)-0.577148438f, (float16_t)-0.79296875f, (float16_t)0.03237915f, (float16_t)-0.180786133f, (float16_t)0.537597656f, (float16_t)0.275146484f, (float16_t)-0.640136719f, (float16_t)-1.018554688f, (float16_t)0.938476562f, (float16_t)-0.139892578f, (float16_t)-1.431640625f, (float16_t)-0.625f, (float16_t)-0.452636719f,
-    (float16_t)-0.115478516f, (float16_t)0.244506836f, (float16_t)-0.774414062f, (float16_t)-0.493164062f, (float16_t)-0.297363281f, (float16_t)0.147460938f, (float16_t)-0.146240234f, (float16_t)0.252685547f, (float16_t)-1.022460938f, (float16_t)-1.282226562f, (float16_t)0.184082031f, (float16_t)-0.502441406f, (float16_t)-0.583496094f, (float16_t)0.034118652f, (float16_t)-0.379394531f, (float16_t)-0.145141602f,
-    (float16_t)0.412353516f, (float16_t)-0.203369141f, (float16_t)-1.268554688f, (float16_t)0.181152344f, (float16_t)0.067749023f, (float16_t)-0.716308594f, (float16_t)0.266601562f, (float16_t)-0.755371094f, (float16_t)-0.9140625f, (float16_t)0.14440918f, (float16_t)-0.402099609f, (float16_t)-0.723144531f, (float16_t)0.481689453f, (float16_t)-0.016174316f, (float16_t)-0.627929688f, (float16_t)0.239501953f,
-    (float16_t)0.054870605f, (float16_t)-0.009742737f, (float16_t)0.187255859f, (float16_t)-0.394287109f, (float16_t)-0.770996094f, (float16_t)0.728027344f, (float16_t)-0.877929688f, (float16_t)-0.690917969f, (float16_t)0.204589844f, (float16_t)-0.501464844f, (float16_t)-0.287841797f, (float16_t)-0.177246094f, (float16_t)-0.443359375f, (float16_t)-0.764160156f, (float16_t)0.428222656f, (float16_t)-0.34375f,
-    (float16_t)-0.7578125f, (float16_t)0.413085938f, (float16_t)-0.354492188f, (float16_t)-0.794433594f, (float16_t)0.345214844f, (float16_t)-0.452148438f, (float16_t)-0.7421875f, (float16_t)0.648925781f, (float16_t)0.155395508f, (float16_t)-0.599609375f, (float16_t)0.10736084f, (float16_t)-0.181274414f, (float16_t)-0.837402344f, (float16_t)-0.088439941f, (float16_t)-0.174926758f, (float16_t)-0.798828125f,
-    (float16_t)0.212646484f, (float16_t)-0.494628906f, (float16_t)-0.721191406f, (float16_t)0.632324219f, (float16_t)-0.5546875f, (float16_t)-0.822265625f, (float16_t)0.455322266f, (float16_t)-0.008918762f, (float16_t)-0.64453125f, (float16_t)0.384521484f, (float16_t)-0.527832031f, (float16_t)-0.618164062f
+    (float16_t)-0.489990234f, (float16_t)-0.138305664f, (float16_t)0.726074219f, (float16_t)-0.689941406f, (float16_t)-0.115722656f, (float16_t)1.358398438f, (float16_t)-0.678710938f, (float16_t)-0.178222656f, (float16_t)0.90234375f, (float16_t)-0.273193359f, (float16_t)-0.618164062f, (float16_t)0.781738281f, (float16_t)-0.505371094f, (float16_t)-0.261230469f, (float16_t)1.221679688f, (float16_t)-0.522460938f,
+    (float16_t)-0.294921875f, (float16_t)0.684082031f, (float16_t)-1.244140625f, (float16_t)0.049316406f, (float16_t)1.21875f, (float16_t)-1.03125f, (float16_t)0.130737305f, (float16_t)0.550292969f, (float16_t)-1.276367188f, (float16_t)-0.696289062f, (float16_t)0.534667969f, (float16_t)-1.329101562f, (float16_t)-0.139404297f, (float16_t)1.668945312f, (float16_t)-1.263671875f, (float16_t)-0.380859375f,
+    (float16_t)1.44140625f, (float16_t)-1.166015625f, (float16_t)-0.534179688f, (float16_t)0.229370117f, (float16_t)-0.848632812f, (float16_t)0.056762695f, (float16_t)0.558105469f, (float16_t)-0.489257812f, (float16_t)-1.1328125f, (float16_t)0.808105469f, (float16_t)-0.821289062f, (float16_t)0.215576172f, (float16_t)1.16015625f, (float16_t)-0.802246094f, (float16_t)-0.607421875f, (float16_t)0.856933594f,
+    (float16_t)-0.476318359f, (float16_t)-0.395263672f, (float16_t)1.331054688f, (float16_t)-0.728027344f, (float16_t)-0.357421875f, (float16_t)0.770019531f, (float16_t)-0.641113281f, (float16_t)-0.904785156f, (float16_t)1.360351562f, (float16_t)-0.978027344f, (float16_t)-0.210571289f, (float16_t)1.236328125f, (float16_t)-1.225585938f, (float16_t)-0.50390625f, (float16_t)0.580566406f, (float16_t)-1.1640625f,
+    (float16_t)-0.604003906f, (float16_t)0.294433594f, (float16_t)-1.0703125f, (float16_t)-0.618164062f, (float16_t)1.633789062f, (float16_t)-0.91015625f, (float16_t)-0.575683594f, (float16_t)1.075195312f, (float16_t)-0.571777344f, (float16_t)-0.308105469f, (float16_t)1.041015625f, (float16_t)-0.651855469f, (float16_t)-0.277587891f, (float16_t)1.129882812f, (float16_t)-1.126953125f, (float16_t)-0.422607422f,
+    (float16_t)1.40625f, (float16_t)-0.744140625f, (float16_t)-0.424316406f, (float16_t)0.276611328f, (float16_t)-1.01953125f, (float16_t)-1.15234375f, (float16_t)1.072265625f, (float16_t)-0.699707031f, (float16_t)-0.255859375f, (float16_t)1.143554688f, (float16_t)-0.875976562f, (float16_t)-0.230957031f, (float16_t)0.999511719f, (float16_t)-1.083984375f, (float16_t)-0.250976562f, (float16_t)0.834960938f,
+    (float16_t)-0.763671875f, (float16_t)-0.610839844f, (float16_t)1.411132812f, (float16_t)-0.713378906f, (float16_t)-0.834472656f, (float16_t)1.099609375f, (float16_t)-0.914550781f, (float16_t)-0.245361328f, (float16_t)0.672851562f, (float16_t)-0.983886719f, (float16_t)-0.884765625f, (float16_t)0.734863281f
 };
 
 #endif

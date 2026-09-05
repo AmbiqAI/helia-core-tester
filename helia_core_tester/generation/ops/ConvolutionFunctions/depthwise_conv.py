@@ -77,6 +77,10 @@ class OpDepthwiseConv(OperationBase):
             'padding': padding,
             'depth_multiplier': self.desc.get('depth_multiplier', 1),
             'use_bias': self.desc.get('use_bias', True),
+            # Unseeded initializers draw from the Keras global RNG, so the same
+            # descriptor produced different weights (and different goldens) run to
+            # run; pinning them keeps generation reproducible across processes.
+            'depthwise_initializer': tf.keras.initializers.GlorotUniform(seed=1234),
             'name': 'depthwise_conv'
         }
         
@@ -104,7 +108,9 @@ class OpDepthwiseConv(OperationBase):
             # cases ship an all-zero bias whatever is set here, and cannot
             # detect a dropped bias-add. TODO(#98): lift once the hoisted
             # operand can be converted back to an int32 accumulator bias.
-            dwconv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(minval=-1.0, maxval=1.0)
+            dwconv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(
+                minval=-1.0, maxval=1.0, seed=4321
+            )
         
         dwconv = tf.keras.layers.DepthwiseConv2D(**dwconv_kwargs)
         x = dwconv(inputs)

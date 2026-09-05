@@ -358,6 +358,10 @@ class TestResultParser:
         HELIA_FLOAT_MAXDIFF) carry none of the others and are printed before
         the failure count, so without it they fall outside the retained
         section and the report keeps the verdict but drops the evidence.
+        `mismatch[` is a keyword for the same reason: the per-element
+        `Mismatch[i]: exp=... got=...` lines print ahead of everything else and
+        carry the failing lane index, which is the only way to tell a kernel
+        defect from a tolerance artefact.
         """
         relevant = []
         in_test_section = False
@@ -367,7 +371,7 @@ class TestResultParser:
             if not line:
                 continue
 
-            if any(keyword in line.lower() for keyword in ['test', 'fail', 'pass', 'error', 'assert', 'helia_']):
+            if any(keyword in line.lower() for keyword in ['test', 'fail', 'pass', 'error', 'assert', 'helia_', 'mismatch[']):
                 in_test_section = True
             
             if in_test_section:

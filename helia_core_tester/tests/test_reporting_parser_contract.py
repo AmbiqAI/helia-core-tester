@@ -340,6 +340,30 @@ def test_parser_keeps_the_helia_evidence_lines_in_the_report() -> None:
     )
 
 
+def test_parser_keeps_the_per_element_mismatch_lines_in_the_report() -> None:
+    # The per-element line carries the failing lane index, which is what separates a
+    # kernel that spreads a token from one that merely misses a tolerance. It prints
+    # ahead of every other keyword, so without its own keyword the retained section
+    # starts after it and the index is lost.
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "Mismatch[309]: exp=1.234000 got=1.235000 (diff=0.001000, tol=0.000617)\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=1.00000000e-03 maxfrac=1.620746 n=1024\n"
+        "1 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("depthwise_conv_float_nonfinite_nan_f16.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert (
+        "Mismatch[309]: exp=1.234000 got=1.235000 (diff=0.001000, tol=0.000617)"
+        in result.output_lines
+    )
+
+
 def test_parser_empty_tensor_does_not_void_sibling_tensor_headroom() -> None:
     # A split-style case validates several output tensors into one output
     # stream. A zero-length tensor compares nothing and always reports the
