@@ -33,13 +33,13 @@ _CPU_ALIASES = {
 # selecting the CMSIS device header (the physical chip doesn't change, only
 # the instruction-set the compiler targets).
 #
-# The generated sources are the same for both targets except for s8
-# FullyConnected: the MVE kernel reads a precomputed kernel sum and ignores
-# the bias pointer, so the generator folds the bias into that sum for
-# "cortex-m55" and passes the bias through for "cortex-m55-dsp" (see
+# For s8 FullyConnected the two targets also differ in where the bias-add
+# happens: the MVE kernel reads a precomputed kernel sum and ignores the bias
+# pointer, so the generator folds the bias into that sum for "cortex-m55" and
+# passes the bias through for "cortex-m55-dsp" (see
 # OpFullyConnected._supports_weight_sum()). A cycle delta between the two
-# targets on those cases therefore includes where the bias-add happens, not
-# only the instruction set.
+# targets on those cases therefore includes the bias-add placement, not only
+# the instruction set.
 _TARGET_CPU_CMAKE_OVERRIDES = {
     "cortex-m55-dsp": "cortex-m55+nomve",
 }
