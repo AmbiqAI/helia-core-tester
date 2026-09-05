@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Tuple
 
 from .env import REPO_ROOT
 from .errors import FvpScriptError
@@ -120,6 +124,57 @@ def _clear_stale_gcda(build_dir: Path) -> None:
         gcda.unlink(missing_ok=True)
 
 
+_COMPILER_LAUNCHER_ENV = "HELIA_CORE_TESTER_COMPILER_LAUNCHER"
+_COMPILER_LAUNCHER_TOOLS = ("ccache", "sccache")
+# CMAKE_<LANG>_COMPILER_LAUNCHER gained ASM support in 3.4; on older CMake the
+# variable is silently ignored and the assembly objects miss the cache.
+_ASM_LAUNCHER_MIN_CMAKE = (3, 4)
+
+
+def resolve_compiler_launcher() -> Optional[str]:
+    """The compiler cache to route this build through, or ``None``.
+
+    Opt-in by presence only: nothing here installs a tool and no image ships
+    one, so a host that already has ccache or sccache gets warm rebuilds and a
+    host that has neither builds exactly as before. See issue #107.
+    """
+    override = os.environ.get(_COMPILER_LAUNCHER_ENV, "").strip()
+    if override:
+        return shutil.which(override) or override
+    for tool in _COMPILER_LAUNCHER_TOOLS:
+        found = shutil.which(tool)
+        if found:
+            return found
+    return None
+
+
+@lru_cache(maxsize=1)
+def _cmake_version() -> Optional[Tuple[int, int]]:
+    try:
+        completed = subprocess.run(
+            ["cmake", "--version"], capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return None
+    match = re.search(r"cmake version (\d+)\.(\d+)", completed.stdout or "")
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def compiler_launcher_args() -> List[str]:
+    """CMake defines routing compilation through an available compiler cache."""
+    launcher = resolve_compiler_launcher()
+    if not launcher:
+        return []
+    args = [f"-DCMAKE_C_COMPILER_LAUNCHER={launcher}"]
+    version = _cmake_version()
+    if version is not None and version >= _ASM_LAUNCHER_MIN_CMAKE:
+        args.append(f"-DCMAKE_ASM_COMPILER_LAUNCHER={launcher}")
+    print(f"Compiler launcher: {launcher}")
+    return args
+
+
 def read_cmake_cache_path(build_dir: Path, key: str) -> Optional[Path]:
     cache = build_dir / "CMakeCache.txt"
     if not cache.exists():
@@ -166,7 +221,7 @@ def cmake_configure(
         f"-DTARGET_CPU={cpu}",
         f"-DCMSIS_PATH={cmsis5}",
         f"-DCMSIS_OPTIMIZATION_LEVEL={optimization}",
-    ] + [f"-D{item}" for item in extra_defs]
+    ] + compiler_launcher_args() + [f"-D{item}" for item in extra_defs]
     if generated_tests_dir is not None:
         cmd.append(f"-DGENERATED_TESTS_DIR={generated_tests_dir}")
     if enable_coverage:
