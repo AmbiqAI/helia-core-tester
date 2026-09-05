@@ -118,11 +118,17 @@ def get_cpu_profile(cpu: str) -> CpuProfile:
         # while f16 has no kernel path here. This is the only soft-float leg in the
         # matrix, which makes it the only one that exercises __aeabi_* float conversion
         # rather than VCVT -- the two differ on non-finite operands.
+        #
+        # soft_float is a positive capability rather than an inferred negation of
+        # has_dsp/has_mve because ns-cmsis-nn guards some behaviour on
+        # `#if !defined(__ARM_FP)`: a descriptor whose contract exists only in the
+        # soft-float compilation of a kernel requires it, and every hard-float target
+        # capability-skips instead of asserting an unspecified result.
         return CpuProfile(
             cpu=canon,
             has_dsp=False,
             has_mve=False,
-            capabilities=frozenset({"fp32_execution"}),
+            capabilities=frozenset({"fp32_execution", "soft_float"}),
         )
     raise ValueError(f"Unsupported CPU target: {cpu}")
 

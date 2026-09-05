@@ -321,8 +321,10 @@ act_param: 0.0
 # generator default of [-1, 1] (nn_activation_float.py), so no case ever left
 # the first sixth of the f32 tanh LUT or reached any saturation branch. The f32
 # tanh kernel interpolates arm_nn_tanh_lut384_f32 over |x| < 6 and saturates to
-# +/-1 at |x| >= 6; the f16 tanh kernel switches at |x| = 4 (MVE LUT) and
-# |x| = 3 (scalar rational fit). None of that was reachable, so ns-cmsis-nn#303
+# +/-1 at |x| >= 6; the f16 tanh kernel saturates at |x| = 4 on both legs, since
+# arm_nn_tanh_scalar_ref_f16 is a scalar twin of the MVE LUT over the same
+# [0, 4] 256-segment geometry (arm_nn_activation_flt.h:401-411,
+# ns-cmsis-nn#407). None of that was reachable, so ns-cmsis-nn#303
 # (which widened the f32 window from 4 to 6) shipped with no case covering it.
 #
 # WHAT THESE CASES ACTUALLY PIN DOWN. Read this before trusting them as the
@@ -557,10 +559,10 @@ act_param: 0.0
 # Sized for the m55-f16-fallback leg, exactly like the narrow tanh_f16 case
 # above, but the floor is higher here and had to be measured separately rather
 # than copied. Expectations are generated from the MVE LUT model (cortex-m55
-# reports has_mve), while the fallback leg compiles the scalar rational fit
-# x*(27+x^2)/(27+9x^2) with its own |x| > 3 cutoff -- two different algorithms,
-# and widening the input range to +/-8 walks straight through the region where
-# they disagree most.
+# reports has_mve) while the fallback leg compiles a different scalar
+# implementation, and widening the input range to +/-8 walks straight through
+# the region where the two disagree most. The number below is the measurement,
+# not a derivation from either algorithm.
 # Measured by tolerance sweep on the FVP, atol held at 0.001:
 #   m55-f16-mvef     : passes at rtol 0.0 (expectations match the MVE path
 #                      bit-for-bit, so this leg contributes no constraint)
@@ -660,12 +662,25 @@ act_param: 0.0
 #     sigmoid(-Inf) = 0, relu6(+Inf) = 6, relu(-Inf) = 0 -- the expected value
 #     is finite and ordinary dtype tolerance applies.
 #
-# Why these belong on cortex-m0 specifically: m0 is the only soft-float leg,
-# so it is the only one where a float->int conversion inside a LUT index
-# calculation goes through __aeabi_f2iz (which returns INT32_MAX for a quiet
-# NaN) rather than VCVT.S32.F32 (which saturates NaN to 0). A NaN case that
-# passes on m55/m4 can still read far out of bounds here -- see
-# ns-cmsis-nn#314, which the tanh cases are the regression guard for.
+# Why cortex-m0 matters here: it is the only soft-float leg, so it is the only
+# one where a float->int conversion inside a LUT index calculation goes through
+# __aeabi_f2iz (which returns INT32_MAX for a quiet NaN) rather than
+# VCVT.S32.F32 (which saturates NaN to 0). A NaN case that passes on m55/m4 can
+# still read far out of bounds there.
+#
+# The regression guard for ns-cmsis-nn#314 is exactly one case,
+# nn_activation_float_tanh_nan_softfloat_f32, and it runs on cortex-m0 only.
+# #314 is NaN-only, so the +-Inf sweeps below do not reach it. The case requires
+# the soft_float capability because that is the scope of the contract: the
+# `#if !defined(__ARM_FP)` block at arm_nn_activation_flt.h:103-118 tests the
+# input's bit pattern and returns the NaN quieted, and being an integer test it
+# survives the shipped -Ofast build. Off soft-float there is nothing to assert.
+# Hard-float scalar (cortex-m4) reaches the NaN only through the `ax != ax`
+# cold branch at :123 onward, which -ffinite-math-only deletes -- :69-83 says so
+# in as many words. MVE (every cortex-m55 leg) returns -0.9999877 by design,
+# because vminnmq is IEEE minNum and the vnegq_m predicate fires on unordered
+# lanes (:85-99). Both are documented as outside the contract, so both
+# capability-skip rather than pin an observation.
 #
 # HARDSWISH has no case here at all: arm_nnfunctions_flt.h:445-451 puts the
 # mux's hard swish outside the NaN/Inf contract and points callers who need it
@@ -685,6 +700,25 @@ nonfinite_tokens: [inf, -inf]
 # tanh(xmax) by design (arm_nn_activation_flt.h:89-93 for f32, :537-554 for f16).
 # Every cortex-m55 leg is MVE, and neither IEEE propagation nor that divergence is
 # a guarantee the header makes, so there is nothing here to assert.
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_nan_softfloat_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+nonfinite_tokens: [nan]
+required_capabilities: [soft_float]
+# The ns-cmsis-nn#314 guard; the block comment above says why it is the only NaN
+# tanh lane in this file and why it is restricted to the soft-float leg. The
+# expected value is NaN and the comparison macro treats both-NaN as equal (tester
+# #75), so the lane asserts that a NaN came back rather than a particular payload
+# -- arm_nn_activation_flt.h:115 quiets the input, and pinning the payload would
+# mean modelling that.
 activation_type: ARM_NN_FLT_ACT_TANH
 act_param: 0.0
 ---
@@ -757,9 +791,9 @@ nonfinite_tokens: [inf, -inf]
 # a guarantee the header makes, so there is nothing here to assert.
 activation_type: ARM_NN_FLT_ACT_TANH
 act_param: 0.0
-# Same scalar-fallback floor as the other narrow tanh_f16 cases: the
-# m55-f16-fallback leg runs the rational fit, not the MVE LUT the goldens are
-# built from, and the two disagree by up to 1.03e-2 over |x| <= 1.
+# Same scalar-fallback floor as the other narrow tanh_f16 cases: the goldens are
+# built from the MVE LUT model and the m55-f16-fallback leg compiles a different
+# scalar implementation, measured to disagree by up to 1.03e-2 over |x| <= 1.
 comparison:
   atol: 0.001
   rtol: 0.02

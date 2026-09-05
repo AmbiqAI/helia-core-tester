@@ -296,22 +296,34 @@ def test_activation_reference_encodes_the_propagation_and_clamping_contract() ->
     np.testing.assert_array_equal(tanh_f16, np.array([1.0, -1.0], dtype=np.float16))
 
 
+_SOFT_FLOAT_TANH_NAN_CASE = "nn_activation_float_tanh_nan_softfloat_f32"
+
+
 def test_tanh_and_sigmoid_descriptors_do_not_assert_a_nan_lane() -> None:
     """ns-cmsis-nn disclaims NaN on both: sigmoid calls it unsupported
     (arm_nnsupportfunctions_flt.h:184-186) and the MVE tanh legs destroy it by design
     (arm_nn_activation_flt.h:89-93 and :537-554). Neither IEEE propagation nor the
-    observed divergence may be locked in as a golden.
+    observed divergence may be locked in as a golden. The single exception is the
+    soft-float tanh case, which is contracted at arm_nn_activation_flt.h:103-118 and
+    is gated on the soft_float capability so no hard-float leg ever runs it.
     """
     path = (
         _repo_root() / "assets" / "descriptors" / "ActivationFunctions" / "nn_activation_float.yaml"
     )
     checked = 0
+    soft_float_cases = 0
     for doc in yaml.safe_load_all(path.read_text()):
         if not isinstance(doc, dict) or doc.get("input_mode") != "nonfinite_sweep":
             continue
         activation = doc["activation_type"]
-        if activation in ("ARM_NN_FLT_ACT_TANH", "ARM_NN_FLT_ACT_SIGMOID"):
+        if doc["name"] == _SOFT_FLOAT_TANH_NAN_CASE:
+            assert activation == "ARM_NN_FLT_ACT_TANH"
+            assert doc["nonfinite_tokens"] == ["nan"]
+            assert doc["required_capabilities"] == ["soft_float"]
+            soft_float_cases += 1
+        elif activation in ("ARM_NN_FLT_ACT_TANH", "ARM_NN_FLT_ACT_SIGMOID"):
             assert doc["nonfinite_tokens"] == ["inf", "-inf"], doc["name"]
+            assert "required_capabilities" not in doc, doc["name"]
             checked += 1
         else:
             assert "nan" in doc.get("nonfinite_tokens", ["nan"]), doc["name"]
@@ -320,3 +332,59 @@ def test_tanh_and_sigmoid_descriptors_do_not_assert_a_nan_lane() -> None:
         assert activation != "ARM_NN_FLT_ACT_HARDSWISH", doc["name"]
 
     assert checked == 4
+    assert soft_float_cases == 1
+
+
+def test_soft_float_tanh_nan_case_expects_a_nan_back() -> None:
+    """The #314 guard is only a guard if the golden is a NaN: the reference must
+    propagate, not clamp the lane to tanh(xmax) the way the MVE leg does.
+    """
+    from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_float import (
+        _activation_reference,
+    )
+
+    old = np.seterr(all="ignore")
+    try:
+        result = _activation_reference(
+            np.array([np.nan, 0.5], dtype=np.float32), "ARM_NN_FLT_ACT_TANH", 0.0, "FP32"
+        )
+    finally:
+        np.seterr(**old)
+
+    assert np.isnan(result[0])
+    assert not np.isnan(result[1])
+
+
+# --- activation bound typing ------------------------------------------------
+
+
+def test_schema_allows_non_integral_activation_bounds_only_in_the_float_suite() -> None:
+    gates = [
+        block
+        for block in _schema()["allOf"]
+        if set(block.get("then", {}).get("properties", {})) == {"act_min", "act_max"}
+    ]
+    assert len(gates) == 1
+    gate = gates[0]
+
+    assert gate["if"] == {"not": {"properties": {"suite": {"const": "float"}}, "required": ["suite"]}}
+    assert gate["then"]["properties"]["act_min"] == {"type": "integer"}
+    assert gate["then"]["properties"]["act_max"] == {"type": "integer"}
+
+    # The float suite keeps the widened type so +/-INFINITY "no clamp" bounds load.
+    for key in ("act_min", "act_max"):
+        assert _schema()["properties"][key]["type"] == ["integer", "number"]
+
+
+def test_quantized_clamp_rejects_a_non_integral_activation_bound() -> None:
+    from helia_core_tester.generation.ops.ActivationFunctions.clamp import (
+        _integral_activation_bound,
+    )
+
+    assert _integral_activation_bound({"act_min": -64}, "act_min", -128) == -64
+    assert _integral_activation_bound({"act_min": -64.0}, "act_min", -128) == -64
+    assert _integral_activation_bound({}, "act_min", -128) == -128
+
+    for bad in (-64.5, float("inf"), float("-inf")):
+        with pytest.raises(ValueError, match="integral quantized code"):
+            _integral_activation_bound({"act_min": bad}, "act_min", -128)

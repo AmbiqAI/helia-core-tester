@@ -40,3 +40,13 @@ def test_cortex_m0_claims_no_simd_capabilities():
     profile = get_cpu_profile("cortex-m0")
     assert profile.supports_capability("dsp") is False
     assert profile.supports_capability("mve") is False
+
+
+def test_soft_float_is_a_cortex_m0_only_capability():
+    """Kernel behaviour guarded on `#if !defined(__ARM_FP)` exists only on the
+    soft-float leg; every hard-float target must capability-skip such a case."""
+    assert get_cpu_profile("cortex-m0").supports_capability("soft_float") is True
+    assert missing_required_capabilities("cortex-m0", ["soft_float"]) == []
+    for cpu in ("cortex-m4", "cortex-m55", "cortex-m55-dsp"):
+        assert get_cpu_profile(cpu).supports_capability("soft_float") is False
+        assert missing_required_capabilities(cpu, ["soft_float"]) == ["soft_float"]

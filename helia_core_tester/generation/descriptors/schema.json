@@ -716,6 +716,21 @@
       "$comment": "DynamicUpdateSlice requires operand_shape, update_shape, start_indices",
       "if": { "properties": { "operator": { "const": "DynamicUpdateSlice" } } },
       "then": { "required": ["operand_shape", "update_shape", "start_indices"] }
+    },
+    {
+      "$comment": "act_min/act_max are float bounds only in the float suite. Quantized consumers (e.g. arm_clamp_s8) carry them as integer codes and would truncate -64.5 to -64, so outside suite:float the bound must be integral; +/-INFINITY is likewise float-suite-only, having no integer image.",
+      "if": {
+        "not": {
+          "properties": { "suite": { "const": "float" } },
+          "required": ["suite"]
+        }
+      },
+      "then": {
+        "properties": {
+          "act_min": { "type": "integer" },
+          "act_max": { "type": "integer" }
+        }
+      }
     }
   ]
 }

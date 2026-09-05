@@ -112,9 +112,13 @@ tolerance. Serialized arrays carry the C99 `NAN` and `INFINITY` macros, which su
 build. The mode applies to the input tensor only, so weights, alpha and second operands stay
 finite and each swept element isolates a single token. Requesting the mode on an op that samples
 outside the shared helpers is a generation error rather than a silently finite case.
-`cortex-m0` runs the f32 float suite through the soft-float ABI, which is the only leg where
-float-to-integer conversion goes through `__aeabi_*` rather than a VFP instruction, and the two
-differ on non-finite operands.
+`cortex-m0` is the only soft-float leg in the target matrix: it runs the f32 suite through
+`-mfloat-abi=soft`, so float-to-integer conversion goes through `__aeabi_*` rather than a VFP
+instruction, and the two differ on non-finite operands. A descriptor whose contract holds only
+there declares `required_capabilities: [soft_float]` and is capability-skipped, with a manifest
+entry, on every hard-float target. Generating and building that leg is supported here, but no
+workflow in this repo runs it; the consumer workflow that exercises `cortex-m0` lives in
+ns-cmsis-nn.
 
 To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
 
