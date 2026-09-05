@@ -472,12 +472,15 @@ class TemplateContextBuilder:
         """
         numeric = float(value)
 
-        # NAN/INFINITY are float-typed C99 macros expanding to compiler builtins, so
-        # they stay valid data under -Ofast/-ffinite-math-only: that flag licenses the
-        # optimizer to assume operands are finite, but it does not stop a builtin from
-        # materializing the bit pattern. Emitting them unsuffixed is deliberate --
-        # `NANf` is not a token, and the decimal path below would otherwise produce
-        # `nan.0f` or split-crash on `inf` (no exponent to unpack).
+        # NAN/INFINITY are float-typed C99 macros expanding to compiler builtins. In a
+        # static initializer they are observed to keep their bit pattern under
+        # -Ofast/-ffinite-math-only on the toolchains this project gates, but that is not
+        # guaranteed: clang documents the macros as undefined behaviour under
+        # -ffinite-math-only and warns on them (-Wnan-infinity-disabled). The literal
+        # survival check in tests/test_nonfinite_input_mode.py is what keeps that
+        # observation honest. Emitting them unsuffixed is deliberate -- `NANf` is not a
+        # token, and the decimal path below would otherwise produce `nan.0f` or
+        # split-crash on `inf` (no exponent to unpack).
         if math.isnan(numeric):
             return "-NAN" if math.copysign(1.0, numeric) < 0 else "NAN"
         if math.isinf(numeric):

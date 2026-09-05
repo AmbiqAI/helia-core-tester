@@ -100,7 +100,9 @@ input_2_shape: [1, 1, 1, 9]
 # operand is swept and why the +-Inf lanes land on the activation clamp in f32.
 # Mul adds one case add cannot reach: the right operand is drawn from [-1, 1] and
 # never lands exactly on zero, so Inf * finite stays Inf here and does not turn
-# into the NaN that Inf * 0 would.
+# into the NaN that Inf * 0 would. As in add, _nonfinite_clamped_f16 carries
+# bounds that stay finite once narrowed (+-6) so the f16 clamp is asserted rather
+# than degenerating into passthrough against a bound of Inf.
 operator: Mul
 name: mul_float_nonfinite_f32
 suite: float
@@ -120,6 +122,18 @@ tensor_dtypes:
 input_1_shape: [1, 4, 4, 8]
 input_2_shape: [1, 4, 4, 8]
 input_mode: nonfinite_sweep
+---
+operator: Mul
+name: mul_float_nonfinite_clamped_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 4, 4, 8]
+input_2_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+act_min: -6.0
+act_max: 6.0
 ---
 operator: Mul
 name: mul_float_nonfinite_noclamp_f32

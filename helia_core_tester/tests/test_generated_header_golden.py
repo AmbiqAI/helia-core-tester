@@ -22,6 +22,7 @@ import yaml
 from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_float import (
     OpNNActivationFloat,
 )
+from helia_core_tester.generation.test_ops import default_seed_for_case
 
 GOLDEN_CASE = "nn_activation_float_tanh_f16"
 GOLDEN_CPU = "cortex-m55"
@@ -45,10 +46,9 @@ def _descriptor() -> dict:
 
 def _emit_header(output_dir: Path) -> str:
     desc = _descriptor()
-    # Mirrors the seed derivation in generation/test_ops.py so the fixture is the same
-    # text a real `helia_core_tester generate` run produces, not a test-only artifact.
-    seed = int.from_bytes(hashlib.sha256(GOLDEN_CASE.encode("utf-8")).digest()[:4], "little")
-    op = OpNNActivationFloat(desc, seed, target_cpu=GOLDEN_CPU)
+    # The generator's own seed derivation, so the fixture is the same text a real
+    # `helia_core_tester generate` run produces, not a test-only artifact.
+    op = OpNNActivationFloat(desc, default_seed_for_case(GOLDEN_CASE), target_cpu=GOLDEN_CPU)
     (output_dir / f"{GOLDEN_CASE}.tflite").touch()
     op.generate_c_files(output_dir)
     return (output_dir / "includes" / f"{GOLDEN_CASE}_nn_activation_float.h").read_text()

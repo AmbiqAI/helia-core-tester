@@ -21,6 +21,11 @@ from helia_core_tester.generation.ops import get_op_map, get_operator_spec
 from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists, missing_header_symbols
 
 
+def default_seed_for_case(name: str) -> int:
+    """Deterministic per-case seed, independent of PYTHONHASHSEED."""
+    return int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:4], "little")
+
+
 def _descriptor_family(desc: Dict[str, Any]) -> str:
     return str(desc.get("_family") or get_operator_spec(str(desc["operator"])).artifact_family_dir)
 
@@ -233,8 +238,7 @@ def generate_test(
     
     # Initialize operation with deterministic seed
     if seed is None:
-        # Stable deterministic seed from name (independent of PYTHONHASHSEED)
-        seed = int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:4], "little")
+        seed = default_seed_for_case(name)
     op = op_class(desc, seed, target_cpu=cpu)
     
     # Build Keras model (skip for ops that generate LiteRT models directly)

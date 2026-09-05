@@ -58,8 +58,10 @@ required_kernel_symbols: [arm_hard_swish_f16]
 # propagation ("only the NaN-ness of the element is guaranteed, not a particular NaN
 # payload"), +Inf returning +Inf because the gate is 1, and -Inf returning NaN rather
 # than the mathematical limit 0 because the gate is 0 there and (-Inf) * 0 is NaN by
-# IEEE 754. All three are documented intent, not incidental arithmetic, so all three
-# tokens are asserted here. The mux (arm_nn_activation HARDSWISH) is explicitly
+# IEEE 754. The f16 entry point restates the same three lanes at :1652-1656, adding
+# that narrowing retags the NaN payload, so the f16 case asserts NaN-ness only too.
+# All of it is documented intent, not incidental arithmetic, so all three tokens are
+# asserted in both widths. The mux (arm_nn_activation HARDSWISH) is explicitly
 # outside this contract, which is why nn_activation_float.yaml has no hardswish case.
 operator: HardSwishPrecise
 name: hard_swish_float_nonfinite_f32

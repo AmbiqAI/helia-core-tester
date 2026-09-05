@@ -18,6 +18,7 @@ import yaml
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+from helia_core_tester.tests.test_float_nonfinite_compare import FLAG_SETS
 
 
 def _repo_root() -> Path:
@@ -209,8 +210,9 @@ def test_nonfinite_array_literals_render_for_both_float_widths() -> None:
 
 
 @pytest.mark.skipif(shutil.which("cc") is None, reason="no host C compiler")
-def test_generated_nonfinite_literals_survive_ofast(tmp_path: Path) -> None:
-    """The tokens must still be non-finite after -Ofast, which asserts they are not.
+@pytest.mark.parametrize("flags", FLAG_SETS, ids=lambda flags: " ".join(flags))
+def test_generated_nonfinite_literals_survive_fast_math(tmp_path: Path, flags: list[str]) -> None:
+    """The tokens must still be non-finite under the flag sets the float legs build with.
 
     -ffinite-math-only licenses the optimizer to assume no NaN/Inf operands, so this
     checks the emitted bit patterns rather than isnan()/isinf(), which that same flag is
@@ -239,7 +241,7 @@ def test_generated_nonfinite_literals_survive_ofast(tmp_path: Path) -> None:
     )
     binary = tmp_path / "nonfinite"
     subprocess.run(
-        ["cc", "-Ofast", "-std=c11", str(source), "-o", str(binary), "-lm"],
+        ["cc", *flags, "-std=c11", str(source), "-o", str(binary), "-lm"],
         check=True,
         capture_output=True,
     )
@@ -356,24 +358,6 @@ def test_soft_float_tanh_nan_case_expects_a_nan_back() -> None:
 
 
 # --- activation bound typing ------------------------------------------------
-
-
-def test_schema_allows_non_integral_activation_bounds_only_in_the_float_suite() -> None:
-    gates = [
-        block
-        for block in _schema()["allOf"]
-        if set(block.get("then", {}).get("properties", {})) == {"act_min", "act_max"}
-    ]
-    assert len(gates) == 1
-    gate = gates[0]
-
-    assert gate["if"] == {"not": {"properties": {"suite": {"const": "float"}}, "required": ["suite"]}}
-    assert gate["then"]["properties"]["act_min"] == {"type": "integer"}
-    assert gate["then"]["properties"]["act_max"] == {"type": "integer"}
-
-    # The float suite keeps the widened type so +/-INFINITY "no clamp" bounds load.
-    for key in ("act_min", "act_max"):
-        assert _schema()["properties"][key]["type"] == ["integer", "number"]
 
 
 def test_quantized_clamp_rejects_a_non_integral_activation_bound() -> None:

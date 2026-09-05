@@ -1,5 +1,8 @@
+import pytest
+
 from helia_core_tester.core.cpu_targets import (
     get_cpu_profile,
+    known_capabilities,
     missing_required_capabilities,
     normalize_cpu,
     parse_cpu_list,
@@ -50,3 +53,13 @@ def test_soft_float_is_a_cortex_m0_only_capability():
     for cpu in ("cortex-m4", "cortex-m55", "cortex-m55-dsp"):
         assert get_cpu_profile(cpu).supports_capability("soft_float") is False
         assert missing_required_capabilities(cpu, ["soft_float"]) == ["soft_float"]
+
+
+def test_an_undeclared_required_capability_is_a_generation_error():
+    """A misspelled capability satisfies no profile, so without this it would skip
+    the descriptor on every target and still report as covered."""
+    for cpu in ("cortex-m0", "cortex-m55"):
+        with pytest.raises(ValueError, match="Unknown required capability"):
+            missing_required_capabilities(cpu, ["soft-float"])
+
+    assert known_capabilities() >= {"dsp", "mve", "fp32_execution", "fp16_execution", "soft_float"}
