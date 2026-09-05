@@ -78,6 +78,7 @@ class OperationBase(ABC):
         self.rng = np.random.default_rng(seed)
         self._litert_interpreter = None
         self._tflite_path = None
+        self._input_mode_consumed = False
         
     @abstractmethod
     def build_keras_model(self):
@@ -136,6 +137,105 @@ class OperationBase(ABC):
         """Return a temporary deterministic RNG seeded from the op seed."""
         return np.random.default_rng(self.seed)
 
+    # Which tokens a sweep may request. A descriptor names a subset because the token
+    # set is a per-kernel contract question: ns-cmsis-nn documents NaN behaviour for
+    # some kernels, declares it unsupported for others (sigmoid), and destroys it by
+    # design on others (MVE tanh), so a kernel that disclaims NaN must not be handed one.
+    NONFINITE_TOKEN_VALUES: Dict[str, float] = {
+        "nan": float("nan"),
+        "inf": float("inf"),
+        "-inf": float("-inf"),
+    }
+    # Ordered so index i of a swept tensor always holds the same token for a given token
+    # set, which is what lets a failing element index name the token that broke without
+    # re-reading the generated array.
+    DEFAULT_NONFINITE_TOKENS: Tuple[str, ...] = ("nan", "inf", "-inf")
+
+    def input_mode(self) -> str:
+        """Return the descriptor input-generation mode."""
+        mode = str(self.desc.get("input_mode", "uniform")).strip().lower()
+        if mode not in ("", "uniform"):
+            suite = str(
+                self.desc.get("_descriptor_suite") or self.desc.get("suite") or ""
+            ).strip().lower()
+            if suite != "float":
+                raise ValueError(
+                    f"input_mode {mode!r} is float-suite only, but descriptor "
+                    f"{self.desc.get('name')!r} declares suite {suite or 'default'!r}"
+                )
+        return mode
+
+    def nonfinite_tokens(self) -> Tuple[str, ...]:
+        """Return the ordered token names this descriptor's sweep writes."""
+        requested = self.desc.get("nonfinite_tokens")
+        if requested is None:
+            return self.DEFAULT_NONFINITE_TOKENS
+        tokens = tuple(str(token).strip().lower() for token in requested)
+        if not tokens:
+            raise ValueError("nonfinite_tokens must name at least one token")
+        unknown = [token for token in tokens if token not in self.NONFINITE_TOKEN_VALUES]
+        if unknown:
+            raise ValueError(
+                f"Unsupported nonfinite_tokens {unknown}; "
+                f"known tokens are {sorted(self.NONFINITE_TOKEN_VALUES)}"
+            )
+        if len(set(tokens)) != len(tokens):
+            raise ValueError(f"nonfinite_tokens must be unique, got {list(tokens)}")
+        return tokens
+
+    def nonfinite_sweep_positions(self) -> Tuple[int, ...]:
+        """Return the flat indices the non-finite sweep overwrites."""
+        return tuple(range(len(self.nonfinite_tokens())))
+
+    def _apply_nonfinite_sweep(self, arr: np.ndarray) -> np.ndarray:
+        """Overwrite the leading elements of a float tensor with the non-finite tokens."""
+        if not np.issubdtype(arr.dtype, np.floating):
+            raise ValueError(
+                f"input_mode 'nonfinite_sweep' requires a float tensor, got dtype {arr.dtype}"
+            )
+        tokens = self.nonfinite_tokens()
+        if arr.size < len(tokens):
+            raise ValueError(
+                f"input_mode 'nonfinite_sweep' needs at least {len(tokens)} elements, "
+                f"got shape {tuple(arr.shape)}"
+            )
+        # Finite neighbours from the uniform draw are kept deliberately: a mixed tensor
+        # distinguishes a kernel that corrupts the lanes around a NaN (or predicates a
+        # whole vector off) from one that merely mishandles the token itself.
+        swept = arr.copy()
+        flat = swept.reshape(-1)
+        flat[: len(tokens)] = np.asarray(
+            [self.NONFINITE_TOKEN_VALUES[token] for token in tokens], dtype=arr.dtype
+        )
+        return swept
+
+    def _maybe_apply_input_mode(self, arr: np.ndarray) -> np.ndarray:
+        """Apply the descriptor input-generation mode to a freshly sampled tensor."""
+        mode = self.input_mode()
+        if mode in ("", "uniform"):
+            return arr
+        if mode == "nonfinite_sweep":
+            swept = self._apply_nonfinite_sweep(arr)
+            self._input_mode_consumed = True
+            return swept
+        raise ValueError(f"Unsupported input_mode: {mode!r}")
+
+    def assert_input_mode_consumed(self) -> None:
+        """Fail if a non-uniform input_mode was requested but no tensor was ever swept.
+
+        Several ops sample outside the shared helpers, so a descriptor can carry
+        input_mode and generate an ordinary finite case that looks green while testing
+        nothing. Silence there is worse than a generation failure.
+        """
+        if self.input_mode() in ("", "uniform"):
+            return
+        if not self._input_mode_consumed:
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} requested input_mode "
+                f"{self.input_mode()!r} but {type(self).__name__} never applied it; "
+                "the op samples its input outside the shared helpers"
+            )
+
     def _sample_uniform(
         self,
         shape: Tuple[int, ...] | list[int],
@@ -145,7 +245,8 @@ class OperationBase(ABC):
         dtype=np.float32,
     ) -> np.ndarray:
         """Sample reproducible uniform input data without mutating self.rng state."""
-        return self._seeded_rng().uniform(low, high, size=tuple(shape)).astype(dtype)
+        sampled = self._seeded_rng().uniform(low, high, size=tuple(shape)).astype(dtype)
+        return self._maybe_apply_input_mode(sampled)
 
     def _sample_dual_uniform_inputs(
         self,
@@ -159,7 +260,10 @@ class OperationBase(ABC):
         rng = self._seeded_rng()
         input_1 = rng.uniform(low, high, size=tuple(shape_1)).astype(np.float32)
         input_2 = rng.uniform(low, high, size=tuple(shape_2)).astype(np.float32)
-        return input_1, input_2
+        # Only the left operand is swept so the right stays finite: that keeps each
+        # element a single-token propagation check (NaN+x, Inf*x) rather than a mix whose
+        # result would be ambiguous about which operand drove it.
+        return self._maybe_apply_input_mode(input_1), input_2
 
     @staticmethod
     def _quant_param_scalar(quant_params: Optional[Dict[str, Any]], key: str, default: float | int) -> float | int:

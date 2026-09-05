@@ -190,6 +190,16 @@ class OpMul(BinaryBasicMathBase):
         block_size = int(np.prod(output_shape))
         
         # Build template context
+        # Only the quantized path renders these as integers; the float path passes the
+        # bounds as literals instead, and the +/-INFINITY no-clamp idiom has no integer
+        # image at all, so casting it would raise rather than produce a dead field.
+        if kernel_info["float_kernel"]:
+            out_activation_min_ctx = activation_min
+            out_activation_max_ctx = activation_max
+        else:
+            out_activation_min_ctx = int(activation_min)
+            out_activation_max_ctx = int(activation_max)
+
         context = {
             'name': name,
             'input1_dims': input1_dims,
@@ -202,8 +212,8 @@ class OpMul(BinaryBasicMathBase):
             'out_offset': int(output_zp),
             'out_mult': int(output_mult),
             'out_shift': int(output_shift),
-            'out_activation_min': int(activation_min),
-            'out_activation_max': int(activation_max),
+            'out_activation_min': out_activation_min_ctx,
+            'out_activation_max': out_activation_max_ctx,
             'block_size': int(block_size),
             'input1_data_array': input1_array_str,
             'input2_data_array': input2_array_str,

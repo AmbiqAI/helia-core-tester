@@ -113,20 +113,51 @@ def get_cpu_profile(cpu: str) -> CpuProfile:
             capabilities=frozenset({"dsp", "fp32_execution"}),
         )
     if canon == "cortex-m0":
+        # fp32_execution without fp16_execution: v6-m has no FPU at all, so f32 runs
+        # through the soft-float ABI (-mfloat-abi=soft) and is a buildable
+        # configuration -- ns-cmsis-nn's own CI runs cortex-m0 int-only -- while f16
+        # has no kernel path here. This is the only soft-float leg in the matrix,
+        # which makes it the only one that exercises __aeabi_* float conversion rather
+        # than VCVT -- the two differ on non-finite operands.
+        #
+        # soft_float is a positive capability rather than an inferred negation of
+        # has_dsp/has_mve because ns-cmsis-nn guards some behaviour on
+        # `#if !defined(__ARM_FP)`: a descriptor whose contract exists only in the
+        # soft-float compilation of a kernel requires it, and every hard-float target
+        # capability-skips instead of asserting an unspecified result.
         return CpuProfile(
             cpu=canon,
             has_dsp=False,
             has_mve=False,
-            capabilities=frozenset(),
+            capabilities=frozenset({"fp32_execution", "soft_float"}),
         )
     raise ValueError(f"Unsupported CPU target: {cpu}")
 
 
+def known_capabilities() -> frozenset[str]:
+    """Union of the capabilities any CPU profile declares."""
+    names: set[str] = set()
+    for canon in set(_CPU_ALIASES.values()):
+        names |= get_cpu_profile(canon).capabilities
+    return frozenset(names)
+
+
 def missing_required_capabilities(cpu: str, required_capabilities: Sequence[str]) -> list[str]:
     profile = get_cpu_profile(cpu)
+    known = known_capabilities()
     missing: list[str] = []
     for capability in required_capabilities:
         capability_name = str(capability).strip().lower()
-        if capability_name and not profile.supports_capability(capability_name):
+        if not capability_name:
+            continue
+        # A name no profile declares is unsatisfiable everywhere, so a typo like
+        # "soft-float" would skip the descriptor on the whole matrix and report as
+        # covered. Fail generation instead.
+        if capability_name not in known:
+            raise ValueError(
+                f"Unknown required capability {capability_name!r}; "
+                f"known capabilities are {sorted(known)}"
+            )
+        if not profile.supports_capability(capability_name):
             missing.append(capability_name)
     return missing

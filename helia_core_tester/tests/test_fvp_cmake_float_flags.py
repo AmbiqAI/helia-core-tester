@@ -56,9 +56,15 @@ def test_generate_step_routes_suite_both_by_cpu_capability(tmp_path: Path) -> No
     commands = GenerateStep(cfg)._plan_details().commands
     rendered = [" ".join(cmd) for cmd in commands]
 
-    assert len(commands) == 5
+    assert len(commands) == 6
     assert any("--cpu cortex-m0" in cmd and "--suite int" in cmd for cmd in rendered)
-    assert not any("--cpu cortex-m0" in cmd and "--suite float" in cmd for cmd in rendered)
+    # m0 has no FPU, so a requested f16 narrows to f32 here rather than dropping the leg.
+    assert any(
+        "--cpu cortex-m0" in cmd
+        and "--suite float" in cmd
+        and "--float-precision f32" in cmd
+        for cmd in rendered
+    )
     assert any(
         "--cpu cortex-m4" in cmd
         and "--suite float" in cmd
@@ -177,8 +183,10 @@ def test_build_step_splits_float_commands_by_effective_precision(tmp_path: Path)
 
     float_cmds = [cmd for cmd in rendered if "--suite float" in cmd]
     assert len(float_cmds) == 2
+    # m0 and m4 both resolve to f32, so they share one build rather than getting a
+    # command each -- the grouping key is the effective precision, not the cpu.
     assert any(
-        "--cpu cortex-m4" in cmd
+        "--cpu cortex-m0,cortex-m4" in cmd
         and "ARM_NN_ENABLE_F32=ON" in cmd
         and "ARM_NN_ENABLE_F16=OFF" in cmd
         for cmd in float_cmds

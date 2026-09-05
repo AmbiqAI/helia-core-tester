@@ -327,7 +327,9 @@ class OpPReLU(OperationBase):
 
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(float_dtype)
+        input_q = self._maybe_apply_input_mode(
+            self.rng.uniform(-1.0, 1.0, size=input_shape).astype(float_dtype)
+        )
         self.rng.__setstate__(rng_state)
 
         alpha_bc = alpha.reshape(

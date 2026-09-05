@@ -265,7 +265,7 @@ def test_float_mean_descriptors_require_their_kernel_symbol() -> None:
 def test_float_hard_swish_descriptors_require_their_kernel_symbol() -> None:
     path = TESTER_ROOT / "assets" / "descriptors" / "ActivationFunctions" / "hard_swish_float.yaml"
     descriptors = load_descriptor(str(path))
-    assert len(descriptors) == 4
+    assert len(descriptors) == 6
     for desc in descriptors:
         assert desc["operator"] == "HardSwishPrecise"
         assert desc["suite"] == "float"

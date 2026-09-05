@@ -100,7 +100,8 @@ def test_run_step_routes_suite_both_into_cpu_groups(tmp_path: Path, monkeypatch)
     assert len(result.details["commands"]) == 3
     rendered = [" ".join(cmd) for cmd in seen]
     assert any("--suite int" in cmd and "--cpu cortex-m0,cortex-m4,cortex-m55" in cmd for cmd in rendered)
-    assert any("--suite float" in cmd and "--cpu cortex-m4" in cmd for cmd in rendered)
+    # m0 joins m4 in the f32 group; the float lanes are keyed on effective precision.
+    assert any("--suite float" in cmd and "--cpu cortex-m0,cortex-m4" in cmd for cmd in rendered)
     assert any("--suite float" in cmd and "--cpu cortex-m55" in cmd for cmd in rendered)
 
 

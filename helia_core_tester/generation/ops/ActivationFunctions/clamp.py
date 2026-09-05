@@ -2,10 +2,25 @@
 Clamp operation implementation (arm_clamp_s8/s16).
 """
 
+import math
 from typing import Dict, Any
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+
+
+def _integral_activation_bound(desc: Dict[str, Any], key: str, default: int) -> int:
+    """arm_clamp_s8/s16 take activation bounds as quantized codes, but the
+    descriptor schema types act_min/act_max as `number` so the float suite can
+    carry fractional and infinite bounds. Truncating here would silently move a
+    -64.5 bound to -64, so a non-integral or non-finite value is an error."""
+    raw = desc.get(key, default)
+    value = float(raw)
+    if not math.isfinite(value) or value != int(value):
+        raise ValueError(
+            f"Clamp {key} must be an integral quantized code, got {raw!r}"
+        )
+    return int(value)
 
 
 class OpClamp(OperationBase):
@@ -54,8 +69,8 @@ class OpClamp(OperationBase):
         input_shape = tuple(self.desc['input_shape'])
         output_shape = input_shape
 
-        act_min = int(self.desc.get('act_min', kernel_info['qmin']))
-        act_max = int(self.desc.get('act_max', kernel_info['qmax']))
+        act_min = _integral_activation_bound(self.desc, 'act_min', kernel_info['qmin'])
+        act_max = _integral_activation_bound(self.desc, 'act_max', kernel_info['qmax'])
 
         act_min = max(kernel_info['qmin'], min(kernel_info['qmax'], act_min))
         act_max = max(kernel_info['qmin'], min(kernel_info['qmax'], act_max))

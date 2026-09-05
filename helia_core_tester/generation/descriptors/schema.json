@@ -167,6 +167,21 @@
     "input_shape": {
       "$ref": "#/$defs/intArray"
     },
+    "input_mode": {
+      "description": "Input generation mode. 'uniform' draws from input_min/input_max. 'nonfinite_sweep' additionally overwrites the leading elements with the tokens named by nonfinite_tokens, leaving the remaining draws finite; float suite only.",
+      "type": "string",
+      "enum": ["uniform", "nonfinite_sweep"]
+    },
+    "nonfinite_tokens": {
+      "description": "Tokens written by 'nonfinite_sweep', in order, one per leading flat element. Defaults to all three. Name a subset where ns-cmsis-nn does not guarantee the omitted token's behaviour.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["nan", "inf", "-inf"]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
     "filter_shape": {
       "$ref": "#/$defs/intArray"
     },
@@ -222,10 +237,10 @@
       ]
     },
     "act_min": {
-      "type": "integer"
+      "type": ["integer", "number"]
     },
     "act_max": {
-      "type": "integer"
+      "type": ["integer", "number"]
     },
     "activation_type": {
       "type": "string"

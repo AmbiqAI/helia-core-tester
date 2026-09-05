@@ -104,3 +104,70 @@ input_1_shape: [1, 1, 1, 9]
 input_2_shape: [1, 1, 1, 9]
 hint:
   kernel_variant: legacy_fp16
+---
+# Non-finite cover for the float add kernels, against the contract in
+# ns-cmsis-nn Include/arm_nnfunctions_flt.h:534-548 (see also issues
+# AmbiqAI/ns-cmsis-nn#333 and #382): "NaN propagates through the clamp
+# (TensorFlow Lite semantics)" at every optimization level including the shipped
+# -Ofast, because the clamp classifies NaN on the integer bit pattern; and
+# "infinities that are not NaN still clamp to the activation bounds (and pass
+# through unchanged under the +/-INFINITY 'no clamp' idiom)".
+#
+# Only the left operand carries the sweep; the right stays finite, so each lane
+# is an unambiguous single-token check rather than a mix whose result would not
+# say which operand drove it.
+#
+# Both halves of the Inf sentence get a case in both widths. The default
+# act_min/act_max of +-1e30 narrows to +-Inf in f16, which makes _nonfinite_f16
+# a passthrough case rather than a clamping one, so _nonfinite_clamped_f16
+# carries bounds that are finite in f16 (+-6) and pins the clamped lanes:
+# NaN stays NaN, +Inf lands on 6, -Inf on -6. The _noclamp_f32 variant sets the
+# +/-INFINITY idiom so Inf passthrough is asserted on its own terms rather than
+# as an f16 range artifact.
+operator: Add
+name: add_float_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 4, 4, 8]
+input_2_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+---
+operator: Add
+name: add_float_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 4, 4, 8]
+input_2_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+---
+operator: Add
+name: add_float_nonfinite_clamped_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 4, 4, 8]
+input_2_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+# Finite in f16, unlike the +-1e30 default, so the swept infinities actually reach
+# the clamp instead of being compared against a bound that narrowed to Inf.
+act_min: -6.0
+act_max: 6.0
+---
+operator: Add
+name: add_float_nonfinite_noclamp_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 4, 4, 8]
+input_2_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+# The documented "no clamp" idiom: MIN/MAX against +-INFINITY is the identity, so
+# +Inf + finite stays +Inf instead of landing on the 1e30 default bound.
+act_min: -.inf
+act_max: .inf

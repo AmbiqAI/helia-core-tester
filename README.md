@@ -98,6 +98,35 @@ Future ops should consume resolved tensor roles rather than raw legacy dtype fie
 - `self.tensor_litert_dtype("input")`
 - `self.comparison_config()`
 
+### Non-finite inputs
+
+A float-suite descriptor can set `input_mode: nonfinite_sweep` to overwrite the leading flat
+elements of its input with non-finite tokens, leaving the remaining elements as ordinary uniform
+draws. `nonfinite_tokens` names the tokens and their order; it defaults to `[nan, inf, -inf]`.
+Naming a subset is how a descriptor stays inside what ns-cmsis-nn guarantees: sigmoid declares NaN
+unsupported and the MVE tanh legs destroy it by design, so those descriptors sweep `[inf, -inf]`
+only. Expected outputs come from the same reference path the descriptor already uses, so
+propagation cases (NaN in, NaN out) and clamping cases (`tanh(+Inf)` is 1, `relu6(+Inf)` is 6) are
+both expressed as normal goldens; the clamping ones are finite and compare under ordinary
+tolerance. Serialized arrays carry the C99 `NAN` and `INFINITY` macros. In static initializers
+these are observed to keep their bit pattern at `-Ofast` on the toolchains this project gates
+(arm-none-eabi-gcc 15 and Apple clang 21), but they are not guaranteed to: clang documents the
+macros as undefined behaviour under `-ffinite-math-only` and diagnoses them with
+`-Wnan-infinity-disabled`. `tests/test_nonfinite_input_mode.py` compiles the emitted literals and
+checks the bit patterns, so the observation is re-established on whatever compiler is in use rather
+than assumed. The mode applies to the input tensor only, so weights, alpha and second operands stay
+finite and each swept element isolates a single token. Requesting the mode on an op that samples
+outside the shared helpers is a generation error rather than a silently finite case.
+`cortex-m0` is the only soft-float leg in the target matrix: it runs the f32 suite through
+`-mfloat-abi=soft`, so float-to-integer conversion goes through `__aeabi_*` rather than a VFP
+instruction, and the two differ on non-finite operands. A descriptor whose contract holds only
+there declares `required_capabilities: [soft_float]` and is capability-skipped, with a manifest
+entry, on every hard-float target. Generating and building that leg is supported here, but nothing
+runs it: no workflow in this repo does, and ns-cmsis-nn's `helia-core-tester.yml` runs `cortex-m0`
+under `--suite int` only, with its float legs on `cortex-m4` and `cortex-m55`. The
+ns-cmsis-nn#314 guard case therefore has no runner until that consumer workflow adds a
+`--cpu cortex-m0 --suite float --float-precision f32` leg.
+
 To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
 
 Generated LiteRT-only ops should route through `build_<op>_op()` and resolve tensor roles from
