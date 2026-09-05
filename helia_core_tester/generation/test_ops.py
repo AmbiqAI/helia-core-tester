@@ -21,9 +21,9 @@ from helia_core_tester.generation.ops import get_op_map, get_operator_spec
 from helia_core_tester.generation.reuse import (
     case_reusable,
     case_stamp,
-    clear_stamp,
     generator_version_hash,
     prune_unlisted_cases,
+    reset_case_dir,
     write_stamp,
 )
 from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists, missing_header_symbols
@@ -522,10 +522,12 @@ def test_generation(test_filters):
                 reused_count += 1
                 continue
         try:
-            # The stamp goes away before any file is touched and comes back only
-            # once the case is whole, so an interrupted run can never leave a
-            # stamp standing over half-written output.
-            clear_stamp(test_dir)
+            # The directory, stamp included, goes away before any file is
+            # touched and the stamp comes back only once the case is whole, so
+            # an interrupted run can never leave a stamp standing over
+            # half-written output nor a file from the previous shape of this
+            # case beside the new ones.
+            reset_case_dir(test_dir)
             generate_test(
                 desc,
                 str(top_generated),
@@ -694,6 +696,15 @@ def test_generation(test_filters):
         },
     }
     (report_dir / "generation_summary.json").write_text(json.dumps(summary, indent=2))
+    # A selection that matches nothing is a different fault from a selection
+    # whose cases all failed to convert, and only the caller can tell which one
+    # they meant, so say which happened.
+    assert produced_count > 0 or skipped_entries or filtered_descriptors, (
+        f"Filter matched no descriptors out of {len(descriptors)} loaded "
+        f"(op={test_filters.get('op')!r}, dtype={test_filters.get('dtype')!r}, "
+        f"wtype={test_filters.get('wtype')!r}, name={test_filters.get('name')!r}, "
+        f"limit={test_filters.get('limit')!r}, suite={suite_mode!r})"
+    )
     assert produced_count > 0 or skipped_entries, "No TFLite models were generated"
     assert not conversion_failures, (
         f"Conversion failures occurred for {len(conversion_failures)} descriptor(s): "

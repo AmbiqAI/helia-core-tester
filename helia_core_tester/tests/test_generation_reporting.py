@@ -194,7 +194,7 @@ def test_generation_excludes_float_suite_unless_requested(tmp_path: Path, monkey
         ],
     )
 
-    with pytest.raises(AssertionError, match="No TFLite models were generated"):
+    with pytest.raises(AssertionError, match="Filter matched no descriptors"):
         generation_module.test_generation(_filters(generated_tests_dir, cpu="cortex-m4"))
 
     summary = json.loads((repo_root / "artifacts" / "reports" / "generation" / "int" / "cortex-m4" / "generation_summary.json").read_text())

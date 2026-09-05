@@ -145,6 +145,23 @@ def _git_output(root: Path, *args: str) -> Optional[str]:
     return completed.stdout
 
 
+def _is_git_toplevel(root: Path) -> bool:
+    """True only when ``root`` is itself the top of a git working tree.
+
+    ``git -C`` walks upwards, so a non-git copy of the checkout unpacked inside
+    another repository (a gitignored scratch path, a vendored drop) would
+    otherwise answer with the OUTER repository's commit and report itself clean
+    no matter what was edited under it.
+    """
+    toplevel = _git_output(root, "rev-parse", "--show-toplevel")
+    if toplevel is None or not toplevel.strip():
+        return False
+    try:
+        return Path(toplevel.strip()).resolve() == root.resolve()
+    except OSError:
+        return False
+
+
 def _subtree_digest(root: Path, subtrees: Iterable[str]) -> str:
     digest = hashlib.sha256()
     for subtree in subtrees:
@@ -174,8 +191,9 @@ def cmsis_nn_checkout_identity() -> Dict[str, str]:
 
     A clean git checkout is identified by its commit, which is cheap and exact.
     A dirty one cannot be: the commit says nothing about the edits on top of it,
-    so the input subtrees are hashed as well. A root that is not a git tree (an
-    unpacked release, a vendored copy) is identified by content alone.
+    so the input subtrees are hashed as well. A root that is not itself the top
+    of a git working tree (an unpacked release, a vendored copy, a copy sitting
+    inside some unrelated repository) is identified by content alone.
 
     Cached for the process: the checkout cannot change under a running
     generation.
@@ -188,7 +206,7 @@ def cmsis_nn_checkout_identity() -> Dict[str, str]:
     if root is None:
         identity: Dict[str, str] = {"state": "absent"}
     else:
-        head = _git_output(root, "rev-parse", "HEAD")
+        head = _git_output(root, "rev-parse", "HEAD") if _is_git_toplevel(root) else None
         if head is None:
             identity = {
                 "state": "content",
@@ -266,6 +284,20 @@ def clear_stamp(test_dir: Path) -> None:
     stamp standing over half-written files.
     """
     (test_dir / STAMP_FILENAME).unlink(missing_ok=True)
+
+
+def reset_case_dir(test_dir: Path) -> None:
+    """Empty a case directory so regeneration starts from nothing.
+
+    Overwriting in place is not enough: a descriptor that keeps its name but
+    changes operator emits differently named sources, and the generated
+    CMakeLists globs ``*_*.c``, so a file left over from the previous shape
+    would be compiled alongside the new one and duplicate its symbols. Removing
+    the directory also removes the stamp, so an interrupted regeneration leaves
+    nothing that can be mistaken for a complete case.
+    """
+    if test_dir.exists():
+        shutil.rmtree(test_dir)
 
 
 def case_reusable(test_dir: Path, stamp: str) -> bool:

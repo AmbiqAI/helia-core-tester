@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -45,6 +47,19 @@ def _fake_checkout(root: Path) -> Path:
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "output.h").write_text("const int8_t lstm_1_output[] = {1, 2, 3};\n")
     return root
+
+
+def _fake_git(root: Path, *, status: str):
+    """Stand in for git over a checkout that is its own working tree top."""
+
+    def _git_output(_root: Path, *args: str) -> str:
+        if args == ("rev-parse", "--show-toplevel"):
+            return f"{root}\n"
+        if args[0] == "rev-parse":
+            return "18a89ff\n"
+        return status
+
+    return _git_output
 
 
 def test_stamp_tracks_every_generation_input() -> None:
@@ -163,11 +178,7 @@ def test_checkout_content_is_the_identity_when_the_root_is_not_a_git_tree(
 def test_a_clean_git_checkout_is_identified_by_its_commit(monkeypatch, tmp_path: Path) -> None:
     root = _fake_checkout(tmp_path / "ns-cmsis-nn")
     monkeypatch.setattr(reuse, "resolve_cmsis_nn_root", lambda: root)
-    monkeypatch.setattr(
-        reuse,
-        "_git_output",
-        lambda _root, *args: "18a89ff\n" if args[0] == "rev-parse" else "",
-    )
+    monkeypatch.setattr(reuse, "_git_output", _fake_git(root, status=""))
 
     monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
     assert reuse.cmsis_nn_checkout_identity() == {
@@ -179,11 +190,7 @@ def test_a_clean_git_checkout_is_identified_by_its_commit(monkeypatch, tmp_path:
 def test_a_dirty_git_checkout_falls_back_to_content(monkeypatch, tmp_path: Path) -> None:
     root = _fake_checkout(tmp_path / "ns-cmsis-nn")
     monkeypatch.setattr(reuse, "resolve_cmsis_nn_root", lambda: root)
-    monkeypatch.setattr(
-        reuse,
-        "_git_output",
-        lambda _root, *args: "18a89ff\n" if args[0] == "rev-parse" else " M Include/x.h\n",
-    )
+    monkeypatch.setattr(reuse, "_git_output", _fake_git(root, status=" M Include/x.h\n"))
 
     monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
     baseline = reuse.cmsis_nn_checkout_identity()
@@ -262,3 +269,39 @@ def test_force_generate_honours_env_override(tmp_path: Path, monkeypatch) -> Non
     root = _config_root(tmp_path)
     monkeypatch.setenv("HELIA_CORE_TESTER_FORCE_GENERATE", "true")
     assert Config(project_root=root).force_generate is True
+
+
+def test_reset_case_dir_clears_output_from_a_previous_shape(tmp_path: Path) -> None:
+    case_dir = _make_case(tmp_path, "BasicMathFunctions", "Add_s8_basic", stamp="abc")
+    stale = case_dir / "Add_s8_basic_mul.c"
+    stale.write_text("void run(void) {}\n")
+
+    reuse.reset_case_dir(case_dir)
+
+    assert not case_dir.exists()
+    assert not stale.exists()
+    reuse.reset_case_dir(case_dir)  # idempotent
+
+
+def test_a_non_git_checkout_inside_another_repo_is_identified_by_content(
+    monkeypatch, tmp_path: Path
+) -> None:
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    subprocess.run(["git", "init", "-q", str(outer)], check=True)
+    subprocess.run(["git", "-C", str(outer), "commit", "-q", "--allow-empty", "-m", "seed"],
+                   check=True,
+                   env={**os.environ,
+                        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
+    root = _fake_checkout(outer / "scratch" / "ns-cmsis-nn")
+    monkeypatch.setattr(reuse, "resolve_cmsis_nn_root", lambda: root)
+
+    monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
+    baseline = reuse.cmsis_nn_checkout_identity()
+    assert baseline["state"] == "content"
+
+    header = root / "Include" / "arm_nnfunctions.h"
+    header.write_text("/* sizers hidden */\n")
+    monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
+    assert reuse.cmsis_nn_checkout_identity() != baseline
