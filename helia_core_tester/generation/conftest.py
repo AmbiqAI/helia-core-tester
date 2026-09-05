@@ -53,7 +53,7 @@ def pytest_configure(config):
     # filter (see generation/reuse.py). Only a forced run starts from empty.
     if not config.getoption("--force-generate"):
         generated_tests_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Reusing generated tests directory (stamp-checked per case)\n")
+        print("Reusing generated tests directory (stamp-checked per case)")
         return
 
     # Clean generated tests directory before running
