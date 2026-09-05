@@ -151,3 +151,201 @@ tensor_dtypes:
 input_shape: [1, 15]
 filter_shape: [9, 15]
 use_bias: true
+---
+# Large-K row groups of the NT_T float matmul (ns-cmsis-nn#417): K >= 32 loads the lhs row once
+# per four contiguous rhs rows. K 33 leaves a one-element predicated tail; N 5 leaves one
+# remainder row for the single-row dot.
+operator: FullyConnected
+name: fully_connected_float_k33_n5_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 33]
+filter_shape: [5, 33]
+use_bias: true
+---
+# Seven-element tail, three full row groups, no bias.
+operator: FullyConnected
+name: fully_connected_float_k39_n12_no_bias_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 39]
+filter_shape: [12, 39]
+use_bias: false
+---
+# Whole vector blocks only (no tail), two lhs rows, three groups plus one remainder row.
+operator: FullyConnected
+name: fully_connected_float_k64_n13_batch2_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [2, 64]
+filter_shape: [13, 64]
+use_bias: true
+---
+# Long accumulation: 128 full blocks per row group.
+operator: FullyConnected
+name: fully_connected_float_k1024_n5_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 1024]
+filter_shape: [5, 1024]
+use_bias: true
+---
+# Small K, N >= 16: the dual gather block plus one remainder row.
+operator: FullyConnected
+name: fully_connected_float_k24_n17_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 24]
+filter_shape: [17, 24]
+use_bias: true
+---
+# Dual gather block plus a four-row sub-block.
+operator: FullyConnected
+name: fully_connected_float_k20_n20_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 20]
+filter_shape: [20, 20]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_float_k33_n5_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 33]
+filter_shape: [5, 33]
+use_bias: true
+# Measured floor 1.07x the FP16 default on the m55 f16 fallback leg (scalar fp16 dot); the MVE
+# row-group path stays at 0.49x. 2e-3/2e-3 gives ~1.9x margin.
+comparison:
+  atol: 0.002
+  rtol: 0.002
+---
+operator: FullyConnected
+name: fully_connected_float_k39_n12_no_bias_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 39]
+filter_shape: [12, 39]
+use_bias: false
+---
+operator: FullyConnected
+name: fully_connected_float_k64_n13_batch2_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [2, 64]
+filter_shape: [13, 64]
+use_bias: true
+# Measured floor 1.42x the FP16 default on the m55 f16 fallback leg (64-term scalar fp16 dot);
+# the MVE build stays at 0.43x. 3e-3/3e-3 gives ~2.1x margin.
+comparison:
+  atol: 0.003
+  rtol: 0.003
+---
+operator: FullyConnected
+name: fully_connected_float_k1024_n5_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 1024]
+filter_shape: [5, 1024]
+use_bias: true
+# Measured on the FVP: a 1024-term fp16 dot reaches 1.27x the FP16 default with the MVE lane
+# accumulators and 7.3x (worst diff 1.4e-2 at |exp|=0.92) with the m55 f16 fallback leg's
+# sequential scalar accumulation. 1.5e-2/1.5e-2 gives ~2x margin over the fallback floor; the
+# f32 twin keeps the defaults.
+comparison:
+  atol: 0.015
+  rtol: 0.015
+---
+operator: FullyConnected
+name: fully_connected_float_k24_n17_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 24]
+filter_shape: [17, 24]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_float_k20_n20_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 20]
+filter_shape: [20, 20]
+use_bias: true
+# Measured floor 0.87x the FP16 default (dual gather block, fp16 accumulation); 2e-3/2e-3 keeps
+# ~2.3x margin instead of passing by 13%.
+comparison:
+  atol: 0.002
+  rtol: 0.002
