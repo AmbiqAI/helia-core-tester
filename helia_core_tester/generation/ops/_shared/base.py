@@ -78,6 +78,7 @@ class OperationBase(ABC):
         self.rng = np.random.default_rng(seed)
         self._litert_interpreter = None
         self._tflite_path = None
+        self._input_mode_consumed = False
         
     @abstractmethod
     def build_keras_model(self):
@@ -136,33 +137,63 @@ class OperationBase(ABC):
         """Return a temporary deterministic RNG seeded from the op seed."""
         return np.random.default_rng(self.seed)
 
-    # Ordered so index i of a swept tensor always holds the same token regardless of
-    # shape or dtype, which is what lets a failing element index name the token that
-    # broke without re-reading the generated array.
-    NONFINITE_SWEEP_TOKENS: Tuple[float, ...] = (
-        float("nan"),
-        float("-nan"),
-        float("inf"),
-        float("-inf"),
-    )
+    # Which tokens a sweep may request. A descriptor names a subset because the token
+    # set is a per-kernel contract question: ns-cmsis-nn documents NaN behaviour for
+    # some kernels, declares it unsupported for others (sigmoid), and destroys it by
+    # design on others (MVE tanh), so a kernel that disclaims NaN must not be handed one.
+    NONFINITE_TOKEN_VALUES: Dict[str, float] = {
+        "nan": float("nan"),
+        "inf": float("inf"),
+        "-inf": float("-inf"),
+    }
+    # Ordered so index i of a swept tensor always holds the same token for a given token
+    # set, which is what lets a failing element index name the token that broke without
+    # re-reading the generated array.
+    DEFAULT_NONFINITE_TOKENS: Tuple[str, ...] = ("nan", "inf", "-inf")
 
     def input_mode(self) -> str:
         """Return the descriptor input-generation mode."""
-        return str(self.desc.get("input_mode", "uniform")).strip().lower()
+        mode = str(self.desc.get("input_mode", "uniform")).strip().lower()
+        if mode not in ("", "uniform"):
+            suite = str(
+                self.desc.get("_descriptor_suite") or self.desc.get("suite") or ""
+            ).strip().lower()
+            if suite != "float":
+                raise ValueError(
+                    f"input_mode {mode!r} is float-suite only, but descriptor "
+                    f"{self.desc.get('name')!r} declares suite {suite or 'default'!r}"
+                )
+        return mode
 
-    @classmethod
-    def nonfinite_sweep_positions(cls) -> Tuple[int, ...]:
+    def nonfinite_tokens(self) -> Tuple[str, ...]:
+        """Return the ordered token names this descriptor's sweep writes."""
+        requested = self.desc.get("nonfinite_tokens")
+        if requested is None:
+            return self.DEFAULT_NONFINITE_TOKENS
+        tokens = tuple(str(token).strip().lower() for token in requested)
+        if not tokens:
+            raise ValueError("nonfinite_tokens must name at least one token")
+        unknown = [token for token in tokens if token not in self.NONFINITE_TOKEN_VALUES]
+        if unknown:
+            raise ValueError(
+                f"Unsupported nonfinite_tokens {unknown}; "
+                f"known tokens are {sorted(self.NONFINITE_TOKEN_VALUES)}"
+            )
+        if len(set(tokens)) != len(tokens):
+            raise ValueError(f"nonfinite_tokens must be unique, got {list(tokens)}")
+        return tokens
+
+    def nonfinite_sweep_positions(self) -> Tuple[int, ...]:
         """Return the flat indices the non-finite sweep overwrites."""
-        return tuple(range(len(cls.NONFINITE_SWEEP_TOKENS)))
+        return tuple(range(len(self.nonfinite_tokens())))
 
-    @classmethod
-    def _apply_nonfinite_sweep(cls, arr: np.ndarray) -> np.ndarray:
+    def _apply_nonfinite_sweep(self, arr: np.ndarray) -> np.ndarray:
         """Overwrite the leading elements of a float tensor with the non-finite tokens."""
         if not np.issubdtype(arr.dtype, np.floating):
             raise ValueError(
                 f"input_mode 'nonfinite_sweep' requires a float tensor, got dtype {arr.dtype}"
             )
-        tokens = cls.NONFINITE_SWEEP_TOKENS
+        tokens = self.nonfinite_tokens()
         if arr.size < len(tokens):
             raise ValueError(
                 f"input_mode 'nonfinite_sweep' needs at least {len(tokens)} elements, "
@@ -173,7 +204,9 @@ class OperationBase(ABC):
         # whole vector off) from one that merely mishandles the token itself.
         swept = arr.copy()
         flat = swept.reshape(-1)
-        flat[: len(tokens)] = np.asarray(tokens, dtype=arr.dtype)
+        flat[: len(tokens)] = np.asarray(
+            [self.NONFINITE_TOKEN_VALUES[token] for token in tokens], dtype=arr.dtype
+        )
         return swept
 
     def _maybe_apply_input_mode(self, arr: np.ndarray) -> np.ndarray:
@@ -182,8 +215,26 @@ class OperationBase(ABC):
         if mode in ("", "uniform"):
             return arr
         if mode == "nonfinite_sweep":
-            return self._apply_nonfinite_sweep(arr)
+            swept = self._apply_nonfinite_sweep(arr)
+            self._input_mode_consumed = True
+            return swept
         raise ValueError(f"Unsupported input_mode: {mode!r}")
+
+    def assert_input_mode_consumed(self) -> None:
+        """Fail if a non-uniform input_mode was requested but no tensor was ever swept.
+
+        Several ops sample outside the shared helpers, so a descriptor can carry
+        input_mode and generate an ordinary finite case that looks green while testing
+        nothing. Silence there is worse than a generation failure.
+        """
+        if self.input_mode() in ("", "uniform"):
+            return
+        if not self._input_mode_consumed:
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} requested input_mode "
+                f"{self.input_mode()!r} but {type(self).__name__} never applied it; "
+                "the op samples its input outside the shared helpers"
+            )
 
     def _sample_uniform(
         self,

@@ -94,11 +94,13 @@ tensor_dtypes:
 input_1_shape: [1, 1, 1, 9]
 input_2_shape: [1, 1, 1, 9]
 ---
-# Non-finite propagation sanity for the float mul kernels; see the note in
-# add_float.yaml for why only the left operand is swept and why the +-Inf lanes
-# land on the activation clamp in f32. Mul adds one case add cannot reach: the
-# right operand is drawn from [-1, 1] and never lands exactly on zero, so
-# Inf * finite stays Inf here and does not turn into the NaN that Inf * 0 would.
+# Non-finite cover for the float mul kernels, against the same contract paragraph
+# as add (ns-cmsis-nn Include/arm_nnfunctions_flt.h:534-548, issues
+# AmbiqAI/ns-cmsis-nn#333 and #382); see add_float.yaml for why only the left
+# operand is swept and why the +-Inf lanes land on the activation clamp in f32.
+# Mul adds one case add cannot reach: the right operand is drawn from [-1, 1] and
+# never lands exactly on zero, so Inf * finite stays Inf here and does not turn
+# into the NaN that Inf * 0 would.
 operator: Mul
 name: mul_float_nonfinite_f32
 suite: float
@@ -118,3 +120,17 @@ tensor_dtypes:
 input_1_shape: [1, 4, 4, 8]
 input_2_shape: [1, 4, 4, 8]
 input_mode: nonfinite_sweep
+---
+operator: Mul
+name: mul_float_nonfinite_noclamp_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 4, 4, 8]
+input_2_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+# The documented "no clamp" idiom, so the Inf lanes assert passthrough of
+# sign(Inf * finite) rather than the 1e30 default bound.
+act_min: -.inf
+act_max: .inf

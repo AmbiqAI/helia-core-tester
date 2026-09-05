@@ -53,12 +53,14 @@ tensor_dtypes:
 input_shape: [1, 1, 1, 13]
 required_kernel_symbols: [arm_hard_swish_f16]
 ---
-# Non-finite input cover for arm_hard_swish_f32 / _f16. The kernel evaluates
-# x * clamp(x/6 + 0.5, 0, 1), so +Inf saturates the clamp to 1 and returns +Inf,
-# while -Inf drives the clamp to 0 and yields -Inf * 0 = NaN. That NaN is an
-# arithmetic consequence of the clamp form rather than a documented intent --
-# #240 does not name the -Inf case -- so if the kernel ever grows an explicit
-# -Inf arm these expectations have to be regenerated.
+# Non-finite input cover for arm_hard_swish_f32 / _f16, which is the one hard swish
+# entry point that carries the contract: arm_nnfunctions_flt.h:513-521 documents NaN
+# propagation ("only the NaN-ness of the element is guaranteed, not a particular NaN
+# payload"), +Inf returning +Inf because the gate is 1, and -Inf returning NaN rather
+# than the mathematical limit 0 because the gate is 0 there and (-Inf) * 0 is NaN by
+# IEEE 754. All three are documented intent, not incidental arithmetic, so all three
+# tokens are asserted here. The mux (arm_nn_activation HARDSWISH) is explicitly
+# outside this contract, which is why nn_activation_float.yaml has no hardswish case.
 operator: HardSwishPrecise
 name: hard_swish_float_nonfinite_f32
 suite: float

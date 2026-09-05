@@ -114,7 +114,7 @@ def test_float_f32_suite_accepts_the_soft_float_cpu(tmp_path: Path) -> None:
 def test_float_suite_rejected_for_cpu_without_fp32_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every shipped profile now has fp32_execution, so the guard needs a stand-in.
+    """No shipped profile lacks fp32_execution, so the guard needs a stand-in.
 
     Keeping it covered matters because the guard is what turns an unsupported
     (cpu, precision) pair into a configuration error instead of a build that emits

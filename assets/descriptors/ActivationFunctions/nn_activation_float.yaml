@@ -638,16 +638,23 @@ act_param: 0.0
 # ---------------------------------------------------------------------------
 # Non-finite input cases (input_mode: nonfinite_sweep).
 #
-# Flat elements 0..3 of the input are overwritten with NaN, -NaN, +Inf and
-# -Inf; the rest keep their uniform draw, so each case is a mixed tensor. That
-# mix is the point: a kernel that predicates a whole vector off on a NaN lane,
-# or that corrupts the lanes neighbouring one, fails differently from a kernel
-# that merely mishandles the token itself.
+# The leading flat elements of the input are overwritten with the tokens named
+# by nonfinite_tokens; the rest keep their uniform draw, so each case is a
+# mixed tensor. That mix is the point: a kernel that predicates a whole vector
+# off on a NaN lane, or that corrupts the lanes neighbouring one, fails
+# differently from a kernel that merely mishandles the token itself.
 #
-# Two distinct contracts are being pinned here, per ns-cmsis-nn#240:
-#   - Propagation: NaN in gives NaN out (tanh, sigmoid, relu, leaky_relu).
-#     The comparison macro treats both-NaN as equal and same-sign Inf as equal
-#     (ns-cmsis-nn tester #75), so these lanes assert identity, not tolerance.
+# The token set is per case because the contract is per kernel. Sources of
+# record are ns-cmsis-nn Include/arm_nnfunctions_flt.h and
+# Include/Internal/arm_nn_activation_flt.h, with issues AmbiqAI/ns-cmsis-nn#333
+# and #382 for the propagation work and #314 for the tanh soft-float index.
+#
+# Two contracts are pinned here:
+#   - Propagation: NaN in gives NaN out. arm_nnfunctions_flt.h:440-444 gives
+#     this for the RELU, RELU6 and LEAKY_RELU legs only -- they classify NaN on
+#     the integer bit pattern, so it holds on scalar and MVE at -Ofast. The
+#     comparison macro treats both-NaN as equal (tester #75), so these lanes
+#     assert identity, not tolerance.
 #   - Clamping: where the kernel's domain reduction bounds a non-finite input
 #     to a finite result -- tanh(+-Inf) = +-1, sigmoid(+Inf) = 1,
 #     sigmoid(-Inf) = 0, relu6(+Inf) = 6, relu(-Inf) = 0 -- the expected value
@@ -658,13 +665,12 @@ act_param: 0.0
 # calculation goes through __aeabi_f2iz (which returns INT32_MAX for a quiet
 # NaN) rather than VCVT.S32.F32 (which saturates NaN to 0). A NaN case that
 # passes on m55/m4 can still read far out of bounds here -- see
-# ns-cmsis-nn#314, which these cases are the regression guard for.
+# ns-cmsis-nn#314, which the tanh cases are the regression guard for.
 #
-# hardswish is deliberately included despite an awkward value: the reference
-# and the kernel both evaluate x * clamp(x/6 + 0.5, 0, 1), so -Inf yields
-# -Inf * 0 = NaN rather than -Inf or 0. That is arithmetic consequence, not a
-# documented intent, and #240 does not name the case; if the kernel is ever
-# given an explicit -Inf arm these expectations must be regenerated.
+# HARDSWISH has no case here at all: arm_nnfunctions_flt.h:445-451 puts the
+# mux's hard swish outside the NaN/Inf contract and points callers who need it
+# at arm_hard_swish_f32, so the standalone cases in hard_swish_float.yaml are
+# where that kernel's non-finite behaviour is asserted.
 operator: NNActivationFloat
 name: nn_activation_float_tanh_nonfinite_f32
 suite: float
@@ -673,6 +679,12 @@ tensor_dtypes:
   output: FP32
 input_shape: [1, 16]
 input_mode: nonfinite_sweep
+nonfinite_tokens: [inf, -inf]
+# No NaN lane: the MVE tanh legs saturate with vminnmq, which is IEEE minNum and
+# returns the numeric operand against a quiet NaN, so a NaN lane comes back as
+# tanh(xmax) by design (arm_nn_activation_flt.h:89-93 for f32, :537-554 for f16).
+# Every cortex-m55 leg is MVE, and neither IEEE propagation nor that divergence is
+# a guarantee the header makes, so there is nothing here to assert.
 activation_type: ARM_NN_FLT_ACT_TANH
 act_param: 0.0
 ---
@@ -684,6 +696,11 @@ tensor_dtypes:
   output: FP32
 input_shape: [1, 16]
 input_mode: nonfinite_sweep
+nonfinite_tokens: [inf, -inf]
+# No NaN lane: arm_nnsupportfunctions_flt.h:184-186 records sigmoid(NaN) == 1.0f as a
+# "defined consequence" of exp(NaN) == exp(80) and states NaN is not a supported input
+# to the softmax/sigmoid kernels. Locking a golden on an input the kernel disclaims
+# would test the tester, not the contract.
 activation_type: ARM_NN_FLT_ACT_SIGMOID
 act_param: 0.0
 ---
@@ -714,17 +731,6 @@ activation_type: ARM_NN_FLT_ACT_RELU6
 act_param: 0.0
 ---
 operator: NNActivationFloat
-name: nn_activation_float_hardswish_nonfinite_f32
-suite: float
-tensor_dtypes:
-  input: FP32
-  output: FP32
-input_shape: [1, 16]
-input_mode: nonfinite_sweep
-activation_type: ARM_NN_FLT_ACT_HARDSWISH
-act_param: 0.0
----
-operator: NNActivationFloat
 name: nn_activation_float_leaky_relu_nonfinite_f32
 suite: float
 tensor_dtypes:
@@ -743,6 +749,12 @@ tensor_dtypes:
   output: FP16
 input_shape: [1, 16]
 input_mode: nonfinite_sweep
+nonfinite_tokens: [inf, -inf]
+# No NaN lane: the MVE tanh legs saturate with vminnmq, which is IEEE minNum and
+# returns the numeric operand against a quiet NaN, so a NaN lane comes back as
+# tanh(xmax) by design (arm_nn_activation_flt.h:89-93 for f32, :537-554 for f16).
+# Every cortex-m55 leg is MVE, and neither IEEE propagation nor that divergence is
+# a guarantee the header makes, so there is nothing here to assert.
 activation_type: ARM_NN_FLT_ACT_TANH
 act_param: 0.0
 # Same scalar-fallback floor as the other narrow tanh_f16 cases: the
@@ -760,6 +772,11 @@ tensor_dtypes:
   output: FP16
 input_shape: [1, 16]
 input_mode: nonfinite_sweep
+nonfinite_tokens: [inf, -inf]
+# No NaN lane: arm_nnsupportfunctions_flt.h:184-186 records sigmoid(NaN) == 1.0f as a
+# "defined consequence" of exp(NaN) == exp(80) and states NaN is not a supported input
+# to the softmax/sigmoid kernels. Locking a golden on an input the kernel disclaims
+# would test the tester, not the contract.
 activation_type: ARM_NN_FLT_ACT_SIGMOID
 act_param: 0.0
 ---
@@ -787,17 +804,6 @@ input_min: -2.0
 input_max: 8.0
 input_mode: nonfinite_sweep
 activation_type: ARM_NN_FLT_ACT_RELU6
-act_param: 0.0
----
-operator: NNActivationFloat
-name: nn_activation_float_hardswish_nonfinite_f16
-suite: float
-tensor_dtypes:
-  input: FP16
-  output: FP16
-input_shape: [1, 16]
-input_mode: nonfinite_sweep
-activation_type: ARM_NN_FLT_ACT_HARDSWISH
 act_param: 0.0
 ---
 operator: NNActivationFloat

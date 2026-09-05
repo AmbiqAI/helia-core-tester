@@ -294,6 +294,7 @@ def generate_test(
     # Generate C/H files from templates
     try:
         op.generate_c_files(test_dir)
+        op.assert_input_mode_consumed()
     except NotImplementedError:
         # Operator doesn't support C file generation yet
         print(f"INFO: {name} - C file generation not implemented")

@@ -50,10 +50,7 @@ def _tanh_reference_f16_mve(input_data: np.ndarray) -> np.ndarray:
     ax = _fp16(np.minimum(ax, _fp16(4.0)))
     # t = ax * (256 / 4); idx = floor(t) clamped to [0, 255]; frac = t - idx
     t = _fp16(ax * _fp16(64.0))
-    # A NaN input leaves t NaN, and float->unsigned casts of NaN are undefined in numpy
-    # as they are in C. Index 0 is a safe stand-in: frac stays NaN below, so this lane
-    # interpolates to NaN whatever the index was, and Inf is already taken by `saturate`.
-    idx = np.minimum(np.where(np.isfinite(t), t, _fp16(0.0)).astype(np.uint16), np.uint16(255))
+    idx = np.minimum(t.astype(np.uint16), np.uint16(255))
     frac = _fp16(t - idx.astype(np.float16))
     y0 = _TANH_LUT256_F16[idx]
     y1 = _TANH_LUT256_F16[idx + 1]

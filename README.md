@@ -100,16 +100,21 @@ Future ops should consume resolved tensor roles rather than raw legacy dtype fie
 
 ### Non-finite inputs
 
-A float descriptor can set `input_mode: nonfinite_sweep` to overwrite the first four flat
-elements of its input with NaN, -NaN, +Inf and -Inf, leaving the remaining elements as ordinary
-uniform draws. Expected outputs come from the same reference path the descriptor already uses, so
+A float-suite descriptor can set `input_mode: nonfinite_sweep` to overwrite the leading flat
+elements of its input with non-finite tokens, leaving the remaining elements as ordinary uniform
+draws. `nonfinite_tokens` names the tokens and their order; it defaults to `[nan, inf, -inf]`.
+Naming a subset is how a descriptor stays inside what ns-cmsis-nn guarantees: sigmoid declares NaN
+unsupported and the MVE tanh legs destroy it by design, so those descriptors sweep `[inf, -inf]`
+only. Expected outputs come from the same reference path the descriptor already uses, so
 propagation cases (NaN in, NaN out) and clamping cases (`tanh(+Inf)` is 1, `relu6(+Inf)` is 6) are
 both expressed as normal goldens; the clamping ones are finite and compare under ordinary
 tolerance. Serialized arrays carry the C99 `NAN` and `INFINITY` macros, which survive the `-Ofast`
 build. The mode applies to the input tensor only, so weights, alpha and second operands stay
-finite and each swept element isolates a single token. `cortex-m0` runs the f32 float suite
-through the soft-float ABI, which is the only leg where float-to-integer conversion goes through
-`__aeabi_*` rather than a VFP instruction, and the two differ on non-finite operands.
+finite and each swept element isolates a single token. Requesting the mode on an op that samples
+outside the shared helpers is a generation error rather than a silently finite case.
+`cortex-m0` runs the f32 float suite through the soft-float ABI, which is the only leg where
+float-to-integer conversion goes through `__aeabi_*` rather than a VFP instruction, and the two
+differ on non-finite operands.
 
 To scaffold a new tester op, start from `helia_core_tester/scripts/scaffold_operator.py`.
 
