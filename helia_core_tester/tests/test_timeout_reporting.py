@@ -111,3 +111,28 @@ def test_fvp_cli_timeout_run_default_matches_the_config_default(tmp_path: Path) 
 
     args = build_arg_parser(tmp_path, tmp_path).parse_args([])
     assert args.timeout_run == DEFAULT_TIMEOUT_SECONDS
+
+
+def _timeout_run_value(cfg) -> str:
+    from helia_core_tester.core.steps.run import RunStep
+
+    commands = RunStep(cfg)._run_commands()
+    assert commands, "expected at least one FVP run command"
+    cmd = commands[0]
+    return cmd[cmd.index("--timeout-run") + 1]
+
+
+def test_the_default_timeout_reaches_the_child_process(tmp_path: Path) -> None:
+    cfg = Config(project_root=_config_root(tmp_path))
+    assert float(_timeout_run_value(cfg)) == DEFAULT_TIMEOUT_SECONDS
+
+
+def test_the_timeout_opt_out_reaches_the_child_process(tmp_path: Path) -> None:
+    # The child's own default is non-zero, so an unforwarded 0 would silently
+    # become the default instead of the opt-out the caller asked for.
+    cfg = Config(
+        project_root=_config_root(tmp_path),
+        timeout=0.0,
+        _explicit_overrides={"project_root", "timeout"},
+    )
+    assert float(_timeout_run_value(cfg)) == 0.0

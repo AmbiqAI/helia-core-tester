@@ -39,8 +39,9 @@ DEFAULT_RUN_JOBS_CAP = 4
 
 # A kernel that spins has no other backstop: without a per-case timeout the FVP
 # subprocess blocks until the CI job cap and the whole leg ends as a cancelled
-# job with no per-case result. Sized well above the slowest known case so a
-# genuine long run is not clipped. timeout=0 is the explicit opt-out.
+# job with no per-case result. The only constraint on the value is that a hang
+# has to become a case result before that job cap, with enough headroom that an
+# unoptimised (coverage) leg is not clipped. timeout=0 is the explicit opt-out.
 # See issue #99.
 DEFAULT_TIMEOUT_SECONDS = 180.0
 

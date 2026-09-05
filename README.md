@@ -274,7 +274,7 @@ Parallel FVP runs:
 
 Per-case timeout:
 - `--timeout` defaults to 180 seconds per case. A timed-out case is reported as a `TIMEOUT` case and rendered as a JUnit failure with its own message, rather than blocking the run until the CI job cap with no per-case result.
-- `--timeout 0` disables it. The masked non-finite policy's "returns SUCCESS and does not time out" only holds with a timeout in force.
+- `--timeout 0` disables it: the value is always forwarded to the run step, so `0` really does hand the run back to the CI job cap as the only backstop. The masked non-finite policy's "returns SUCCESS and does not time out" only holds with a timeout in force.
 
 Compiler cache (opt-in):
 - when `ccache` or `sccache` is on `PATH`, the CMake configure adds `CMAKE_C_COMPILER_LAUNCHER` (and the ASM launcher on CMake versions that honour it) and logs which launcher it picked.
