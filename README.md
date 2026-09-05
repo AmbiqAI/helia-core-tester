@@ -265,7 +265,7 @@ Generation reuse:
 - a case whose stamp still matches is reused: no TFLite conversion, no inference, no file emission. Its manifest entry is rebuilt from the on-disk sidecar, so build and run see the same tree either way.
 - a case whose stamp does not match has its directory removed before regeneration, so output a previous descriptor emitted under a different file name cannot survive into the new build.
 - capability and kernel-symbol skips are re-evaluated every run, because a different ns-cmsis-nn checkout can add or remove a symbol.
-- `generation_summary.json` and `manifest.json` record generated versus reused counts.
+- `generation_summary.json` and `manifest.json` record generated, reused and pruned counts.
 - `--force-generate` (also `force_generate` in `helia_core_tester.toml`, `HELIA_CORE_TESTER_FORCE_GENERATE`) regenerates everything.
 - cases outside the active filter are pruned from the tree at the end of a run.
 
