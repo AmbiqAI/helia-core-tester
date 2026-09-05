@@ -2,6 +2,9 @@
 #define SOFTMAX_FLOAT_DEFAULT_F32_SOFTMAX_H
 
 #include <stdint.h>
+// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
+// other translation-unit include that would define them.
+#include <math.h>
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
 

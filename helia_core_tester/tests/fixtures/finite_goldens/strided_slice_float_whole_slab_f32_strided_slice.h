@@ -2,6 +2,9 @@
 #define STRIDED_SLICE_FLOAT_WHOLE_SLAB_F32_STRIDEDSLICE_H
 
 #include <stdint.h>
+// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
+// other translation-unit include that would define them.
+#include <math.h>
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
 
