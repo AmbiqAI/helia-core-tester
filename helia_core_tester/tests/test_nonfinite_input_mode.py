@@ -221,22 +221,25 @@ def test_generated_nonfinite_literals_survive_ofast(tmp_path: Path) -> None:
     )
     source = tmp_path / "nonfinite.c"
     source.write_text(
+        "#include <inttypes.h>\n"
         "#include <math.h>\n"
+        "#include <stdint.h>\n"
         "#include <stdio.h>\n"
         "#include <string.h>\n"
+        "_Static_assert(sizeof(float) == sizeof(uint32_t), \"binary32 float required\");\n"
         "static const float values[] = {\n" + literals + "\n};\n"
         "int main(void) {\n"
-        "    for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); i++) {\n"
-        "        unsigned int bits;\n"
+        "    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {\n"
+        "        uint32_t bits;\n"
         "        memcpy(&bits, &values[i], sizeof(bits));\n"
-        "        printf(\"%08x\\n\", bits);\n"
+        "        printf(\"%08\" PRIx32 \"\\n\", bits);\n"
         "    }\n"
         "    return 0;\n"
         "}\n"
     )
     binary = tmp_path / "nonfinite"
     subprocess.run(
-        ["cc", "-Ofast", "-std=c99", str(source), "-o", str(binary), "-lm"],
+        ["cc", "-Ofast", "-std=c11", str(source), "-o", str(binary), "-lm"],
         check=True,
         capture_output=True,
     )
