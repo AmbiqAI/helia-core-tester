@@ -312,3 +312,69 @@ def test_parser_float_maxdiff_literal_inf_token_is_sentinel() -> None:
     )
     assert result.max_diff == -1.0
     assert result.max_tolerance_fraction == -2.0
+
+
+def test_parser_keeps_the_helia_evidence_lines_in_the_report() -> None:
+    # The HELIA_* lines are the only record of which element went non-finite
+    # and by how much the finite ones missed; the report is the artifact a
+    # reader gets, so a verdict without them is not actionable.
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "HELIA_NONFINITE_MISMATCH[0]: exp=1 got=nan\n"
+        "HELIA_NONFINITE_MISMATCHES n=1\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=8\n"
+        "1 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("logistic_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert "HELIA_NONFINITE_MISMATCH[0]: exp=1 got=nan" in result.output_lines
+    assert "HELIA_NONFINITE_MISMATCHES n=1" in result.output_lines
+    assert (
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=8"
+        in result.output_lines
+    )
+
+
+def test_parser_empty_tensor_does_not_void_sibling_tensor_headroom() -> None:
+    # A split-style case validates several output tensors into one output
+    # stream. A zero-length tensor compares nothing and always reports the
+    # sentinel, which must not erase headroom the other tensors measured.
+    parser = reporting_parser.TestResultParser()
+    output = (
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=0\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=4.20000000e-04 maxfrac=0.420000 n=8\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=1.00000000e-04 maxfrac=0.100000 n=8\n"
+        "0 Failures\n"
+    )
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("split_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.PASS
+    assert result.max_diff == pytest.approx(4.2e-04)
+    assert result.max_tolerance_fraction == pytest.approx(0.42)
+
+
+def test_parser_lone_empty_tensor_still_reports_the_sentinel() -> None:
+    # With nothing else to speak for the case, the empty tensor's sentinel is
+    # the honest answer: no headroom was measured.
+    parser = reporting_parser.TestResultParser()
+    output = "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=0\n0 Failures\n"
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("empty_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.PASS
+    assert result.max_diff == -1.0
+    assert result.max_tolerance_fraction == -2.0

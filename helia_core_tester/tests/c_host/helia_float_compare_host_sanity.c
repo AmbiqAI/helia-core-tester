@@ -107,6 +107,87 @@ static void helia_run_f16_tensor_cases(void)
 #endif /* HELIA_HOST_HAVE_F16 */
 
 /*
+ * The producer hides where a non-finite value came from, which matches the
+ * shipped generator (separate kernel TU, no LTO) but is also the one shape no
+ * compiler folds. These rows do the opposite: the bit pattern is a literal in
+ * this translation unit, a few lines from the comparison, so the optimizer
+ * knows the operand's class before HELIA_VALIDATE_FLOATS looks at it. That is
+ * the most exposed shape for the fold issue #75 guards against, and the one an
+ * inlined or header-only kernel would produce. No compiler tried here folds it
+ * even against the pre-fix classifier, so these rows are coverage of the
+ * exposure rather than a detector for it.
+ */
+static float helia_visible_f32(uint32_t bits)
+{
+    float value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static void helia_run_visible_case_f32(
+    const char *name,
+    uint32_t actual_bits,
+    uint32_t expected_bits
+)
+{
+    float actual[1];
+    float expected[1];
+    int failures = 0;
+
+    actual[0] = helia_visible_f32(actual_bits);
+    expected[0] = helia_visible_f32(expected_bits);
+
+    printf("CASE %s\r\n", name);
+    HELIA_VALIDATE_FLOATS(actual, expected, 1, 1e-5, 1e-5, 8, failures);
+    printf("RESULT %s failures=%d\r\n", name, failures);
+}
+
+static void helia_run_visible_cases_f32(void)
+{
+    helia_run_visible_case_f32("visible_nan_vs_finite", 0x7FC00000u, 0x3F800000u);
+    helia_run_visible_case_f32("visible_finite_vs_nan", 0x3F800000u, 0x7FC00000u);
+    helia_run_visible_case_f32("visible_neginf_vs_finite", 0xFF800000u, 0x3F800000u);
+    helia_run_visible_case_f32("visible_posinf_vs_neginf", 0x7F800000u, 0xFF800000u);
+}
+
+#ifdef HELIA_HOST_HAVE_F16
+
+static helia_host_f16 helia_visible_f16(uint16_t bits)
+{
+    helia_host_f16 value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static void helia_run_visible_case_f16(
+    const char *name,
+    uint16_t actual_bits,
+    uint16_t expected_bits
+)
+{
+    helia_host_f16 actual[1];
+    helia_host_f16 expected[1];
+    int failures = 0;
+
+    actual[0] = helia_visible_f16(actual_bits);
+    expected[0] = helia_visible_f16(expected_bits);
+
+    printf("CASE %s\r\n", name);
+    HELIA_VALIDATE_FLOATS(actual, expected, 1, 1e-5, 1e-5, 8, failures);
+    printf("RESULT %s failures=%d\r\n", name, failures);
+}
+
+static void helia_run_visible_cases_f16(void)
+{
+    helia_run_visible_case_f16("f16_visible_nan_vs_finite", 0x7E00u, 0x3C00u);
+    helia_run_visible_case_f16("f16_visible_finite_vs_nan", 0x3C00u, 0x7E00u);
+    helia_run_visible_case_f16("f16_visible_neginf_vs_finite", 0xFC00u, 0x3C00u);
+    helia_run_visible_case_f16("f16_visible_posinf_vs_neginf", 0x7C00u, 0xFC00u);
+}
+
+#endif /* HELIA_HOST_HAVE_F16 */
+
+/*
  * Tensor-level rows: a single element decides only the per-element verdict,
  * while the headroom sentinel is a property of the whole tensor.
  */
@@ -172,6 +253,7 @@ int main(void)
     }
 
     helia_run_tensor_cases();
+    helia_run_visible_cases_f32();
 
 #ifdef HELIA_HOST_HAVE_F16
     printf("F16_SUPPORTED 1\r\n");
@@ -182,6 +264,7 @@ int main(void)
         helia_run_case_f16(&helia_cases[i], "zerortol", 0.0);
     }
     helia_run_f16_tensor_cases();
+    helia_run_visible_cases_f16();
 #else
     printf("F16_SUPPORTED 0\r\n");
 #endif

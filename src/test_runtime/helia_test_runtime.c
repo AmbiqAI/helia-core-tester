@@ -68,6 +68,19 @@ int helia_test_finish_validation(int failures)
     return failures;
 }
 
+/*
+ * Kept out of the header, and out of every harness translation unit with it:
+ * this classifies a value that has already been widened to double, which is
+ * exactly the shape issue #75 is about. It is safe only here, where `expected`
+ * arrives as a function argument no fast-math-attributed instruction of this
+ * TU produced. Harness code classifies through HELIA_FLOAT_CLASS_OF instead,
+ * which decodes the element at its own storage width.
+ */
+static int helia_test_float_class(double value)
+{
+    return helia_test_float_class_binary64(&value);
+}
+
 double helia_test_float_tolerance(double expected, double atol, double rtol)
 {
     // A tolerance derived from a non-finite expected value is itself Inf or

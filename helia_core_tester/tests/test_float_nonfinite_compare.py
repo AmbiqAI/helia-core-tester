@@ -9,11 +9,15 @@ tests use (-Ofast for the armclang leg, -O3 -ffast-math for the GCC and ATfE
 legs), because it is the -ffinite-math-only they both imply that the
 classification has to survive. And the operands come from a second translation
 unit, so no result here depends on the compiler failing to notice where a NaN
-came from.
+came from -- except for the `visible_*` rows, which deliberately do the reverse
+and put the non-finite bit pattern in the driver's own TU, because that is the
+shape a classify-after-widening validator actually folds away.
 """
 
 from __future__ import annotations
 
+import functools
+import os
 import re
 import shutil
 import subprocess
@@ -62,6 +66,29 @@ MISMATCH_TOKENS = {
 }
 F16_MISMATCH_TOKENS = dict(MISMATCH_TOKENS, posinf_vs_fltmax=("65504", "+inf"))
 
+# Rows whose non-finite operand is a literal bit pattern in the driver's own
+# translation unit: expected/actual tokens on the HELIA_NONFINITE_MISMATCH line.
+VISIBLE_MISMATCH_TOKENS = {
+    "visible_nan_vs_finite": ("1", "nan"),
+    "visible_finite_vs_nan": ("nan", "1"),
+    "visible_neginf_vs_finite": ("1", "-inf"),
+    "visible_posinf_vs_neginf": ("-inf", "+inf"),
+}
+
+
+@functools.lru_cache(maxsize=None)
+def _compiler_accepts(flags: tuple[str, ...]) -> bool:
+    cc = shutil.which("cc")
+    if cc is None:
+        return False
+    probe = subprocess.run(
+        [cc, *flags, "-xc", "-c", "-o", os.devnull, "-"],
+        input="int main(void) { return 0; }\n",
+        text=True,
+        capture_output=True,
+    )
+    return probe.returncode == 0
+
 
 @pytest.fixture(scope="module", params=FLAG_SETS, ids=lambda flags: " ".join(flags))
 def host_sanity_output(
@@ -72,6 +99,12 @@ def host_sanity_output(
         pytest.skip("host C compiler not available")
 
     flags = request.param
+    # clang already warns that -Ofast is deprecated; when it becomes an error
+    # the other flag set still covers -ffinite-math-only, so skip rather than
+    # collapse the module.
+    if not _compiler_accepts(tuple(flags)):
+        pytest.skip(f"host compiler rejects {' '.join(flags)}")
+
     workdir = tmp_path_factory.mktemp("float_nonfinite")
     binary = workdir / "helia_float_compare_host_sanity"
     subprocess.run(
@@ -244,6 +277,26 @@ def test_finite_cases_keep_measurable_headroom(host_sanity_output: str) -> None:
     mismatched = _case_block(host_sanity_output, "finite_mismatch.rtol")
     assert "Mismatch[0]: exp=1.000000 got=2.000000" in mismatched
     assert "HELIA_NONFINITE_MISMATCH" not in mismatched
+
+
+@pytest.mark.parametrize("case_name", sorted(VISIBLE_MISMATCH_TOKENS))
+@pytest.mark.parametrize("prefix", ["", "f16_"])
+def test_locally_visible_nonfinite_operand_is_still_classified(
+    host_sanity_output: str, case_name: str, prefix: str
+) -> None:
+    # The bit pattern is a literal in the driver's own TU, which is the shape
+    # most exposed to the fold: an operand whose class the optimizer knows
+    # before the comparison. The token assertion is the load-bearing half --
+    # a -Inf lane that fell through to the finite path would still count one
+    # failure, but would print a Mismatch line instead of this one.
+    if prefix:
+        _require_f16(host_sanity_output)
+    case_id = f"{prefix}{case_name}"
+    expected_token, actual_token = VISIBLE_MISMATCH_TOKENS[case_name]
+    block = _case_block(host_sanity_output, case_id)
+    assert _failure_counts(host_sanity_output)[case_id] == 1
+    assert f"HELIA_NONFINITE_MISMATCH[0]: exp={expected_token} got={actual_token}" in block
+    assert "HELIA_NONFINITE_MISMATCHES n=1" in block
 
 
 def test_float_validator_classifies_before_any_conversion() -> None:

@@ -260,10 +260,22 @@ class TestResultParser:
                                       headroom for the finite ones.
         A literal nan/inf token (which the macro does not emit) is treated the
         same as the non-finite sentinel.
+
+        Lines with n=0 measured nothing, so they are ignored while any other
+        line is present.
         """
         matches = self.float_maxdiff_pattern.findall(output)
         if not matches:
             return None, None
+
+        # A zero-length tensor always reports the sentinel -- it compared
+        # nothing -- and a split-style case emits one line per output tensor
+        # into the same output. Letting an empty sibling void the measured
+        # headroom of the tensors that did compare would lose the measurement
+        # for the whole case, so empty lines only speak when nothing else does.
+        measured = [match for match in matches if match[2] != '0']
+        if measured:
+            matches = measured
 
         max_diff = 0.0
         max_frac = 0.0
@@ -290,16 +302,23 @@ class TestResultParser:
         return max_diff, (-1.0 if saw_zero_tol_violation else max_frac)
 
     def _extract_relevant_lines(self, lines: List[str]) -> List[str]:
-        """Extract relevant output lines for debugging."""
+        """Extract relevant output lines for debugging.
+
+        `helia_` is a keyword because the runtime's evidence lines
+        (HELIA_NONFINITE_MISMATCH, HELIA_NONFINITE_MISMATCHES,
+        HELIA_FLOAT_MAXDIFF) carry none of the others and are printed before
+        the failure count, so without it they fall outside the retained
+        section and the report keeps the verdict but drops the evidence.
+        """
         relevant = []
         in_test_section = False
-        
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-                
-            if any(keyword in line.lower() for keyword in ['test', 'fail', 'pass', 'error', 'assert']):
+
+            if any(keyword in line.lower() for keyword in ['test', 'fail', 'pass', 'error', 'assert', 'helia_']):
                 in_test_section = True
             
             if in_test_section:

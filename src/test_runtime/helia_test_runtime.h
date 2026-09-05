@@ -77,11 +77,14 @@ void helia_test_nonfinite_mismatch_summary(int count);
  *
  * These macros expand in the generated harness translation unit, so the check
  * has to survive whatever flags that TU is compiled with, not just the ones
- * this runtime is built with. README.md records the toolchains and flag sets
- * the classification has been exercised on.
+ * this runtime is built with. README.md records how the classification is
+ * exercised.
  *
  * IEEE-754 binary16/32/64 share one rule: a maximal exponent field means Inf
- * when the significand is zero and NaN otherwise.
+ * when the significand is zero and NaN otherwise. Arm's alternative half
+ * format does not follow it -- it has no Inf or NaN encodings and spends the
+ * maximal exponent on finite values up to 131008 -- so a target selecting it
+ * is rejected below rather than decoded by a rule that does not apply.
  */
 enum {
     HELIA_FLOAT_CLASS_FINITE = 0,
@@ -112,6 +115,18 @@ enum {
 #define HELIA_FLOAT16_GENERIC_ROWS(handler) _Float16: handler,
 #else
 #define HELIA_FLOAT16_GENERIC_ROWS(handler)
+#endif
+
+/*
+ * The alternative format reaches HELIA_HAVE_FP16_TYPE because the issue #54
+ * guard has to cover every half-typed element the target can declare, but
+ * helia_test_float_class_binary16() below would read 0x7C00 as
+ * +Inf where that format means 65536.0. Rejecting the build is the only honest
+ * answer: a validator that silently reclassifies finite kernel output is worse
+ * than no build at all.
+ */
+#if defined(__ARM_FP16_FORMAT_ALTERNATIVE)
+#error "__ARM_FP16_FORMAT_ALTERNATIVE has no Inf/NaN encodings; the binary16 class decoder is IEEE-only (helia-core-tester issue #75)"
 #endif
 
 _Static_assert(sizeof(float) == 4, "float is not IEEE-754 binary32 on this target");
@@ -161,13 +176,6 @@ static inline int helia_test_float_class_binary64(const void *storage)
     }
     return (helia_bits & 0x8000000000000000ull) ? HELIA_FLOAT_CLASS_NEG_INF
                                                 : HELIA_FLOAT_CLASS_POS_INF;
-}
-
-/* For values that reach the runtime as function arguments (no FP instruction
- * of ours produced them, so no fast-math attribute is attached to them). */
-static inline int helia_test_float_class(double value)
-{
-    return helia_test_float_class_binary64(&value);
 }
 
 #ifdef __cplusplus

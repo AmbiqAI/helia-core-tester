@@ -109,9 +109,13 @@ Float outputs are compared element by element against `atol + rtol * |expected|`
 element is classified before that tolerance is computed. A NaN or infinite operand is never
 run through the tolerance, because `rtol * |Inf|` is `Inf` and `0 * |Inf|` is `NaN`, and
 `diff > tol` is false against either. Matched non-finite operands pass: NaN against NaN, or
-two infinities of the same sign. ns-cmsis-nn's `Include/arm_nnfunctions_flt.h` guarantees the
-NaN-ness of an element and not its payload, so a matched NaN passes regardless of sign or
-payload (see AmbiqAI/ns-cmsis-nn#333). Every other pairing fails, including infinities of
+two infinities of the same sign. For the families whose ns-cmsis-nn header notes state it
+(elementwise add/sub/mul, `arm_nn_activation` RELU/RELU6/LEAKY_RELU, hard_swish, and
+mean/reduce_sum), `Include/arm_nnfunctions_flt.h` guarantees the NaN-ness of an element and not
+its payload, so a matched NaN passes regardless of sign or payload (see AmbiqAI/ns-cmsis-nn#333).
+Minimum and maximum are documented as unspecified for non-finite inputs, so a matched NaN there
+is a property of the implementation rather than a guarantee. Every other pairing fails, including
+infinities of
 opposite sign and a non-finite value against a finite one, and is reported on a
 `HELIA_NONFINITE_MISMATCH[i]` line that prints `nan`/`+inf`/`-inf` symbolically; the reporting
 parser classifies those results as `nonfinite_mismatch`.
@@ -136,11 +140,11 @@ emitted with `nnan`/`ninf`, so a class test applied to a value produced by a wid
 conversion may be deleted as provably false, and `isnan`/`isinf` may fold to a constant false.
 An integer test on bytes read from the array asks nothing of the optimizer.
 
-Exercised on: `arm-none-eabi-gcc` 15.2.rel1 (cortex-m55 hard-float, cortex-m0 soft-float, `-O3`
-and `-Ofast`); `clang --target=thumbv8.1m.main-none-unknown-eabihf -mcpu=cortex-m55` (`-O3`,
-`-O3 -ffast-math`, `-Ofast`); and the host driver in
-`helia_core_tester/tests/c_host/`, run at both `-Ofast` and `-O3 -ffast-math` for `float` and
-`_Float16` by `helia_core_tester/tests/test_float_nonfinite_compare.py`.
+The host driver in `helia_core_tester/tests/c_host/` is built and executed at both `-Ofast` and
+`-O3 -ffast-math`, for `float` and `_Float16`, by
+`helia_core_tester/tests/test_float_nonfinite_compare.py`; the Arm targets are compiled and their
+classification call sites counted, not executed, with the toolchains and results recorded in the
+pull request.
 
 ## Coverage Merge
 
