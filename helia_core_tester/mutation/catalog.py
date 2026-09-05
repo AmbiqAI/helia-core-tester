@@ -11,10 +11,12 @@ skipped.
 
 Grounding of the v1 entries:
 
-- drop_conv_bias:        tester#77. The s8/s16 int conv suite ships all-zero
-                         bias, so every s8/s16 case that executes the mutated
-                         code passes with the bias term deleted; the s4 suite
-                         ships nonzero bias and detects the drop. Covers the
+- drop_conv_bias:        tester#77. The s8 and s4 int conv cases ship nonzero
+                         bias and detect the drop. Quantized dilated convs
+                         still survive it: the TFLite converter hoists their
+                         bias into a trailing Add, leaving the CONV_2D op a
+                         zero placeholder. No s16 conv kernel is mutated, so
+                         s16 cases never reach the deleted term. Covers the
                          s8_s16 kernel, the s4 kernel, the 1xN/1x1 non-fast
                          route (arm_nn_mat_mult_nt_t_s8), the grouped
                          row-offset kernel, and the arm_convolve_s8 leftover
@@ -113,8 +115,9 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             ),
         ),
         expected_detected_by=(
-            "conv golden cases with a nonzero bias: the s4 suite ships nonzero bias and kills it; "
-            "every s8/s16 case that executes the mutated code survives (tester#77)"
+            "conv golden cases with a nonzero bias: the s8 and s4 suites kill it; quantized "
+            "dilated convs carry a zero bias the converter hoisted into a trailing Add and "
+            "survive, and no s16 conv kernel is mutated (tester#77)"
         ),
         refs=("AmbiqAI/helia-core-tester#77",),
     ),

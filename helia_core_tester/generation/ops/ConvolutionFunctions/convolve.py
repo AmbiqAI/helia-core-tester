@@ -6,6 +6,7 @@ import os
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
 from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel
 
 
@@ -96,21 +97,37 @@ class OpConvolve(OperationBase):
         
         use_bias = self.desc.get('use_bias', True)
         # A zero bias_initializer produces an all-zero bias tensor, which the
-        # TFLite converter's constant-folding optimizer strips from the
-        # FLOAT (non-quantized) graph entirely -- the generated CMSIS-NN
-        # test then calls the kernel with a NULL bias pointer, leaving the
-        # bias-add path completely untested. Use a small nonzero uniform
-        # bias, deterministic from the case seed, so real bias data flows
-        # through the golden and the kernel call.
-        # Float cases only: the same Keras model also feeds the QUANTIZED
-        # pipeline, so an ungated nonzero bias would silently perturb every
-        # int8/int16 conv golden (54 cases -- caught by adversarial review).
-        # Int-suite bias enrichment is a separate, deliberate change.
+        # TFLite converter's constant-folding optimizer strips from the graph
+        # entirely -- the generated CMSIS-NN test then calls the kernel with a
+        # NULL bias pointer, leaving the bias-add path completely untested.
+        # Use a nonzero uniform bias, deterministic from the case seed, so
+        # real bias data flows through the golden and the kernel call.
+        #
+        # The quantized magnitude has to clear one output quantization step,
+        # or a dropped bias-add still reproduces the golden bit for bit. The
+        # int suite calibrates from inputs in [-32, 32), which puts the
+        # calibrated conv output range at 33..195 for both S8 and S16, and
+        # the bias itself widens that range by 2*maxval. A floor of 2.0 keeps
+        # the shift above 2 output steps at the widest range while spending
+        # under a fifth of the dynamic range at the narrowest, and it is four
+        # orders of magnitude below the int32 accumulator's headroom.
+        #
+        # Quantized dilated convolutions are excluded: they lower to
+        # SpaceToBatchND -> Conv2D -> BatchToSpaceND -> Add, which leaves the
+        # CONV_2D op a zero placeholder bias and moves the real bias into an
+        # ADD whose operand lives in the output quantization domain, not at
+        # accumulator scale. The golden is read from the model output, so a
+        # nonzero bias there would disagree with the zero bias the kernel is
+        # handed. TODO(AmbiqAI/helia-core-tester#77): lift once the hoisted
+        # operand can be converted back to an int32 accumulator bias.
         _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
-        bias_initializer = (
-            tf.keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
-            if (use_bias and _case_is_float) else 'zeros'
-        )
+        _bias_hoisted_by_lowering = not _case_is_float and any(d != 1 for d in dilation)
+        if not use_bias or _bias_hoisted_by_lowering:
+            bias_initializer = 'zeros'
+        elif _case_is_float:
+            bias_initializer = tf.keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
+        else:
+            bias_initializer = SignedMagnitudeUniform(minval=2.0, maxval=4.0, seed=self.seed)
 
         conv = tf.keras.layers.Conv2D(
             filters=output_filters,
