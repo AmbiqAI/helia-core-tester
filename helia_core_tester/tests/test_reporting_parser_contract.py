@@ -426,19 +426,24 @@ def test_parser_sums_masked_lane_lines_across_outputs() -> None:
     assert result.masked_lanes_total == 16
 
 
-def test_parser_rejects_more_masked_lanes_than_compared() -> None:
+def test_parser_fails_a_case_reporting_more_masked_lanes_than_compared() -> None:
     # k > n cannot come from the runtime, so it means the capture is corrupt or
     # interleaved; silently recording a masked fraction above 1 would read as a
-    # measurement.
+    # measurement. It is a failed result rather than an exception because the
+    # serial and the parallel runner do not survive an exception the same way.
     parser = reporting_parser.TestResultParser()
-    with pytest.raises(ValueError, match="cannot mask more lanes than it compared"):
-        parser.parse_fvp_output(
-            output="HELIA_MASKED_LANES: 9 of 8\n0 Failures\n",
-            elf_path=Path("max_pool_float_nonfinite_nan_f32.elf"),
-            cpu="cortex-m55",
-            duration=0.1,
-            exit_code=0,
-        )
+    result = parser.parse_fvp_output(
+        output="HELIA_MASKED_LANES: 9 of 8\n0 Failures\n",
+        elf_path=Path("max_pool_float_nonfinite_nan_f32.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "corrupted_capture"
+    assert "Corrupted capture" in result.failure_reason
+    assert result.masked_lanes is None
+    assert result.masked_lanes_total is None
 
 
 def test_parser_leaves_masked_lanes_unset_without_the_summary_line() -> None:

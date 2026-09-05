@@ -101,7 +101,15 @@ class TestResultParser:
         cycles = self._extract_cycles(output)
         memory_usage = self._extract_memory_usage(output)
         max_diff, max_tolerance_fraction = self._extract_float_maxdiff(output)
-        masked_lanes, masked_lanes_total = self._extract_masked_lanes(output)
+        masked_lanes, masked_lanes_total, mask_corruption = self._extract_masked_lanes(output)
+        if mask_corruption is not None:
+            # A masked fraction above 1 would be read downstream as a real
+            # measurement, so the case is failed on the capture rather than on the
+            # kernel, and the counts stay unset.
+            status = TestStatus.FAIL
+            failure_reason = mask_corruption
+            skip_reason = None
+            error_type = "corrupted_capture"
 
         relevant_lines = self._extract_relevant_lines(lines)
         
@@ -309,32 +317,38 @@ class TestResultParser:
             return -1.0, -2.0
         return max_diff, (-1.0 if saw_zero_tol_violation else max_frac)
 
-    def _extract_masked_lanes(self, output: str) -> Tuple[Optional[int], Optional[int]]:
-        """Masked lanes and the total they are out of, or (None, None) if unmasked.
+    def _extract_masked_lanes(
+        self, output: str
+    ) -> Tuple[Optional[int], Optional[int], Optional[str]]:
+        """Masked lanes, the total they are out of, and a corruption reason if any.
 
         A case with several validated outputs prints one line each, so both counts
         are summed; the plain validator prints nothing, which is what separates
         "no lane was masked" (0) from "this case has no mask" (None). The total
         travels with the count because k alone cannot distinguish one masked lane
         in a thousand from one in two.
+
+        k > n cannot come from the harness, which cannot mask more lanes than it
+        compared, so the capture is corrupted or interleaved. That is reported as a
+        result, not raised: raising here would abort the whole serial run while the
+        parallel run turned the same capture into a single ERROR entry.
         """
         matches = self.masked_lanes_pattern.findall(output)
         if not matches:
-            return None, None
+            return None, None, None
         masked_total = 0
         lane_total = 0
         for masked, total in matches:
             masked_count, lane_count = int(masked), int(total)
             if masked_count > lane_count:
-                # Only a corrupted or interleaved capture can produce this, and a
-                # masked fraction above 1 would be read as a real measurement.
-                raise ValueError(
-                    f"HELIA_MASKED_LANES reported {masked_count} masked lanes of "
-                    f"{lane_count}; the harness cannot mask more lanes than it compared"
+                return None, None, (
+                    f"Corrupted capture: HELIA_MASKED_LANES reported {masked_count} "
+                    f"masked lanes of {lane_count}; the harness cannot mask more lanes "
+                    "than it compared"
                 )
             masked_total += masked_count
             lane_total += lane_count
-        return masked_total, lane_total
+        return masked_total, lane_total, None
 
     def _extract_relevant_lines(self, lines: List[str]) -> List[str]:
         """Extract relevant output lines for debugging.
