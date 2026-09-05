@@ -50,6 +50,12 @@ class TestResultParser:
         self.nonfinite_mismatch_pattern = re.compile(
             r'HELIA_NONFINITE_MISMATCH\[(\d+)\]:\s*exp=(\S+)\s+got=(\S+)'
         )
+        # Per-tensor count of mismatched non-finite elements. Printed whenever
+        # one occurred, including when the per-element reports above were used
+        # up by earlier failures, so this is the reliable classifier.
+        self.nonfinite_summary_pattern = re.compile(
+            r'HELIA_NONFINITE_MISMATCHES\s+n=(\d+)'
+        )
         # Pattern for "Convolution failed" or API errors
         self.api_error_pattern = re.compile(
             r'(?P<label>[A-Za-z][A-Za-z0-9 _-]*)\s+failed with status\s+(?P<status>-?\d+)',
@@ -157,15 +163,20 @@ class TestResultParser:
                     None,
                     "nonfinite_mismatch",
                 )
-            if self._has_unmeasurable_headroom_sentinel(output):
+            nonfinite_counts = self.nonfinite_summary_pattern.findall(output)
+            if nonfinite_counts:
                 # The runtime reports individual elements only while failures
                 # stay within the case's report limit (20 by default), so a
                 # tensor with enough finite overruns ahead of the non-finite
-                # element carries the sentinel and no printed line.
+                # element carries only the per-tensor count. The headroom
+                # sentinel cannot stand in for it: the sentinel also fires when
+                # a tensor had no finite element to measure, which would
+                # mislabel a finite overrun in a multi-output case.
+                nonfinite_total = sum(int(count) for count in nonfinite_counts)
                 return (
                     TestStatus.FAIL,
                     f"Non-finite output mismatch: {failure_count} element(s) differ from expected "
-                    "(non-finite element beyond the per-case report limit)",
+                    f"({nonfinite_total} non-finite, reported beyond the per-case report limit)",
                     None,
                     "nonfinite_mismatch",
                 )
@@ -186,18 +197,6 @@ class TestResultParser:
 
         return TestStatus.ERROR, "Unknown test status", None, "unknown"
     
-    def _has_unmeasurable_headroom_sentinel(self, output: str) -> bool:
-        """True when any HELIA_FLOAT_MAXDIFF line carries the -1.0/-2.0 sentinel."""
-        for diff_str, frac_str, _n_str in self.float_maxdiff_pattern.findall(output):
-            try:
-                diff_val = float(diff_str)
-                frac_val = float(frac_str)
-            except ValueError:
-                continue
-            if diff_val <= -1.0 and frac_val <= -2.0:
-                return True
-        return False
-
     def _extract_failure_reason(self, output: str, lines: List[str]) -> str:
         """Extract detailed failure reason from legacy assertion-style output."""
         assertion_matches = self.assertion_pattern.findall(output)

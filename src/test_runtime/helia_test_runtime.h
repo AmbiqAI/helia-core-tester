@@ -49,21 +49,39 @@ int helia_test_expected_status_failure(const char *label, int status, int expect
 int helia_test_scalar_int_mismatch(const char *label, const char *subject, int expected, int actual);
 int helia_test_finish_validation(int failures);
 double helia_test_float_tolerance(double expected, double atol, double rtol);
-void helia_test_nonfinite_mismatch(int index, double expected, double actual);
+void helia_test_nonfinite_mismatch(
+    int index,
+    int expected_class,
+    double expected,
+    int actual_class,
+    double actual
+);
+void helia_test_nonfinite_mismatch_summary(int count);
 
 /*
  * Non-finite classification (issue #75).
  *
- * Deliberately bit-pattern based rather than isnan()/isinf(): generated tests
- * build at -Ofast or -O3 -ffast-math (both imply -ffinite-math-only), which
- * licenses the compiler to fold every library non-finite predicate to a
- * constant false (the mechanism behind AmbiqAI/ns-cmsis-nn#314). The macros
- * below expand in the generated harness translation unit, so the check has to
- * survive whatever flags that TU is compiled with, not just the ones this
- * runtime uses.
+ * The class of an element is decoded from that element's own storage bytes,
+ * at its own width, before any floating-point operation touches the value.
+ * The ordering is the point. Generated tests build at -Ofast or at
+ * -O3 -ffast-math (both imply -ffinite-math-only), under which every FP
+ * instruction is emitted with nnan/ninf -- including the widening conversion
+ * that handing a float or float16_t element to a double-typed classifier would
+ * require. The optimizer is then entitled to treat the widened result as
+ * finite and to delete an exponent test applied to it, which would report zero
+ * failures for a kernel that returned NaN. Decoding the element's own bytes
+ * asks nothing of the optimizer: the test is integer arithmetic on a value no
+ * FP instruction of ours produced. isnan()/isinf() are unusable for the same
+ * reason -- they are licensed to fold to a constant false, the mechanism
+ * behind AmbiqAI/ns-cmsis-nn#314.
  *
- * IEEE-754 binary64: a maximal exponent field means Inf when the significand
- * is zero and NaN otherwise.
+ * These macros expand in the generated harness translation unit, so the check
+ * has to survive whatever flags that TU is compiled with, not just the ones
+ * this runtime is built with. README.md records the toolchains and flag sets
+ * the classification has been exercised on.
+ *
+ * IEEE-754 binary16/32/64 share one rule: a maximal exponent field means Inf
+ * when the significand is zero and NaN otherwise.
  */
 enum {
     HELIA_FLOAT_CLASS_FINITE = 0,
@@ -72,25 +90,102 @@ enum {
     HELIA_FLOAT_CLASS_NEG_INF = 3
 };
 
-_Static_assert(sizeof(double) == sizeof(uint64_t),
-               "helia_test_float_class() decodes IEEE-754 binary64; this target's double is not 64-bit");
+/*
+ * float16_t is a typedef of __fp16 or of _Float16 depending on the toolchain
+ * (ns-cmsis-nn Include/arm_nn_math_types_flt.h), and the two are distinct
+ * types where both exist, so every _Generic over element types has to carry
+ * whichever rows the target actually has.
+ */
+#if defined(__ARM_FP16_FORMAT_IEEE) || defined(__ARM_FP16_FORMAT_ALTERNATIVE) \
+    || defined(__ARM_FEATURE_FP16_SCALAR_ARITHMETIC)
+#define HELIA_HAVE_FP16_TYPE 1
+#endif
+#if defined(__FLT16_MAX__)
+#define HELIA_HAVE_FLOAT16_TYPE 1
+#endif
 
-static inline int helia_test_float_class(double value)
+#if defined(HELIA_HAVE_FP16_TYPE) && defined(HELIA_HAVE_FLOAT16_TYPE)
+#define HELIA_FLOAT16_GENERIC_ROWS(handler) __fp16: handler, _Float16: handler,
+#elif defined(HELIA_HAVE_FP16_TYPE)
+#define HELIA_FLOAT16_GENERIC_ROWS(handler) __fp16: handler,
+#elif defined(HELIA_HAVE_FLOAT16_TYPE)
+#define HELIA_FLOAT16_GENERIC_ROWS(handler) _Float16: handler,
+#else
+#define HELIA_FLOAT16_GENERIC_ROWS(handler)
+#endif
+
+_Static_assert(sizeof(float) == 4, "float is not IEEE-754 binary32 on this target");
+_Static_assert(sizeof(double) == 8, "double is not IEEE-754 binary64 on this target");
+#ifdef HELIA_HAVE_FP16_TYPE
+_Static_assert(sizeof(__fp16) == 2, "__fp16 is not IEEE-754 binary16 on this target");
+#endif
+#ifdef HELIA_HAVE_FLOAT16_TYPE
+_Static_assert(sizeof(_Float16) == 2, "_Float16 is not IEEE-754 binary16 on this target");
+#endif
+
+static inline int helia_test_float_class_binary16(const void *storage)
+{
+    uint16_t helia_bits = 0;
+    memcpy(&helia_bits, storage, sizeof(helia_bits));
+    if ((helia_bits & 0x7C00u) != 0x7C00u) {
+        return HELIA_FLOAT_CLASS_FINITE;
+    }
+    if ((helia_bits & 0x03FFu) != 0u) {
+        return HELIA_FLOAT_CLASS_NAN;
+    }
+    return (helia_bits & 0x8000u) ? HELIA_FLOAT_CLASS_NEG_INF : HELIA_FLOAT_CLASS_POS_INF;
+}
+
+static inline int helia_test_float_class_binary32(const void *storage)
+{
+    uint32_t helia_bits = 0;
+    memcpy(&helia_bits, storage, sizeof(helia_bits));
+    if ((helia_bits & 0x7F800000u) != 0x7F800000u) {
+        return HELIA_FLOAT_CLASS_FINITE;
+    }
+    if ((helia_bits & 0x007FFFFFu) != 0u) {
+        return HELIA_FLOAT_CLASS_NAN;
+    }
+    return (helia_bits & 0x80000000u) ? HELIA_FLOAT_CLASS_NEG_INF : HELIA_FLOAT_CLASS_POS_INF;
+}
+
+static inline int helia_test_float_class_binary64(const void *storage)
 {
     uint64_t helia_bits = 0;
-    memcpy(&helia_bits, &value, sizeof(helia_bits));
-    if (((helia_bits >> 52) & 0x7FFu) != 0x7FFu) {
+    memcpy(&helia_bits, storage, sizeof(helia_bits));
+    if ((helia_bits & 0x7FF0000000000000ull) != 0x7FF0000000000000ull) {
         return HELIA_FLOAT_CLASS_FINITE;
     }
     if ((helia_bits & 0x000FFFFFFFFFFFFFull) != 0ull) {
         return HELIA_FLOAT_CLASS_NAN;
     }
-    return (helia_bits >> 63) ? HELIA_FLOAT_CLASS_NEG_INF : HELIA_FLOAT_CLASS_POS_INF;
+    return (helia_bits & 0x8000000000000000ull) ? HELIA_FLOAT_CLASS_NEG_INF
+                                                : HELIA_FLOAT_CLASS_POS_INF;
+}
+
+/* For values that reach the runtime as function arguments (no FP instruction
+ * of ours produced them, so no fast-math attribute is attached to them). */
+static inline int helia_test_float_class(double value)
+{
+    return helia_test_float_class_binary64(&value);
 }
 
 #ifdef __cplusplus
 }
 #endif
+
+/*
+ * Dispatches on the element's declared type so the decode happens at the
+ * element's own storage width, and passes the element by address so the bytes
+ * are read from where the kernel wrote them rather than from a copy the
+ * compiler has watched go through an FP register.
+ */
+#define HELIA_FLOAT_CLASS_OF(element) \
+    _Generic((element), \
+        HELIA_FLOAT16_GENERIC_ROWS(helia_test_float_class_binary16) \
+        float: helia_test_float_class_binary32, \
+        double: helia_test_float_class_binary64 \
+    )(&(element))
 
 #define HELIA_VALIDATE_EXPECTED_STATUS(label, status, expected_status) \
     do { \
@@ -124,21 +219,12 @@ static inline int helia_test_float_class(double value)
  * long long, which silently truncates float outputs (|v| < 1 becomes 0 on
  * both sides and always "matches"). If a generator regression ever routes a
  * float-typed output into an integer validator again, fail the BUILD instead
- * of silently passing forever. __fp16 is included only where the target
- * defines an IEEE half type, which is every configuration that can compile
- * float16 test data in the first place.
+ * of silently passing forever. The half types are covered wherever the target
+ * has one, which is every configuration that can compile float16 test data in
+ * the first place.
  */
-#if (defined(__ARM_FP16_FORMAT_IEEE) || defined(__ARM_FEATURE_FP16_SCALAR_ARITHMETIC)) && defined(__FLT16_MAX__)
-/* __fp16 and _Float16 are distinct types on GCC/Clang Arm targets; block both
- * (float16_t may typedef either depending on toolchain/host configuration). */
-#define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, __fp16: 1, _Float16: 1, default: 0)
-#elif defined(__ARM_FP16_FORMAT_IEEE) || defined(__ARM_FEATURE_FP16_SCALAR_ARITHMETIC)
-#define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, __fp16: 1, default: 0)
-#elif defined(__FLT16_MAX__)
-#define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, _Float16: 1, default: 0)
-#else
-#define HELIA_ELEM_IS_FLOAT(expr) _Generic((expr), float: 1, double: 1, default: 0)
-#endif
+#define HELIA_ELEM_IS_FLOAT(expr) \
+    _Generic((expr), HELIA_FLOAT16_GENERIC_ROWS(1) float: 1, double: 1, default: 0)
 #define HELIA_ASSERT_INT_VALIDATOR_INPUT(arr) \
     _Static_assert(!HELIA_ELEM_IS_FLOAT((arr)[0]), \
                    "integer validator applied to float outputs: validation-mode coercion " \
@@ -208,11 +294,18 @@ static inline int helia_test_float_class(double value)
  *                   headroom for the finite ones. Either way NaN/Inf stays out
  *                   of the printf.
  *
- * Non-finite elements (issue #75) are classified before the tolerance is
- * computed, because the tolerance is what goes bad: rtol * |Inf| is Inf and
- * 0 * |Inf| is NaN, and `diff > tol` is false against either, so a tolerance
- * derived from a non-finite expected value can never be exceeded. A matched
- * pair (both NaN, or infinities of the same sign) passes: ns-cmsis-nn's
+ * Non-finite elements (issue #75) are classified straight from the element's
+ * storage bytes, before the widening conversion and before the tolerance is
+ * computed. Before the tolerance, because the tolerance is what goes bad:
+ * rtol * |Inf| is Inf and 0 * |Inf| is NaN, and `diff > tol` is false against
+ * either, so a tolerance derived from a non-finite expected value can never be
+ * exceeded. Before the conversion, because under -ffinite-math-only the
+ * conversion itself is what erases the evidence (see HELIA_FLOAT_CLASS_OF).
+ * The count of mismatched non-finite elements is reported on its own
+ * HELIA_NONFINITE_MISMATCHES line, so the reporting parser can tell this
+ * defect from a tolerance overrun without inferring it from the headroom
+ * sentinel, which has two causes. A matched pair (both NaN, or infinities of
+ * the same sign) passes: ns-cmsis-nn's
  * Include/arm_nnfunctions_flt.h guarantees NaN-ness, not payload, so a matched
  * NaN passes regardless of sign or payload (see AmbiqAI/ns-cmsis-nn#333). Any
  * other pairing, including infinities of opposite sign, is a failure reported
@@ -223,25 +316,31 @@ static inline int helia_test_float_class(double value)
         double helia_max_diff = 0.0; \
         double helia_max_frac = 0.0; \
         int helia_zero_tol_violation = 0; \
-        int helia_nonfinite_mismatch = 0; \
+        int helia_nonfinite_mismatches = 0; \
         int helia_finite_compared = 0; \
         for (int helia_i = 0; helia_i < (size); ++helia_i) { \
-            double helia_act_val = (double)((actual)[helia_i]); \
-            double helia_exp_val = (double)((expected)[helia_i]); \
-            int helia_act_class = helia_test_float_class(helia_act_val); \
-            int helia_exp_class = helia_test_float_class(helia_exp_val); \
+            int helia_act_class = HELIA_FLOAT_CLASS_OF((actual)[helia_i]); \
+            int helia_exp_class = HELIA_FLOAT_CLASS_OF((expected)[helia_i]); \
             if (helia_act_class != HELIA_FLOAT_CLASS_FINITE \
                 || helia_exp_class != HELIA_FLOAT_CLASS_FINITE) { \
                 if (helia_act_class != helia_exp_class) { \
-                    helia_nonfinite_mismatch = 1; \
+                    ++helia_nonfinite_mismatches; \
                     ++(failures); \
                     if ((failures) <= (max_reports)) { \
-                        helia_test_nonfinite_mismatch(helia_i, helia_exp_val, helia_act_val); \
+                        helia_test_nonfinite_mismatch( \
+                            helia_i, \
+                            helia_exp_class, \
+                            (double)((expected)[helia_i]), \
+                            helia_act_class, \
+                            (double)((actual)[helia_i]) \
+                        ); \
                     } \
                 } \
                 continue; \
             } \
             helia_finite_compared = 1; \
+            double helia_act_val = (double)((actual)[helia_i]); \
+            double helia_exp_val = (double)((expected)[helia_i]); \
             double helia_diff = fabs(helia_act_val - helia_exp_val); \
             double helia_tol = helia_test_float_tolerance( \
                 helia_exp_val, \
@@ -273,7 +372,8 @@ static inline int helia_test_float_class(double value)
                 } \
             } \
         } \
-        int helia_unmeasurable = (helia_nonfinite_mismatch || !helia_finite_compared); \
+        helia_test_nonfinite_mismatch_summary(helia_nonfinite_mismatches); \
+        int helia_unmeasurable = (helia_nonfinite_mismatches > 0 || !helia_finite_compared); \
         printf( \
             "HELIA_FLOAT_MAXDIFF maxdiff=%.8e maxfrac=%.6f n=%d\r\n", \
             helia_unmeasurable ? -1.0 : helia_max_diff, \

@@ -116,15 +116,31 @@ opposite sign and a non-finite value against a finite one, and is reported on a
 `HELIA_NONFINITE_MISMATCH[i]` line that prints `nan`/`+inf`/`-inf` symbolically; the reporting
 parser classifies those results as `nonfinite_mismatch`.
 
+A mismatched non-finite element is also counted on a `HELIA_NONFINITE_MISMATCHES n=<k>` line,
+emitted once per tensor when `k > 0`. That line, not the headroom sentinel, is what the parser
+classifies on, because the sentinel has a second cause.
+
 Matched non-finite elements are excluded from the headroom measurement rather than voiding it,
 so a tensor with a few NaN lanes and finite values elsewhere still reports real `maxdiff` and
 `maxfrac` for the finite elements. The `maxdiff=-1.0 maxfrac=-2.0` headroom sentinel is
-reported only when a non-finite element mismatched or when no finite element was compared.
+reported only when a non-finite element mismatched or when no finite element was compared at
+all, which includes a zero-length validation: it compares nothing, so it passes and records the
+sentinel rather than a headroom number it never measured.
 
-The classification reads the IEEE-754 exponent and significand bits rather than calling
-`isnan`/`isinf`: generated tests build at `-Ofast` or `-O3 -ffast-math` (both imply
-`-ffinite-math-only`), which lets the compiler fold the library predicates to a constant
-false.
+The classification decodes the IEEE-754 exponent and significand fields out of the element's
+own storage bytes, at the element's own width (binary16, binary32 or binary64, selected by
+`_Generic` on the element type), before the element is converted to `double` for the tolerance
+arithmetic. Doing it in that order is what makes it immune to `-ffinite-math-only`, which both
+`-Ofast` and `-O3 -ffast-math` imply: under that flag every floating-point instruction is
+emitted with `nnan`/`ninf`, so a class test applied to a value produced by a widening
+conversion may be deleted as provably false, and `isnan`/`isinf` may fold to a constant false.
+An integer test on bytes read from the array asks nothing of the optimizer.
+
+Exercised on: `arm-none-eabi-gcc` 15.2.rel1 (cortex-m55 hard-float, cortex-m0 soft-float, `-O3`
+and `-Ofast`); `clang --target=thumbv8.1m.main-none-unknown-eabihf -mcpu=cortex-m55` (`-O3`,
+`-O3 -ffast-math`, `-Ofast`); and the host driver in
+`helia_core_tester/tests/c_host/`, run at both `-Ofast` and `-O3 -ffast-math` for `float` and
+`_Float16` by `helia_core_tester/tests/test_float_nonfinite_compare.py`.
 
 ## Coverage Merge
 
