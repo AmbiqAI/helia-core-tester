@@ -10,8 +10,10 @@ legs), because it is the -ffinite-math-only they both imply that the
 classification has to survive. And the operands come from a second translation
 unit, so no result here depends on the compiler failing to notice where a NaN
 came from -- except for the `visible_*` rows, which deliberately do the reverse
-and put the non-finite bit pattern in the driver's own TU, because that is the
-shape a classify-after-widening validator actually folds away.
+and put the non-finite bit pattern in the driver's own TU. Those rows are
+exposure coverage, not a detector: nothing here folds them. The fold itself is
+caught by test_float_nonfinite_fold_harness.py, which builds the full generated
+harness shape.
 """
 
 from __future__ import annotations
@@ -284,11 +286,13 @@ def test_finite_cases_keep_measurable_headroom(host_sanity_output: str) -> None:
 def test_locally_visible_nonfinite_operand_is_still_classified(
     host_sanity_output: str, case_name: str, prefix: str
 ) -> None:
-    # The bit pattern is a literal in the driver's own TU, which is the shape
-    # most exposed to the fold: an operand whose class the optimizer knows
-    # before the comparison. The token assertion is the load-bearing half --
-    # a -Inf lane that fell through to the finite path would still count one
-    # failure, but would print a Mismatch line instead of this one.
+    # The bit pattern is a literal in the driver's own TU, so the optimizer
+    # knows the operand's class before the comparison. No compiler tried folds
+    # this shape, so these rows do not discriminate against the pre-fix
+    # classifier; test_float_nonfinite_fold_harness.py does. The token
+    # assertion is still the load-bearing half -- a -Inf lane that fell through
+    # to the finite path would count one failure either way, but would print a
+    # Mismatch line instead of this one.
     if prefix:
         _require_f16(host_sanity_output)
     case_id = f"{prefix}{case_name}"

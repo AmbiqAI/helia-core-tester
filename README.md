@@ -142,9 +142,15 @@ An integer test on bytes read from the array asks nothing of the optimizer.
 
 The host driver in `helia_core_tester/tests/c_host/` is built and executed at both `-Ofast` and
 `-O3 -ffast-math`, for `float` and `_Float16`, by
-`helia_core_tester/tests/test_float_nonfinite_compare.py`; the Arm targets are compiled and their
-classification call sites counted, not executed, with the toolchains and results recorded in the
-pull request.
+`helia_core_tester/tests/test_float_nonfinite_compare.py`. Alongside it,
+`helia_core_tester/tests/test_float_nonfinite_fold_harness.py` builds and runs the full generated
+harness shape at the same two flag sets: a file-scope `static const` golden carrying
+`NAN`/`INFINITY` literals, the kernel output produced in a second translation unit, and the
+validation macro expanded in a `*_test_case_run()`. That shape is the one where a
+classify-after-widening validator actually loses lanes, so it is what holds the fix in place;
+smaller probes stay correct on the same compiler either way. The Arm targets are compiled and
+their classification call sites counted, not executed, with the toolchains and results recorded
+in the pull request.
 
 ## Coverage Merge
 

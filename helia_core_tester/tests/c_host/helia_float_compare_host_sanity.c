@@ -112,10 +112,11 @@ static void helia_run_f16_tensor_cases(void)
  * compiler folds. These rows do the opposite: the bit pattern is a literal in
  * this translation unit, a few lines from the comparison, so the optimizer
  * knows the operand's class before HELIA_VALIDATE_FLOATS looks at it. That is
- * the most exposed shape for the fold issue #75 guards against, and the one an
- * inlined or header-only kernel would produce. No compiler tried here folds it
- * even against the pre-fix classifier, so these rows are coverage of the
- * exposure rather than a detector for it.
+ * the shape an inlined or header-only kernel would produce. No compiler tried
+ * here folds it even against the pre-fix classifier, so these rows are
+ * coverage of the exposure rather than a detector for it: the discriminating
+ * test is the generated-shape harness driven by
+ * test_float_nonfinite_fold_harness.py, which does fold.
  */
 static float helia_visible_f32(uint32_t bits)
 {
