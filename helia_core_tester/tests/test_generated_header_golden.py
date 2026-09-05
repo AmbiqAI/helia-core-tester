@@ -47,8 +47,9 @@ _GOLDEN_ARRAY_RE = re.compile(
 )
 _CAST_RE = re.compile(r"^\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\)\s*")
 
-# f16 carries ~11 bits of mantissa, so one ulp is already ~1e-3 relative; f32 gets the
-# tighter of a 4 ulp and a relative bound so near-zero goldens are not given a free pass.
+# f16 carries ~11 bits of mantissa, so one ulp is already ~1e-3 relative; f32 is held an
+# order of magnitude tighter. The same fraction serves as the element-relative bound and
+# as the floor taken from the array's own scale.
 _REL_TOL = {"float16_t": 1e-3}
 _DEFAULT_REL_TOL = 1e-6
 _ULP_TOL = 4
@@ -90,19 +91,31 @@ def _parse_c_literals(body: str) -> list[float | str]:
 
 
 def _golden_array_deviation(name: str, ctype: str, emitted: str, expected: str) -> str | None:
+    """Compare one golden body against the fixture, tolerating host-libm last bits only.
+
+    The tolerance is scale-aware: an element is allowed the larger of its own relative
+    bound, 4 ulp, and a floor drawn from the fixture array's largest magnitude. A host
+    libm difference is bounded in absolute terms by the magnitudes the reference model
+    carries, not by each element, so a lane that happens to land near zero (a recurrent
+    output compounds exp and tanh across time steps) inherits the array's absolute error
+    while an element-relative bound alone would call that a failure. Any change of
+    substance still moves a lane by far more than the array's own scale times `rel_tol`.
+    """
     got = _parse_c_literals(emitted)
     want = _parse_c_literals(expected)
     if len(got) != len(want):
         return f"{name}: {len(got)} values emitted, fixture has {len(want)}"
 
     rel_tol = _REL_TOL.get(ctype, _DEFAULT_REL_TOL)
+    scale = max((abs(value) for value in want if not isinstance(value, str)), default=0.0)
+    abs_floor = max(scale * rel_tol, _ULP_TOL * _f32_ulp(scale))
     worst: tuple[float, str] | None = None
     for index, (a, b) in enumerate(zip(got, want)):
         if isinstance(a, str) or isinstance(b, str):
             if a != b:
                 return f"{name}[{index}]: emitted {a!r}, fixture has {b!r}"
             continue
-        tol = max(abs(b) * rel_tol, _ULP_TOL * _f32_ulp(b))
+        tol = max(abs(b) * rel_tol, _ULP_TOL * _f32_ulp(b), abs_floor)
         delta = abs(a - b)
         if delta <= tol:
             continue
