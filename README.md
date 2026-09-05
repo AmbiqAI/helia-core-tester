@@ -172,10 +172,11 @@ non-finite output may be pinned is a per-kernel question.
   `arm_max_pool_f16` note calls the scalar leg's NaN behaviour unspecified at the shipped
   `-Ofast` and declines to promise NaN propagation end to end, and the `arm_avg_pool_f16` note
   has NaN propagating at every optimization level on non-MVE while the MVE clamp resolves it to
-  a bound. It asserts
-  robustness and non-corruption of the neighbouring lanes without encoding an uncontracted value
-  as a golden. A case that ends up masking every lane fails generation, since it would assert
-  nothing beyond `SUCCESS`.
+  a bound. It asserts robustness and non-corruption of the neighbouring lanes without encoding an
+  uncontracted value as a golden. Two generation-time guards keep the measurement honest: a case
+  that ends up masking every lane fails, since it would assert nothing beyond `SUCCESS`, and so
+  does a case where no lane moves between the probes, since a two-sided activation clamp that
+  saturates all three probes to the same bound is not evidence that the token is confined.
 
 A masked case emits the mask alongside the golden, whose masked entries are written as `0.0f` so
 the golden stays finite -- the input arrays still carry the tokens -- and the harness prints
