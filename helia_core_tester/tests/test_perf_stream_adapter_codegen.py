@@ -233,6 +233,39 @@ def test_fully_connected_builder_scalar_keys_are_subset_of_firmware_adapter_scal
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
+def test_s8_mve_fully_connected_bridges_the_generated_bias(tmp_path: Path) -> None:
+    """The bias an MVE s8 FC case folds into its weight sum still has to reach the adapter.
+
+    The firmware body rebuilds the kernel sum with arm_vector_sum_s8() from the bias blob,
+    so a missing or zero bias blob silently reproduces the golden minus the bias term --
+    an 11-15 LSB error against a tolerance of 1.  See AmbiqAI/helia-core-tester#77.
+    """
+    import numpy as np
+
+    from helia_core_tester.perf_stream.generated_test_bridge import (
+        _extract_array,
+        _find_header_file,
+        discover_generated_tests,
+    )
+
+    cases = discover_generated_tests(
+        PROJECT_ROOT, cpu="cortex-m55", family="FullyConnectedFunctions", name_filter="fully_connected_mve_case_01_s8"
+    )
+    if not cases:
+        pytest.skip("no generated cortex-m55 fully_connected_mve_case_01_s8 artifacts")
+    case = cases[0]
+    header_text = _find_header_file(case.directory).read_text(encoding="utf-8")
+    generated_bias = np.array(_extract_array(header_text, f"{case.name}_biases"), dtype=np.int32)
+
+    bundle = _build_fully_connected_case(PROJECT_ROOT, case, output_root=tmp_path)
+    bias_blobs = [blob for blob in bundle.blobs if blob.role == "bias"]
+    assert bias_blobs, "s8 MVE FC case bridged without a bias blob"
+
+    bridged_bias = np.frombuffer(bias_blobs[0].path.read_bytes(), dtype=np.int32)
+    assert np.any(bridged_bias != 0), "bridged bias blob is all zero"
+    assert np.array_equal(bridged_bias, generated_bias)
+
+
 def test_batch_matmul_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.generated_test_bridge import discover_generated_tests
 

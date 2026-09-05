@@ -21,6 +21,9 @@ from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected im
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _SEED = 1
+# An MVE target and a non-MVE one: the s8 FC bias is folded into the
+# precomputed kernel sum only on the former.
+_TARGETS = ("cortex-m55", "cortex-m4")
 
 
 def _descriptor(name: str) -> Dict:
@@ -31,11 +34,11 @@ def _descriptor(name: str) -> Dict:
     raise AssertionError(f"descriptor {name} not found")
 
 
-def _generate(name: str, out_dir: Path) -> str:
-    """Generate one case and return its emitted header text."""
+def _generate(name: str, out_dir: Path, target_cpu: str) -> str:
+    """Generate one case for one target and return its emitted header text."""
     desc = _descriptor(name)
     op_cls = OpConvolve if desc["operator"] == "Convolve" else OpFullyConnected
-    op = op_cls(desc, seed=_SEED, target_cpu="cortex-m55")
+    op = op_cls(desc, seed=_SEED, target_cpu=target_cpu)
     model = op.build_keras_model() if op.needs_keras_model() else None
     op.convert_to_tflite(model, str(out_dir / f"{name}.tflite"), _SEED)
     op.generate_c_files(out_dir)
@@ -54,8 +57,8 @@ def _int_scalar(header: str, suffix: str) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
-def _output_steps(header: str) -> float:
-    """Largest output shift, in output quantization steps, a dropped bias causes."""
+def _output_steps(header: str) -> List[float]:
+    """Per-channel output shift, in output quantization steps, a dropped bias causes."""
     biases = _int_array(header, "biases")
     # Per-tensor cases emit scalars where per-channel cases emit arrays.
     multipliers = _int_array(header, "multiplier") or [_int_scalar(header, "multiplier_val")]
@@ -69,14 +72,15 @@ def _output_steps(header: str) -> float:
         multipliers = multipliers * channels
     if len(shifts) == 1:
         shifts = shifts * channels
-    return max(
+    return [
         abs(bias) * (multiplier / 2**31) * (2.0**shift)
         for bias, multiplier, shift in zip(biases, multipliers, shifts)
-    )
+    ]
 
 
-# One per int kernel family that takes a bias array: per-channel s8, the
-# s16 int64-bias path, and the s4 packed-weight path.
+# One per int kernel family that takes a bias array: per-channel s8 and the
+# s16 int64-bias path.  Both are built from a Keras model whose bias comes
+# from SignedMagnitudeUniform, so every channel clears the detection floor.
 @pytest.mark.parametrize(
     "case_name",
     [
@@ -85,54 +89,86 @@ def _output_steps(header: str) -> float:
         "convolve_kernel_support_groups2_s8",
         "convolve_kernel_support_s16",
         "convolve_requantize_s64_s16",
-        "convolve_generic_s4",
     ],
 )
-def test_int_convolve_bias_is_nonzero_and_detectable(case_name: str, tmp_path: Path) -> None:
-    header = _generate(case_name, tmp_path)
+def test_int_convolve_bias_is_detectable_on_every_channel(case_name: str, tmp_path: Path) -> None:
+    header = _generate(case_name, tmp_path, "cortex-m55")
+    biases = _int_array(header, "biases")
+
+    assert biases, f"{case_name} emits no bias array"
+    assert all(bias != 0 for bias in biases), f"{case_name} ships a zero bias channel"
+    assert min(_output_steps(header)) >= 1.0, (
+        f"{case_name} has a channel whose bias is below one output quantization "
+        f"step, so dropping the bias-add reproduces that channel exactly"
+    )
+
+
+# The s4 path builds its tensors with LiteRT directly and draws the bias from
+# rng.integers(-128, 128), which can hand an individual channel a zero: only
+# the case as a whole is guaranteed to detect a dropped bias-add.
+@pytest.mark.parametrize("case_name", ["convolve_generic_s4", "fully_connected_tail_rows5_cols13_bias_s4"])
+def test_s4_bias_is_detectable_on_at_least_one_channel(case_name: str, tmp_path: Path) -> None:
+    header = _generate(case_name, tmp_path, "cortex-m55")
     biases = _int_array(header, "biases")
 
     assert biases, f"{case_name} emits no bias array"
     assert any(bias != 0 for bias in biases), f"{case_name} ships an all-zero bias"
-    assert _output_steps(header) >= 1.0, (
-        f"{case_name} bias is below one output quantization step, so dropping "
-        f"the bias-add reproduces the golden exactly"
+    assert max(_output_steps(header)) >= 1.0, (
+        f"{case_name} bias is below one output quantization step on every channel, "
+        f"so dropping the bias-add reproduces the golden exactly"
     )
 
 
-@pytest.mark.parametrize(
-    "case_name",
-    [
-        "fully_connected_default_s16",
-        "fully_connected_tail_rows5_cols13_bias_s4",
-    ],
-)
-def test_int_fully_connected_bias_is_nonzero_and_detectable(case_name: str, tmp_path: Path) -> None:
-    header = _generate(case_name, tmp_path)
+@pytest.mark.parametrize("target_cpu", _TARGETS)
+@pytest.mark.parametrize("case_name", ["fully_connected_default_s16", "fully_connected_mve_case_01_s8"])
+def test_int_fully_connected_bias_is_detectable_on_every_channel(
+    case_name: str, target_cpu: str, tmp_path: Path
+) -> None:
+    header = _generate(case_name, tmp_path, target_cpu)
     biases = _int_array(header, "biases")
 
-    assert biases, f"{case_name} emits no bias array"
-    assert any(bias != 0 for bias in biases), f"{case_name} ships an all-zero bias"
-    assert _output_steps(header) >= 1.0, (
-        f"{case_name} bias is below one output quantization step, so dropping "
-        f"the bias-add reproduces the golden exactly"
+    assert biases, f"{case_name} emits no bias array on {target_cpu}"
+    assert all(bias != 0 for bias in biases), f"{case_name} ships a zero bias channel"
+    assert min(_output_steps(header)) >= 1.0, (
+        f"{case_name} has a channel whose bias is below one output quantization "
+        f"step, so dropping the bias-add reproduces that channel exactly"
     )
+
+
+@pytest.mark.parametrize("target_cpu", _TARGETS)
+def test_s8_fully_connected_weight_sum_is_gated_on_mve(target_cpu: str, tmp_path: Path) -> None:
+    """Only an MVE build reads the precomputed kernel sum.
+
+    ``arm_nn_vec_mat_mult_t_s8`` consults the sum in ``ctx->buf`` under
+    ``ARM_MATH_MVEI`` and the bias pointer everywhere else, so a case that
+    folds its bias into the sum on a non-MVE target loses the bias-add.
+    """
+    header = _generate("fully_connected_mve_case_01_s8", tmp_path, target_cpu)
+
+    if target_cpu == "cortex-m55":
+        assert _int_array(header, "weight_sum"), "MVE target emits no precomputed weight sum"
+    else:
+        assert _int_array(header, "weight_sum") is None, (
+            "non-MVE target emits a precomputed weight sum the kernel never reads"
+        )
 
 
 def test_s8_fully_connected_bias_reaches_the_kernel_via_the_weight_sum(tmp_path: Path) -> None:
     """The s8 FC kernel takes bias folded into the precomputed kernel sum.
 
     ``arm_vector_sum_s8`` accumulates the bias into the per-row sum and the
-    kernel is then called with a NULL bias pointer, so a nonzero bias shows up
-    in ``_weight_sum`` rather than in ``_biases``.
+    kernel is then called with a NULL bias pointer.  The header still declares
+    the bias array, because the perf-stream bridge rebuilds the sum on device
+    from it, so the two have to agree.
     """
     from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import vector_sum_s8
 
-    header = _generate("fully_connected_mve_case_01_s8", tmp_path)
+    header = _generate("fully_connected_mve_case_01_s8", tmp_path, "cortex-m55")
 
-    assert _int_array(header, "biases") is None
     emitted = _int_array(header, "weight_sum")
     assert emitted, "s8 FC case emits no precomputed weight sum"
+    declared_bias = _int_array(header, "biases")
+    assert declared_bias, "s8 FC case declares no bias array for the bridge to read"
 
     rows = len(emitted)
     weights = np.asarray(_int_array(header, "weights"), dtype=np.int8).reshape(rows, -1)
@@ -147,6 +183,9 @@ def test_s8_fully_connected_bias_reaches_the_kernel_via_the_weight_sum(tmp_path:
 
     folded_bias = np.asarray(emitted, dtype=np.int64) - bias_free
     assert np.all(folded_bias != 0), "s8 FC weight sum carries no bias contribution"
+    assert np.array_equal(folded_bias, np.asarray(declared_bias, dtype=np.int64)), (
+        "declared bias array disagrees with the bias folded into the weight sum"
+    )
 
 
 @pytest.mark.parametrize("case_name", ["convolve_2x2_dilation_s8", "convolve_int16xint8_dilation_case_01_s16"])
@@ -159,7 +198,7 @@ def test_quantized_dilated_convolve_keeps_a_zero_bias(case_name: str, tmp_path: 
     the generated case cannot carry it.  Guard the carve-out so it stays
     visible instead of quietly widening.
     """
-    header = _generate(case_name, tmp_path)
+    header = _generate(case_name, tmp_path, "cortex-m55")
     biases = _int_array(header, "biases")
 
     assert biases is not None
