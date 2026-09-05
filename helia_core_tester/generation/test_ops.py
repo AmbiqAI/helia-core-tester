@@ -18,6 +18,15 @@ from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filt
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.core.path_layout import generation_report_dir
 from helia_core_tester.generation.ops import get_op_map, get_operator_spec
+from helia_core_tester.generation.reuse import (
+    case_artifacts_present,
+    case_stamp,
+    clear_stamp,
+    generator_version_hash,
+    prune_unlisted_cases,
+    read_stamp,
+    write_stamp,
+)
 from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists, missing_header_symbols
 
 
@@ -200,6 +209,61 @@ def _skip_manifest_entry(
     return entry
 
 
+def _manifest_entry(
+    desc: Dict[str, Any],
+    *,
+    test_dir: Path,
+    generated_tests_dir: Path,
+    cpu: str,
+    reused: bool,
+) -> Dict[str, Any]:
+    return {
+        "name": desc.get("name"),
+        "operator": desc.get("operator"),
+        "family": _descriptor_family(desc),
+        "parity_kind": _descriptor_parity_kind(desc),
+        "activation_dtype": desc.get("activation_dtype"),
+        "weight_dtype": desc.get("weight_dtype"),
+        "resolved_tensor_dtypes": _resolved_tensor_dtypes(desc),
+        "resolved_comparison": _resolved_comparison(desc),
+        "descriptor_relpath": desc.get("_source_relpath"),
+        "suite": _descriptor_suite(desc),
+        "path": str(test_dir),
+        "relative_test_dir": str(test_dir.relative_to(generated_tests_dir)),
+        "tflite": str(test_dir / f"{desc['name']}.tflite"),
+        "c_sources": sorted(p.name for p in test_dir.glob("*.c")),
+        "cpu": cpu,
+        "reused": reused,
+    }
+
+
+def _reused_manifest_entry(
+    test_dir: Path,
+    *,
+    generated_tests_dir: Path,
+    cpu: str,
+) -> Optional[Dict[str, Any]]:
+    """Rebuild a reused case's manifest entry from what is on disk.
+
+    Reading the sidecar back rather than reusing the in-memory descriptor keeps
+    the entry a statement about the tree build and run will actually consume,
+    and fails the reuse closed if the sidecar is unreadable.
+    """
+    try:
+        sidecar = yaml.safe_load((test_dir / "descriptor.yaml").read_text())
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(sidecar, dict) or not sidecar.get("name") or not sidecar.get("operator"):
+        return None
+    return _manifest_entry(
+        sidecar,
+        test_dir=test_dir,
+        generated_tests_dir=generated_tests_dir,
+        cpu=cpu,
+        reused=True,
+    )
+
+
 def generate_test(
     desc: Dict[str, Any],
     out_dir: str,
@@ -360,6 +424,10 @@ def test_generation(test_filters):
 
     # Place models in generated tests root
     generated_count = 0
+    reused_count = 0
+    force_generate = bool(test_filters.get("force_generate"))
+    float_precision_mode = _float_precision_mode(test_filters)
+    version_hash = generator_version_hash()
     manifest_entries: List[Dict[str, Any]] = []
     skipped_entries: List[Dict[str, Any]] = []
     conversion_failures: List[Dict[str, Any]] = []
@@ -434,7 +502,35 @@ def test_generation(test_filters):
                 f"{', '.join(missing_symbols)}"
             )
             continue
+        case_name = str(desc["name"])
+        test_dir = _descriptor_test_dir(Path(top_generated), desc)
+        stamp = case_stamp(
+            desc,
+            case_name=case_name,
+            cpu=target_cpu,
+            suite=suite_mode,
+            float_precision=float_precision_mode,
+            seed=test_filters.get("seed") if test_filters.get("seed") is not None
+            else default_seed_for_case(case_name),
+            version_hash=version_hash,
+        )
+        if (
+            not force_generate
+            and read_stamp(test_dir) == stamp
+            and case_artifacts_present(test_dir, case_name)
+        ):
+            reused_entry = _reused_manifest_entry(
+                test_dir, generated_tests_dir=Path(top_generated), cpu=target_cpu
+            )
+            if reused_entry is not None:
+                manifest_entries.append(reused_entry)
+                reused_count += 1
+                continue
         try:
+            # The stamp goes away before any file is touched and comes back only
+            # once the case is whole, so an interrupted run can never leave a
+            # stamp standing over half-written output.
+            clear_stamp(test_dir)
             generate_test(
                 desc,
                 str(top_generated),
@@ -443,27 +539,16 @@ def test_generation(test_filters):
                 conversion_failures=conversion_failures,
                 generation_failures=generation_failures,
             )
-            test_dir = _descriptor_test_dir(Path(top_generated), desc)
-            tflite_path = test_dir / f"{desc['name']}.tflite"
-            c_sources = sorted([str(p.name) for p in test_dir.glob("*.c")])
-            relative_test_dir = str(test_dir.relative_to(top_generated))
-            manifest_entries.append({
-                "name": desc.get("name"),
-                "operator": desc.get("operator"),
-                "family": _descriptor_family(desc),
-                "parity_kind": _descriptor_parity_kind(desc),
-                "activation_dtype": desc.get("activation_dtype"),
-                "weight_dtype": desc.get("weight_dtype"),
-                "resolved_tensor_dtypes": _resolved_tensor_dtypes(desc),
-                "resolved_comparison": _resolved_comparison(desc),
-                "descriptor_relpath": desc.get("_source_relpath"),
-                "suite": _descriptor_suite(desc),
-                "path": str(test_dir),
-                "relative_test_dir": relative_test_dir,
-                "tflite": str(tflite_path),
-                "c_sources": c_sources,
-                "cpu": target_cpu,
-            })
+            manifest_entries.append(
+                _manifest_entry(
+                    desc,
+                    test_dir=test_dir,
+                    generated_tests_dir=Path(top_generated),
+                    cpu=target_cpu,
+                    reused=False,
+                )
+            )
+            write_stamp(test_dir, stamp)
             generated_count += 1
         except Exception as e:
             print(f"Failed to generate TFLite model for {desc['name']}: {e}")
@@ -491,7 +576,18 @@ def test_generation(test_filters):
         ),
     )
 
-    print(f"Successfully generated {generated_count} TFLite models")
+    produced_count = generated_count + reused_count
+    pruned_count = prune_unlisted_cases(
+        top_generated,
+        {str(entry["relative_test_dir"]) for entry in manifest_entries},
+    )
+    if pruned_count:
+        print(f"Pruned {pruned_count} case director(ies) outside the active filter")
+
+    print(
+        f"Successfully produced {produced_count} test case(s): "
+        f"{generated_count} generated, {reused_count} reused"
+    )
     conversion_failures_path = report_dir / "conversion_failures.json"
     conversion_failures_path.write_text(json.dumps(conversion_failures, indent=2))
     if conversion_failures:
@@ -515,7 +611,7 @@ def test_generation(test_filters):
         print("Capability skips (0)")
 
     manifest_path: Optional[Path] = None
-    if generated_count > 0 or skipped_entries:
+    if produced_count > 0 or skipped_entries:
         manifest_path = _write_manifest_and_cmake(
             manifest_entries,
             skipped_entries,
@@ -540,10 +636,10 @@ def test_generation(test_filters):
     end_time = datetime.now(timezone.utc)
     status = "success"
     if conversion_failures or generation_failures:
-        status = "partial_failure" if generated_count > 0 or skipped_entries else "failed_no_generated_tests"
-    elif generated_count == 0 and skipped_entries:
+        status = "partial_failure" if produced_count > 0 or skipped_entries else "failed_no_generated_tests"
+    elif produced_count == 0 and skipped_entries:
         status = "skipped_only"
-    elif generated_count == 0:
+    elif produced_count == 0:
         status = "failed_no_generated_tests"
 
     summary = {
@@ -571,12 +667,16 @@ def test_generation(test_filters):
             "limit": test_filters.get("limit"),
             "seed": test_filters.get("seed"),
             "suite": suite_mode,
-            "float_precision": _float_precision_mode(test_filters),
+            "float_precision": float_precision_mode,
+            "force_generate": force_generate,
         },
         "counts": {
             "descriptors_total": len(descriptors),
             "descriptors_after_filters": len(filtered_descriptors),
             "generated": generated_count,
+            "reused": reused_count,
+            "cases_total": produced_count,
+            "pruned": pruned_count,
             "skipped_capability": sum(
                 1 for entry in skipped_entries if entry.get("status") == "skipped_capability"
             ),
@@ -595,7 +695,7 @@ def test_generation(test_filters):
         },
     }
     (report_dir / "generation_summary.json").write_text(json.dumps(summary, indent=2))
-    assert generated_count > 0 or skipped_entries, "No TFLite models were generated"
+    assert produced_count > 0 or skipped_entries, "No TFLite models were generated"
     assert not conversion_failures, (
         f"Conversion failures occurred for {len(conversion_failures)} descriptor(s): "
         f"{', '.join(str(f.get('name')) for f in conversion_failures)}"
@@ -617,6 +717,8 @@ def _write_manifest_and_cmake(
 
     manifest = {
         "generated_count": len(entries),
+        "regenerated_count": sum(1 for entry in entries if not entry.get("reused")),
+        "reused_count": sum(1 for entry in entries if entry.get("reused")),
         "skipped_count": len(skipped_entries),
         "families": sorted({str(entry["family"]) for entry in [*entries, *skipped_entries]}),
         "parity_kinds": sorted({str(entry["parity_kind"]) for entry in [*entries, *skipped_entries]}),

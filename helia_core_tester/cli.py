@@ -123,6 +123,7 @@ def generate(
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision filter: f16, f32, or both"),
+    force_generate: bool = typer.Option(False, "--force-generate", help="Regenerate every case even when its reuse stamp still matches"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -142,6 +143,7 @@ def generate(
         seed=seed,
         suite=suite,
         float_precision=float_precision,
+        force_generate=force_generate,
     )
     if config.plan:
         _print_plan_item(GenerateStep(config).plan())
@@ -253,6 +255,7 @@ def full(
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Do not stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn coverage collection/reporting"),
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Enable Cortex-M55 float MVE paths during coverage builds"),
+    force_generate: bool = typer.Option(False, "--force-generate", help="Regenerate every case even when its reuse stamp still matches"),
     skip_generation: bool = typer.Option(False, "--skip-generation", help="Skip TFLite generation"),
     skip_build: bool = typer.Option(False, "--skip-build", help="Skip FVP build"),
     skip_run: bool = typer.Option(False, "--skip-run", help="Skip FVP test execution"),
@@ -285,6 +288,7 @@ def full(
         fail_fast=not no_fail_fast,
         coverage=coverage,
         coverage_mve_float=coverage_mve_float,
+        force_generate=force_generate,
         skip_generation=skip_generation,
         skip_build=skip_build,
         skip_run=skip_run,
