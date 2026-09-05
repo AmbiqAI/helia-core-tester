@@ -723,7 +723,7 @@ hint:
 # arm_lstm_unidirectional_f32 or arm_lstm_unidirectional_f16 (the f16 block is a
 # @copydoc of the f32 one), so nothing about a non-finite result is contracted and no
 # output value may be pinned. The case asserts ARM_CMSIS_NN_SUCCESS, no fault and no
-# hang, plus exact values on every output lane the token does not reach.
+# hang, plus the case's float tolerance on every lane the token does not reach.
 #
 # One token per case at flat index 0, which is batch row 0 at t = 0. The recurrence
 # carries whatever that produces into every later step of that row, so the mask covers

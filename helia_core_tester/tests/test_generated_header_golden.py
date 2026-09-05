@@ -197,11 +197,6 @@ ROUTED_CASES = [
     # would make their .c text a property of the machine rather than of this repo. The
     # streaming and single-shot paths share the sampling and the header template, so the
     # tensors and goldens under test are the same ones.
-    #
-    # These three fixtures were generated at 4b5fcbe and then had the <math.h> include
-    # this change adds to the three header templates inserted by hand; that include is
-    # the only difference between the emitted text before and after the change, and the
-    # .c files are byte-identical.
     ("lstm_unidirectional_float_stream_f32", "lstm_unidirectional"),
     ("gru_unidirectional_float_stream_f32", "gru_unidirectional"),
     ("svdf_float_default_f32", "svdf"),

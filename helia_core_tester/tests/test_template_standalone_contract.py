@@ -769,6 +769,35 @@ def test_lstm_and_svdf_keep_specialized_shared_validation_contracts() -> None:
     assert "HELIA_VALIDATE_OUTPUTS(" in svdf
 
 
+def test_single_shot_recurrent_float_templates_validate_the_whole_output() -> None:
+    # These two render one of two branches depending on a generation-time probe of the
+    # configured ns-cmsis-nn checkout, so no golden fixture pins their text; the size
+    # argument is asserted here instead. Anything narrower than dst_size would leave
+    # output elements uncompared while the case still reported a pass.
+    lstm_f32 = (
+        _templates_root()
+        / "LSTMFunctions"
+        / "lstm_unidirectional"
+        / "lstm_unidirectional_f32.c.j2"
+    ).read_text()
+    gru = (
+        _templates_root()
+        / "LSTMFunctions"
+        / "gru_unidirectional"
+        / "gru_unidirectional.c.j2"
+    ).read_text()
+
+    call_site = (
+        "{{ validation_outputs(validation_mode_token | default(\"FLOAT\"), "
+        "validation_tolerance | default(1), dst_size, "
+        "validation_report_limit | default(8)) }}"
+    )
+    assert lstm_f32.count("validation_outputs(") == 1
+    assert call_site in lstm_f32
+    assert gru.count("validation_outputs(") == 1
+    assert call_site in gru
+
+
 def test_quantize_and_dequantize_render_only_requested_validation_helpers() -> None:
     quantize = _render(
         "QuantizationFunctions/quantize/quantize.c.j2",

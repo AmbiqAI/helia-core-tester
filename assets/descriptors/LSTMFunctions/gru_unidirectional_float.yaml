@@ -1158,6 +1158,8 @@ hint:
 # arm_gru_unidirectional_f32 nor arm_gru_unidirectional_f16 carries a NaN/Inf note in
 # Include/arm_nnfunctions_flt.h, so no leg is contracted. Placement and the batch-row
 # split are the LSTM design; see the comment above the LSTM sweep cases.
+#
+# All six cases set reset_after true, so the pre-reset gate path is unswept.
 operator: GRUUnidirectional
 name: gru_unidirectional_float_nonfinite_nan_f32
 suite: float
