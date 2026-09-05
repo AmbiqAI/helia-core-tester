@@ -872,3 +872,737 @@ padding: VALID
 use_bias: false
 hint:
   weight_format: NT_N_PACKED
+---
+# Direct small-input-channel float kernel (ns-cmsis-nn#417): input_c < one vector, lanes are
+# output x positions. Width 30 at stride 1 gives a left edge group, contiguous interior groups
+# (VLD1) and a partial tail group for both the 4-lane f32 and 8-lane f16 kernels.
+operator: Convolve
+name: convolve_float_small_c1_k3_same_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 6, 30, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+# Width 61 at stride 2: edge, VLD2 interior groups and a tail for both lane widths.
+operator: Convolve
+name: convolve_float_small_c1_k3_same_stride2_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 5, 61, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [2, 2]
+padding: SAME
+use_bias: true
+---
+# Stride 3 has no contiguous load form: interior groups gather, edges and the last group predicate.
+operator: Convolve
+name: convolve_float_small_c1_k3_same_stride3_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 4, 70, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [3, 3]
+padding: SAME
+use_bias: true
+---
+# Stride 4: VLD4 interior groups in f32, gathered interior groups in f16.
+operator: Convolve
+name: convolve_float_small_c1_k3_same_stride4_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 5, 77, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [4, 4]
+padding: SAME
+use_bias: true
+---
+# Partial output-channel group (5 = 4 + 1 in f32, 2 + 2 + 1 in f16) with a right edge group.
+operator: Convolve
+name: convolve_float_small_c1_k3_same_stride4_oc5_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 5, 45, 1]
+filter_shape: [3, 3, 1, 5]
+strides: [4, 4]
+padding: SAME
+use_bias: true
+---
+# Single output channel, no bias: every group is a one-channel partial group.
+operator: Convolve
+name: convolve_float_small_c1_k3_same_oc1_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 5, 30, 1]
+filter_shape: [3, 3, 1, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: false
+---
+# Batch loop of the direct kernel with a partial channel group.
+operator: Convolve
+name: convolve_float_small_c1_k3_same_batch2_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [2, 5, 30, 1]
+filter_shape: [3, 3, 1, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+# Dilation 2 widens the lane-group span and the SAME padding (2 columns each side).
+operator: Convolve
+name: convolve_float_small_c1_k3_same_dilated_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 6, 30, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [1, 1]
+padding: SAME
+dilation: [2, 2]
+use_bias: true
+---
+# NT_N_PACKED weights through the direct kernel: lane-strided weight reads, full channel blocks.
+operator: Convolve
+name: convolve_float_small_c1_k3_same_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 6, 30, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+---
+# Packed weights with a partial last block (5 channels), no bias, VLD2 interior groups.
+operator: Convolve
+name: convolve_float_small_c1_k3_same_stride2_oc5_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 5, 61, 1]
+filter_shape: [3, 3, 1, 5]
+strides: [2, 2]
+padding: SAME
+use_bias: false
+hint:
+  weight_format: NT_N_PACKED
+---
+# input_c > 1 takes the gathered channel loop in both edge and interior groups.
+operator: Convolve
+name: convolve_float_small_c2_k3_same_stride2_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 6, 29, 2]
+filter_shape: [3, 3, 2, 8]
+strides: [2, 2]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_small_c3_k3_same_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 6, 30, 3]
+filter_shape: [3, 3, 3, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+# input_c 5 and 7 stay below the 8-lane f16 vector (direct kernel) and above the 4-lane f32 one
+# (packed-patch GEMM).
+operator: Convolve
+name: convolve_float_small_c5_k3_same_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 6, 30, 5]
+filter_shape: [3, 3, 5, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_small_c7_k3_same_stride2_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 5, 61, 7]
+filter_shape: [3, 3, 7, 5]
+strides: [2, 2]
+padding: SAME
+use_bias: false
+---
+# Below the patch-GEMM output-channel floor with a full input vector: the generic per-output loop.
+operator: Convolve
+name: convolve_float_generic_oc3_valid_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 7, 7, 8]
+filter_shape: [3, 3, 8, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+---
+# Generic loop with NT_N_PACKED weights: one predicated weight vector per (tap, channel).
+operator: Convolve
+name: convolve_float_generic_oc3_valid_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 7, 7, 8]
+filter_shape: [3, 3, 8, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+---
+# Four output positions, below the patch-GEMM position floor; full packed block, no bias.
+operator: Convolve
+name: convolve_float_generic_pos4_valid_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 4, 4, 8]
+filter_shape: [3, 3, 8, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: false
+hint:
+  weight_format: NT_N_PACKED
+---
+# Packed-patch GEMM over NT_N_PACKED weights for a 3x3 kernel.
+operator: Convolve
+name: convolve_float_patch_gemm_packed_valid_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 8, 8, 8]
+filter_shape: [3, 3, 8, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+---
+operator: Convolve
+name: convolve_float_small_c1_k3_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 6, 30, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_small_c1_k3_same_stride2_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 5, 61, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [2, 2]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_small_c1_k3_same_stride3_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 4, 70, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [3, 3]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_small_c1_k3_same_stride4_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 5, 77, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [4, 4]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_small_c1_k3_same_stride4_oc5_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 5, 45, 1]
+filter_shape: [3, 3, 1, 5]
+strides: [4, 4]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_small_c1_k3_same_oc1_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 5, 30, 1]
+filter_shape: [3, 3, 1, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: false
+---
+operator: Convolve
+name: convolve_float_small_c1_k3_same_batch2_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [2, 5, 30, 1]
+filter_shape: [3, 3, 1, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_small_c1_k3_same_dilated_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 6, 30, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [1, 1]
+padding: SAME
+dilation: [2, 2]
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_small_c1_k3_same_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 6, 30, 1]
+filter_shape: [3, 3, 1, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+---
+operator: Convolve
+name: convolve_float_small_c1_k3_same_stride2_oc5_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 5, 61, 1]
+filter_shape: [3, 3, 1, 5]
+strides: [2, 2]
+padding: SAME
+use_bias: false
+hint:
+  weight_format: NT_N_PACKED
+---
+operator: Convolve
+name: convolve_float_small_c2_k3_same_stride2_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 6, 29, 2]
+filter_shape: [3, 3, 2, 8]
+strides: [2, 2]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_small_c3_k3_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 6, 30, 3]
+filter_shape: [3, 3, 3, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+# Measured floor 1.06x the FP16 default on the m55 f16 fallback leg (scalar fp16 accumulation);
+# the MVE direct kernel accumulates in fp32 and stays below 0.5x. 2e-3/2e-3 gives ~1.9x margin.
+comparison:
+  atol: 0.002
+  rtol: 0.002
+---
+operator: Convolve
+name: convolve_float_small_c5_k3_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 6, 30, 5]
+filter_shape: [3, 3, 5, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+# Measured floor 1.49x the FP16 default on the m55 f16 fallback leg (scalar fp16 accumulation over
+# 45 terms); the MVE direct kernel stays below 0.5x. 3e-3/3e-3 gives ~2x margin.
+comparison:
+  atol: 0.003
+  rtol: 0.003
+---
+operator: Convolve
+name: convolve_float_small_c7_k3_same_stride2_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 5, 61, 7]
+filter_shape: [3, 3, 7, 5]
+strides: [2, 2]
+padding: SAME
+use_bias: false
+# Measured floor 1.37x the FP16 default on the m55 f16 fallback leg (63-term scalar fp16
+# accumulation); 3e-3/3e-3 gives ~2.2x margin.
+comparison:
+  atol: 0.003
+  rtol: 0.003
+---
+operator: Convolve
+name: convolve_float_generic_oc3_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 7, 7, 8]
+filter_shape: [3, 3, 8, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+# Measured on the FVP: the m55 f16 fallback leg (ARM_MATH_AUTOVECTORIZE, scalar fp16 accumulation
+# over the 72-term patch) reaches 1.79x the FP16 default; the MVE build stays at 0.60x. 4e-3/4e-3
+# gives ~2.2x margin over the fallback floor.
+comparison:
+  atol: 0.004
+  rtol: 0.004
+---
+operator: Convolve
+name: convolve_float_generic_oc3_valid_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 7, 7, 8]
+filter_shape: [3, 3, 8, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+# Measured on the FVP at the shipped flags: the NT_N_PACKED generic loop accumulates the 72-term
+# patch in fp16 lanes and reaches 1.54x the FP16 default (worst diff 3.9e-3 at |exp|=1.53).
+# 3e-3/3e-3 gives ~1.9x margin over the measured floor.
+comparison:
+  atol: 0.003
+  rtol: 0.003
+---
+operator: Convolve
+name: convolve_float_generic_pos4_valid_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 4, 4, 8]
+filter_shape: [3, 3, 8, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: false
+hint:
+  weight_format: NT_N_PACKED
+# Measured floor 1.09x the FP16 default (fp16 lane accumulation over 72 terms); 2e-3/2e-3 gives
+# ~1.8x margin.
+comparison:
+  atol: 0.002
+  rtol: 0.002
+---
+operator: Convolve
+name: convolve_float_patch_gemm_packed_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 8, 8, 8]
+filter_shape: [3, 3, 8, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+# Measured floor 1.47x the FP16 default (packed-patch GEMM, 72-term fp16 accumulation);
+# 3e-3/3e-3 gives ~2x margin. Same reasoning as convolve_float_patch_gemm_f16 above.
+comparison:
+  atol: 0.003
+  rtol: 0.003
+---
+# SAME padding through the generic per-output loop: padded taps skip both row and column.
+operator: Convolve
+name: convolve_float_generic_oc3_same_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 7, 7, 8]
+filter_shape: [3, 3, 8, 3]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+# Padded taps in the NT_N_PACKED generic loop, no bias.
+operator: Convolve
+name: convolve_float_generic_oc3_same_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 7, 7, 8]
+filter_shape: [3, 3, 8, 3]
+strides: [1, 1]
+padding: SAME
+use_bias: false
+hint:
+  weight_format: NT_N_PACKED
+---
+operator: Convolve
+name: convolve_float_generic_oc3_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 7, 7, 8]
+filter_shape: [3, 3, 8, 3]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+# Measured floor 1.79x the FP16 default on the m55 f16 fallback leg (scalar fp16 accumulation over
+# 72 terms), 0.81x with MVE. 4e-3/4e-3 gives ~2.2x margin, as for the VALID twin.
+comparison:
+  atol: 0.004
+  rtol: 0.004
+---
+operator: Convolve
+name: convolve_float_generic_oc3_same_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 7, 7, 8]
+filter_shape: [3, 3, 8, 3]
+strides: [1, 1]
+padding: SAME
+use_bias: false
+hint:
+  weight_format: NT_N_PACKED
+# Measured floor 2.14x the FP16 default on the m55 f16 fallback leg and 1.67x with the MVE packed
+# loop (72-term fp16 accumulation). 5e-3/5e-3 gives ~2.3x margin over the fallback floor.
+comparison:
+  atol: 0.005
+  rtol: 0.005
