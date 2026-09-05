@@ -349,3 +349,19 @@ use_bias: true
 comparison:
   atol: 0.002
   rtol: 0.002
+
+# FullyConnected has no non-finite cover. arm_fully_connected_f32 and
+# arm_fully_connected_f16 (Include/arm_nnfunctions_flt.h:753 and :1818, the f16 entry a
+# @copydoc of the f32 one) say nothing about NaN or Inf, so the policy would have to be
+# mask -- but every output element of a fully connected layer is a dot product over the
+# whole input row, so one swept token reaches all of them and the mask covers 100% of
+# the output. A case that masks every lane asserts nothing beyond SUCCESS and is
+# rejected at generation time.
+#
+# A second input row would leave finite lanes, and the descriptors already accept a
+# batch: fully_connected_float_vector8_f32 asks for input_shape [2, 16] and
+# fully_connected_float_k64_n13_batch2_f32 for [2, 64]. The shared Keras-to-TFLite
+# conversion drops the batch -- both generate input_dims.n = 1 over a single input
+# row, so the batch2 case covers the K 64 row groups of the NT_T matmul and not a
+# batch dimension -- and the batch cannot be reached from a descriptor alone.
+# See AmbiqAI/helia-core-tester#74.

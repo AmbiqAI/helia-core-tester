@@ -374,7 +374,17 @@ class OpTransposeConv(OperationBase):
 
             input_data = self._sample_uniform(input_shape, dtype=float_dtype)
             interpreter_input_dtype = interpreter.get_input_details()[0]['dtype']
-            output_data = self.run_inference(str(tflite_path), input_data.astype(interpreter_input_dtype)).astype(float_dtype)
+
+            def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
+                return self.run_inference(
+                    str(tflite_path), operands[0].astype(_in_dtype)
+                ).astype(_dtype)
+
+            output_data = float_reference([input_data])
+
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=float_reference, inputs=[input_data]
+            )
 
             weights_array_str = builder.format_array_as_c_literal(weights)
             biases_array_str = builder.format_array_as_c_literal(biases) if has_biases else ""
@@ -427,6 +437,7 @@ class OpTransposeConv(OperationBase):
                 'transpose_activation_min_literal': builder.format_float_literal(transpose_conv_params['activation_min']),
                 'transpose_activation_max_literal': builder.format_float_literal(transpose_conv_params['activation_max']),
             }
+            context.update(nonfinite_context)
             includes_api_dir = output_dir / "includes"
             includes_api_dir.mkdir(parents=True, exist_ok=True)
             

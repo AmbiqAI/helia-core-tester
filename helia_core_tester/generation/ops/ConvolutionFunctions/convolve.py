@@ -585,7 +585,13 @@ class OpConvolve(OperationBase):
         if float_kernel:
             input_q = np.asarray(input_data, dtype=float_dtype)
             interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
-            output_data = self.run_inference(str(tflite_path), input_q.astype(interpreter_input_dtype)).astype(float_dtype)
+
+            def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
+                return self.run_inference(
+                    str(tflite_path), operands[0].astype(_in_dtype)
+                ).astype(_dtype)
+
+            output_data = float_reference([input_q])
         else:
             input_scale = float(self._quant_param_scalar(quant_params['input'], 'scale', 1.0))
             input_zp = int(self._quant_param_scalar(quant_params['input'], 'zero_point', 0))
@@ -627,6 +633,13 @@ class OpConvolve(OperationBase):
                 weight_format_macro = "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"
             elif weight_format not in {"STANDARD", "ARM_NN_WEIGHT_FORMAT_STANDARD"}:
                 raise ValueError(f"Unsupported Convolve weight_format hint: {weight_format}")
+
+        if float_kernel:
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=float_reference, inputs=[input_q]
+            )
+        else:
+            nonfinite_context = {}
 
         # Format arrays
         weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
@@ -694,6 +707,7 @@ class OpConvolve(OperationBase):
             context['conv_activation_max_literal'] = builder.format_float_literal(conv_params['activation_max'])
         else:
             context['quant_params'] = quant_params_dict
+        context.update(nonfinite_context)
 
         # Render templates
         includes_api_dir = output_dir / "includes"

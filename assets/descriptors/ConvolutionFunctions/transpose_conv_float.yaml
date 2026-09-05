@@ -201,3 +201,138 @@ padding: SAME
 use_bias: true
 hint:
   kernel_variant: wrapper
+---
+# Non-finite cover for the float transpose convolution kernels. arm_transpose_conv_f32
+# and arm_transpose_conv_f16 (Include/arm_nnfunctions_flt.h:998 and :2010, the f16 entry
+# a @copydoc of the f32 one) say nothing about NaN or Inf, so nonfinite_policy is mask:
+# the output patch the token scatters into is don't-care, and the case asserts SUCCESS,
+# no fault, no hang and exact values everywhere else.
+#
+# Transpose convolution scatters one input element over a kernel-sized output patch
+# instead of gathering, so the token at input element 0 lands on a 3x3 corner patch
+# across all four output channels: 36 of 1024 output elements are masked and 96.5% stay
+# asserted strictly.
+#
+# One token per case: overlapping scatter patches accumulate, so all three tokens in one
+# case could still meet +Inf and -Inf in the same output accumulator.
+#
+# The f32 reference clamps its output to [lowest float, max float] when the fused
+# activation is NONE, so an f32 +/-Inf token leaves a finite reference lane where the
+# f16 leg leaves an infinity. That does not change what the case asserts: the don't-care
+# set is measured reachability, not reference non-finiteness, so the scatter patch is
+# masked either way and the golden never claims ns-cmsis-nn saturates the way
+# TensorFlow Lite does.
+---
+operator: TransposeConv
+name: transpose_conv_float_nonfinite_nan_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 8, 8, 2]
+filter_shape: [3, 3, 4, 2]
+strides: [2, 2]
+padding: SAME
+use_bias: true
+input_mode: nonfinite_sweep
+nonfinite_tokens: [nan]
+nonfinite_policy: mask
+---
+operator: TransposeConv
+name: transpose_conv_float_nonfinite_inf_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 8, 8, 2]
+filter_shape: [3, 3, 4, 2]
+strides: [2, 2]
+padding: SAME
+use_bias: true
+input_mode: nonfinite_sweep
+nonfinite_tokens: [inf]
+nonfinite_policy: mask
+---
+operator: TransposeConv
+name: transpose_conv_float_nonfinite_neginf_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 8, 8, 2]
+filter_shape: [3, 3, 4, 2]
+strides: [2, 2]
+padding: SAME
+use_bias: true
+input_mode: nonfinite_sweep
+nonfinite_tokens: [-inf]
+nonfinite_policy: mask
+---
+operator: TransposeConv
+name: transpose_conv_float_nonfinite_nan_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 8, 8, 2]
+filter_shape: [3, 3, 4, 2]
+strides: [2, 2]
+padding: SAME
+use_bias: true
+input_mode: nonfinite_sweep
+nonfinite_tokens: [nan]
+nonfinite_policy: mask
+---
+operator: TransposeConv
+name: transpose_conv_float_nonfinite_inf_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 8, 8, 2]
+filter_shape: [3, 3, 4, 2]
+strides: [2, 2]
+padding: SAME
+use_bias: true
+input_mode: nonfinite_sweep
+nonfinite_tokens: [inf]
+nonfinite_policy: mask
+---
+operator: TransposeConv
+name: transpose_conv_float_nonfinite_neginf_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 8, 8, 2]
+filter_shape: [3, 3, 4, 2]
+strides: [2, 2]
+padding: SAME
+use_bias: true
+input_mode: nonfinite_sweep
+nonfinite_tokens: [-inf]
+nonfinite_policy: mask
