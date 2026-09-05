@@ -228,7 +228,7 @@ def test_mask_policy_marks_the_nonfinite_reference_lanes_and_zeroes_them() -> No
     emitted, context = op.apply_nonfinite_policy(reference)
 
     assert context["nonfinite_masked_lanes"] == 3
-    assert [int(v) for v in context["nonfinite_mask_array"].replace(",", " ").split()] == [1, 1, 1, 0]
+    assert [int(v) for v in context["nonfinite_mask_array_str"].replace(",", " ").split()] == [1, 1, 1, 0]
     # The header must stay finite-only: the masked entries are written as zero.
     assert emitted.tolist() == [0.0, 0.0, 0.0, 1.5]
     assert emitted.dtype == np.float32

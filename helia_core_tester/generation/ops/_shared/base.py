@@ -222,7 +222,7 @@ class OperationBase(ABC):
         masked_golden = np.where(mask, output_data.dtype.type(0.0), output_data)
         self._nonfinite_policy_applied = True
         return masked_golden, {
-            "nonfinite_mask_array": TemplateContextBuilder.format_array_as_c_literal(
+            "nonfinite_mask_array_str": TemplateContextBuilder.format_array_as_c_literal(
                 mask.astype(np.uint8)
             ),
             "nonfinite_masked_lanes": int(mask.sum()),
