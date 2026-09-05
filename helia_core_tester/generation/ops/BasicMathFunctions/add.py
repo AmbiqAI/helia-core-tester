@@ -86,16 +86,15 @@ class OpAdd(BinaryBasicMathBase):
                 'output_c_type': 'int16_t',
                 'float_kernel': False,
             }
-        elif activation_dtype == 'FP32':
-            return {
-                'kernel_fn': 'arm_elementwise_add_f32',
-                'input_c_type': 'float',
-                'output_c_type': 'float',
-                'float_kernel': True,
-            }
-        elif activation_dtype == 'FP16':
+        elif activation_dtype in ('FP32', 'FP16'):
             hint = self.desc.get("hint", {})
-            if str(hint.get("kernel_variant", "")).lower() == "legacy_fp16":
+            legacy_fp16 = activation_dtype == 'FP16' and str(hint.get("kernel_variant", "")).lower() == "legacy_fp16"
+            # Opt-in only: un-hinted mismatched shapes keep the materialised-broadcast
+            # flat call that add_float_{channel,scalar}_broadcast_* already pin.
+            float_broadcast = self._float_broadcast_call(auto_on_shape_mismatch=False)
+            if legacy_fp16 and float_broadcast:
+                raise ValueError("hint.kernel_variant legacy_fp16 has no broadcast entry point")
+            if legacy_fp16:
                 return {
                     'kernel_fn': 'arm_elementwise_add_fp16',
                     'input_c_type': 'float16_t',
@@ -103,12 +102,15 @@ class OpAdd(BinaryBasicMathBase):
                     'float_kernel': True,
                     'legacy_fp16_kernel': True,
                 }
+            suffix = 'f32' if activation_dtype == 'FP32' else 'f16'
+            c_type = 'float' if activation_dtype == 'FP32' else 'float16_t'
             return {
-                'kernel_fn': 'arm_elementwise_add_f16',
-                'input_c_type': 'float16_t',
-                'output_c_type': 'float16_t',
+                'kernel_fn': f"arm_elementwise_add_broadcast_{suffix}" if float_broadcast else f"arm_elementwise_add_{suffix}",
+                'input_c_type': c_type,
+                'output_c_type': c_type,
                 'float_kernel': True,
                 'legacy_fp16_kernel': False,
+                'float_broadcast': float_broadcast,
             }
         else:
             raise NotImplementedError(f"Unsupported Add dtype: {activation_dtype}")
@@ -163,8 +165,10 @@ class OpAdd(BinaryBasicMathBase):
                 activation_min,
                 activation_max,
             ).astype(float_dtype)
-            input1_q = np.broadcast_to(input1_q, output_shape).astype(float_dtype, copy=True)
-            input2_q = np.broadcast_to(input2_q, output_shape).astype(float_dtype, copy=True)
+            if not kernel_info.get("float_broadcast"):
+                # The flat kernel sees the broadcast already materialised.
+                input1_q = np.broadcast_to(input1_q, output_shape).astype(float_dtype, copy=True)
+                input2_q = np.broadcast_to(input2_q, output_shape).astype(float_dtype, copy=True)
             activation_min_literal = builder.format_float_literal(activation_min)
             activation_max_literal = builder.format_float_literal(activation_max)
             mult1 = shift1 = mult2 = shift2 = output_mult = output_shift = left_shift = 0
@@ -281,6 +285,8 @@ class OpAdd(BinaryBasicMathBase):
             context["out_activation_min_literal"] = activation_min_literal
             context["out_activation_max_literal"] = activation_max_literal
             context["validation_mode"] = "float"
+            if kernel_info.get("float_broadcast"):
+                context["float_broadcast"] = True
         
         cmake_context = {
             'name': name,

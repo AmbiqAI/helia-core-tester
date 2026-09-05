@@ -67,19 +67,18 @@ class OpMul(BinaryBasicMathBase):
                 'output_c_type': 'int16_t',
                 'float_kernel': False,
             }
-        elif activation_dtype == 'FP32':
+        elif activation_dtype in ('FP32', 'FP16'):
+            # Opt-in only: un-hinted mismatched shapes keep the materialised-broadcast
+            # flat call that mul_float_{channel,scalar}_broadcast_* already pin.
+            float_broadcast = self._float_broadcast_call(auto_on_shape_mismatch=False)
+            suffix = 'f32' if activation_dtype == 'FP32' else 'f16'
+            c_type = 'float' if activation_dtype == 'FP32' else 'float16_t'
             return {
-                'kernel_fn': 'arm_elementwise_mul_f32',
-                'input_c_type': 'float',
-                'output_c_type': 'float',
+                'kernel_fn': f"arm_elementwise_mul_broadcast_{suffix}" if float_broadcast else f"arm_elementwise_mul_{suffix}",
+                'input_c_type': c_type,
+                'output_c_type': c_type,
                 'float_kernel': True,
-            }
-        elif activation_dtype == 'FP16':
-            return {
-                'kernel_fn': 'arm_elementwise_mul_f16',
-                'input_c_type': 'float16_t',
-                'output_c_type': 'float16_t',
-                'float_kernel': True,
+                'float_broadcast': float_broadcast,
             }
         else:
             raise NotImplementedError(f"Unsupported Mul dtype: {activation_dtype}")
@@ -133,8 +132,10 @@ class OpMul(BinaryBasicMathBase):
                 activation_min,
                 activation_max,
             ).astype(float_dtype)
-            input1_q = np.broadcast_to(input1_q, output_shape).astype(float_dtype, copy=True)
-            input2_q = np.broadcast_to(input2_q, output_shape).astype(float_dtype, copy=True)
+            if not kernel_info.get("float_broadcast"):
+                # The flat kernel sees the broadcast already materialised.
+                input1_q = np.broadcast_to(input1_q, output_shape).astype(float_dtype, copy=True)
+                input2_q = np.broadcast_to(input2_q, output_shape).astype(float_dtype, copy=True)
             activation_min_literal = builder.format_float_literal(activation_min)
             activation_max_literal = builder.format_float_literal(activation_max)
             input1_zp = input2_zp = output_zp = output_mult = output_shift = 0
@@ -227,6 +228,8 @@ class OpMul(BinaryBasicMathBase):
             context["out_activation_min_literal"] = activation_min_literal
             context["out_activation_max_literal"] = activation_max_literal
             context["validation_mode"] = "float"
+            if kernel_info.get("float_broadcast"):
+                context["float_broadcast"] = True
         
         cmake_context = {
             'name': name,
