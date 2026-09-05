@@ -277,15 +277,6 @@ def write_stamp(test_dir: Path, stamp: str) -> None:
     (test_dir / STAMP_FILENAME).write_text(json.dumps(record, sort_keys=True) + "\n")
 
 
-def clear_stamp(test_dir: Path) -> None:
-    """Invalidate a case before regenerating it.
-
-    A crash partway through regeneration must not leave the previous run's
-    stamp standing over half-written files.
-    """
-    (test_dir / STAMP_FILENAME).unlink(missing_ok=True)
-
-
 def reset_case_dir(test_dir: Path) -> None:
     """Empty a case directory so regeneration starts from nothing.
 

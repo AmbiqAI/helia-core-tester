@@ -108,10 +108,11 @@ def test_stamp_round_trip_and_invalidation(tmp_path: Path) -> None:
     assert reuse.case_reusable(case_dir, "abc")
     assert not reuse.case_reusable(case_dir, "a-different-stamp")
 
-    reuse.clear_stamp(case_dir)
+    reuse.reset_case_dir(case_dir)
+    assert not case_dir.exists()
     assert reuse.read_stamp(case_dir) is None
     assert not reuse.case_reusable(case_dir, "abc")
-    reuse.clear_stamp(case_dir)  # idempotent
+    reuse.reset_case_dir(case_dir)  # idempotent
 
 
 @pytest.mark.parametrize(
