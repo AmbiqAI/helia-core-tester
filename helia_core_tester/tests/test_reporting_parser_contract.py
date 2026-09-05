@@ -507,3 +507,42 @@ def test_parser_fails_a_masked_case_that_faults_or_times_out() -> None:
     )
     assert bad_status.status == reporting_models.TestStatus.FAIL
     assert bad_status.error_type == "api_error"
+
+
+def test_parser_keeps_the_verdict_lines_past_the_truncation_cap() -> None:
+    # A multi-output case emits enough per-element lines on its own to exhaust the
+    # retained-line budget, which would otherwise cut the capture before the
+    # summaries and the failure count that carry the verdict.
+    parser = reporting_parser.TestResultParser()
+    body = []
+    for tensor in range(3):
+        for lane in range(20):
+            body.append(
+                f"Mismatch[{tensor * 100 + lane}]: exp=1.234000 got=1.235000 "
+                "(diff=0.001000, tol=0.000617)"
+            )
+        body.append("HELIA_MASKED_LANES: 4 of 1024")
+        body.append(
+            f"HELIA_FLOAT_MAXDIFF maxdiff=1.0000000{tensor}e-03 maxfrac=1.62074{tensor} n=1024"
+        )
+    body.append("HELIA_NONFINITE_MISMATCHES n=2")
+    body.append("60 Failures")
+    output = "\n".join(body) + "\n"
+
+    result = parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("depthwise_conv_float_nonfinite_nan_f16.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+
+    assert "... (truncated)" in result.output_lines
+    assert "60 Failures" in result.output_lines
+    assert "HELIA_NONFINITE_MISMATCHES n=2" in result.output_lines
+    assert result.output_lines.count("HELIA_MASKED_LANES: 4 of 1024") == 3
+    for tensor in range(3):
+        assert (
+            f"HELIA_FLOAT_MAXDIFF maxdiff=1.0000000{tensor}e-03 maxfrac=1.62074{tensor} n=1024"
+            in result.output_lines
+        )

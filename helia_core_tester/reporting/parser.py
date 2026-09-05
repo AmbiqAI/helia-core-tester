@@ -3,6 +3,7 @@
 import math
 import re
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
@@ -12,7 +13,16 @@ from helia_core_tester.reporting.models import TestResult, TestStatus
 
 class TestResultParser:
     """Parser for standalone failure-count output with legacy Unity fallback."""
-    
+
+    # Once-per-case verdict lines: they close out the output, so a truncated
+    # capture keeps them even when the per-element body is cut.
+    SUMMARY_LINE_PREFIXES = (
+        'HELIA_FLOAT_MAXDIFF',
+        'HELIA_MASKED_LANES',
+        'HELIA_NONFINITE_MISMATCHES',
+    )
+    failure_count_line_pattern = re.compile(r'^\d+\s+Failures$', re.IGNORECASE)
+
     def __init__(self):
         self.test_start_pattern = re.compile(r'Running test: (.+)')
         self.test_pass_pattern = re.compile(r'(.+):test__([^:]+):PASS')
@@ -362,9 +372,16 @@ class TestResultParser:
         `Mismatch[i]: exp=... got=...` lines print ahead of everything else and
         carry the failing lane index, which is the only way to tell a kernel
         defect from a tolerance artefact.
+
+        The line cap bounds the per-element body, which is a debugging aid, but
+        it must not bound the verdict: a multi-output case emits enough
+        Mismatch[] lines on its own to push the HELIA_* summaries and the
+        failure count past the cap, so those are re-appended after the
+        truncation marker instead of being dropped with the rest of the tail.
         """
         relevant = []
         in_test_section = False
+        truncated = False
 
         for line in lines:
             line = line.strip()
@@ -373,14 +390,29 @@ class TestResultParser:
 
             if any(keyword in line.lower() for keyword in ['test', 'fail', 'pass', 'error', 'assert', 'helia_', 'mismatch[']):
                 in_test_section = True
-            
+
             if in_test_section:
                 relevant.append(line)
-                
+
                 if len(relevant) > 50:
                     relevant.append("... (truncated)")
+                    truncated = True
                     break
-        
+
+        if not truncated:
+            return relevant
+
+        already_kept = Counter(relevant)
+        for line in lines:
+            line = line.strip()
+            if not (line.startswith(self.SUMMARY_LINE_PREFIXES)
+                    or self.failure_count_line_pattern.match(line)):
+                continue
+            if already_kept[line]:
+                already_kept[line] -= 1
+                continue
+            relevant.append(line)
+
         return relevant
     
     def _extract_output_differences(self, output: str, lines: List[str]) -> Tuple[Optional[str], Optional[str], List[str]]:
