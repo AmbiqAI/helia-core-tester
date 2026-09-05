@@ -364,4 +364,4 @@ comparison:
 # conversion drops the batch -- both generate input_dims.n = 1 over a single input
 # row, so the batch2 case covers the K 64 row groups of the NT_T matmul and not a
 # batch dimension -- and the batch cannot be reached from a descriptor alone. No
-# case in this file exercises a batch. Tracked in a follow-up issue.
+# case in this file exercises a batch. See AmbiqAI/helia-core-tester#106.
