@@ -11,8 +11,17 @@ static float svdf_float_default_f32_output[4];
 static int32_t run_svdf(void)
 {
     cmsis_nn_context ctx = {0};
-    cmsis_nn_context input_ctx = {.buf = svdf_float_default_f32_scratch_input, .size = sizeof(svdf_float_default_f32_scratch_input)};
-    cmsis_nn_context output_ctx = {.buf = svdf_float_default_f32_scratch_output, .size = sizeof(svdf_float_default_f32_scratch_output)};
+    // The static arrays are the allocation upper bound; the ctx sizes come from the
+    // kernel's own sizers (issue #71).
+    const int32_t scratch_input_bytes = arm_svdf_f32_input_ctx_get_buffer_size(&svdf_float_default_f32_input_dims, &svdf_float_default_f32_weights_feature_dims);
+    const int32_t scratch_output_bytes = arm_svdf_f32_output_ctx_get_buffer_size(&svdf_float_default_f32_svdf_params, &svdf_float_default_f32_input_dims, &svdf_float_default_f32_weights_feature_dims);
+    if (scratch_input_bytes < 0 || scratch_input_bytes > (int32_t)sizeof(svdf_float_default_f32_scratch_input) ||
+        scratch_output_bytes < 0 || scratch_output_bytes > (int32_t)sizeof(svdf_float_default_f32_scratch_output))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    cmsis_nn_context input_ctx = {.buf = svdf_float_default_f32_scratch_input, .size = scratch_input_bytes};
+    cmsis_nn_context output_ctx = {.buf = svdf_float_default_f32_scratch_output, .size = scratch_output_bytes};
 
     for (int i = 0; i < 12; ++i)
     {
@@ -52,6 +61,12 @@ svdf_float_default_f32_bias,
 
 int32_t svdf_float_default_f32_test_case_run(void)
 {
+    // Exact ctx scratch sizes (issue #71), measured by calling the real sizers on host;
+    // target-invariant, so no ISA split.
+    HELIA_VALIDATE_SCALAR_EQ_INT("Svdf", "input ctx size", 16,
+                                 arm_svdf_f32_input_ctx_get_buffer_size(&svdf_float_default_f32_input_dims, &svdf_float_default_f32_weights_feature_dims));
+    HELIA_VALIDATE_SCALAR_EQ_INT("Svdf", "output ctx size", 16,
+                                 arm_svdf_f32_output_ctx_get_buffer_size(&svdf_float_default_f32_svdf_params, &svdf_float_default_f32_input_dims, &svdf_float_default_f32_weights_feature_dims));
     int32_t status = run_svdf();
     HELIA_VALIDATE_STATUS("Svdf", status);
 

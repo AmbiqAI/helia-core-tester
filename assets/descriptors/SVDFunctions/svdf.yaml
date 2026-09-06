@@ -12,6 +12,11 @@ hint:
   time_batches: 3
   rank: 1
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_s8_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=4, rank=1): not re-derived in Python.
+expected_input_ctx_size: 32
+expected_output_ctx_size: 32
 ---
 operator: SVDF
 name: svdf_bias_rank2_s8
@@ -27,6 +32,13 @@ hint:
   time_batches: 3
   rank: 2
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_s8_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=4, rank=2): not re-derived in Python.
+expected_input_ctx_size: 32
+expected_output_ctx_size: 16
+# Sizer-only degenerate/-1 sentinel probes (issue #71), one case per kernel.
+ctx_sizer_sentinels: true
 ---
 operator: SVDF
 name: svdf_no_bias_rank2_s8
@@ -42,6 +54,11 @@ hint:
   time_batches: 3
   rank: 2
   use_bias: false
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_s8_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=4, rank=2): not re-derived in Python.
+expected_input_ctx_size: 32
+expected_output_ctx_size: 16
 ---
 operator: SVDF
 name: svdf_state_s16_bias_rank1_s8
@@ -57,6 +74,11 @@ hint:
   time_batches: 3
   rank: 1
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_state_s16_s8_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=4, rank=1): not re-derived in Python.
+expected_input_ctx_size: 32
+expected_output_ctx_size: 32
 ---
 operator: SVDF
 name: svdf_state_s16_bias_rank2_s8
@@ -72,6 +94,13 @@ hint:
   time_batches: 3
   rank: 2
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_state_s16_s8_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=4, rank=2): not re-derived in Python.
+expected_input_ctx_size: 32
+expected_output_ctx_size: 16
+# Sizer-only degenerate/-1 sentinel probes (issue #71), one case per kernel.
+ctx_sizer_sentinels: true
 ---
 operator: SVDF
 name: svdf_state_s16_no_bias_rank2_s8
@@ -87,6 +116,11 @@ hint:
   time_batches: 3
   rank: 2
   use_bias: false
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_state_s16_s8_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=4, rank=2): not re-derived in Python.
+expected_input_ctx_size: 32
+expected_output_ctx_size: 16
 ---
 operator: SVDF
 name: svdf_bias_rank1_rows3_cols17_s8
@@ -102,6 +136,11 @@ hint:
   time_batches: 3
   rank: 1
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_s8_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=3, rank=1): not re-derived in Python.
+expected_input_ctx_size: 24
+expected_output_ctx_size: 24
 ---
 operator: SVDF
 name: svdf_no_bias_rank2_rows6_cols17_s8
@@ -117,6 +156,11 @@ hint:
   time_batches: 3
   rank: 2
   use_bias: false
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_s8_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=6, rank=2): not re-derived in Python.
+expected_input_ctx_size: 48
+expected_output_ctx_size: 24
 ---
 operator: SVDF
 name: svdf_state_s16_bias_rank1_rows5_cols17_s8
@@ -132,6 +176,11 @@ hint:
   time_batches: 3
   rank: 1
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_state_s16_s8_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=5, rank=1): not re-derived in Python.
+expected_input_ctx_size: 40
+expected_output_ctx_size: 40
 ---
 operator: SVDF
 name: svdf_state_s16_no_bias_rank2_rows6_cols33_s8
@@ -147,3 +196,8 @@ hint:
   time_batches: 3
   rank: 2
   use_bias: false
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_state_s16_s8_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=6, rank=2): not re-derived in Python.
+expected_input_ctx_size: 48
+expected_output_ctx_size: 24
