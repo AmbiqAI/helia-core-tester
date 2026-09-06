@@ -3,18 +3,21 @@
 TFLite conversion plus interpreter inference dominates generation wall time, and
 every input that can change a case's emitted bytes is knowable before that work
 starts: the descriptor document, the per-case generation inputs (cpu, suite,
-float precision, seed), the generator itself and the ns-cmsis-nn checkout the
-generator reads. A stamp folds all of those into one digest; a case whose
-on-disk stamp still matches, and whose artifacts still hash to what that stamp
-recorded, is reused verbatim. See issue #107.
+seed), the generator itself, the resolved dependency set and interpreter it runs
+under, and the ns-cmsis-nn checkout the generator reads. A stamp folds all of
+those into one digest; a case whose on-disk stamp still matches, and whose
+artifacts still hash to what that stamp recorded, is reused verbatim.
+See issue #107.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, Optional
 
@@ -26,11 +29,13 @@ STAMP_FILENAME = ".stamp"
 
 # Version prefix of the stamp payload itself. Bump when the payload layout
 # changes so old stamps cannot accidentally validate against new semantics.
-_STAMP_SCHEMA = "helia-core-tester/generation-stamp/2"
+_STAMP_SCHEMA = "helia-core-tester/generation-stamp/3"
 
-# Packages whose codegen or numerics feed the emitted bytes; a version bump in
-# either can change a converted model or a reference output.
-_PINNED_PACKAGES = ("tensorflow", "ai-edge-litert")
+# The lock file is the whole resolved dependency set, so it covers every package
+# that can move emitted bytes -- the converter and runtime, but equally numpy's
+# RNG streams, keras, jinja2, flatbuffers and pyyaml -- without anyone having to
+# keep a hand-maintained list of them in step.
+_LOCK_FILENAME = "uv.lock"
 
 # Modules outside generation/ that still decide emitted bytes: the CPU profile
 # (has_mve gates which template variant a case emits) and the path layout that
@@ -82,26 +87,38 @@ def _iter_generator_sources() -> Iterator[Path]:
             yield path
 
 
-def _pinned_package_versions() -> Dict[str, Optional[str]]:
-    """Installed versions of the pinned converter packages.
+def _environment_identity() -> Dict[str, str]:
+    """Identity of the Python environment the generator emits from.
 
-    An unresolvable version is recorded as JSON ``null``, which no real version
-    string can equal: "installed but not queryable" and "version X" stay
-    distinguishable states in the digest.
+    Naming individual packages under-counts the inputs: numpy decides the RNG
+    streams behind every generated tensor, jinja2 and pyyaml decide the emitted
+    text, flatbuffers and the converter decide the model bytes. Hashing the lock
+    file covers the resolved set as a whole. The interpreter version and the
+    machine are separate axes the lock file does not pin, and both reach the
+    emitted bytes through platform-specific wheels and floating-point behaviour.
+
+    A missing lock file raises rather than degrading to a weaker digest: a stamp
+    computed without it would validate cases emitted under a different
+    dependency set.
     """
-    from importlib import metadata
-
-    versions: Dict[str, Optional[str]] = {}
-    for package in _PINNED_PACKAGES:
-        try:
-            versions[package] = metadata.version(package)
-        except Exception:
-            versions[package] = None
-    return versions
+    lock_path = find_repo_root() / _LOCK_FILENAME
+    try:
+        lock_bytes = lock_path.read_bytes()
+    except OSError as error:
+        raise FileNotFoundError(
+            f"Dependency lock file not found: {lock_path}. Reuse stamps are bound "
+            f"to the resolved dependency set, so generation cannot compute one "
+            f"without it."
+        ) from error
+    return {
+        "lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
+        "python": ".".join(str(part) for part in sys.version_info[:3]),
+        "machine": platform.machine(),
+    }
 
 
 def generator_version_hash() -> str:
-    """Digest of the generator sources, templates and pinned converter versions.
+    """Digest of the generator sources, templates and environment identity.
 
     Cached for the process: the inputs cannot change under a running generation.
     """
@@ -123,9 +140,7 @@ def generator_version_hash() -> str:
         digest.update(label.encode("utf-8"))
         digest.update(b"\0")
         digest.update(hashlib.sha256(path.read_bytes()).digest())
-    digest.update(
-        json.dumps(_pinned_package_versions(), sort_keys=True).encode("utf-8")
-    )
+    digest.update(json.dumps(_environment_identity(), sort_keys=True).encode("utf-8"))
     _version_hash_cache = digest.hexdigest()
     return _version_hash_cache
 
@@ -232,24 +247,44 @@ def case_stamp(
     case_name: str,
     cpu: str,
     suite: str,
-    float_precision: str,
     seed: int,
     version_hash: str,
 ) -> str:
-    """Digest of everything that determines a case's generated bytes."""
+    """Digest of everything that determines a case's generated bytes.
+
+    The float precision filter is deliberately absent: it selects which
+    descriptors a run generates, not what any one of them emits, so folding it
+    in would make ``--float-precision both`` and ``--float-precision f32``
+    regenerate each other's f32 cases for no change in output.
+    """
     payload = {
         "schema": _STAMP_SCHEMA,
         "descriptor": descriptor,
         "case_name": case_name,
         "cpu": cpu,
         "suite": suite,
-        "float_precision": float_precision,
         "seed": seed,
         "generator_version": version_hash,
         "cmsis_nn_checkout": cmsis_nn_checkout_identity(),
     }
     encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _concurrent_run_error(test_dir: Path, action: str) -> RuntimeError:
+    """Error for a case directory that disappeared under the generator.
+
+    Generation owns its output tree outright, so nothing inside a run removes a
+    case directory while that case is being written or pruned. The one way it
+    happens is a second generation running against the same output tree, and the
+    two runs will keep overwriting each other's cases; saying so beats a bare
+    FileNotFoundError naming a path that no longer exists.
+    """
+    return RuntimeError(
+        f"Case directory disappeared while {action} it: {test_dir}. This is a "
+        f"concurrent-run collision -- another generation is writing to the same "
+        f"generated_tests tree. Let that run finish, then rerun this one."
+    )
 
 
 def read_stamp(test_dir: Path) -> Optional[Dict[str, str]]:
@@ -269,12 +304,17 @@ def write_stamp(test_dir: Path, stamp: str) -> None:
     The record pins the emitted artifacts as well as the inputs, so a case that
     is edited or truncated after generation stops being reusable.
     """
-    record = {
-        "schema": _STAMP_SCHEMA,
-        "stamp": stamp,
-        "artifacts_sha256": generated_case_artifact_sha256(test_dir),
-    }
-    (test_dir / STAMP_FILENAME).write_text(json.dumps(record, sort_keys=True) + "\n")
+    if not test_dir.is_dir():
+        raise _concurrent_run_error(test_dir, "stamping")
+    try:
+        record = {
+            "schema": _STAMP_SCHEMA,
+            "stamp": stamp,
+            "artifacts_sha256": generated_case_artifact_sha256(test_dir),
+        }
+        (test_dir / STAMP_FILENAME).write_text(json.dumps(record, sort_keys=True) + "\n")
+    except FileNotFoundError as error:
+        raise _concurrent_run_error(test_dir, "stamping") from error
 
 
 def reset_case_dir(test_dir: Path) -> None:
@@ -287,8 +327,12 @@ def reset_case_dir(test_dir: Path) -> None:
     the directory also removes the stamp, so an interrupted regeneration leaves
     nothing that can be mistaken for a complete case.
     """
-    if test_dir.exists():
+    if not test_dir.exists():
+        return
+    try:
         shutil.rmtree(test_dir)
+    except FileNotFoundError as error:
+        raise _concurrent_run_error(test_dir, "resetting") from error
 
 
 def case_reusable(test_dir: Path, stamp: str) -> bool:
@@ -335,7 +379,10 @@ def prune_unlisted_cases(generated_tests_dir: Path, keep_relative_dirs: set[str]
             relative = str(case_dir.relative_to(generated_tests_dir))
             if relative in keep:
                 continue
-            shutil.rmtree(case_dir)
+            try:
+                shutil.rmtree(case_dir)
+            except FileNotFoundError as error:
+                raise _concurrent_run_error(case_dir, "pruning") from error
             removed += 1
         if not any(family_dir.iterdir()):
             family_dir.rmdir()

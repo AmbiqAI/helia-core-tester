@@ -508,7 +508,6 @@ def test_generation(test_filters):
             case_name=case_name,
             cpu=target_cpu,
             suite=suite_mode,
-            float_precision=float_precision_mode,
             seed=test_filters.get("seed") if test_filters.get("seed") is not None
             else default_seed_for_case(case_name),
             version_hash=version_hash,

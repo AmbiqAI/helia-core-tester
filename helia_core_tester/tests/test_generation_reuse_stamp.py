@@ -16,7 +16,6 @@ def _stamp(descriptor: dict, **overrides) -> str:
         "case_name": "Add_s8_basic",
         "cpu": "cortex-m55",
         "suite": "int",
-        "float_precision": "both",
         "seed": 500,
         "version_hash": "v1",
     }
@@ -69,7 +68,6 @@ def test_stamp_tracks_every_generation_input() -> None:
     assert _stamp(dict(descriptor, shape=[1, 8])) != baseline
     assert _stamp(descriptor, cpu="cortex-m4") != baseline
     assert _stamp(descriptor, suite="float") != baseline
-    assert _stamp(descriptor, float_precision="f32") != baseline
     assert _stamp(descriptor, seed=501) != baseline
     assert _stamp(descriptor, version_hash="v2") != baseline
     assert _stamp(dict(reversed(list(descriptor.items())))) == baseline
@@ -83,7 +81,7 @@ def test_generator_version_hash_covers_templates_and_sources(monkeypatch, tmp_pa
     source.write_text("print()")
 
     monkeypatch.setattr(reuse, "_iter_generator_sources", lambda: iter([source, template]))
-    monkeypatch.setattr(reuse, "_pinned_package_versions", lambda: {"tensorflow": "1.0"})
+    monkeypatch.setattr(reuse, "_environment_identity", lambda: {"lock_sha256": "aa"})
 
     monkeypatch.setattr(reuse, "_version_hash_cache", None, raising=False)
     baseline = reuse.generator_version_hash()
@@ -96,7 +94,7 @@ def test_generator_version_hash_covers_templates_and_sources(monkeypatch, tmp_pa
     monkeypatch.setattr(reuse, "_version_hash_cache", None, raising=False)
     assert reuse.generator_version_hash() == baseline
 
-    monkeypatch.setattr(reuse, "_pinned_package_versions", lambda: {"tensorflow": "2.0"})
+    monkeypatch.setattr(reuse, "_environment_identity", lambda: {"lock_sha256": "bb"})
     monkeypatch.setattr(reuse, "_version_hash_cache", None, raising=False)
     assert reuse.generator_version_hash() != baseline
 
