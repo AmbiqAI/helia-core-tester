@@ -99,6 +99,8 @@ def build_squared_difference_op(
 class OpSquaredDifference(BinaryBasicMathBase):
     """SquaredDifference operation."""
 
+    SIGN_SPAN_OPERANDS = ("input_1", "input_2")
+
     def needs_keras_model(self) -> bool:
         return self._use_s16_fake_quant_keras_path()
 

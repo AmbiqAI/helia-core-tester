@@ -26,6 +26,8 @@ class OpAbs(OperationBase):
     Abs operation.
     """
 
+    SIGN_SPAN_OPERANDS = ("input",)
+
     def needs_keras_model(self) -> bool:
         return False
 

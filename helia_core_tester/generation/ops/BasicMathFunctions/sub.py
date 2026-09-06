@@ -12,6 +12,8 @@ class OpSub(BinaryBasicMathBase):
     """
     Subtract operation.
     """
+
+    SIGN_SPAN_OPERANDS = ("input_1", "input_2")
     
     def needs_keras_model(self) -> bool:
         return False

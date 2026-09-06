@@ -480,6 +480,12 @@ class OperationBase(ABC):
     # required: see README "Operand sign span" and issue #81 property 2.
     SIGN_SPAN_EXEMPT_KEY = "operand_sign_span_exempt"
 
+    # Operand labels this operator submits to the span rule. A waiver keyed on
+    # anything else waives nothing and reads as covering a gap it never
+    # touches, so the labels are declared per operator and both the waiver keys
+    # and the call sites are checked against them.
+    SIGN_SPAN_OPERANDS: Tuple[str, ...] = ()
+
     _SIGN_SPAN_DTYPE_BOUNDS = {"int8": (-128, 127), "int16": (-32768, 32767)}
 
     def _sign_span_exemptions(self) -> Dict[str, str]:
@@ -493,7 +499,14 @@ class OperationBase(ABC):
                 f"intentionally one-signed operand to the reason it stays that way, "
                 f"e.g. {{alpha: the model constant is a positive PReLU slope}}"
             )
+        known = ", ".join(self.SIGN_SPAN_OPERANDS) or "(none)"
         for operand, reason in exempt.items():
+            if str(operand) not in self.SIGN_SPAN_OPERANDS:
+                raise ValueError(
+                    f"'{self.desc.get('name')}': {self.SIGN_SPAN_EXEMPT_KEY}[{operand}] names an "
+                    f"operand {type(self).__name__} never submits to the span rule, so it waives "
+                    f"nothing; the checked operands are {known}"
+                )
             if not isinstance(reason, str) or not reason.strip():
                 raise ValueError(
                     f"'{self.desc.get('name')}': {self.SIGN_SPAN_EXEMPT_KEY}[{operand}] must be "
@@ -522,12 +535,19 @@ class OperationBase(ABC):
         returned here. Two kinds of operand stay out of it and are check-only:
         one baked into the TFLite model (a PReLU alpha), because the reference
         interpreter would still use the model's copy; and one the descriptor
-        pins explicitly (``hint.extras.input_values``, ``scalar_input_value``),
-        because the pinned values are the case. Either can only be waived with
+        pins explicitly (``hint.extras.input_values``), because the pinned
+        values are the case. Either can only be waived with
         ``operand_sign_span_exempt``.
 
         Returns the operand arrays in input order, steered where needed.
         """
+        undeclared = sorted({str(label) for label, _, _ in operands} - set(self.SIGN_SPAN_OPERANDS))
+        if undeclared:
+            raise ValueError(
+                f"'{self.desc.get('name')}': {type(self).__name__}.SIGN_SPAN_OPERANDS does not "
+                f"declare {', '.join(undeclared)}; waiver keys are validated against it, so an "
+                f"undeclared operand could never be exempted"
+            )
         exemptions = self._sign_span_exemptions()
         steerable_set = set(steerable)
         result: List[np.ndarray] = []
@@ -542,16 +562,33 @@ class OperationBase(ABC):
             if not missing:
                 result.append(array)
                 continue
-            if label in steerable_set:
-                array = self._steer_int_operand_sign_span(array, zp)
-                if not self._sign_span_gaps(array.reshape(-1), zp):
-                    result.append(array)
+            attempted = label in steerable_set
+            if attempted:
+                # Plant only the missing regions: overwriting all three throws
+                # away the elements that already carried the ones present, and
+                # on a short operand those are the case. A targeted plant can
+                # still consume the sole carrier of a region it was relying on,
+                # so the full triple stays as the fallback.
+                steered = self._steer_int_operand_sign_span(array, zp, missing)
+                if self._sign_span_gaps(steered.reshape(-1), zp):
+                    steered = self._steer_int_operand_sign_span(array, zp)
+                if not self._sign_span_gaps(steered.reshape(-1), zp):
+                    result.append(steered)
                     continue
+            if attempted:
+                why = (
+                    f"steering cannot reach them: clipped to the dtype range, no representable "
+                    f"value lands on the missing side of zero_point {zp}"
+                )
+            else:
+                why = (
+                    "the operand is model-baked or descriptor-pinned, so the generator may not "
+                    "steer it"
+                )
             raise ValueError(
                 f"'{self.desc.get('name')}': {label} post-offset values "
                 f"(n {flat.size}, min {int(flat.min()) - zp}, max {int(flat.max()) - zp}, "
-                f"zero_point {zp}) do not span {' and '.join(missing)}, and the operand is "
-                f"model-baked or descriptor-pinned, so the generator may not steer it; a "
+                f"zero_point {zp}) do not span {' and '.join(missing)}, and {why}; a "
                 f"one-signed operand cannot discriminate the sign-dependent "
                 f"kernel paths (ns-cmsis-nn#343). Set {self.SIGN_SPAN_EXEMPT_KEY}[{label}] to "
                 f"the reason it must stay one-signed."
@@ -572,16 +609,20 @@ class OperationBase(ABC):
         return gaps
 
     @classmethod
-    def _steer_int_operand_sign_span(cls, array: np.ndarray, zero_point: int) -> np.ndarray:
+    def _steer_int_operand_sign_span(
+        cls,
+        array: np.ndarray,
+        zero_point: int,
+        missing: Optional[Sequence[str]] = None,
+    ) -> np.ndarray:
         """
-        Plant a negative / zero / positive post-offset triple, at half the
-        operand's own magnitude so the steered values stay inside the range the
-        case was written for. Deterministic and independent of the RNG stream,
-        so a re-run reproduces it exactly.
+        Plant post-offset values for the regions in ``missing`` (default: all
+        three), at half the operand's own magnitude so the steered values stay
+        inside the range the case was written for. Deterministic and
+        independent of the RNG stream, so a re-run reproduces it exactly.
 
-        All three are planted whenever any one is missing, so the result is
-        correct by construction rather than depending on which element happened
-        to carry the region that was already present.
+        One element is replaced per planted region, so an operand that lacks
+        only the near-zero boundary keeps every other element it had.
         """
         bounds = cls._SIGN_SPAN_DTYPE_BOUNDS.get(str(array.dtype))
         if bounds is None:
@@ -589,7 +630,13 @@ class OperationBase(ABC):
         qmin, qmax = bounds
         post = array.reshape(-1).astype(np.int64) - zero_point
         step = max(1, int(np.abs(post).max()) // 2)
-        planted = np.clip([zero_point - step, zero_point, zero_point + step], qmin, qmax)
+        by_region = {
+            "negative": zero_point - step,
+            "near-zero": zero_point,
+            "positive": zero_point + step,
+        }
+        wanted = list(missing) if missing else list(by_region)
+        planted = np.clip([by_region[region] for region in wanted], qmin, qmax)
         # Overwrite the elements closest to the offset rather than the leading
         # ones: a full-scale element carries saturation coverage that a
         # mid-range element does not, and on a 3- or 4-element operand the head

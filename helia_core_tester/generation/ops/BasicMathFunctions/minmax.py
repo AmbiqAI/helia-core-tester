@@ -25,6 +25,8 @@ def build_minmax_op(*, operator: str, input_1_shape, input_2_shape, dtype: str) 
 class OpMinMax(BinaryBasicMathBase):
     """Maximum and Minimum operation implementation."""
 
+    SIGN_SPAN_OPERANDS = ("input_1", "input_2")
+
     def needs_keras_model(self) -> bool:
         return False
 

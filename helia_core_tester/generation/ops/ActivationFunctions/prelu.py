@@ -12,6 +12,8 @@ class OpPReLU(OperationBase):
     """
     PReLU (Parametric ReLU) operation.
     """
+
+    SIGN_SPAN_OPERANDS = ("input", "alpha")
     
     def _prepare_alpha_values(
         self,

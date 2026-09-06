@@ -12,7 +12,6 @@ plus the descriptor opt-out and the shape of its required reason.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +23,8 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 
 class _Op(OperationBase):
     """Minimal concrete OperationBase: the rule needs only self.desc."""
+
+    SIGN_SPAN_OPERANDS = ("input", "input_1", "input_2", "alpha")
 
     def build_keras_model(self):  # pragma: no cover - never called
         raise NotImplementedError
@@ -50,19 +51,21 @@ def test_one_signed_runtime_operand_is_steered_not_rejected() -> None:
     data = np.full(12, 40, dtype=np.int8)
     (result,) = _op()._enforce_int_operand_sign_span((("input_1", data, 0),), steerable=("input_1",))
     assert not OperationBase._sign_span_gaps(result.reshape(-1), 0)
-    # Exactly three elements move, whatever the operand length.
-    assert int((result != data).sum()) == 3
+    # Only the missing regions are planted: the data was already positive, so
+    # the negative and near-zero plants move two elements and no more.
+    assert OperationBase._sign_span_gaps(data, 0) == ["negative", "near-zero"]
+    assert int((result != data).sum()) == 2
 
 
 def test_steering_overwrites_the_least_extreme_elements() -> None:
     # Planting into the head would discard a full-scale element and the
-    # saturation coverage that comes with it. The three elements closest to the
-    # zero point go instead.
+    # saturation coverage that comes with it. The elements closest to the zero
+    # point go instead, and only as many as there are missing regions.
     data = np.array([-128, 127, 20, -9, 3, 100], dtype=np.int8)
+    assert OperationBase._sign_span_gaps(data, 0) == ["near-zero"]
     (result,) = _op()._enforce_int_operand_sign_span((("input_1", data, 0),), steerable=("input_1",))
     assert result[0] == -128 and result[1] == 127
-    moved = {int(i) for i in np.flatnonzero(result != data)}
-    assert moved <= {2, 3, 4}
+    assert {int(i) for i in np.flatnonzero(result != data)} == {4}
 
 
 def test_near_zero_is_absolute_not_a_fraction_of_the_range() -> None:
@@ -73,6 +76,18 @@ def test_near_zero_is_absolute_not_a_fraction_of_the_range() -> None:
     (result,) = _op()._enforce_int_operand_sign_span((("input_1", data, 0),), steerable=("input_1",))
     assert (np.abs(result.astype(np.int64)) <= OperationBase.NEAR_ZERO_MAX_ABS).any()
     assert result[0] == -20000 and result[3] == 17000
+    # The operand already spanned sign, so only the near-zero plant moves.
+    assert int((result != data).sum()) == 1
+
+
+def test_steering_falls_back_to_the_full_triple_when_a_targeted_plant_reopens_a_gap() -> None:
+    # The near-zero plant lands on the only negative element, so planting the
+    # gap alone would trade one missing region for another. The fallback plants
+    # all three and the operand ends up spanning.
+    data = np.array([-2, 40, 60], dtype=np.int8)
+    assert OperationBase._sign_span_gaps(data, 0) == ["near-zero"]
+    (result,) = _op()._enforce_int_operand_sign_span((("input_1", data, 0),), steerable=("input_1",))
+    assert not OperationBase._sign_span_gaps(result.reshape(-1), 0)
 
 
 def test_steering_is_deterministic() -> None:
@@ -92,10 +107,21 @@ def test_unsteerable_one_signed_operand_fails_generation() -> None:
 
 def test_zero_point_that_pins_the_whole_domain_cannot_be_steered() -> None:
     # zero_point -128 maps the entire int8 domain to [0, 255] post-offset:
-    # no planted value can make the operand negative.
+    # no planted value can make the operand negative. The refusal has to say
+    # steering was tried and name the zero point, not blame a pinned operand.
     data = np.array([-128, -100, -60, -30], dtype=np.int8)
-    with pytest.raises(ValueError, match="do not span negative"):
+    with pytest.raises(ValueError, match="do not span negative") as excinfo:
         _op()._enforce_int_operand_sign_span((("input_1", data, -128),), steerable=("input_1",))
+    assert "steering cannot reach them" in str(excinfo.value)
+    assert "zero_point -128" in str(excinfo.value)
+
+
+def test_refusal_of_an_unsteerable_operand_names_the_pinning_not_the_clipping() -> None:
+    data = np.full(12, 26, dtype=np.int8)
+    with pytest.raises(ValueError) as excinfo:
+        _op()._enforce_int_operand_sign_span((("alpha", data, 0),), steerable=())
+    assert "model-baked or descriptor-pinned" in str(excinfo.value)
+    assert "steering cannot reach" not in str(excinfo.value)
 
 
 def test_short_operands_are_out_of_scope() -> None:
@@ -122,28 +148,32 @@ def test_exemption_requires_an_operand_keyed_reason(value) -> None:
         op._enforce_int_operand_sign_span((("alpha", np.full(12, 26, dtype=np.int8), 0),), steerable=())
 
 
-_ENFORCE_CALL = re.compile(
-    r"_enforce_int_operand_sign_span\(\s*\((.*?)\),\s*steerable=", re.S
-)
+def test_a_waiver_on_an_operand_the_operator_never_checks_is_rejected() -> None:
+    # A key the rule never looks up waives nothing while reading as if it
+    # covered a gap; the operator's declared labels are the check.
+    op = _op(operand_sign_span_exempt={"inpt_1": "typo for input_1"})
+    with pytest.raises(ValueError, match="waives nothing"):
+        op._enforce_int_operand_sign_span(
+            (("input_1", np.full(12, 26, dtype=np.int8), 0),), steerable=()
+        )
 
 
-def _rule_operand_labels() -> set[str]:
-    """Operand labels the generators actually pass to the rule."""
-    labels: set[str] = set()
-    for path in (_repo_root() / "helia_core_tester" / "generation" / "ops").rglob("*.py"):
-        for call in _ENFORCE_CALL.finditer(path.read_text()):
-            labels.update(re.findall(r'\("([a-z_][a-z_0-9]*)"', call.group(1)))
-    return labels
+def test_the_rule_rejects_an_operand_the_operator_did_not_declare() -> None:
+    # SIGN_SPAN_OPERANDS is what the waiver keys are checked against, so a call
+    # site passing a label outside it would create an unwaivable operand.
+    class _Undeclared(_Op):
+        SIGN_SPAN_OPERANDS = ("input_1",)
+
+    op = _Undeclared({"name": "case"}, seed=1)
+    with pytest.raises(ValueError, match="SIGN_SPAN_OPERANDS"):
+        op._enforce_int_operand_sign_span(
+            (("input_2", np.full(12, 26, dtype=np.int8), 0),), steerable=("input_2",)
+        )
 
 
-def test_rule_operand_labels_are_discoverable() -> None:
-    # The shipped-exemption test below is only meaningful if this finds the
-    # call sites; an empty set would make it vacuous.
-    assert {"input", "input_1", "input_2", "alpha"} <= _rule_operand_labels()
-
-
-def test_shipped_exemptions_are_well_formed_and_scoped() -> None:
-    labels = _rule_operand_labels()
+def test_shipped_exemptions_are_well_formed() -> None:
+    # Scoping is enforced at generation time against the operator's declared
+    # labels, so this only has to pin the reason contract.
     descriptors = load_all_descriptors(str(_repo_root() / "assets" / "descriptors"))
     exempt = [d for d in descriptors if d.get("operand_sign_span_exempt") is not None]
     assert exempt, "the audit left at least the PReLU alpha waivers in place"
@@ -152,6 +182,3 @@ def test_shipped_exemptions_are_well_formed_and_scoped() -> None:
         assert isinstance(mapping, dict) and mapping, desc["name"]
         for operand, reason in mapping.items():
             assert isinstance(reason, str) and reason.strip(), (desc["name"], operand)
-        # A waiver has to name an operand the rule actually checks, or it
-        # silently waives nothing.
-        assert set(mapping) <= labels, (desc["name"], sorted(set(mapping) - labels))
