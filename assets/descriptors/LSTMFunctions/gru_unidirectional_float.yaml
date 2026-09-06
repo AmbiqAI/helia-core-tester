@@ -1154,10 +1154,27 @@ hint:
 ---
 # Issue #74 phase 2c: non-finite inputs for the unidirectional float GRU.
 #
-# nonfinite_policy is mask, for the same reason as the LSTM cases: neither
-# arm_gru_unidirectional_f32 nor arm_gru_unidirectional_f16 carries a NaN/Inf note in
-# Include/arm_nnfunctions_flt.h, so no leg is contracted. Placement and the batch-row
-# split are the LSTM design; see the comment above the LSTM sweep cases.
+# nonfinite_policy is strict (#122). The public arm_gru_unidirectional_f32 and _f16
+# declarations in Include/arm_nnfunctions_flt.h state the contract:
+#
+#   NaN contract: a NaN in ``input``, the previous hidden state, or the candidate gate's
+#   weight or bias reaches every output unit it feeds, on the scalar and MVE legs alike and
+#   at the shipped -Ofast: the MVE block re-establishes NaN after the table tanh with an
+#   integer-domain test that fast-math cannot elide (#251). A NaN confined to the update or
+#   reset gate's weight or bias does not reach the output: the scalar sigmoid maps NaN to
+#   1.0 (see the note on arm_nn_sigmoid_scalar_f32 in arm_nnsupportfunctions_flt.h). NaN
+#   payloads and signs are not preserved on the MVE leg (default NaN, architectural). Inf
+#   follows the arithmetic.
+#
+# Every case below puts its one token in the input tensor. The nan cases fall under the
+# first sentence: the token's batch row is NaN on every unit at every step, and the
+# comparator classifies each element before comparing, so the MVE leg's default-NaN
+# canonicalisation is a match. The inf and neginf cases fall under the last sentence: the
+# gates saturate, the reference is finite, and every lane is asserted at the case tolerance.
+# A case that puts a token in the update or reset gate's weight or bias is absorbed by the
+# kernel while the reference still produces NaN, so it would have to stay mask; none does. The LSTM cases stay mask: the
+# LSTM declarations carry no such note. Placement and the batch-row split are the LSTM
+# design; see the comment above the LSTM sweep cases.
 #
 # All six cases set reset_after true, so the pre-reset gate path is unswept.
 operator: GRUUnidirectional
@@ -1179,7 +1196,7 @@ reset_after: true
 input_shape: [2, 3, 4]
 input_mode: nonfinite_sweep
 nonfinite_tokens: [nan]
-nonfinite_policy: mask
+nonfinite_policy: strict
 hint:
   force_cmsis: true
 ---
@@ -1202,7 +1219,7 @@ reset_after: true
 input_shape: [2, 3, 4]
 input_mode: nonfinite_sweep
 nonfinite_tokens: [inf]
-nonfinite_policy: mask
+nonfinite_policy: strict
 hint:
   force_cmsis: true
 ---
@@ -1225,7 +1242,7 @@ reset_after: true
 input_shape: [2, 3, 4]
 input_mode: nonfinite_sweep
 nonfinite_tokens: [-inf]
-nonfinite_policy: mask
+nonfinite_policy: strict
 hint:
   force_cmsis: true
 ---
@@ -1248,7 +1265,7 @@ reset_after: true
 input_shape: [2, 3, 4]
 input_mode: nonfinite_sweep
 nonfinite_tokens: [nan]
-nonfinite_policy: mask
+nonfinite_policy: strict
 hint:
   force_cmsis: true
 ---
@@ -1271,7 +1288,7 @@ reset_after: true
 input_shape: [2, 3, 4]
 input_mode: nonfinite_sweep
 nonfinite_tokens: [inf]
-nonfinite_policy: mask
+nonfinite_policy: strict
 hint:
   force_cmsis: true
 ---
@@ -1294,6 +1311,6 @@ reset_after: true
 input_shape: [2, 3, 4]
 input_mode: nonfinite_sweep
 nonfinite_tokens: [-inf]
-nonfinite_policy: mask
+nonfinite_policy: strict
 hint:
   force_cmsis: true
