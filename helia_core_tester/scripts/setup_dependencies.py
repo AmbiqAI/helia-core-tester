@@ -15,12 +15,14 @@ Dependencies downloaded:
 
 Usage:
     python3 scripts/setup_dependencies.py [--downloads-dir DOWNLOADS_DIR] [--force]
+        [--gcc-version 13.2.rel1] [--gcc-sha256 <hex>]
 """
 
 import argparse
 import hashlib
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -37,21 +39,117 @@ class ChecksumMismatchError(RuntimeError):
     """Raised when a downloaded file's SHA-256 does not match the pinned value."""
 
 
-# Pinned SHA-256 digests for all downloaded dependency archives, keyed by
-# (dependency, architecture). Values were obtained from Arm's official release
-# artifacts:
-#   - ARM GCC toolchain 14.2.rel1: published by Arm alongside the release at
-#     https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/<file>.sha256asc
-#   - Corstone-300 FVP 11.24_13: Arm does not publish a SHA-256 sidecar for this
-#     archive; the digest below was computed directly from a fresh download of
-#     the official Arm URL referenced in setup_corstone300() and should be
-#     re-verified/updated whenever the pinned Corstone300 version changes.
+DEFAULT_GCC_VERSION = "14.2.rel1"
+GCC_VERSION_ENV = "HELIA_GCC_VERSION"
+GCC_SHA256_ENV = "HELIA_GCC_SHA256"
+GCC_VERSION_RE = re.compile(r"^\d+\.\d+\.rel\d+$")
+GCC_VERSION_MARKER = ".helia_gcc_version"
+_SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+# Pinned SHA-256 digests for all downloaded dependency archives. Values were
+# obtained from Arm's official release artifacts:
+#   - ARM GCC toolchain, keyed (dependency, version, architecture): published by
+#     Arm alongside each release at
+#     https://developer.arm.com/-/media/Files/downloads/gnu/<ver>/binrel/<file>.sha256asc
+#     A release not listed here can still be selected with --gcc-version; its
+#     digest is then taken from --gcc-sha256 / HELIA_GCC_SHA256 or, failing
+#     that, fetched from that same sidecar at install time (see
+#     resolve_gcc_sha256()).
+#   - Corstone-300 FVP 11.24_13, keyed (dependency, architecture): Arm does not
+#     publish a SHA-256 sidecar for this archive; the digest below was computed
+#     directly from a fresh download of the official Arm URL referenced in
+#     setup_corstone300() and should be re-verified/updated whenever the pinned
+#     Corstone300 version changes.
 PINNED_SHA256 = {
-    ("arm_gcc", "x86_64"): "62a63b981fe391a9cbad7ef51b17e49aeaa3e7b0d029b36ca1e9c3b2a9b78823",
-    ("arm_gcc", "aarch64"): "87330bab085dd8749d4ed0ad633674b9dc48b237b61069e3b481abd364d0a684",
+    ("arm_gcc", "13.2.rel1", "x86_64"): "6cd1bbc1d9ae57312bcd169ae283153a9572bd6a8e4eeae2fedfbc33b115fdbb",
+    ("arm_gcc", "13.2.rel1", "aarch64"): "8fd8b4a0a8d44ab2e195ccfbeef42223dfb3ede29d80f14dcf2183c34b8d199a",
+    ("arm_gcc", "13.3.rel1", "x86_64"): "95c011cee430e64dd6087c75c800f04b9c49832cc1000127a92a97f9c8d83af4",
+    ("arm_gcc", "13.3.rel1", "aarch64"): "c8824bffd057afce2259f7618254e840715f33523a3d4e4294f471208f976764",
+    ("arm_gcc", "14.2.rel1", "x86_64"): "62a63b981fe391a9cbad7ef51b17e49aeaa3e7b0d029b36ca1e9c3b2a9b78823",
+    ("arm_gcc", "14.2.rel1", "aarch64"): "87330bab085dd8749d4ed0ad633674b9dc48b237b61069e3b481abd364d0a684",
+    ("arm_gcc", "14.3.rel1", "x86_64"): "8f6903f8ceb084d9227b9ef991490413014d991874a1e34074443c2a72b14dbd",
+    ("arm_gcc", "14.3.rel1", "aarch64"): "2d465847eb1d05f876270494f51034de9ace9abe87a4222d079f3360240184d3",
+    ("arm_gcc", "15.2.rel1", "x86_64"): "597893282ac8c6ab1a4073977f2362990184599643b4c5ee34870a8215783a16",
+    ("arm_gcc", "15.2.rel1", "aarch64"): "d061559d814b205ed30c5b7c577c03317ec447ca51cd5a159d26b12a5bbeb20c",
     ("corstone300", "x86_64"): "6ea4096ecf8a8c06d6e76e21cae494f0c7139374cb33f6bc3964d189b84539a9",
     ("corstone300", "aarch64"): "9b43da6a688220c707cd1801baf9cf4f5fb37d6dc77587b9071347411a64fd56",
 }
+
+
+def normalize_gcc_version(version: str) -> str:
+    """Lowercase (Arm's URL path uses `rel1`, not `Rel1`) and validate the format."""
+    normalized = str(version).strip().lower()
+    if not GCC_VERSION_RE.match(normalized):
+        raise ValueError(
+            f"Invalid ARM GCC version {version!r}: expected <major>.<minor>.rel<N> "
+            f"(e.g. {DEFAULT_GCC_VERSION})"
+        )
+    return normalized
+
+
+def resolve_gcc_version(cli_value: Optional[str] = None) -> str:
+    """Selected GCC release: --gcc-version > HELIA_GCC_VERSION > DEFAULT_GCC_VERSION."""
+    raw = cli_value or os.environ.get(GCC_VERSION_ENV) or DEFAULT_GCC_VERSION
+    return normalize_gcc_version(raw)
+
+
+def arm_gcc_download_url(version: str, arch: str) -> str:
+    return (
+        f"https://developer.arm.com/-/media/Files/downloads/gnu/{version}/binrel/"
+        f"arm-gnu-toolchain-{version}-{arch}-arm-none-eabi.tar.xz"
+    )
+
+
+def parse_sha256_sidecar(text: str) -> str:
+    """Extract the digest from Arm's `<hex>  <filename>` .sha256asc content."""
+    for line in text.splitlines():
+        tokens = line.split()
+        if not tokens:
+            continue
+        if not _SHA256_HEX_RE.match(tokens[0]):
+            raise ValueError(f"Malformed SHA-256 sidecar line: {line!r}")
+        return tokens[0].lower()
+    raise ValueError("Empty SHA-256 sidecar")
+
+
+def fetch_sha256_sidecar(archive_url: str) -> str:
+    with urllib.request.urlopen(archive_url + ".sha256asc") as response:
+        return parse_sha256_sidecar(response.read().decode("utf-8", errors="replace"))
+
+
+def resolve_gcc_sha256(version: str, arch: str, override: Optional[str] = None) -> str:
+    """Expected digest: explicit override > pinned table > Arm's .sha256asc sidecar."""
+    if override:
+        digest = override.strip().lower()
+        if not _SHA256_HEX_RE.match(digest):
+            raise ValueError(f"Invalid --gcc-sha256 value {override!r}: expected 64 hex characters")
+        return digest
+
+    pinned = PINNED_SHA256.get(("arm_gcc", version, arch))
+    if pinned:
+        return pinned
+
+    url = arm_gcc_download_url(version, arch)
+    print(
+        f"NOTE: no pinned SHA-256 for ARM GCC {version} ({arch}); fetching {url}.sha256asc. "
+        "This digest comes from the same origin as the archive, so it guards against a "
+        "corrupted download but is not an independent pin. Pass --gcc-sha256 (or set "
+        f"{GCC_SHA256_ENV}) to pin it explicitly."
+    )
+    try:
+        return fetch_sha256_sidecar(url)
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not fetch the SHA-256 sidecar for ARM GCC {version} ({arch}): {e}. "
+            f"Pass --gcc-sha256 <hex> (or set {GCC_SHA256_ENV}) with the expected digest."
+        ) from e
+
+
+def read_installed_gcc_version(gcc_dir: Path) -> Optional[str]:
+    marker = gcc_dir / GCC_VERSION_MARKER
+    if not marker.exists():
+        return None
+    return marker.read_text(encoding="utf-8").strip() or None
 
 
 def get_architecture() -> str:
@@ -261,50 +359,79 @@ def setup_corstone300(downloads_dir: Path, force: bool = False) -> None:
 
 
 
-def setup_arm_gcc(downloads_dir: Path, force: bool = False) -> None:
-    """Download and setup ARM GCC toolchain."""
+def setup_arm_gcc(
+    downloads_dir: Path,
+    force: bool = False,
+    version: Optional[str] = None,
+    sha256: Optional[str] = None,
+) -> None:
+    """Download and setup ARM GCC toolchain.
+
+    `version` / `sha256` fall back to HELIA_GCC_VERSION / HELIA_GCC_SHA256 and
+    then to DEFAULT_GCC_VERSION / the pinned table (see resolve_gcc_sha256()).
+    """
     gcc_dir = downloads_dir / "arm_gcc_download"
-    
+    version = resolve_gcc_version(version)
+    print(f"ARM GCC version: {version}")
+
     if gcc_dir.exists() and not force:
-        print("Arm GCC already installed. If you wish to install a new version, please delete the old folder.")
+        installed = read_installed_gcc_version(gcc_dir)
+        if installed is None:
+            # Pre-marker install: assume it is the historical default, so only a
+            # non-default request is unverifiable.
+            if version != DEFAULT_GCC_VERSION:
+                raise RuntimeError(
+                    f"Arm GCC at {gcc_dir} has no {GCC_VERSION_MARKER} marker (predates version "
+                    f"selection) so it cannot be confirmed as {version}. Pass --force to replace it "
+                    "(or delete that directory)."
+                )
+            print(
+                f"Arm GCC already installed (no {GCC_VERSION_MARKER} marker; assumed "
+                f"{DEFAULT_GCC_VERSION}). Pass --force to reinstall."
+            )
+            return
+        if installed != version:
+            raise RuntimeError(
+                f"Arm GCC {installed} is installed at {gcc_dir} but {version} was requested. "
+                "Pass --force to replace it (or delete that directory)."
+            )
+        print(f"Arm GCC {installed} already installed. If you wish to install a new version, pass --force.")
         return
-    
+
     if force and gcc_dir.exists():
         print("Removing existing ARM GCC installation...")
         shutil.rmtree(gcc_dir)
-    
+
     arch = get_architecture()
-    if arch == 'x86_64':
-        gcc_url = "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi.tar.xz"
-    elif arch == 'aarch64':
-        gcc_url = "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-aarch64-arm-none-eabi.tar.xz"
-    else:
+    if arch not in ('x86_64', 'aarch64'):
         raise RuntimeError(f"Unsupported architecture for ARM GCC: {arch}")
 
-    expected_sha256 = PINNED_SHA256[("arm_gcc", arch)]
+    gcc_url = arm_gcc_download_url(version, arch)
+    expected_sha256 = resolve_gcc_sha256(version, arch, override=sha256 or os.environ.get(GCC_SHA256_ENV))
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         archive_file = temp_path / "arm_gcc.tar.xz"
-        
-        download_file(gcc_url, archive_file, "ARM GCC toolchain", expected_sha256)
-        
+
+        download_file(gcc_url, archive_file, f"ARM GCC toolchain {version}", expected_sha256)
+
         # Extract to temporary directory first
         temp_extract = temp_path / "extracted"
         extract_tar_gz(archive_file, temp_extract, strip_components=0)
-        
+
         # Find the toolchain directory (should be the only subdirectory)
         toolchain_dirs = [d for d in temp_extract.iterdir() if d.is_dir()]
         if not toolchain_dirs:
             raise RuntimeError("Could not find toolchain directory in archive")
-        
+
         toolchain_dir = toolchain_dirs[0]
-        
+
         # Move contents to final destination
         print(f"Moving toolchain from {toolchain_dir.name} to {gcc_dir}")
         shutil.move(str(toolchain_dir), str(gcc_dir))
-    
-    print("ARM GCC setup complete")
+
+    (gcc_dir / GCC_VERSION_MARKER).write_text(version + "\n", encoding="utf-8")
+    print(f"ARM GCC {version} setup complete")
 
 
 def setup_cmsis5(downloads_dir: Path, force: bool = False) -> None:
@@ -654,9 +781,12 @@ Examples:
     python3 scripts/setup_dependencies.py
     python3 scripts/setup_dependencies.py --downloads-dir ./my_downloads
     python3 scripts/setup_dependencies.py --force
+    python3 scripts/setup_dependencies.py --gcc-version 13.2.rel1 --force
+    HELIA_GCC_VERSION=15.2.rel1 python3 scripts/setup_dependencies.py --force
+    python3 scripts/setup_dependencies.py --gcc-version 15.3.rel1 --gcc-sha256 <hex> --force
         """
     )
-    
+
     parser.add_argument(
         "--downloads-dir",
         type=Path,
@@ -667,6 +797,23 @@ Examples:
         "--force",
         action="store_true",
         help="Force re-download and reinstall all dependencies"
+    )
+    parser.add_argument(
+        "--gcc-version",
+        default=None,
+        help=(
+            "ARM GCC release to install, e.g. 13.2.rel1 (default: $%s or %s). "
+            "A different release than the one already installed requires --force."
+            % (GCC_VERSION_ENV, DEFAULT_GCC_VERSION)
+        ),
+    )
+    parser.add_argument(
+        "--gcc-sha256",
+        default=None,
+        help=(
+            "Expected SHA-256 of the ARM GCC archive (default: $%s, then the pinned table, "
+            "then Arm's published .sha256asc sidecar)" % GCC_SHA256_ENV
+        ),
     )
     parser.add_argument(
         "--skip-corstone",
@@ -718,7 +865,8 @@ Examples:
     # all, which is what drove people to wire it up by hand instead.
     try:
         get_architecture()
-    except RuntimeError as e:
+        gcc_version = resolve_gcc_version(args.gcc_version)
+    except (RuntimeError, ValueError) as e:
         print(f"Error: {e}")
         return 1
 
@@ -739,15 +887,16 @@ Examples:
     print("Setting up CMSIS-NN build dependencies")
     print(f"Downloads directory: {args.downloads_dir}")
     print(f"Force mode: {args.force}")
+    print(f"ARM GCC version: {gcc_version}")
     print("=" * 80)
-    
+
     try:
         if host_os_supported and not args.skip_corstone:
             setup_corstone300(args.downloads_dir, args.force)
             print()
-        
+
         if host_os_supported and not args.skip_gcc:
-            setup_arm_gcc(args.downloads_dir, args.force)
+            setup_arm_gcc(args.downloads_dir, args.force, version=gcc_version, sha256=args.gcc_sha256)
             print()
         
         if not args.skip_cmsis5:

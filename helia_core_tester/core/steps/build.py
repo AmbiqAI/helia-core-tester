@@ -27,11 +27,12 @@ class BuildStep(StepBase):
             self.runtime_env = bootstrap_runtime_env(
                 downloads_dir=self.config.downloads_dir,
                 ensure_setup=True,
+                toolchain=self.config.toolchain,
             )
         return self.runtime_env
 
     def _locked_fvp_flags(self) -> list[str]:
-        return build_locked_fvp_flags(self.runtime_env, self.config.downloads_dir)
+        return build_locked_fvp_flags(self.runtime_env, self.config.downloads_dir, self.config.toolchain)
     
     @property
     def name(self) -> str:

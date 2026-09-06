@@ -9,12 +9,27 @@ from pathlib import Path
 
 VALID_SUITES = {"int", "float", "float-mve"}
 
+# toolchain (CLI/config name) -> compiler tag used in build-<suite>-<cpu>-<tag>.
+COMPILER_TAGS = {"gcc": "gcc", "armclang": "arm-compiler"}
+VALID_TOOLCHAINS = frozenset(COMPILER_TAGS)
+
 
 def normalize_suite(suite: str) -> str:
     normalized = str(suite).strip().lower()
     if normalized not in VALID_SUITES:
         raise ValueError(f"Unsupported suite: {suite}")
     return normalized
+
+
+def normalize_toolchain(toolchain: str) -> str:
+    normalized = str(toolchain).strip().lower()
+    if normalized not in VALID_TOOLCHAINS:
+        raise ValueError(f"Unsupported toolchain: {toolchain} (expected one of: {', '.join(sorted(VALID_TOOLCHAINS))})")
+    return normalized
+
+
+def compiler_tag_for_toolchain(toolchain: str) -> str:
+    return COMPILER_TAGS[normalize_toolchain(toolchain)]
 
 
 def _root(project_root: Path) -> Path:

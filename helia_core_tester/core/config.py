@@ -13,14 +13,17 @@ from helia_core_tester.core.cpu_targets import get_cpu_profile, parse_cpu_list
 from helia_core_tester.core.discovery import find_repo_root
 from helia_core_tester.core.errors import ConfigurationError, PathNotFoundError
 from helia_core_tester.core.path_layout import (
+    VALID_TOOLCHAINS,
     artifacts_root,
     build_dir,
+    compiler_tag_for_toolchain,
     coverage_merged_dir,
     coverage_report_dir,
     generated_tests_dir,
     generated_tests_root,
     generation_report_dir,
     normalize_suite,
+    normalize_toolchain,
     reports_root,
     tests_report_dir,
 )
@@ -78,6 +81,7 @@ class Config:
     cpu: str = "cortex-m55"
     cpus: list[str] = field(default_factory=list)
     optimization: str = "-Ofast"
+    toolchain: str = "gcc"
     jobs: Optional[int] = None
     coverage: bool = False
     coverage_mve_float: bool = False
@@ -276,6 +280,8 @@ class Config:
         self.suites = ["int", "float"] if self.suite == "both" else [self.suite]
         self._validate_float_precision_cpu_compatibility()
         self._validate_coverage_mve_float()
+        self.toolchain = self._normalize_toolchain(self.toolchain)
+        self._validate_toolchain_coverage()
 
         if not 0 <= self.verbosity <= 3:
             raise ValueError(f"verbosity must be between 0 and 3, got {self.verbosity}")
@@ -309,6 +315,21 @@ class Config:
                 f"Invalid float_precision: {float_precision!r} (expected one of: f16, f32, both)"
             )
         return normalized
+
+    def _normalize_toolchain(self, toolchain: str) -> str:
+        try:
+            return normalize_toolchain(toolchain)
+        except ValueError:
+            raise ConfigurationError(
+                f"Invalid toolchain: {toolchain!r} (expected one of: {', '.join(sorted(VALID_TOOLCHAINS))})"
+            ) from None
+
+    def _validate_toolchain_coverage(self) -> None:
+        # Mirrors the fvp orchestrator's guard: gcov instrumentation is GCC-only.
+        if self.coverage and self.toolchain != "gcc":
+            raise ConfigurationError(
+                f"--coverage is only supported with the gcc toolchain (got toolchain={self.toolchain!r})"
+            )
 
     def _validate_float_precision_cpu_compatibility(self) -> None:
         if "float" not in self.suites:
@@ -435,9 +456,13 @@ class Config:
     def coverage_merged_report_dir(self) -> Path:
         return coverage_merged_dir(self.project_root)
 
+    @property
+    def compiler_tag(self) -> str:
+        return compiler_tag_for_toolchain(self.toolchain)
+
     def build_dir_for(self, cpu: str, suite: Optional[str] = None) -> Path:
         suite_name = normalize_suite(suite or self.default_suite())
-        return build_dir(self.project_root, cpu, suite=suite_name)
+        return build_dir(self.project_root, cpu, self.compiler_tag, suite=suite_name)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -450,6 +475,7 @@ class Config:
             "cpu": self.cpu,
             "cpus": list(self.cpus),
             "optimization": self.optimization,
+            "toolchain": self.toolchain,
             "jobs": self.jobs,
             "coverage": self.coverage,
             "coverage_mve_float": self.coverage_mve_float,
