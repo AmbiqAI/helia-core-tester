@@ -197,6 +197,16 @@
       "type": "string",
       "enum": ["strict", "mask"]
     },
+    "fault": {
+      "description": "Argument fault to inject before the kernel call, selecting the operator's <op>_fault.c.j2 template. Each operator validates the kind against its FAULT_KINDS; shared kinds are null_ctx_buf, null_input, null_output, zero_dim and negative_dim. A fault case asserts the returned status against expected_status and never validates outputs.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"
+    },
+    "expected_status": {
+      "description": "arm_cmsis_nn_status token the kernel call must return. Defaults to ARM_CMSIS_NN_SUCCESS; a fault case normally sets ARM_CMSIS_NN_ARG_ERROR.",
+      "type": "string",
+      "enum": ["ARM_CMSIS_NN_SUCCESS", "ARM_CMSIS_NN_ARG_ERROR", "ARM_CMSIS_NN_NO_IMPL_ERROR", "ARM_CMSIS_NN_FAILURE"]
+    },
     "filter_shape": {
       "$ref": "#/$defs/intArray"
     },

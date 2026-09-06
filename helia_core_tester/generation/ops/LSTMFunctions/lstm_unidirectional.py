@@ -10,7 +10,9 @@ from helia_core_tester.generation.ops.catalog import get_operator_spec
 
 class OpLSTMUnidirectional(OperationBase):
     """LSTMUnidirectional operation."""
-    
+
+    FAULT_KINDS = ("null_input", "null_output", "null_params", "null_buffers")
+
     def build_keras_model(self) -> tf.keras.Model:
         """
         Build Keras model for LSTMUnidirectional.
@@ -334,8 +336,7 @@ class OpLSTMUnidirectional(OperationBase):
             # Issue #56: port of the GRU fault: mechanism
             # (gru_unidirectional.py) -- LSTM previously had no
             # argument-validation coverage at all.
-            fault = self.desc.get("fault")
-            expected_status = str(self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
+            fault = self.fault_kind()
             # Follow-up to #56: port of the GRU stream: mechanism -- LSTM
             # previously had zero hidden_state/cell_state streaming coverage.
             # See arm_lstm_unidirectional_f32.c: cell_state is caller-owned
@@ -344,8 +345,7 @@ class OpLSTMUnidirectional(OperationBase):
             stream = bool(self.desc.get("hint", {}).get("stream", False))
             h_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.h.j2"
             if fault:
-                context["fault"] = fault
-                context["expected_status"] = expected_status
+                context.update(self.fault_context())
                 c_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_fault.c.j2"
             elif stream:
                 if batch_size != 1:

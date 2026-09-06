@@ -1265,3 +1265,135 @@ depth_multiplier: 1
 dilation:
 - 1
 - 1
+---
+# Fault-injection cases (issue #72): each case feeds an argument the kernel's
+# own validation rejects and asserts ARM_CMSIS_NN_ARG_ERROR instead of
+# validating outputs. The optimized (ch_mult 1) routes hold the guards.
+operator: DepthwiseConv
+name: depthwise_conv_fault_null_ctx_buf_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+required_capabilities: [dsp]
+hint:
+  call_style: per_tensor
+input_shape: [1, 4, 4, 4]
+filter_shape: [2, 2, 4, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+fault: null_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: DepthwiseConv
+name: depthwise_conv_fault_null_ctx_buf_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+required_capabilities: [dsp]
+hint:
+  call_style: per_tensor
+input_shape: [1, 4, 4, 4]
+filter_shape: [2, 2, 4, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+fault: null_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: DepthwiseConv
+name: depthwise_conv_fault_null_ctx_buf_s4
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape: [1, 4, 4, 4]
+filter_shape: [2, 2, 4, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+fault: null_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: DepthwiseConv
+name: depthwise_conv_fault_null_weight_sum_ctx_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+required_capabilities: [mve]
+hint:
+  call_style: per_tensor
+input_shape: [1, 4, 4, 4]
+filter_shape: [2, 2, 4, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+fault: null_weight_sum_ctx
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: DepthwiseConv
+name: depthwise_conv_fault_channel_mismatch_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 4, 4, 4]
+filter_shape: [2, 2, 4, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+fault: channel_mismatch
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: DepthwiseConv
+name: depthwise_conv_fault_channel_mismatch_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 4, 4, 4]
+filter_shape: [2, 2, 4, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+fault: channel_mismatch
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: DepthwiseConv
+name: depthwise_conv_fault_channel_mismatch_s4
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape: [1, 4, 4, 4]
+filter_shape: [2, 2, 4, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+fault: channel_mismatch
+expected_status: ARM_CMSIS_NN_ARG_ERROR

@@ -291,3 +291,325 @@ hint:
   rank: 1
   sequence_steps: 2
   use_bias: true
+---
+operator: SVDF
+name: svdf_fault_null_input_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: null_input
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_null_input_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: null_input
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_null_output_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: null_output
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_null_output_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: null_output
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_null_input_ctx_buf_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: null_input_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_null_input_ctx_buf_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: null_input_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_null_output_ctx_buf_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: null_output_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_null_output_ctx_buf_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: null_output_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_small_input_ctx_size_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: small_input_ctx_size
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_small_input_ctx_size_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: small_input_ctx_size
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_small_output_ctx_size_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: small_output_ctx_size
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_small_output_ctx_size_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: small_output_ctx_size
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_zero_rank_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: zero_rank
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_zero_rank_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  sequence_steps: 1
+  use_bias: true
+fault: zero_rank
+expected_status: ARM_CMSIS_NN_ARG_ERROR

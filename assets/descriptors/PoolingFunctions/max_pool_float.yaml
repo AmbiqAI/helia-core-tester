@@ -337,3 +337,107 @@ input_mode: nonfinite_sweep
 nonfinite_tokens: [nan]
 nonfinite_positions: [72]
 nonfinite_policy: mask
+---
+operator: MaxPool
+name: max_pool_fault_zero_dim_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 4, 4, 2]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+fault: zero_dim
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: MaxPool
+name: max_pool_fault_zero_dim_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 4, 4, 2]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+fault: zero_dim
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: MaxPool
+name: max_pool_fault_negative_dim_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 4, 4, 2]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+fault: negative_dim
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: MaxPool
+name: max_pool_fault_negative_dim_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 4, 4, 2]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+fault: negative_dim
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: MaxPool
+name: max_pool_fault_null_input_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 4, 4, 2]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+fault: null_input
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: MaxPool
+name: max_pool_fault_null_input_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 4, 4, 2]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+fault: null_input
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: MaxPool
+name: max_pool_fault_null_output_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 4, 4, 2]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+fault: null_output
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: MaxPool
+name: max_pool_fault_null_output_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 4, 4, 2]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+fault: null_output
+expected_status: ARM_CMSIS_NN_ARG_ERROR

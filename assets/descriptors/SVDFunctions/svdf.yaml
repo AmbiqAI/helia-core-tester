@@ -147,3 +147,92 @@ hint:
   time_batches: 3
   rank: 2
   use_bias: false
+---
+# Fault-injection cases (issue #72): each case feeds an argument the kernel's
+# own validation rejects and asserts ARM_CMSIS_NN_ARG_ERROR instead of
+# validating outputs.
+operator: SVDF
+name: svdf_fault_null_ctx_buf_s8
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [1, 4]
+required_capabilities: [mve]
+hint:
+  force_cmsis: true
+  state_dtype: S8
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  use_bias: true
+fault: null_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_null_input_ctx_buf_s8
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  state_dtype: S8
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  use_bias: true
+fault: null_input_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_null_output_ctx_buf_s8
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  state_dtype: S8
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  use_bias: true
+fault: null_output_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_state_s16_null_input_ctx_buf_s8
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  state_dtype: S16
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  use_bias: true
+fault: null_input_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: SVDF
+name: svdf_fault_state_s16_null_output_ctx_buf_s8
+activation_dtype: S8
+weight_dtype: S8
+input_shape: [1, 4]
+hint:
+  force_cmsis: true
+  state_dtype: S16
+  input_batches: 1
+  input_height: 4
+  feature_batches: 4
+  time_batches: 3
+  rank: 1
+  use_bias: true
+fault: null_output_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR

@@ -1,0 +1,93 @@
+#include "{{ name }}_transpose_conv.h"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+{# Declare only the buffers this fault mode actually passes to the kernel so a
+   NULL-substituted buffer never becomes an unused static (-Wunused-variable). #}
+{% if fault != "null_output" %}static {{ output_dtype }} {{ name }}_output[{{ output_dims.n * output_dims.h * output_dims.w * output_dims.c }}];
+{% endif %}{% if fault != "null_ctx_buf" %}static uint8_t {{ name }}_buffer[{{ [buffer_size_max, 4] | max }}];
+{% endif %}{% if fault != "null_reverse_conv_ctx_buf" %}static uint8_t {{ name }}_reverse_conv_ctx_buffer[{{ [reverse_conv_ctx_size, 4] | max }}];
+{% endif %}{% if not float_kernel and fault != "null_weight_sum_ctx" %}static int32_t {{ name }}_weight_sum_buffer[{{ output_dims.c }}];
+{% endif %}
+
+/*
+ * Fault-injection test case: exercises an {{ kernel_fn }}
+ * argument-validation branch. Fault mode: {{ fault }}.
+ */
+static int32_t run_transpose_conv(void)
+{
+    const cmsis_nn_context ctx = {
+        .buf = {% if fault == "null_ctx_buf" %}NULL{% else %}{{ name }}_buffer{% endif %},
+        .size = {% if fault == "null_ctx_buf" %}0{% else %}sizeof({{ name }}_buffer){% endif %},
+    };
+    const cmsis_nn_context reverse_conv_ctx = {
+        .buf = {% if fault == "null_reverse_conv_ctx_buf" %}NULL{% else %}{{ name }}_reverse_conv_ctx_buffer{% endif %},
+        .size = {% if fault == "null_reverse_conv_ctx_buf" %}0{% else %}sizeof({{ name }}_reverse_conv_ctx_buffer){% endif %},
+    };
+{% if not float_kernel %}
+    const cmsis_nn_context weight_sum_ctx = {
+        .buf = {% if fault == "null_weight_sum_ctx" %}NULL{% else %}(uint8_t *){{ name }}_weight_sum_buffer{% endif %},
+        .size = {% if fault == "null_weight_sum_ctx" %}0{% else %}sizeof({{ name }}_weight_sum_buffer){% endif %},
+    };
+{% endif %}
+    {{ transpose_conv_params_type | default("cmsis_nn_transpose_conv_params") }} transpose_conv_params = {{ name }}_transpose_conv_params;
+{% if fault == "nonunit_dilation" %}
+    transpose_conv_params.dilation.w = 2;
+{% endif %}
+    const {{ input_dtype }} *input_arg = {% if fault == "null_input" %}NULL{% else %}{{ name }}_input{% endif %};
+    {{ output_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};
+
+{% if float_kernel %}
+    return {{ kernel_fn }}(
+        &ctx,
+        &reverse_conv_ctx,
+        &transpose_conv_params,
+        &{{ name }}_input_dims,
+        input_arg,
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        &{{ name }}_bias_dims,
+        {% if has_biases %}
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        output_arg,
+        {{ "(arm_nn_tensor_layout)(" ~ kernel_layout ~ " + 1)" if fault == "invalid_layout" else kernel_layout }}
+    );
+{% else %}
+    return {{ kernel_fn }}(
+        &ctx,
+        &weight_sum_ctx,
+        &reverse_conv_ctx,
+        &transpose_conv_params,
+        &{{ name }}_quant_params,
+        &{{ name }}_input_dims,
+        input_arg,
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        &{{ name }}_bias_dims,
+        {% if has_biases %}
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        output_arg
+    );
+{% endif %}
+}
+
+int32_t {{ name }}_test_case_run(void)
+{
+    int32_t status = run_transpose_conv();
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ validation_label | default("Transpose convolution") }}",
+        status,
+        {{ expected_status }}
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(0);
+}
+
+{% include "common/standalone/main.j2" %}

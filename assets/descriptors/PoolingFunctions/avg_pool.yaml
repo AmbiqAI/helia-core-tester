@@ -197,3 +197,62 @@ strides:
 - 3
 - 1
 padding: SAME
+---
+# Fault-injection cases (issue #72): each case feeds an argument the kernel's
+# own validation rejects and asserts ARM_CMSIS_NN_ARG_ERROR instead of
+# validating outputs.
+operator: AvgPool
+name: avg_pool_fault_zero_dim_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 4, 4, 2]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+fault: zero_dim
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: AvgPool
+name: avg_pool_fault_zero_dim_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 4, 4, 2]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+fault: zero_dim
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: AvgPool
+name: avg_pool_fault_negative_dim_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 4, 4, 2]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+fault: negative_dim
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: AvgPool
+name: avg_pool_fault_negative_dim_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 4, 4, 2]
+pool_size: [2, 2]
+strides: [2, 2]
+padding: VALID
+fault: negative_dim
+expected_status: ARM_CMSIS_NN_ARG_ERROR
