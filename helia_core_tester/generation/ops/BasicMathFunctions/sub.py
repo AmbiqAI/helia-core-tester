@@ -75,19 +75,18 @@ class OpSub(BinaryBasicMathBase):
                 'output_c_type': 'int16_t',
                 'float_kernel': False,
             }
-        elif activation_dtype == 'FP32':
+        elif activation_dtype in ('FP32', 'FP16'):
+            # The flat float kernel has no dims, so two shapes can only reach the
+            # dims-taking broadcast entry point (ns-cmsis-nn#415).
+            float_broadcast = self._float_broadcast_call(auto_on_shape_mismatch=True)
+            suffix = 'f32' if activation_dtype == 'FP32' else 'f16'
+            c_type = 'float' if activation_dtype == 'FP32' else 'float16_t'
             return {
-                'kernel_fn': 'arm_elementwise_sub_f32',
-                'input_c_type': 'float',
-                'output_c_type': 'float',
+                'kernel_fn': f"arm_elementwise_sub_broadcast_{suffix}" if float_broadcast else f"arm_elementwise_sub_{suffix}",
+                'input_c_type': c_type,
+                'output_c_type': c_type,
                 'float_kernel': True,
-            }
-        elif activation_dtype == 'FP16':
-            return {
-                'kernel_fn': 'arm_elementwise_sub_f16',
-                'input_c_type': 'float16_t',
-                'output_c_type': 'float16_t',
-                'float_kernel': True,
+                'float_broadcast': float_broadcast,
             }
         else:
             raise NotImplementedError(f"Unsupported Sub dtype: {activation_dtype}")
@@ -148,8 +147,8 @@ class OpSub(BinaryBasicMathBase):
         activation_dtype = self.tensor_dtype("input", default="S8")
 
         if kernel_info["float_kernel"]:
-            # The float elementwise sub kernels have no broadcast support, so
-            # both inputs must already share the same shape.
+            # The flat kernels take equal shapes; the broadcast entry point takes the
+            # operands as drawn and the golden broadcasts them by NumPy's rules.
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
             activation_min = float(self.desc.get("act_min", -1.0e30))
             activation_max = float(self.desc.get("act_max", 1.0e30))
@@ -287,6 +286,8 @@ class OpSub(BinaryBasicMathBase):
             context["out_activation_min_literal"] = activation_min_literal
             context["out_activation_max_literal"] = activation_max_literal
             context["validation_mode"] = "float"
+            if kernel_info.get("float_broadcast"):
+                context["float_broadcast"] = True
 
         cmake_context = {
             'name': name,

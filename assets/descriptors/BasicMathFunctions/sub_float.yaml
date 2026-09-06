@@ -104,3 +104,304 @@ nonfinite_policy: strict
 # landing on the 1e30 default bound.
 act_min: -.inf
 act_max: .inf
+---
+# Broadcast shapes for the dims-taking float entry point
+# arm_elementwise_sub_broadcast_{f32,f16} (ns-cmsis-nn#415): NumPy/TFLite NHWC
+# broadcasting, same clamp and NaN contract as the flat arm_elementwise_sub_{f32,f16}.
+# `hint: call_style: broadcast` selects that entry point; the golden is NumPy's
+# broadcast of the operands as drawn (no materialised copy in the input arrays).
+# input_2 broadcast along N, H and W (the vec-op-scalar leaf per channel run)
+operator: Sub
+name: sub_float_bcast_channel_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 1, 1, 4]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f32]
+
+---
+operator: Sub
+name: sub_float_bcast_channel_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 1, 1, 4]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f16]
+
+---
+# the mirror: input_1 is the broadcast operand (sub's rsub leaf, scalar - vec)
+operator: Sub
+name: sub_float_bcast_channel_left_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 1, 1, 4]
+input_2_shape: [1, 2, 3, 4]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f32]
+
+---
+operator: Sub
+name: sub_float_bcast_channel_left_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 1, 1, 4]
+input_2_shape: [1, 2, 3, 4]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f16]
+
+---
+# input_2 is one element
+operator: Sub
+name: sub_float_bcast_scalar_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 1, 1, 1]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f32]
+
+---
+operator: Sub
+name: sub_float_bcast_scalar_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 1, 1, 1]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f16]
+
+---
+# input_1 is one element (sub's rsub leaf)
+operator: Sub
+name: sub_float_bcast_scalar_left_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 1, 1, 1]
+input_2_shape: [1, 2, 3, 4]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f32]
+
+---
+operator: Sub
+name: sub_float_bcast_scalar_left_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 1, 1, 1]
+input_2_shape: [1, 2, 3, 4]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f16]
+
+---
+# input_1 broadcast along H only; full-width leaf per row
+operator: Sub
+name: sub_float_bcast_height_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 1, 3, 4]
+input_2_shape: [1, 2, 3, 4]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f32]
+
+---
+operator: Sub
+name: sub_float_bcast_height_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 1, 3, 4]
+input_2_shape: [1, 2, 3, 4]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f16]
+
+---
+# one scalar per batch on the right
+operator: Sub
+name: sub_float_bcast_batch_scalar_right_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [2, 2, 3, 4]
+input_2_shape: [2, 1, 1, 1]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f32]
+
+---
+operator: Sub
+name: sub_float_bcast_batch_scalar_right_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [2, 2, 3, 4]
+input_2_shape: [2, 1, 1, 1]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f16]
+
+---
+# one scalar per H row on the right
+operator: Sub
+name: sub_float_bcast_row_scalar_right_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 2, 1, 1]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f32]
+
+---
+operator: Sub
+name: sub_float_bcast_row_scalar_right_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 2, 1, 1]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f16]
+
+---
+# one scalar per pixel on the right (C run of 4 against 1)
+operator: Sub
+name: sub_float_bcast_channel_scalar_right_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 2, 3, 1]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f32]
+
+---
+operator: Sub
+name: sub_float_bcast_channel_scalar_right_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 2, 3, 4]
+input_2_shape: [1, 2, 3, 1]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f16]
+
+---
+# both operands broadcast (H from input_1, W from input_2); C=5 is a tail on both the f32 and f16 lane counts
+operator: Sub
+name: sub_float_bcast_both_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 3, 1, 5]
+input_2_shape: [1, 1, 2, 5]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f32]
+
+---
+operator: Sub
+name: sub_float_bcast_both_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 3, 1, 5]
+input_2_shape: [1, 1, 2, 5]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f16]
+
+---
+# one scalar per pixel on the right with C=5: the vec-op-scalar leaf's predicated tail on both lane counts
+operator: Sub
+name: sub_float_bcast_channel_scalar_right_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 2, 3, 5]
+input_2_shape: [1, 2, 3, 1]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f32]
+
+---
+operator: Sub
+name: sub_float_bcast_channel_scalar_right_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 2, 3, 5]
+input_2_shape: [1, 2, 3, 1]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f16]
+
+---
+# input_1 is one element and the run is 30: the scalar-op-vec leaf (sub's rsub) with a tail on both lane counts
+operator: Sub
+name: sub_float_bcast_scalar_left_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_1_shape: [1, 1, 1, 1]
+input_2_shape: [1, 2, 3, 5]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f32]
+
+---
+operator: Sub
+name: sub_float_bcast_scalar_left_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_1_shape: [1, 1, 1, 1]
+input_2_shape: [1, 2, 3, 5]
+hint:
+  call_style: broadcast
+required_kernel_symbols: [arm_elementwise_sub_broadcast_f16]
