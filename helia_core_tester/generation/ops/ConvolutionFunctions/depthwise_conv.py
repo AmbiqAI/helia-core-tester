@@ -6,6 +6,7 @@ import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.bias_init import (
+    HoistedBiasInjectionError,
     bias_is_hoisted_by_lowering,
     inject_hoisted_dilation_bias,
 )
@@ -240,12 +241,14 @@ class OpDepthwiseConv(OperationBase):
             is_float=str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"},
         )
         if self.desc.get('use_bias', True) and hoisted:
-            if not inject_hoisted_dilation_bias(out_path, rep_seed):
+            try:
+                inject_hoisted_dilation_bias(out_path, rep_seed)
+            except HoistedBiasInjectionError as exc:
                 raise ValueError(
-                    f"{self.desc.get('name')}: the lowered dilated depthwise conv kept "
-                    f"its zero placeholder bias, so the case cannot detect a dropped "
-                    f"bias-add"
-                )
+                    f"{self.desc.get('name')}: no accumulator-scale bias was injected "
+                    f"into the lowered dilated depthwise conv, so the case cannot "
+                    f"detect a dropped bias-add: {exc}"
+                ) from exc
 
     def _select_cmsis_depthwise_conv_kernel(self) -> Dict[str, str]:
         info = resolve_depthwise_conv_kernel(

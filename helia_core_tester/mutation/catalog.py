@@ -49,7 +49,12 @@ Grounding of the v1 entries:
                          that carries a bias, the six dilated ones included.
                          The remaining nine s16 Convolve cases are use_bias:
                          false; every other survivor is an s8/s4 conv or a
-                         DepthwiseConv case, which no edit here touches.
+                         DepthwiseConv case, which no edit here touches. The
+                         arm_convolve_s16_fast_small_kernel.c edits sit inside
+                         that file's ARM_MATH_MVEI branch, so they are inert on
+                         cortex-m4 and the 9/123 figure is the non-MVE routes
+                         only; an MVE run reaches more entry points and differs
+                         by construction.
 - packed_sign_mask_343:  ns-cmsis-nn#343 (packed DSP loop masked the
                          sign-extended halfword with & 0x0FFFF, disagreeing
                          with its own scalar tail). The patch removes the

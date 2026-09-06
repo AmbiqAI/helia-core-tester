@@ -17,6 +17,15 @@ _DILATION_BIAS_MIN_STEPS = 3.0
 _DILATION_BIAS_MAX_STEPS = 8.0
 
 
+class HoistedBiasInjectionError(ValueError):
+    """A model handed to :func:`inject_hoisted_dilation_bias` did not match.
+
+    Subclasses ``ValueError`` so the argument-validation contract of this
+    module is unchanged for callers that do not care which precondition
+    failed.
+    """
+
+
 class SignedMagnitudeUniform(keras.initializers.Initializer):
     """Seed-derived values with ``|value|`` uniform in ``[minval, maxval]``.
 
@@ -72,7 +81,7 @@ def bias_is_hoisted_by_lowering(dilation: Any, *, is_float: bool) -> bool:
     return any(int(rate) != 1 for rate in rates)
 
 
-def inject_hoisted_dilation_bias(tflite_path: str | Path, seed: Optional[int]) -> bool:
+def inject_hoisted_dilation_bias(tflite_path: str | Path, seed: Optional[int]) -> None:
     """Give a lowered quantized dilated conv the accumulator-scale bias it lost.
 
     TF lowers a quantized dilated Conv2D/DepthwiseConv2D to SpaceToBatchND ->
@@ -93,9 +102,12 @@ def inject_hoisted_dilation_bias(tflite_path: str | Path, seed: Optional[int]) -
         tflite_path: Converted model, rewritten in place when the pattern matches.
         seed: Case seed; identical seeds give identical bias tensors.
 
-    Returns:
-        True if a bias was injected, False if the model is not a lowered
-        quantized dilated conv (float graphs and undilated graphs included).
+    Raises:
+        HoistedBiasInjectionError: The model is not a lowered quantized dilated
+            conv with an injectable placeholder bias. The message names the
+            precondition that failed, which is what tells a caller whether the
+            graph was never lowered, or was lowered into a shape this does not
+            know how to bias.
     """
     from ai_edge_litert import schema_py_generated as litert
     import flatbuffers
@@ -113,7 +125,9 @@ def inject_hoisted_dilation_bias(tflite_path: str | Path, seed: Optional[int]) -
     if not any(
         builtin_code(op) == litert.BuiltinOperator.SPACE_TO_BATCH_ND for op in subgraph.operators
     ):
-        return False
+        raise HoistedBiasInjectionError(
+            "the graph has no SpaceToBatchND, so the converter never hoisted a bias"
+        )
 
     conv_op = None
     for op in subgraph.operators:
@@ -123,13 +137,22 @@ def inject_hoisted_dilation_bias(tflite_path: str | Path, seed: Optional[int]) -
         ):
             conv_op = op
             break
-    if conv_op is None or conv_op.inputs is None or len(conv_op.inputs) < 3:
-        return False
+    if conv_op is None:
+        raise HoistedBiasInjectionError(
+            "the lowered graph has no CONV_2D or DEPTHWISE_CONV_2D operator"
+        )
+    if conv_op.inputs is None or len(conv_op.inputs) < 3:
+        raise HoistedBiasInjectionError(
+            "the lowered conv op has no bias input "
+            f"({0 if conv_op.inputs is None else len(conv_op.inputs)} inputs)"
+        )
 
     # TFLite marks an absent optional input with -1, which would index the
     # tensor list from the end.
     if int(conv_op.inputs[2]) < 0:
-        return False
+        raise HoistedBiasInjectionError(
+            "the lowered conv op's bias input is the -1 absent-optional sentinel"
+        )
 
     bias_tensor = subgraph.tensors[int(conv_op.inputs[2])]
     bias_np_dtype = {
@@ -137,36 +160,55 @@ def inject_hoisted_dilation_bias(tflite_path: str | Path, seed: Optional[int]) -
         litert.TensorType.INT64: np.int64,
     }.get(bias_tensor.type)
     if bias_np_dtype is None:
-        return False
+        raise HoistedBiasInjectionError(
+            f"the placeholder bias is tensor type {bias_tensor.type}, not INT32 or INT64"
+        )
 
     existing = get_tensor_data_from_litert(bias_tensor, model)
     if existing is not None and np.any(existing != 0):
-        return False
+        raise HoistedBiasInjectionError(
+            "the lowered conv op already carries a non-zero bias, so the Keras bias "
+            "was not hoisted into the trailing Add"
+        )
 
     input_tensor = subgraph.tensors[int(conv_op.inputs[0])]
     weight_tensor = subgraph.tensors[int(conv_op.inputs[1])]
     output_tensor = subgraph.tensors[int(conv_op.outputs[0])]
-    for tensor in (input_tensor, weight_tensor, output_tensor):
-        if tensor.quantization is None or tensor.quantization.scale is None:
-            return False
-        if len(tensor.quantization.scale) == 0:
-            return False
+    for role, tensor in (
+        ("input", input_tensor),
+        ("weight", weight_tensor),
+        ("output", output_tensor),
+    ):
+        if (
+            tensor.quantization is None
+            or tensor.quantization.scale is None
+            or len(tensor.quantization.scale) == 0
+        ):
+            raise HoistedBiasInjectionError(
+                f"the lowered conv op's {role} tensor carries no quantization scale"
+            )
 
     channels = int(bias_tensor.shape[0]) if bias_tensor.shape is not None else 0
     if channels <= 0:
-        return False
+        raise HoistedBiasInjectionError(
+            f"the placeholder bias has no channels (shape {bias_tensor.shape})"
+        )
 
     weight_scales = np.asarray(weight_tensor.quantization.scale, dtype=np.float64)
     if weight_scales.size == 1:
         weight_scales = np.repeat(weight_scales, channels)
     if weight_scales.size != channels:
-        return False
+        raise HoistedBiasInjectionError(
+            f"the weight tensor has {weight_scales.size} scales for {channels} bias channels"
+        )
 
     input_scale = float(input_tensor.quantization.scale[0])
     output_scale = float(output_tensor.quantization.scale[0])
     accumulator_scales = input_scale * weight_scales
     if not np.all(accumulator_scales > 0):
-        return False
+        raise HoistedBiasInjectionError(
+            "the input x weight accumulator scale is not positive on every channel"
+        )
 
     steps = np.asarray(
         SignedMagnitudeUniform(
@@ -191,4 +233,3 @@ def inject_hoisted_dilation_bias(tflite_path: str | Path, seed: Optional[int]) -
     file_identifier = getattr(litert.Model, "FileIdentifier", lambda: b"TFL3")()
     builder.Finish(model_offset, file_identifier)
     Path(tflite_path).write_bytes(bytes(builder.Output()))
-    return True

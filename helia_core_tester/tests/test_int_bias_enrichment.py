@@ -18,7 +18,9 @@ import numpy as np
 import pytest
 
 from helia_core_tester.generation.ops.ConvolutionFunctions import convolve as convolve_module
+from helia_core_tester.generation.ops.ConvolutionFunctions import depthwise_conv as depthwise_module
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
+from helia_core_tester.generation.ops._shared.bias_init import bias_is_hoisted_by_lowering
 from helia_core_tester.generation.ops.ConvolutionFunctions.convolve import OpConvolve
 from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import OpDepthwiseConv
 from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import OpFullyConnected
@@ -123,30 +125,35 @@ def _bias_carrying_int_cases(*, weight_dtype_s4: bool) -> List[str]:
     return names
 
 
-def _dilated_hoisted_bias_cases() -> List[str]:
+def _dilated_hoisted_bias_cases(operator: Optional[str] = None) -> List[str]:
     """Names of the cases whose bias the converter hoists out of the conv op.
 
     A quantized dilated Convolve/DepthwiseConv lowers to SpaceToBatchND -> conv
     -> BatchToSpaceND, leaving a zero placeholder bias on the op the kernel
     stands in for; ``inject_hoisted_dilation_bias`` writes a real
-    accumulator-scale bias back into it.  S4 cases are excluded: they are built
-    with LiteRT directly and never go through that lowering.
+    accumulator-scale bias back into it.  Which cases those are is decided by
+    the same ``bias_is_hoisted_by_lowering`` predicate generation gates the
+    injection on, so a descriptor cannot be held here to a rule production does
+    not apply.  S4 cases are excluded on top of it: they are built with LiteRT
+    directly and never reach the converter that does the lowering.
+
+    Args:
+        operator: Restrict the sweep to one operator name; all of them if None.
     """
     names: List[str] = []
     for desc in _all_descriptors():
         if desc.get("operator") not in ("Convolve", "DepthwiseConv"):
             continue
-        if str(desc.get("activation_dtype", "")).upper() in ("FP32", "FP16"):
+        if operator is not None and desc.get("operator") != operator:
             continue
         if str(desc.get("weight_dtype", "S8")).upper() == "S4":
             continue
         if not desc.get("use_bias", True):
             continue
-        dilation = desc.get("dilation")
-        if dilation is None:
-            continue
-        rates = (dilation,) if isinstance(dilation, (int, float)) else tuple(dilation)
-        if all(int(rate) == 1 for rate in rates):
+        if not bias_is_hoisted_by_lowering(
+            desc.get("dilation", 1),
+            is_float=str(desc.get("activation_dtype", "")).upper() in ("FP32", "FP16"),
+        ):
             continue
         names.append(desc["name"])
     assert names, "descriptor sweep found no dilated hoisted-bias cases"
@@ -296,7 +303,8 @@ def test_dilated_bias_is_detectable_on_every_channel(
 
 @pytest.mark.parametrize(
     "case_name",
-    ["convolve_2x2_dilation_s8", "convolve_int16xint8_dilation_case_01_s16"],
+    ["convolve_2x2_dilation_s8", "convolve_int16xint8_dilation_case_01_s16"]
+    + _dilated_hoisted_bias_cases("DepthwiseConv"),
 )
 def test_dilated_golden_moves_with_the_injected_bias(
     case_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -311,9 +319,14 @@ def test_dilated_golden_moves_with_the_injected_bias(
     """
     with_bias = _generate(case_name, tmp_path / "with_bias", "cortex-m55")
 
-    # Reporting success without writing anything is the only way to get the
+    # Returning without writing anything is the only way to get the
     # pre-injection model out of generation: a failed injection is a hard error.
-    monkeypatch.setattr(convolve_module, "inject_hoisted_dilation_bias", lambda *_: True)
+    op_module = (
+        depthwise_module
+        if _descriptor(case_name)["operator"] == "DepthwiseConv"
+        else convolve_module
+    )
+    monkeypatch.setattr(op_module, "inject_hoisted_dilation_bias", lambda *_: None)
     without_bias = _generate(case_name, tmp_path / "without_bias", "cortex-m55")
 
     assert all(bias == 0 for bias in _int_array(without_bias, "biases") or [])
