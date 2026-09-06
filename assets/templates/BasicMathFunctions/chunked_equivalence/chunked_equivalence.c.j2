@@ -59,8 +59,10 @@ static int32_t {{ name }}_kernel_call(
     );
     {% elif call_style == 'minmax' %}
     // The min/max kernels slice by dims, not by a block size. Identical dims
-    // on both inputs and the output keep the broadcast walk on its
-    // no-broadcast path, which is the one holding the vector loop.
+    // on both inputs and the output are what keeps the walk in
+    // Include/Internal/arm_nn_broadcast_walk.h on its no-broadcast path, which
+    // is the one holding the vector loop; any difference would route the
+    // chunked pass through a scalar broadcast helper instead.
     const cmsis_nn_context ctx = {NULL, 0};
     const cmsis_nn_dims dims = {1, 1, 1, block_size};
     return {{ kernel_fn }}(&ctx, input1, &dims, input2, &dims, output, &dims);

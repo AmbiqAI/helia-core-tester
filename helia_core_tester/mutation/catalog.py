@@ -77,10 +77,11 @@ Grounding of the v1 entries:
   requantize_tail_drop: the same tail-drop class as tail_loop_off_by_one,
                          planted in the three families that gained chunked
                          cases in issue #81. Each is expressed in every
-                         compiled variant of its kernel, not just the
-                         vectorised one, because the host scorer builds with
-                         ARM_MATH_DSP and no MVEI: an MVE-only edit would be
-                         dead code here and score as vacuous.
+                         compiled variant of its kernel, scalar and vectorised
+                         alike: the host scorer builds with ARM_MATH_DSP and no
+                         MVEI, so an MVE-only edit would be dead code there and
+                         score as vacuous, while a scalar-only edit would be
+                         dead code on the FVP targets the suite actually runs.
 """
 
 from __future__ import annotations
@@ -391,6 +392,16 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
                 ),
                 count=1,
             ),
+            # The MVE build compiles the wlstp.8/.16 asm instead of the
+            # scalar loop above, so shortening only that loop would leave the
+            # mutant dead on an MVE target. Trimming the loop-count operand is
+            # the same defect expressed in the vectorised variant.
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_minimum_s8.c",
+                pattern=': [cnt] "r"(flat_size)',
+                replacement=': [cnt] "r"(flat_size - 1) /* MUTANT minmax_no_broadcast_tail_drop */',
+                count=1,
+            ),
             Edit(
                 relpath="Source/BasicMathFunctions/arm_maximum_s8.c",
                 pattern="    while (flat_size > 0)\n    {\n        int8_t in1 = *input_1++;",
@@ -398,6 +409,16 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
                     "    while (flat_size > 1) /* MUTANT minmax_no_broadcast_tail_drop */\n"
                     "    {\n        int8_t in1 = *input_1++;"
                 ),
+                count=1,
+            ),
+            # The MVE build compiles the wlstp.8/.16 asm instead of the
+            # scalar loop above, so shortening only that loop would leave the
+            # mutant dead on an MVE target. Trimming the loop-count operand is
+            # the same defect expressed in the vectorised variant.
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_maximum_s8.c",
+                pattern=': [cnt] "r"(flat_size)',
+                replacement=': [cnt] "r"(flat_size - 1) /* MUTANT minmax_no_broadcast_tail_drop */',
                 count=1,
             ),
             Edit(
@@ -409,6 +430,16 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
                 ),
                 count=1,
             ),
+            # The MVE build compiles the wlstp.8/.16 asm instead of the
+            # scalar loop above, so shortening only that loop would leave the
+            # mutant dead on an MVE target. Trimming the loop-count operand is
+            # the same defect expressed in the vectorised variant.
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_minimum_s16.c",
+                pattern=': [cnt] "r"(flat_size)',
+                replacement=': [cnt] "r"(flat_size - 1) /* MUTANT minmax_no_broadcast_tail_drop */',
+                count=1,
+            ),
             Edit(
                 relpath="Source/BasicMathFunctions/arm_maximum_s16.c",
                 pattern="    while (flat_size > 0)\n    {\n        int16_t in1 = *input_1++;",
@@ -418,11 +449,23 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
                 ),
                 count=1,
             ),
+            # The MVE build compiles the wlstp.8/.16 asm instead of the
+            # scalar loop above, so shortening only that loop would leave the
+            # mutant dead on an MVE target. Trimming the loop-count operand is
+            # the same defect expressed in the vectorised variant.
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_maximum_s16.c",
+                pattern=': [cnt] "r"(flat_size)',
+                replacement=': [cnt] "r"(flat_size - 1) /* MUTANT minmax_no_broadcast_tail_drop */',
+                count=1,
+            ),
         ),
         expected_detected_by=(
             "chunked-equivalence minimum/maximum s8/s16 cases: a size-1 slice writes nothing, "
             "so the singles pass disagrees with the full call on every element. Golden "
-            "min/max cases kill it too (last element of every contiguous run is stale)."
+            "min/max cases kill it too (last element of every contiguous run is stale). "
+            "Both the scalar loop and the MVE loop-count operand carry the edit, so the "
+            "mutant is live in the DSP-only host build and on an MVE target alike."
         ),
         refs=("AmbiqAI/helia-core-tester#81",),
     ),

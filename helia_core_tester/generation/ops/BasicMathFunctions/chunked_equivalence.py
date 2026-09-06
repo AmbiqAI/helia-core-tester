@@ -29,8 +29,9 @@ Kernels differ in how a slice is expressed. Three families are covered:
     count, so a slice is a pointer pair plus a shorter count;
   - dims kernels (minimum/maximum) take cmsis_nn_dims, so a slice is
     identical [1,1,1,chunk] dims for both inputs and the output with the
-    data pointers advanced -- identical dims keep the broadcast walk on its
-    no-broadcast path, which is the one with the vector loop;
+    data pointers advanced -- identical dims are what keeps the walk in
+    Include/Internal/arm_nn_broadcast_walk.h on its no-broadcast path, which
+    is the one with the vector loop;
   - unary kernels (arm_requantize_s8_s8) have one operand and a `size`.
 """
 
@@ -46,27 +47,32 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 #   call_style "mul":    input offsets, one output requantization, block_size
 #   call_style "minmax": cmsis_nn_context + cmsis_nn_dims, no quant params
 #   call_style "requantize": single operand, `size`, scale mult/shift + zero points
-# "vector_widths" are the lane counts of the kernel's vectorised paths on any
-# supported target; the chunk pattern must leave a tail for each of them and
-# the sign check must hold inside each packed region.
+# "vector_widths" are the lane counts of the kernel's vectorised loops as the
+# reference checkout writes them, MVE and DSP together -- not a blanket list.
+# The chunk pattern must leave a tail for each of them and the sign check must
+# hold inside each packed region, so a width that is not really there would
+# constrain the pattern for nothing and a missing one would let a vacuous
+# pattern through.
 _KERNEL_TABLE: Dict[Tuple[str, str], Dict[str, Any]] = {
     ("add", "S8"): {
         "kernel_fn": "arm_elementwise_add_s8",
         "call_style": "addsub",
         "c_type": "int8_t",
-        "vector_widths": (4, 2),
+        "vector_widths": (4,),
     },
     ("sub", "S8"): {
         "kernel_fn": "arm_elementwise_sub_s8",
         "call_style": "addsub",
         "c_type": "int8_t",
-        "vector_widths": (4, 2),
+        "vector_widths": (4,),
     },
+    # The s8 mul MVE main loop widens to int16 and does 8 elements per
+    # iteration, with a 4-lane predicated remainder; the DSP loop is 4-wide.
     ("mul", "S8"): {
         "kernel_fn": "arm_elementwise_mul_s8",
         "call_style": "mul",
         "c_type": "int8_t",
-        "vector_widths": (4, 2),
+        "vector_widths": (8, 4),
     },
     ("add", "S16"): {
         "kernel_fn": "arm_elementwise_add_s16",
@@ -90,45 +96,46 @@ _KERNEL_TABLE: Dict[Tuple[str, str], Dict[str, Any]] = {
         "kernel_fn": "arm_elementwise_squared_difference_s8",
         "call_style": "addsub",
         "c_type": "int8_t",
-        "vector_widths": (4, 2),
+        "vector_widths": (4,),
     },
     ("squared_difference", "S16"): {
         "kernel_fn": "arm_elementwise_squared_difference_s16",
         "call_style": "addsub",
         "c_type": "int16_t",
-        "vector_widths": (4, 2),
+        "vector_widths": (4,),
     },
     # The minimum/maximum MVE inner loops are wlstp.8 / wlstp.16 over 128-bit
-    # vectors, so the lane count is 16 for s8 and 8 for s16, not 4.
+    # vectors, so the lane count is 16 for s8 and 8 for s16; the non-MVE build
+    # is a plain scalar loop with no packed width at all.
     ("minimum", "S8"): {
         "kernel_fn": "arm_minimum_s8",
         "call_style": "minmax",
         "c_type": "int8_t",
-        "vector_widths": (16, 4, 2),
+        "vector_widths": (16,),
     },
     ("maximum", "S8"): {
         "kernel_fn": "arm_maximum_s8",
         "call_style": "minmax",
         "c_type": "int8_t",
-        "vector_widths": (16, 4, 2),
+        "vector_widths": (16,),
     },
     ("minimum", "S16"): {
         "kernel_fn": "arm_minimum_s16",
         "call_style": "minmax",
         "c_type": "int16_t",
-        "vector_widths": (8, 4, 2),
+        "vector_widths": (8,),
     },
     ("maximum", "S16"): {
         "kernel_fn": "arm_maximum_s16",
         "call_style": "minmax",
         "c_type": "int16_t",
-        "vector_widths": (8, 4, 2),
+        "vector_widths": (8,),
     },
     ("requantize", "S8"): {
         "kernel_fn": "arm_requantize_s8_s8",
         "call_style": "requantize",
         "c_type": "int8_t",
-        "vector_widths": (4, 2),
+        "vector_widths": (4,),
     },
 }
 
@@ -206,9 +213,12 @@ _QUANT_TABLE: Dict[Tuple[str, str], Dict[str, int]] = {
     },
 }
 
-# Squared difference squares the requantized operand difference, so the
-# output requantization has to absorb that square: shared addsub parameters
-# would clamp every lane to out_activation_max and make the case vacuous.
+# Squared difference squares the requantized operand difference, so the output
+# requantization has to absorb that square. Reusing the add/sub output
+# parameters pins the great majority of lanes at out_activation_max -- for s16,
+# every lane whose operands differ by more than a fraction of full scale -- and
+# an output that is constant across the run cannot show a chunk-boundary
+# disagreement.
 _QUANT_TABLE[("addsub", "S8", "squared_difference")] = {
     **_QUANT_TABLE[("addsub", "S8")],
     "out_shift": -5,
@@ -355,7 +365,7 @@ class OpChunkedEquivalence(OperationBase):
         data: np.ndarray,
         offset: int,
         element_count: int,
-        vector_widths: Tuple[int, ...] = (4, 2),
+        vector_widths: Tuple[int, ...],
     ) -> None:
         """
         Fail generation unless value + offset spans negative AND positive

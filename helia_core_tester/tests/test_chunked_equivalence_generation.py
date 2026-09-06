@@ -30,6 +30,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from helia_core_tester.core.cpu_targets import missing_required_capabilities
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.ops.BasicMathFunctions.chunked_equivalence import (
     _KERNEL_TABLE,
@@ -147,10 +148,10 @@ def test_sign_coverage_check_rejects_non_negative_packed_region() -> None:
     # can only ever pass.
     data = np.arange(1, 24, dtype=np.int8)
     with pytest.raises(ValueError, match="sign-dependent"):
-        OpChunkedEquivalence._check_sign_coverage("case", "input_1", data, 0, 23)
+        OpChunkedEquivalence._check_sign_coverage("case", "input_1", data, 0, 23, (4,))
     # Sign-diverse data passes.
     OpChunkedEquivalence._check_sign_coverage(
-        "case", "input_1", np.array([-5, 3, -1, 7] * 6, dtype=np.int8)[:23], 0, 23
+        "case", "input_1", np.array([-5, 3, -1, 7] * 6, dtype=np.int8)[:23], 0, 23, (4,)
     )
 
 
@@ -159,7 +160,7 @@ def test_sign_coverage_accounts_for_input_offset() -> None:
     # non-negative: the case is vacuous and must be rejected.
     data = np.full(23, -3, dtype=np.int8)
     with pytest.raises(ValueError, match="sign-dependent"):
-        OpChunkedEquivalence._check_sign_coverage("case", "input_1", data, 100, 23)
+        OpChunkedEquivalence._check_sign_coverage("case", "input_1", data, 100, 23, (4,))
 
 
 @pytest.mark.parametrize(
@@ -291,3 +292,24 @@ def test_squared_difference_output_params_do_not_saturate_every_lane() -> None:
     assert s8["out_shift"] != OpChunkedEquivalence._quant_params("addsub", "S8", "add")["out_shift"]
     peak = ((127 + abs(s8["input_1_offset"])) // 4 + (128 + abs(s8["input_2_offset"])) // 4) ** 2
     assert peak >> (-s8["out_shift"] + 1) < s8["out_activation_max"] - s8["out_offset"]
+
+
+def test_every_shipped_case_declares_the_capability_its_kernel_needs() -> None:
+    # A kernel with only an MVE path and a scalar #else runs the identical loop
+    # for the full call and the chunked pass on a DSP-only or baseline target,
+    # so the case there can only ever pass. Gate it instead of shipping it.
+    mve_only = {"squared_difference", "minimum", "maximum", "requantize"}
+    descriptors = load_all_descriptors(str(_repo_root() / "assets" / "descriptors"))
+    ce = [d for d in descriptors if d["operator"] == "ChunkedEquivalence"]
+    for desc in ce:
+        expected = ["mve"] if desc["kernel"] in mve_only else ["dsp"]
+        assert desc.get("required_capabilities") == expected, desc["name"]
+
+    generated = {
+        cpu: [d for d in ce if not missing_required_capabilities(cpu, d["required_capabilities"])]
+        for cpu in ("cortex-m55", "cortex-m4", "cortex-m0")
+    }
+    assert len(generated["cortex-m55"]) == 26
+    assert len(generated["cortex-m4"]) == 12
+    assert generated["cortex-m0"] == []
+    assert {d["kernel"] for d in generated["cortex-m4"]} == {"add", "sub", "mul"}

@@ -9,7 +9,6 @@ not compile kernels and need neither gcc nor an ns-cmsis-nn checkout.
 import json
 import os
 import shutil
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -41,21 +40,32 @@ from helia_core_tester.mutation.runner import (
 TESTER_ROOT = Path(__file__).resolve().parents[2]
 
 
+# Dedicated to this test on purpose. HELIA_CORE_TESTER_CMSIS_NN_ROOT is the
+# pipeline Config override, so reusing it here would mean that enabling the
+# catalog check also redirects the pipeline tests' notion of the checkout.
+MUTATION_CHECKOUT_ENV = "HELIA_CORE_TESTER_MUTATION_CHECKOUT"
+
+
 def _kernel_checkout():
     """An ns-cmsis-nn checkout to patch against, or None when there is none.
 
     The env var is the explicit handle; the fallback is the conventional
     nested layout (<ns-cmsis-nn>/Tests/helia-core-tester).
     """
-    candidates = []
-    env = os.environ.get("HELIA_CORE_TESTER_CMSIS_NN_ROOT")
+    def looks_like_a_checkout(path: Path) -> bool:
+        return (path / "Source" / "BasicMathFunctions").is_dir() and (path / "Include").is_dir()
+
+    env = os.environ.get(MUTATION_CHECKOUT_ENV)
     if env:
-        candidates.append(Path(env))
-    candidates.append(TESTER_ROOT.parents[1])
-    for candidate in candidates:
-        if (candidate / "Source" / "BasicMathFunctions").is_dir() and (candidate / "Include").is_dir():
-            return candidate
-    return None
+        # Setting the variable is a claim that the check can run. Skipping on a
+        # bad path would let CI report green having exercised nothing.
+        assert looks_like_a_checkout(Path(env)), (
+            f"{MUTATION_CHECKOUT_ENV}={env} is not an ns-cmsis-nn checkout "
+            f"(no Source/BasicMathFunctions and Include)"
+        )
+        return Path(env)
+    nested = TESTER_ROOT.parents[1]
+    return nested if looks_like_a_checkout(nested) else None
 
 
 def _mutant(edits) -> Mutant:
@@ -408,7 +418,7 @@ class TestVerifyPristine:
         assert {"squared_difference_tail_drop", "minmax_no_broadcast_tail_drop",
                 "requantize_tail_drop"} <= ids
 
-    def test_every_v1_edit_applies_to_a_real_checkout(self):
+    def test_every_v1_edit_applies_to_a_real_checkout(self, tmp_path: Path):
         """
         A catalogued edit is only worth anything if it still matches the
         kernel source. Applying the whole catalog to a copy of a real checkout
@@ -417,10 +427,8 @@ class TestVerifyPristine:
         """
         checkout = _kernel_checkout()
         if checkout is None:
-            pytest.skip(
-                "no ns-cmsis-nn checkout: set HELIA_CORE_TESTER_CMSIS_NN_ROOT to one"
-            )
-        tree = prepare_tree(checkout, Path(tempfile.mkdtemp()) / "tree")
+            pytest.skip(f"no ns-cmsis-nn checkout: set {MUTATION_CHECKOUT_ENV} to one")
+        tree = prepare_tree(checkout, tmp_path / "tree")
         for mutant in MUTANTS_V1:
             with AppliedMutant(tree, mutant):
                 for edit in mutant.edits:
