@@ -13,6 +13,12 @@ filter_shape: [3, 3, 3, 5]
 strides: [1, 1]
 padding: SAME
 use_bias: true
+# Exact scratch size (issue #69), measured by calling the real, unmodified
+# arm_convolve_wrapper_f32_get_buffer_size() on host for this case's dims
+# (input=[1,6,6,3] filter=[5,3,3,3] output=[1,6,6,5], stride=1x1, pad=1x1
+# from SAME padding). arm_convolve_f32_get_buffer_size() does not branch on
+# ARM_MATH_MVEI/DSP, so the value is the same on every build target.
+expected_buffer_size: 864
 ---
 operator: Convolve
 name: convolve_float_stride2_valid_f32

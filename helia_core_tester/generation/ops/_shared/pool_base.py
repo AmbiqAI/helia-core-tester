@@ -265,6 +265,12 @@ class PoolFamilyBase(OperationBase):
                 ("arm_avg_pool_nhwc_", "arm_max_pool_nhwc_")
             ),
             'buffer_size_max': buffer_size_max,
+            # Independently-measured exact scratch size (issue #69): not derived from
+            # calculate_pooling_buffer_size_max's conservative allocation formula. Only
+            # present when the descriptor supplies expected_buffer_size, and only
+            # meaningful when kernel_get_buffer_size_fn is set (average pooling); see
+            # avg_pool.c.j2 / max_pool.c.j2.
+            'expected_buffer_size': self.desc.get('expected_buffer_size'),
             'pooling_type': pooling_type,
             'pool_params_type': (
                 'cmsis_nn_pool_params_f16'
