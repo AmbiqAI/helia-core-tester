@@ -271,14 +271,17 @@ property 2).
 post-offset value within one count of zero. A relative rule let a large-magnitude s16 operand
 whose closest approach was thousands of counts count as covered.
 
-When a runtime input operand the generator owns does not span, generation steers it: a
-negative / zero / positive post-offset triple at half the operand's own magnitude replaces the
-three elements whose post-offset magnitude is smallest. Least-extreme rather than leading,
+When a runtime input operand the generator owns does not span, generation steers it: one
+post-offset value at half the operand's own magnitude is planted per **missing** region, into
+the elements whose post-offset magnitude is smallest. Least-extreme rather than leading,
 because a full-scale element carries saturation coverage a mid-range one does not, and on a
-short operand the leading elements are the whole case. All three are planted whenever any one
-is missing, so the result is correct by construction. Steering is deterministic and independent
-of the RNG stream, and the golden is computed after it, so a re-run reproduces the same data and
-the same expected output.
+short operand the leading elements are the whole case. Missing-only rather than all three,
+because most operands lack only the near-zero boundary and replacing the negative and positive
+elements as well would discard data the case was written around. The span is re-checked after
+planting; in the rare case where a planted element was the sole carrier of a region that was
+present, the full negative / zero / positive triple is planted instead. Steering is
+deterministic and independent of the RNG stream, and the golden is computed after it, so a
+re-run reproduces the same data and the same expected output.
 
 Operands with fewer than three elements cannot hold all three regions and are out of scope
 entirely -- not steered, not refused, not requiring a waiver. That covers broadcast scalars and
@@ -289,8 +292,8 @@ wired to the rule.
 Two kinds of operand are check-only: the generator never steers them, so a failing one must be
 waived. An operand baked into the TFLite model (a PReLU alpha) cannot move, because the
 reference interpreter would keep using the model's copy and the golden would stop matching the
-emitted array. An operand the descriptor pins explicitly (`hint.extras.input_values`,
-`scalar_input_value`) must not move, because the pinned values are the case.
+emitted array. An operand the descriptor pins explicitly (`hint.extras.input_values`) must not
+move, because the pinned values are the case.
 
 An operand that is intentionally one-signed opts out in its descriptor under
 `operand_sign_span_exempt`, naming the operand and the reason:
@@ -303,9 +306,27 @@ operand_sign_span_exempt:
     the sign of the input, not of alpha (hct#81)
 ```
 
-The reason is required and must name an operand the rule actually checks. The key is also
-declared in `helia_core_tester/generation/descriptors/schema.json`, but that schema is not
-enforced at load time (#100), so the rule lives in code.
+The reason is required, and the key must name an operand the operator actually submits to the
+rule: each wired operator declares those labels as `SIGN_SPAN_OPERANDS`, and a waiver on
+anything else fails generation instead of silently waiving nothing. `operand_sign_span_exempt`
+is also declared in `helia_core_tester/generation/descriptors/schema.json`, but that schema is
+not enforced at load time (#100), so the rule lives in code.
+
+## Mutation scoring
+
+`python -m helia_core_tester.mutation run --cmsis-nn-root <checkout>` generates cases, applies
+each catalogued mutant to a copy of the kernel source, rebuilds, and reports which cases kill
+which mutant (issue #76; catalog in `helia_core_tester/mutation/catalog.py`).
+
+`--cpu` defaults to `cortex-m55`, the widest capability set in the matrix, because some killers
+are capability-gated descriptors: generating for a narrower CPU removes them from the corpus.
+The chosen CPU's capabilities are passed to the scorer, and a mutant that declares
+`requires_capabilities` the corpus does not have is reported `NOT_APPLICABLE` instead of
+`SURVIVED`. That distinction matters: `SURVIVED` is a claim about the suite ("no case detects
+this bug class"), while `NOT_APPLICABLE` says the run never sampled the question.
+`--fail-on-survivor` fires only on a real survivor. `requantize_tail_drop` is the current
+example -- its only killers are the MVE-gated chunked-equivalence requantize cases, so
+`--cpu cortex-m4` reports it not applicable.
 
 ## Pipeline efficiency
 

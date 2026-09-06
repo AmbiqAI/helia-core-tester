@@ -14,6 +14,11 @@ Given an ns-cmsis-nn checkout and a set of generated cases, the runner:
    mutants-killed / total, and the cases that killed *nothing* across all
    mutants (vacuous-case candidates).
 
+A mutant whose killers require a capability the generation CPU does not have
+is reported as NOT_APPLICABLE and never scored: the corpus cannot contain a
+case that could kill it, so calling it a survivor would blame the suite for a
+gap the run never sampled.
+
 A mutant whose patch fails to apply is reported as APPLY_FAILED and makes
 the run exit nonzero; source drift must be loud. A mutant under which every
 case binary fails to compile/link is BUILD_FAILED, never a kill -- a compile
@@ -45,6 +50,7 @@ STATUS_KILLED = "KILLED"
 STATUS_SURVIVED = "SURVIVED"
 STATUS_APPLY_FAILED = "APPLY_FAILED"
 STATUS_BUILD_FAILED = "BUILD_FAILED"
+STATUS_NOT_APPLICABLE = "NOT_APPLICABLE"
 
 
 @dataclass
@@ -62,10 +68,22 @@ class MutationReport:
     scored_cases: List[str]
     outcomes: List[MutantOutcome]
     wall_time_s: float
+    # Capabilities of the CPU the scored corpus was generated for. Recorded in
+    # the report because it decides which mutants were scorable at all.
+    capabilities: frozenset = frozenset()
 
     @property
     def killed_count(self) -> int:
         return sum(1 for o in self.outcomes if o.status == STATUS_KILLED)
+
+    @property
+    def scorable_outcomes(self) -> List[MutantOutcome]:
+        """Outcomes the corpus could actually have killed."""
+        return [o for o in self.outcomes if o.status != STATUS_NOT_APPLICABLE]
+
+    @property
+    def survivors(self) -> List[MutantOutcome]:
+        return [o for o in self.outcomes if o.status == STATUS_SURVIVED]
 
     @property
     def apply_failures(self) -> List[MutantOutcome]:
@@ -96,15 +114,18 @@ class MutationReport:
                     "family": o.mutant.family,
                     "refs": list(o.mutant.refs),
                     "expected_detected_by": o.mutant.expected_detected_by,
+                    "requires_capabilities": list(o.mutant.requires_capabilities),
                     "status": o.status,
                     "killed_by": o.killed_by,
                     "detail": o.detail,
                 }
                 for o in self.outcomes
             ],
+            "capabilities": sorted(self.capabilities),
             "headline": {
                 "mutants_killed": self.killed_count,
-                "mutants_total": len(self.outcomes),
+                "mutants_total": len(self.scorable_outcomes),
+                "mutants_not_applicable": len(self.outcomes) - len(self.scorable_outcomes),
                 "vacuous_case_candidates": self.vacuous_case_candidates(),
             },
             "wall_time_s": round(self.wall_time_s, 1),
@@ -112,9 +133,11 @@ class MutationReport:
 
     def render_text(self, max_killers: int = 6) -> str:
         lines: List[str] = []
+        not_applicable = len(self.outcomes) - len(self.scorable_outcomes)
+        skipped = f", {not_applicable} not applicable" if not_applicable else ""
         lines.append(
-            f"Mutation score: {self.killed_count}/{len(self.outcomes)} mutants killed "
-            f"({self.baseline_total} cases, {len(self.scored_cases)} scored, "
+            f"Mutation score: {self.killed_count}/{len(self.scorable_outcomes)} mutants killed"
+            f"{skipped} ({self.baseline_total} cases, {len(self.scored_cases)} scored, "
             f"{self.wall_time_s:.0f}s wall)"
         )
         if self.baseline_failed:
@@ -130,6 +153,8 @@ class MutationReport:
                 lines.append(f"  KILLED    {o.mutant.mutant_id}  by {len(o.killed_by)} case(s): {shown}{suffix}")
             elif o.status == STATUS_SURVIVED:
                 lines.append(f"  SURVIVED  {o.mutant.mutant_id}  <-- no case detects this bug class")
+            elif o.status == STATUS_NOT_APPLICABLE:
+                lines.append(f"  N/A       {o.mutant.mutant_id}: {o.detail}")
             else:
                 lines.append(f"  {o.status}  {o.mutant.mutant_id}: {o.detail}")
         vacuous = self.vacuous_case_candidates()
@@ -163,6 +188,7 @@ def run_mutation_scoring(
     workdir: Path,
     cc: str = "gcc",
     jobs: int = 8,
+    capabilities: Optional[frozenset] = None,
     log=print,
 ) -> MutationReport:
     start = time.monotonic()
@@ -182,8 +208,22 @@ def run_mutation_scoring(
     for r in baseline_failed:
         log(f"[mutation] baseline FAIL (excluded): {r.name}: {r.detail}")
 
+    available = frozenset(capabilities) if capabilities is not None else None
     outcomes: List[MutantOutcome] = []
     for mutant in mutants:
+        # Checked before the patch is applied: an unscorable mutant should not
+        # cost a rebuild, and its result must not depend on one.
+        if available is not None and mutant.requires_capabilities:
+            absent = [c for c in mutant.requires_capabilities if c not in available]
+            if absent:
+                detail = (
+                    f"needs {', '.join(absent)}; the generated corpus has "
+                    f"{', '.join(sorted(available)) or 'no capabilities'}, so it contains no "
+                    f"case that could kill this mutant"
+                )
+                outcomes.append(MutantOutcome(mutant, STATUS_NOT_APPLICABLE, detail=detail))
+                log(f"[mutation] mutant {mutant.mutant_id}: {STATUS_NOT_APPLICABLE} ({detail})")
+                continue
         log(f"[mutation] mutant {mutant.mutant_id}: applying + rebuilding")
         try:
             with AppliedMutant(tree, mutant):
@@ -235,6 +275,7 @@ def run_mutation_scoring(
         scored_cases=scored_names,
         outcomes=outcomes,
         wall_time_s=time.monotonic() - start,
+        capabilities=frozenset(available or ()),
     )
     (workdir / "mutation_report.json").write_text(json.dumps(report.to_dict(), indent=2) + "\n")
     return report

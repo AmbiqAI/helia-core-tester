@@ -16,6 +16,7 @@ from typing import List, Optional
 
 import typer
 
+from helia_core_tester.core.cpu_targets import get_cpu_profile
 from helia_core_tester.mutation.catalog import MUTANTS_V1, get_mutants
 from helia_core_tester.mutation.runner import run_mutation_scoring
 from helia_core_tester.mutation.host_build import discover_cases
@@ -27,6 +28,13 @@ app = typer.Typer(
 )
 
 DEFAULT_OPS = "Add,Sub,Mul,SquaredDifference,ChunkedEquivalence,Maximum,Minimum,Convolve"
+
+# The widest capability set in the matrix, so the default run generates every
+# case the catalog's killers need. A narrower CPU is a valid choice, but it
+# silently removes killers from the corpus, which is why the capabilities of
+# this CPU are passed to the scorer and mutants they cannot cover come back
+# NOT_APPLICABLE rather than SURVIVED.
+DEFAULT_CPU = "cortex-m55"
 
 
 def _tester_root() -> Path:
@@ -70,7 +78,8 @@ def list_mutants():
     """List the catalogued mutants."""
     for m in MUTANTS_V1:
         refs = f" [{', '.join(m.refs)}]" if m.refs else ""
-        typer.echo(f"{m.mutant_id}: {m.description}{refs}")
+        needs = f" (requires {', '.join(m.requires_capabilities)})" if m.requires_capabilities else ""
+        typer.echo(f"{m.mutant_id}: {m.description}{needs}{refs}")
 
 
 @app.command()
@@ -80,7 +89,7 @@ def run(
     cases_root: Optional[Path] = typer.Option(None, "--cases-root", help="Reuse already-generated cases under this directory instead of generating"),
     mutants: Optional[str] = typer.Option(None, "--mutants", help="Comma-separated mutant ids (default: full v1 catalog)"),
     workdir: Path = typer.Option(Path("artifacts/mutation"), "--workdir", help="Scratch + report directory"),
-    cpu: str = typer.Option("cortex-m4", "--cpu", help="CPU used for case generation (cortex-m4 matches the host DSP emulation)"),
+    cpu: str = typer.Option(DEFAULT_CPU, "--cpu", help="CPU whose capabilities the generated corpus has; also the generation target, and with --cases-root it must name the CPU those cases were generated for"),
     seed: int = typer.Option(500, "--seed", help="Generation seed (fixed for determinism)"),
     jobs: int = typer.Option(8, "--jobs", help="Parallel compile/run jobs"),
     cc: str = typer.Option("gcc", "--cc", help="Host C compiler"),
@@ -113,6 +122,7 @@ def run(
         workdir=workdir,
         cc=cc,
         jobs=jobs,
+        capabilities=get_cpu_profile(cpu).capabilities,
         log=typer.echo,
     )
     typer.echo("")
@@ -122,7 +132,9 @@ def run(
     if report.apply_failures:
         typer.echo("✗ one or more mutants failed to apply or build; the catalog has drifted", err=True)
         raise typer.Exit(2)
-    if fail_on_survivor and report.killed_count < len(report.outcomes):
+    # Only a genuine survivor fails the run: a NOT_APPLICABLE mutant was never
+    # sampled, and apply/build failures already exited above.
+    if fail_on_survivor and report.survivors:
         raise typer.Exit(3)
 
 

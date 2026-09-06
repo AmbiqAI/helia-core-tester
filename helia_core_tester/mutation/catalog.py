@@ -83,8 +83,13 @@ Grounding of the v1 entries:
                          score as vacuous, while a scalar-only edit would be
                          dead code on the FVP targets the suite actually runs.
                          Their chunked killers are gated on the mve capability,
-                         so scoring them means passing --cpu cortex-m55 rather
-                         than the cortex-m4 default.
+                         which is why the CLI generates for cortex-m55.
+
+A mutant may declare ``requires_capabilities``: the capabilities the generated
+corpus needs before any case that could kill it exists at all. Scoring on a CPU
+that lacks one reports NOT_APPLICABLE rather than SURVIVED, because a corpus
+that cannot contain a killer says nothing about the suite's power against that
+bug class, and --fail-on-survivor must not fire on it.
 """
 
 from __future__ import annotations
@@ -121,6 +126,9 @@ class Mutant:
     edits: Tuple[Edit, ...]
     expected_detected_by: str
     refs: Tuple[str, ...] = field(default_factory=tuple)
+    # Capabilities the generation CPU must provide for the corpus to contain
+    # any case that could kill this mutant. Empty means every CPU can score it.
+    requires_capabilities: Tuple[str, ...] = field(default_factory=tuple)
 
 
 MUTANTS_V1: Tuple[Mutant, ...] = (
@@ -491,12 +499,14 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             ),
         ),
         expected_detected_by=(
-            "chunked-equivalence requantize s8 cases only: arm_requantize_s8_s8 has no golden "
-            "case in the suite, so nothing else in the corpus can see this. Those cases require "
-            "the mve capability, so scoring this mutant needs --cpu cortex-m55; the default "
-            "cortex-m4 generation produces no case that can kill it."
+            "chunked-equivalence requantize s8 cases only. The suite's one golden case for this "
+            "kernel, requantize_default_s8, is 1x2x3x2 -- 12 elements, a multiple of 4 -- so it "
+            "cannot see a size % 4 tail drop, and nothing else in the corpus calls it. The "
+            "chunked cases require the mve capability, so scoring this mutant needs a "
+            "generation CPU that has it."
         ),
         refs=("AmbiqAI/helia-core-tester#81",),
+        requires_capabilities=("mve",),
     ),
 )
 

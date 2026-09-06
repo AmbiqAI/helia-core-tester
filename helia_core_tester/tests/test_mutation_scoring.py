@@ -9,10 +9,12 @@ not compile kernels and need neither gcc nor an ns-cmsis-nn checkout.
 import json
 import os
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from helia_core_tester.core.cpu_targets import get_cpu_profile, known_capabilities
 from helia_core_tester.mutation.catalog import MUTANTS_V1, Edit, Mutant, get_mutants
 from helia_core_tester.mutation.host_build import (
     KERNEL_SOURCE_DIRS,
@@ -30,6 +32,7 @@ from helia_core_tester.mutation.runner import (
     STATUS_APPLY_FAILED,
     STATUS_BUILD_FAILED,
     STATUS_KILLED,
+    STATUS_NOT_APPLICABLE,
     STATUS_SURVIVED,
     MutantOutcome,
     MutationReport,
@@ -387,6 +390,49 @@ class TestRunnerFailureClassification:
         assert by_id["wrong_value"].status == STATUS_KILLED
         assert by_id["wrong_value"].killed_by == ["crafted_case"]
 
+    def test_mutant_needing_an_absent_capability_is_not_applicable_not_survived(
+        self, tmp_path: Path
+    ):
+        # SURVIVED is a claim about the suite; a corpus that cannot contain a
+        # killer has not made that claim either way.
+        checkout = _crafted_checkout(tmp_path)
+        case = _crafted_case(tmp_path)
+        gated = replace(_WRONG_VALUE, mutant_id="gated", requires_capabilities=("mve",))
+        report = run_mutation_scoring(
+            cmsis_nn_root=checkout,
+            case_dirs=[case],
+            mutants=[gated, _WRONG_VALUE],
+            tester_root=TESTER_ROOT,
+            workdir=tmp_path / "work",
+            capabilities=get_cpu_profile("cortex-m4").capabilities,
+            log=lambda *_: None,
+        )
+        by_id = {o.mutant.mutant_id: o for o in report.outcomes}
+        assert by_id["gated"].status == STATUS_NOT_APPLICABLE
+        assert "mve" in by_id["gated"].detail
+        assert report.survivors == []
+        # The ungated control still scores, and the headline counts only what
+        # the corpus could reach.
+        assert by_id["wrong_value"].status == STATUS_KILLED
+        assert report.to_dict()["headline"]["mutants_total"] == 1
+        assert report.to_dict()["headline"]["mutants_not_applicable"] == 1
+        assert "not applicable" in report.render_text()
+
+    def test_a_present_capability_leaves_the_mutant_scored(self, tmp_path: Path):
+        checkout = _crafted_checkout(tmp_path)
+        case = _crafted_case(tmp_path)
+        gated = replace(_WRONG_VALUE, mutant_id="gated", requires_capabilities=("mve",))
+        report = run_mutation_scoring(
+            cmsis_nn_root=checkout,
+            case_dirs=[case],
+            mutants=[gated],
+            tester_root=TESTER_ROOT,
+            workdir=tmp_path / "work",
+            capabilities=get_cpu_profile("cortex-m55").capabilities,
+            log=lambda *_: None,
+        )
+        assert report.outcomes[0].status == STATUS_KILLED
+
     def test_poisoned_restore_raises(self, tmp_path: Path, monkeypatch):
         """verify_pristine must abort the run when a restore leaves mutant markers."""
         checkout = _crafted_checkout(tmp_path)
@@ -417,6 +463,21 @@ class TestVerifyPristine:
         ids = {m.mutant_id for m in MUTANTS_V1}
         assert {"squared_difference_tail_drop", "minmax_no_broadcast_tail_drop",
                 "requantize_tail_drop"} <= ids
+
+    def test_capability_requirements_are_real_capabilities(self):
+        # A typo would be unsatisfiable everywhere and turn the mutant into a
+        # permanent NOT_APPLICABLE that no run ever scores.
+        known = known_capabilities()
+        for mutant in MUTANTS_V1:
+            assert set(mutant.requires_capabilities) <= known, mutant.mutant_id
+
+    def test_the_requantize_mutant_declares_the_capability_its_killers_need(self):
+        # Its only killers are the MVE-gated chunked requantize cases, so on a
+        # non-MVE CPU the corpus provably contains no case that could kill it.
+        (mutant,) = [m for m in MUTANTS_V1 if m.mutant_id == "requantize_tail_drop"]
+        assert mutant.requires_capabilities == ("mve",)
+        assert get_cpu_profile("cortex-m55").capabilities >= set(mutant.requires_capabilities)
+        assert not get_cpu_profile("cortex-m4").capabilities >= set(mutant.requires_capabilities)
 
     def test_every_v1_edit_applies_to_a_real_checkout(self, tmp_path: Path):
         """
