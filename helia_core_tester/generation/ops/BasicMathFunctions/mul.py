@@ -159,6 +159,10 @@ class OpMul(BinaryBasicMathBase):
 
             input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
             input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
+            input1_q, input2_q = self._enforce_int_operand_sign_span(
+                (("input_1", input1_q, input1_zp), ("input_2", input2_q, input2_zp)),
+                steerable=("input_1", "input_2"),
+            )
 
             # Always compute the golden via the CMSIS-NN-matching fixed-point simulation
             # (_simulate_mul_quantized), not the TFLite interpreter, even when the two

@@ -150,10 +150,14 @@ def test_squared_difference_builder_uses_explicit_quantization(tmp_path: Path) -
     input2_quant = op_tensors["inputs"][1]["quantization"]
     output_quant = op_tensors["outputs"][0]["quantization"]
 
+    # The inputs are signed and so quantize around zero; only the output,
+    # which is non-negative by definition, uses the -128 zero point. An input
+    # zero point of -128 would pin every lane to a non-negative post-offset
+    # value and hide the sign-dependent kernel paths (hct#81).
     assert input1_quant["scale"] == pytest.approx(1.0 / 128.0)
-    assert input1_quant["zero_point"] == -128
+    assert input1_quant["zero_point"] == 0
     assert input2_quant["scale"] == pytest.approx(1.0 / 256.0)
-    assert input2_quant["zero_point"] == -128
+    assert input2_quant["zero_point"] == 0
     assert output_quant["scale"] == pytest.approx(1.0 / 64.0)
     assert output_quant["zero_point"] == -128
 
@@ -174,8 +178,10 @@ def test_squared_difference_s8_generates_expected_c_params(tmp_path: Path, monke
     content = c_path.read_text()
 
     assert "arm_squared_difference_s8" in content
-    assert "128,       // input1_offset" in content
-    assert "128,       // input2_offset" in content
+    # input*_offset is -zero_point, and the signed inputs quantize around
+    # zero; only the non-negative output keeps the -128 zero point (hct#81).
+    assert "0,       // input1_offset" in content
+    assert "0,       // input2_offset" in content
     assert "-128,          // out_offset" in content
     assert "0,        // input1_shift" in content
     assert "-1,        // input2_shift" in content

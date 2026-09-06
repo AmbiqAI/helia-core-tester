@@ -7,13 +7,16 @@ not compile kernels and need neither gcc nor an ns-cmsis-nn checkout.
 """
 
 import json
+import os
 import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
 
 from helia_core_tester.mutation.catalog import MUTANTS_V1, Edit, Mutant, get_mutants
 from helia_core_tester.mutation.host_build import (
+    KERNEL_SOURCE_DIRS,
     KIND_CASE_FAIL,
     KIND_COMPILE_FAILED,
     KIND_NO_SOURCE,
@@ -36,6 +39,23 @@ from helia_core_tester.mutation.runner import (
 )
 
 TESTER_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _kernel_checkout():
+    """An ns-cmsis-nn checkout to patch against, or None when there is none.
+
+    The env var is the explicit handle; the fallback is the conventional
+    nested layout (<ns-cmsis-nn>/Tests/helia-core-tester).
+    """
+    candidates = []
+    env = os.environ.get("HELIA_CORE_TESTER_CMSIS_NN_ROOT")
+    if env:
+        candidates.append(Path(env))
+    candidates.append(TESTER_ROOT.parents[1])
+    for candidate in candidates:
+        if (candidate / "Source" / "BasicMathFunctions").is_dir() and (candidate / "Include").is_dir():
+            return candidate
+    return None
 
 
 def _mutant(edits) -> Mutant:
@@ -266,13 +286,9 @@ class TestFailureKinds:
 def _crafted_checkout(tmp_path: Path) -> Path:
     """A minimal fake ns-cmsis-nn checkout with one host-compilable kernel."""
     checkout = tmp_path / "checkout"
-    for sub in (
-        "Source/BasicMathFunctions",
-        "Source/ConvolutionFunctions",
-        "Source/NNSupportFunctions",
-        "Source/FullyConnectedFunctions",
-        "Source/ActivationFunctions",
-    ):
+    # Driven off KERNEL_SOURCE_DIRS so a new kernel family in the host build
+    # cannot silently leave this fabricated checkout incomplete.
+    for sub in KERNEL_SOURCE_DIRS:
         (checkout / sub).mkdir(parents=True)
     (checkout / "Include").mkdir()
     # helia_test_runtime.h includes arm_nnfunctions.h for ARM_CMSIS_NN_SUCCESS;
@@ -386,6 +402,32 @@ class TestVerifyPristine:
 
     def test_passes_on_clean_tree(self, tree: Path):
         verify_pristine(tree, MUTANTS_V1)
+
+    def test_v1_covers_the_issue_81_chunked_families(self):
+        ids = {m.mutant_id for m in MUTANTS_V1}
+        assert {"squared_difference_tail_drop", "minmax_no_broadcast_tail_drop",
+                "requantize_tail_drop"} <= ids
+
+    def test_every_v1_edit_applies_to_a_real_checkout(self):
+        """
+        A catalogued edit is only worth anything if it still matches the
+        kernel source. Applying the whole catalog to a copy of a real checkout
+        is the only thing that proves the patterns and their exact replacement
+        counts have not drifted; the fabricated-tree tests above cannot.
+        """
+        checkout = _kernel_checkout()
+        if checkout is None:
+            pytest.skip(
+                "no ns-cmsis-nn checkout: set HELIA_CORE_TESTER_CMSIS_NN_ROOT to one"
+            )
+        tree = prepare_tree(checkout, Path(tempfile.mkdtemp()) / "tree")
+        for mutant in MUTANTS_V1:
+            with AppliedMutant(tree, mutant):
+                for edit in mutant.edits:
+                    assert "/* MUTANT " in (tree / edit.relpath).read_text(), (
+                        f"{mutant.mutant_id}: {edit.relpath} was not patched"
+                    )
+            verify_pristine(tree, [mutant])
 
     def test_every_v1_edit_leaves_a_marker_for_verify_pristine(self):
         """verify_pristine can only catch a poisoned restore if every

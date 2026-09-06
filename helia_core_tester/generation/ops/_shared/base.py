@@ -5,7 +5,7 @@ All operations inherit from this and implement build_keras_model().
 
 import json
 import numpy as np
-from typing import Callable, Dict, Any, Optional, Sequence, Tuple, Iterator
+from typing import Callable, Dict, Any, List, Optional, Sequence, Tuple, Iterator
 from abc import ABC, abstractmethod
 from pathlib import Path
 import jinja2
@@ -459,6 +459,134 @@ class OperationBase(ABC):
         # element a single-token propagation check (NaN+x, Inf*x) rather than a mix whose
         # result would be ambiguous about which operand drove it.
         return self._maybe_apply_input_mode(input_1), input_2
+
+    # An operand is "near zero" when its smallest post-offset magnitude is
+    # within this fraction of its largest. Below it, the operand never puts a
+    # value next to the sign boundary that the packed/scalar paths and the
+    # branchy kernels (PReLU, min/max) actually split on.
+    NEAR_ZERO_FRACTION = 0.1
+
+    # An operand with fewer than this many elements cannot hold a negative, a
+    # near-zero and a positive value at once. Broadcast scalars and one- or
+    # two-element rows are therefore out of scope for the span rule; the
+    # operand they broadcast against still has to satisfy it.
+    SIGN_SPAN_MIN_ELEMENTS = 3
+
+    # Descriptor key that waives the span rule for an operand whose one-signed
+    # data is the point of the case (a PReLU alpha baked into the model as a
+    # positive slope, a relu-shaped range whose zero point pins the whole
+    # domain to one side). It maps operand label -> reason, and the reason is
+    # required: see README "Operand sign span" and issue #81 property 2.
+    SIGN_SPAN_EXEMPT_KEY = "operand_sign_span_exempt"
+
+    _SIGN_SPAN_DTYPE_BOUNDS = {"int8": (-128, 127), "int16": (-32768, 32767)}
+
+    def _sign_span_exemptions(self) -> Dict[str, str]:
+        """Validated operand -> reason map from the span opt-out key."""
+        exempt = self.desc.get(self.SIGN_SPAN_EXEMPT_KEY)
+        if exempt is None:
+            return {}
+        if not isinstance(exempt, dict) or not exempt:
+            raise ValueError(
+                f"'{self.desc.get('name')}': {self.SIGN_SPAN_EXEMPT_KEY} must map each "
+                f"intentionally one-signed operand to the reason it stays that way, "
+                f"e.g. {{alpha: the model constant is a positive PReLU slope}}"
+            )
+        for operand, reason in exempt.items():
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError(
+                    f"'{self.desc.get('name')}': {self.SIGN_SPAN_EXEMPT_KEY}[{operand}] must be "
+                    f"a non-empty reason string explaining why the operand is one-signed"
+                )
+        return {str(k): str(v) for k, v in exempt.items()}
+
+    def _enforce_int_operand_sign_span(
+        self,
+        operands: Sequence[Tuple[str, np.ndarray, Any]],
+        steerable: Sequence[str] = (),
+    ) -> List[np.ndarray]:
+        """
+        Make every int operand span negative, near-zero and positive AFTER its
+        input offset is applied (value - zero_point), and fail generation when
+        that is impossible without a declared reason.
+
+        A one-signed operand cannot discriminate the sign-dependent kernel
+        paths: the packed DSP loop of ns-cmsis-nn#343 dropped the sign of
+        value + input_offset, and PReLU/min/max branch on it directly. Uniform
+        [-1, 1] float data plus a TFLite zero point does not guarantee the
+        span, so it is enforced rather than assumed (issue #81 property 2).
+
+        ``steerable`` names the operands that are runtime inputs, i.e. the ones
+        whose golden is recomputed from the array returned here. An operand
+        baked into the TFLite model (a PReLU alpha) must not be steered, since
+        the reference interpreter would still use the model's copy; such an
+        operand can only be waived with ``operand_sign_span_exempt``.
+
+        Returns the operand arrays in input order, steered where needed.
+        """
+        exemptions = self._sign_span_exemptions()
+        steerable_set = set(steerable)
+        result: List[np.ndarray] = []
+        for label, data, zero_point in operands:
+            array = np.asarray(data)
+            flat = array.reshape(-1)
+            zp = int(zero_point)
+            if label in exemptions or flat.size < self.SIGN_SPAN_MIN_ELEMENTS:
+                result.append(array)
+                continue
+            missing = self._sign_span_gaps(flat, zp)
+            if not missing:
+                result.append(array)
+                continue
+            if label in steerable_set:
+                array = self._steer_int_operand_sign_span(array, zp)
+                if not self._sign_span_gaps(array.reshape(-1), zp):
+                    result.append(array)
+                    continue
+            raise ValueError(
+                f"'{self.desc.get('name')}': {label} post-offset values "
+                f"(n {flat.size}, min {int(flat.min()) - zp}, max {int(flat.max()) - zp}, "
+                f"zero_point {zp}) do not span {' and '.join(missing)}, and the operand cannot "
+                f"be steered to; a one-signed operand cannot discriminate the sign-dependent "
+                f"kernel paths (ns-cmsis-nn#343). Set {self.SIGN_SPAN_EXEMPT_KEY}[{label}] to "
+                f"the reason it must stay one-signed."
+            )
+        return result
+
+    @classmethod
+    def _sign_span_gaps(cls, flat: np.ndarray, zero_point: int) -> List[str]:
+        """Which of negative / near-zero / positive the post-offset data lacks."""
+        post = flat.astype(np.int64) - zero_point
+        magnitude = np.abs(post)
+        near_zero_bound = max(1.0, cls.NEAR_ZERO_FRACTION * float(magnitude.max()))
+        gaps = []
+        if not (post < 0).any():
+            gaps.append("negative")
+        if float(magnitude.min()) > near_zero_bound:
+            gaps.append("near-zero")
+        if not (post > 0).any():
+            gaps.append("positive")
+        return gaps
+
+    @classmethod
+    def _steer_int_operand_sign_span(cls, array: np.ndarray, zero_point: int) -> np.ndarray:
+        """
+        Plant a negative / zero / positive post-offset triple in the first
+        three elements, at half the operand's own magnitude so the steered
+        values stay inside the range the case was written for. Deterministic
+        and independent of the RNG stream, so a re-run reproduces it exactly.
+        """
+        bounds = cls._SIGN_SPAN_DTYPE_BOUNDS.get(str(array.dtype))
+        if bounds is None:
+            return array
+        qmin, qmax = bounds
+        flat = array.reshape(-1).astype(np.int64)
+        magnitude = int(np.abs(flat - zero_point).max())
+        step = max(1, magnitude // 2)
+        planted = [zero_point - step, zero_point, zero_point + step]
+        steered = array.copy().reshape(-1)
+        steered[:3] = np.clip(planted, qmin, qmax).astype(array.dtype)
+        return steered.reshape(array.shape)
 
     @staticmethod
     def _quant_param_scalar(quant_params: Optional[Dict[str, Any]], key: str, default: float | int) -> float | int:

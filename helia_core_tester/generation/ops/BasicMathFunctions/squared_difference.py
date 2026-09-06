@@ -11,8 +11,12 @@ from tensorflow.keras import layers
 
 SQUARED_DIFFERENCE_QUANT_PRESETS = {
     "int8": {
-        "input_1_quant": ([1.0 / 128.0], [-128]),
-        "input_2_quant": ([1.0 / 256.0], [-128]),
+        # The inputs are signed, so their zero point is 0: a -128 zero point
+        # (which the output legitimately uses, squared difference being
+        # non-negative) would pin every input lane to a non-negative
+        # post-offset value and hide sign-dependent kernel paths (hct#81).
+        "input_1_quant": ([1.0 / 128.0], [0]),
+        "input_2_quant": ([1.0 / 256.0], [0]),
         "output_quant": ([1.0 / 64.0], [-128]),
     },
     "int16": {
@@ -279,6 +283,10 @@ class OpSquaredDifference(BinaryBasicMathBase):
         
         input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
         input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
+        input1_q, input2_q = self._enforce_int_operand_sign_span(
+            (("input_1", input1_q, input1_zp), ("input_2", input2_q, input2_zp)),
+            steerable=("input_1", "input_2"),
+        )
         
         # Run inference using LiteRT interpreter when shapes match for int8.
         # LiteRT does not currently invoke INT16 SQUARED_DIFFERENCE reliably,

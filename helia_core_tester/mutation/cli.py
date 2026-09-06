@@ -26,7 +26,7 @@ app = typer.Typer(
     add_completion=False,
 )
 
-DEFAULT_OPS = "Add,Sub,Mul,ChunkedEquivalence,Maximum,Minimum,Convolve"
+DEFAULT_OPS = "Add,Sub,Mul,SquaredDifference,ChunkedEquivalence,Maximum,Minimum,Convolve"
 
 
 def _tester_root() -> Path:

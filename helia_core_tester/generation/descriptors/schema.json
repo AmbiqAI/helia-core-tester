@@ -343,7 +343,7 @@
     },
     "kernel": {
       "type": "string",
-      "enum": ["add", "sub", "mul"],
+      "enum": ["add", "sub", "mul", "squared_difference", "minimum", "maximum", "requantize"],
       "description": "ChunkedEquivalence: elementwise kernel family to exercise."
     },
     "element_count": {
@@ -354,6 +354,12 @@
     "chunk_sizes": {
       "$ref": "#/$defs/intArray",
       "description": "ChunkedEquivalence: consecutive slice sizes for the chunked pass; must sum to element_count."
+    },
+    "operand_sign_span_exempt": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "minLength": 1 },
+      "description": "Int elementwise cases: operand name -> reason the operand is intentionally one-signed after its zero point is applied. Waives the generation-time operand sign-span check for that operand only. This schema is not enforced at load time (#100); the same rule is enforced in code by OperationBase._enforce_int_operand_sign_span."
     }
   },
   "$defs": {

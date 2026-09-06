@@ -256,6 +256,41 @@ smaller probes stay correct on the same compiler either way. The Arm targets are
 their classification call sites counted, not executed, with the toolchains and results recorded
 in the pull request.
 
+## Operand sign span
+
+Int elementwise cases (Add, Sub, Mul, SquaredDifference, Minimum, Maximum, PReLU) must feed
+each operand data that spans negative, near-zero and positive values **after** the input
+offset is applied, i.e. `value - zero_point`. A one-signed operand cannot discriminate the
+sign-dependent kernel paths: the packed DSP loop of ns-cmsis-nn#343 dropped the sign of
+`value + input_offset`, and PReLU and min/max branch on it directly. Uniform `[-1, 1]` float
+data plus a TFLite zero point does not guarantee the span, so generation enforces it
+(`OperationBase._enforce_int_operand_sign_span`, issue #81 property 2).
+
+When a runtime input operand does not span, generation steers it: the first three elements are
+overwritten with a negative / zero / positive post-offset triple at half the operand's own
+magnitude. Steering is deterministic and independent of the RNG stream, and the golden is
+computed after it, so a re-run reproduces the same data and the same expected output.
+
+Operands with fewer than three elements (broadcast scalars, one- and two-element rows) cannot
+hold all three regions and are out of scope; the operand they broadcast against still has to
+span.
+
+An operand that is intentionally one-signed opts out in its descriptor, naming the operand and
+the reason:
+
+```yaml
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it
+    would leave the reference interpreter using the model's copy, and the kernel branches on
+    the sign of the input, not of alpha (hct#81)
+```
+
+The reason is required. An operand baked into the TFLite model (a PReLU alpha) can only be
+waived, never steered, because the reference interpreter would keep using the model's copy and
+the golden would stop matching the emitted array. The key is also declared in
+`helia_core_tester/generation/descriptors/schema.json`, but that schema is not enforced at load
+time (#100), so the rule lives in code.
+
 ## Pipeline efficiency
 
 Defaults chosen so a repeat run is cheap and a hung kernel cannot wedge a leg.

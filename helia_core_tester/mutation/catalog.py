@@ -73,6 +73,14 @@ Grounding of the v1 entries:
 - broadcast_row_reuse:   the broadcast-walk row-reuse class (the escaped
                          min/max broadcast bug family): the NHWC walk stops
                          advancing input 1 across rows and re-reads row 0.
+- squared_difference_tail_drop, minmax_no_broadcast_tail_drop,
+  requantize_tail_drop: the same tail-drop class as tail_loop_off_by_one,
+                         planted in the three families that gained chunked
+                         cases in issue #81. Each is expressed in every
+                         compiled variant of its kernel, not just the
+                         vectorised one, because the host scorer builds with
+                         ARM_MATH_DSP and no MVEI: an MVE-only edit would be
+                         dead code here and score as vacuous.
 """
 
 from __future__ import annotations
@@ -342,6 +350,105 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
         ),
         expected_detected_by="broadcast cases where input 1 has more than one row and the walk descends to rows",
         refs=("ns-cmsis-nn#321",),
+    ),
+    Mutant(
+        mutant_id="squared_difference_tail_drop",
+        description="Squared-difference kernels process only the 4-aligned prefix, never the tail",
+        family="BasicMathFunctions",
+        edits=(
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_elementwise_squared_difference_s8.c",
+                pattern="int32_t loop_count = block_size;",
+                replacement="int32_t loop_count = block_size & ~3; /* MUTANT squared_difference_tail_drop */",
+                count=2,
+            ),
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_elementwise_squared_difference_s16.c",
+                pattern="int32_t loop_count = block_size;",
+                replacement="int32_t loop_count = block_size & ~3; /* MUTANT squared_difference_tail_drop */",
+                count=2,
+            ),
+        ),
+        expected_detected_by=(
+            "chunked-equivalence squared_difference s8/s16 cases (singles and offcut): the "
+            "singles pass processes nothing at all while the full call processes its aligned "
+            "prefix. Golden squared-difference cases kill it only when their flat element "
+            "count is not a multiple of 4."
+        ),
+        refs=("AmbiqAI/helia-core-tester#81",),
+    ),
+    Mutant(
+        mutant_id="minmax_no_broadcast_tail_drop",
+        description="min/max no-broadcast inner loop stops one element short of the run",
+        family="BasicMathFunctions",
+        edits=(
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_minimum_s8.c",
+                pattern="    while (flat_size > 0)\n    {\n        int8_t in1 = *input_1++;",
+                replacement=(
+                    "    while (flat_size > 1) /* MUTANT minmax_no_broadcast_tail_drop */\n"
+                    "    {\n        int8_t in1 = *input_1++;"
+                ),
+                count=1,
+            ),
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_maximum_s8.c",
+                pattern="    while (flat_size > 0)\n    {\n        int8_t in1 = *input_1++;",
+                replacement=(
+                    "    while (flat_size > 1) /* MUTANT minmax_no_broadcast_tail_drop */\n"
+                    "    {\n        int8_t in1 = *input_1++;"
+                ),
+                count=1,
+            ),
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_minimum_s16.c",
+                pattern="    while (flat_size > 0)\n    {\n        int16_t in1 = *input_1++;",
+                replacement=(
+                    "    while (flat_size > 1) /* MUTANT minmax_no_broadcast_tail_drop */\n"
+                    "    {\n        int16_t in1 = *input_1++;"
+                ),
+                count=1,
+            ),
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_maximum_s16.c",
+                pattern="    while (flat_size > 0)\n    {\n        int16_t in1 = *input_1++;",
+                replacement=(
+                    "    while (flat_size > 1) /* MUTANT minmax_no_broadcast_tail_drop */\n"
+                    "    {\n        int16_t in1 = *input_1++;"
+                ),
+                count=1,
+            ),
+        ),
+        expected_detected_by=(
+            "chunked-equivalence minimum/maximum s8/s16 cases: a size-1 slice writes nothing, "
+            "so the singles pass disagrees with the full call on every element. Golden "
+            "min/max cases kill it too (last element of every contiguous run is stale)."
+        ),
+        refs=("AmbiqAI/helia-core-tester#81",),
+    ),
+    Mutant(
+        mutant_id="requantize_tail_drop",
+        description="arm_requantize_s8_s8 drops the trailing size % 4 elements",
+        family="QuantizationFunctions",
+        edits=(
+            Edit(
+                relpath="Source/QuantizationFunctions/arm_quantize_s8_s8.c",
+                pattern="int32_t count = (size + 3) / 4;",
+                replacement="int32_t count = size / 4; /* MUTANT requantize_tail_drop */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/QuantizationFunctions/arm_quantize_s8_s8.c",
+                pattern="for (int i = 0; i < size; i++)",
+                replacement="for (int i = 0; i < (size & ~3); i++) /* MUTANT requantize_tail_drop */",
+                count=1,
+            ),
+        ),
+        expected_detected_by=(
+            "chunked-equivalence requantize s8 cases only: arm_requantize_s8_s8 has no golden "
+            "case in the suite, so nothing else in the corpus can see this."
+        ),
+        refs=("AmbiqAI/helia-core-tester#81",),
     ),
 )
 

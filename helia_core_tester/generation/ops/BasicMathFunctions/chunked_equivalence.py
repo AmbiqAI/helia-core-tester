@@ -1,5 +1,5 @@
 """
-Chunked-equivalence property cases for elementwise kernels (issue #81).
+Chunked-equivalence property cases for sliceable int kernels (issue #81).
 
 Every regular descriptor runs a kernel once, at one element count. A defect
 that only appears at certain block sizes -- e.g. a packed 4-at-a-time DSP loop
@@ -23,6 +23,15 @@ Operand sign matters (the #343 trigger was sign-dependent: the packed loop
 masked away the sign of value + input_offset). Generation therefore plants
 strongly negative operands inside the packed region and fails the descriptor
 if the data does not span negative and positive post-offset values there.
+
+Kernels differ in how a slice is expressed. Three families are covered:
+  - block_size kernels (add/sub/mul/squared_difference) take a plain element
+    count, so a slice is a pointer pair plus a shorter count;
+  - dims kernels (minimum/maximum) take cmsis_nn_dims, so a slice is
+    identical [1,1,1,chunk] dims for both inputs and the output with the
+    data pointers advanced -- identical dims keep the broadcast walk on its
+    no-broadcast path, which is the one with the vector loop;
+  - unary kernels (arm_requantize_s8_s8) have one operand and a `size`.
 """
 
 from typing import Any, Dict, List, Tuple
@@ -33,16 +42,98 @@ from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
 
 # Kernel selection: (kernel, activation_dtype) -> call info.
-# "addsub" kernels take per-input requantization + left_shift;
-# "mul" kernels only requantize the product.
+#   call_style "addsub": per-input requantization + left_shift + block_size
+#   call_style "mul":    input offsets, one output requantization, block_size
+#   call_style "minmax": cmsis_nn_context + cmsis_nn_dims, no quant params
+#   call_style "requantize": single operand, `size`, scale mult/shift + zero points
+# "vector_widths" are the lane counts of the kernel's vectorised paths on any
+# supported target; the chunk pattern must leave a tail for each of them and
+# the sign check must hold inside each packed region.
 _KERNEL_TABLE: Dict[Tuple[str, str], Dict[str, Any]] = {
-    ("add", "S8"): {"kernel_fn": "arm_elementwise_add_s8", "call_style": "addsub", "c_type": "int8_t"},
-    ("sub", "S8"): {"kernel_fn": "arm_elementwise_sub_s8", "call_style": "addsub", "c_type": "int8_t"},
-    ("mul", "S8"): {"kernel_fn": "arm_elementwise_mul_s8", "call_style": "mul", "c_type": "int8_t"},
-    ("add", "S16"): {"kernel_fn": "arm_elementwise_add_s16", "call_style": "addsub", "c_type": "int16_t"},
-    ("sub", "S16"): {"kernel_fn": "arm_elementwise_sub_s16", "call_style": "addsub", "c_type": "int16_t"},
-    ("mul", "S16"): {"kernel_fn": "arm_elementwise_mul_s16", "call_style": "mul", "c_type": "int16_t"},
+    ("add", "S8"): {
+        "kernel_fn": "arm_elementwise_add_s8",
+        "call_style": "addsub",
+        "c_type": "int8_t",
+        "vector_widths": (4, 2),
+    },
+    ("sub", "S8"): {
+        "kernel_fn": "arm_elementwise_sub_s8",
+        "call_style": "addsub",
+        "c_type": "int8_t",
+        "vector_widths": (4, 2),
+    },
+    ("mul", "S8"): {
+        "kernel_fn": "arm_elementwise_mul_s8",
+        "call_style": "mul",
+        "c_type": "int8_t",
+        "vector_widths": (4, 2),
+    },
+    ("add", "S16"): {
+        "kernel_fn": "arm_elementwise_add_s16",
+        "call_style": "addsub",
+        "c_type": "int16_t",
+        "vector_widths": (4, 2),
+    },
+    ("sub", "S16"): {
+        "kernel_fn": "arm_elementwise_sub_s16",
+        "call_style": "addsub",
+        "c_type": "int16_t",
+        "vector_widths": (4, 2),
+    },
+    ("mul", "S16"): {
+        "kernel_fn": "arm_elementwise_mul_s16",
+        "call_style": "mul",
+        "c_type": "int16_t",
+        "vector_widths": (4, 2),
+    },
+    ("squared_difference", "S8"): {
+        "kernel_fn": "arm_elementwise_squared_difference_s8",
+        "call_style": "addsub",
+        "c_type": "int8_t",
+        "vector_widths": (4, 2),
+    },
+    ("squared_difference", "S16"): {
+        "kernel_fn": "arm_elementwise_squared_difference_s16",
+        "call_style": "addsub",
+        "c_type": "int16_t",
+        "vector_widths": (4, 2),
+    },
+    # The minimum/maximum MVE inner loops are wlstp.8 / wlstp.16 over 128-bit
+    # vectors, so the lane count is 16 for s8 and 8 for s16, not 4.
+    ("minimum", "S8"): {
+        "kernel_fn": "arm_minimum_s8",
+        "call_style": "minmax",
+        "c_type": "int8_t",
+        "vector_widths": (16, 4, 2),
+    },
+    ("maximum", "S8"): {
+        "kernel_fn": "arm_maximum_s8",
+        "call_style": "minmax",
+        "c_type": "int8_t",
+        "vector_widths": (16, 4, 2),
+    },
+    ("minimum", "S16"): {
+        "kernel_fn": "arm_minimum_s16",
+        "call_style": "minmax",
+        "c_type": "int16_t",
+        "vector_widths": (8, 4, 2),
+    },
+    ("maximum", "S16"): {
+        "kernel_fn": "arm_maximum_s16",
+        "call_style": "minmax",
+        "c_type": "int16_t",
+        "vector_widths": (8, 4, 2),
+    },
+    ("requantize", "S8"): {
+        "kernel_fn": "arm_requantize_s8_s8",
+        "call_style": "requantize",
+        "c_type": "int8_t",
+        "vector_widths": (4, 2),
+    },
 }
+
+# Number of input operands per call style.
+_OPERAND_COUNT: Dict[str, int] = {"addsub": 2, "mul": 2, "minmax": 2, "requantize": 1}
 
 # Fixed quantization parameters per (call_style, dtype). Any values work for
 # the equivalence property (the full call is compared against the kernel
@@ -52,6 +143,7 @@ _KERNEL_TABLE: Dict[Tuple[str, str], Dict[str, Any]] = {
 # the packed-loop sign defect visible.
 # Note: the s16 add/sub kernels and both mul kernels ignore the input
 # offsets (s16) or apply them before a single output requantization (mul).
+# minimum/maximum take no quantization parameters at all.
 _QUANT_TABLE: Dict[Tuple[str, str], Dict[str, int]] = {
     ("addsub", "S8"): {
         "input_1_offset": -3,
@@ -101,6 +193,31 @@ _QUANT_TABLE: Dict[Tuple[str, str], Dict[str, int]] = {
         "out_activation_min": -32768,
         "out_activation_max": 32767,
     },
+    ("minmax", "S8"): {},
+    ("minmax", "S16"): {},
+    ("requantize", "S8"): {
+        # (value + 3) / 2 + 2 over the whole int8 domain: no output saturates,
+        # so a lane that takes the wrong path shows up as a value difference
+        # rather than being clamped into agreement.
+        "effective_scale_multiplier": 1 << 30,
+        "effective_scale_shift": 0,
+        "input_zeropoint": -3,
+        "output_zeropoint": 2,
+    },
+}
+
+# Squared difference squares the requantized operand difference, so the
+# output requantization has to absorb that square: shared addsub parameters
+# would clamp every lane to out_activation_max and make the case vacuous.
+_QUANT_TABLE[("addsub", "S8", "squared_difference")] = {
+    **_QUANT_TABLE[("addsub", "S8")],
+    "out_shift": -5,
+    "out_offset": -30,
+}
+_QUANT_TABLE[("addsub", "S16", "squared_difference")] = {
+    **_QUANT_TABLE[("addsub", "S16")],
+    "out_shift": -13,
+    "out_offset": -8000,
 }
 
 # Guaranteed sign-diverse operand heads planted at the start of both inputs
@@ -110,17 +227,12 @@ _QUANT_TABLE: Dict[Tuple[str, str], Dict[str, int]] = {
 _SIGN_SEED_INPUT_1 = (-100, -1, 5, 60, -128, 127, -3, 3)
 _SIGN_SEED_INPUT_2 = (-7, 3, -80, 20, 127, -128, 5, -5)
 
-# Vectorised strides whose packed regions must see negative post-offset
-# operands: 4 (Armv7E-M DSP s8 quad loop), 2 (s16 dual-halfword loop). MVE
-# tail-predicated loops have no separate tail path but are covered anyway.
-_PACKED_STRIDES = (4, 2)
-
 
 class OpChunkedEquivalence(OperationBase):
     """
-    Block-size invariance ("chunked equivalence") case for elementwise
-    add/sub/mul kernels: one full-length call is the reference for a sequence
-    of chunked calls over the same data.
+    Block-size invariance ("chunked equivalence") case for sliceable int
+    kernels: one full-length call is the reference for a sequence of chunked
+    calls over the same data.
     """
 
     def needs_keras_model(self) -> bool:
@@ -141,12 +253,34 @@ class OpChunkedEquivalence(OperationBase):
         kernel = str(self.desc.get("kernel", "")).strip().lower()
         dtype = self.tensor_dtype("input", default=str(self.desc.get("activation_dtype", "S8"))).upper()
         if (kernel, dtype) not in _KERNEL_TABLE:
-            supported = sorted({k for k, _ in _KERNEL_TABLE})
+            supported = sorted(_KERNEL_TABLE)
             raise ValueError(
                 f"ChunkedEquivalence descriptor '{self.desc.get('name')}' has unsupported "
-                f"kernel/dtype '{kernel}'/{dtype}; supported kernels: {supported} for S8/S16"
+                f"kernel/dtype '{kernel}'/{dtype}; supported kernel/dtype pairs: {supported}"
             )
         return kernel, dtype
+
+    @staticmethod
+    def _quant_params(call_style: str, dtype: str, kernel: str) -> Dict[str, int]:
+        specialised = _QUANT_TABLE.get((call_style, dtype, kernel))
+        if specialised is not None:
+            return dict(specialised)
+        return dict(_QUANT_TABLE[(call_style, dtype)])
+
+    @staticmethod
+    def _operand_offsets(call_style: str, quant: Dict[str, int]) -> List[int]:
+        """
+        Offset added to each stored operand value before the kernel does any
+        arithmetic on it. This is what the sign check has to look at: a lane
+        that is negative in memory but non-negative after the offset never
+        exercises a sign-dependent packed path.
+        """
+        if call_style in ("addsub", "mul"):
+            return [int(quant["input_1_offset"]), int(quant["input_2_offset"])]
+        if call_style == "minmax":
+            return [0, 0]
+        # arm_requantize_s8_s8 computes value - input_zeropoint.
+        return [-int(quant["input_zeropoint"])]
 
     def _element_count_and_chunks(self) -> Tuple[int, List[int]]:
         element_count = int(self.desc["element_count"])
@@ -167,9 +301,37 @@ class OpChunkedEquivalence(OperationBase):
             )
         return element_count, chunk_sizes
 
+    @staticmethod
+    def _check_chunk_discrimination(
+        name: str,
+        element_count: int,
+        chunk_sizes: List[int],
+        vector_widths: Tuple[int, ...],
+    ) -> None:
+        """
+        Fail generation unless, for every vectorised width the kernel uses,
+        the full call leaves a tail AND at least one chunk boundary falls
+        strictly inside a vector. Without both, pass (a) and pass (b) route
+        every element through the same path and the case cannot discriminate.
+        """
+        boundaries = np.cumsum(chunk_sizes[:-1]).tolist()
+        for width in vector_widths:
+            if element_count % width == 0:
+                raise ValueError(
+                    f"'{name}': element_count {element_count} is a multiple of the kernel's "
+                    f"vector width {width}, so the full-length call has no tail and the "
+                    f"chunked pass cannot expose a packed-vs-tail disagreement"
+                )
+            if not any(b % width for b in boundaries):
+                raise ValueError(
+                    f"'{name}': every chunk boundary {boundaries} is aligned to the kernel's "
+                    f"vector width {width}; the chunked pass runs the same vector lanes as "
+                    f"the full call and the case cannot discriminate"
+                )
+
     # ------------------------------------------------------------------ data
 
-    def _generate_operands(self, element_count: int, dtype: str) -> Tuple[np.ndarray, np.ndarray]:
+    def _generate_operands(self, element_count: int, dtype: str, operand_count: int = 2) -> List[np.ndarray]:
         rng = self._seeded_rng()
         if dtype == "S8":
             low, high, np_dtype = -128, 127, np.int8
@@ -177,12 +339,14 @@ class OpChunkedEquivalence(OperationBase):
         else:
             low, high, np_dtype = -32768, 32767, np.int16
             seed_scale = 199  # spread the planted s8-range seeds across the s16 range
-        input_1 = rng.integers(low, high + 1, size=element_count).astype(np.int64)
-        input_2 = rng.integers(low, high + 1, size=element_count).astype(np.int64)
+        seeds = (_SIGN_SEED_INPUT_1, _SIGN_SEED_INPUT_2)
         head = min(element_count, len(_SIGN_SEED_INPUT_1))
-        input_1[:head] = np.clip(np.array(_SIGN_SEED_INPUT_1[:head]) * seed_scale, low, high)
-        input_2[:head] = np.clip(np.array(_SIGN_SEED_INPUT_2[:head]) * seed_scale, low, high)
-        return input_1.astype(np_dtype), input_2.astype(np_dtype)
+        operands = []
+        for index in range(operand_count):
+            data = rng.integers(low, high + 1, size=element_count).astype(np.int64)
+            data[:head] = np.clip(np.array(seeds[index][:head]) * seed_scale, low, high)
+            operands.append(data.astype(np_dtype))
+        return operands
 
     @staticmethod
     def _check_sign_coverage(
@@ -191,18 +355,19 @@ class OpChunkedEquivalence(OperationBase):
         data: np.ndarray,
         offset: int,
         element_count: int,
+        vector_widths: Tuple[int, ...] = (4, 2),
     ) -> None:
         """
-        Fail generation unless value + input_offset spans negative AND
-        positive inside every vectorised packed region (issue #81 property 2:
-        cases whose packed lanes never see a negative post-offset operand
-        cannot discriminate sign-dependent packed-path defects like #343).
+        Fail generation unless value + offset spans negative AND positive
+        inside every vectorised packed region (issue #81 property 2: cases
+        whose packed lanes never see a negative post-offset operand cannot
+        discriminate sign-dependent packed-path defects like #343).
         """
         post = data.astype(np.int64) + int(offset)
-        for stride in _PACKED_STRIDES:
-            packed_len = (element_count // stride) * stride
+        for width in vector_widths:
+            packed_len = (element_count // width) * width
             region = post[:packed_len] if packed_len else post
-            scope = f"first {packed_len} elements (packed stride {stride})" if packed_len else "whole vector"
+            scope = f"first {packed_len} elements (packed stride {width})" if packed_len else "whole vector"
             if not (region < 0).any() or not (region > 0).any():
                 raise ValueError(
                     f"'{name}': {operand_label} post-offset values do not span negative and "
@@ -218,29 +383,36 @@ class OpChunkedEquivalence(OperationBase):
         name = self.desc["name"]
         kernel, dtype = self._kernel_key()
         kernel_info = _KERNEL_TABLE[(kernel, dtype)]
-        quant = dict(_QUANT_TABLE[(kernel_info["call_style"], dtype)])
+        call_style = kernel_info["call_style"]
+        vector_widths = tuple(kernel_info["vector_widths"])
+        operand_count = _OPERAND_COUNT[call_style]
+        quant = self._quant_params(call_style, dtype, kernel)
         element_count, chunk_sizes = self._element_count_and_chunks()
+        self._check_chunk_discrimination(name, element_count, chunk_sizes, vector_widths)
 
-        input_1, input_2 = self._generate_operands(element_count, dtype)
-        self._check_sign_coverage(name, "input_1", input_1, quant["input_1_offset"], element_count)
-        self._check_sign_coverage(name, "input_2", input_2, quant["input_2_offset"], element_count)
+        operands = self._generate_operands(element_count, dtype, operand_count)
+        offsets = self._operand_offsets(call_style, quant)
+        for index, (data, offset) in enumerate(zip(operands, offsets), start=1):
+            self._check_sign_coverage(name, f"input_{index}", data, offset, element_count, vector_widths)
 
         builder = TemplateContextBuilder()
         context: Dict[str, Any] = {
             "name": name,
             "kernel_fn": kernel_info["kernel_fn"],
-            "call_style": kernel_info["call_style"],
+            "call_style": call_style,
+            "operand_count": operand_count,
             "input_dtype": kernel_info["c_type"],
             "output_dtype": kernel_info["c_type"],
             "element_count": element_count,
             "chunk_count": len(chunk_sizes),
             "chunk_sizes_array": ", ".join(str(c) for c in chunk_sizes),
-            "input1_data_array": builder.format_array_as_c_literal(input_1),
-            "input2_data_array": builder.format_array_as_c_literal(input_2),
+            "input1_data_array": builder.format_array_as_c_literal(operands[0]),
             "validation_mode": "exact_int",
             "validation_label": f"ChunkedEquivalence {kernel_info['kernel_fn']}",
             **quant,
         }
+        if operand_count == 2:
+            context["input2_data_array"] = builder.format_array_as_c_literal(operands[1])
 
         cmake_context = {
             "name": name,

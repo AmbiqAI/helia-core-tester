@@ -15,6 +15,16 @@
 #   offcut:  mixed sizes    -> packed loops start on odd boundaries; every
 #                              mod-4 and mod-2 (s16 dual-halfword) tail length
 #                              is exercised.
+#
+# Both patterns hold for every vector width in play (16 for the s8 min/max
+# wlstp.8 loop, 8 for the s16 one, 4 for the MVE 32-bit-lane loops, 2 for the
+# s16 DSP halfword pairs): 23 and 29 are coprime with none of them, and the
+# offcut boundaries land inside a vector in every case. Generation re-checks
+# this per kernel and refuses a pattern that would be vacuous.
+#
+# arm_elementwise_prelu_s8/_s16 are deliberately absent: those kernels are a
+# single scalar loop with no vectorised path, so block-size invariance is
+# trivially true for them and a case would cost FVP time for no signal.
 operator: ChunkedEquivalence
 name: chunked_equivalence_add_singles_s8
 activation_dtype: S8
@@ -108,5 +118,117 @@ name: chunked_equivalence_mul_offcut_s16
 activation_dtype: S16
 weight_dtype: S8
 kernel: mul
+element_count: 29
+chunk_sizes: [3, 8, 7, 5, 4, 2]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_squared_difference_singles_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: squared_difference
+element_count: 23
+chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_squared_difference_offcut_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: squared_difference
+element_count: 29
+chunk_sizes: [3, 8, 7, 5, 4, 2]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_squared_difference_singles_s16
+activation_dtype: S16
+weight_dtype: S8
+kernel: squared_difference
+element_count: 23
+chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_squared_difference_offcut_s16
+activation_dtype: S16
+weight_dtype: S8
+kernel: squared_difference
+element_count: 29
+chunk_sizes: [3, 8, 7, 5, 4, 2]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_minimum_singles_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: minimum
+element_count: 23
+chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_minimum_offcut_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: minimum
+element_count: 29
+chunk_sizes: [3, 8, 7, 5, 4, 2]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_minimum_singles_s16
+activation_dtype: S16
+weight_dtype: S8
+kernel: minimum
+element_count: 23
+chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_minimum_offcut_s16
+activation_dtype: S16
+weight_dtype: S8
+kernel: minimum
+element_count: 29
+chunk_sizes: [3, 8, 7, 5, 4, 2]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_maximum_singles_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: maximum
+element_count: 23
+chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_maximum_offcut_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: maximum
+element_count: 29
+chunk_sizes: [3, 8, 7, 5, 4, 2]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_maximum_singles_s16
+activation_dtype: S16
+weight_dtype: S8
+kernel: maximum
+element_count: 23
+chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_maximum_offcut_s16
+activation_dtype: S16
+weight_dtype: S8
+kernel: maximum
+element_count: 29
+chunk_sizes: [3, 8, 7, 5, 4, 2]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_requantize_singles_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: requantize
+element_count: 23
+chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+---
+operator: ChunkedEquivalence
+name: chunked_equivalence_requantize_offcut_s8
+activation_dtype: S8
+weight_dtype: S8
+kernel: requantize
 element_count: 29
 chunk_sizes: [3, 8, 7, 5, 4, 2]
