@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import List, Optional, Set
@@ -120,6 +122,55 @@ def _clear_stale_gcda(build_dir: Path) -> None:
         gcda.unlink(missing_ok=True)
 
 
+_COMPILER_LAUNCHER_ENV = "HELIA_CORE_TESTER_COMPILER_LAUNCHER"
+_COMPILER_LAUNCHER_TOOLS = ("ccache", "sccache")
+_COMPILER_LAUNCHER_OFF = ("", "none")
+
+
+def resolve_compiler_launcher() -> Optional[str]:
+    """The compiler cache to route this build through, or ``None``.
+
+    Opt-in by presence only: nothing here installs a tool and no image ships
+    one, so a host that already has ccache or sccache gets warm rebuilds and a
+    host that has neither builds exactly as before. See issue #107.
+
+    ``HELIA_CORE_TESTER_COMPILER_LAUNCHER`` names a specific tool, or is set to
+    ``none`` (or empty) to disable caching outright even where ccache is on
+    ``PATH`` -- a build that has to be reproducible wants the compiler invoked
+    directly. A name that is not on ``PATH`` raises:
+    silently building uncached under a launcher the caller explicitly asked for
+    hides exactly the misconfiguration the override exists to express.
+    """
+    override = os.environ.get(_COMPILER_LAUNCHER_ENV)
+    if override is not None:
+        override = override.strip()
+        if override.lower() in _COMPILER_LAUNCHER_OFF:
+            return None
+        resolved = shutil.which(override)
+        if resolved is None:
+            raise FvpScriptError(
+                f"{_COMPILER_LAUNCHER_ENV}={override!r} is not on PATH. "
+                f"Name a compiler launcher that is installed, or set it to "
+                f"'none' to build without one."
+            )
+        return resolved
+    for tool in _COMPILER_LAUNCHER_TOOLS:
+        found = shutil.which(tool)
+        if found:
+            return found
+    return None
+
+
+def compiler_launcher_args(verbosity: int = 0) -> List[str]:
+    """CMake defines routing compilation through an available compiler cache."""
+    launcher = resolve_compiler_launcher()
+    if not launcher:
+        return []
+    if verbosity >= 1:
+        print(f"Compiler launcher: {launcher}")
+    return [f"-DCMAKE_C_COMPILER_LAUNCHER={launcher}"]
+
+
 def read_cmake_cache_path(build_dir: Path, key: str) -> Optional[Path]:
     cache = build_dir / "CMakeCache.txt"
     if not cache.exists():
@@ -166,7 +217,7 @@ def cmake_configure(
         f"-DTARGET_CPU={cpu}",
         f"-DCMSIS_PATH={cmsis5}",
         f"-DCMSIS_OPTIMIZATION_LEVEL={optimization}",
-    ] + [f"-D{item}" for item in extra_defs]
+    ] + compiler_launcher_args(verbosity) + [f"-D{item}" for item in extra_defs]
     if generated_tests_dir is not None:
         cmd.append(f"-DGENERATED_TESTS_DIR={generated_tests_dir}")
     if enable_coverage:

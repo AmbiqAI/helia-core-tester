@@ -169,7 +169,7 @@ def test_generation_name_filter_uses_renamed_descriptor_names(tmp_path: Path, mo
     assert manifest["tests"][0]["relative_test_dir"] == "PoolingFunctions/avg_pool_same_pool5x6_stride5x9_s8"
 
     generated.clear()
-    with pytest.raises(AssertionError, match="No TFLite models were generated"):
+    with pytest.raises(AssertionError, match="Filter matched no descriptors"):
         generation_module.test_generation(
             {
                 "op": None,

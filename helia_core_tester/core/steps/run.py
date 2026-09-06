@@ -84,8 +84,10 @@ class RunStep(StepBase):
                     if suite == "float" and getattr(self.config, "coverage_mve_float", False):
                         cmd.extend(["--coverage-report-suite", "float-mve"])
 
-                if self.config.timeout > 0:
-                    cmd.extend(["--timeout-run", str(self.config.timeout)])
+                # Always forwarded, 0 included: the child's own default is
+                # non-zero, so withholding the flag would turn the explicit
+                # opt-out back into the default.
+                cmd.extend(["--timeout-run", str(self.config.timeout)])
                 if self.config.fail_fast:
                     cmd.append("--fail-fast")
                 else:

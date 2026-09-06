@@ -31,6 +31,20 @@ FALSE_VALUES = {"0", "false", "no", "off"}
 VALID_SUITE_MODES = {"int", "float", "both"}
 VALID_FLOAT_PRECISION = {"f16", "f32", "both"}
 
+# FVP boot dominates per-case wall time, so parallel run jobs are the lever that
+# matters -- but an unbounded default on a shared or metered runner is a cost
+# risk, so the default caps out well below a big host's core count. run_jobs=0
+# stays as the explicit opt-in for "use every core". See issue #107.
+DEFAULT_RUN_JOBS_CAP = 4
+
+# A kernel that spins has no other backstop: without a per-case timeout the FVP
+# subprocess blocks until the CI job cap and the whole leg ends as a cancelled
+# job with no per-case result. The only constraint on the value is that a hang
+# has to become a case result before that job cap, with enough headroom that an
+# unoptimised (coverage) leg is not clipped. timeout=0 is the explicit opt-out.
+# See issue #99.
+DEFAULT_TIMEOUT_SECONDS = 300.0
+
 PATH_KEYS = frozenset(
     {
         "project_root",
@@ -42,6 +56,11 @@ PATH_KEYS = frozenset(
         "cmsis_nn_root",
     }
 )
+
+
+def default_run_jobs() -> int:
+    """Bounded parallel FVP run jobs for this host."""
+    return min(os.cpu_count() or 1, DEFAULT_RUN_JOBS_CAP)
 
 
 @dataclass
@@ -66,9 +85,9 @@ class Config:
     suites: list[str] = field(default_factory=list)
     float_precision: str = "both"
 
-    timeout: float = 0.0
+    timeout: float = DEFAULT_TIMEOUT_SECONDS
     fail_fast: bool = True
-    run_jobs: int = 1
+    run_jobs: Optional[int] = None
     verbosity: int = 0
     dry_run: bool = False
     plan: bool = False
@@ -79,6 +98,7 @@ class Config:
     limit: Optional[int] = None
     seed: Optional[int] = 500
 
+    force_generate: bool = False
     skip_generation: bool = False
     skip_build: bool = False
     skip_run: bool = False
@@ -210,6 +230,7 @@ class Config:
             "fail_fast",
             "dry_run",
             "plan",
+            "force_generate",
             "skip_generation",
             "skip_build",
             "skip_run",
@@ -263,7 +284,7 @@ class Config:
             self.jobs = os.cpu_count() or 4
 
         if self.run_jobs is None:
-            self.run_jobs = 1
+            self.run_jobs = default_run_jobs()
         if self.run_jobs < 0:
             raise ValueError(f"run_jobs must be >= 0, got {self.run_jobs}")
         if self.run_jobs == 0:
@@ -446,6 +467,7 @@ class Config:
             "name_filter": self.name_filter,
             "limit": self.limit,
             "seed": self.seed,
+            "force_generate": self.force_generate,
             "skip_generation": self.skip_generation,
             "skip_build": self.skip_build,
             "skip_run": self.skip_run,

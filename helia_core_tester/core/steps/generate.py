@@ -64,6 +64,8 @@ class GenerateStep(StepBase):
                 cmd.extend(["--float-precision", effective_float_precision])
         if include_seed and self.config.seed is not None:
             cmd.extend(["--seed", str(self.config.seed)])
+        if self.config.force_generate:
+            cmd.append("--force-generate")
         return cmd
     
     def _do_execute(self) -> StepResult:

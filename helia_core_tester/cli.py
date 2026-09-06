@@ -12,7 +12,7 @@ from typing import Optional
 
 import typer
 
-from helia_core_tester.core.config import Config
+from helia_core_tester.core.config import DEFAULT_RUN_JOBS_CAP, DEFAULT_TIMEOUT_SECONDS, Config
 from helia_core_tester.core.discovery import ensure_arm_toolchain_on_path
 from helia_core_tester.core.logging import setup_logger
 from helia_core_tester.core.path_layout import artifacts_root
@@ -123,6 +123,7 @@ def generate(
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision filter: f16, f32, or both"),
+    force_generate: bool = typer.Option(False, "--force-generate", help="Regenerate every case even when its reuse stamp still matches"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -142,6 +143,7 @@ def generate(
         seed=seed,
         suite=suite,
         float_precision=float_precision,
+        force_generate=force_generate,
     )
     if config.plan:
         _print_plan_item(GenerateStep(config).plan())
@@ -196,8 +198,8 @@ def build(
 @app.command()
 def run(
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
-    timeout: float = typer.Option(0.0, help="Per-test timeout in seconds (0 = none)"),
-    run_jobs: int = typer.Option(1, "--run-jobs", help="Parallel FVP run jobs (0 = auto/use all host cores)"),
+    timeout: Optional[float] = typer.Option(None, help=f"Per-case FVP timeout in seconds (default: {DEFAULT_TIMEOUT_SECONDS:g}; 0 disables it and lets a hung kernel block the run)"),
+    run_jobs: Optional[int] = typer.Option(None, "--run-jobs", help=f"Parallel FVP run jobs (default: min(host cores, {DEFAULT_RUN_JOBS_CAP}); 0 = every host core). FVP boot dominates per-case time so parallelism is the lever, but unbounded jobs on a shared or metered runner is a cost risk"),
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Do not stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Collect and merge ns-cmsis-nn gcov streams"),
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Write MVE float coverage to the float-mve report lane"),
@@ -248,11 +250,12 @@ def full(
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision selection for float suite: f16, f32, or both"),
     opt: str = typer.Option("-Ofast", help="Optimization level"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
-    timeout: float = typer.Option(0.0, help="Per-test timeout in seconds (0 = none)"),
-    run_jobs: int = typer.Option(1, "--run-jobs", help="Parallel FVP run jobs (0 = auto/use all host cores)"),
+    timeout: Optional[float] = typer.Option(None, help=f"Per-case FVP timeout in seconds (default: {DEFAULT_TIMEOUT_SECONDS:g}; 0 disables it and lets a hung kernel block the run)"),
+    run_jobs: Optional[int] = typer.Option(None, "--run-jobs", help=f"Parallel FVP run jobs (default: min(host cores, {DEFAULT_RUN_JOBS_CAP}); 0 = every host core). FVP boot dominates per-case time so parallelism is the lever, but unbounded jobs on a shared or metered runner is a cost risk"),
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Do not stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn coverage collection/reporting"),
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Enable Cortex-M55 float MVE paths during coverage builds"),
+    force_generate: bool = typer.Option(False, "--force-generate", help="Regenerate every case even when its reuse stamp still matches"),
     skip_generation: bool = typer.Option(False, "--skip-generation", help="Skip TFLite generation"),
     skip_build: bool = typer.Option(False, "--skip-build", help="Skip FVP build"),
     skip_run: bool = typer.Option(False, "--skip-run", help="Skip FVP test execution"),
@@ -285,6 +288,7 @@ def full(
         fail_fast=not no_fail_fast,
         coverage=coverage,
         coverage_mve_float=coverage_mve_float,
+        force_generate=force_generate,
         skip_generation=skip_generation,
         skip_build=skip_build,
         skip_run=skip_run,
