@@ -462,8 +462,9 @@ class OperationBase(ABC):
 
     # "Near zero" is absolute, not a fraction of the operand's own range: the
     # sign boundary the packed/scalar paths and the branchy kernels (PReLU,
-    # min/max) split on sits at a fixed post-offset value, so an operand whose
-    # closest approach is 10% of a large maximum is still nowhere near it.
+    # min/max) split on sits at a fixed post-offset value, so an operand that
+    # only comes within some fraction of its own large maximum is still nowhere
+    # near it.
     NEAR_ZERO_MAX_ABS = 1
 
     # An operand with fewer than this many elements cannot hold a negative, a
