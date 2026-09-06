@@ -11,29 +11,50 @@ skipped.
 
 Grounding of the v1 entries:
 
-- drop_conv_bias:        tester#77. Measured against ns-cmsis-nn 18a89ff in
-                         ghcr.io/ambiqai/ns-cmsis-nn-ci:latest on cortex-m4,
-                         seed 500, over a 105-case baseline: 44 kill it (24
-                         non-dilated s8 Convolve cases plus 20 s4 cases).
-                         Every survivor is a survivor by construction:
-                         * quantized dilated convs -- the TFLite converter
-                           hoists the bias into a trailing Add and leaves a
-                           zero placeholder on the CONV_2D op (tester#98);
+- drop_conv_bias:        tester#77, tester#98. Measured against ns-cmsis-nn
+                         18a89ff in ghcr.io/ambiqai/ns-cmsis-nn-ci:latest on
+                         cortex-m4, seed 500, --ops Convolve,DepthwiseConv,
+                         over a 123-case set: 51 kill it (24 non-dilated s8
+                         Convolve cases, the 7 dilated s8 Convolve cases that
+                         tester#98 gave an accumulator-scale bias, and 20 s4
+                         cases). Every survivor is a survivor by construction:
                          * use_bias: false cases, which have no bias to drop;
                          * s16 convs, because no s16 conv kernel is mutated;
+                         * every DepthwiseConv case -- the mutant patches
+                           convolution kernels only;
                          * the five s4 cases that do not execute a mutated
                            route -- convolve_1x1_fast_s4,
                            convolve_1x1_stride_s4,
                            convolve_even_rhs50_lhs1_bias_s4,
                            convolve_odd_rhs3_lhs1_bias_s4 and
                            convolve_odd_rhs5_lhs1_bias_s4 (no s4 route
-                           through arm_nn_mat_mult_nt_t_s4 is patched);
-                         * the FullyConnected cases in the baseline set --
-                           the mutant patches conv kernels only.
+                           through arm_nn_mat_mult_nt_t_s4 is patched).
                          Covers the s8_s16 kernel, the s4_s16 kernel, the
                          1xN/1x1 non-fast route (arm_nn_mat_mult_nt_t_s8),
                          the grouped row-offset kernel, and the
                          arm_convolve_s8 leftover loop.
+- drop_depthwise_bias:   tester#98. Measured against ns-cmsis-nn 18a89ff in
+                         ghcr.io/ambiqai/ns-cmsis-nn-ci:latest on cortex-m4,
+                         seed 500, --ops Convolve,DepthwiseConv, over the same
+                         123-case set: 16 kill it, all of them DepthwiseConv
+                         cases, the five dilated quantized ones included.
+                         Survivors are the Convolve cases (the mutant patches
+                         the depthwise entry points only), the 14 use_bias:
+                         false depthwise cases, and the 18 bias-carrying
+                         depthwise cases whose wrapper dispatches straight to
+                         an optimized kernel rather than through one of the
+                         three mutated entry points.
+- drop_conv_s16_bias:    tester#98. Same checkout, image, cpu, seed and
+                         123-case set: 9 kill it -- every s16 Convolve case
+                         that carries a bias, the six dilated ones included.
+                         The remaining nine s16 Convolve cases are use_bias:
+                         false; every other survivor is an s8/s4 conv or a
+                         DepthwiseConv case, which no edit here touches. The
+                         arm_convolve_s16_fast_small_kernel.c edits sit inside
+                         that file's ARM_MATH_MVEI branch, so they are inert on
+                         cortex-m4 and the 9/123 figure is the non-MVE routes
+                         only; an MVE run reaches more entry points and differs
+                         by construction.
 - packed_sign_mask_343:  ns-cmsis-nn#343 (packed DSP loop masked the
                          sign-extended halfword with & 0x0FFFF, disagreeing
                          with its own scalar tail). The patch removes the
@@ -129,17 +150,114 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
         ),
         expected_detected_by=(
             "conv golden cases with a nonzero bias. Measured on cortex-m4 against "
-            "ns-cmsis-nn 18a89ff (seed 500, 105 cases): 44 killers, 24 non-dilated s8 "
-            "Convolve cases plus 20 s4 cases. Survivors are the quantized dilated convs "
-            "(bias hoisted into a trailing Add by the converter, tester#98), the "
-            "use_bias: false cases, the s16 convs, the five s4 cases that do not execute "
-            "a mutated route (convolve_1x1_fast_s4, convolve_1x1_stride_s4, "
-            "convolve_even_rhs50_lhs1_bias_s4, convolve_odd_rhs3_lhs1_bias_s4 and "
-            "convolve_odd_rhs5_lhs1_bias_s4 -- no s4 route through "
-            "arm_nn_mat_mult_nt_t_s4 is patched), and the FullyConnected cases "
-            "(the mutant touches conv kernels only) (tester#77)"
+            "ns-cmsis-nn 18a89ff (seed 500, --ops Convolve,DepthwiseConv, 123 cases): "
+            "51 killers, 24 non-dilated s8 Convolve cases, 7 dilated s8 Convolve cases "
+            "and 20 s4 cases. Survivors are the use_bias: false cases, the s16 convs, "
+            "every DepthwiseConv case (the mutant touches conv kernels only), and the "
+            "five s4 cases that do not execute a mutated route (convolve_1x1_fast_s4, "
+            "convolve_1x1_stride_s4, convolve_even_rhs50_lhs1_bias_s4, "
+            "convolve_odd_rhs3_lhs1_bias_s4 and convolve_odd_rhs5_lhs1_bias_s4 -- no s4 "
+            "route through arm_nn_mat_mult_nt_t_s4 is patched) (tester#77, tester#98)"
         ),
-        refs=("AmbiqAI/helia-core-tester#77",),
+        refs=("AmbiqAI/helia-core-tester#77", "AmbiqAI/helia-core-tester#98"),
+    ),
+    Mutant(
+        mutant_id="drop_depthwise_bias",
+        description="Depthwise convolution kernels ignore the bias tensor entirely",
+        family="ConvolutionFunctions",
+        edits=(
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_depthwise_conv_s8.c",
+                pattern="    (void)bias_dims;",
+                replacement="    (void)bias_dims;\n    bias = NULL; /* MUTANT drop_depthwise_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_depthwise_conv_s16.c",
+                pattern="    (void)bias_dims;",
+                replacement="    (void)bias_dims;\n    bias = NULL; /* MUTANT drop_depthwise_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_depthwise_conv_s4.c",
+                pattern="    (void)bias_dims;",
+                replacement="    (void)bias_dims;\n    bias = NULL; /* MUTANT drop_depthwise_bias */",
+                count=1,
+            ),
+        ),
+        expected_detected_by=(
+            "depthwise golden cases with a nonzero bias that reach one of the three "
+            "mutated entry points. Measured on cortex-m4 against ns-cmsis-nn 18a89ff "
+            "(seed 500, --ops Convolve,DepthwiseConv, 123 cases): 16 killers, every one "
+            "a DepthwiseConv case, including all five dilated ones the conv mutants "
+            "cannot reach (depthwise_conv_dilation_s8, depthwise_conv_dilation_s16, "
+            "depthwise_conv_buf_nonopt_dil2_s8, depthwise_conv_dil_2x1_bias_s16 and "
+            "depthwise_conv_fast_false_dil2_bias_s16). Survivors are the Convolve "
+            "cases, the 14 use_bias: false depthwise cases and the 18 bias-carrying "
+            "depthwise cases the wrapper sends to an optimized kernel instead "
+            "(tester#98)"
+        ),
+        refs=("AmbiqAI/helia-core-tester#98",),
+    ),
+    Mutant(
+        mutant_id="drop_conv_s16_bias",
+        description="s16 convolution kernels ignore the bias tensor entirely",
+        family="ConvolutionFunctions",
+        edits=(
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_s16.c",
+                pattern="const int64_t *bias_s64 = (const int64_t *)bias_data_ptr->data;",
+                replacement="const int64_t *bias_s64 = NULL; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_s16.c",
+                pattern="const int32_t *bias_s32 = (const int32_t *)bias_data_ptr->data;",
+                replacement="const int32_t *bias_s32 = NULL; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_nn_mat_mult_kernel_s16.c",
+                pattern="const int64_t *bias_s64 = (const int64_t *)bias_data->data;",
+                replacement="const int64_t *bias_s64 = NULL; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_nn_mat_mult_kernel_s16.c",
+                pattern="const int32_t *bias_s32 = (const int32_t *)bias_data->data;",
+                replacement="const int32_t *bias_s32 = NULL; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_s16_group_ch_mult_1.c",
+                pattern="const bool has_bias = (bias_data != NULL) && (bias_data->data != NULL);",
+                replacement="const bool has_bias = false; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_s16_fast_small_kernel.c",
+                pattern="const int64_t *bias_s64 = (const int64_t *)bias_data->data;",
+                replacement="const int64_t *bias_s64 = NULL; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_s16_fast_small_kernel.c",
+                pattern="const int32_t *bias_s32 = (const int32_t *)bias_data->data;",
+                replacement="const int32_t *bias_s32 = NULL; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+        ),
+        expected_detected_by=(
+            "s16 conv golden cases with a nonzero bias. Measured on cortex-m4 against "
+            "ns-cmsis-nn 18a89ff (seed 500, --ops Convolve,DepthwiseConv, 123 cases): "
+            "9 killers, which is every bias-carrying s16 Convolve case in the set, "
+            "including the six dilated ones drop_conv_bias cannot reach "
+            "(convolve_int16xint8_dilation_case_01_s16 through _case_03_s16 and "
+            "convolve_int16xint8xint32_case_04_s16 through _case_06_s16). Survivors "
+            "are the nine use_bias: false s16 Convolve cases and everything that is "
+            "not an s16 conv (tester#98)"
+        ),
+        refs=("AmbiqAI/helia-core-tester#98",),
     ),
     Mutant(
         mutant_id="packed_sign_mask_343",

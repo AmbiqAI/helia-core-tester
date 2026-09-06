@@ -173,9 +173,16 @@ class TestCaseDiscovery:
 
 
 class TestReportFormat:
+    # Named rather than indexed: the catalog grows in place, and these
+    # assertions are about the report, not about catalog order.
+    def _mutant(self, mutant_id: str) -> Mutant:
+        return next(m for m in MUTANTS_V1 if m.mutant_id == mutant_id)
+
     def _report(self) -> MutationReport:
-        killed = MutantOutcome(MUTANTS_V1[1], STATUS_KILLED, killed_by=["chunked_add_s8"])
-        survived = MutantOutcome(MUTANTS_V1[0], STATUS_SURVIVED)
+        killed = MutantOutcome(
+            self._mutant("packed_sign_mask_343"), STATUS_KILLED, killed_by=["chunked_add_s8"]
+        )
+        survived = MutantOutcome(self._mutant("drop_conv_bias"), STATUS_SURVIVED)
         return MutationReport(
             baseline_total=3,
             baseline_failed=[CaseResult("broken_case", "Fam", False, "exit 1")],
@@ -209,7 +216,11 @@ class TestReportFormat:
     def test_apply_failures_surface(self):
         report = self._report()
         report.outcomes.append(
-            MutantOutcome(MUTANTS_V1[2], STATUS_APPLY_FAILED, detail="pattern matched 0 times")
+            MutantOutcome(
+                self._mutant("tail_loop_off_by_one"),
+                STATUS_APPLY_FAILED,
+                detail="pattern matched 0 times",
+            )
         )
         assert [o.mutant.mutant_id for o in report.apply_failures] == ["tail_loop_off_by_one"]
         assert "APPLY_FAILED" in report.render_text()

@@ -6,7 +6,12 @@ import os
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
+from helia_core_tester.generation.ops._shared.bias_init import (
+    HoistedBiasInjectionError,
+    SignedMagnitudeUniform,
+    bias_is_hoisted_by_lowering,
+    inject_hoisted_dilation_bias,
+)
 from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel
 
 
@@ -113,16 +118,14 @@ class OpConvolve(OperationBase):
         # and it stays orders of magnitude below the int32 accumulator's
         # headroom. The float range is unchanged.
         #
-        # Quantized dilated convolutions are excluded: they lower to
-        # SpaceToBatchND -> Conv2D -> BatchToSpaceND -> Add, which leaves the
-        # CONV_2D op a zero placeholder bias and moves the real bias into an
-        # ADD whose operand lives in the output quantization domain, not at
-        # accumulator scale. The golden is read from the model output, so a
-        # nonzero bias there would disagree with the zero bias the kernel is
-        # handed. TODO(#98): lift once the hoisted
-        # operand can be converted back to an int32 accumulator bias.
+        # A quantized dilated conv keeps a zero Keras bias: it lowers to
+        # SpaceToBatchND -> Conv2D -> BatchToSpaceND (-> Add), and a bias set
+        # here would land in a trailing Add in the output quantization domain
+        # instead of in the CONV_2D the kernel stands in for. Those cases get
+        # their bias written into the CONV_2D placeholder after conversion by
+        # inject_hoisted_dilation_bias, ahead of the golden run.
         _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
-        _bias_hoisted_by_lowering = not _case_is_float and any(d != 1 for d in dilation)
+        _bias_hoisted_by_lowering = bias_is_hoisted_by_lowering(dilation, is_float=_case_is_float)
         if not use_bias or _bias_hoisted_by_lowering:
             bias_initializer = 'zeros'
         elif _case_is_float:
@@ -236,7 +239,21 @@ class OpConvolve(OperationBase):
         tflite_model = converter.convert()
         with open(out_path, 'wb') as f:
             f.write(tflite_model)
-            
+
+        hoisted = bias_is_hoisted_by_lowering(
+            self.desc.get('dilation', [1, 1]),
+            is_float=str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"},
+        )
+        if self.desc.get('use_bias', True) and hoisted:
+            try:
+                inject_hoisted_dilation_bias(out_path, rep_seed)
+            except HoistedBiasInjectionError as exc:
+                raise ValueError(
+                    f"{self.desc.get('name')}: no accumulator-scale bias was injected "
+                    f"into the lowered dilated conv, so the case cannot detect a "
+                    f"dropped bias-add: {exc}"
+                ) from exc
+
     def _select_cmsis_convolve_kernel(self) -> Dict[str, str]:
         info = resolve_convolve_kernel(
             activation_dtype=self.desc.get("activation_dtype", "S8"),
@@ -345,8 +362,10 @@ class OpConvolve(OperationBase):
             # hoisted ADD operates in the quantized output domain (its
             # operand is not a plain int32 accumulator bias), so reusing this
             # extraction for quantized dtypes would silently substitute the
-            # wrong tensor. Quantized dilated-conv bias handling is out of
-            # scope here and is left untouched.
+            # wrong tensor. Those cases instead get an accumulator-scale bias
+            # written into the placeholder at conversion time by
+            # inject_hoisted_dilation_bias, and the placeholder read above is
+            # then the right tensor.
             if float_kernel and bts_op_index is not None:
                 from helia_core_tester.generation.utils.litert_utils import get_tensor_data_from_litert
 
