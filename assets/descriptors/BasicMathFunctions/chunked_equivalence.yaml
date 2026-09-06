@@ -24,11 +24,17 @@
 # Generation re-checks this against the per-kernel width table and refuses a
 # pattern that would be vacuous.
 #
-# Each case declares the capability its kernel needs a vectorised path for. The
-# four families added in #81 have an MVE path and a scalar #else and nothing in
-# between, so on a DSP-only or baseline target the chunked pass and the full
-# call run the identical scalar loop and the case can only ever pass; add/sub/
-# mul do have DSP packed loops, so they stay meaningful down to Cortex-M4.
+# A case declares a capability only where the kernel's block-size handling
+# collapses to one loop without it. The four families added in #81 have an MVE
+# path and a scalar #else and nothing in between, so on a DSP-only or baseline
+# target the chunked pass and the full call run the identical loop and the case
+# can only ever pass: those 14 require mve. The s8 add/sub/mul kernels take
+# their packed 4-at-a-time loop plus scalar tail from ARM_MATH_DSP, so their six
+# cases require dsp. The s16 add/sub/mul kernels are not gated on ARM_MATH_DSP
+# at all (arm_elementwise_add_s16/_sub_s16 have no such guard, and mul_s16
+# guards only the multiply): their block_size/2 dual-halfword loop and odd tail
+# compile on every target, so those six cases stay ungated and run down to
+# Cortex-M0.
 #
 # arm_elementwise_prelu_s8/_s16 are deliberately absent: those kernels are a
 # single scalar loop with no vectorised path, so block-size invariance is
@@ -92,7 +98,6 @@ name: chunked_equivalence_add_singles_s16
 activation_dtype: S16
 weight_dtype: S8
 kernel: add
-required_capabilities: [dsp]
 element_count: 23
 chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 ---
@@ -101,7 +106,6 @@ name: chunked_equivalence_add_offcut_s16
 activation_dtype: S16
 weight_dtype: S8
 kernel: add
-required_capabilities: [dsp]
 element_count: 29
 chunk_sizes: [3, 8, 7, 5, 4, 2]
 ---
@@ -110,7 +114,6 @@ name: chunked_equivalence_sub_singles_s16
 activation_dtype: S16
 weight_dtype: S8
 kernel: sub
-required_capabilities: [dsp]
 element_count: 23
 chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 ---
@@ -119,7 +122,6 @@ name: chunked_equivalence_sub_offcut_s16
 activation_dtype: S16
 weight_dtype: S8
 kernel: sub
-required_capabilities: [dsp]
 element_count: 29
 chunk_sizes: [3, 8, 7, 5, 4, 2]
 ---
@@ -128,7 +130,6 @@ name: chunked_equivalence_mul_singles_s16
 activation_dtype: S16
 weight_dtype: S8
 kernel: mul
-required_capabilities: [dsp]
 element_count: 23
 chunk_sizes: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 ---
@@ -137,7 +138,6 @@ name: chunked_equivalence_mul_offcut_s16
 activation_dtype: S16
 weight_dtype: S8
 kernel: mul
-required_capabilities: [dsp]
 element_count: 29
 chunk_sizes: [3, 8, 7, 5, 4, 2]
 ---

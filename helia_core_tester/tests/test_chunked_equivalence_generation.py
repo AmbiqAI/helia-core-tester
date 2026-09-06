@@ -295,21 +295,38 @@ def test_squared_difference_output_params_do_not_saturate_every_lane() -> None:
 
 
 def test_every_shipped_case_declares_the_capability_its_kernel_needs() -> None:
-    # A kernel with only an MVE path and a scalar #else runs the identical loop
-    # for the full call and the chunked pass on a DSP-only or baseline target,
-    # so the case there can only ever pass. Gate it instead of shipping it.
+    # A case is gated only where the kernel's block-size handling collapses to a
+    # single loop without the capability, because there the chunked pass and the
+    # full call run the identical code and the case can only ever pass. MVE-only
+    # families need mve; the s8 add/sub/mul packed loop needs dsp; the s16
+    # add/sub/mul dual-halfword loop is not guarded on ARM_MATH_DSP and runs
+    # everywhere.
     mve_only = {"squared_difference", "minimum", "maximum", "requantize"}
     descriptors = load_all_descriptors(str(_repo_root() / "assets" / "descriptors"))
     ce = [d for d in descriptors if d["operator"] == "ChunkedEquivalence"]
     for desc in ce:
-        expected = ["mve"] if desc["kernel"] in mve_only else ["dsp"]
+        if desc["kernel"] in mve_only:
+            expected = ["mve"]
+        elif desc["activation_dtype"] == "S8":
+            expected = ["dsp"]
+        else:
+            expected = None
         assert desc.get("required_capabilities") == expected, desc["name"]
 
     generated = {
-        cpu: [d for d in ce if not missing_required_capabilities(cpu, d["required_capabilities"])]
+        cpu: [
+            d
+            for d in ce
+            if not missing_required_capabilities(cpu, d.get("required_capabilities") or [])
+        ]
         for cpu in ("cortex-m55", "cortex-m4", "cortex-m0")
     }
     assert len(generated["cortex-m55"]) == 26
     assert len(generated["cortex-m4"]) == 12
-    assert generated["cortex-m0"] == []
+    assert len(generated["cortex-m0"]) == 6
     assert {d["kernel"] for d in generated["cortex-m4"]} == {"add", "sub", "mul"}
+    assert {(d["kernel"], d["activation_dtype"]) for d in generated["cortex-m0"]} == {
+        ("add", "S16"),
+        ("sub", "S16"),
+        ("mul", "S16"),
+    }
