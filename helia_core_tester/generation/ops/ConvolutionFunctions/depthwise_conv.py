@@ -5,7 +5,10 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.ops._shared.bias_init import inject_hoisted_dilation_bias
+from helia_core_tester.generation.ops._shared.bias_init import (
+    bias_is_hoisted_by_lowering,
+    inject_hoisted_dilation_bias,
+)
 from helia_core_tester.generation.kernel_dispatch import resolve_depthwise_conv_kernel
 
 
@@ -103,14 +106,19 @@ class OpDepthwiseConv(OperationBase):
         
         if dwconv_kwargs['use_bias']:
             # A quantized dilated depthwise conv lowers to SpaceToBatchND ->
-            # DepthwiseConv2D -> BatchToSpaceND -> Add, so the converter leaves
-            # the DEPTHWISE_CONV_2D op a zero placeholder bias and applies this
-            # one in the trailing Add at output quantization scale, outside the
-            # op the kernel stands in for. Those cases get an accumulator-scale
-            # bias written into the placeholder after conversion by
+            # DepthwiseConv2D -> BatchToSpaceND (-> Add), so a bias set here
+            # would land in a trailing Add at output quantization scale,
+            # outside the op the kernel stands in for. Keeping it zero lets
+            # that Add fold away; the bias those cases are held to is written
+            # into the DEPTHWISE_CONV_2D placeholder after conversion by
             # inject_hoisted_dilation_bias, ahead of the golden run.
-            dwconv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(
-                minval=-1.0, maxval=1.0, seed=4321
+            hoisted = bias_is_hoisted_by_lowering(
+                dwconv_kwargs.get('dilation_rate', (1, 1)),
+                is_float=str(self.tensor_dtype("input", default="S8")).upper()
+                in {"FP32", "FP16"},
+            )
+            dwconv_kwargs['bias_initializer'] = 'zeros' if hoisted else (
+                tf.keras.initializers.RandomUniform(minval=-1.0, maxval=1.0, seed=4321)
             )
         
         dwconv = tf.keras.layers.DepthwiseConv2D(**dwconv_kwargs)
@@ -227,8 +235,17 @@ class OpDepthwiseConv(OperationBase):
         with open(out_path, 'wb') as f:
             f.write(tflite_model)
 
-        if self.desc.get('use_bias', True):
-            inject_hoisted_dilation_bias(out_path, self.seed)
+        hoisted = bias_is_hoisted_by_lowering(
+            self.desc.get('dilation', [1, 1]),
+            is_float=str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"},
+        )
+        if self.desc.get('use_bias', True) and hoisted:
+            if not inject_hoisted_dilation_bias(out_path, rep_seed):
+                raise ValueError(
+                    f"{self.desc.get('name')}: the lowered dilated depthwise conv kept "
+                    f"its zero placeholder bias, so the case cannot detect a dropped "
+                    f"bias-add"
+                )
 
     def _select_cmsis_depthwise_conv_kernel(self) -> Dict[str, str]:
         info = resolve_depthwise_conv_kernel(

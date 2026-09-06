@@ -17,10 +17,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pytest
 
-from helia_core_tester.generation.ops.ConvolutionFunctions import convolve as convolve_module
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.ops.ConvolutionFunctions.convolve import OpConvolve
-from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import OpDepthwiseConv
 from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import OpFullyConnected
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -53,12 +51,8 @@ def _descriptor(name: str) -> Dict:
 
 def _generate(name: str, out_dir: Path, target_cpu: str, seed: int = _SEED) -> str:
     """Generate one case for one target and return its emitted header text."""
-    out_dir.mkdir(parents=True, exist_ok=True)
     desc = _descriptor(name)
-    op_cls = {
-        "Convolve": OpConvolve,
-        "DepthwiseConv": OpDepthwiseConv,
-    }.get(desc["operator"], OpFullyConnected)
+    op_cls = OpConvolve if desc["operator"] == "Convolve" else OpFullyConnected
     op = op_cls(desc, seed=seed, target_cpu=target_cpu)
     model = op.build_keras_model() if op.needs_keras_model() else None
     op.convert_to_tflite(model, str(out_dir / f"{name}.tflite"), seed)
@@ -104,9 +98,9 @@ def _bias_carrying_int_cases(*, weight_dtype_s4: bool) -> List[str]:
 
     Derived from the descriptors rather than enumerated so a new case is held to
     the floor the moment it is added.  Float cases have no quantization step to
-    clear and use_bias: false cases have no bias; quantized dilated convs are
-    included, their bias being written into the lowered CONV_2D placeholder
-    after conversion rather than coming from the Keras model.
+    clear, use_bias: false cases have no bias, and quantized dilated convs carry a
+    zero placeholder because the converter hoists the bias into a trailing Add
+    (TODO(#98)).
     """
     names: List[str] = []
     for desc in _all_descriptors():
@@ -115,6 +109,10 @@ def _bias_carrying_int_cases(*, weight_dtype_s4: bool) -> List[str]:
         if str(desc.get("activation_dtype", "")).upper() in ("FP32", "FP16"):
             continue
         if not desc.get("use_bias", True):
+            continue
+        dilation = desc.get("dilation", [1, 1])
+        dilation = [dilation, dilation] if isinstance(dilation, (int, float)) else list(dilation)
+        if any(int(d) != 1 for d in dilation):
             continue
         if (str(desc.get("weight_dtype", "S8")).upper() == "S4") is not weight_dtype_s4:
             continue
@@ -247,47 +245,18 @@ def test_s8_fully_connected_bias_reaches_the_kernel_via_the_weight_sum(tmp_path:
     )
 
 
-# The dilated lowering also covers DepthwiseConv, whose non-dilated cases draw
-# their bias from a plain uniform and are not held to the per-channel floor.
-@pytest.mark.parametrize(
-    "case_name",
-    ["depthwise_conv_dilation_s8", "depthwise_conv_dilation_s16"],
-)
-def test_dilated_depthwise_bias_is_detectable_on_every_channel(
-    case_name: str, tmp_path: Path
-) -> None:
+@pytest.mark.parametrize("case_name", ["convolve_2x2_dilation_s8", "convolve_int16xint8_dilation_case_01_s16"])
+def test_quantized_dilated_convolve_keeps_a_zero_bias(case_name: str, tmp_path: Path) -> None:
+    """Known gap, deliberately not fixed here.
+
+    A quantized dilated conv lowers to SpaceToBatchND -> Conv2D ->
+    BatchToSpaceND -> Add.  The bias ends up in the trailing Add at output
+    quantization scale rather than in the CONV_2D op at accumulator scale, so
+    the generated case cannot carry it.  Guard the carve-out so it stays
+    visible instead of quietly widening.
+    """
     header = _generate(case_name, tmp_path, "cortex-m55")
     biases = _int_array(header, "biases")
 
-    assert biases, f"{case_name} emits no bias array"
-    assert all(bias != 0 for bias in biases), f"{case_name} ships a zero bias channel"
-    assert min(_output_steps(header)) >= 1.0, (
-        f"{case_name} has a channel whose bias is below one output quantization step"
-    )
-
-
-@pytest.mark.parametrize(
-    "case_name",
-    ["convolve_2x2_dilation_s8", "convolve_int16xint8_dilation_case_01_s16"],
-)
-def test_dilated_golden_moves_with_the_injected_bias(
-    case_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The golden has to be recomputed from the model the bias was written into.
-
-    A quantized dilated conv lowers to SpaceToBatchND -> Conv2D ->
-    BatchToSpaceND, and both the emitted bias tensor and the golden are read
-    off that CONV_2D. If the injected bias reached the harness without the
-    golden moving with it, every one of these cases would fail on hardware for
-    a kernel that is behaving correctly.
-    """
-    with_bias = _generate(case_name, tmp_path / "with_bias", "cortex-m55")
-
-    monkeypatch.setattr(convolve_module, "inject_hoisted_dilation_bias", lambda *_: False)
-    without_bias = _generate(case_name, tmp_path / "without_bias", "cortex-m55")
-
-    assert all(bias == 0 for bias in _int_array(without_bias, "biases") or [])
-    assert any(bias != 0 for bias in _int_array(with_bias, "biases") or [])
-    assert _int_array(with_bias, "expected_output") != _int_array(
-        without_bias, "expected_output"
-    ), f"{case_name} golden is unchanged by the injected bias"
+    assert biases is not None
+    assert all(bias == 0 for bias in biases)

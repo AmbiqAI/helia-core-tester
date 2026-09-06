@@ -8,6 +8,7 @@ import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.bias_init import (
     SignedMagnitudeUniform,
+    bias_is_hoisted_by_lowering,
     inject_hoisted_dilation_bias,
 )
 from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel
@@ -123,7 +124,7 @@ class OpConvolve(OperationBase):
         # their bias written into the CONV_2D placeholder after conversion by
         # inject_hoisted_dilation_bias, ahead of the golden run.
         _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
-        _bias_hoisted_by_lowering = not _case_is_float and any(d != 1 for d in dilation)
+        _bias_hoisted_by_lowering = bias_is_hoisted_by_lowering(dilation, is_float=_case_is_float)
         if not use_bias or _bias_hoisted_by_lowering:
             bias_initializer = 'zeros'
         elif _case_is_float:
@@ -238,8 +239,16 @@ class OpConvolve(OperationBase):
         with open(out_path, 'wb') as f:
             f.write(tflite_model)
 
-        if self.desc.get('use_bias', True):
-            inject_hoisted_dilation_bias(out_path, self.seed)
+        hoisted = bias_is_hoisted_by_lowering(
+            self.desc.get('dilation', [1, 1]),
+            is_float=str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"},
+        )
+        if self.desc.get('use_bias', True) and hoisted:
+            if not inject_hoisted_dilation_bias(out_path, rep_seed):
+                raise ValueError(
+                    f"{self.desc.get('name')}: the lowered dilated conv kept its zero "
+                    f"placeholder bias, so the case cannot detect a dropped bias-add"
+                )
 
     def _select_cmsis_convolve_kernel(self) -> Dict[str, str]:
         info = resolve_convolve_kernel(
@@ -349,8 +358,10 @@ class OpConvolve(OperationBase):
             # hoisted ADD operates in the quantized output domain (its
             # operand is not a plain int32 accumulator bias), so reusing this
             # extraction for quantized dtypes would silently substitute the
-            # wrong tensor. Quantized dilated-conv bias handling is out of
-            # scope here and is left untouched.
+            # wrong tensor. Those cases instead get an accumulator-scale bias
+            # written into the placeholder at conversion time by
+            # inject_hoisted_dilation_bias, and the placeholder read above is
+            # then the right tensor.
             if float_kernel and bts_op_index is not None:
                 from helia_core_tester.generation.utils.litert_utils import get_tensor_data_from_litert
 

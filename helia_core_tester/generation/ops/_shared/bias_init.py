@@ -11,8 +11,8 @@ import numpy as np
 # Output quantization steps a hoisted-bias case's injected bias is worth per
 # channel. The floor clears the Convolve family's 1 LSB comparison tolerance
 # with margin so a dropped bias-add cannot hide inside it, and the ceiling
-# keeps the bias a few percent of the int8 output range, which the conv output
-# tensor's scale was calibrated without.
+# keeps the bias a few percent of the output tensor's own range, which its
+# scale was calibrated without.
 _DILATION_BIAS_MIN_STEPS = 3.0
 _DILATION_BIAS_MAX_STEPS = 8.0
 
@@ -53,6 +53,23 @@ class SignedMagnitudeUniform(keras.initializers.Initializer):
 
     def get_config(self) -> Dict[str, Any]:
         return {"minval": self.minval, "maxval": self.maxval, "seed": self.seed}
+
+
+def bias_is_hoisted_by_lowering(dilation: Any, *, is_float: bool) -> bool:
+    """True when the converter moves this case's bias out of the conv op.
+
+    A quantized dilated conv lowers to SpaceToBatchND -> conv ->
+    BatchToSpaceND -> Add, which strands the bias in the trailing Add; a float
+    graph keeps its bias fused into the conv whatever the dilation is.
+
+    Args:
+        dilation: Descriptor dilation, an int or a pair.
+        is_float: True for FP32/FP16 cases.
+    """
+    if is_float:
+        return False
+    rates = (dilation,) if isinstance(dilation, (int, float)) else tuple(dilation)
+    return any(int(rate) != 1 for rate in rates)
 
 
 def inject_hoisted_dilation_bias(tflite_path: str | Path, seed: Optional[int]) -> bool:
@@ -107,6 +124,11 @@ def inject_hoisted_dilation_bias(tflite_path: str | Path, seed: Optional[int]) -
             conv_op = op
             break
     if conv_op is None or conv_op.inputs is None or len(conv_op.inputs) < 3:
+        return False
+
+    # TFLite marks an absent optional input with -1, which would index the
+    # tensor list from the end.
+    if int(conv_op.inputs[2]) < 0:
         return False
 
     bias_tensor = subgraph.tensors[int(conv_op.inputs[2])]

@@ -11,24 +11,25 @@ skipped.
 
 Grounding of the v1 entries:
 
-- drop_conv_bias:        tester#77, tester#98. Measured against ns-cmsis-nn
-                         34ec14e1 in ghcr.io/ambiqai/ns-cmsis-nn-ci:latest on
-                         cortex-m4, seed 500, --ops Convolve,DepthwiseConv,
-                         over a 123-case set: 51 kill it (24 non-dilated s8
-                         Convolve cases, the 7 dilated s8 Convolve cases that
-                         tester#98 gave an accumulator-scale bias, and 20 s4
-                         cases). Every survivor is a survivor by construction:
+- drop_conv_bias:        tester#77. Measured against ns-cmsis-nn 18a89ff in
+                         ghcr.io/ambiqai/ns-cmsis-nn-ci:latest on cortex-m4,
+                         seed 500, over a 105-case baseline: 44 kill it (24
+                         non-dilated s8 Convolve cases plus 20 s4 cases).
+                         Every survivor is a survivor by construction:
+                         * quantized dilated convs -- the TFLite converter
+                           hoists the bias into a trailing Add and leaves a
+                           zero placeholder on the CONV_2D op (tester#98);
                          * use_bias: false cases, which have no bias to drop;
                          * s16 convs, because no s16 conv kernel is mutated;
-                         * every DepthwiseConv case -- the mutant patches
-                           convolution kernels only;
                          * the five s4 cases that do not execute a mutated
                            route -- convolve_1x1_fast_s4,
                            convolve_1x1_stride_s4,
                            convolve_even_rhs50_lhs1_bias_s4,
                            convolve_odd_rhs3_lhs1_bias_s4 and
                            convolve_odd_rhs5_lhs1_bias_s4 (no s4 route
-                           through arm_nn_mat_mult_nt_t_s4 is patched).
+                           through arm_nn_mat_mult_nt_t_s4 is patched);
+                         * the FullyConnected cases in the baseline set --
+                           the mutant patches conv kernels only.
                          Covers the s8_s16 kernel, the s4_s16 kernel, the
                          1xN/1x1 non-fast route (arm_nn_mat_mult_nt_t_s8),
                          the grouped row-offset kernel, and the
@@ -128,16 +129,17 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
         ),
         expected_detected_by=(
             "conv golden cases with a nonzero bias. Measured on cortex-m4 against "
-            "ns-cmsis-nn 34ec14e1 (seed 500, --ops Convolve,DepthwiseConv, 123 cases): "
-            "51 killers, 24 non-dilated s8 Convolve cases, 7 dilated s8 Convolve cases "
-            "and 20 s4 cases. Survivors are the use_bias: false cases, the s16 convs, "
-            "every DepthwiseConv case (the mutant touches conv kernels only), and the "
-            "five s4 cases that do not execute a mutated route (convolve_1x1_fast_s4, "
-            "convolve_1x1_stride_s4, convolve_even_rhs50_lhs1_bias_s4, "
-            "convolve_odd_rhs3_lhs1_bias_s4 and convolve_odd_rhs5_lhs1_bias_s4 -- no s4 "
-            "route through arm_nn_mat_mult_nt_t_s4 is patched) (tester#77, tester#98)"
+            "ns-cmsis-nn 18a89ff (seed 500, 105 cases): 44 killers, 24 non-dilated s8 "
+            "Convolve cases plus 20 s4 cases. Survivors are the quantized dilated convs "
+            "(bias hoisted into a trailing Add by the converter, tester#98), the "
+            "use_bias: false cases, the s16 convs, the five s4 cases that do not execute "
+            "a mutated route (convolve_1x1_fast_s4, convolve_1x1_stride_s4, "
+            "convolve_even_rhs50_lhs1_bias_s4, convolve_odd_rhs3_lhs1_bias_s4 and "
+            "convolve_odd_rhs5_lhs1_bias_s4 -- no s4 route through "
+            "arm_nn_mat_mult_nt_t_s4 is patched), and the FullyConnected cases "
+            "(the mutant touches conv kernels only) (tester#77)"
         ),
-        refs=("AmbiqAI/helia-core-tester#77", "AmbiqAI/helia-core-tester#98"),
+        refs=("AmbiqAI/helia-core-tester#77",),
     ),
     Mutant(
         mutant_id="packed_sign_mask_343",
