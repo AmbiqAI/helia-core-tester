@@ -54,6 +54,7 @@ class FullTestPipeline:
             self._runtime_env = bootstrap_runtime_env(
                 downloads_dir=self.config.downloads_dir,
                 ensure_setup=True,
+                toolchain=self.config.toolchain,
             )
         return self._runtime_env
     

@@ -5,6 +5,7 @@ Command-line interface for helia-core-tester.
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 from dataclasses import MISSING
 from pathlib import Path
@@ -160,6 +161,7 @@ def generate(
 def build(
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     opt: str = typer.Option("-Ofast", help="Optimization level"),
+    toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default) or armclang (Arm Compiler 6 on PATH; not combinable with --coverage)"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn code coverage instrumentation"),
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Enable Cortex-M55 float MVE paths during coverage builds"),
@@ -178,6 +180,7 @@ def build(
         plan=plan,
         project_root=project_root,
         optimization=opt,
+        toolchain=toolchain,
         jobs=jobs,
         coverage=coverage,
         coverage_mve_float=coverage_mve_float,
@@ -204,6 +207,7 @@ def run(
     coverage: bool = typer.Option(False, "--coverage", help="Collect and merge ns-cmsis-nn gcov streams"),
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Write MVE float coverage to the float-mve report lane"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
+    toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default) or armclang (Arm Compiler 6 on PATH; not combinable with --coverage)"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
     report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
@@ -226,6 +230,7 @@ def run(
         coverage_mve_float=coverage_mve_float,
         run_jobs=run_jobs,
         suite=suite,
+        toolchain=toolchain,
     )
     if config.plan:
         _print_plan_item(RunStep(config).plan())
@@ -249,6 +254,7 @@ def full(
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision selection for float suite: f16, f32, or both"),
     opt: str = typer.Option("-Ofast", help="Optimization level"),
+    toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default) or armclang (Arm Compiler 6 on PATH; not combinable with --coverage)"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     timeout: Optional[float] = typer.Option(None, help=f"Per-case FVP timeout in seconds (default: {DEFAULT_TIMEOUT_SECONDS:g}; 0 disables it and lets a hung kernel block the run)"),
     run_jobs: Optional[int] = typer.Option(None, "--run-jobs", help=f"Parallel FVP run jobs (default: min(host cores, {DEFAULT_RUN_JOBS_CAP}); 0 = every host core). FVP boot dominates per-case time so parallelism is the lever, but unbounded jobs on a shared or metered runner is a cost risk"),
@@ -282,6 +288,7 @@ def full(
         suite=suite,
         float_precision=float_precision,
         optimization=opt,
+        toolchain=toolchain,
         jobs=jobs,
         timeout=timeout,
         run_jobs=run_jobs,
@@ -364,6 +371,14 @@ def clean_all(
     typer.echo("✓ Clean-all completed")
 
 
+def _tool_version(exe: str) -> str:
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10, check=False).stdout
+        return out.strip().splitlines()[0] if out.strip() else "version unknown"
+    except Exception:
+        return "version unknown"
+
+
 @app.command()
 def doctor(
     project_root: Optional[Path] = typer.Option(None, "--repo-root", help="Repository root directory"),
@@ -393,6 +408,17 @@ def doctor(
         else:
             typer.echo(f"✗ {tool} not found ({description})", err=True)
             all_ok = False
+
+    gcc = shutil.which("arm-none-eabi-gcc")
+    if gcc:
+        typer.echo(f"✓ arm-none-eabi-gcc found ({_tool_version(gcc)}) at {gcc}")
+    else:
+        typer.echo("⚠ arm-none-eabi-gcc not on PATH (run setup_dependencies.py; --toolchain gcc needs it)", err=True)
+    armclang = shutil.which("armclang")
+    if armclang:
+        typer.echo(f"✓ armclang found ({_tool_version(armclang)}) at {armclang}")
+    else:
+        typer.echo("⚠ armclang not on PATH (only needed for --toolchain armclang)")
 
     key_dirs = {
         "assets/descriptors": "Test descriptors",
