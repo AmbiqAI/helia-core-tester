@@ -12,6 +12,7 @@ plus the descriptor opt-out and the shape of its required reason.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -49,8 +50,29 @@ def test_one_signed_runtime_operand_is_steered_not_rejected() -> None:
     data = np.full(12, 40, dtype=np.int8)
     (result,) = _op()._enforce_int_operand_sign_span((("input_1", data, 0),), steerable=("input_1",))
     assert not OperationBase._sign_span_gaps(result.reshape(-1), 0)
-    # Only the planted head moves; the rest of the case's data is untouched.
-    np.testing.assert_array_equal(result[3:], data[3:])
+    # Exactly three elements move, whatever the operand length.
+    assert int((result != data).sum()) == 3
+
+
+def test_steering_overwrites_the_least_extreme_elements() -> None:
+    # Planting into the head would discard a full-scale element and the
+    # saturation coverage that comes with it. The three elements closest to the
+    # zero point go instead.
+    data = np.array([-128, 127, 20, -9, 3, 100], dtype=np.int8)
+    (result,) = _op()._enforce_int_operand_sign_span((("input_1", data, 0),), steerable=("input_1",))
+    assert result[0] == -128 and result[1] == 127
+    moved = {int(i) for i in np.flatnonzero(result != data)}
+    assert moved <= {2, 3, 4}
+
+
+def test_near_zero_is_absolute_not_a_fraction_of_the_range() -> None:
+    # A large-magnitude s16 operand spans sign but never comes near the
+    # boundary the kernels split on; the old relative rule called it covered.
+    data = np.array([-20000, -9000, 8000, 17000, -3000, 12000], dtype=np.int16)
+    assert OperationBase._sign_span_gaps(data, 0) == ["near-zero"]
+    (result,) = _op()._enforce_int_operand_sign_span((("input_1", data, 0),), steerable=("input_1",))
+    assert (np.abs(result.astype(np.int64)) <= OperationBase.NEAR_ZERO_MAX_ABS).any()
+    assert result[0] == -20000 and result[3] == 17000
 
 
 def test_steering_is_deterministic() -> None:
@@ -100,7 +122,28 @@ def test_exemption_requires_an_operand_keyed_reason(value) -> None:
         op._enforce_int_operand_sign_span((("alpha", np.full(12, 26, dtype=np.int8), 0),), steerable=())
 
 
+_ENFORCE_CALL = re.compile(
+    r"_enforce_int_operand_sign_span\(\s*\((.*?)\),\s*steerable=", re.S
+)
+
+
+def _rule_operand_labels() -> set[str]:
+    """Operand labels the generators actually pass to the rule."""
+    labels: set[str] = set()
+    for path in (_repo_root() / "helia_core_tester" / "generation" / "ops").rglob("*.py"):
+        for call in _ENFORCE_CALL.finditer(path.read_text()):
+            labels.update(re.findall(r'\("([a-z_][a-z_0-9]*)"', call.group(1)))
+    return labels
+
+
+def test_rule_operand_labels_are_discoverable() -> None:
+    # The shipped-exemption test below is only meaningful if this finds the
+    # call sites; an empty set would make it vacuous.
+    assert {"input", "input_1", "input_2", "alpha"} <= _rule_operand_labels()
+
+
 def test_shipped_exemptions_are_well_formed_and_scoped() -> None:
+    labels = _rule_operand_labels()
     descriptors = load_all_descriptors(str(_repo_root() / "assets" / "descriptors"))
     exempt = [d for d in descriptors if d.get("operand_sign_span_exempt") is not None]
     assert exempt, "the audit left at least the PReLU alpha waivers in place"
@@ -109,5 +152,6 @@ def test_shipped_exemptions_are_well_formed_and_scoped() -> None:
         assert isinstance(mapping, dict) and mapping, desc["name"]
         for operand, reason in mapping.items():
             assert isinstance(reason, str) and reason.strip(), (desc["name"], operand)
-        # Nothing waives a runtime input: those are steered instead.
-        assert set(mapping) <= {"alpha"}, desc["name"]
+        # A waiver has to name an operand the rule actually checks, or it
+        # silently waives nothing.
+        assert set(mapping) <= labels, (desc["name"], sorted(set(mapping) - labels))

@@ -460,11 +460,11 @@ class OperationBase(ABC):
         # result would be ambiguous about which operand drove it.
         return self._maybe_apply_input_mode(input_1), input_2
 
-    # An operand is "near zero" when its smallest post-offset magnitude is
-    # within this fraction of its largest. Below it, the operand never puts a
-    # value next to the sign boundary that the packed/scalar paths and the
-    # branchy kernels (PReLU, min/max) actually split on.
-    NEAR_ZERO_FRACTION = 0.1
+    # "Near zero" is absolute, not a fraction of the operand's own range: the
+    # sign boundary the packed/scalar paths and the branchy kernels (PReLU,
+    # min/max) split on sits at a fixed post-offset value, so an operand whose
+    # closest approach is 10% of a large maximum is still nowhere near it.
+    NEAR_ZERO_MAX_ABS = 1
 
     # An operand with fewer than this many elements cannot hold a negative, a
     # near-zero and a positive value at once. Broadcast scalars and one- or
@@ -516,11 +516,14 @@ class OperationBase(ABC):
         [-1, 1] float data plus a TFLite zero point does not guarantee the
         span, so it is enforced rather than assumed (issue #81 property 2).
 
-        ``steerable`` names the operands that are runtime inputs, i.e. the ones
-        whose golden is recomputed from the array returned here. An operand
-        baked into the TFLite model (a PReLU alpha) must not be steered, since
-        the reference interpreter would still use the model's copy; such an
-        operand can only be waived with ``operand_sign_span_exempt``.
+        ``steerable`` names the operands that are runtime inputs whose data the
+        generator owns, i.e. the ones whose golden is recomputed from the array
+        returned here. Two kinds of operand stay out of it and are check-only:
+        one baked into the TFLite model (a PReLU alpha), because the reference
+        interpreter would still use the model's copy; and one the descriptor
+        pins explicitly (``hint.extras.input_values``, ``scalar_input_value``),
+        because the pinned values are the case. Either can only be waived with
+        ``operand_sign_span_exempt``.
 
         Returns the operand arrays in input order, steered where needed.
         """
@@ -546,8 +549,9 @@ class OperationBase(ABC):
             raise ValueError(
                 f"'{self.desc.get('name')}': {label} post-offset values "
                 f"(n {flat.size}, min {int(flat.min()) - zp}, max {int(flat.max()) - zp}, "
-                f"zero_point {zp}) do not span {' and '.join(missing)}, and the operand cannot "
-                f"be steered to; a one-signed operand cannot discriminate the sign-dependent "
+                f"zero_point {zp}) do not span {' and '.join(missing)}, and the operand is "
+                f"model-baked or descriptor-pinned, so the generator may not steer it; a "
+                f"one-signed operand cannot discriminate the sign-dependent "
                 f"kernel paths (ns-cmsis-nn#343). Set {self.SIGN_SPAN_EXEMPT_KEY}[{label}] to "
                 f"the reason it must stay one-signed."
             )
@@ -557,12 +561,10 @@ class OperationBase(ABC):
     def _sign_span_gaps(cls, flat: np.ndarray, zero_point: int) -> List[str]:
         """Which of negative / near-zero / positive the post-offset data lacks."""
         post = flat.astype(np.int64) - zero_point
-        magnitude = np.abs(post)
-        near_zero_bound = max(1.0, cls.NEAR_ZERO_FRACTION * float(magnitude.max()))
         gaps = []
         if not (post < 0).any():
             gaps.append("negative")
-        if float(magnitude.min()) > near_zero_bound:
+        if not (np.abs(post) <= cls.NEAR_ZERO_MAX_ABS).any():
             gaps.append("near-zero")
         if not (post > 0).any():
             gaps.append("positive")
@@ -571,21 +573,29 @@ class OperationBase(ABC):
     @classmethod
     def _steer_int_operand_sign_span(cls, array: np.ndarray, zero_point: int) -> np.ndarray:
         """
-        Plant a negative / zero / positive post-offset triple in the first
-        three elements, at half the operand's own magnitude so the steered
-        values stay inside the range the case was written for. Deterministic
-        and independent of the RNG stream, so a re-run reproduces it exactly.
+        Plant a negative / zero / positive post-offset triple, at half the
+        operand's own magnitude so the steered values stay inside the range the
+        case was written for. Deterministic and independent of the RNG stream,
+        so a re-run reproduces it exactly.
+
+        All three are planted whenever any one is missing, so the result is
+        correct by construction rather than depending on which element happened
+        to carry the region that was already present.
         """
         bounds = cls._SIGN_SPAN_DTYPE_BOUNDS.get(str(array.dtype))
         if bounds is None:
             return array
         qmin, qmax = bounds
-        flat = array.reshape(-1).astype(np.int64)
-        magnitude = int(np.abs(flat - zero_point).max())
-        step = max(1, magnitude // 2)
-        planted = [zero_point - step, zero_point, zero_point + step]
+        post = array.reshape(-1).astype(np.int64) - zero_point
+        step = max(1, int(np.abs(post).max()) // 2)
+        planted = np.clip([zero_point - step, zero_point, zero_point + step], qmin, qmax)
+        # Overwrite the elements closest to the offset rather than the leading
+        # ones: a full-scale element carries saturation coverage that a
+        # mid-range element does not, and on a 3- or 4-element operand the head
+        # is the whole case. Stable sort keeps the choice reproducible.
+        targets = np.argsort(np.abs(post), kind="stable")[: planted.size]
         steered = array.copy().reshape(-1)
-        steered[:3] = np.clip(planted, qmin, qmax).astype(array.dtype)
+        steered[targets] = planted.astype(array.dtype)
         return steered.reshape(array.shape)
 
     @staticmethod

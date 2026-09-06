@@ -9,14 +9,15 @@ import tensorflow as tf
 from tensorflow.keras import layers
 
 
+# The s8 inputs carry a moderate asymmetric zero point rather than the -128 the
+# output legitimately uses (squared difference being non-negative). -128 would
+# pin every input lane to a non-negative post-offset value and hide the
+# sign-dependent kernel paths, while 0 would leave the input offset term dead in
+# every s8 case; -40 does neither (hct#81).
 SQUARED_DIFFERENCE_QUANT_PRESETS = {
     "int8": {
-        # The inputs are signed, so their zero point is 0: a -128 zero point
-        # (which the output legitimately uses, squared difference being
-        # non-negative) would pin every input lane to a non-negative
-        # post-offset value and hide sign-dependent kernel paths (hct#81).
-        "input_1_quant": ([1.0 / 128.0], [0]),
-        "input_2_quant": ([1.0 / 256.0], [0]),
+        "input_1_quant": ([1.0 / 128.0], [-40]),
+        "input_2_quant": ([1.0 / 256.0], [-40]),
         "output_quant": ([1.0 / 64.0], [-128]),
     },
     "int16": {
@@ -52,8 +53,38 @@ class QuantizedSquaredDifference(layers.Layer):
         return config
 
 
-def build_squared_difference_op(*, input_1_shape, input_2_shape, dtype: str = "int8") -> bytes:
-    quant = SQUARED_DIFFERENCE_QUANT_PRESETS[dtype]
+# A relu-shaped input range: the zero point sits at the bottom of the domain, so
+# every post-offset lane is non-negative. Two s8 cases keep it deliberately, to
+# hold the regime the upstream reference vectors for this kernel were captured
+# in; they declare operand_sign_span_exempt for it.
+SQUARED_DIFFERENCE_QUANT_PRESET_VARIANTS = {
+    "relu_range": {
+        "int8": {
+            "input_1_quant": ([1.0 / 128.0], [-128]),
+            "input_2_quant": ([1.0 / 256.0], [-128]),
+            "output_quant": ([1.0 / 64.0], [-128]),
+        },
+    },
+}
+
+
+def squared_difference_quant_preset(dtype: str, quant_preset: str = "default") -> dict:
+    """Quantization preset for a SquaredDifference case, by dtype and variant."""
+    if quant_preset == "default":
+        return SQUARED_DIFFERENCE_QUANT_PRESETS[dtype]
+    try:
+        return SQUARED_DIFFERENCE_QUANT_PRESET_VARIANTS[quant_preset][dtype]
+    except KeyError:
+        raise ValueError(
+            f"SquaredDifference has no '{quant_preset}' quantization preset for {dtype}; "
+            f"variants: {sorted(SQUARED_DIFFERENCE_QUANT_PRESET_VARIANTS)}"
+        ) from None
+
+
+def build_squared_difference_op(
+    *, input_1_shape, input_2_shape, dtype: str = "int8", quant_preset: str = "default"
+) -> bytes:
+    quant = squared_difference_quant_preset(dtype, quant_preset)
     return build_binary_broadcast_op(
         op_name="SQUARED_DIFFERENCE",
         input_1_shape=input_1_shape,
@@ -117,6 +148,7 @@ class OpSquaredDifference(BinaryBasicMathBase):
             input_1_shape=tuple(self.desc["input_1_shape"]),
             input_2_shape=tuple(self.desc["input_2_shape"]),
             dtype=dtype,
+            quant_preset=str(self.desc.get("quant_preset", "default")),
         )
         self._write_tflite_bytes(out_path, model_bytes)
 

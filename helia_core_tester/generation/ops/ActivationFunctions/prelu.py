@@ -570,9 +570,11 @@ class OpPReLU(OperationBase):
         # alpha is a constant baked into the TFLite model, so it can only be
         # waived, never steered: the reference interpreter would keep using the
         # model's copy and the golden would stop matching the emitted array.
+        # A descriptor that pins input_values chose those exact operands, so
+        # the input is check-only for the same reason the values exist.
         input_q, _ = self._enforce_int_operand_sign_span(
             (("input", input_q, input_zp), ("alpha", alpha_q, alpha_zp)),
-            steerable=("input",),
+            steerable=() if "input_values" in extras else ("input",),
         )
         
         if kernel_info["input_c_type"] == "int16_t":

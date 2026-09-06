@@ -355,6 +355,10 @@
       "$ref": "#/$defs/intArray",
       "description": "ChunkedEquivalence: consecutive slice sizes for the chunked pass; must sum to element_count."
     },
+    "quant_preset": {
+      "type": "string",
+      "description": "SquaredDifference: named quantization preset variant. 'default' (implied when absent) gives the s8 inputs a moderate asymmetric zero point; 'relu_range' keeps the -128 input zero point that pins every post-offset lane non-negative."
+    },
     "operand_sign_span_exempt": {
       "type": "object",
       "minProperties": 1,
