@@ -256,6 +256,83 @@ smaller probes stay correct on the same compiler either way. The Arm targets are
 their classification call sites counted, not executed, with the toolchains and results recorded
 in the pull request.
 
+## Operand sign span
+
+Int cases for the operators wired to the rule (Abs, Add, Sub, Mul, SquaredDifference,
+Minimum, Maximum, PReLU) must feed each operand data that spans negative, near-zero and
+positive values **after** the input offset is applied, i.e. `value - zero_point`. A one-signed
+operand cannot discriminate the sign-dependent kernel paths: the packed DSP loop of
+ns-cmsis-nn#343 dropped the sign of `value + input_offset`, and abs, PReLU and min/max branch
+on it directly. Uniform `[-1, 1]` float data plus a TFLite zero point does not guarantee the
+span, so generation enforces it (`OperationBase._enforce_int_operand_sign_span`, issue #81
+property 2).
+
+"Near-zero" is absolute, not a fraction of the operand's own range: the operand must contain a
+post-offset value within one count of zero. A relative rule let a large-magnitude s16 operand
+whose closest approach was thousands of counts count as covered.
+
+When a runtime input operand the generator owns does not span, generation steers it: one
+post-offset value at half the operand's own magnitude is planted per **missing** region, into
+the elements whose post-offset magnitude is smallest. Least-extreme rather than leading,
+because a full-scale element carries saturation coverage a mid-range one does not, and on a
+short operand the leading elements are the whole case. Missing-only rather than all three,
+because most operands lack only the near-zero boundary and replacing the negative and positive
+elements as well would discard data the case was written around. The span is re-checked after
+planting; in the rare case where a planted element was the sole carrier of a region that was
+present, the full negative / zero / positive triple is planted instead. Steering is
+deterministic and independent of the RNG stream, and the golden is computed after it, so a
+re-run reproduces the same data and the same expected output.
+
+Operands with fewer than three elements cannot hold all three regions and are out of scope
+entirely -- not steered, not refused, not requiring a waiver. That covers broadcast scalars and
+one- and two-element rows; the operand they broadcast against still has to span. PReLUScalar's
+cases are all one- or two-pixel and sit below this floor, which is why that operator is not
+wired to the rule.
+
+Two kinds of operand are check-only: the generator never steers them, so a failing one must be
+waived. An operand baked into the TFLite model (a PReLU alpha) cannot move, because the
+reference interpreter would keep using the model's copy and the golden would stop matching the
+emitted array. An operand the descriptor pins explicitly (`hint.extras.input_values`) must not
+move, because the pinned values are the case.
+
+An operand that is intentionally one-signed opts out in its descriptor under
+`operand_sign_span_exempt`, naming the operand and the reason:
+
+```yaml
+operand_sign_span_exempt:
+  input: pinned uniformly negative input to hold the alpha branch on every lane (hct#81)
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it
+    would leave the reference interpreter using the model's copy, and the kernel branches on
+    the sign of the input, not of alpha (hct#81)
+```
+
+The reason is required, and the key must name an operand the operator actually submits to the
+rule: each wired operator declares those labels as `SIGN_SPAN_OPERANDS`, and a waiver on
+anything else fails generation instead of silently waiving nothing. `operand_sign_span_exempt`
+is also declared in `helia_core_tester/generation/descriptors/schema.json`, but that schema is
+not enforced at load time (#100), so the rule lives in code.
+
+## Mutation scoring
+
+`python -m helia_core_tester.mutation run --cmsis-nn-root <checkout>` generates cases, applies
+each catalogued mutant to a copy of the kernel source, rebuilds, and reports which cases kill
+which mutant (issue #76; catalog in `helia_core_tester/mutation/catalog.py`).
+
+`--cpu` defaults to `cortex-m55`, the widest capability set the int corpus uses, because some
+killers are capability-gated descriptors: generating for a narrower CPU removes them from the
+corpus. The corpus CPU's capabilities are passed to the scorer, and a mutant that declares
+`requires_capabilities` the corpus does not have is reported `NOT_APPLICABLE` instead of
+`SURVIVED`. That distinction matters: `SURVIVED` is a claim about the suite ("no case detects
+this bug class"), while `NOT_APPLICABLE` says the run never sampled the question.
+`--fail-on-survivor` fires only on a real survivor. `requantize_tail_drop` is the current
+example -- its only killers are the MVE-gated chunked-equivalence requantize cases, so
+`--cpu cortex-m4` reports it not applicable.
+
+With `--cases-root`, the corpus CPU is read from the tree on disk (its `manifest.json`, or an
+`artifacts/generated_tests/<suite>/<cpu>/` path) rather than from `--cpu`, so a `--cpu` that
+does not match the cases cannot excuse a mutant whose killers are in that tree. A `--cpu` that
+contradicts the tree is an error, and a tree that records no CPU requires `--cpu` explicitly.
+
 ## Pipeline efficiency
 
 Defaults chosen so a repeat run is cheap and a hung kernel cannot wedge a leg.

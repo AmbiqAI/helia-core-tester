@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import os
 
+import pytest
+
 from helia_core_tester.core.config import Config
 from helia_core_tester.core.runtime_env import RuntimeEnvContext
 from helia_core_tester.core.steps.build import BuildStep
@@ -152,7 +154,13 @@ def test_build_step_emits_cmsis_nn_root_cmake_define(tmp_path: Path) -> None:
     assert f"CMSIS_NN_ROOT={cmsis_nn_root}" in cmd
 
 
-def test_build_step_omits_cmsis_nn_root_cmake_define_when_unset(tmp_path: Path) -> None:
+def test_build_step_omits_cmsis_nn_root_cmake_define_when_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # "Unset" has to mean unset in the environment too: Config reads the
+    # override from HELIA_CORE_TESTER_CMSIS_NN_ROOT, so a developer who exports
+    # it would otherwise see this pass or fail depending on their shell.
+    monkeypatch.delenv("HELIA_CORE_TESTER_CMSIS_NN_ROOT", raising=False)
     root = _init_repo_root(tmp_path)
     cfg = Config(project_root=root, suite="int", _explicit_overrides={"project_root", "suite"})
 

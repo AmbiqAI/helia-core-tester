@@ -18,7 +18,9 @@ static {{ output_dtype }} {{ name }}_output_chunked[{{ name|upper }}_ELEMENT_COU
 
 static int32_t {{ name }}_kernel_call(
     const {{ input_dtype }} *input1,
+{%- if operand_count == 2 %}
     const {{ input_dtype }} *input2,
+{%- endif %}
     {{ output_dtype }} *output,
     int32_t block_size)
 {
@@ -41,7 +43,7 @@ static int32_t {{ name }}_kernel_call(
         {{ out_activation_max }},  // out_activation_max
         block_size
     );
-    {% else %}
+    {% elif call_style == 'mul' %}
     return {{ kernel_fn }}(
         input1,
         input2,
@@ -55,6 +57,25 @@ static int32_t {{ name }}_kernel_call(
         {{ out_activation_max }},  // out_activation_max
         block_size
     );
+    {% elif call_style == 'minmax' %}
+    // The min/max kernels slice by dims, not by a block size. Identical dims
+    // on both inputs and the output are what keeps the walk in
+    // Include/Internal/arm_nn_broadcast_walk.h on its no-broadcast path, which
+    // is the one holding the vector loop; any difference would route the
+    // chunked pass through a scalar broadcast helper instead.
+    const cmsis_nn_context ctx = {NULL, 0};
+    const cmsis_nn_dims dims = {1, 1, 1, block_size};
+    return {{ kernel_fn }}(&ctx, input1, &dims, input2, &dims, output, &dims);
+    {% else %}
+    return {{ kernel_fn }}(
+        input1,
+        output,
+        block_size,
+        {{ effective_scale_multiplier }},  // effective_scale_multiplier
+        {{ effective_scale_shift }},       // effective_scale_shift
+        {{ input_zeropoint }},             // input_zeropoint
+        {{ output_zeropoint }}             // output_zeropoint
+    );
     {% endif %}
 }
 
@@ -62,7 +83,7 @@ int32_t {{ name }}_test_case_run(void)
 {
     // (a) Reference: one full-length call over all elements.
     int32_t status = {{ name }}_kernel_call(
-        {{ name }}_input1, {{ name }}_input2,
+        {{ name }}_input1,{% if operand_count == 2 %} {{ name }}_input2,{% endif %}
         {{ name }}_output_full, {{ name|upper }}_ELEMENT_COUNT);
     HELIA_VALIDATE_STATUS("{{ validation_label }} full", status);
 
@@ -72,7 +93,7 @@ int32_t {{ name }}_test_case_run(void)
     {
         const int32_t chunk_size = {{ name }}_chunk_sizes[chunk];
         status = {{ name }}_kernel_call(
-            {{ name }}_input1 + offset, {{ name }}_input2 + offset,
+            {{ name }}_input1 + offset,{% if operand_count == 2 %} {{ name }}_input2 + offset,{% endif %}
             {{ name }}_output_chunked + offset, chunk_size);
         HELIA_VALIDATE_STATUS("{{ validation_label }} chunk", status);
         offset += chunk_size;

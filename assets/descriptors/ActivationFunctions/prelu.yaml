@@ -1,5 +1,7 @@
 operator: PReLU
 name: prelu_nhwc_s8
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -10,6 +12,8 @@ alpha: 0.25
 ---
 operator: PReLU
 name: prelu_vector_s8
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -20,6 +24,8 @@ alpha: 0.25
 ---
 operator: PReLU
 name: prelu_default_alpha_s8
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -40,6 +46,8 @@ alpha_shape: [1]
 ---
 operator: PReLU
 name: prelu_broadcast_batch_s8
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -51,6 +59,8 @@ alpha: 0.2
 ---
 operator: PReLU
 name: prelu_broadcast_channel_s8
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -95,6 +105,9 @@ alpha: 0.1
 ---
 operator: PReLU
 name: prelu_scalar_alpha_mixed_sign_s8
+operand_sign_span_exempt:
+  input: pinned symmetric sign sweep whose four values are the case; it has no lane at the zero boundary by construction, and the generated-data PReLU cases carry that lane instead (hct#81)
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -108,6 +121,9 @@ alpha: 0.2
 ---
 operator: PReLU
 name: prelu_scalar_alpha_all_negative_input_s8
+operand_sign_span_exempt:
+  input: pinned uniformly negative input to hold the alpha branch on every lane (hct#81)
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -121,6 +137,9 @@ alpha: 0.2
 ---
 operator: PReLU
 name: prelu_scalar_alpha_all_positive_input_s8
+operand_sign_span_exempt:
+  input: pinned uniformly positive input to hold the identity branch on every lane (hct#81)
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -147,6 +166,8 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
 operator: PReLU
 name: prelu_batch_row_nobcast_s8
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -159,6 +180,8 @@ alpha: 0.2
 ---
 operator: PReLU
 name: prelu_nhwc_s16
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -169,6 +192,8 @@ alpha: 0.25
 ---
 operator: PReLU
 name: prelu_vector_s16
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -179,6 +204,8 @@ alpha: 0.25
 ---
 operator: PReLU
 name: prelu_default_alpha_s16
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -199,6 +226,8 @@ alpha_shape: [1]
 ---
 operator: PReLU
 name: prelu_broadcast_channel_s16
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -210,6 +239,9 @@ alpha: 0.15
 ---
 operator: PReLU
 name: prelu_scalar_alpha_mixed_sign_s16
+operand_sign_span_exempt:
+  input: pinned symmetric sign sweep whose four values are the case; it has no lane at the zero boundary by construction, and the generated-data PReLU cases carry that lane instead (hct#81)
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -223,6 +255,8 @@ alpha: 0.2
 ---
 operator: PReLU
 name: prelu_row_elementwise_hbcast_s8
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -234,6 +268,8 @@ alpha: 0.2
 ---
 operator: PReLU
 name: prelu_row_elementwise_hbcast_s16
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE
@@ -245,6 +281,8 @@ alpha: 0.2
 ---
 operator: PReLU
 name: prelu_broadcast_batch_s16
+operand_sign_span_exempt:
+  alpha: PReLU's alpha is the positive slope constant baked into the TFLite model; steering it would leave the reference interpreter using the model's copy, and the kernel branches on the sign of the input, not of alpha (hct#81)
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

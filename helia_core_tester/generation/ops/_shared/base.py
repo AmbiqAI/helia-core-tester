@@ -5,7 +5,7 @@ All operations inherit from this and implement build_keras_model().
 
 import json
 import numpy as np
-from typing import Callable, Dict, Any, Optional, Sequence, Tuple, Iterator
+from typing import Callable, Dict, Any, List, Optional, Sequence, Tuple, Iterator
 from abc import ABC, abstractmethod
 from pathlib import Path
 import jinja2
@@ -459,6 +459,192 @@ class OperationBase(ABC):
         # element a single-token propagation check (NaN+x, Inf*x) rather than a mix whose
         # result would be ambiguous about which operand drove it.
         return self._maybe_apply_input_mode(input_1), input_2
+
+    # "Near zero" is absolute, not a fraction of the operand's own range: the
+    # sign boundary the packed/scalar paths and the branchy kernels (PReLU,
+    # min/max) split on sits at a fixed post-offset value, so an operand that
+    # only comes within some fraction of its own large maximum is still nowhere
+    # near it.
+    NEAR_ZERO_MAX_ABS = 1
+
+    # An operand with fewer than this many elements cannot hold a negative, a
+    # near-zero and a positive value at once. Broadcast scalars and one- or
+    # two-element rows are therefore out of scope for the span rule; the
+    # operand they broadcast against still has to satisfy it.
+    SIGN_SPAN_MIN_ELEMENTS = 3
+
+    # Descriptor key that waives the span rule for an operand whose one-signed
+    # data is the point of the case (a PReLU alpha baked into the model as a
+    # positive slope, a relu-shaped range whose zero point pins the whole
+    # domain to one side). It maps operand label -> reason, and the reason is
+    # required: see README "Operand sign span" and issue #81 property 2.
+    SIGN_SPAN_EXEMPT_KEY = "operand_sign_span_exempt"
+
+    # Operand labels this operator submits to the span rule. A waiver keyed on
+    # anything else waives nothing and reads as covering a gap it never
+    # touches, so the labels are declared per operator and both the waiver keys
+    # and the call sites are checked against them.
+    SIGN_SPAN_OPERANDS: Tuple[str, ...] = ()
+
+    _SIGN_SPAN_DTYPE_BOUNDS = {"int8": (-128, 127), "int16": (-32768, 32767)}
+
+    def _sign_span_exemptions(self) -> Dict[str, str]:
+        """Validated operand -> reason map from the span opt-out key."""
+        exempt = self.desc.get(self.SIGN_SPAN_EXEMPT_KEY)
+        if exempt is None:
+            return {}
+        if not isinstance(exempt, dict) or not exempt:
+            raise ValueError(
+                f"'{self.desc.get('name')}': {self.SIGN_SPAN_EXEMPT_KEY} must map each "
+                f"intentionally one-signed operand to the reason it stays that way, "
+                f"e.g. {{alpha: the model constant is a positive PReLU slope}}"
+            )
+        known = ", ".join(self.SIGN_SPAN_OPERANDS) or "(none)"
+        for operand, reason in exempt.items():
+            if str(operand) not in self.SIGN_SPAN_OPERANDS:
+                raise ValueError(
+                    f"'{self.desc.get('name')}': {self.SIGN_SPAN_EXEMPT_KEY}[{operand}] names an "
+                    f"operand {type(self).__name__} never submits to the span rule, so it waives "
+                    f"nothing; the checked operands are {known}"
+                )
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError(
+                    f"'{self.desc.get('name')}': {self.SIGN_SPAN_EXEMPT_KEY}[{operand}] must be "
+                    f"a non-empty reason string explaining why the operand is one-signed"
+                )
+        return {str(k): str(v) for k, v in exempt.items()}
+
+    def _enforce_int_operand_sign_span(
+        self,
+        operands: Sequence[Tuple[str, np.ndarray, Any]],
+        steerable: Sequence[str] = (),
+    ) -> List[np.ndarray]:
+        """
+        Make every int operand span negative, near-zero and positive AFTER its
+        input offset is applied (value - zero_point), and fail generation when
+        that is impossible without a declared reason.
+
+        A one-signed operand cannot discriminate the sign-dependent kernel
+        paths: the packed DSP loop of ns-cmsis-nn#343 dropped the sign of
+        value + input_offset, and PReLU/min/max branch on it directly. Uniform
+        [-1, 1] float data plus a TFLite zero point does not guarantee the
+        span, so it is enforced rather than assumed (issue #81 property 2).
+
+        ``steerable`` names the operands that are runtime inputs whose data the
+        generator owns, i.e. the ones whose golden is recomputed from the array
+        returned here. Two kinds of operand stay out of it and are check-only:
+        one baked into the TFLite model (a PReLU alpha), because the reference
+        interpreter would still use the model's copy; and one the descriptor
+        pins explicitly (``hint.extras.input_values``), because the pinned
+        values are the case. Either can only be waived with
+        ``operand_sign_span_exempt``.
+
+        Returns the operand arrays in input order, steered where needed.
+        """
+        undeclared = sorted({str(label) for label, _, _ in operands} - set(self.SIGN_SPAN_OPERANDS))
+        if undeclared:
+            raise ValueError(
+                f"'{self.desc.get('name')}': {type(self).__name__}.SIGN_SPAN_OPERANDS does not "
+                f"declare {', '.join(undeclared)}; waiver keys are validated against it, so an "
+                f"undeclared operand could never be exempted"
+            )
+        exemptions = self._sign_span_exemptions()
+        steerable_set = set(steerable)
+        result: List[np.ndarray] = []
+        for label, data, zero_point in operands:
+            array = np.asarray(data)
+            flat = array.reshape(-1)
+            zp = int(zero_point)
+            if label in exemptions or flat.size < self.SIGN_SPAN_MIN_ELEMENTS:
+                result.append(array)
+                continue
+            missing = self._sign_span_gaps(flat, zp)
+            if not missing:
+                result.append(array)
+                continue
+            attempted = label in steerable_set
+            if attempted:
+                # Plant only the missing regions: overwriting all three throws
+                # away the elements that already carried the ones present, and
+                # on a short operand those are the case. A targeted plant can
+                # still consume the sole carrier of a region it was relying on,
+                # so the full triple stays as the fallback.
+                steered = self._steer_int_operand_sign_span(array, zp, missing)
+                if self._sign_span_gaps(steered.reshape(-1), zp):
+                    steered = self._steer_int_operand_sign_span(array, zp)
+                if not self._sign_span_gaps(steered.reshape(-1), zp):
+                    result.append(steered)
+                    continue
+            if attempted:
+                why = (
+                    f"steering cannot reach them: clipped to the dtype range, no representable "
+                    f"value lands on the missing side of zero_point {zp}"
+                )
+            else:
+                why = (
+                    "the operand is model-baked or descriptor-pinned, so the generator may not "
+                    "steer it"
+                )
+            raise ValueError(
+                f"'{self.desc.get('name')}': {label} post-offset values "
+                f"(n {flat.size}, min {int(flat.min()) - zp}, max {int(flat.max()) - zp}, "
+                f"zero_point {zp}) do not span {' and '.join(missing)}, and {why}; a "
+                f"one-signed operand cannot discriminate the sign-dependent "
+                f"kernel paths (ns-cmsis-nn#343). Set {self.SIGN_SPAN_EXEMPT_KEY}[{label}] to "
+                f"the reason it must stay one-signed."
+            )
+        return result
+
+    @classmethod
+    def _sign_span_gaps(cls, flat: np.ndarray, zero_point: int) -> List[str]:
+        """Which of negative / near-zero / positive the post-offset data lacks."""
+        post = flat.astype(np.int64) - zero_point
+        gaps = []
+        if not (post < 0).any():
+            gaps.append("negative")
+        if not (np.abs(post) <= cls.NEAR_ZERO_MAX_ABS).any():
+            gaps.append("near-zero")
+        if not (post > 0).any():
+            gaps.append("positive")
+        return gaps
+
+    @classmethod
+    def _steer_int_operand_sign_span(
+        cls,
+        array: np.ndarray,
+        zero_point: int,
+        missing: Optional[Sequence[str]] = None,
+    ) -> np.ndarray:
+        """
+        Plant post-offset values for the regions in ``missing`` (default: all
+        three), at half the operand's own magnitude so the steered values stay
+        inside the range the case was written for. Deterministic and
+        independent of the RNG stream, so a re-run reproduces it exactly.
+
+        One element is replaced per planted region, so an operand that lacks
+        only the near-zero boundary keeps every other element it had.
+        """
+        bounds = cls._SIGN_SPAN_DTYPE_BOUNDS.get(str(array.dtype))
+        if bounds is None:
+            return array
+        qmin, qmax = bounds
+        post = array.reshape(-1).astype(np.int64) - zero_point
+        step = max(1, int(np.abs(post).max()) // 2)
+        by_region = {
+            "negative": zero_point - step,
+            "near-zero": zero_point,
+            "positive": zero_point + step,
+        }
+        wanted = list(missing) if missing else list(by_region)
+        planted = np.clip([by_region[region] for region in wanted], qmin, qmax)
+        # Overwrite the elements closest to the offset rather than the leading
+        # ones: a full-scale element carries saturation coverage that a
+        # mid-range element does not, and on a 3- or 4-element operand the head
+        # is the whole case. Stable sort keeps the choice reproducible.
+        targets = np.argsort(np.abs(post), kind="stable")[: planted.size]
+        steered = array.copy().reshape(-1)
+        steered[targets] = planted.astype(array.dtype)
+        return steered.reshape(array.shape)
 
     @staticmethod
     def _quant_param_scalar(quant_params: Optional[Dict[str, Any]], key: str, default: float | int) -> float | int:

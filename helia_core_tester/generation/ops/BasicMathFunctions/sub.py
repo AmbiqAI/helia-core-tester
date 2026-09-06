@@ -12,6 +12,8 @@ class OpSub(BinaryBasicMathBase):
     """
     Subtract operation.
     """
+
+    SIGN_SPAN_OPERANDS = ("input_1", "input_2")
     
     def needs_keras_model(self) -> bool:
         return False
@@ -206,6 +208,10 @@ class OpSub(BinaryBasicMathBase):
 
             input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
             input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
+            input1_q, input2_q = self._enforce_int_operand_sign_span(
+                (("input_1", input1_q, input1_zp), ("input_2", input2_q, input2_zp)),
+                steerable=("input_1", "input_2"),
+            )
 
             # Run inference using LiteRT interpreter when shapes match (no broadcast).
             # LiteRT broadcasting can abort in some runtimes, so fall back to a local

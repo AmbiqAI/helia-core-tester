@@ -9,10 +9,15 @@ import tensorflow as tf
 from tensorflow.keras import layers
 
 
+# The s8 inputs carry a moderate asymmetric zero point rather than the -128 the
+# output legitimately uses (squared difference being non-negative). -128 would
+# pin every input lane to a non-negative post-offset value and hide the
+# sign-dependent kernel paths, while 0 would leave the input offset term dead in
+# every s8 case; -40 does neither (hct#81).
 SQUARED_DIFFERENCE_QUANT_PRESETS = {
     "int8": {
-        "input_1_quant": ([1.0 / 128.0], [-128]),
-        "input_2_quant": ([1.0 / 256.0], [-128]),
+        "input_1_quant": ([1.0 / 128.0], [-40]),
+        "input_2_quant": ([1.0 / 256.0], [-40]),
         "output_quant": ([1.0 / 64.0], [-128]),
     },
     "int16": {
@@ -48,8 +53,38 @@ class QuantizedSquaredDifference(layers.Layer):
         return config
 
 
-def build_squared_difference_op(*, input_1_shape, input_2_shape, dtype: str = "int8") -> bytes:
-    quant = SQUARED_DIFFERENCE_QUANT_PRESETS[dtype]
+# A relu-shaped input range: the zero point sits at the bottom of the domain, so
+# every post-offset lane is non-negative. Two s8 cases keep it deliberately, to
+# hold the regime the upstream reference vectors for this kernel were captured
+# in; they declare operand_sign_span_exempt for it.
+SQUARED_DIFFERENCE_QUANT_PRESET_VARIANTS = {
+    "relu_range": {
+        "int8": {
+            "input_1_quant": ([1.0 / 128.0], [-128]),
+            "input_2_quant": ([1.0 / 256.0], [-128]),
+            "output_quant": ([1.0 / 64.0], [-128]),
+        },
+    },
+}
+
+
+def squared_difference_quant_preset(dtype: str, quant_preset: str = "default") -> dict:
+    """Quantization preset for a SquaredDifference case, by dtype and variant."""
+    if quant_preset == "default":
+        return SQUARED_DIFFERENCE_QUANT_PRESETS[dtype]
+    try:
+        return SQUARED_DIFFERENCE_QUANT_PRESET_VARIANTS[quant_preset][dtype]
+    except KeyError:
+        raise ValueError(
+            f"SquaredDifference has no '{quant_preset}' quantization preset for {dtype}; "
+            f"variants: {sorted(SQUARED_DIFFERENCE_QUANT_PRESET_VARIANTS)}"
+        ) from None
+
+
+def build_squared_difference_op(
+    *, input_1_shape, input_2_shape, dtype: str = "int8", quant_preset: str = "default"
+) -> bytes:
+    quant = squared_difference_quant_preset(dtype, quant_preset)
     return build_binary_broadcast_op(
         op_name="SQUARED_DIFFERENCE",
         input_1_shape=input_1_shape,
@@ -63,6 +98,8 @@ def build_squared_difference_op(*, input_1_shape, input_2_shape, dtype: str = "i
 
 class OpSquaredDifference(BinaryBasicMathBase):
     """SquaredDifference operation."""
+
+    SIGN_SPAN_OPERANDS = ("input_1", "input_2")
 
     def needs_keras_model(self) -> bool:
         return self._use_s16_fake_quant_keras_path()
@@ -113,6 +150,7 @@ class OpSquaredDifference(BinaryBasicMathBase):
             input_1_shape=tuple(self.desc["input_1_shape"]),
             input_2_shape=tuple(self.desc["input_2_shape"]),
             dtype=dtype,
+            quant_preset=str(self.desc.get("quant_preset", "default")),
         )
         self._write_tflite_bytes(out_path, model_bytes)
 
@@ -279,6 +317,10 @@ class OpSquaredDifference(BinaryBasicMathBase):
         
         input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
         input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
+        input1_q, input2_q = self._enforce_int_operand_sign_span(
+            (("input_1", input1_q, input1_zp), ("input_2", input2_q, input2_zp)),
+            steerable=("input_1", "input_2"),
+        )
         
         # Run inference using LiteRT interpreter when shapes match for int8.
         # LiteRT does not currently invoke INT16 SQUARED_DIFFERENCE reliably,

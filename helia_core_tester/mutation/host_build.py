@@ -37,6 +37,9 @@ KERNEL_SOURCE_DIRS = (
     "Source/NNSupportFunctions",
     "Source/FullyConnectedFunctions",
     "Source/ActivationFunctions",
+    # arm_requantize_s8_s8 lives here and is called by the issue #81
+    # chunked-equivalence requantize cases.
+    "Source/QuantizationFunctions",
 )
 
 # Float kernels are not part of the host build (see module docstring).

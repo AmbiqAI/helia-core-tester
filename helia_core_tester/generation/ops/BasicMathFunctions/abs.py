@@ -26,6 +26,8 @@ class OpAbs(OperationBase):
     Abs operation.
     """
 
+    SIGN_SPAN_OPERANDS = ("input",)
+
     def needs_keras_model(self) -> bool:
         return False
 
@@ -146,6 +148,13 @@ class OpAbs(OperationBase):
             np_in_dtype = np.int16 if activation_dtype == "S16" else np.int8
             input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
             input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+            # abs is the sign-defining int kernel: its two branches are chosen
+            # by the sign of value - zero_point, so an operand that lands on
+            # one side exercises exactly one of them.
+            (input_q,) = self._enforce_int_operand_sign_span(
+                (("input", input_q, input_zp),),
+                steerable=("input",),
+            )
 
             interpreter = self.load_litert_interpreter(str(tflite_path))
             input_details = interpreter.get_input_details()

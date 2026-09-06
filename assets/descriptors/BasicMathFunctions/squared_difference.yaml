@@ -2,6 +2,10 @@ name: squared_difference_ident_s8
 operator: SquaredDifference
 activation_dtype: S8
 weight_dtype: S8
+quant_preset: relu_range
+operand_sign_span_exempt:
+  input_1: kept in the relu-range regime, where the input zero point sits at the bottom of the int8 domain and every post-offset lane is non-negative by construction, so two s8 cases still cover the regime the upstream reference vectors for this kernel were captured in (hct#81)
+  input_2: kept in the relu-range regime, where the input zero point sits at the bottom of the int8 domain and every post-offset lane is non-negative by construction, so two s8 cases still cover the regime the upstream reference vectors for this kernel were captured in (hct#81)
 input_1_shape: [1, 2, 3, 4]
 input_2_shape: [1, 2, 3, 4]
 ---
@@ -23,6 +27,10 @@ name: squared_difference_broadcast_n_s8
 operator: SquaredDifference
 activation_dtype: S8
 weight_dtype: S8
+quant_preset: relu_range
+operand_sign_span_exempt:
+  input_1: kept in the relu-range regime, where the input zero point sits at the bottom of the int8 domain and every post-offset lane is non-negative by construction, so two s8 cases still cover the regime the upstream reference vectors for this kernel were captured in (hct#81)
+  input_2: kept in the relu-range regime, where the input zero point sits at the bottom of the int8 domain and every post-offset lane is non-negative by construction, so two s8 cases still cover the regime the upstream reference vectors for this kernel were captured in (hct#81)
 input_1_shape: [1, 2, 3, 4]
 input_2_shape: [2, 2, 3, 4]
 ---

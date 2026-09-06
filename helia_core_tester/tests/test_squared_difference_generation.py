@@ -7,6 +7,7 @@ from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.ops.BasicMathFunctions.squared_difference import (
     OpSquaredDifference,
     build_squared_difference_op,
+    squared_difference_quant_preset,
 )
 from helia_core_tester.generation.utils.litert_builder import LITERT_AVAILABLE
 from helia_core_tester.generation.utils.litert_utils import (
@@ -150,10 +151,14 @@ def test_squared_difference_builder_uses_explicit_quantization(tmp_path: Path) -
     input2_quant = op_tensors["inputs"][1]["quantization"]
     output_quant = op_tensors["outputs"][0]["quantization"]
 
+    # A moderate asymmetric input zero point: -128 would pin every lane to a
+    # non-negative post-offset value and hide the sign-dependent kernel paths,
+    # 0 would leave the input offset term dead in every s8 case. Only the
+    # output, non-negative by definition, keeps -128 (hct#81).
     assert input1_quant["scale"] == pytest.approx(1.0 / 128.0)
-    assert input1_quant["zero_point"] == -128
+    assert input1_quant["zero_point"] == -40
     assert input2_quant["scale"] == pytest.approx(1.0 / 256.0)
-    assert input2_quant["zero_point"] == -128
+    assert input2_quant["zero_point"] == -40
     assert output_quant["scale"] == pytest.approx(1.0 / 64.0)
     assert output_quant["zero_point"] == -128
 
@@ -174,8 +179,10 @@ def test_squared_difference_s8_generates_expected_c_params(tmp_path: Path, monke
     content = c_path.read_text()
 
     assert "arm_squared_difference_s8" in content
-    assert "128,       // input1_offset" in content
-    assert "128,       // input2_offset" in content
+    # input*_offset is -zero_point; only the non-negative output keeps the
+    # -128 zero point (hct#81).
+    assert "40,       // input1_offset" in content
+    assert "40,       // input2_offset" in content
     assert "-128,          // out_offset" in content
     assert "0,        // input1_shift" in content
     assert "-1,        // input2_shift" in content
@@ -290,3 +297,28 @@ def test_squared_difference_s16_elementwise_generates_expected_c_params(
     assert "-1,        // input2_shift" in content
     assert "0,          // left_shift" in content
     assert "-12,           // out_shift" in content
+
+
+def test_relu_range_preset_is_kept_on_exactly_two_s8_cases() -> None:
+    # The regime the upstream reference vectors for this kernel were captured
+    # in: zero point at the bottom of the domain, every post-offset lane
+    # non-negative. Two cases hold it; the rest carry a sign-spanning offset.
+    from helia_core_tester.generation.io.descriptors import load_all_descriptors
+
+    descriptors = load_all_descriptors(str(TESTER_ROOT / "assets" / "descriptors"))
+    sq = [d for d in descriptors if d["operator"] == "SquaredDifference"]
+    relu_range = [d for d in sq if d.get("quant_preset") == "relu_range"]
+    assert len(relu_range) == 2
+    for desc in relu_range:
+        assert desc["activation_dtype"] == "S8"
+        # The rule cannot steer past a zero point that pins the domain, so the
+        # waiver is what keeps these cases generatable.
+        assert set(desc["operand_sign_span_exempt"]) == {"input_1", "input_2"}
+    preset = squared_difference_quant_preset("int8", "relu_range")
+    assert preset["input_1_quant"][1] == [-128]
+    assert preset["input_2_quant"][1] == [-128]
+
+
+def test_unknown_quant_preset_is_rejected() -> None:
+    with pytest.raises(ValueError, match="no 'wat' quantization preset"):
+        squared_difference_quant_preset("int8", "wat")
