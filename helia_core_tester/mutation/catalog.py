@@ -82,6 +82,9 @@ Grounding of the v1 entries:
                          MVEI, so an MVE-only edit would be dead code there and
                          score as vacuous, while a scalar-only edit would be
                          dead code on the FVP targets the suite actually runs.
+                         Their chunked killers are gated on the mve capability,
+                         so scoring them means passing --cpu cortex-m55 rather
+                         than the cortex-m4 default.
 """
 
 from __future__ import annotations
@@ -489,7 +492,9 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
         ),
         expected_detected_by=(
             "chunked-equivalence requantize s8 cases only: arm_requantize_s8_s8 has no golden "
-            "case in the suite, so nothing else in the corpus can see this."
+            "case in the suite, so nothing else in the corpus can see this. Those cases require "
+            "the mve capability, so scoring this mutant needs --cpu cortex-m55; the default "
+            "cortex-m4 generation produces no case that can kill it."
         ),
         refs=("AmbiqAI/helia-core-tester#81",),
     ),
