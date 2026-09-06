@@ -609,6 +609,13 @@ def build_case_bundle_from_generated_test(
     if known_limitation is not None:
         raise UnsupportedGeneratedTestError(f"{generated_test.name}: {known_limitation.reason}")
 
+    fault = generated_test.descriptor.get("fault")
+    if fault:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: fault case ({fault}) asserts a kernel status only and "
+            "has no golden output to stream"
+        )
+
     policy = fvp_gate if fvp_gate is not None else ("advisory" if require_fvp_pass else "off")
     if policy not in GATE_POLICIES:
         raise ValueError(f"fvp_gate must be one of {GATE_POLICIES}, got {policy!r}")

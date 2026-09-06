@@ -1,0 +1,98 @@
+#include "{{ name }}_depthwise_conv.h"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+{# Declare only the buffers this fault mode actually passes to the kernel so a
+   NULL-substituted buffer never becomes an unused static (-Wunused-variable). #}
+{% if fault != "null_output" %}static {{ output_dtype }} {{ name }}_output[{{ output_dims.n * output_dims.h * output_dims.w * output_dims.c }}];
+{% endif %}{% if fault != "null_ctx_buf" %}static uint8_t {{ name }}_buffer[{{ [buffer_size_max, 4] | max }}];
+{% endif %}{% if kernel_fn == 'arm_depthwise_conv_wrapper_s8' and fault != "null_weight_sum_ctx" %}static int32_t {{ name }}_weight_sum_buffer[{{ output_dims.c }}];
+{% endif %}
+static const cmsis_nn_dims {{ name }}_bias_dims = {
+    .n = 1, .h = 1,
+    .w = 1, .c = {{ output_dims.c }}
+};
+
+/*
+ * Fault-injection test case: exercises an {{ kernel_fn }}
+ * argument-validation branch. Fault mode: {{ fault }}.
+ */
+static int32_t run_depthwise_conv(void)
+{
+    const cmsis_nn_context ctx = {
+        .buf = {% if fault == "null_ctx_buf" %}NULL{% else %}{{ name }}_buffer{% endif %},
+        .size = {% if fault == "null_ctx_buf" %}0{% else %}sizeof({{ name }}_buffer){% endif %},
+    };
+{% if kernel_fn == 'arm_depthwise_conv_wrapper_s8' %}
+    const cmsis_nn_context weight_sum_ctx = {
+        .buf = {% if fault == "null_weight_sum_ctx" %}NULL{% else %}(uint8_t *){{ name }}_weight_sum_buffer{% endif %},
+        .size = {% if fault == "null_weight_sum_ctx" %}0{% else %}sizeof({{ name }}_weight_sum_buffer){% endif %},
+    };
+{% endif %}
+    cmsis_nn_dims output_dims = {{ name }}_output_dims;
+{% if fault == "channel_mismatch" %}
+    output_dims.c = {{ input_dims.c + 1 }};
+{% endif %}
+    const {{ input_dtype }} *input_arg = {% if fault == "null_input" %}NULL{% else %}{{ name }}_input{% endif %};
+    {{ output_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};
+
+{% if float_kernel %}
+{% set layout_arg = "(arm_nn_tensor_layout)(" ~ kernel_layout ~ " + 1)" if fault == "invalid_layout" else kernel_layout %}
+    return {{ kernel_fn }}(
+        &ctx,
+        &{{ name }}_dw_conv_params,
+        &{{ name }}_input_dims,
+        input_arg,
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        &{{ name }}_bias_dims,
+        {% if has_biases %}
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        {% endif %}
+        &output_dims,
+        output_arg{% if kernel_needs_layout %},
+        {{ layout_arg }}
+{% endif %}
+    );
+{% else %}
+    return {{ kernel_fn }}(
+        &ctx,
+        {% if kernel_fn == 'arm_depthwise_conv_wrapper_s8' %}
+        &weight_sum_ctx,
+        {% endif %}
+        &{{ name }}_dw_conv_params,
+        &{{ name }}_quant_params,
+        &{{ name }}_input_dims,
+        input_arg,
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        &{{ name }}_bias_dims,
+        {% if has_biases %}
+        {% if kernel_fn == 'arm_depthwise_conv_wrapper_s16' %}
+        (const int64_t*){{ name }}_biases,
+        {% else %}
+        {{ name }}_biases,
+        {% endif %}
+        {% else %}
+        NULL,
+        {% endif %}
+        &output_dims,
+        output_arg
+    );
+{% endif %}
+}
+
+int32_t {{ name }}_test_case_run(void)
+{
+    int32_t status = run_depthwise_conv();
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ validation_label | default("Depthwise convolution") }}",
+        status,
+        {{ expected_status }}
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(0);
+}
+
+{% include "common/standalone/main.j2" %}

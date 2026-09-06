@@ -18,9 +18,50 @@ from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel
 class OpConvolve(OperationBase):
     """Convolve operation."""
 
+    FAULT_KINDS = (
+        "null_ctx_buf",
+        "null_weight_sum_ctx",
+        "zero_stride",
+        "channel_group_mismatch",
+        "null_input",
+        "null_output",
+        "invalid_layout",
+    )
+
     def _hint(self) -> Dict[str, Any]:
         hint = self.desc.get("hint", {})
         return hint if isinstance(hint, dict) else {}
+
+    def _check_fault_reachable(self, kind: str, context: Dict[str, Any]) -> None:
+        kernel_fn = context["kernel_fn"]
+        if context["float_kernel"]:
+            if kind in ("null_ctx_buf", "null_weight_sum_ctx", "zero_stride", "channel_group_mismatch"):
+                raise self.fault_unreachable(kind, f"{kernel_fn} has no such guard")
+            if kind == "invalid_layout" and not context["kernel_needs_layout"]:
+                raise self.fault_unreachable(kind, f"{kernel_fn} takes no layout argument")
+            return
+        if kind in ("null_input", "null_output", "invalid_layout"):
+            raise self.fault_unreachable(kind, f"{kernel_fn} does not check pointers or layout")
+        if kind == "null_weight_sum_ctx" and kernel_fn != "arm_convolve_wrapper_s8":
+            raise self.fault_unreachable(kind, f"{kernel_fn} takes no weight-sum context")
+        if kind == "channel_group_mismatch" and kernel_fn == "arm_convolve_wrapper_s4":
+            raise self.fault_unreachable(kind, f"{kernel_fn} has no group divisibility guard")
+        input_dims = context["input_dims"]
+        filter_dims = context["filter_dims"]
+        conv_params = context["conv_params"]
+        if kind == "zero_stride":
+            is_1xn = (
+                kernel_fn == "arm_convolve_wrapper_s8"
+                and input_dims["h"] == 1
+                and filter_dims["h"] == 1
+                and filter_dims["w"] > 1
+                and int(conv_params["dilation_w"]) == 1
+                and input_dims["c"] == filter_dims["c"]
+            )
+            if not is_1xn:
+                raise self.fault_unreachable(
+                    kind, "only the s8 1xN route (input h == 1, filter 1xN with N > 1, dilation.w == 1) checks stride.w"
+                )
 
     @staticmethod
     def _pack_nt_n_weights(weights: np.ndarray, block_cols: int) -> np.ndarray:
@@ -728,6 +769,13 @@ class OpConvolve(OperationBase):
             context['quant_params'] = quant_params_dict
         context.update(nonfinite_context)
 
+        fault = self.fault_kind()
+        c_template = "ConvolutionFunctions/convolve/convolve.c.j2"
+        if fault:
+            self._check_fault_reachable(fault, context)
+            context.update(self.fault_context())
+            c_template = "ConvolutionFunctions/convolve/convolve_fault.c.j2"
+
         # Render templates
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)
@@ -737,7 +785,7 @@ class OpConvolve(OperationBase):
         with open(h_path, 'w') as f:
             f.write(h_content)
 
-        c_content = self.render_template("ConvolutionFunctions/convolve/convolve.c.j2", context)
+        c_content = self.render_template(c_template, context)
         c_path = output_dir / f"{name}_convolve.c"
         with open(c_path, 'w') as f:
             f.write(c_content)

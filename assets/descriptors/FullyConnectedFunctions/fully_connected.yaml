@@ -500,3 +500,46 @@ filter_shape:
 - 7
 - 769
 use_bias: false
+---
+# Fault-injection cases (issue #72): each case feeds an argument the kernel's
+# own validation rejects and asserts ARM_CMSIS_NN_ARG_ERROR instead of
+# validating outputs.
+operator: FullyConnected
+name: fully_connected_fault_null_ctx_buf_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+required_capabilities: [mve]
+hint:
+  call_style: per_tensor
+input_shape: [1, 8]
+filter_shape: [4, 8]
+use_bias: true
+fault: null_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: FullyConnected
+name: fully_connected_fault_null_ctx_buf_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 8]
+filter_shape: [4, 8]
+use_bias: true
+fault: null_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: FullyConnected
+name: fully_connected_fault_small_ctx_size_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 8]
+filter_shape: [4, 8]
+use_bias: true
+fault: small_ctx_size
+expected_status: ARM_CMSIS_NN_ARG_ERROR

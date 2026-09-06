@@ -17,6 +17,36 @@ class OpFullyConnected(OperationBase):
     FullyConnected operation.
     """
 
+    FAULT_KINDS = (
+        "null_ctx_buf",
+        "small_ctx_size",
+        "filter_n_mismatch",
+        "invalid_layout",
+    )
+
+    def _check_fault_reachable(self, kind: str, context: Dict[str, Any]) -> None:
+        """Reject fault kinds the selected fully-connected kernel route does not diagnose."""
+        kernel_fn = context["kernel_fn"]
+        if context.get("float_kernel"):
+            if kind not in ("filter_n_mismatch", "invalid_layout"):
+                raise self.fault_unreachable(kind, f"{kernel_fn} has no such guard")
+            return
+        if kind in ("filter_n_mismatch", "invalid_layout"):
+            raise self.fault_unreachable(kind, f"{kernel_fn} does not check {kind}")
+        if kernel_fn == "arm_fully_connected_s4":
+            raise self.fault_unreachable(kind, "arm_fully_connected_s4 validates no arguments")
+        per_channel = bool(context["quant_params"].get("per_channel"))
+        if kernel_fn == "arm_fully_connected_wrapper_s16":
+            if not per_channel:
+                raise self.fault_unreachable(kind, "arm_fully_connected_s16 validates no arguments")
+            return
+        if kind == "small_ctx_size":
+            raise self.fault_unreachable(kind, f"{kernel_fn} does not check ctx->size")
+        if "mve" not in self.required_capabilities():
+            raise self.fault_unreachable(
+                kind, f"{kernel_fn} only checks ctx->buf under ARM_MATH_MVEI; add required_capabilities: [mve]"
+            )
+
     def needs_keras_model(self) -> bool:
         return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
     
@@ -681,6 +711,12 @@ class OpFullyConnected(OperationBase):
                 'validation_mode': 'float',
             }
             context.update(nonfinite_context)
+            fault = self.fault_kind()
+            c_template = "FullyConnectedFunctions/fully_connected/fully_connected.c.j2"
+            if fault:
+                self._check_fault_reachable(fault, context)
+                context.update(self.fault_context())
+                c_template = "FullyConnectedFunctions/fully_connected/fully_connected_fault.c.j2"
 
             includes_api_dir = output_dir / "includes"
             includes_api_dir.mkdir(parents=True, exist_ok=True)
@@ -690,7 +726,7 @@ class OpFullyConnected(OperationBase):
             with open(h_path, 'w') as f:
                 f.write(h_content)
             
-            c_content = self.render_template("FullyConnectedFunctions/fully_connected/fully_connected.c.j2", context)
+            c_content = self.render_template(c_template, context)
             c_path = output_dir / f"{name}_fully_connected.c"
             with open(c_path, 'w') as f:
                 f.write(c_content)
@@ -1013,7 +1049,13 @@ class OpFullyConnected(OperationBase):
             'weight_sum_array': weight_sum_array_str,
             'has_weight_sum': has_weight_sum,
         }
-        
+        fault = self.fault_kind()
+        c_template = "FullyConnectedFunctions/fully_connected/fully_connected.c.j2"
+        if fault:
+            self._check_fault_reachable(fault, context)
+            context.update(self.fault_context())
+            c_template = "FullyConnectedFunctions/fully_connected/fully_connected_fault.c.j2"
+
         # Render templates
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)
@@ -1023,7 +1065,7 @@ class OpFullyConnected(OperationBase):
         with open(h_path, 'w') as f:
             f.write(h_content)
         
-        c_content = self.render_template("FullyConnectedFunctions/fully_connected/fully_connected.c.j2", context)
+        c_content = self.render_template(c_template, context)
         c_path = output_dir / f"{name}_fully_connected.c"
         with open(c_path, 'w') as f:
             f.write(c_content)
