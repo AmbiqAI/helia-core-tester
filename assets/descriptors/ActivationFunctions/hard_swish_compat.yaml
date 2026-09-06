@@ -53,3 +53,62 @@ hint:
 input_shape:
 - 1
 - 8
+---
+# ns-cmsis-nn#289: arm_hard_swish_compat_s8 takes a 256-entry table path on MVE
+# from 4160 elements (HARD_SWISH_COMPAT_S8_LUT_MIN_SIZE). 4159 / 4160 straddle it.
+operator: HardSwishCompat
+name: hard_swish_compat_vector_4159_below_lut_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 4159
+---
+operator: HardSwishCompat
+name: hard_swish_compat_vector_4160_lut_exp0_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 0.0078125
+    output_scale: 0.0078125
+    input_zero_point: 0
+    output_zero_point: 0
+input_shape:
+- 1
+- 4160
+---
+# 4177 = 261 full 16-lane gathers + a 1-element predicated tail.
+operator: HardSwishCompat
+name: hard_swish_compat_vector_4177_lut_tail1_expneg_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 0.00390625
+    output_scale: 0.00390625
+    input_zero_point: 0
+    output_zero_point: 0
+input_shape:
+- 1
+- 4177
+---
+operator: HardSwishCompat
+name: hard_swish_compat_nhwc_48x48x16_lut_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 48
+- 48
+- 16
