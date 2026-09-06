@@ -33,6 +33,23 @@ Grounding of the v1 entries:
                          1xN/1x1 non-fast route (arm_nn_mat_mult_nt_t_s8),
                          the grouped row-offset kernel, and the
                          arm_convolve_s8 leftover loop.
+- drop_depthwise_bias:   tester#98. Measured against ns-cmsis-nn 18a89ff in
+                         ghcr.io/ambiqai/ns-cmsis-nn-ci:latest on cortex-m4,
+                         seed 500, --ops Convolve,DepthwiseConv, over the same
+                         123-case set: 16 kill it, all of them DepthwiseConv
+                         cases, the five dilated quantized ones included.
+                         Survivors are the Convolve cases (the mutant patches
+                         the depthwise entry points only), the 14 use_bias:
+                         false depthwise cases, and the 18 bias-carrying
+                         depthwise cases whose wrapper dispatches straight to
+                         an optimized kernel rather than through one of the
+                         three mutated entry points.
+- drop_conv_s16_bias:    tester#98. Same checkout, image, cpu, seed and
+                         123-case set: 9 kill it -- every s16 Convolve case
+                         that carries a bias, the six dilated ones included.
+                         The remaining nine s16 Convolve cases are use_bias:
+                         false; every other survivor is an s8/s4 conv or a
+                         DepthwiseConv case, which no edit here touches.
 - packed_sign_mask_343:  ns-cmsis-nn#343 (packed DSP loop masked the
                          sign-extended halfword with & 0x0FFFF, disagreeing
                          with its own scalar tail). The patch removes the
@@ -164,11 +181,16 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             ),
         ),
         expected_detected_by=(
-            "depthwise golden cases with a nonzero bias, including the five dilated "
-            "ones the conv mutants cannot reach (depthwise_conv_dilation_s8, "
-            "depthwise_conv_dilation_s16, depthwise_conv_buf_nonopt_dil2_s8, "
-            "depthwise_conv_dil_2x1_bias_s16 and "
-            "depthwise_conv_fast_false_dil2_bias_s16) (tester#98)"
+            "depthwise golden cases with a nonzero bias that reach one of the three "
+            "mutated entry points. Measured on cortex-m4 against ns-cmsis-nn 18a89ff "
+            "(seed 500, --ops Convolve,DepthwiseConv, 123 cases): 16 killers, every one "
+            "a DepthwiseConv case, including all five dilated ones the conv mutants "
+            "cannot reach (depthwise_conv_dilation_s8, depthwise_conv_dilation_s16, "
+            "depthwise_conv_buf_nonopt_dil2_s8, depthwise_conv_dil_2x1_bias_s16 and "
+            "depthwise_conv_fast_false_dil2_bias_s16). Survivors are the Convolve "
+            "cases, the 14 use_bias: false depthwise cases and the 18 bias-carrying "
+            "depthwise cases the wrapper sends to an optimized kernel instead "
+            "(tester#98)"
         ),
         refs=("AmbiqAI/helia-core-tester#98",),
     ),
@@ -221,10 +243,14 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             ),
         ),
         expected_detected_by=(
-            "s16 conv golden cases with a nonzero bias, including the six dilated ones "
-            "drop_conv_bias cannot reach (convolve_int16xint8_dilation_case_01_s16 "
-            "through _case_03_s16 and convolve_int16xint8xint32_case_04_s16 through "
-            "_case_06_s16) (tester#98)"
+            "s16 conv golden cases with a nonzero bias. Measured on cortex-m4 against "
+            "ns-cmsis-nn 18a89ff (seed 500, --ops Convolve,DepthwiseConv, 123 cases): "
+            "9 killers, which is every bias-carrying s16 Convolve case in the set, "
+            "including the six dilated ones drop_conv_bias cannot reach "
+            "(convolve_int16xint8_dilation_case_01_s16 through _case_03_s16 and "
+            "convolve_int16xint8xint32_case_04_s16 through _case_06_s16). Survivors "
+            "are the nine use_bias: false s16 Convolve cases and everything that is "
+            "not an s16 conv (tester#98)"
         ),
         refs=("AmbiqAI/helia-core-tester#98",),
     ),
