@@ -44,6 +44,12 @@ class TestResultParser:
         self.zero_failures_pattern = re.compile(r'^0\s+Failures\s*$', re.MULTILINE | re.IGNORECASE)
         # Pattern for "X Failures" where X > 0
         self.nonzero_failures_pattern = re.compile(r'^(\d+)\s+Failures\s*$', re.MULTILINE | re.IGNORECASE)
+        # Buffer overrun guard breach (issue #68): HELIA_GUARD_CHECK prints this
+        # line, distinct from a value mismatch, when a canary byte on either
+        # side of a guarded buffer was corrupted. Must be matched before the
+        # failure-count pattern below, or a guard breach (which also bumps the
+        # printed failure count) is misreported as an ordinary output mismatch.
+        self.guard_breach_pattern = re.compile(r'GuardBreach\[(?P<label>[^]]+)\]: (?P<dir>[a-z ]+) detected')
         # Pattern for "Convolution failed" or API errors
         self.api_error_pattern = re.compile(
             r'(?P<label>[A-Za-z][A-Za-z0-9 _-]*)\s+failed with status\s+(?P<status>-?\d+)',
@@ -134,6 +140,12 @@ class TestResultParser:
             label = api_error_match.group("label").strip()
             status_code = api_error_match.group("status")
             return TestStatus.FAIL, f"{label} API error (status {status_code})", None, "api_error"
+
+        guard_match = self.guard_breach_pattern.search(output)
+        if guard_match:
+            label = guard_match.group("label").strip()
+            direction = guard_match.group("dir").strip()
+            return TestStatus.FAIL, f"Guard breach in {label}: {direction} detected", None, "guard_breach"
 
         if self.zero_failures_pattern.search(output):
             return TestStatus.PASS, None, None, None

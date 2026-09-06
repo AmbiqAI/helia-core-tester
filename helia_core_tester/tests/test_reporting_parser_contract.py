@@ -49,6 +49,46 @@ def test_parser_parses_generic_api_error_before_summary() -> None:
     assert result.error_type == "api_error"
 
 
+def test_parser_classifies_guard_breach_overrun_distinctly() -> None:
+    # issue #68: a corrupted tail canary must be reported as its own failure
+    # kind, not folded into an ordinary output mismatch, even though
+    # HELIA_GUARD_CHECK also bumps the printed failure count.
+    parser = reporting_parser.TestResultParser()
+    result = parser.parse_fvp_output(
+        output="GuardBreach[conv1_scratch]: overrun detected (canary corrupted)\n1 Failures\n",
+        elf_path=Path("convolve.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "guard_breach"
+    assert result.failure_reason == "Guard breach in conv1_scratch: overrun detected"
+
+
+def test_parser_classifies_guard_breach_underrun_and_combined() -> None:
+    parser = reporting_parser.TestResultParser()
+    underrun = parser.parse_fvp_output(
+        output="GuardBreach[conv1_output]: underrun detected (canary corrupted)\n1 Failures\n",
+        elf_path=Path("convolve.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert underrun.error_type == "guard_breach"
+    assert underrun.failure_reason == "Guard breach in conv1_output: underrun detected"
+
+    both = parser.parse_fvp_output(
+        output="GuardBreach[conv1_output]: underrun and overrun detected (canary corrupted)\n2 Failures\n",
+        elf_path=Path("convolve.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert both.error_type == "guard_breach"
+    assert both.failure_reason == "Guard breach in conv1_output: underrun and overrun detected"
+
+
 def test_parser_keeps_legacy_unity_fallback() -> None:
     parser = reporting_parser.TestResultParser()
     result = parser.parse_fvp_output(
