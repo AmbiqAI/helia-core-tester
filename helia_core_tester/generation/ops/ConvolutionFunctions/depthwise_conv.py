@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.bias_init import inject_hoisted_dilation_bias
 from helia_core_tester.generation.kernel_dispatch import resolve_depthwise_conv_kernel
 
 
@@ -103,11 +104,11 @@ class OpDepthwiseConv(OperationBase):
         if dwconv_kwargs['use_bias']:
             # A quantized dilated depthwise conv lowers to SpaceToBatchND ->
             # DepthwiseConv2D -> BatchToSpaceND -> Add, so the converter leaves
-            # the DEPTHWISE_CONV_2D op a zero placeholder bias and moves the
-            # real one into the trailing Add at output quantization scale. Those
-            # cases ship an all-zero bias whatever is set here, and cannot
-            # detect a dropped bias-add. TODO(#98): lift once the hoisted
-            # operand can be converted back to an int32 accumulator bias.
+            # the DEPTHWISE_CONV_2D op a zero placeholder bias and applies this
+            # one in the trailing Add at output quantization scale, outside the
+            # op the kernel stands in for. Those cases get an accumulator-scale
+            # bias written into the placeholder after conversion by
+            # inject_hoisted_dilation_bias, ahead of the golden run.
             dwconv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(
                 minval=-1.0, maxval=1.0, seed=4321
             )
@@ -225,7 +226,10 @@ class OpDepthwiseConv(OperationBase):
         tflite_model = converter.convert()
         with open(out_path, 'wb') as f:
             f.write(tflite_model)
-    
+
+        if self.desc.get('use_bias', True):
+            inject_hoisted_dilation_bias(out_path, self.seed)
+
     def _select_cmsis_depthwise_conv_kernel(self) -> Dict[str, str]:
         info = resolve_depthwise_conv_kernel(
             activation_dtype=self.desc.get("activation_dtype", "S8"),
