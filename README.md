@@ -48,6 +48,25 @@ Run both suites as separate flows:
 uv run helia_core_tester full --cpu cortex-m0,cortex-m4,cortex-m55 --suite both
 ```
 
+## Toolchain Selection
+
+### GCC release (`setup_dependencies.py`)
+
+`helia_core_tester/scripts/setup_dependencies.py` installs one Arm GNU toolchain release into `artifacts/downloads/arm_gcc_download`; the default is 14.2.rel1.
+
+- `--gcc-version 13.2.rel1` (or `HELIA_GCC_VERSION=13.2.rel1`; flag wins over env) selects the release. Case-insensitive, must match `<major>.<minor>.rel<N>`. `full`/`build`/`run` call the script with the inherited environment, so exporting `HELIA_GCC_VERSION` before them is enough.
+- SHA-256 pins ship for 13.2, 13.3, 14.2, 14.3 and 15.2.rel1 (both x86_64 and aarch64). For any other release the digest comes from `--gcc-sha256 <hex>` / `HELIA_GCC_SHA256`, or, failing that, from Arm's published `<archive>.sha256asc` sidecar (same origin as the archive, so it guards against corruption but is not an independent pin; the script says so when it does this).
+- The installed release is recorded in `arm_gcc_download/.helia_gcc_version`. Requesting a different release against an existing install fails and asks for `--force` (which replaces the install) or deleting the directory. An install that predates the marker is assumed to be the default release: accepted with a note when the default is requested, rejected (asking for `--force`) when any other release is.
+
+```bash
+uv run python -m helia_core_tester.scripts.setup_dependencies --gcc-version 13.2.rel1 --force
+HELIA_GCC_VERSION=15.2.rel1 uv run helia_core_tester full --cpu cortex-m55
+```
+
+### Compiler (`--toolchain`)
+
+`build`, `run` and `full` take `--toolchain gcc|armclang` (default `gcc`; also `toolchain` in `helia_core_tester.toml` and `HELIA_CORE_TESTER_TOOLCHAIN`). `armclang` selects ethos-u-core-platform's `armclang.cmake` and needs Arm Compiler 6 (`armclang`) on `PATH`; it is not fetched by `setup_dependencies.py`. Build output goes to `artifacts/build-<suite>-<cpu>-arm-compiler/`. `--toolchain armclang` is mutually exclusive with `--coverage` (gcov instrumentation is GCC-only). `doctor` reports which of `arm-none-eabi-gcc` / `armclang` it finds.
+
 ## Canonical Artifacts
 
 Generated tests:

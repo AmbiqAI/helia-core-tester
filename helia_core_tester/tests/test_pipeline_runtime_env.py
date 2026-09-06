@@ -37,9 +37,10 @@ def test_full_pipeline_bootstraps_runtime_env_once_and_reuses(monkeypatch, tmp_p
     bootstrap_calls = {"count": 0}
     step_runtime_env_ids = []
 
-    def fake_bootstrap_runtime_env(*, downloads_dir, ensure_setup):
+    def fake_bootstrap_runtime_env(*, downloads_dir, ensure_setup, toolchain="gcc"):
         bootstrap_calls["count"] += 1
         assert ensure_setup is True
+        assert toolchain == "gcc"
         assert Path(downloads_dir) == cfg.downloads_dir
         return expected_runtime_env
 
