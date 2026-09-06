@@ -29,10 +29,12 @@ int32_t fully_connected_float_default_f16_run(
         ARM_NN_LAYOUT_NHWC
     );
 
-    if (required_buffer_size > FULLY_CONNECTED_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX) {
-        printf("Buffer size error: required=%d > max=%d\r\n", required_buffer_size, FULLY_CONNECTED_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX);
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // Sizer contract (issue #69): a negative return is the header's
+    // out-of-range sentinel, never a size. The capacity check that follows is
+    // the allocation guard for the static above, not a statement about the
+    // sizer. The s4 route queries no sizer, so it has nothing to check here.
+    HELIA_VALIDATE_SIZER("arm_fully_connected_f16_get_buffer_size", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("arm_fully_connected_f16_get_buffer_size", required_buffer_size, FULLY_CONNECTED_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX);
 
     // Initialize context buffer
     fully_connected_float_default_f16_ctx.buf = fully_connected_float_default_f16_buffer;

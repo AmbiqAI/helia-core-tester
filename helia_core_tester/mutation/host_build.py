@@ -40,6 +40,12 @@ KERNEL_SOURCE_DIRS = (
     # arm_requantize_s8_s8 lives here and is called by the issue #81
     # chunked-equivalence requantize cases.
     "Source/QuantizationFunctions",
+    # The issue #69 sizer-contract cases call the avgpool and SVDF scratch
+    # queries; without their translation units those case binaries fail to
+    # link and are dropped at baseline, which would silently shrink the corpus
+    # scoring the sizer mutants.
+    "Source/PoolingFunctions",
+    "Source/SVDFunctions",
 )
 
 # Float kernels are not part of the host build (see module docstring).

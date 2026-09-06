@@ -1,0 +1,11 @@
+#ifndef {{ name|upper }}_SIZER_CONTRACT_H
+#define {{ name|upper }}_SIZER_CONTRACT_H
+
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+
+// This case runs no kernel and carries no tensor data: it queries
+// {{ sizer_symbol }}() with shapes whose answer {{ sizer_header }}
+// states outright, and checks the answer against that statement.
+
+#endif

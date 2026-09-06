@@ -39,16 +39,15 @@ int32_t transpose_conv_float_default_f32_run(
         &transpose_conv_float_default_f32_filter_dims
     );
 
-    if (required_buffer_size > TRANSPOSE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX) {
-        printf("Buffer size error: required=%d > max=%d\r\n", required_buffer_size, TRANSPOSE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
-    if (reverse_required_buffer_size > TRANSPOSE_CONV_FLOAT_DEFAULT_F32_REVERSE_CONV_CTX_SIZE) {
-        printf("Reverse buffer size error: required=%d > max=%d\r\n",
-               reverse_required_buffer_size,
-               TRANSPOSE_CONV_FLOAT_DEFAULT_F32_REVERSE_CONV_CTX_SIZE);
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // Sizer contract (issue #69): a negative return is the header's
+    // out-of-range sentinel, never a size. The capacity checks that follow are
+    // the allocation guards for the statics above, not statements about the
+    // sizers. Both scratch queries are checked; either one going negative
+    // would otherwise pass straight into a ctx.size.
+    HELIA_VALIDATE_SIZER("arm_transpose_conv_f32_get_buffer_size", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("arm_transpose_conv_f32_get_buffer_size", required_buffer_size, TRANSPOSE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
+    HELIA_VALIDATE_SIZER("arm_transpose_conv_f32_get_reverse_conv_buffer_size", reverse_required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("arm_transpose_conv_f32_get_reverse_conv_buffer_size", reverse_required_buffer_size, TRANSPOSE_CONV_FLOAT_DEFAULT_F32_REVERSE_CONV_CTX_SIZE);
 
     // Initialize context buffer
     transpose_conv_float_default_f32_ctx.buf = transpose_conv_float_default_f32_buffer;

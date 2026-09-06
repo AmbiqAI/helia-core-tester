@@ -41,16 +41,23 @@ def test_all_c_templates_use_standalone_harness_contract() -> None:
         assert '{% include "common/standalone/runtime_common.j2" %}' in text, path
         assert '{% include "common/standalone/main.j2" %}' in text, path
         assert "int32_t {{ name }}_test_case_run(void)" in text, path
-        assert (
-            "HELIA_VALIDATE_STATUS(" in text
-            or "HELIA_VALIDATE_EXPECTED_STATUS(" in text
-        ), path
+        # Sizer-contract templates (issue #69) call a *_get_buffer_size() query
+        # and nothing else. A query returns a byte count, not an
+        # arm_cmsis_nn_status, so there is no status to validate; the whole case
+        # is the scalar comparison against the value the header documents, so
+        # there is no output tensor to hand HELIA_VALIDATE_OUTPUTS either.
+        is_sizer_contract_template = path.stem == "sizer_contract.c"
+        if not is_sizer_contract_template:
+            assert (
+                "HELIA_VALIDATE_STATUS(" in text
+                or "HELIA_VALIDATE_EXPECTED_STATUS(" in text
+            ), path
         # Fault-injection templates deliberately only assert the kernel's
         # returned status (e.g. rejecting null pointers/invalid params) and
         # never produce a valid output buffer to compare, so they are exempt
         # from the HELIA_VALIDATE_OUTPUTS requirement.
         is_fault_template = path.stem.endswith("_fault.c")
-        if not is_fault_template:
+        if not (is_fault_template or is_sizer_contract_template):
             # Mask-policy operators (issue #74) reach the same validator through the
             # shared common/standalone/validation.j2 macro, which picks the masked or
             # the plain form from the render context.

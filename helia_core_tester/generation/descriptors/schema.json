@@ -67,6 +67,7 @@
         "SVDF",
         "ScatterNd",
         "SelectV2",
+        "SizerContract",
         "Softmax",
         "SpaceToBatchND",
         "SpaceToDepth",
@@ -354,6 +355,24 @@
     "chunk_sizes": {
       "$ref": "#/$defs/intArray",
       "description": "ChunkedEquivalence: consecutive slice sizes for the chunked pass; must sum to element_count."
+    },
+    "sizer": {
+      "type": "string",
+      "enum": [
+        "convolve_wrapper_s8",
+        "depthwise_conv_wrapper_s8",
+        "fully_connected_s8",
+        "svdf_s8_input_ctx",
+        "svdf_s8_output_ctx",
+        "avgpool_s8"
+      ],
+      "description": "SizerContract: which shipped *_get_buffer_size() query the case probes."
+    },
+    "probes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "enum": ["negative_dim", "overflow", "degenerate_zero"] },
+      "description": "SizerContract: which documented-return probes to emit. Each probe's expected value is quoted from the sizer's entry in Include/arm_nnfunctions.h; not every sizer documents every probe."
     },
     "quant_preset": {
       "type": "string",
@@ -716,6 +735,11 @@
       "$comment": "ChunkedEquivalence requires kernel, element_count and chunk_sizes",
       "if": { "properties": { "operator": { "const": "ChunkedEquivalence" } } },
       "then": { "required": ["kernel", "element_count", "chunk_sizes"] }
+    },
+    {
+      "$comment": "SizerContract requires sizer and probes",
+      "if": { "properties": { "operator": { "const": "SizerContract" } } },
+      "then": { "required": ["sizer", "probes"] }
     },
     {
       "$comment": "Tile requires multiples",

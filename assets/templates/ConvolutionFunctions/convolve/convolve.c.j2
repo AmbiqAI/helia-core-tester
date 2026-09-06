@@ -69,9 +69,12 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
     );
     {% endif %}
 
-    if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // Sizer contract (issue #69): a negative return is the header's
+    // out-of-range sentinel, never a size. The capacity check that follows is
+    // the allocation guard for the static above, not a statement about the
+    // sizer.
+    HELIA_VALIDATE_SIZER("{{ kernel_get_buffer_size_fn }}", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("{{ kernel_get_buffer_size_fn }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
 
     // Initialize context buffer
     {{ name }}_ctx.buf = {{ name }}_buffer;

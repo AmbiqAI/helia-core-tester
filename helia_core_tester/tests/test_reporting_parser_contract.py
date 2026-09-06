@@ -546,3 +546,83 @@ def test_parser_keeps_the_verdict_lines_past_the_truncation_cap() -> None:
             f"HELIA_FLOAT_MAXDIFF maxdiff=1.0000000{tensor}e-03 maxfrac=1.62074{tensor} n=1024"
             in result.output_lines
         )
+
+
+def test_parser_reports_a_negative_sizer_return_as_a_contract_violation() -> None:
+    # The harness prints the marker and then unwinds with ARM_CMSIS_NN_ARG_ERROR,
+    # so the api_error line is always present too. Classifying on the marker is
+    # the point: issue #69 is about a sizer answering outside its documented
+    # contract being indistinguishable from a kernel rejecting its arguments.
+    parser = reporting_parser.TestResultParser()
+    result = parser.parse_fvp_output(
+        output=(
+            "HELIA_SIZER_INVALID[arm_convolve_wrapper_s8_get_buffer_size]: -1\n"
+            "Convolution failed with status -3\n"
+            "1 Failures\n"
+        ),
+        elf_path=Path("convolve_1x1_s8.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "sizer_contract"
+    assert "arm_convolve_wrapper_s8_get_buffer_size" in result.failure_reason
+    assert "-1" in result.failure_reason
+
+
+def test_parser_reports_an_oversized_sizer_return_as_a_contract_violation() -> None:
+    parser = reporting_parser.TestResultParser()
+    result = parser.parse_fvp_output(
+        output=(
+            "HELIA_SIZER_OVER_CAPACITY[arm_avgpool_s8_get_buffer_size]: 8192 > 4096\n"
+            "AvgPool failed with status -3\n"
+            "1 Failures\n"
+        ),
+        elf_path=Path("avgpool_s8.elf"),
+        cpu="cortex-m4",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "sizer_contract"
+    assert "arm_avgpool_s8_get_buffer_size" in result.failure_reason
+    assert "8192" in result.failure_reason
+    assert "4096" in result.failure_reason
+
+
+def test_parser_reports_a_failed_sizer_contract_case_as_a_contract_violation() -> None:
+    # sizer_contract cases assert through the ordinary scalar validator, so
+    # their failures arrive on the generic mismatch line; the label prefix the
+    # generator sets is what keeps them out of the output_mismatch bucket.
+    parser = reporting_parser.TestResultParser()
+    result = parser.parse_fvp_output(
+        output=(
+            "sizer contract arm_fully_connected_s8_get_buffer_size negative-channel "
+            "return mismatch: expected -1 got 4\n"
+            "1 Failures\n"
+        ),
+        elf_path=Path("sizer_contract_fully_connected_s8.elf"),
+        cpu="cortex-m0",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "sizer_contract"
+    assert "arm_fully_connected_s8_get_buffer_size" in result.failure_reason
+    assert "negative-channel return" in result.failure_reason
+
+
+def test_parser_keeps_the_sizer_marker_past_the_truncation_cap() -> None:
+    parser = reporting_parser.TestResultParser()
+    body = [f"Mismatch[{lane}]: exp=1 got=2 (diff=1)" for lane in range(60)]
+    marker = "HELIA_SIZER_INVALID[arm_svdf_s8_input_ctx_get_buffer_size]: -1"
+    result = parser.parse_fvp_output(
+        output="\n".join(body + [marker, "1 Failures"]) + "\n",
+        elf_path=Path("svdf_s8.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert marker in result.output_lines
+    assert result.error_type == "sizer_contract"

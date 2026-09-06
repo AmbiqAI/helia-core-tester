@@ -41,10 +41,21 @@ int32_t {{ name }}_run(
     );
     {% endif %}
 
-    if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
-        printf("Buffer size error: required=%d > max=%d\r\n", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+{% if kernel_fn != 'arm_fully_connected_s4' %}
+{% if not float_kernel and quant_params.per_channel and output_dtype == 'int16_t' %}
+{% set sizer_label = 'arm_fully_connected_per_channel_s16_get_buffer_size' %}
+{% else %}
+{% set sizer_label = kernel_get_buffer_size_fn %}
+{% endif %}
+    // Sizer contract (issue #69): a negative return is the header's
+    // out-of-range sentinel, never a size. The capacity check that follows is
+    // the allocation guard for the static above, not a statement about the
+    // sizer. The s4 route queries no sizer, so it has nothing to check here.
+    HELIA_VALIDATE_SIZER("{{ sizer_label }}", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("{{ sizer_label }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
+{% else %}
+    (void)required_buffer_size;
+{% endif %}
 
     // Initialize context buffer
     {% if float_kernel %}
