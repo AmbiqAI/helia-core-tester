@@ -8,13 +8,17 @@ not compile kernels and need neither gcc nor an ns-cmsis-nn checkout.
 
 import json
 import os
+import re
 import shutil
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from helia_core_tester.core.cpu_targets import get_cpu_profile, known_capabilities
+from helia_core_tester.generation.io.descriptors import load_all_descriptors
+from helia_core_tester.mutation import cli as mutation_cli
 from helia_core_tester.mutation.catalog import MUTANTS_V1, Edit, Mutant, get_mutants
 from helia_core_tester.mutation.host_build import (
     KERNEL_SOURCE_DIRS,
@@ -449,6 +453,21 @@ class TestRunnerFailureClassification:
             )
 
 
+
+
+def _shipped_descriptors():
+    return load_all_descriptors(str(TESTER_ROOT / "assets" / "descriptors"))
+
+
+def _descriptors_named_by(descriptors, expected_detected_by: str):
+    """Shipped descriptors a mutant's expected-killer prose names by kernel or case name."""
+    words = set(re.findall(r"[a-z_0-9]+", expected_detected_by.lower()))
+    return [
+        d for d in descriptors
+        if str(d.get("kernel") or "").lower() in words or str(d.get("name") or "").lower() in words
+    ]
+
+
 class TestVerifyPristine:
     def test_raises_on_leftover_marker(self, tree: Path):
         target = tree / "Source" / "BasicMathFunctions" / "kernel.c"
@@ -479,6 +498,36 @@ class TestVerifyPristine:
         assert get_cpu_profile("cortex-m55").capabilities >= set(mutant.requires_capabilities)
         assert not get_cpu_profile("cortex-m4").capabilities >= set(mutant.requires_capabilities)
 
+    def test_the_shipped_requantize_descriptors_carry_the_mutant_gate(self):
+        # The mutant's gate and its killers' gate are one fact stored twice:
+        # loosening the descriptors without the mutant turns a real survivor
+        # into a silent NOT_APPLICABLE, and the reverse hides a scoreable bug.
+        descriptors = _shipped_descriptors()
+        (mutant,) = [m for m in MUTANTS_V1 if m.mutant_id == "requantize_tail_drop"]
+        killers = [
+            d for d in descriptors
+            if d.get("operator") == "ChunkedEquivalence" and d.get("kernel") == "requantize"
+        ]
+        assert killers
+        for desc in killers:
+            assert tuple(desc.get("required_capabilities") or ()) == mutant.requires_capabilities, desc["name"]
+
+    def test_every_gated_mutant_has_a_killer_descriptor_with_exactly_that_gate(self):
+        descriptors = _shipped_descriptors()
+        for mutant in MUTANTS_V1:
+            if not mutant.requires_capabilities:
+                continue
+            named = _descriptors_named_by(descriptors, mutant.expected_detected_by)
+            assert named, f"{mutant.mutant_id}: expected_detected_by names no shipped descriptor"
+            gates = {tuple(d.get("required_capabilities") or ()) for d in named}
+            assert mutant.requires_capabilities in gates, mutant.mutant_id
+
+    def test_the_default_cpu_covers_every_catalogued_gate(self):
+        # The CLI default exists so one run can score the whole catalog; a
+        # mutant needing a capability it lacks would be permanently excused.
+        required = {c for m in MUTANTS_V1 for c in m.requires_capabilities}
+        assert required <= get_cpu_profile(mutation_cli.DEFAULT_CPU).capabilities
+
     def test_every_v1_edit_applies_to_a_real_checkout(self, tmp_path: Path):
         """
         A catalogued edit is only worth anything if it still matches the
@@ -506,3 +555,102 @@ class TestVerifyPristine:
                 assert "/* MUTANT " in edit.replacement, (
                     f"{mutant.mutant_id}: replacement for {edit.relpath} has no marker"
                 )
+
+
+class _StubReport:
+    """Stand-in for a scoring report: the CLI only renders it and reads its lists."""
+
+    apply_failures = ()
+    survivors = ()
+
+    def render_text(self) -> str:
+        return "stub report"
+
+
+def _corpus_tree(tmp_path: Path, cpu: str = None, *, manifest_cpu: str = None) -> Path:
+    """A minimal discoverable corpus, optionally placed in the layout for ``cpu``."""
+    root = (tmp_path / "artifacts" / "generated_tests" / "int" / cpu) if cpu else (tmp_path / "cases")
+    case_dir = root / "BasicMathFunctions" / "chunked_equivalence_requantize_singles_s8"
+    (case_dir / "includes").mkdir(parents=True)
+    (case_dir / "chunked_equivalence_requantize_singles_s8.c").write_text("int main(void){return 0;}\n")
+    if manifest_cpu:
+        (root / "manifest.json").write_text(json.dumps({"filters": {"cpu": manifest_cpu}, "tests": []}))
+    return root
+
+
+def _invoke_run(tmp_path: Path, cases_root: Path, extra=()):
+    return CliRunner().invoke(
+        mutation_cli.app,
+        [
+            "run",
+            "--cmsis-nn-root", str(tmp_path / "checkout"),
+            "--cases-root", str(cases_root),
+            "--cc", "sh",
+            *extra,
+        ],
+    )
+
+
+class TestCorpusCapabilityDerivation:
+    """--cases-root takes its cases from disk, so its capabilities must come
+    from the same place: a corpus CPU inferred from --cpu instead can excuse a
+    mutant as NOT_APPLICABLE while its killers sit in the tree (issue #81)."""
+
+    def test_the_layout_path_names_the_cpu(self, tmp_path: Path):
+        root = _corpus_tree(tmp_path, "cortex-m55")
+        assert mutation_cli.derive_corpus_cpu([root], discover_cases([root])) == "cortex-m55"
+
+    def test_the_manifest_names_the_cpu(self, tmp_path: Path):
+        root = _corpus_tree(tmp_path, manifest_cpu="cortex-m4")
+        assert mutation_cli.derive_corpus_cpu([root], discover_cases([root])) == "cortex-m4"
+
+    def test_an_unlabelled_tree_derives_nothing(self, tmp_path: Path):
+        root = _corpus_tree(tmp_path)
+        assert mutation_cli.derive_corpus_cpu([root], discover_cases([root])) is None
+
+    def test_a_mixed_tree_is_an_error(self, tmp_path: Path):
+        root = _corpus_tree(tmp_path, "cortex-m55", manifest_cpu="cortex-m4")
+        with pytest.raises(ValueError, match="more than one CPU"):
+            mutation_cli.derive_corpus_cpu([root], discover_cases([root]))
+
+    def test_the_tree_cpu_is_scored_not_the_default_cpu(self, tmp_path: Path, monkeypatch):
+        captured = {}
+
+        def fake_scoring(**kwargs):
+            captured.update(kwargs)
+            return _StubReport()
+
+        monkeypatch.setattr(mutation_cli, "run_mutation_scoring", fake_scoring)
+        result = _invoke_run(tmp_path, _corpus_tree(tmp_path, "cortex-m4"))
+        assert result.exit_code == 0, result.output
+        assert captured["capabilities"] == get_cpu_profile("cortex-m4").capabilities
+
+    def test_a_cpu_contradicting_the_tree_is_refused(self, tmp_path: Path, monkeypatch):
+        # The false-excuse scenario: cortex-m4 capabilities over a cortex-m55
+        # corpus would report requantize_tail_drop NOT_APPLICABLE even though
+        # its MVE-gated killers were generated into this very tree.
+        def refuse_scoring(**kwargs):
+            raise AssertionError("scoring must not start on a contradicted corpus CPU")
+
+        monkeypatch.setattr(mutation_cli, "run_mutation_scoring", refuse_scoring)
+        result = _invoke_run(tmp_path, _corpus_tree(tmp_path, "cortex-m55"), ["--cpu", "cortex-m4"])
+        assert result.exit_code == 1
+        assert "cortex-m55" in result.output
+
+    def test_an_unlabelled_tree_requires_an_explicit_cpu(self, tmp_path: Path, monkeypatch):
+        captured = {}
+
+        def fake_scoring(**kwargs):
+            captured.update(kwargs)
+            return _StubReport()
+
+        monkeypatch.setattr(mutation_cli, "run_mutation_scoring", fake_scoring)
+        root = _corpus_tree(tmp_path)
+        defaulted = _invoke_run(tmp_path, root)
+        assert defaulted.exit_code == 1
+        assert "--cpu" in defaulted.output
+        assert not captured
+
+        explicit = _invoke_run(tmp_path, root, ["--cpu", "cortex-m4"])
+        assert explicit.exit_code == 0, explicit.output
+        assert captured["capabilities"] == get_cpu_profile("cortex-m4").capabilities

@@ -318,15 +318,20 @@ not enforced at load time (#100), so the rule lives in code.
 each catalogued mutant to a copy of the kernel source, rebuilds, and reports which cases kill
 which mutant (issue #76; catalog in `helia_core_tester/mutation/catalog.py`).
 
-`--cpu` defaults to `cortex-m55`, the widest capability set in the matrix, because some killers
-are capability-gated descriptors: generating for a narrower CPU removes them from the corpus.
-The chosen CPU's capabilities are passed to the scorer, and a mutant that declares
+`--cpu` defaults to `cortex-m55`, the widest capability set the int corpus uses, because some
+killers are capability-gated descriptors: generating for a narrower CPU removes them from the
+corpus. The corpus CPU's capabilities are passed to the scorer, and a mutant that declares
 `requires_capabilities` the corpus does not have is reported `NOT_APPLICABLE` instead of
 `SURVIVED`. That distinction matters: `SURVIVED` is a claim about the suite ("no case detects
 this bug class"), while `NOT_APPLICABLE` says the run never sampled the question.
 `--fail-on-survivor` fires only on a real survivor. `requantize_tail_drop` is the current
 example -- its only killers are the MVE-gated chunked-equivalence requantize cases, so
 `--cpu cortex-m4` reports it not applicable.
+
+With `--cases-root`, the corpus CPU is read from the tree on disk (its `manifest.json`, or an
+`artifacts/generated_tests/<suite>/<cpu>/` path) rather than from `--cpu`, so a `--cpu` that
+does not match the cases cannot excuse a mutant whose killers are in that tree. A `--cpu` that
+contradicts the tree is an error, and a tree that records no CPU requires `--cpu` explicitly.
 
 ## Pipeline efficiency
 
