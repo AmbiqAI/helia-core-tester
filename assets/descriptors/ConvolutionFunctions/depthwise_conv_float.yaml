@@ -14,6 +14,13 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
+# Exact scratch size (issue #69), measured by calling the real, unmodified
+# arm_depthwise_conv_wrapper_f32_get_buffer_size() on host for this case's
+# dims (input=[1,6,6,3] filter=[1,3,3,3] output=[1,6,6,3], ch_mult=1,
+# stride=1x1, pad=1x1 from SAME padding). No ARM_MATH_MVEI/DSP branch applies
+# (the MVE-only one-in-ch path requires input_c==1), so the value is the same
+# on every build target.
+expected_buffer_size: 432
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_stride2_valid_f32

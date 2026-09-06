@@ -418,6 +418,10 @@ class OpTransposeConv(OperationBase):
                 'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
                 'buffer_size_max': buffer_size_max,
                 'reverse_conv_ctx_size': reverse_conv_ctx_size,
+                # Independently-measured exact scratch sizes (issue #69); see
+                # transpose_conv.c.j2 and the int-path context above.
+                'expected_buffer_size': self.desc.get('expected_buffer_size'),
+                'expected_reverse_buffer_size': self.desc.get('expected_reverse_buffer_size'),
                 'float_kernel': True,
                 'transpose_conv_params_type': (
                     'cmsis_nn_transpose_conv_params_f16'
@@ -612,6 +616,12 @@ class OpTransposeConv(OperationBase):
             'kernel_get_reverse_buffer_size_fn': kernel_info["kernel_get_reverse_buffer_size_fn"],
             'buffer_size_max': buffer_size_max,
             'reverse_conv_ctx_size': reverse_conv_ctx_size,
+            # Independently-measured exact scratch sizes (issue #69): not derived from
+            # calculate_transpose_conv_buffer_size_max's conservative allocation
+            # formula. Only present when the descriptor supplies them; see
+            # transpose_conv.c.j2.
+            'expected_buffer_size': self.desc.get('expected_buffer_size'),
+            'expected_reverse_buffer_size': self.desc.get('expected_reverse_buffer_size'),
         }
         
         # Render templates

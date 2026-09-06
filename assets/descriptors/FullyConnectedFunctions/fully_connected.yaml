@@ -14,6 +14,15 @@ filter_shape:
 - 6
 - 10
 use_bias: true
+# Exact scratch size (issue #69), measured by calling the real, unmodified
+# arm_fully_connected_s8_get_buffer_size{,_dsp,_mve}() on host for this
+# case's actual generated filter_dims (n=20 [input features], c=6 [output
+# units]). The DSP/generic leg is bufferless (arm_fully_connected_s8_get_
+# buffer_size_dsp() always returns 0); only MVE needs filter_dims.c * 4.
+expected_buffer_size:
+  generic: 0
+  dsp: 0
+  mve: 24
 ---
 operator: FullyConnected
 name: fully_connected_weight_offset_s8
@@ -108,6 +117,11 @@ filter_shape:
 - 11
 - 7
 use_bias: true
+# Exact scratch size (issue #69), measured by calling the real, unmodified
+# arm_fully_connected_per_channel_s16_get_buffer_size() on host for this
+# case's actual generated filter_dims (n=63, c=11 [output units]). This
+# sizer uses the same formula (filter_dims.c * 4) on every build target.
+expected_buffer_size: 44
 ---
 operator: FullyConnected
 name: fully_connected_slow_s16
@@ -162,6 +176,11 @@ filter_shape:
 - 3
 - 4
 use_bias: true
+# Degenerate-0 regime (issue #69): arm_fully_connected_s16_get_buffer_size()
+# is documented "bufferless" and unconditionally returns 0 -- verified by
+# calling the real function (and its _dsp/_mve legs, which just forward to
+# it) on host for this case's actual generated filter_dims (n=16, c=3).
+expected_buffer_size: 0
 ---
 operator: FullyConnected
 name: fully_connected_bias_s4

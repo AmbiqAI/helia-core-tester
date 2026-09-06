@@ -329,6 +329,9 @@ class OpBatchMatMul(OperationBase):
                 'kernel_fn': kernel_info["kernel_fn"],
                 'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
                 'buffer_size_max': buffer_size_max,
+                # Independently-measured exact scratch size (issue #69); see
+                # batch_matmul.c.j2 and the int-path context above.
+                'expected_buffer_size': self.desc.get('expected_buffer_size'),
                 'float_kernel': True,
                 'bmm_params_type': (
                     'cmsis_nn_bmm_params_f16'
@@ -466,8 +469,13 @@ class OpBatchMatMul(OperationBase):
             'kernel_fn': kernel_info["kernel_fn"],
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
             'buffer_size_max': buffer_size_max,
+            # Independently-measured exact scratch size (issue #69): not derived from
+            # calculate_fc_buffer_size_max's conservative allocation formula. Only
+            # present when the descriptor supplies expected_buffer_size; see
+            # batch_matmul.c.j2.
+            'expected_buffer_size': self.desc.get('expected_buffer_size'),
         }
-        
+
         # Render templates
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)

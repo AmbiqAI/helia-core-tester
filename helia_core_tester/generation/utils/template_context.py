@@ -769,12 +769,22 @@ class TemplateContextBuilder:
                                             output_dtype: str = 'S8') -> int:
         """
         Calculate a conservative upper bound for depthwise convolution buffer size.
-        
+
         This matches CMSIS-NN's depthwise buffer size calculation:
         - MVE: 4 * CH_IN_BLOCK_MVE * filter_w * filter_h (where CH_IN_BLOCK_MVE = 16)
         - DSP: input_c * filter_w * filter_h * sizeof(int16_t)
-        
+
         For depthwise conv, we use input_dims->c (input channels), not filter_dims->c.
+
+        NOTE (issue #69): this is a static-allocation sizer ONLY -- it exists solely to
+        size the harness's fixed scratch buffer generously enough to cover whichever
+        ISA variant a given build takes (hence max(mve, dsp)). It is a Python
+        transcription of the kernel formula and is deliberately conservative, so it
+        must never be used as the "expected" value asserted against the real
+        arm_depthwise_conv_wrapper_*_get_buffer_size() return. That exact-equality
+        check needs a value measured independently (e.g. by calling the real, unmodified
+        kernel function) -- see the descriptor's `expected_buffer_size` field and
+        depthwise_conv.c.j2.
         """
         input_c = input_dims['c']
         filter_w = filter_dims['w']
@@ -834,6 +844,16 @@ class TemplateContextBuilder:
           fell through to the S8 (int8) formula for FP32/FP16 callers, undersizing the
           scratch buffer by 2x-4x (elem_size=1 assumed instead of 2 or 4) and causing
           real hardware ARM_CMSIS_NN_ARG_ERROR rejections for float Convolve cases.
+
+        NOTE (issue #69): this is a static-allocation sizer ONLY -- it exists solely to
+        size the harness's fixed scratch buffer generously enough to cover whichever
+        ISA variant a given build takes (hence max(mve, dsp)). It is a Python
+        transcription of the kernel formula and is deliberately conservative, so it
+        must never be used as the "expected" value asserted against the real
+        arm_convolve_wrapper_*_get_buffer_size() return. That exact-equality check
+        needs a value measured independently (e.g. by calling the real, unmodified
+        kernel function) -- see the descriptor's `expected_buffer_size` field and
+        convolve.c.j2.
         """
         input_c = input_dims['c']
         filter_w = filter_dims['w']
@@ -995,8 +1015,18 @@ class TemplateContextBuilder:
         TransposeConv requires two buffers:
         1. ctx buffer (from arm_transpose_conv_s8_get_buffer_size)
         2. output_ctx buffer (from arm_transpose_conv_s8_get_reverse_conv_buffer_size)
-        
+
         Returns the maximum of both buffers.
+
+        NOTE (issue #69): this is a static-allocation sizer ONLY -- it exists solely to
+        size the harness's fixed scratch buffers generously enough to cover whichever
+        ISA variant a given build takes. It is a Python transcription of the kernel
+        formula and is deliberately conservative, so it must never be used as the
+        "expected" value asserted against the real arm_transpose_conv_s8_get_buffer_size()
+        / arm_transpose_conv_s8_get_reverse_conv_buffer_size() returns. That
+        exact-equality check needs a value measured independently (e.g. by calling the
+        real, unmodified kernel function) -- see the descriptor's `expected_buffer_size`
+        / `expected_reverse_buffer_size` fields and transpose_conv.c.j2.
         """
         input_c = input_dims['c']
         filter_w = filter_dims['w']
@@ -1132,9 +1162,18 @@ class TemplateContextBuilder:
                                      output_dtype: str = 'S8') -> int:
         """
         Calculate a conservative upper bound for fully connected buffer size.
-        
+
         For S8, buffer size depends on filter_dims (col_dim * row_dim).
         For S16, buffer size is typically 0 or minimal.
+
+        NOTE (issue #69): this is a static-allocation sizer ONLY -- it exists solely to
+        size the harness's fixed scratch buffer generously. It is a Python
+        transcription/estimate of the kernel formula and is deliberately conservative
+        (not exact), so it must never be used as the "expected" value asserted against
+        the real arm_fully_connected_*_get_buffer_size() / arm_batch_matmul_*_get_buffer_size()
+        returns. That exact-equality check needs a value measured independently (e.g.
+        by calling the real, unmodified kernel function) -- see the descriptor's
+        `expected_buffer_size` field and fully_connected.c.j2 / batch_matmul.c.j2.
         """
         # For fully connected, buffer size is typically small or 0
         # Use a conservative estimate based on filter dimensions
@@ -1243,9 +1282,18 @@ class TemplateContextBuilder:
             output_dims: Output dimensions dict with n, h, w, c
             pooling_type: 'AVERAGE' or 'MAX'
             output_dtype: 'S8' or 'S16'
-            
+
         Returns:
             Maximum buffer size in bytes
+
+        NOTE (issue #69): this is a static-allocation sizer ONLY -- it exists solely to
+        size the harness's fixed scratch buffer generously enough to cover whichever
+        ISA variant a given build takes (hence the DSP-worst-case estimate). It is a
+        Python transcription of the kernel formula and is deliberately conservative, so
+        it must never be used as the "expected" value asserted against the real
+        arm_avgpool_*_get_buffer_size() return. That exact-equality check needs a value
+        measured independently (e.g. by calling the real, unmodified kernel function)
+        -- see the descriptor's `expected_buffer_size` field and avg_pool.c.j2.
         """
         # Max pooling doesn't need a buffer
         if pooling_type == 'MAX':

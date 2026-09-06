@@ -20,6 +20,14 @@ strides:
 - 1
 padding: VALID
 use_bias: true
+# Exact scratch size (issue #69), measured by calling the real, unmodified
+# arm_convolve_wrapper_s8_get_buffer_size() on host for this case's dims
+# (input=[1,8,5,1] filter=[1,4,2,1] output=[1,5,4,1], stride=1x1, pad=0x0):
+# not re-derived from calculate_buffer_size_max's Python formula.
+expected_buffer_size:
+  generic: 32
+  dsp: 32
+  mve: 64
 ---
 operator: Convolve
 name: convolve_stride2pad1_s8
@@ -66,6 +74,13 @@ strides:
 - 1
 padding: VALID
 use_bias: true
+# Degenerate-0 regime (issue #69): a 1x1 unit-stride, zero-padding kernel
+# qualifies for the "1x1 fast" path (arm_nn_is_convolve_1x1() &&
+# arm_nn_is_convolve_1x1_fast()), whose GCC-toolchain buffer size is
+# unconditionally 0 in every ISA leg -- verified by calling the real
+# arm_convolve_wrapper_s8_get_buffer_size() on host for this case's actual
+# generated dims (input=[1,5,7,19] filter=[7,1,1,19] output=[1,5,7,7]).
+expected_buffer_size: 0
 ---
 operator: Convolve
 name: convolve_kernel1x1_stride_x_s8

@@ -13,6 +13,13 @@ filter_shape: [3, 3, 3, 2]
 strides: [2, 2]
 padding: SAME
 use_bias: true
+# Exact scratch sizes (issue #69): arm_transpose_conv_f32_get_buffer_size()
+# and arm_transpose_conv_f32_get_reverse_conv_buffer_size() are documented in
+# ns-cmsis-nn's arm_transpose_conv_f32.c as "Placeholder: current float32
+# transpose conv is bufferless" / "no reverse-convolution workspace needed
+# today" -- both unconditionally return 0 for any shape.
+expected_buffer_size: 0
+expected_reverse_buffer_size: 0
 ---
 operator: TransposeConv
 name: transpose_conv_float_valid_f32

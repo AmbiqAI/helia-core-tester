@@ -662,6 +662,9 @@ class OpFullyConnected(OperationBase):
                 'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
                 'call_style': kernel_info.get("call_style", "baseline"),
                 'buffer_size_max': buffer_size_max,
+                # Independently-measured exact scratch size (issue #69); see
+                # fully_connected.c.j2 and the int-path context above.
+                'expected_buffer_size': self.desc.get('expected_buffer_size'),
                 'weight_sum_array': "",
                 'has_weight_sum': False,
                 'float_kernel': True,
@@ -1000,6 +1003,11 @@ class OpFullyConnected(OperationBase):
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
             'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
+            # Independently-measured exact scratch size (issue #69): not derived from
+            # calculate_fc_buffer_size_max's conservative allocation formula. Only
+            # present when the descriptor supplies expected_buffer_size; see
+            # fully_connected.c.j2.
+            'expected_buffer_size': self.desc.get('expected_buffer_size'),
             'weight_sum_array': weight_sum_array_str,
             'has_weight_sum': has_weight_sum,
         }
