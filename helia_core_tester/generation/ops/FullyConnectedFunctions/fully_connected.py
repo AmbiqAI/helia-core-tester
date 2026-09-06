@@ -620,10 +620,19 @@ class OpFullyConnected(OperationBase):
             input_data = np.asarray(self._sample_uniform(input_shape), dtype=float_dtype)
             from helia_core_tester.generation.utils.litert_utils import run_inference_litert
             interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
-            output_data = run_inference_litert(
-                str(tflite_path),
-                input_data.astype(interpreter_input_dtype),
-                subgraph_index=0,
+            def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
+                return np.asarray(
+                    run_inference_litert(
+                        str(tflite_path),
+                        operands[0].astype(_in_dtype),
+                        subgraph_index=0,
+                    ),
+                    dtype=_dtype,
+                )
+
+            output_data = float_reference([input_data])
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=float_reference, inputs=[input_data]
             )
 
             weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
@@ -671,6 +680,7 @@ class OpFullyConnected(OperationBase):
                 'fc_activation_max_literal': builder.format_float_literal(fc_params['activation_max']),
                 'validation_mode': 'float',
             }
+            context.update(nonfinite_context)
 
             includes_api_dir = output_dir / "includes"
             includes_api_dir.mkdir(parents=True, exist_ok=True)

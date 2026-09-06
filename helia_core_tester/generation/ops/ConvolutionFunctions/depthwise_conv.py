@@ -77,6 +77,10 @@ class OpDepthwiseConv(OperationBase):
             'padding': padding,
             'depth_multiplier': self.desc.get('depth_multiplier', 1),
             'use_bias': self.desc.get('use_bias', True),
+            # Fixed seeds keep the weights a function of the descriptor alone, so the
+            # goldens reproduce regardless of case order or the Keras global RNG state
+            # the process happens to be in.
+            'depthwise_initializer': tf.keras.initializers.GlorotUniform(seed=1234),
             'name': 'depthwise_conv'
         }
         
@@ -104,7 +108,9 @@ class OpDepthwiseConv(OperationBase):
             # cases ship an all-zero bias whatever is set here, and cannot
             # detect a dropped bias-add. TODO(#98): lift once the hoisted
             # operand can be converted back to an int32 accumulator bias.
-            dwconv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(minval=-1.0, maxval=1.0)
+            dwconv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(
+                minval=-1.0, maxval=1.0, seed=4321
+            )
         
         dwconv = tf.keras.layers.DepthwiseConv2D(**dwconv_kwargs)
         x = dwconv(inputs)
@@ -575,11 +581,21 @@ class OpDepthwiseConv(OperationBase):
             else:
                 out_tensor_idx = dw_out_tensor_idx
             interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
-            output_data = run_inference_litert_tensor(
-                str(tflite_path),
-                input_data.astype(interpreter_input_dtype),
-                out_tensor_idx,
-            ).astype(float_dtype)
+            def float_reference(
+                operands,
+                _dtype=float_dtype,
+                _in_dtype=interpreter_input_dtype,
+                _out_idx=out_tensor_idx,
+            ):
+                return run_inference_litert_tensor(
+                    str(tflite_path), operands[0].astype(_in_dtype), _out_idx
+                ).astype(_dtype)
+
+            output_data = float_reference([input_data])
+
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=float_reference, inputs=[input_data]
+            )
 
             weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
             biases_array_str = builder.format_array_as_c_literal(biases) if has_biases else ""
@@ -630,6 +646,7 @@ class OpDepthwiseConv(OperationBase):
                 'dw_activation_min_literal': builder.format_float_literal(dw_conv_params['activation_min']),
                 'dw_activation_max_literal': builder.format_float_literal(dw_conv_params['activation_max']),
             }
+            context.update(nonfinite_context)
             includes_api_dir = output_dir / "includes"
             includes_api_dir.mkdir(parents=True, exist_ok=True)
 

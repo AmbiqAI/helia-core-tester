@@ -1606,3 +1606,133 @@ hint:
 comparison:
   atol: 0.005
   rtol: 0.005
+---
+# Non-finite cover for the float convolution kernels. arm_convolve_f32 and
+# arm_convolve_f16 (Include/arm_nnfunctions_flt.h:213 and :1430, the f16 entry a
+# @copydoc of the f32 one) say nothing about NaN or Inf, so nonfinite_policy is mask:
+# the output positions whose receptive field contains the token are don't-care, and the
+# case asserts SUCCESS, no fault, no hang and exact values everywhere else.
+#
+# The token sits at input element 0, the (h=0, w=0, c=0) corner. A 3x3 filter at stride
+# 1 with SAME padding reaches four output positions from there, across all four output
+# channels, so 16 of 1024 output elements are masked and 98.4% stay asserted strictly.
+# That margin is the point: a vector leg that poisons a whole register instead of one
+# accumulator fails on the neighbours.
+#
+# One token per case, because a convolution accumulator is a reduction group: all three
+# tokens in one case would put +Inf and -Inf in the same dot product and the golden
+# would be a statement about (+Inf) + (-Inf) rather than about the kernel.
+---
+operator: Convolve
+name: convolve_float_nonfinite_nan_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 16, 16, 3]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+input_mode: nonfinite_sweep
+nonfinite_tokens: [nan]
+nonfinite_policy: mask
+---
+operator: Convolve
+name: convolve_float_nonfinite_inf_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 16, 16, 3]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+input_mode: nonfinite_sweep
+nonfinite_tokens: [inf]
+nonfinite_policy: mask
+---
+operator: Convolve
+name: convolve_float_nonfinite_neginf_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 16, 16, 3]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+input_mode: nonfinite_sweep
+nonfinite_tokens: [-inf]
+nonfinite_policy: mask
+---
+operator: Convolve
+name: convolve_float_nonfinite_nan_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 16, 16, 3]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+input_mode: nonfinite_sweep
+nonfinite_tokens: [nan]
+nonfinite_policy: mask
+---
+operator: Convolve
+name: convolve_float_nonfinite_inf_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 16, 16, 3]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+input_mode: nonfinite_sweep
+nonfinite_tokens: [inf]
+nonfinite_policy: mask
+---
+operator: Convolve
+name: convolve_float_nonfinite_neginf_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 16, 16, 3]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+input_mode: nonfinite_sweep
+nonfinite_tokens: [-inf]
+nonfinite_policy: mask

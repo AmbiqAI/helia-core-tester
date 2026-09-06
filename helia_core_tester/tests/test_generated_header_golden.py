@@ -213,6 +213,19 @@ ROUTED_CASES = [
     ("lstm_unidirectional_float_stream_f32", "lstm_unidirectional"),
     ("gru_unidirectional_float_stream_f32", "gru_unidirectional"),
     ("svdf_float_default_f32", "svdf"),
+    # The spreading float families share one masked-comparison macro, so a pin on each
+    # call site is what keeps a macro edit from silently changing their emitted bodies.
+    # Both precisions are pinned because the f16 leg narrows through a separate path.
+    ("convolve_float_default_f32", "convolve"),
+    ("convolve_float_default_f16", "convolve"),
+    ("depthwise_conv_float_default_f32", "depthwise_conv"),
+    ("depthwise_conv_float_default_f16", "depthwise_conv"),
+    ("transpose_conv_float_default_f32", "transpose_conv"),
+    ("transpose_conv_float_default_f16", "transpose_conv"),
+    ("fully_connected_float_default_f32", "fully_connected"),
+    ("fully_connected_float_default_f16", "fully_connected"),
+    ("batch_matmul_float_default_f32", "batch_matmul"),
+    ("batch_matmul_float_default_f16", "batch_matmul"),
 ]
 ROUTED_CPU = "cortex-m55"
 

@@ -397,3 +397,120 @@ adj_y: false
 comparison:
   atol: 0.004
   rtol: 0.004
+---
+# Non-finite cover for the float batch matmul kernels. arm_batch_matmul_f32 and
+# arm_batch_matmul_f16 (Include/arm_nnfunctions_flt.h:918 and :1952, the f16 entry a
+# @copydoc of the f32 one) say nothing about NaN or Inf, so nonfinite_policy is mask:
+# the output row that consumed the token is don't-care, and the case asserts SUCCESS,
+# no fault, no hang and exact values everywhere else.
+#
+# The sweep applies to the LHS only, so the RHS stays finite and every poisoned element
+# is a single-token propagation rather than a mix. The token sits in row 0 of the first
+# of four batch matrices, so it poisons one of 32 output rows: 4 of 128 output elements
+# are masked and 96.9% stay asserted strictly. The other three batch matrices are what
+# catch a leg that lets the token escape its own matrix.
+#
+# One token per case, because each output element is a dot product over K: all three
+# tokens would share one row and the golden would be about (+Inf) + (-Inf).
+---
+operator: BatchMatMul
+name: batch_matmul_float_nonfinite_nan_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+input_1_shape: [1, 4, 8, 8]
+input_2_shape: [1, 4, 8, 4]
+adj_x: false
+adj_y: false
+input_mode: nonfinite_sweep
+nonfinite_tokens: [nan]
+nonfinite_policy: mask
+---
+operator: BatchMatMul
+name: batch_matmul_float_nonfinite_inf_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+input_1_shape: [1, 4, 8, 8]
+input_2_shape: [1, 4, 8, 4]
+adj_x: false
+adj_y: false
+input_mode: nonfinite_sweep
+nonfinite_tokens: [inf]
+nonfinite_policy: mask
+---
+operator: BatchMatMul
+name: batch_matmul_float_nonfinite_neginf_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+input_1_shape: [1, 4, 8, 8]
+input_2_shape: [1, 4, 8, 4]
+adj_x: false
+adj_y: false
+input_mode: nonfinite_sweep
+nonfinite_tokens: [-inf]
+nonfinite_policy: mask
+---
+operator: BatchMatMul
+name: batch_matmul_float_nonfinite_nan_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+input_1_shape: [1, 4, 8, 8]
+input_2_shape: [1, 4, 8, 4]
+adj_x: false
+adj_y: false
+input_mode: nonfinite_sweep
+nonfinite_tokens: [nan]
+nonfinite_policy: mask
+---
+operator: BatchMatMul
+name: batch_matmul_float_nonfinite_inf_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+input_1_shape: [1, 4, 8, 8]
+input_2_shape: [1, 4, 8, 4]
+adj_x: false
+adj_y: false
+input_mode: nonfinite_sweep
+nonfinite_tokens: [inf]
+nonfinite_policy: mask
+---
+operator: BatchMatMul
+name: batch_matmul_float_nonfinite_neginf_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+input_1_shape: [1, 4, 8, 8]
+input_2_shape: [1, 4, 8, 4]
+adj_x: false
+adj_y: false
+input_mode: nonfinite_sweep
+nonfinite_tokens: [-inf]
+nonfinite_policy: mask
