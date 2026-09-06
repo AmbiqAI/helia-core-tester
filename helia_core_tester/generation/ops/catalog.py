@@ -62,6 +62,22 @@ def _spec(
 
 OPERATOR_SPECS: Dict[str, OperatorSpec] = {
 
+    "SizerContract": _spec(
+        "SizerContract",
+        "BufferSizeFunctions",
+        "sizer_contract",
+        "OpSizerContract",
+        descriptor_relpaths=("BufferSizeFunctions/sizer_contract.yaml",),
+        template_relpath="BufferSizeFunctions/sizer_contract",
+        rationale=(
+            "Sizer sentinel-contract cases (issue #69): the scratch queries were only "
+            "bounded above by a Python re-derivation of the same C formula, so the "
+            "documented -1 and the documented no-scratch 0 were never asserted anywhere. "
+            "The oracle is the prose in Include/arm_nnfunctions.h, quoted in the generated "
+            "source next to each assertion, not a second transcription of the formula."
+        ),
+    ),
+
     "HardSwishCompat": _spec(
         "HardSwishCompat",
         "ActivationFunctions",

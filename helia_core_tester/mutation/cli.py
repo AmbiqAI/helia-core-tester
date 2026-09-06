@@ -29,7 +29,7 @@ app = typer.Typer(
     add_completion=False,
 )
 
-DEFAULT_OPS = "Add,Sub,Mul,SquaredDifference,ChunkedEquivalence,Maximum,Minimum,Convolve"
+DEFAULT_OPS = "Add,Sub,Mul,SquaredDifference,ChunkedEquivalence,Maximum,Minimum,Convolve,SizerContract"
 
 # The widest capability set the int corpus uses (dsp + mve), so the default run
 # generates every case the catalog's killers need. A narrower CPU is a valid choice, but it

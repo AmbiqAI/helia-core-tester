@@ -84,6 +84,7 @@ OPERATOR_DESCRIPTOR_PROFILES = {'Abs': 'single_input_unary',
  'SpaceToBatchND': 'shape_transform',
  'SpaceToDepth': 'shape_transform',
  'Split': 'shape_transform',
+ 'SizerContract': 'custom',
  'Sqrt': 'single_input_unary',
  'SquaredDifference': 'dual_input_elementwise',
  'Squeeze': 'shape_transform',
@@ -131,6 +132,7 @@ OPERATOR_EXTRA_REQUIRED_FIELDS = {'BroadcastTo': ('output_shape',),
  'ResizeNearestNeighbor': ('size',),
  'ReverseSequence': ('seq_lengths', 'seq_dim', 'batch_dim'),
  'ScatterNd': ('indices', 'updates'),
+ 'SizerContract': ('sizer', 'probes'),
  'Tile': ('multiples',)}
 
 OPERATOR_FIELD_CONSTRAINTS = {'HardSwishCompat': {'activation_dtype': 'S8'}, 'Rsqrt': {'activation_dtype': 'S16'}}

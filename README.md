@@ -312,6 +312,50 @@ anything else fails generation instead of silently waiving nothing. `operand_sig
 is also declared in `helia_core_tester/generation/descriptors/schema.json`, but that schema is
 not enforced at load time (#100), so the rule lives in code.
 
+## Scratch sizer contract
+
+Every scratch-consuming harness calls the shipped `*_get_buffer_size()` at runtime. Two things
+are asserted about the answer, and one deliberately is not.
+
+**Asserted at every call site.** A negative return is the header's out-of-range sentinel, never
+a size: `Include/arm_nnfunctions.h` says each query returns "required buffer size in bytes, or
+-1 if the shape is out of range" and tells the caller to "always test for -1 before using the
+value". `HELIA_VALIDATE_SIZER` fails the case on one, printing
+`HELIA_SIZER_INVALID[<sizer>]: <value>`. A return above the static scratch the case allocates
+is a separate failure, `HELIA_SIZER_OVER_CAPACITY[<sizer>]: <value> > <capacity>`: that bound
+is the conservative `max(mve, dsp)` figure `calculate_buffer_size_max()` derives in Python, so
+exceeding it means the bound and the shipped kernel disagree. Both land in the report as
+`error_type: sizer_contract`, with the sizer named in the JUnit failure message. Before issue
+#69 the first case passed silently and the second arrived as an indistinguishable `api_error`.
+
+**Asserted by the `sizer_contract` cases.** `assets/descriptors/<family>/sizer_contract.yaml`
+declares small model-free cases that call one family's query with shapes whose answer the
+header states in prose: a negative dimension and a shape whose byte count overflows an int32_t
+must return -1, and a route the header says needs no scratch (the 1x1 non-fast convolution) or
+a shape it says truncates to no units (an SVDF rank above the feature-batch count) must return
+0. The quoted sentence is emitted into the generated C above each assertion, so the assertion
+and its warrant cannot drift apart. Covered today: the s8 convolution and depthwise wrappers,
+`arm_fully_connected_s8_get_buffer_size`, `arm_avgpool_s8_get_buffer_size`, and both SVDF
+staging-context queries.
+
+Where the header makes the answer build-dependent -- "which routes compute a byte count is
+build-dependent" for the two wrappers -- the probe either uses a shape the header covers
+unconditionally or the descriptor carries `required_capabilities`. The depthwise overflow probe
+is split into its own descriptor for exactly that reason: on a build with neither DSP nor MVE
+the optimized depthwise route needs no buffer and answers 0 for any dimensions.
+
+**Deliberately not asserted: the exact byte count for a valid shape.** An expected value for it
+could only come from transcribing the kernel arithmetic into Python a second time, which is the
+defect issue #69 describes -- a mistake in the shared understanding of the formula is reproduced
+identically in both languages and cancels out instead of failing. `calculate_buffer_size_max()`
+stays what it always was, the allocation sizer, and is not an oracle. The consequence is a
+known gap: a sizer that reports slightly *too little* still passes from every direction the
+suite currently looks, since the answer stays positive, stays under the static bound,
+`arm_convolve_s8()` never reads `ctx->size`, and the kernel writes inside the oversized static.
+That gap is measured rather than assumed -- the `sizer_underreports` mutant is planted as a
+known survivor -- and closing it needs the scratch-boundary poison guard tracked on
+AmbiqAI/helia-core-tester#69.
+
 ## Mutation scoring
 
 `python -m helia_core_tester.mutation run --cmsis-nn-root <checkout>` generates cases, applies

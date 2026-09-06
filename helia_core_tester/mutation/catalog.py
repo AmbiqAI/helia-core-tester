@@ -84,6 +84,21 @@ Grounding of the v1 entries:
                          dead code on the FVP targets the suite actually runs.
                          Their chunked killers are gated on the mve capability,
                          which is why the CLI generates for cortex-m55.
+- sizer_returns_minus_one, sizer_drops_overflow_check: tester#69. The scratch
+                         queries were only ever bounded above by a Python
+                         re-derivation of the same C formula, so the documented
+                         -1 sentinel and a dropped range check both passed.
+                         Their killers are the template-side
+                         HELIA_VALIDATE_SIZER check and the sizer_contract
+                         cases, so scoring them needs SizerContract in --ops.
+- sizer_underreports:    tester#69, the under-reporting class of
+                         ns-cmsis-nn#296 / #304. Planted as a KNOWN SURVIVOR:
+                         nothing in this suite can see a sizer that reports
+                         slightly too little. It is here so the gap is measured
+                         rather than assumed, and it is what PR 2 of tester#69
+                         (the scratch-boundary poison guard, stacked on
+                         tester#95) is meant to close. A run that reports it
+                         KILLED is a signal to re-derive why, not a pass.
 
 A mutant may declare ``requires_capabilities``: the capabilities the generated
 corpus needs before any case that could kill it exists at all. Scoring on a CPU
@@ -507,6 +522,213 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
         ),
         refs=("AmbiqAI/helia-core-tester#81",),
         requires_capabilities=("mve",),
+    ),
+    Mutant(
+        mutant_id="sizer_returns_minus_one",
+        description="The s8 convolution wrapper sizer returns the -1 sentinel for every shape",
+        family="ConvolutionFunctions",
+        edits=(
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_get_buffer_sizes_s8.c",
+                pattern=(
+                    "int32_t arm_convolve_wrapper_s8_get_buffer_size(const cmsis_nn_conv_params *conv_params,\n"
+                    "                                                const cmsis_nn_dims *input_dims,\n"
+                    "                                                const cmsis_nn_dims *filter_dims,\n"
+                    "                                                const cmsis_nn_dims *output_dims)\n"
+                    "{\n"
+                ),
+                replacement=(
+                    "int32_t arm_convolve_wrapper_s8_get_buffer_size(const cmsis_nn_conv_params *conv_params,\n"
+                    "                                                const cmsis_nn_dims *input_dims,\n"
+                    "                                                const cmsis_nn_dims *filter_dims,\n"
+                    "                                                const cmsis_nn_dims *output_dims)\n"
+                    "{\n"
+                    "    return -1; /* MUTANT sizer_returns_minus_one */\n"
+                ),
+                count=1,
+            ),
+            # The generated harnesses call whichever entry point suits their
+            # generation CPU -- an m55 corpus emits the _mve name, an m4 corpus
+            # the _dsp one -- so patching only the dispatcher would leave the
+            # mutant reachable by the sizer_contract case and by nothing else.
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_get_buffer_sizes_s8.c",
+                pattern=(
+                    "int32_t arm_convolve_wrapper_s8_get_buffer_size_mve(const cmsis_nn_conv_params *conv_params,\n"
+                    "                                                    const cmsis_nn_dims *input_dims,\n"
+                    "                                                    const cmsis_nn_dims *filter_dims,\n"
+                    "                                                    const cmsis_nn_dims *output_dims)\n"
+                    "{\n"
+                ),
+                replacement=(
+                    "int32_t arm_convolve_wrapper_s8_get_buffer_size_mve(const cmsis_nn_conv_params *conv_params,\n"
+                    "                                                    const cmsis_nn_dims *input_dims,\n"
+                    "                                                    const cmsis_nn_dims *filter_dims,\n"
+                    "                                                    const cmsis_nn_dims *output_dims)\n"
+                    "{\n"
+                    "    return -1; /* MUTANT sizer_returns_minus_one */\n"
+                ),
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_get_buffer_sizes_s8.c",
+                pattern=(
+                    "int32_t arm_convolve_wrapper_s8_get_buffer_size_dsp(const cmsis_nn_conv_params *conv_params,\n"
+                    "                                                    const cmsis_nn_dims *input_dims,\n"
+                    "                                                    const cmsis_nn_dims *filter_dims,\n"
+                    "                                                    const cmsis_nn_dims *output_dims)\n"
+                    "{\n"
+                ),
+                replacement=(
+                    "int32_t arm_convolve_wrapper_s8_get_buffer_size_dsp(const cmsis_nn_conv_params *conv_params,\n"
+                    "                                                    const cmsis_nn_dims *input_dims,\n"
+                    "                                                    const cmsis_nn_dims *filter_dims,\n"
+                    "                                                    const cmsis_nn_dims *output_dims)\n"
+                    "{\n"
+                    "    return -1; /* MUTANT sizer_returns_minus_one */\n"
+                ),
+                count=1,
+            ),
+        ),
+        expected_detected_by=(
+            "the s8 Convolve cases, through the HELIA_VALIDATE_SIZER check the templates "
+            "gained in tester#69: the sentinel is smaller than the static scratch, so the "
+            "one upper-bound check the harness used to have accepted it and -1 went "
+            "straight into ctx.size. Measured against ns-cmsis-nn 18a89ff in "
+            "ghcr.io/ambiqai/ns-cmsis-nn-ci:latest over the 256-case default corpus "
+            "(cortex-m55, seed 500): 33 killers, every one an s8 Convolve case plus "
+            "sizer_contract_convolve_wrapper_s8, which fails on the probe expecting the "
+            "documented 0 from the 1x1 non-fast route. Survivors are the s4 and s16 "
+            "Convolve cases (they query their own dtype's sizer) and everything outside "
+            "the convolution family. All three public entry points carry the edit, so the "
+            "mutant is live whichever of them the generation CPU made the harness call"
+        ),
+        refs=("AmbiqAI/helia-core-tester#69",),
+    ),
+    Mutant(
+        mutant_id="sizer_drops_overflow_check",
+        description="The s8 convolution im2col sizer stops reporting an out-of-range byte count",
+        family="ConvolutionFunctions",
+        edits=(
+            # The non-MVE leg. Without the guard the overflowed accumulator (-1
+            # from arm_nn_size_mul) is rounded up by the alignment arithmetic
+            # into a plausible 16-byte request, which is the shape of the defect
+            # AmbiqAI/ns-cmsis-nn#296 and #304 fixed.
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_get_buffer_sizes_s8.c",
+                pattern=(
+                    "    if (rhs_cols < 0)\n"
+                    "    {\n"
+                    "        return -1;\n"
+                    "    }\n"
+                    "\n"
+                    "    const int64_t remainder = rhs_cols % 4;\n"
+                    "    const int64_t aligned_rhs_cols = remainder != 0 ? rhs_cols + 4 - remainder : rhs_cols;\n"
+                ),
+                replacement=(
+                    "    /* MUTANT sizer_drops_overflow_check */\n"
+                    "\n"
+                    "    const int64_t remainder = rhs_cols % 4;\n"
+                    "    const int64_t aligned_rhs_cols = remainder != 0 ? rhs_cols + 4 - remainder : rhs_cols;\n"
+                ),
+                count=1,
+            ),
+            # The MVE leg carries the same defect in its own arithmetic: without
+            # the guard the overflowed count divides down to a 0-byte request.
+            # Both legs are edited so the mutant is live in the DSP-only host
+            # build and on an MVE target alike.
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_get_buffer_sizes_s8.c",
+                pattern=(
+                    "    if (col_elements < 0)\n"
+                    "    {\n"
+                    "        return -1;\n"
+                    "    }\n"
+                ),
+                replacement="    /* MUTANT sizer_drops_overflow_check */\n",
+                count=1,
+            ),
+        ),
+        expected_detected_by=(
+            "the sizer_contract convolve case (tester#69), on the probe whose shape "
+            "overflows the int32_t byte count: Include/arm_nnfunctions.h documents -1 "
+            "there, and without the guard the sizer answers a positive 16 on a DSP build "
+            "and 0 on an MVE build. Measured against ns-cmsis-nn 18a89ff in "
+            "ghcr.io/ambiqai/ns-cmsis-nn-ci:latest over the 256-case default corpus "
+            "(cortex-m55, seed 500): exactly 1 killer, sizer_contract_convolve_wrapper_s8. "
+            "No golden Convolve case can see it -- every one of them has an in-range "
+            "shape, so the removed guard never fires for them"
+        ),
+        refs=(
+            "AmbiqAI/helia-core-tester#69",
+            "AmbiqAI/ns-cmsis-nn#296",
+            "AmbiqAI/ns-cmsis-nn#304",
+        ),
+    ),
+    Mutant(
+        mutant_id="sizer_underreports",
+        description="The s8 convolution im2col sizer reports 4 bytes less than the kernel needs",
+        family="ConvolutionFunctions",
+        edits=(
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_get_buffer_sizes_s8.c",
+                pattern=(
+                    "    int64_t required_bytes = arm_nn_size_mul(2, aligned_rhs_cols);\n"
+                    "    required_bytes = arm_nn_size_mul(required_bytes, (int32_t)sizeof(int16_t));\n"
+                    "\n"
+                    "    return (int32_t)required_bytes;\n"
+                ),
+                replacement=(
+                    "    int64_t required_bytes = arm_nn_size_mul(2, aligned_rhs_cols);\n"
+                    "    required_bytes = arm_nn_size_mul(required_bytes, (int32_t)sizeof(int16_t));\n"
+                    "\n"
+                    "    return (int32_t)(required_bytes > 4 ? required_bytes - 4 : required_bytes);"
+                    " /* MUTANT sizer_underreports */\n"
+                ),
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_get_buffer_sizes_s8.c",
+                pattern=(
+                    "    int64_t required_bytes = arm_nn_size_mul(4, col_length);\n"
+                    "    required_bytes = arm_nn_size_mul(required_bytes, 16);\n"
+                    "    required_bytes = arm_nn_size_mul(required_bytes, (int32_t)sizeof(int8_t));\n"
+                    "\n"
+                    "    return (int32_t)required_bytes;\n"
+                ),
+                replacement=(
+                    "    int64_t required_bytes = arm_nn_size_mul(4, col_length);\n"
+                    "    required_bytes = arm_nn_size_mul(required_bytes, 16);\n"
+                    "    required_bytes = arm_nn_size_mul(required_bytes, (int32_t)sizeof(int8_t));\n"
+                    "\n"
+                    "    return (int32_t)(required_bytes > 4 ? required_bytes - 4 : required_bytes);"
+                    " /* MUTANT sizer_underreports */\n"
+                ),
+                count=1,
+            ),
+        ),
+        expected_detected_by=(
+            "NOTHING in this suite yet -- it is planted as a known survivor, and a run "
+            "that reports it KILLED means something else changed. Measured against "
+            "ns-cmsis-nn 18a89ff in ghcr.io/ambiqai/ns-cmsis-nn-ci:latest over the "
+            "256-case default corpus (cortex-m55, seed 500): 0 killers. This is the "
+            "under-reporting class of AmbiqAI/ns-cmsis-nn#296 and #304, and it is invisible "
+            "from every direction the suite currently looks: the answer stays positive, so "
+            "HELIA_VALIDATE_SIZER passes; it stays under the conservative static bound, so "
+            "HELIA_VALIDATE_SIZER_FITS passes; arm_convolve_s8() never reads ctx->size, so "
+            "no status changes; and the kernel writes into the deliberately oversized "
+            "static, so no output changes. Killing it needs the scratch-boundary poison "
+            "guard planned as PR 2 of tester#69 on top of tester#95 -- allocate the static, "
+            "poison [reported_size, reported_size + G) and check it after the kernel. The "
+            "sizer_contract cases cannot kill it either: they probe out-of-range and "
+            "no-scratch shapes, where the 4-byte subtraction does not apply"
+        ),
+        refs=(
+            "AmbiqAI/helia-core-tester#69",
+            "AmbiqAI/helia-core-tester#95",
+            "AmbiqAI/ns-cmsis-nn#296",
+            "AmbiqAI/ns-cmsis-nn#304",
+        ),
     ),
 )
 

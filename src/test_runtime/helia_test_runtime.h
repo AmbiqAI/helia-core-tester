@@ -47,6 +47,8 @@ void helia_test_print_failure_count(int failures);
 int helia_test_status_failure(const char *label, int status);
 int helia_test_expected_status_failure(const char *label, int status, int expected_status);
 int helia_test_scalar_int_mismatch(const char *label, const char *subject, int expected, int actual);
+void helia_test_sizer_invalid(const char *label, long long value);
+void helia_test_sizer_over_capacity(const char *label, long long value, long long capacity);
 int helia_test_finish_validation(int failures);
 double helia_test_float_tolerance(double expected, double atol, double rtol);
 void helia_test_nonfinite_mismatch(
@@ -216,6 +218,47 @@ static inline int helia_test_float_class_binary64(const void *storage)
         int helia_actual = (int)(actual); \
         if (helia_actual != helia_expected) { \
             return helia_test_scalar_int_mismatch((label), (subject), helia_expected, helia_actual); \
+        } \
+    } while (0)
+
+/*
+ * Scratch-sizer contract (issue #69). Include/arm_nnfunctions.h states what
+ * every *_get_buffer_size() answers with: "required buffer size in bytes, or
+ * -1 if the shape is out of range", and tells the caller to "always test for
+ * -1 before using the value". Nothing in a generated harness used to test it.
+ * A -1 is smaller than the static buffer, so the one upper-bound check the
+ * harness had accepted it, ctx.size became -1, and the kernel ran inside the
+ * conservatively oversized static with nothing reporting anything.
+ *
+ * The marker line is what the reporting parser classifies as sizer_contract;
+ * ARM_CMSIS_NN_ARG_ERROR unwinds through the harness's existing status path so
+ * the case fails rather than proceeding on a size the header disowns.
+ */
+#define HELIA_VALIDATE_SIZER(label, value) \
+    do { \
+        long long helia_sizer_value = (long long)(value); \
+        if (helia_sizer_value < 0) { \
+            helia_test_sizer_invalid((label), helia_sizer_value); \
+            return ARM_CMSIS_NN_ARG_ERROR; \
+        } \
+    } while (0)
+
+/*
+ * The static scratch is sized by calculate_buffer_size_max(), a deliberately
+ * conservative max(mve, dsp) bound derived in Python. A request above it means
+ * that bound and the shipped kernel disagree -- not that the kernel rejected
+ * its arguments -- so it carries its own marker instead of the bare ARG_ERROR
+ * that made the two indistinguishable in the report. The check itself stays:
+ * it is what keeps an over-large size from being handed to a kernel that would
+ * then write past the static.
+ */
+#define HELIA_VALIDATE_SIZER_FITS(label, value, capacity) \
+    do { \
+        long long helia_sizer_fits_value = (long long)(value); \
+        long long helia_sizer_fits_capacity = (long long)(capacity); \
+        if (helia_sizer_fits_value > helia_sizer_fits_capacity) { \
+            helia_test_sizer_over_capacity((label), helia_sizer_fits_value, helia_sizer_fits_capacity); \
+            return ARM_CMSIS_NN_ARG_ERROR; \
         } \
     } while (0)
 

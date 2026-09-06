@@ -36,9 +36,12 @@ int32_t depthwise_conv_float_default_f32_run(
         ARM_NN_LAYOUT_NHWC
     );
 
-    if (required_buffer_size > DEPTHWISE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX) {
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // Sizer contract (issue #69): a negative return is the header's
+    // out-of-range sentinel, never a size. The capacity check that follows is
+    // the allocation guard for the static above, not a statement about the
+    // sizer.
+    HELIA_VALIDATE_SIZER("arm_depthwise_conv_f32_get_buffer_size", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("arm_depthwise_conv_f32_get_buffer_size", required_buffer_size, DEPTHWISE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
 
     // Initialize context buffer
     depthwise_conv_float_default_f32_ctx.buf = depthwise_conv_float_default_f32_buffer;

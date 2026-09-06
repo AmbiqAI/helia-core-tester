@@ -1,0 +1,45 @@
+#include "{{ name }}_sizer_contract.h"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+/*
+ * Sizer-contract case, helia-core-tester issue #69.
+ *
+ * The oracle is {{ sizer_header }}, not a Python re-derivation of the
+ * kernel formula: each probe below uses a shape whose answer the header states
+ * in prose, and the quoted sentence sits above the assertion. The exact byte
+ * count for a valid shape is deliberately not asserted anywhere -- an expected
+ * value for that could only come from transcribing the kernel arithmetic a
+ * second time, and a mistake in the shared understanding of the formula would
+ * then cancel out instead of failing.
+ *
+ * No kernel is called and no tensor is allocated, so a failure here is
+ * unambiguously the query's.
+ */
+
+int32_t {{ name }}_test_case_run(void)
+{
+    int failures = 0;
+{% for probe in probes %}
+
+    {
+{% for line in probe.doc %}
+        // {{ line }}
+{% endfor %}
+{% for decl in probe.decls %}
+        {{ decl }}
+{% endfor %}
+        const int32_t observed = {{ probe.call }};
+        HELIA_VALIDATE_SCALAR_EQ_INT(
+            "{{ validation_label }}",
+            "{{ probe.subject }}",
+            {{ probe.expect }},
+            observed
+        );
+    }
+{% endfor %}
+
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
+}
+
+{% include "common/standalone/main.j2" %}

@@ -1,0 +1,89 @@
+# Sentinel-contract cases for the s8 convolution scratch queries (issue #69).
+#
+# The oracle is the prose in Include/arm_nnfunctions.h, quoted in the generated
+# source next to each assertion, not a Python re-derivation of the kernel
+# formula. Only the answers the header states for out-of-range and no-scratch
+# shapes are asserted; the byte count for a valid shape is not, because an
+# expected value for it could only be a second transcription of the same
+# arithmetic (see AmbiqAI/helia-core-tester#69).
+operator: SizerContract
+name: sizer_contract_convolve_wrapper_s8
+activation_dtype: S8
+weight_dtype: S8
+sizer: convolve_wrapper_s8
+probes: [negative_dim, overflow, degenerate_zero]
+required_kernel_symbols: [arm_convolve_wrapper_s8_get_buffer_size]
+---
+operator: SizerContract
+name: sizer_contract_depthwise_conv_wrapper_s8
+activation_dtype: S8
+weight_dtype: S8
+sizer: depthwise_conv_wrapper_s8
+probes: [negative_dim]
+required_kernel_symbols: [arm_depthwise_conv_wrapper_s8_get_buffer_size]
+---
+# The overflow probe is split out because the header makes it build-dependent:
+# on a build with neither DSP nor MVE the optimized depthwise route needs no
+# buffer and returns 0 for any dimensions, so only a dsp-capable target can
+# assert the -1.
+operator: SizerContract
+name: sizer_contract_depthwise_conv_wrapper_dsp_s8
+activation_dtype: S8
+weight_dtype: S8
+sizer: depthwise_conv_wrapper_s8
+probes: [overflow]
+required_capabilities: [dsp]
+required_kernel_symbols: [arm_depthwise_conv_wrapper_s8_get_buffer_size]
+---
+# Sentinel-contract case for the s8 fully connected scratch query (issue #69).
+#
+# Include/arm_nnfunctions.h states the -1 return for this query without a build
+# qualifier ("For an invalid filter_dims->c, returns -1 on every build
+# target"), so both probes run on every CPU. The valid-shape byte count is
+# deliberately not asserted; see AmbiqAI/helia-core-tester#69.
+operator: SizerContract
+name: sizer_contract_fully_connected_s8
+activation_dtype: S8
+weight_dtype: S8
+sizer: fully_connected_s8
+probes: [negative_dim, overflow]
+required_kernel_symbols: [arm_fully_connected_s8_get_buffer_size]
+---
+# Sentinel-contract case for the s8 average pooling scratch query (issue #69).
+#
+# Include/arm_nnfunctions.h states the -1 return without a build qualifier
+# ("For an invalid ch_src it returns -1 on every build target") and records that
+# arm_avgpool_s8() itself depends on it, since it reads a non-zero size as
+# "ctx->buf is required". The valid-shape byte count is build-dependent and is
+# deliberately not asserted; see AmbiqAI/helia-core-tester#69.
+operator: SizerContract
+name: sizer_contract_avgpool_s8
+activation_dtype: S8
+weight_dtype: S8
+sizer: avgpool_s8
+probes: [negative_dim, overflow]
+required_kernel_symbols: [arm_avgpool_s8_get_buffer_size]
+---
+# Sentinel-contract cases for the two SVDF staging-context queries (issue #71).
+#
+# Include/arm_nnfunctions.h states that these two figures "do not vary by build
+# target" -- the kernel stages both buffers on every build, not only under MVE
+# -- so every probe here runs on every CPU. Each also documents a 0 that is a
+# real answer rather than an error, which is what the degenerate_zero probes
+# pin. The valid-shape byte count is deliberately not asserted; see
+# AmbiqAI/helia-core-tester#69.
+operator: SizerContract
+name: sizer_contract_svdf_input_ctx_s8
+activation_dtype: S8
+weight_dtype: S8
+sizer: svdf_s8_input_ctx
+probes: [negative_dim, overflow, degenerate_zero]
+required_kernel_symbols: [arm_svdf_s8_input_ctx_get_buffer_size]
+---
+operator: SizerContract
+name: sizer_contract_svdf_output_ctx_s8
+activation_dtype: S8
+weight_dtype: S8
+sizer: svdf_s8_output_ctx
+probes: [negative_dim, overflow, degenerate_zero]
+required_kernel_symbols: [arm_svdf_s8_output_ctx_get_buffer_size]

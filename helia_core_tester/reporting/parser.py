@@ -20,6 +20,8 @@ class TestResultParser:
         'HELIA_FLOAT_MAXDIFF',
         'HELIA_MASKED_LANES',
         'HELIA_NONFINITE_MISMATCHES',
+        'HELIA_SIZER_INVALID',
+        'HELIA_SIZER_OVER_CAPACITY',
     )
     failure_count_line_pattern = re.compile(r'^\d+\s+Failures$', re.IGNORECASE)
 
@@ -70,6 +72,28 @@ class TestResultParser:
         # up by earlier failures, so this is the reliable classifier.
         self.nonfinite_summary_pattern = re.compile(
             r'HELIA_NONFINITE_MISMATCHES\s+n=(\d+)'
+        )
+        # Scratch-sizer contract violations (issue #69). Emitted by
+        # HELIA_VALIDATE_SIZER / HELIA_VALIDATE_SIZER_FITS before the harness
+        # unwinds with ARM_CMSIS_NN_ARG_ERROR, so they are matched ahead of the
+        # api_error pattern below -- otherwise the ARG_ERROR the macros return
+        # would classify a sizer answering outside its documented contract as a
+        # kernel rejecting its arguments. The label is the sizer's own name so
+        # the JUnit message names the function and the value it returned.
+        self.sizer_invalid_pattern = re.compile(
+            r'HELIA_SIZER_INVALID\[([^\]]*)\]:\s*(-?\d+)'
+        )
+        self.sizer_over_capacity_pattern = re.compile(
+            r'HELIA_SIZER_OVER_CAPACITY\[([^\]]*)\]:\s*(-?\d+)\s*>\s*(-?\d+)'
+        )
+        # sizer_contract cases assert the header's documented sentinels through
+        # the ordinary scalar-equality validator, so their failures arrive on
+        # the generic mismatch line. The "sizer contract " label prefix is set
+        # by the generator for exactly this reason: without it the case would
+        # be reported as an output mismatch, which is what issue #69 is about
+        # not being able to tell apart.
+        self.sizer_expectation_pattern = re.compile(
+            r'sizer contract (\S+) (.+?) mismatch: expected (-?\d+) got (-?\d+)'
         )
         # Pattern for "Convolution failed" or API errors
         self.api_error_pattern = re.compile(
@@ -167,6 +191,41 @@ class TestResultParser:
         if exit_code == 124 or "TIMEOUT" in output:
             return TestStatus.TIMEOUT, "Test execution timed out", None, "timeout"
         
+        sizer_invalid_match = self.sizer_invalid_pattern.search(output)
+        if sizer_invalid_match:
+            sizer, value = sizer_invalid_match.groups()
+            return (
+                TestStatus.FAIL,
+                f"Sizer contract violation: {sizer} returned {value}; "
+                "Include/arm_nnfunctions.h documents a negative return as the out-of-range "
+                "sentinel, which is never a usable buffer size",
+                None,
+                "sizer_contract",
+            )
+
+        sizer_capacity_match = self.sizer_over_capacity_pattern.search(output)
+        if sizer_capacity_match:
+            sizer, value, capacity = sizer_capacity_match.groups()
+            return (
+                TestStatus.FAIL,
+                f"Sizer contract violation: {sizer} returned {value}, above the "
+                f"{capacity}-byte static scratch this case allocates; the conservative "
+                "generation-time bound and the shipped kernel disagree",
+                None,
+                "sizer_contract",
+            )
+
+        sizer_expectation_match = self.sizer_expectation_pattern.search(output)
+        if sizer_expectation_match:
+            sizer, subject, expected, actual = sizer_expectation_match.groups()
+            return (
+                TestStatus.FAIL,
+                f"Sizer contract violation: {sizer} {subject} was {actual}, not the "
+                f"{expected} its header entry documents",
+                None,
+                "sizer_contract",
+            )
+
         api_error_match = self.api_error_pattern.search(output)
         if api_error_match:
             label = api_error_match.group("label").strip()

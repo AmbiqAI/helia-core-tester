@@ -62,6 +62,23 @@ int helia_test_scalar_int_mismatch(const char *label, const char *subject, int e
     return 1;
 }
 
+/*
+ * Printed instead of returning a bare ARG_ERROR so the reporting parser can
+ * tell "the sizer answered outside its documented contract" from "the kernel
+ * rejected its arguments"; the two used to arrive as the same api_error.
+ * The failure count is left to the caller's existing status path so a case
+ * still emits exactly one "N Failures" line.
+ */
+void helia_test_sizer_invalid(const char *label, long long value)
+{
+    printf("HELIA_SIZER_INVALID[%s]: %lld\r\n", label, value);
+}
+
+void helia_test_sizer_over_capacity(const char *label, long long value, long long capacity)
+{
+    printf("HELIA_SIZER_OVER_CAPACITY[%s]: %lld > %lld\r\n", label, value, capacity);
+}
+
 int helia_test_finish_validation(int failures)
 {
     helia_test_print_failure_count(failures);
