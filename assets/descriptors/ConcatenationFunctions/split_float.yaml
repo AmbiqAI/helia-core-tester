@@ -59,3 +59,304 @@ axis: -1
 num_splits: 2
 input_mode: nonfinite_sweep
 nonfinite_policy: strict
+---
+# # ns-cmsis-nn#475 shapes: arm_split_f32 is new and arm_split_f16 moved onto the shared
+# # any-rank axis-copy core in the same change, so every case below carries
+# # required_kernel_symbols and skips as skipped_kernel_symbol on a checkout that predates
+# # it (the f16 cases pin the f32 sibling too, because the rank-1/2/5, zero-extent and
+# # unequal-length behaviour they assert is the #475 contract, not the older f16 kernel's).
+# # Goldens are numpy.split; the kernel is a bit copy, so the comparison is zero-tolerance.
+operator: Split
+name: split_float_channels_pairs_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [1, 2, 2, 4]
+axis: -1
+num_splits: 2
+---
+operator: Split
+name: split_float_height_triple_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [1, 6, 4, 2]
+axis: 1
+num_splits: 3
+---
+operator: Split
+name: split_float_v_channels_mixed_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [1, 2, 2, 6]
+axis: -1
+size_splits: [2, 1, 3]
+---
+# Pure data movement: NaN, +Inf and -Inf pass through bit-exact, so the policy is strict.
+operator: Split
+name: split_float_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [1, 2, 2, 4]
+axis: -1
+num_splits: 2
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+---
+operator: Split
+name: split_float_rank1_v_pair_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [13]
+axis: 0
+size_splits: [5, 8]
+---
+operator: Split
+name: split_float_rank2_axis0_v_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [3, 10]
+axis: 0
+size_splits: [1, 2]
+---
+operator: Split
+name: split_float_rank2_axis1_v_triple_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [3, 10]
+axis: 1
+size_splits: [3, 3, 4]
+---
+operator: Split
+name: split_float_rank3_axis1_v_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [2, 7, 3]
+axis: 1
+size_splits: [1, 4, 2]
+---
+operator: Split
+name: split_float_rank4_axis0_pairs_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [2, 3, 4, 3]
+axis: 0
+num_splits: 2
+---
+operator: Split
+name: split_float_rank4_axis2_v_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [1, 4, 6, 3]
+axis: 2
+size_splits: [2, 4]
+---
+operator: Split
+name: split_float_rank5_axis2_v_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [2, 2, 9, 3, 2]
+axis: 2
+size_splits: [1, 1, 5, 1, 1]
+---
+operator: Split
+name: split_float_rank5_axis4_v_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [2, 2, 3, 2, 7]
+axis: 4
+size_splits: [3, 4]
+---
+# A zero-length split entry is accepted and copies nothing; the empty output validates over 0 elements.
+operator: Split
+name: split_float_zero_slice_v_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [2, 3, 10, 5]
+axis: 2
+size_splits: [3, 0, 6, 1]
+---
+# 6528 elements; inner runs of 629 and 1547 are not multiples of any lane count.
+operator: Split
+name: split_float_large_v_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f32]
+input_shape: [3, 128, 17]
+axis: 1
+size_splits: [37, 91]
+---
+operator: Split
+name: split_float_rank1_v_pair_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f16, arm_split_f32]
+input_shape: [13]
+axis: 0
+size_splits: [5, 8]
+---
+operator: Split
+name: split_float_rank2_axis0_v_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f16, arm_split_f32]
+input_shape: [3, 10]
+axis: 0
+size_splits: [1, 2]
+---
+operator: Split
+name: split_float_rank2_axis1_v_triple_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f16, arm_split_f32]
+input_shape: [3, 10]
+axis: 1
+size_splits: [3, 3, 4]
+---
+operator: Split
+name: split_float_rank3_axis1_v_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f16, arm_split_f32]
+input_shape: [2, 7, 3]
+axis: 1
+size_splits: [1, 4, 2]
+---
+operator: Split
+name: split_float_rank4_axis0_pairs_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f16, arm_split_f32]
+input_shape: [2, 3, 4, 3]
+axis: 0
+num_splits: 2
+---
+operator: Split
+name: split_float_rank4_axis2_v_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f16, arm_split_f32]
+input_shape: [1, 4, 6, 3]
+axis: 2
+size_splits: [2, 4]
+---
+operator: Split
+name: split_float_rank5_axis2_v_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f16, arm_split_f32]
+input_shape: [2, 2, 9, 3, 2]
+axis: 2
+size_splits: [1, 1, 5, 1, 1]
+---
+operator: Split
+name: split_float_rank5_axis4_v_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f16, arm_split_f32]
+input_shape: [2, 2, 3, 2, 7]
+axis: 4
+size_splits: [3, 4]
+---
+# A zero-length split entry is accepted and copies nothing; the empty output validates over 0 elements.
+operator: Split
+name: split_float_zero_slice_v_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f16, arm_split_f32]
+input_shape: [2, 3, 10, 5]
+axis: 2
+size_splits: [3, 0, 6, 1]
+---
+# 6528 elements; inner runs of 629 and 1547 are not multiples of any lane count.
+operator: Split
+name: split_float_large_v_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_split_f16, arm_split_f32]
+input_shape: [3, 128, 17]
+axis: 1
+size_splits: [37, 91]

@@ -1,4 +1,4 @@
-#include "{{ name }}_split.h"
+#include "{{ name }}_unpack.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
 
@@ -7,43 +7,40 @@
 {% if out.size > 0 %}
 static {{ output_dtype }} {{ out.name }}_output[{{ out.name|upper }}_OUTPUT_SIZE];
 {% else %}
-static {{ output_dtype }} {{ out.name }}_output[1];  // zero-extent slice: storage only, nothing is compared
+static {{ output_dtype }} {{ out.name }}_output[1];  // zero-element slice: storage only, nothing is compared
 {% endif %}
 {% endfor %}
 
 static {{ output_dtype }}* {{ name }}_output_ptrs[] = {
-    {% for out in outputs %}
+{% for out in outputs %}
     {{ out.name }}_output,
-    {% endfor %}
+{% endfor %}
 };
 
 int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input
 ) {
-    // Call Split kernel
-    // Note: Split has multiple outputs, but we only handle the first one for now
+    // Call Unpack kernel: one output per slice along the axis
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
-        input,                              // input_data
-        {{ input_dims_count }},             // input_dims
-        {{ name }}_input_shape,             // input_shape
-        {{ axis }},                         // axis
-        {{ num_splits }},                   // num_splits
-        {{ name }}_split_dims,              // split_dims
-        {{ name }}_output_ptrs              // output_data (array of pointers)
+        input,                    // input_data
+        {{ input_dims_count }},   // input_dims
+        {{ name }}_input_shape,   // input_shape
+        {{ axis }},               // axis
+        {{ name }}_output_ptrs    // output_data (array of pointers)
     );
-    
+
     return kernel_status;
 }
 
 int32_t {{ name }}_test_case_run(void)
 {
     int32_t status = {{ name }}_run({{ name }}_input);
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("Split") }}", status);
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("Unpack") }}", status);
 
     int failures = 0;
-    {% for out in outputs %}
+{% for out in outputs %}
     HELIA_VALIDATE_OUTPUTS(
-        {{ validation_mode_token | default("TOLERANT_INT") }},
+        {{ validation_mode_token | default("FLOAT") }},
         {{ out.name }}_output,
         {{ out.name }}_expected_output,
         {{ out.name|upper }}_OUTPUT_SIZE,
@@ -53,7 +50,7 @@ int32_t {{ name }}_test_case_run(void)
         {{ validation_report_limit | default(20) }},
         failures
     );
-    {% endfor %}
+{% endfor %}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 

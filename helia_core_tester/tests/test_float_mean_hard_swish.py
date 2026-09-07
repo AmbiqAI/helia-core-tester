@@ -36,7 +36,15 @@ def _fake_cmsis_nn_root(
     for symbol in source_symbols:
         source_dir = root / "Source" / "BasicMathFunctions"
         source_dir.mkdir(parents=True, exist_ok=True)
-        (source_dir / f"{symbol}.c").write_text(f"/* {symbol} kernel */\n")
+        # A real kernel source, not just a file with the right name: the probe's
+        # backstop asks whether the file DEFINES the symbol, so the doxygen
+        # banner alone must not be enough to claim it (see the umbrella-file
+        # case in test_kernel_source_exists_matches_only_shipped_sources).
+        (source_dir / f"{symbol}.c").write_text(
+            f"/*\n * Title:        {symbol}.c\n */\n"
+            f"arm_cmsis_nn_status {symbol}(const float32_t *input, float32_t *output)\n"
+            "{\n    return ARM_CMSIS_NN_SUCCESS;\n}\n"
+        )
     return root
 
 
@@ -243,6 +251,29 @@ def test_kernel_source_exists_matches_only_shipped_sources(tmp_path: Path) -> No
     assert kernel_source_exists("arm_nn_mean_f32", cmsis_nn_root=root) is True
     assert kernel_source_exists("arm_hard_swish_f32", cmsis_nn_root=root) is False
     assert kernel_source_exists("arm_nn_mean_f32", cmsis_nn_root=tmp_path / "nope") is False
+
+
+def test_kernel_source_exists_rejects_an_umbrella_file(tmp_path: Path) -> None:
+    """A file named after a symbol family does not supply the bare symbol.
+
+    ns-cmsis-nn 7.32.0 ships Source/ConcatenationFunctions/arm_concatenation_f32.c
+    holding only arm_concatenation_f32_{x,y,z,w}; the bare arm_concatenation_f32
+    arrives with ns-cmsis-nn#475. Matching on the filename alone made that look
+    like a probe contradiction and failed generation on the very checkout the
+    required_kernel_symbols gate exists to skip on.
+    """
+    from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists
+
+    root = tmp_path / "umbrella"
+    source_dir = root / "Source" / "ConcatenationFunctions"
+    source_dir.mkdir(parents=True)
+    (source_dir / "arm_concatenation_f32.c").write_text(
+        "/*\n * Title:        arm_concatenation_f32.c\n */\n"
+        "void arm_concatenation_f32_x(const float32_t *input, float32_t *output)\n"
+        "{\n    (void)input;\n    (void)output;\n}\n"
+    )
+    assert kernel_source_exists("arm_concatenation_f32", cmsis_nn_root=root) is False
+    assert kernel_source_exists("arm_concatenation_f32_x", cmsis_nn_root=root) is False
 
 
 # ---------------------------------------------------------------------------

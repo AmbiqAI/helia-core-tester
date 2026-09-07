@@ -1,0 +1,232 @@
+# # arm_nn_fill_f32/f16 (ns-cmsis-nn#475): one value written to block_size elements as a bit
+# # copy, sign and NaN payload included. The value reaches the kernel through a static
+# # initializer (the shape in which NAN/INFINITY are observed to keep their bits at -Ofast,
+# # see README "Non-finite inputs"); the golden is numpy.full and the comparison is
+# # zero-tolerance. The runtime matches NaN by class, so a NaN fill asserts NaN-ness, not the
+# # payload, and -0 asserts a zero. Sizes straddle the vector lane counts (16 f32 / 8 f16 per
+# # MVE block) with tails. required_kernel_symbols skips every case on a checkout without the
+# # symbol. Fill has no input tensor, so input_mode does not apply; the non-finite cover is the
+# # value itself.
+operator: Fill
+name: fill_float_block1_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f32]
+output_shape: [1]
+value: 1.5
+---
+operator: Fill
+name: fill_float_block15_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f32]
+output_shape: [15]
+value: 1.5
+---
+operator: Fill
+name: fill_float_block16_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f32]
+output_shape: [16]
+value: -2.25
+---
+operator: Fill
+name: fill_float_block17_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f32]
+output_shape: [17]
+value: 0.375
+---
+# 1000 is 62 f32 blocks plus 8, or 125 f16 blocks exactly.
+operator: Fill
+name: fill_float_block1000_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f32]
+output_shape: [1000]
+value: 1.5
+---
+# block_size 0 is a documented no-op; nothing is compared.
+operator: Fill
+name: fill_float_block0_noop_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f32]
+output_shape: [0]
+value: 1.5
+---
+operator: Fill
+name: fill_float_negzero_block17_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f32]
+output_shape: [17]
+value: '-0.0'
+---
+operator: Fill
+name: fill_float_posinf_block17_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f32]
+output_shape: [17]
+value: inf
+---
+operator: Fill
+name: fill_float_neginf_block9_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f32]
+output_shape: [9]
+value: '-inf'
+---
+operator: Fill
+name: fill_float_nan_block17_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f32]
+output_shape: [17]
+value: nan
+---
+operator: Fill
+name: fill_float_block1_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f16]
+output_shape: [1]
+value: 1.5
+---
+operator: Fill
+name: fill_float_block15_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f16]
+output_shape: [15]
+value: 1.5
+---
+operator: Fill
+name: fill_float_block16_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f16]
+output_shape: [16]
+value: -2.25
+---
+operator: Fill
+name: fill_float_block17_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f16]
+output_shape: [17]
+value: 0.375
+---
+# 1000 is 62 f32 blocks plus 8, or 125 f16 blocks exactly.
+operator: Fill
+name: fill_float_block1000_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f16]
+output_shape: [1000]
+value: 1.5
+---
+# block_size 0 is a documented no-op; nothing is compared.
+operator: Fill
+name: fill_float_block0_noop_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f16]
+output_shape: [0]
+value: 1.5
+---
+operator: Fill
+name: fill_float_negzero_block17_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f16]
+output_shape: [17]
+value: '-0.0'
+---
+operator: Fill
+name: fill_float_posinf_block17_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f16]
+output_shape: [17]
+value: inf
+---
+operator: Fill
+name: fill_float_neginf_block9_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f16]
+output_shape: [9]
+value: '-inf'
+---
+operator: Fill
+name: fill_float_nan_block17_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_nn_fill_f16]
+output_shape: [17]
+value: nan

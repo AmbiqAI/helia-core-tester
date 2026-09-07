@@ -143,6 +143,18 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("BasicMathFunctions/mul.yaml", "BasicMathFunctions/mul_float.yaml"),
         template_relpath="BasicMathFunctions/mul",
     ),
+    "Fill": _spec(
+        "Fill",
+        "BasicMathFunctions",
+        "fill",
+        "OpFill",
+        "BasicMathFunctions/fill_float.yaml",
+        "BasicMathFunctions/fill",
+        rationale=(
+            "arm_nn_fill_f32/f16 (ns-cmsis-nn#475) ship under Source/BasicMathFunctions; "
+            "Fill was a tester-only extension with no generated templates before them."
+        ),
+    ),
     "ChunkedEquivalence": _spec(
         "ChunkedEquivalence",
         "BasicMathFunctions",
@@ -210,6 +222,22 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "OpSplit",
         descriptor_relpaths=("ConcatenationFunctions/split.yaml", "ConcatenationFunctions/split_float.yaml"),
         template_relpath="ConcatenationFunctions/split",
+    ),
+    "Pack": _spec(
+        "Pack",
+        "ConcatenationFunctions",
+        "pack",
+        "OpPack",
+        "ConcatenationFunctions/pack_float.yaml",
+        "ConcatenationFunctions/pack",
+    ),
+    "Unpack": _spec(
+        "Unpack",
+        "ConcatenationFunctions",
+        "unpack",
+        "OpUnpack",
+        "ConcatenationFunctions/unpack_float.yaml",
+        "ConcatenationFunctions/unpack",
     ),
     "Convolve": _spec(
         "Convolve",
@@ -378,16 +406,6 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "OpNNActivationFloat",
         "ActivationFunctions/nn_activation_float.yaml",
         "ActivationFunctions/nn_activation_float",
-    ),
-    "Fill": _spec(
-        "Fill",
-        "TesterExtensions",
-        "fill",
-        "OpFill",
-        None,
-        None,
-        parity_kind="extension",
-        rationale="Tester-only utility op with no CMSIS-NN family mapping or generated templates.",
     ),
     "Squeeze": _spec(
         "Squeeze",

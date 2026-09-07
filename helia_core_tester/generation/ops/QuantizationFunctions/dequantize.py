@@ -15,7 +15,15 @@ class OpDequantize(QuantizationFamilyBase):
 
     def allow_no_tflite(self) -> bool:
         return True
-    
+
+    def _widens_f16(self) -> bool:
+        """FP16 -> FP32 is arm_dequantize_f16_f32 (ns-cmsis-nn#475): a bit-exact widening
+        with no scale or zero point, built as a LiteRT DEQUANTIZE rather than a Keras model."""
+        return self.tensor_dtype("input") == "FP16"
+
+    def needs_keras_model(self) -> bool:
+        return not self._widens_f16()
+
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for Dequantize operation."""
         input_shape = self.desc['input_shape']
@@ -37,6 +45,17 @@ class OpDequantize(QuantizationFamilyBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        if self._widens_f16():
+            from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
+
+            model_bytes = build_unary_same_shape_op(
+                op_name="DEQUANTIZE",
+                input_shape=tuple(self.desc["input_shape"]),
+                dtype="float16",
+                output_dtype="float32",
+            )
+            self._write_tflite_bytes(out_path, model_bytes)
+            return
         # Dequantize produces float32 output
         self._convert_with_activation_quantization(
             model,
@@ -70,6 +89,13 @@ class OpDequantize(QuantizationFamilyBase):
                 'input_c_type': self.tensor_c_type("input"),
                 'output_c_type': self.tensor_c_type("output"),
             }
+        if input_dtype == 'FP16':
+            return {
+                'kernel_fn': 'arm_dequantize_f16_f32',
+                'input_c_type': self.tensor_c_type("input"),
+                'output_c_type': self.tensor_c_type("output"),
+                'kernel_style': 'widen',
+            }
         raise NotImplementedError(f"Unsupported Dequantize input dtype: {input_dtype}")
     
     def generate_c_files(self, output_dir: Path) -> None:
@@ -91,7 +117,25 @@ class OpDequantize(QuantizationFamilyBase):
         activation_str = self.activation_name()
         has_activation = activation_str in ['RELU', 'RELU6']
 
-        if tflite_path.exists():
+        if kernel_info.get("kernel_style") == "widen":
+            # No quantization parameters: the kernel widens every float16 bit
+            # pattern exactly, so numpy's astype is the reference. input_min/
+            # input_max bound the uniform draw; a range inside +/-6.1e-5 keeps
+            # every draw a float16 subnormal, and input_mode nonfinite_sweep
+            # puts NaN/+Inf/-Inf in the leading lanes.
+            input_shape = tuple(int(dim) for dim in self.desc["input_shape"])
+            low = float(self.desc.get("input_min", -1.0))
+            high = float(self.desc.get("input_max", 1.0))
+            input_q = self._sample_uniform(input_shape, low=low, high=high, dtype=np.float16)
+            output_data = input_q.astype(np.float32)
+            input_scale = 0.0
+            input_zp = 0
+            if has_activation:
+                if activation_str == 'RELU':
+                    output_data = np.maximum(output_data, 0.0)
+                else:
+                    output_data = np.clip(output_data, 0.0, 6.0)
+        elif tflite_path.exists():
             # Load interpreter to extract the input quantization chosen by the
             # converted model, but do not use its output as the golden.
             # Converted dequantize models can drift slightly from the direct
@@ -210,6 +254,7 @@ class OpDequantize(QuantizationFamilyBase):
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
+            'kernel_style': kernel_info.get("kernel_style", "scale_offset"),
             'has_activation': has_activation,
             'activation_type': activation_str if has_activation else 'NONE',
             'comparison_atol': float(comparison.get("atol", 0.0)),

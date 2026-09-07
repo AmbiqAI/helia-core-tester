@@ -373,6 +373,24 @@ class TemplateContextBuilder:
             raise ValueError(f"Unsupported shape length: {len(shape)}")
 
     @staticmethod
+    def shape_to_cmsis_dims_any_rank(shape: Tuple[int, ...]) -> Dict[str, int]:
+        """cmsis_nn_dims for a tensor of any rank, for templates that only use the
+        dims to size a buffer. Rank 0 is one element; rank 1..4 follow
+        nhwc_to_cmsis_dims; a higher rank folds its leading axes into n so the
+        n*h*w*c product stays the element count. The rank-agnostic copy kernels
+        (arm_split_*, arm_concatenation_*, arm_pack_*, arm_unpack_*) take the
+        real shape as a separate int32 array."""
+        shape = tuple(int(dim) for dim in shape)
+        if len(shape) == 0:
+            return {'n': 1, 'h': 1, 'w': 1, 'c': 1}
+        if len(shape) <= 4:
+            return TemplateContextBuilder.nhwc_to_cmsis_dims(shape)
+        leading = 1
+        for dim in shape[:-3]:
+            leading *= dim
+        return {'n': leading, 'h': shape[-3], 'w': shape[-2], 'c': shape[-1]}
+
+    @staticmethod
     def normalize_reduction_axes(input_rank: int, axes: List[int]) -> List[int]:
         """
         Normalize reduction axes to unique, in-range positive indices.
@@ -489,16 +507,34 @@ class TemplateContextBuilder:
         abs_numeric = abs(numeric)
         use_scientific = abs_numeric >= 1.0e6 or (abs_numeric != 0.0 and abs_numeric < 1.0e-4)
 
-        if use_scientific:
+        def scientific() -> str:
+            # .9e is ten significant digits, which round-trips every binary32.
             mantissa, exponent = f"{numeric:.9e}".split("e")
             mantissa = mantissa.rstrip("0").rstrip(".")
             if "." not in mantissa:
                 mantissa += ".0"
-            literal = f"{mantissa}e{exponent}"
+            return f"{mantissa}e{exponent}"
+
+        if use_scientific:
+            literal = scientific()
         else:
             literal = f"{numeric:.9f}".rstrip("0").rstrip(".")
             if "." not in literal:
                 literal += ".0"
+            # .9f is nine DECIMAL PLACES, not nine significant digits, so it
+            # silently loses precision below ~1e-2 (0.00435256958 -> 0.00435257,
+            # six significant digits, one float32 ULP off). Same class of defect
+            # as the f16 `.6f` fixed in helia-core-tester#64, one range down.
+            # It cancels while both sides of a comparison are the same dtype and
+            # carry the same literal, but a widening golden (FP16 input, FP32
+            # expected -- arm_dequantize_f16_f32, ns-cmsis-nn#475) compares a
+            # `(float16_t)` cast that snaps back to the f16 grid against an f32
+            # literal that does not, and a zero-tolerance case then fails by
+            # 4.66e-10. Fall back to scientific only where the fixed form does
+            # not round-trip, so every literal that was already exact is
+            # unchanged.
+            if np.float32(float(literal)) != np.float32(numeric):
+                literal = scientific()
 
         return f"{literal}{suffix}"
 

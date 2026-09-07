@@ -163,3 +163,392 @@ input_2_shape: [1, 2, 1, 3]
 input_3_shape: [1, 2, 3, 3]
 input_mode: nonfinite_sweep
 nonfinite_policy: strict
+---
+# # Rank-agnostic arm_concatenation_f32/f16 (ns-cmsis-nn#475), reached through
+# # hint.call_style any_rank: every input in one call, natural row-major layout, any rank
+# # and axis. required_kernel_symbols skips these on a checkout without the symbol. The
+# # rank-4 cases reuse the shapes of the per-axis _x/_y/_z/_w cases above so the two
+# # entry points are asserted against the same numpy golden.
+operator: Concatenation
+name: concatenation_any_rank_rank1_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f32]
+hint: {call_style: any_rank}
+axis: 0
+input_shape: [3]
+input_1_shape: [3]
+input_2_shape: [4]
+---
+operator: Concatenation
+name: concatenation_any_rank_rank2_axis0_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f32]
+hint: {call_style: any_rank}
+axis: 0
+input_shape: [1, 5]
+input_1_shape: [1, 5]
+input_2_shape: [2, 5]
+---
+operator: Concatenation
+name: concatenation_any_rank_rank2_axis1_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f32]
+hint: {call_style: any_rank}
+axis: 1
+input_shape: [3, 2]
+input_1_shape: [3, 2]
+input_2_shape: [3, 3]
+---
+operator: Concatenation
+name: concatenation_any_rank_rank3_axis1_triple_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f32]
+hint: {call_style: any_rank}
+axis: 1
+input_shape: [2, 1, 3]
+input_1_shape: [2, 1, 3]
+input_2_shape: [2, 4, 3]
+input_3_shape: [2, 2, 3]
+---
+operator: Concatenation
+name: concatenation_any_rank_axis_x_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f32]
+hint: {call_style: any_rank}
+axis: 2
+input_shape: [1, 2, 2, 3]
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 1, 3]
+input_3_shape: [1, 2, 3, 3]
+---
+operator: Concatenation
+name: concatenation_any_rank_axis_y_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f32]
+hint: {call_style: any_rank}
+axis: 1
+input_shape: [1, 1, 3, 2]
+input_1_shape: [1, 1, 3, 2]
+input_2_shape: [1, 2, 3, 2]
+---
+operator: Concatenation
+name: concatenation_any_rank_axis_z_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f32]
+hint: {call_style: any_rank}
+axis: 3
+input_shape: [1, 2, 3, 2]
+input_1_shape: [1, 2, 3, 2]
+input_2_shape: [1, 2, 3, 1]
+input_3_shape: [1, 2, 3, 3]
+---
+operator: Concatenation
+name: concatenation_any_rank_axis_w_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f32]
+hint: {call_style: any_rank}
+axis: 0
+input_shape: [1, 2, 2, 2]
+input_1_shape: [1, 2, 2, 2]
+input_2_shape: [2, 2, 2, 2]
+---
+operator: Concatenation
+name: concatenation_any_rank_rank5_axis2_triple_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f32]
+hint: {call_style: any_rank}
+axis: 2
+input_shape: [2, 2, 4, 3, 2]
+input_1_shape: [2, 2, 4, 3, 2]
+input_2_shape: [2, 2, 1, 3, 2]
+input_3_shape: [2, 2, 3, 3, 2]
+---
+operator: Concatenation
+name: concatenation_any_rank_rank5_axis4_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f32]
+hint: {call_style: any_rank}
+axis: 4
+input_shape: [2, 2, 4, 3, 2]
+input_1_shape: [2, 2, 4, 3, 2]
+input_2_shape: [2, 2, 4, 3, 7]
+---
+# An input with a zero-extent axis is accepted and contributes nothing.
+operator: Concatenation
+name: concatenation_any_rank_zero_extent_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f32]
+hint: {call_style: any_rank}
+axis: 2
+input_shape: [2, 3, 0, 5]
+input_1_shape: [2, 3, 0, 5]
+input_2_shape: [2, 3, 4, 5]
+---
+# 5151 elements; per-input inner runs of 1088 and 629 are not multiples of any lane count.
+operator: Concatenation
+name: concatenation_any_rank_large_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f32]
+hint: {call_style: any_rank}
+axis: 1
+input_shape: [3, 64, 17]
+input_1_shape: [3, 64, 17]
+input_2_shape: [3, 37, 17]
+---
+# Pure data movement: the first operand carries the sweep and every token must land bit-exact.
+operator: Concatenation
+name: concatenation_any_rank_nonfinite_rank3_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f32]
+hint: {call_style: any_rank}
+axis: 1
+input_shape: [2, 1, 3]
+input_1_shape: [2, 1, 3]
+input_2_shape: [2, 4, 3]
+input_3_shape: [2, 2, 3]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+---
+operator: Concatenation
+name: concatenation_any_rank_rank1_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f16]
+hint: {call_style: any_rank}
+axis: 0
+input_shape: [3]
+input_1_shape: [3]
+input_2_shape: [4]
+---
+operator: Concatenation
+name: concatenation_any_rank_rank2_axis0_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f16]
+hint: {call_style: any_rank}
+axis: 0
+input_shape: [1, 5]
+input_1_shape: [1, 5]
+input_2_shape: [2, 5]
+---
+operator: Concatenation
+name: concatenation_any_rank_rank2_axis1_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f16]
+hint: {call_style: any_rank}
+axis: 1
+input_shape: [3, 2]
+input_1_shape: [3, 2]
+input_2_shape: [3, 3]
+---
+operator: Concatenation
+name: concatenation_any_rank_rank3_axis1_triple_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f16]
+hint: {call_style: any_rank}
+axis: 1
+input_shape: [2, 1, 3]
+input_1_shape: [2, 1, 3]
+input_2_shape: [2, 4, 3]
+input_3_shape: [2, 2, 3]
+---
+operator: Concatenation
+name: concatenation_any_rank_axis_x_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f16]
+hint: {call_style: any_rank}
+axis: 2
+input_shape: [1, 2, 2, 3]
+input_1_shape: [1, 2, 2, 3]
+input_2_shape: [1, 2, 1, 3]
+input_3_shape: [1, 2, 3, 3]
+---
+operator: Concatenation
+name: concatenation_any_rank_axis_y_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f16]
+hint: {call_style: any_rank}
+axis: 1
+input_shape: [1, 1, 3, 2]
+input_1_shape: [1, 1, 3, 2]
+input_2_shape: [1, 2, 3, 2]
+---
+operator: Concatenation
+name: concatenation_any_rank_axis_z_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f16]
+hint: {call_style: any_rank}
+axis: 3
+input_shape: [1, 2, 3, 2]
+input_1_shape: [1, 2, 3, 2]
+input_2_shape: [1, 2, 3, 1]
+input_3_shape: [1, 2, 3, 3]
+---
+operator: Concatenation
+name: concatenation_any_rank_axis_w_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f16]
+hint: {call_style: any_rank}
+axis: 0
+input_shape: [1, 2, 2, 2]
+input_1_shape: [1, 2, 2, 2]
+input_2_shape: [2, 2, 2, 2]
+---
+operator: Concatenation
+name: concatenation_any_rank_rank5_axis2_triple_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f16]
+hint: {call_style: any_rank}
+axis: 2
+input_shape: [2, 2, 4, 3, 2]
+input_1_shape: [2, 2, 4, 3, 2]
+input_2_shape: [2, 2, 1, 3, 2]
+input_3_shape: [2, 2, 3, 3, 2]
+---
+operator: Concatenation
+name: concatenation_any_rank_rank5_axis4_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f16]
+hint: {call_style: any_rank}
+axis: 4
+input_shape: [2, 2, 4, 3, 2]
+input_1_shape: [2, 2, 4, 3, 2]
+input_2_shape: [2, 2, 4, 3, 7]
+---
+# An input with a zero-extent axis is accepted and contributes nothing.
+operator: Concatenation
+name: concatenation_any_rank_zero_extent_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f16]
+hint: {call_style: any_rank}
+axis: 2
+input_shape: [2, 3, 0, 5]
+input_1_shape: [2, 3, 0, 5]
+input_2_shape: [2, 3, 4, 5]
+---
+# 5151 elements; per-input inner runs of 1088 and 629 are not multiples of any lane count.
+operator: Concatenation
+name: concatenation_any_rank_large_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f16]
+hint: {call_style: any_rank}
+axis: 1
+input_shape: [3, 64, 17]
+input_1_shape: [3, 64, 17]
+input_2_shape: [3, 37, 17]
+---
+# Pure data movement: the first operand carries the sweep and every token must land bit-exact.
+operator: Concatenation
+name: concatenation_any_rank_nonfinite_rank3_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_concatenation_f16]
+hint: {call_style: any_rank}
+axis: 1
+input_shape: [2, 1, 3]
+input_1_shape: [2, 1, 3]
+input_2_shape: [2, 4, 3]
+input_3_shape: [2, 2, 3]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict

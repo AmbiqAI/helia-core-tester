@@ -54,6 +54,7 @@
         "PReLU",
         "PReLUScalar",
         "Pad",
+        "Pack",
         "Quantize",
         "ReduceMax",
         "ReduceMin",
@@ -79,6 +80,7 @@
         "Tanh",
         "Tile",
         "Transpose",
+        "Unpack",
         "TransposeConv",
         "VariableUpdate",
         "Where"
@@ -246,9 +248,11 @@
       "type": "integer"
     },
     "value": {
+      "$comment": "Fill also accepts the non-finite and signed-zero tokens named by ops/BasicMathFunctions/fill.py.",
       "type": [
         "integer",
-        "number"
+        "number",
+        "string"
       ]
     },
     "act_min": {
@@ -547,7 +551,8 @@
               "HardSwishCompat",
               "PReLU",
               "PReLUScalar",
-              "Fill",
+              "Pack",
+              "Unpack",
               "Reshape",
               "Squeeze",
               "SpaceToDepth",
@@ -741,6 +746,21 @@
       "$comment": "DynamicUpdateSlice requires operand_shape, update_shape, start_indices",
       "if": { "properties": { "operator": { "const": "DynamicUpdateSlice" } } },
       "then": { "required": ["operand_shape", "update_shape", "start_indices"] }
+    },
+    {
+      "$comment": "operator_required_fields:Fill",
+      "if": { "properties": { "operator": { "const": "Fill" } } },
+      "then": { "required": ["output_shape", "value"] }
+    },
+    {
+      "$comment": "operator_required_fields:Pack",
+      "if": { "properties": { "operator": { "const": "Pack" } } },
+      "then": { "required": ["num_inputs", "axis"] }
+    },
+    {
+      "$comment": "operator_required_fields:Unpack",
+      "if": { "properties": { "operator": { "const": "Unpack" } } },
+      "then": { "required": ["axis"] }
     },
     {
       "$comment": "A sweep case has to say how its golden is compared. There is no safe default: 'strict' pins a value ns-cmsis-nn may not contract, 'mask' drops lanes a contracted kernel should be asserting, and which one applies is a per-kernel question the descriptor author has to answer. This if/then is not enforced by the descriptor loader, which validates a subset of the schema; the rule that actually fails a policy-less sweep is OperationBase.nonfinite_policy(). Enforcement moves here when #100 lands.",
