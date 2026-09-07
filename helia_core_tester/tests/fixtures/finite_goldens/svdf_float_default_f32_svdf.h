@@ -54,7 +54,7 @@ static const float svdf_float_default_f32_initial_state[] = {
 };
 
 static const float svdf_float_default_f32_bias[] = {
-    0.43134445f, 0.000509068f, -0.19906047f, -0.354343981f
+    0.43134445f, 5.090683117e-04f, -0.19906047f, -0.354343981f
 };
 
 static const float svdf_float_default_f32_expected_output[] = {
