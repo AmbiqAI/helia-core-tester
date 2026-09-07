@@ -59,9 +59,6 @@ static int32_t run_gru_chunk(int32_t chunk_time_steps, int32_t input_offset, int
 
 int32_t {{ name }}_test_case_run(void)
 {
-    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
-    HELIA_GUARD_ARM({{ name }}_hidden_state, false /* zero-seeded below: don't poison */);
-
     /* Fresh streaming state for this sequence. */
     for (int32_t h = 0; h < {{ hidden_state_size }}; h++)
     {
@@ -71,17 +68,20 @@ int32_t {{ name }}_test_case_run(void)
     int32_t status;
     int failures = 0;
 {% for length in chunk_lengths %}
+    /* Canaries only, no poison: output and hidden_state carry real data
+     * across chunks. Re-stamped per chunk so a breach is attributed to the
+     * chunk that caused it and reported once. */
+    HELIA_GUARD_ARM({{ name }}_output, false);
+    HELIA_GUARD_ARM({{ name }}_hidden_state, false);
     status = run_gru_chunk({{ length }}, {{ chunk_input_offsets[loop.index0] }}, {{ chunk_output_offsets[loop.index0] }});
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("GRU") }} (chunk {{ loop.index0 }})", status);
-    // temp1 is re-armed (re-poisoned) at the top of the next chunk's
-    // run_gru_chunk() call, which would erase any breach from *this* chunk
-    // before a single post-loop check ever saw it -- so check it here, once
-    // per chunk, immediately after each kernel call.
+    // Checked before the status validator can return, and before the next
+    // chunk's run_gru_chunk() re-arms (re-poisons) temp1 and erases a breach.
     HELIA_GUARD_CHECK({{ name }}_temp1, "{{ validation_label | default("GRU") }} temp1 (chunk {{ loop.index0 }})", failures);
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("GRU") }} output (chunk {{ loop.index0 }})", failures);
+    HELIA_GUARD_CHECK({{ name }}_hidden_state, "{{ validation_label | default("GRU") }} hidden_state (chunk {{ loop.index0 }})", failures);
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("GRU") }} (chunk {{ loop.index0 }})", status);
 {% endfor %}
 
-    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("GRU") }} output", failures);
-    HELIA_GUARD_CHECK({{ name }}_hidden_state, "{{ validation_label | default("GRU") }} hidden_state", failures);
 {{ validation_outputs(validation_mode_token | default("FLOAT"), validation_tolerance | default(1), dst_size, validation_report_limit | default(8)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

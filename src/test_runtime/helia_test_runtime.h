@@ -203,6 +203,14 @@ static inline int helia_test_float_class_binary64(const void *storage)
 
 void helia_guard_arm(uint8_t *head, uint8_t *tail, void *body, size_t body_bytes, bool poison_body);
 void helia_guard_check(const char *label, const uint8_t *head, const uint8_t *tail, int *failures);
+/* Slack canary: a scratch buffer sized by a compile-time upper bound is
+ * only partly used by the kernel (arm_*_get_buffer_size decides how much).
+ * The tail guard sits at the declared end, so a kernel that overruns its
+ * *queried* size lands in the unused slack and goes unnoticed. These stamp
+ * and verify up to HELIA_GUARD_BYTES at body + used_bytes (clamped to the
+ * body; a no-op when there is no slack). */
+void helia_guard_stamp_at(void *body, size_t body_bytes, size_t used_bytes);
+void helia_guard_check_at(const char *label, const void *body, size_t body_bytes, size_t used_bytes, int *failures);
 
 #ifdef __cplusplus
 }
@@ -235,6 +243,12 @@ void helia_guard_check(const char *label, const uint8_t *head, const uint8_t *ta
 
 #define HELIA_GUARD_CHECK(ident, label, failures) \
     helia_guard_check((label), &(ident##_guard.head[0]), &(ident##_guard.tail[0]), &(failures))
+
+#define HELIA_GUARD_STAMP_SLACK(ident, used_bytes) \
+    helia_guard_stamp_at((ident##_guard.body), sizeof(ident##_guard.body), (size_t)(used_bytes))
+
+#define HELIA_GUARD_CHECK_SLACK(ident, label, used_bytes, failures) \
+    helia_guard_check_at((label), (ident##_guard.body), sizeof(ident##_guard.body), (size_t)(used_bytes), &(failures))
 
 #define HELIA_VALIDATE_EXPECTED_STATUS(label, status, expected_status) \
     do { \

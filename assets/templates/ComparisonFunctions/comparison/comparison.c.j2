@@ -35,10 +35,10 @@ int32_t {{ name }}_run(
 int32_t {{ name }}_test_case_run(void)
 {
     int32_t status = {{ name }}_run({{ name }}_input_1, {{ name }}_input_2, {{ name }}_output);
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("Comparison") }}", status);
-
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Comparison") }} output", failures);
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("Comparison") }}", status);
+
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("BOOL") }},
         {{ name }}_output,

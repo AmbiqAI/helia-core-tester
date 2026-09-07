@@ -58,13 +58,13 @@ static int32_t run_svdf(void)
 int32_t {{ name }}_test_case_run(void)
 {
     int32_t status = run_svdf();
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("SVDF") }}", status);
-
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_state, "{{ validation_label | default("SVDF") }} state", failures);
     HELIA_GUARD_CHECK({{ name }}_scratch_input, "{{ validation_label | default("SVDF") }} scratch_input", failures);
     HELIA_GUARD_CHECK({{ name }}_scratch_output, "{{ validation_label | default("SVDF") }} scratch_output", failures);
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("SVDF") }} output", failures);
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("SVDF") }}", status);
+
 {{ validation_outputs(validation_mode_token | default("FLOAT"), validation_tolerance | default(1), output_size, validation_report_limit | default(8)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

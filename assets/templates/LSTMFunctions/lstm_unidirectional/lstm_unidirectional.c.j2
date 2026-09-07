@@ -37,6 +37,18 @@
    must not be poisoned like buffer1/buffer2 (pure temp scratch). #}
 {{ helia_guard_declare(output_dtype, "buffer3", "LSTM_BUFFER_SIZE") }}
 {{ helia_guard_declare(output_dtype, name ~ "_output", "LSTM_OUTPUT_SIZE") }}
+{# Per-gate kernel sums are written by arm_vector_sum_s8*() ahead of the
+   kernel call (the ns-cmsis-nn#325 bug class), so they are guarded write
+   targets like the temps. #}
+{% set kernel_sum_dtype = "int32_t" if dtype == "s8" else "int64_t" %}
+{% for gate in ["input", "forget", "cell", "output"] %}
+{{ helia_guard_declare(kernel_sum_dtype, gate ~ "_data_kernel_sum", macro_prefix ~ "HIDDEN_SIZE") }}
+{{ helia_guard_declare(kernel_sum_dtype, gate ~ "_hidden_kernel_sum", macro_prefix ~ "HIDDEN_SIZE") }}
+{% endfor %}
+{% if dtype != "s8" %}
+{{ helia_guard_declare("int64_t", "coverage_probe_sum_no_bias", macro_prefix ~ "HIDDEN_SIZE") }}
+{{ helia_guard_declare("int64_t", "coverage_probe_sum_bias", macro_prefix ~ "HIDDEN_SIZE") }}
+{% endif %}
 {% if temp_sizers_available %}
 
 static int {{ name }}_check_temp_sizers(void)
@@ -97,15 +109,14 @@ static int {{ name }}_check_temp_sizers(void)
 static int32_t run_lstm(void)
 {
 {% if dtype == "s8" %}
-    int32_t input_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-    int32_t forget_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-    int32_t cell_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-    int32_t output_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-
-    int32_t input_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-    int32_t forget_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-    int32_t cell_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-    int32_t output_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    HELIA_GUARD_ARM(input_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(forget_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(cell_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(output_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(input_hidden_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(forget_hidden_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(cell_hidden_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(output_hidden_kernel_sum, true /* pure write target: poison */);
 
     arm_vector_sum_s8(&input_data_kernel_sum[0],
                       {{ macro_prefix }}INPUT_SIZE,
@@ -165,15 +176,14 @@ static int32_t run_lstm(void)
                       0,
                       NULL);
 {% else %}
-    int64_t input_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-    int64_t forget_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-    int64_t cell_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-    int64_t output_data_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-
-    int64_t input_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-    int64_t forget_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-    int64_t cell_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
-    int64_t output_hidden_kernel_sum[{{ macro_prefix }}HIDDEN_SIZE];
+    HELIA_GUARD_ARM(input_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(forget_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(cell_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(output_data_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(input_hidden_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(forget_hidden_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(cell_hidden_kernel_sum, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(output_hidden_kernel_sum, true /* pure write target: poison */);
 
     arm_vector_sum_s8_s64(&input_data_kernel_sum[0],
                           {{ macro_prefix }}INPUT_SIZE,
@@ -226,8 +236,8 @@ static int32_t run_lstm(void)
                           NULL);
 
     // Branch-coverage probes for arm_vector_sum_s8_s64 (do not affect LSTM outputs).
-    int64_t coverage_probe_sum_no_bias[{{ macro_prefix }}HIDDEN_SIZE];
-    int64_t coverage_probe_sum_bias[{{ macro_prefix }}HIDDEN_SIZE];
+    HELIA_GUARD_ARM(coverage_probe_sum_no_bias, true /* pure write target: poison */);
+    HELIA_GUARD_ARM(coverage_probe_sum_bias, true /* pure write target: poison */);
     const int32_t coverage_probe_lhs_offset =
         ({{ macro_prefix }}INPUT_ZERO_POINT == 0) ? 1 : {{ macro_prefix }}INPUT_ZERO_POINT;
 
@@ -340,13 +350,21 @@ int32_t {{ name }}_test_case_run(void)
 
 {% endif %}
     int32_t status = run_lstm();
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);
-
     int failures = 0;
     HELIA_GUARD_CHECK(buffer1, "{{ validation_label | default("LSTM") }} temp1", failures);
     HELIA_GUARD_CHECK(buffer2, "{{ validation_label | default("LSTM") }} temp2", failures);
     HELIA_GUARD_CHECK(buffer3, "{{ validation_label | default("LSTM") }} cell_state", failures);
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("LSTM") }} output", failures);
+{% for gate in ["input", "forget", "cell", "output"] %}
+    HELIA_GUARD_CHECK({{ gate }}_data_kernel_sum, "{{ validation_label | default("LSTM") }} {{ gate }}_data_kernel_sum", failures);
+    HELIA_GUARD_CHECK({{ gate }}_hidden_kernel_sum, "{{ validation_label | default("LSTM") }} {{ gate }}_hidden_kernel_sum", failures);
+{% endfor %}
+{% if dtype != "s8" %}
+    HELIA_GUARD_CHECK(coverage_probe_sum_no_bias, "{{ validation_label | default("LSTM") }} coverage_probe_sum_no_bias", failures);
+    HELIA_GUARD_CHECK(coverage_probe_sum_bias, "{{ validation_label | default("LSTM") }} coverage_probe_sum_bias", failures);
+{% endif %}
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);
+
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("EXACT_INT") }},
         {{ name }}_output,

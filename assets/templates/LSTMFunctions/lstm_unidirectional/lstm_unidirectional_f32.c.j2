@@ -125,8 +125,6 @@ int32_t {{ name }}_test_case_run(void)
 
 {% endif %}
     int32_t status = run_lstm();
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);
-
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("LSTM") }} output", failures);
     {% if not temp_sizers_available %}
@@ -134,6 +132,8 @@ int32_t {{ name }}_test_case_run(void)
     HELIA_GUARD_CHECK({{ name }}_temp2, "{{ validation_label | default("LSTM") }} temp2", failures);
     {% endif %}
     HELIA_GUARD_CHECK({{ name }}_cell_state, "{{ validation_label | default("LSTM") }} cell_state", failures);
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);
+
 {{ validation_outputs(validation_mode_token | default("FLOAT"), validation_tolerance | default(1), dst_size, validation_report_limit | default(8)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

@@ -38,11 +38,13 @@ int32_t {{ name }}_run(
 int32_t {{ name }}_test_case_run(void)
 {
     int32_t status = {{ name }}_run({{ name }}_input);
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("Split") }}", status);
-
     int failures = 0;
     {% for out in outputs %}
     HELIA_GUARD_CHECK({{ out.name }}_output, "{{ validation_label | default("Split") }} {{ out.name }} output", failures);
+    {% endfor %}
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("Split") }}", status);
+
+    {% for out in outputs %}
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("TOLERANT_INT") }},
         {{ out.name }}_output,

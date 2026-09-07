@@ -4,8 +4,14 @@
 #include <stdint.h>
 #include "test_runtime/helia_test_runtime.h"
 
+
 #define REDUCE_SUM_FLOAT_AXIS_C_F32_OUTPUT_SIZE (1 * 3 * 4 * 1)
-static float reduce_sum_float_axis_c_f32_output[REDUCE_SUM_FLOAT_AXIS_C_F32_OUTPUT_SIZE];
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float body[REDUCE_SUM_FLOAT_AXIS_C_F32_OUTPUT_SIZE];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} reduce_sum_float_axis_c_f32_output_guard;
+#define reduce_sum_float_axis_c_f32_output (reduce_sum_float_axis_c_f32_output_guard.body)
 
 int32_t reduce_sum_float_axis_c_f32_run(
     const float* __restrict input,
@@ -25,10 +31,12 @@ int32_t reduce_sum_float_axis_c_f32_run(
 
 int32_t reduce_sum_float_axis_c_f32_test_case_run(void)
 {
+    HELIA_GUARD_ARM(reduce_sum_float_axis_c_f32_output, false /* real output, not scratch: don't poison */);
     int32_t status = reduce_sum_float_axis_c_f32_run(reduce_sum_float_axis_c_f32_input, reduce_sum_float_axis_c_f32_output);
+    int failures = 0;
+    HELIA_GUARD_CHECK(reduce_sum_float_axis_c_f32_output, "Reducesum output", failures);
     HELIA_VALIDATE_STATUS("Reducesum", status);
 
-    int failures = 0;
     HELIA_VALIDATE_OUTPUTS(
         FLOAT,
         reduce_sum_float_axis_c_f32_output,

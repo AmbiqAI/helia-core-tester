@@ -16,13 +16,13 @@ int32_t {{ name }}_test_case_run(void)
         {{ name }}_output,
         &num_true
     );
+    int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_output, "Where output", failures);
     HELIA_VALIDATE_STATUS("Where", status);
 
     /* Validate num_true matches expected */
     HELIA_VALIDATE_SCALAR_EQ_INT("Where", "num_true", {{ num_true }}, num_true);
 
-    int failures = 0;
-    HELIA_GUARD_CHECK({{ name }}_output, "Where output", failures);
     int output_count = num_true * {{ rank }};
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("TOLERANT_INT") }},

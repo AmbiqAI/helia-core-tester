@@ -19,10 +19,10 @@ int32_t {{ name }}_test_case_run(void)
         &{{ name }}_params,
         {{ name }}_output
     );
-    HELIA_VALIDATE_STATUS("ScatterNd", status);
-
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_output, "ScatterNd output", failures);
+    HELIA_VALIDATE_STATUS("ScatterNd", status);
+
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("TOLERANT_INT") }},
         {{ name }}_output,

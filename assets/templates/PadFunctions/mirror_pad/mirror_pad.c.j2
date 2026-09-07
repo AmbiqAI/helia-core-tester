@@ -14,10 +14,10 @@ int32_t {{ name }}_test_case_run(void)
         &{{ name }}_params,
         {{ name }}_output
     );
-    HELIA_VALIDATE_STATUS("MirrorPad", status);
-
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_output, "MirrorPad output", failures);
+    HELIA_VALIDATE_STATUS("MirrorPad", status);
+
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("TOLERANT_INT") }},
         {{ name }}_output,

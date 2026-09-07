@@ -196,3 +196,38 @@ void helia_guard_check(const char *label, const uint8_t *head, const uint8_t *ta
                tail_breach ? "overrun" : "");
     }
 }
+
+static size_t helia_guard_slack_bytes(size_t body_bytes, size_t used_bytes)
+{
+    size_t slack;
+    if (used_bytes >= body_bytes) {
+        return 0;
+    }
+    slack = body_bytes - used_bytes;
+    return slack < HELIA_GUARD_BYTES ? slack : HELIA_GUARD_BYTES;
+}
+
+void helia_guard_stamp_at(void *body, size_t body_bytes, size_t used_bytes)
+{
+    size_t slack = helia_guard_slack_bytes(body_bytes, used_bytes);
+    if (body != NULL && slack != 0) {
+        memset((uint8_t *)body + used_bytes, HELIA_GUARD_CANARY_BYTE, slack);
+    }
+}
+
+void helia_guard_check_at(const char *label, const void *body, size_t body_bytes, size_t used_bytes, int *failures)
+{
+    size_t slack = helia_guard_slack_bytes(body_bytes, used_bytes);
+    const uint8_t *slack_start = (const uint8_t *)body + used_bytes;
+    size_t i;
+    if (body == NULL) {
+        return;
+    }
+    for (i = 0; i < slack; ++i) {
+        if (slack_start[i] != HELIA_GUARD_CANARY_BYTE) {
+            ++(*failures);
+            printf("GuardBreach[%s]: overrun detected (canary corrupted)\r\n", label);
+            return;
+        }
+    }
+}

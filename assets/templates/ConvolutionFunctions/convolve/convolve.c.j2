@@ -78,6 +78,7 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
     {{ name }}_ctx.buf = {{ name }}_buffer;
     {{ name }}_ctx.size = required_buffer_size;
     HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
 
     {% if kernel_fn == 'arm_convolve_wrapper_s8' %}
     // Initialize weight sum context and buffer
@@ -244,14 +245,15 @@ int32_t {{ name }}_test_case_run(void)
 {
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("Convolution") }}", status);
-
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Convolution") }} scratch", failures);
+    HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ validation_label | default("Convolution") }} scratch slack", {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u, failures);
     {% if kernel_fn == 'arm_convolve_wrapper_s8' %}
     HELIA_GUARD_CHECK({{ name }}_weight_sum_buffer, "{{ validation_label | default("Convolution") }} weight_sum", failures);
     {% endif %}
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Convolution") }} output", failures);
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("Convolution") }}", status);
+
 {{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

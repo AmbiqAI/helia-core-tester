@@ -40,7 +40,7 @@ int32_t {{ name }}_run(
     // ctx.buf NULL below -- poisoning an unused buffer here is harmless,
     // and keeps this in lockstep with the CHECK in _test_case_run instead
     // of leaving its canary unstamped whenever kernel_get_buffer_size_fn
-    // is absent. (buffer_size_max is always 0 for max pooling today, so
+    // is absent. (buffer_size_max is always 0 for max pooling, so
     // this is dead code here, but keeps the template correct if that
     // ever changes.)
     HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
@@ -65,6 +65,9 @@ int32_t {{ name }}_run(
     {{ name }}_ctx.buf = NULL;
     {{ name }}_ctx.size = 0;
     {% endif %}
+    {% if buffer_size_max > 0 %}
+    HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
+    {% endif %}
 
     // Call pooling kernel
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
@@ -84,13 +87,14 @@ int32_t {{ name }}_test_case_run(void)
 {
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("Pooling") }}", status);
-
     int failures = 0;
     {% if buffer_size_max > 0 %}
     HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Pooling") }} scratch", failures);
+    HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ validation_label | default("Pooling") }} scratch slack", {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u, failures);
     {% endif %}
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Pooling") }} output", failures);
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("Pooling") }}", status);
+
 {{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

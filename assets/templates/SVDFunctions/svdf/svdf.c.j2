@@ -5,7 +5,11 @@
 {% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 #define SVDF_OUTPUT_SIZE ({{ name|upper }}_INPUT_BATCHES * {{ name|upper }}_UNIT_COUNT)
+#define SVDF_STATE_SIZE ({{ name|upper }}_INPUT_BATCHES * {{ name|upper }}_FEATURE_BATCHES * {{ name|upper }}_TIME_BATCHES)
 {{ helia_guard_declare(output_dtype, name ~ "_output", "SVDF_OUTPUT_SIZE") }}
+{# The kernel shifts and rewrites the state in place, so it is a write target
+   like the output: guarded, seeded from state_init, never poisoned. #}
+{{ helia_guard_declare(state_dtype, name ~ "_state_data", "SVDF_STATE_SIZE") }}
 
 /*
  * The scratch contexts below are malloc'd (sized from a runtime buffer-size
@@ -89,8 +93,8 @@ static int32_t run_svdf(void)
     output_quant_params.multiplier = {{ name|upper }}_OUTPUT_MULTIPLIER;
     output_quant_params.shift = {{ name|upper }}_OUTPUT_SHIFT;
 
-    {{ state_dtype }} state_data[{{ name|upper }}_INPUT_BATCHES * {{ name|upper }}_FEATURE_BATCHES * {{ name|upper }}_TIME_BATCHES];
-    memcpy(state_data, {{ name }}_state_init, sizeof({{ name }}_state_init));
+    HELIA_GUARD_ARM({{ name }}_state_data, false /* seeded from state_init below: don't poison */);
+    memcpy({{ name }}_state_data, {{ name }}_state_init, sizeof({{ name }}_state_init));
 
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, zero-seeded below: don't poison */);
     memset({{ name }}_output, 0, sizeof({{ name }}_output));
@@ -105,7 +109,7 @@ static int32_t run_svdf(void)
                                                  &{{ name }}_input_dims,
                                                  {{ name }}_input_data,
                                                  &{{ name }}_state_dims,
-                                                 state_data,
+                                                 {{ name }}_state_data,
                                                  &{{ name }}_weights_feature_dims,
                                                  {{ name }}_weights_feature,
                                                  &{{ name }}_weights_time_dims,
@@ -127,7 +131,7 @@ static int32_t run_svdf(void)
                                                  &{{ name }}_input_dims,
                                                  {{ name }}_input_data,
                                                  &{{ name }}_state_dims,
-                                                 state_data,
+                                                 {{ name }}_state_data,
                                                  &{{ name }}_weights_feature_dims,
                                                  {{ name }}_weights_feature,
                                                  &{{ name }}_weights_time_dims,
@@ -143,6 +147,7 @@ static int32_t run_svdf(void)
 {% endif %}
 
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("SVDF") }} output", {{ name }}_guard_failures);
+    HELIA_GUARD_CHECK({{ name }}_state_data, "{{ validation_label | default("SVDF") }} state", {{ name }}_guard_failures);
     if ({{ name }}_input_ctx_guard_base) {
         helia_guard_check("{{ validation_label | default("SVDF") }} input scratch",
                           {{ name }}_input_ctx_guard_base,

@@ -49,6 +49,7 @@ int32_t {{ name }}_run(
     {{ name }}_ctx.buf = {{ name }}_buffer;
     {{ name }}_ctx.size = required_buffer_size;
     HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
 
     // Call batch matmul kernel
     {% if float_kernel %}
@@ -83,11 +84,12 @@ int32_t {{ name }}_test_case_run(void)
 {
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     int32_t status = {{ name }}_run({{ name }}_input_lhs, {{ name }}_input_rhs, {{ name }}_output);
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("Batch matmul") }}", status);
-
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Batch matmul") }} scratch", failures);
+    HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ validation_label | default("Batch matmul") }} scratch slack", {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u, failures);
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Batch matmul") }} output", failures);
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("Batch matmul") }}", status);
+
 {{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

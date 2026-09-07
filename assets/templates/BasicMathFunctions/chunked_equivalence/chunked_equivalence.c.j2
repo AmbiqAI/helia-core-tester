@@ -89,6 +89,8 @@ int32_t {{ name }}_test_case_run(void)
     int32_t status = {{ name }}_kernel_call(
         {{ name }}_input1,{% if operand_count == 2 %} {{ name }}_input2,{% endif %}
         {{ name }}_output_full, {{ name|upper }}_ELEMENT_COUNT);
+    int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_output_full, "{{ validation_label }} output_full", failures);
     HELIA_VALIDATE_STATUS("{{ validation_label }} full", status);
 
     // (b) Same data, processed as consecutive slices with varied block sizes.
@@ -99,14 +101,12 @@ int32_t {{ name }}_test_case_run(void)
         status = {{ name }}_kernel_call(
             {{ name }}_input1 + offset,{% if operand_count == 2 %} {{ name }}_input2 + offset,{% endif %}
             {{ name }}_output_chunked + offset, chunk_size);
+        HELIA_GUARD_CHECK({{ name }}_output_chunked, "{{ validation_label }} output_chunked", failures);
         HELIA_VALIDATE_STATUS("{{ validation_label }} chunk", status);
         offset += chunk_size;
     }
 
     // (a) and (b) must agree bit-exactly on every element.
-    int failures = 0;
-    HELIA_GUARD_CHECK({{ name }}_output_full, "{{ validation_label }} output_full", failures);
-    HELIA_GUARD_CHECK({{ name }}_output_chunked, "{{ validation_label }} output_chunked", failures);
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("EXACT_INT") }},
         {{ name }}_output_chunked,

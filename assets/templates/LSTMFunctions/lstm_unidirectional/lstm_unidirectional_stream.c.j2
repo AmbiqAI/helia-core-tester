@@ -77,10 +77,6 @@ static int32_t run_lstm_chunk(int32_t chunk_time_steps, int32_t input_offset, in
 
 int32_t {{ name }}_test_case_run(void)
 {
-    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
-    HELIA_GUARD_ARM({{ name }}_cell_state, false /* zero-seeded below: don't poison */);
-    HELIA_GUARD_ARM({{ name }}_hidden_state, false /* zero-seeded below: don't poison */);
-
     /* Fresh streaming state for this sequence: both hidden_state and
      * cell_state start at zero, matching the kernel's own single-shot
      * zero-init (see comment above) -- but seeded once here since the
@@ -94,19 +90,24 @@ int32_t {{ name }}_test_case_run(void)
     int32_t status;
     int failures = 0;
 {% for length in chunk_lengths %}
+    /* Canaries only, no poison: output, cell_state and hidden_state carry
+     * real data across chunks. Re-stamped per chunk so a breach is attributed
+     * to the chunk that caused it and reported once. */
+    HELIA_GUARD_ARM({{ name }}_output, false);
+    HELIA_GUARD_ARM({{ name }}_cell_state, false);
+    HELIA_GUARD_ARM({{ name }}_hidden_state, false);
     status = run_lstm_chunk({{ length }}, {{ chunk_input_offsets[loop.index0] }}, {{ chunk_output_offsets[loop.index0] }});
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }} (chunk {{ loop.index0 }})", status);
-    // temp1/temp2 are re-armed (re-poisoned) at the top of the next chunk's
-    // run_lstm_chunk() call, which would erase any breach from *this* chunk
-    // before a single post-loop check ever saw it -- so check them here,
-    // once per chunk, immediately after each kernel call.
+    // Checked before the status validator can return, and before the next
+    // chunk's run_lstm_chunk() re-arms (re-poisons) temp1/temp2 and erases a
+    // breach.
     HELIA_GUARD_CHECK({{ name }}_temp1, "{{ validation_label | default("LSTM") }} temp1 (chunk {{ loop.index0 }})", failures);
     HELIA_GUARD_CHECK({{ name }}_temp2, "{{ validation_label | default("LSTM") }} temp2 (chunk {{ loop.index0 }})", failures);
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("LSTM") }} output (chunk {{ loop.index0 }})", failures);
+    HELIA_GUARD_CHECK({{ name }}_cell_state, "{{ validation_label | default("LSTM") }} cell_state (chunk {{ loop.index0 }})", failures);
+    HELIA_GUARD_CHECK({{ name }}_hidden_state, "{{ validation_label | default("LSTM") }} hidden_state (chunk {{ loop.index0 }})", failures);
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }} (chunk {{ loop.index0 }})", status);
 {% endfor %}
 
-    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("LSTM") }} output", failures);
-    HELIA_GUARD_CHECK({{ name }}_cell_state, "{{ validation_label | default("LSTM") }} cell_state", failures);
-    HELIA_GUARD_CHECK({{ name }}_hidden_state, "{{ validation_label | default("LSTM") }} hidden_state", failures);
 {{ validation_outputs(validation_mode_token | default("FLOAT"), validation_tolerance | default(1), dst_size, validation_report_limit | default(8)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

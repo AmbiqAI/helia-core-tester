@@ -131,13 +131,13 @@ int32_t {{ name }}_test_case_run(void)
 
 {% endif %}
     int32_t status = run_gru();
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("GRU") }}", status);
-
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("GRU") }} output", failures);
     {% if not (temp_sizers_available and reset_after) %}
     HELIA_GUARD_CHECK({{ name }}_temp1, "{{ validation_label | default("GRU") }} temp1", failures);
     {% endif %}
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("GRU") }}", status);
+
 {{ validation_outputs(validation_mode_token | default("FLOAT"), validation_tolerance | default(1), dst_size, validation_report_limit | default(8)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
