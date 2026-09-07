@@ -105,3 +105,47 @@ size:
 - 7
 align_corners: false
 half_pixel_centers: true
+---
+# The width axis reduces 26 to 22, whose scale is not representable in float32. At output
+# column 11 the exact rational product is 13.0, so a reference computed in double reads row
+# 13, while the kernel's float32 product is just below and reads 12 (#127). Every other
+# checked-in case uses a scale where both agree, so this is the case that fails on target if
+# the reference stops mirroring the kernel's arithmetic.
+operator: ResizeNearestNeighbor
+name: resize_nearest_neighbor_float32_scale_boundary_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 2
+- 26
+- 3
+size:
+- 2
+- 22
+align_corners: false
+half_pixel_centers: false
+---
+# A single output pixel with half-pixel centres samples the middle of the axis, not index 0
+# (#127). The kernel has no special case for one output pixel; a reference that short-circuits
+# to the first row passes every other shipped case and fails only here.
+operator: ResizeNearestNeighbor
+name: resize_nearest_neighbor_single_pixel_half_pixel_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 4
+- 5
+- 3
+size:
+- 1
+- 1
+align_corners: false
+half_pixel_centers: true
