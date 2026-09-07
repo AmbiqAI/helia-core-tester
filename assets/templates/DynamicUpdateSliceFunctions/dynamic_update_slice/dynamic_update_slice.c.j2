@@ -1,12 +1,14 @@
 #include "{{ name }}_dynamic_update_slice.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 #define {{ name|upper }}_OUTPUT_SIZE {{ operand_size }}
-static {{ c_type }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+{{ helia_guard_declare(c_type, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
 
 int32_t {{ name }}_test_case_run(void)
 {
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     arm_cmsis_nn_status status = {{ kernel_fn }}(
         {{ operand_arg | default(name ~ "_operand") }},
         {{ update_arg | default(name ~ "_update") }},
@@ -14,6 +16,12 @@ int32_t {{ name }}_test_case_run(void)
         {{ params_arg | default("&" ~ name ~ "_params") }},
         {{ output_arg | default(name ~ "_output") }}
     );
+    int failures = 0;
+    // Checked unconditionally, even for expected-error cases: a kernel that
+    // correctly rejects the call can still have corrupted the output boundary
+    // on the way there, and that must not be masked by the "no output
+    // comparison for error cases" branch below.
+    HELIA_GUARD_CHECK({{ name }}_output, "DynamicUpdateSlice output", failures);
     HELIA_VALIDATE_EXPECTED_STATUS(
         "DynamicUpdateSlice",
         status,
@@ -21,7 +29,6 @@ int32_t {{ name }}_test_case_run(void)
     );
 
 {% if expected_status | default("ARM_CMSIS_NN_SUCCESS") == "ARM_CMSIS_NN_SUCCESS" %}
-    int failures = 0;
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("TOLERANT_INT") }},
         {{ name }}_output,
@@ -33,10 +40,8 @@ int32_t {{ name }}_test_case_run(void)
         {{ validation_report_limit | default(20) }},
         failures
     );
-    HELIA_VALIDATE_RETURN_FAILURES(failures);
-{% else %}
-    HELIA_VALIDATE_RETURN_FAILURES(0);
 {% endif %}
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 
 {% include "common/standalone/main.j2" %}

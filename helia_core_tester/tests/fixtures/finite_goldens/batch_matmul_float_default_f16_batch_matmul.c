@@ -4,16 +4,27 @@
 #include <stdint.h>
 #include "test_runtime/helia_test_runtime.h"
 
+
 // Context for buffer allocation
 static cmsis_nn_context batch_matmul_float_default_f16_ctx;
 
 // Runtime scratch buffer (max upper bound; actual size queried at runtime)
 // Buffer size calculated conservatively to handle MVE and DSP implementations
 #define BATCH_MATMUL_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX 1024
-static uint8_t batch_matmul_float_default_f16_buffer[BATCH_MATMUL_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX];
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    uint8_t body[BATCH_MATMUL_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} batch_matmul_float_default_f16_buffer_guard;
+#define batch_matmul_float_default_f16_buffer (batch_matmul_float_default_f16_buffer_guard.body)
 
 #define BATCH_MATMUL_FLOAT_DEFAULT_F16_OUTPUT_SIZE (1 * 1 * 4 * 2)
-static float16_t batch_matmul_float_default_f16_output[BATCH_MATMUL_FLOAT_DEFAULT_F16_OUTPUT_SIZE];
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float16_t body[BATCH_MATMUL_FLOAT_DEFAULT_F16_OUTPUT_SIZE];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} batch_matmul_float_default_f16_output_guard;
+#define batch_matmul_float_default_f16_output (batch_matmul_float_default_f16_output_guard.body)
 
 int32_t batch_matmul_float_default_f16_run(
     const float16_t* __restrict input_lhs,
@@ -35,6 +46,8 @@ int32_t batch_matmul_float_default_f16_run(
     // Initialize context buffer
     batch_matmul_float_default_f16_ctx.buf = batch_matmul_float_default_f16_buffer;
     batch_matmul_float_default_f16_ctx.size = required_buffer_size;
+    HELIA_GUARD_ARM(batch_matmul_float_default_f16_buffer, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_STAMP_SLACK(batch_matmul_float_default_f16_buffer, batch_matmul_float_default_f16_ctx.buf == batch_matmul_float_default_f16_buffer ? (size_t)batch_matmul_float_default_f16_ctx.size : 0u);
 
     // Call batch matmul kernel
     arm_cmsis_nn_status kernel_status = arm_batch_matmul_f16(
@@ -53,10 +66,14 @@ int32_t batch_matmul_float_default_f16_run(
 
 int32_t batch_matmul_float_default_f16_test_case_run(void)
 {
+    HELIA_GUARD_ARM(batch_matmul_float_default_f16_output, false /* real output, not scratch: don't poison */);
     int32_t status = batch_matmul_float_default_f16_run(batch_matmul_float_default_f16_input_lhs, batch_matmul_float_default_f16_input_rhs, batch_matmul_float_default_f16_output);
+    int failures = 0;
+    HELIA_GUARD_CHECK(batch_matmul_float_default_f16_buffer, "Batchmatmul scratch", failures);
+    HELIA_GUARD_CHECK_SLACK(batch_matmul_float_default_f16_buffer, "Batchmatmul scratch slack", batch_matmul_float_default_f16_ctx.buf == batch_matmul_float_default_f16_buffer ? (size_t)batch_matmul_float_default_f16_ctx.size : 0u, failures);
+    HELIA_GUARD_CHECK(batch_matmul_float_default_f16_output, "Batchmatmul output", failures);
     HELIA_VALIDATE_STATUS("Batchmatmul", status);
 
-    int failures = 0;
     HELIA_VALIDATE_OUTPUTS(
         FLOAT,
         batch_matmul_float_default_f16_output,

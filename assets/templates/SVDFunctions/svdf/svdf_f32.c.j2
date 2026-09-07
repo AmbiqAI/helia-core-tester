@@ -1,17 +1,23 @@
 #include "{{ name }}_svdf.h"
 {% from "common/standalone/validation.j2" import validation_outputs with context %}
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
-static {{ data_dtype }} {{ name }}_state[{{ state_size }}];
-static {{ data_dtype }} {{ name }}_scratch_input[{{ scratch_input_size }}];
-static {{ data_dtype }} {{ name }}_scratch_output[{{ scratch_output_size }}];
-static {{ data_dtype }} {{ name }}_output[{{ output_size }}];
+{{ helia_guard_declare(data_dtype, name ~ "_state", state_size) }}
+{{ helia_guard_declare(data_dtype, name ~ "_scratch_input", scratch_input_size) }}
+{{ helia_guard_declare(data_dtype, name ~ "_scratch_output", scratch_output_size) }}
+{{ helia_guard_declare(data_dtype, name ~ "_output", output_size) }}
 
 static int32_t run_svdf(void)
 {
     cmsis_nn_context ctx = {0};
     cmsis_nn_context input_ctx = {.buf = {{ name }}_scratch_input, .size = sizeof({{ name }}_scratch_input)};
     cmsis_nn_context output_ctx = {.buf = {{ name }}_scratch_output, .size = sizeof({{ name }}_scratch_output)};
+
+    HELIA_GUARD_ARM({{ name }}_state, false /* recurrent state seeded below: don't poison */);
+    HELIA_GUARD_ARM({{ name }}_scratch_input, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_ARM({{ name }}_scratch_output, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
 
     for (int i = 0; i < {{ state_size }}; ++i)
     {
@@ -52,9 +58,13 @@ static int32_t run_svdf(void)
 int32_t {{ name }}_test_case_run(void)
 {
     int32_t status = run_svdf();
+    int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_state, "{{ validation_label | default("SVDF") }} state", failures);
+    HELIA_GUARD_CHECK({{ name }}_scratch_input, "{{ validation_label | default("SVDF") }} scratch_input", failures);
+    HELIA_GUARD_CHECK({{ name }}_scratch_output, "{{ validation_label | default("SVDF") }} scratch_output", failures);
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("SVDF") }} output", failures);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("SVDF") }}", status);
 
-    int failures = 0;
 {{ validation_outputs(validation_mode_token | default("FLOAT"), validation_tolerance | default(1), output_size, validation_report_limit | default(8)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

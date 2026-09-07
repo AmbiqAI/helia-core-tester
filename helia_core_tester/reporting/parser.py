@@ -20,6 +20,7 @@ class TestResultParser:
         'HELIA_FLOAT_MAXDIFF',
         'HELIA_MASKED_LANES',
         'HELIA_NONFINITE_MISMATCHES',
+        'GuardBreach[',
     )
     failure_count_line_pattern = re.compile(r'^\d+\s+Failures$', re.IGNORECASE)
 
@@ -59,6 +60,13 @@ class TestResultParser:
         self.zero_failures_pattern = re.compile(r'^0\s+Failures\s*$', re.MULTILINE | re.IGNORECASE)
         # Pattern for "X Failures" where X > 0
         self.nonzero_failures_pattern = re.compile(r'^(\d+)\s+Failures\s*$', re.MULTILINE | re.IGNORECASE)
+        # Buffer overrun guard breach (issue #68): HELIA_GUARD_CHECK prints one
+        # line per breached buffer, distinct from a value mismatch, when a
+        # canary byte on either side of a guarded buffer was corrupted. Matched
+        # before the API-error and failure-count patterns: a breach also bumps
+        # the printed failure count and can co-occur with a non-success status,
+        # and memory corruption is the more severe finding in both cases.
+        self.guard_breach_pattern = re.compile(r'GuardBreach\[(?P<label>[^]]+)\]: (?P<dir>[a-z ]+) detected')
         # Non-finite operand mismatch (issue #75): emitted by
         # helia_test_nonfinite_mismatch() instead of the %f "Mismatch[...]"
         # line, because a NaN/Inf operand renders unhelpfully as a number.
@@ -167,6 +175,13 @@ class TestResultParser:
         if exit_code == 124 or "TIMEOUT" in output:
             return TestStatus.TIMEOUT, "Test execution timed out", None, "timeout"
         
+        guard_breaches = [
+            f"{match.group('label').strip()}: {match.group('dir').strip()} detected"
+            for match in self.guard_breach_pattern.finditer(output)
+        ]
+        if guard_breaches:
+            return TestStatus.FAIL, "Guard breach in " + "; ".join(guard_breaches), None, "guard_breach"
+
         api_error_match = self.api_error_pattern.search(output)
         if api_error_match:
             label = api_error_match.group("label").strip()
@@ -371,7 +386,9 @@ class TestResultParser:
         `mismatch[` is a keyword for the same reason: the per-element
         `Mismatch[i]: exp=... got=...` lines print ahead of everything else and
         carry the failing lane index, which is the only way to tell a kernel
-        defect from a tolerance artefact.
+        defect from a tolerance artefact. `guardbreach[` likewise: the
+        GuardBreach[label] lines (issue #68) name which buffer's canary was
+        corrupted, and are printed right after the kernel call.
 
         The line cap bounds the per-element body, which is a debugging aid, but
         it must not bound the verdict: a multi-output case emits enough
@@ -388,7 +405,7 @@ class TestResultParser:
             if not line:
                 continue
 
-            if any(keyword in line.lower() for keyword in ['test', 'fail', 'pass', 'error', 'assert', 'helia_', 'mismatch[']):
+            if any(keyword in line.lower() for keyword in ['test', 'fail', 'pass', 'error', 'assert', 'helia_', 'mismatch[', 'guardbreach[']):
                 in_test_section = True
 
             if in_test_section:

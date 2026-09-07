@@ -4,11 +4,17 @@
 #include <stdint.h>
 #include "test_runtime/helia_test_runtime.h"
 
+
 // Context for buffer allocation (min/max operations don't need a buffer, but API requires ctx)
 static cmsis_nn_context minimum_float_default_f32_ctx = { .buf = NULL, .size = 0 };
 
 #define MINIMUM_FLOAT_DEFAULT_F32_OUTPUT_SIZE (1 * 4 * 4 * 8)
-static float minimum_float_default_f32_output[MINIMUM_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float body[MINIMUM_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} minimum_float_default_f32_output_guard;
+#define minimum_float_default_f32_output (minimum_float_default_f32_output_guard.body)
 
 int32_t minimum_float_default_f32_run(
     const float* __restrict input1,
@@ -31,10 +37,12 @@ int32_t minimum_float_default_f32_run(
 
 int32_t minimum_float_default_f32_test_case_run(void)
 {
+    HELIA_GUARD_ARM(minimum_float_default_f32_output, false /* real output, not scratch: don't poison */);
     int32_t status = minimum_float_default_f32_run(minimum_float_default_f32_input1, minimum_float_default_f32_input2, minimum_float_default_f32_output);
+    int failures = 0;
+    HELIA_GUARD_CHECK(minimum_float_default_f32_output, "Minimum output", failures);
     HELIA_VALIDATE_STATUS("Minimum", status);
 
-    int failures = 0;
     HELIA_VALIDATE_OUTPUTS(
         FLOAT,
         minimum_float_default_f32_output,

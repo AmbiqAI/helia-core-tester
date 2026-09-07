@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "test_runtime/helia_test_runtime.h"
 
+
 // Context for buffer allocation
 static cmsis_nn_context max_pool_float_default_f32_ctx;
 
@@ -14,7 +15,12 @@ static cmsis_nn_context max_pool_float_default_f32_ctx;
 static uint8_t* max_pool_float_default_f32_buffer = NULL;
 
 #define MAX_POOL_FLOAT_DEFAULT_F32_OUTPUT_SIZE (1 * 3 * 3 * 3)
-static float max_pool_float_default_f32_output[MAX_POOL_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float body[MAX_POOL_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} max_pool_float_default_f32_output_guard;
+#define max_pool_float_default_f32_output (max_pool_float_default_f32_output_guard.body)
 
 int32_t max_pool_float_default_f32_run(
     const float* __restrict input,
@@ -40,10 +46,12 @@ int32_t max_pool_float_default_f32_run(
 
 int32_t max_pool_float_default_f32_test_case_run(void)
 {
+    HELIA_GUARD_ARM(max_pool_float_default_f32_output, false /* real output, not scratch: don't poison */);
     int32_t status = max_pool_float_default_f32_run(max_pool_float_default_f32_input, max_pool_float_default_f32_output);
+    int failures = 0;
+    HELIA_GUARD_CHECK(max_pool_float_default_f32_output, "Maxpool output", failures);
     HELIA_VALIDATE_STATUS("Maxpool", status);
 
-    int failures = 0;
     HELIA_VALIDATE_OUTPUTS(
         FLOAT,
         max_pool_float_default_f32_output,

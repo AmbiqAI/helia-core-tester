@@ -1,9 +1,16 @@
 #include "{{ name }}_quantize.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 #define {{ name|upper }}_OUTPUT_SIZE {{ input_size }}
-static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+{{ helia_guard_declare(output_dtype, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
+{% if has_activation %}
+{{ helia_guard_declare("float", "activated_input", input_size) }}
+{% endif %}
+{% if has_activation and activation_kernel_fn %}
+{{ helia_guard_declare(output_dtype, "activation_probe", input_size) }}
+{% endif %}
 
 int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input,
@@ -12,8 +19,8 @@ int32_t {{ name }}_run(
     {% if has_activation %}
     // TFLite applies activation in float space BEFORE quantization
     // To match TFLite behavior, we need to apply activation to float input first
-    static float activated_input[{{ input_size }}];
-    
+    HELIA_GUARD_ARM(activated_input, false /* fully written below: don't poison */);
+
     {% if activation_type == 'RELU' %}
     // ReLU: clamp negative values to zero
     for (int i = 0; i < {{ input_size }}; i++) {
@@ -55,7 +62,7 @@ int32_t {{ name }}_run(
     {% if has_activation and activation_kernel_fn %}
     // Coverage path: invoke legacy activation kernels on a scratch copy so
     // golden-checked output remains in the affine quantized domain.
-    static {{ output_dtype }} activation_probe[{{ input_size }}];
+    HELIA_GUARD_ARM(activation_probe, false /* fully written below: don't poison */);
     for (int i = 0; i < {{ input_size }}; i++) {
         activation_probe[i] = output[i];
     }
@@ -67,10 +74,18 @@ int32_t {{ name }}_run(
 
 int32_t {{ name }}_test_case_run(void)
 {
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
+    int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Quantize") }} output", failures);
+    {% if has_activation %}
+    HELIA_GUARD_CHECK(activated_input, "{{ validation_label | default("Quantize") }} activated_input", failures);
+    {% endif %}
+    {% if has_activation and activation_kernel_fn %}
+    HELIA_GUARD_CHECK(activation_probe, "{{ validation_label | default("Quantize") }} activation_probe", failures);
+    {% endif %}
     HELIA_VALIDATE_STATUS("{{ validation_label | default("Quantize") }}", status);
 
-    int failures = 0;
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("TOLERANT_INT") }},
         {{ name }}_output,

@@ -1,20 +1,23 @@
 #include "{{ name }}_mirror_pad.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 #define {{ name|upper }}_OUTPUT_SIZE {{ output_size }}
-static {{ c_type }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+{{ helia_guard_declare(c_type, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
 
 int32_t {{ name }}_test_case_run(void)
 {
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     arm_cmsis_nn_status status = {{ kernel_fn }}(
         {{ name }}_input,
         &{{ name }}_params,
         {{ name }}_output
     );
+    int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_output, "MirrorPad output", failures);
     HELIA_VALIDATE_STATUS("MirrorPad", status);
 
-    int failures = 0;
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("TOLERANT_INT") }},
         {{ name }}_output,

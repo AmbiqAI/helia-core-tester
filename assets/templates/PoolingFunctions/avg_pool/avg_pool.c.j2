@@ -1,6 +1,7 @@
 #include "{{ name }}_avg_pool.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 {% from "common/standalone/validation.j2" import validation_outputs with context %}
 
 {% if requires_kernel_prototype | default(false) %}
@@ -20,19 +21,29 @@ static cmsis_nn_context {{ name }}_ctx;
 // Buffer size: 0 for max pooling, input_channels * 4 for average pooling (DSP)
 #define {{ name|upper }}_BUFFER_SIZE_MAX {{ buffer_size_max }}
 {% if buffer_size_max > 0 %}
-static uint8_t {{ name }}_buffer[{{ name|upper }}_BUFFER_SIZE_MAX];
+{{ helia_guard_declare("uint8_t", name ~ "_buffer", name|upper ~ "_BUFFER_SIZE_MAX") }}
 {% else %}
 // No buffer needed for max pooling
 static uint8_t* {{ name }}_buffer = NULL;
 {% endif %}
 
 #define {{ name|upper }}_OUTPUT_SIZE ({{ output_dims.n }} * {{ output_dims.h }} * {{ output_dims.w }} * {{ output_dims.c }})
-static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+{{ helia_guard_declare(output_dtype, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
 
 int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input,
     {{ output_dtype }}* __restrict output
 ) {
+    {% if buffer_size_max > 0 %}
+    // Armed unconditionally: declared/checked whenever buffer_size_max > 0
+    // (see the DSP buffer-size comment above), even for kernel variants
+    // (e.g. the float kernels below) that never query a buffer size and
+    // leave ctx.buf NULL -- poisoning an unused buffer here is harmless,
+    // and keeps this in lockstep with the CHECK in _test_case_run instead
+    // of leaving its canary unstamped whenever kernel_get_buffer_size_fn
+    // is absent.
+    HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
+    {% endif %}
     {% if kernel_get_buffer_size_fn %}
     // Calculate required buffer size (for average pooling)
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
@@ -53,6 +64,9 @@ int32_t {{ name }}_run(
     {{ name }}_ctx.buf = NULL;
     {{ name }}_ctx.size = 0;
     {% endif %}
+    {% if buffer_size_max > 0 %}
+    HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
+    {% endif %}
 
     // Call pooling kernel
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
@@ -70,10 +84,16 @@ int32_t {{ name }}_run(
 
 int32_t {{ name }}_test_case_run(void)
 {
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
+    int failures = 0;
+    {% if buffer_size_max > 0 %}
+    HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Pooling") }} scratch", failures);
+    HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ validation_label | default("Pooling") }} scratch slack", {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u, failures);
+    {% endif %}
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Pooling") }} output", failures);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("Pooling") }}", status);
 
-    int failures = 0;
 {{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

@@ -49,6 +49,144 @@ def test_parser_parses_generic_api_error_before_summary() -> None:
     assert result.error_type == "api_error"
 
 
+def test_parser_classifies_guard_breach_overrun_distinctly() -> None:
+    # issue #68: a corrupted tail canary must be reported as its own failure
+    # kind, not folded into an ordinary output mismatch, even though
+    # HELIA_GUARD_CHECK also bumps the printed failure count.
+    parser = reporting_parser.TestResultParser()
+    result = parser.parse_fvp_output(
+        output="GuardBreach[conv1_scratch]: overrun detected (canary corrupted)\n1 Failures\n",
+        elf_path=Path("convolve.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "guard_breach"
+    assert result.failure_reason == "Guard breach in conv1_scratch: overrun detected"
+
+
+def test_parser_classifies_guard_breach_underrun_and_combined() -> None:
+    parser = reporting_parser.TestResultParser()
+    underrun = parser.parse_fvp_output(
+        output="GuardBreach[conv1_output]: underrun detected (canary corrupted)\n1 Failures\n",
+        elf_path=Path("convolve.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert underrun.error_type == "guard_breach"
+    assert underrun.failure_reason == "Guard breach in conv1_output: underrun detected"
+
+    both = parser.parse_fvp_output(
+        output="GuardBreach[conv1_output]: underrun and overrun detected (canary corrupted)\n2 Failures\n",
+        elf_path=Path("convolve.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert both.error_type == "guard_breach"
+    assert both.failure_reason == "Guard breach in conv1_output: underrun and overrun detected"
+
+
+def _parse(parser: reporting_parser.TestResultParser, output: str) -> reporting_models.TestResult:
+    return parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("convolve.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+
+
+def test_parser_guard_breach_outranks_value_mismatch_with_emitted_label() -> None:
+    # The label form the runtime actually prints carries spaces; a breach must
+    # win over the value mismatch that a corrupted buffer usually also causes.
+    parser = reporting_parser.TestResultParser()
+    result = _parse(
+        parser,
+        "Convolution output mismatch: expected 4 got 7\n"
+        "GuardBreach[Convolution scratch]: overrun detected (canary corrupted)\n"
+        "Mismatch[3]: exp=7 got=9\n"
+        "2 Failures\n",
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "guard_breach"
+    assert result.failure_reason == "Guard breach in Convolution scratch: overrun detected"
+
+
+def test_parser_guard_breach_outranks_api_error_and_keeps_the_line() -> None:
+    # Guard checks run before the returning status validator, so a kernel that
+    # overruns and then returns non-success prints both; the memory-safety
+    # finding is the one to keep.
+    parser = reporting_parser.TestResultParser()
+    result = _parse(
+        parser,
+        "GuardBreach[Convolution output]: underrun detected (canary corrupted)\n"
+        "Convolution failed with status -1\n"
+        "1 Failures\n",
+    )
+    assert result.error_type == "guard_breach"
+    assert result.failure_reason == "Guard breach in Convolution output: underrun detected"
+    assert "GuardBreach[Convolution output]: underrun detected (canary corrupted)" in result.output_lines
+
+
+def test_parser_reports_every_breached_buffer() -> None:
+    parser = reporting_parser.TestResultParser()
+    result = _parse(
+        parser,
+        "GuardBreach[Convolution scratch]: overrun detected (canary corrupted)\n"
+        "GuardBreach[Convolution weight_sum]: underrun detected (canary corrupted)\n"
+        "GuardBreach[Convolution output]: underrun and overrun detected (canary corrupted)\n"
+        "3 Failures\n",
+    )
+    assert result.error_type == "guard_breach"
+    assert result.failure_reason == (
+        "Guard breach in Convolution scratch: overrun detected; "
+        "Convolution weight_sum: underrun detected; "
+        "Convolution output: underrun and overrun detected"
+    )
+    assert sum(line.startswith("GuardBreach[") for line in result.output_lines) == 3
+
+
+def test_parser_guard_breach_outranks_nonfinite_mismatch() -> None:
+    parser = reporting_parser.TestResultParser()
+    result = _parse(
+        parser,
+        "GuardBreach[Convolution output]: overrun detected (canary corrupted)\n"
+        "HELIA_NONFINITE_MISMATCH[0]: exp=1.5 got=nan\n"
+        "HELIA_NONFINITE_MISMATCHES n=1\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=8\n"
+        "2 Failures\n",
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "guard_breach"
+
+
+def test_parser_corrupted_capture_outranks_guard_breach() -> None:
+    parser = reporting_parser.TestResultParser()
+    result = _parse(
+        parser,
+        "GuardBreach[Convolution output]: overrun detected (canary corrupted)\n"
+        "HELIA_MASKED_LANES: 9 of 8\n"
+        "1 Failures\n",
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "corrupted_capture"
+
+
+def test_parser_guard_breach_survives_truncated_capture() -> None:
+    parser = reporting_parser.TestResultParser()
+    body = "".join(f"Mismatch[{i}]: exp=1 got=2\n" for i in range(80))
+    result = _parse(
+        parser,
+        body + "GuardBreach[Convolution output]: overrun detected (canary corrupted)\n81 Failures\n",
+    )
+    assert result.error_type == "guard_breach"
+    assert "GuardBreach[Convolution output]: overrun detected (canary corrupted)" in result.output_lines
+    assert "81 Failures" in result.output_lines
+
+
 def test_parser_keeps_legacy_unity_fallback() -> None:
     parser = reporting_parser.TestResultParser()
     result = parser.parse_fvp_output(

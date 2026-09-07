@@ -1,6 +1,7 @@
 #include "{{ name }}_convolve.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 {% from "common/standalone/validation.j2" import validation_outputs with context %}
 
 {% include "common/standalone/benchmark.j2" %}
@@ -13,7 +14,7 @@ static cmsis_nn_context {{ name }}_ctx;
 // Runtime scratch buffer (max upper bound; actual size queried at runtime)
 // Buffer size calculated conservatively to handle MVE and DSP implementations
 #define {{ name|upper }}_BUFFER_SIZE_MAX {{ buffer_size_max }}
-static uint8_t {{ name }}_buffer[{{ name|upper }}_BUFFER_SIZE_MAX];
+{{ helia_guard_declare("uint8_t", name ~ "_buffer", name|upper ~ "_BUFFER_SIZE_MAX") }}
 
 {% if kernel_fn == 'arm_convolve_wrapper_s8' %}
 // Weight sum context (precomputed input-offset/bias fold, avoids per-MAC offset arithmetic)
@@ -21,11 +22,11 @@ static cmsis_nn_context {{ name }}_weight_sum_ctx;
 // Weight sum buffer size: output channels * sizeof(int32_t)
 // CMSIS-NN uses output_dims->c, which should equal filter_dims.n (output channels)
 #define {{ name|upper }}_WEIGHT_SUM_BUFFER_SIZE ({{ output_dims.c }} * sizeof(int32_t))
-static uint8_t {{ name }}_weight_sum_buffer[{{ name|upper }}_WEIGHT_SUM_BUFFER_SIZE];
+{{ helia_guard_declare("uint8_t", name ~ "_weight_sum_buffer", name|upper ~ "_WEIGHT_SUM_BUFFER_SIZE") }}
 {% endif %}
 
 #define {{ name|upper }}_OUTPUT_SIZE ({{ output_dims.n }} * {{ output_dims.h }} * {{ output_dims.w }} * {{ output_dims.c }})
-static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+{{ helia_guard_declare(output_dtype, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
 
 {% if has_biases %}
 // Bias dimensions
@@ -76,11 +77,14 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
     // Initialize context buffer
     {{ name }}_ctx.buf = {{ name }}_buffer;
     {{ name }}_ctx.size = required_buffer_size;
+    HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
 
     {% if kernel_fn == 'arm_convolve_wrapper_s8' %}
     // Initialize weight sum context and buffer
     {{ name }}_weight_sum_ctx.buf = {{ name }}_weight_sum_buffer;
     {{ name }}_weight_sum_ctx.size = {{ name|upper }}_WEIGHT_SUM_BUFFER_SIZE;
+    HELIA_GUARD_ARM({{ name }}_weight_sum_buffer, true /* fully recomputed below: poison-safe */);
 
     // Calculate weight sum (required for s8 convolutions)
     // This pre-computes weight * input_offset + bias for optimization
@@ -239,10 +243,17 @@ static void {{ name }}_benchmark_run(void)
 
 int32_t {{ name }}_test_case_run(void)
 {
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
+    int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Convolution") }} scratch", failures);
+    HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ validation_label | default("Convolution") }} scratch slack", {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u, failures);
+    {% if kernel_fn == 'arm_convolve_wrapper_s8' %}
+    HELIA_GUARD_CHECK({{ name }}_weight_sum_buffer, "{{ validation_label | default("Convolution") }} weight_sum", failures);
+    {% endif %}
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Convolution") }} output", failures);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("Convolution") }}", status);
 
-    int failures = 0;
 {{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

@@ -22,6 +22,9 @@ def test_where_templates_use_int64_coordinates() -> None:
     op_source = (_repo_root() / "helia_core_tester" / "generation" / "ops" / "SelectFunctions" / "where.py").read_text()
 
     assert "static const int64_t {{ name }}_expected_output[]" in header
-    assert "static {{ output_c_type }} {{ name }}_output" in source
+    # Guard-wrapped (issue #68): the output buffer's element type is still
+    # output_c_type, now passed through helia_guard_declare's first arg
+    # rather than a plain "static {{ output_c_type }} ..." declaration.
+    assert 'helia_guard_declare(output_c_type, name ~ "_output"' in source
     assert '"output_c_type": "int64_t"' in op_source
     assert "dtype=np.int64" in op_source
