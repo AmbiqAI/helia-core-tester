@@ -1,0 +1,69 @@
+#include "{{ name }}_{{ op_suffix }}.h"
+#include <string.h>
+{% include "common/standalone/runtime_common.j2" %}
+{% if not half and not api_error %}
+#if defined(__SSE__)
+#include <xmmintrin.h>
+#endif
+static int {{ name }}_flushes_inputs(void)
+{
+#if defined(__arm__) && defined(__ARM_FP) && (__ARM_FP != 0)
+    uint32_t fpscr;
+    __asm__ volatile("vmrs %0, fpscr" : "=r"(fpscr));
+    return (fpscr & (1u << 24)) != 0;
+#elif defined(__SSE__)
+    return (_mm_getcsr() & (1u << 6)) != 0;
+#else
+    return 0;
+#endif
+}
+{% endif %}
+
+static {{ output_dtype }} {{ name }}_input[{{ block_size }} + 2];
+static {{ output_dtype }} {{ name }}_output[{{ block_size }} + 2];
+
+int32_t {{ name }}_test_case_run(void)
+{
+    memset({{ name }}_input, 0xa5, sizeof({{ name }}_input));
+    memset({{ name }}_output, 0xa5, sizeof({{ name }}_output));
+    memcpy({{ name }}_input + 1, {{ name }}_input_bits, sizeof({{ name }}_input_bits));
+    {{ output_dtype }} *result = {{ name }}_{{ 'input' if in_place else 'output' }} + 1;
+    int32_t status = {{ kernel_fn }}(
+        {{ 'NULL' if api_error == 'null_input' else name + '_input + 1' }},
+        {{ 'NULL' if api_error == 'null_output' else 'result' }}, {{ call_size }});
+    HELIA_VALIDATE_EXPECTED_STATUS("{{ name }}", status, {{ expected_status }});
+    int failures = 0;
+{% if not half and not api_error %}
+    const int flush_inputs = {{ name }}_flushes_inputs();
+{% endif %}
+    for (int i = 0; i < {{ block_size }}; ++i) {
+        {{ word_type }} actual;
+        memcpy(&actual, result + i, sizeof(actual));
+{% if api_error %}
+        const {{ word_type }} expected = {{ name + '_input_bits[i]' if in_place else ('0xa5a5' if half else '0xa5a5a5a5') }};
+        const uint32_t allowed = 0;
+{% else %}
+        {{ word_type }} expected = {{ name }}_expected_bits[i];
+{% if not half %}
+        if (flush_inputs && {{ name }}_input_bits[i] > 0 && {{ name }}_input_bits[i] < 0x00800000u) {
+            expected = {{ flushed_bits }};
+        }
+{% endif %}
+        const uint32_t allowed = (expected > 0 && expected < {{ '0x7c00u' if half else '0x7f800000u' }}) ? {{ max_ulp }} : 0;
+{% endif %}
+        HELIA_VALIDATE_FLOAT_BITS(actual, expected, {{ '0x7c00u' if half else '0x7f800000u' }}, allowed, i, 8, failures);
+    }
+    for (unsigned int i = 0; i < sizeof({{ name }}_input); ++i) {
+        const unsigned int first = sizeof({{ output_dtype }});
+        const unsigned int last = ({{ block_size }} + 1) * sizeof({{ output_dtype }});
+        if (i < first || i >= last) {
+            if (((unsigned char *){{ name }}_input)[i] != 0xa5 || ((unsigned char *){{ name }}_output)[i] != 0xa5) ++failures;
+        }
+    }
+{% if not in_place %}
+    if (memcmp({{ name }}_input + 1, {{ name }}_input_bits, sizeof({{ name }}_input_bits)) != 0) ++failures;
+{% endif %}
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
+}
+
+{% include "common/standalone/main.j2" %}

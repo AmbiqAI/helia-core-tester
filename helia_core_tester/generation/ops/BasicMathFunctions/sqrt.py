@@ -133,6 +133,15 @@ class OpSqrt(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        if self.tensor_dtype("input") in ("FP16", "FP32"):
+            self._write_tflite_bytes(
+                out_path,
+                build_sqrt_op(
+                    input_shape=tuple(self.desc["input_shape"]),
+                    dtype=self.tensor_litert_dtype("input"),
+                ),
+            )
+            return
         activation_dtype = self.desc.get("activation_dtype", "S8")
         if activation_dtype == "S8":
             dtype = "int8"
@@ -181,6 +190,12 @@ class OpSqrt(OperationBase):
         """
         Generate C and H files from templates for Sqrt operation.
         """
+        if self.tensor_dtype("input") in ("FP16", "FP32"):
+            from helia_core_tester.generation.ops._shared.sqrt_float import generate_sqrt_float
+
+            generate_sqrt_float(self, output_dir, reciprocal=False)
+            return
+
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']

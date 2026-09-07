@@ -56,6 +56,7 @@ def test_all_c_templates_use_standalone_harness_contract() -> None:
             # the plain form from the render context.
             assert (
                 "HELIA_VALIDATE_OUTPUTS(" in text
+                or "HELIA_VALIDATE_FLOAT_BITS(" in text
                 or "validation_outputs(" in text
             ), path
         assert "HELIA_VALIDATE_RETURN_FAILURES(" in text, path
@@ -859,6 +860,7 @@ def test_shared_runtime_header_defines_all_validators() -> None:
         "HELIA_VALIDATE_EXACT_INTS",
         "HELIA_VALIDATE_TOLERANT_INTS",
         "HELIA_VALIDATE_FLOATS",
+        "HELIA_VALIDATE_FLOAT_BITS",
         "HELIA_VALIDATE_BOOLEANS",
         "HELIA_VALIDATE_OUTPUTS_EXACT_INT",
         "HELIA_VALIDATE_OUTPUTS_TOLERANT_INT",
