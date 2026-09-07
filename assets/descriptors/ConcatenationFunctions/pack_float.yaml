@@ -1,0 +1,397 @@
+# # arm_pack_f32/f16 (ns-cmsis-nn#475, TFLite PACK): num_inputs equal-shape tensors stacked
+# # along a new axis at any position 0..rank, rank-0 inputs included. Goldens are numpy.stack;
+# # the kernel is a bit copy, so the comparison is zero-tolerance. required_kernel_symbols
+# # skips every case on a checkout without the symbol.
+operator: Pack
+name: pack_float_rank0_n8_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: []
+num_inputs: 8
+axis: 0
+---
+operator: Pack
+name: pack_float_rank1_n2_axis0_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [5]
+num_inputs: 2
+axis: 0
+---
+operator: Pack
+name: pack_float_rank1_n2_axis1_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [5]
+num_inputs: 2
+axis: 1
+---
+operator: Pack
+name: pack_float_rank2_n3_axis0_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [3, 7]
+num_inputs: 3
+axis: 0
+---
+operator: Pack
+name: pack_float_rank2_n3_axis1_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [3, 7]
+num_inputs: 3
+axis: 1
+---
+operator: Pack
+name: pack_float_rank2_n3_axis2_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [3, 7]
+num_inputs: 3
+axis: 2
+---
+# A single input is a plain copy with a unit axis inserted.
+operator: Pack
+name: pack_float_rank2_n1_axis1_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [3, 7]
+num_inputs: 1
+axis: 1
+---
+operator: Pack
+name: pack_float_rank3_n5_axis0_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [2, 3, 5]
+num_inputs: 5
+axis: 0
+---
+operator: Pack
+name: pack_float_rank3_n5_axis1_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [2, 3, 5]
+num_inputs: 5
+axis: 1
+---
+operator: Pack
+name: pack_float_rank3_n5_axis2_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [2, 3, 5]
+num_inputs: 5
+axis: 2
+---
+operator: Pack
+name: pack_float_rank3_n5_axis3_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [2, 3, 5]
+num_inputs: 5
+axis: 3
+---
+operator: Pack
+name: pack_float_rank4_n8_axis0_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [1, 4, 6, 3]
+num_inputs: 8
+axis: 0
+---
+operator: Pack
+name: pack_float_rank4_n8_axis2_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [1, 4, 6, 3]
+num_inputs: 8
+axis: 2
+---
+operator: Pack
+name: pack_float_rank4_n8_axis4_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [1, 4, 6, 3]
+num_inputs: 8
+axis: 4
+---
+# 4488 elements; inner runs of 33 are not a multiple of any lane count.
+operator: Pack
+name: pack_float_large_n8_axis1_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [17, 33]
+num_inputs: 8
+axis: 1
+---
+# Pure data movement: the first input carries the sweep and every token must land bit-exact.
+operator: Pack
+name: pack_float_nonfinite_rank3_n3_axis1_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f32]
+input_shape: [2, 3, 5]
+num_inputs: 3
+axis: 1
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+---
+operator: Pack
+name: pack_float_rank0_n8_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: []
+num_inputs: 8
+axis: 0
+---
+operator: Pack
+name: pack_float_rank1_n2_axis0_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [5]
+num_inputs: 2
+axis: 0
+---
+operator: Pack
+name: pack_float_rank1_n2_axis1_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [5]
+num_inputs: 2
+axis: 1
+---
+operator: Pack
+name: pack_float_rank2_n3_axis0_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [3, 7]
+num_inputs: 3
+axis: 0
+---
+operator: Pack
+name: pack_float_rank2_n3_axis1_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [3, 7]
+num_inputs: 3
+axis: 1
+---
+operator: Pack
+name: pack_float_rank2_n3_axis2_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [3, 7]
+num_inputs: 3
+axis: 2
+---
+# A single input is a plain copy with a unit axis inserted.
+operator: Pack
+name: pack_float_rank2_n1_axis1_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [3, 7]
+num_inputs: 1
+axis: 1
+---
+operator: Pack
+name: pack_float_rank3_n5_axis0_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [2, 3, 5]
+num_inputs: 5
+axis: 0
+---
+operator: Pack
+name: pack_float_rank3_n5_axis1_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [2, 3, 5]
+num_inputs: 5
+axis: 1
+---
+operator: Pack
+name: pack_float_rank3_n5_axis2_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [2, 3, 5]
+num_inputs: 5
+axis: 2
+---
+operator: Pack
+name: pack_float_rank3_n5_axis3_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [2, 3, 5]
+num_inputs: 5
+axis: 3
+---
+operator: Pack
+name: pack_float_rank4_n8_axis0_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [1, 4, 6, 3]
+num_inputs: 8
+axis: 0
+---
+operator: Pack
+name: pack_float_rank4_n8_axis2_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [1, 4, 6, 3]
+num_inputs: 8
+axis: 2
+---
+operator: Pack
+name: pack_float_rank4_n8_axis4_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [1, 4, 6, 3]
+num_inputs: 8
+axis: 4
+---
+# 4488 elements; inner runs of 33 are not a multiple of any lane count.
+operator: Pack
+name: pack_float_large_n8_axis1_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [17, 33]
+num_inputs: 8
+axis: 1
+---
+# Pure data movement: the first input carries the sweep and every token must land bit-exact.
+operator: Pack
+name: pack_float_nonfinite_rank3_n3_axis1_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_pack_f16]
+input_shape: [2, 3, 5]
+num_inputs: 3
+axis: 1
+input_mode: nonfinite_sweep
+nonfinite_policy: strict

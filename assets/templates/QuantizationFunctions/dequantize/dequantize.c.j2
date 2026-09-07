@@ -9,6 +9,14 @@ int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input,
     {{ output_dtype }}* __restrict output
 ) {
+{% if kernel_style == 'widen' %}
+    // Call the float16 -> float32 widening kernel (no scale or zero point)
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        input,
+        output,
+        {{ input_size }}         // block_size
+    );
+{% else %}
     // Call Dequantize kernel
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         input,
@@ -17,6 +25,7 @@ int32_t {{ name }}_run(
         {{ zero_point }},        // zero_point
         {{ scale }}f             // scale (float)
     );
+{% endif %}
     
     if (kernel_status != ARM_CMSIS_NN_SUCCESS) {
         return kernel_status;

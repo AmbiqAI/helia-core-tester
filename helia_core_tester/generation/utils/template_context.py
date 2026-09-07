@@ -373,6 +373,24 @@ class TemplateContextBuilder:
             raise ValueError(f"Unsupported shape length: {len(shape)}")
 
     @staticmethod
+    def shape_to_cmsis_dims_any_rank(shape: Tuple[int, ...]) -> Dict[str, int]:
+        """cmsis_nn_dims for a tensor of any rank, for templates that only use the
+        dims to size a buffer. Rank 0 is one element; rank 1..4 follow
+        nhwc_to_cmsis_dims; a higher rank folds its leading axes into n so the
+        n*h*w*c product stays the element count. The rank-agnostic copy kernels
+        (arm_split_*, arm_concatenation_*, arm_pack_*, arm_unpack_*) take the
+        real shape as a separate int32 array."""
+        shape = tuple(int(dim) for dim in shape)
+        if len(shape) == 0:
+            return {'n': 1, 'h': 1, 'w': 1, 'c': 1}
+        if len(shape) <= 4:
+            return TemplateContextBuilder.nhwc_to_cmsis_dims(shape)
+        leading = 1
+        for dim in shape[:-3]:
+            leading *= dim
+        return {'n': leading, 'h': shape[-3], 'w': shape[-2], 'c': shape[-1]}
+
+    @staticmethod
     def normalize_reduction_axes(input_rank: int, axes: List[int]) -> List[int]:
         """
         Normalize reduction axes to unique, in-range positive indices.

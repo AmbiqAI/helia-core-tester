@@ -22,13 +22,15 @@ class OpSplit(OperationBase):
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         from helia_core_tester.generation.utils.litert_builder import build_split_op
 
-        activation_dtype = self.desc.get("activation_dtype", "S8")
+        activation_dtype = self._split_dtype()
         if activation_dtype == "S8":
             dtype = "int8"
         elif activation_dtype == "S16":
             dtype = "int16"
         elif activation_dtype == "FP16":
             dtype = "float16"
+        elif activation_dtype == "FP32":
+            dtype = "float32"
         else:
             raise NotImplementedError(f"Unsupported Split dtype: {activation_dtype}")
 
@@ -47,6 +49,9 @@ class OpSplit(OperationBase):
         with open(out_path, "wb") as f:
             f.write(model_bytes)
     
+    def _split_dtype(self) -> str:
+        return self.tensor_dtype("input", default=str(self.desc.get("activation_dtype", "S8")))
+
     def _select_cmsis_split_kernel(self) -> Dict[str, str]:
         """
         Select appropriate CMSIS-NN kernel function for Split operation.
@@ -54,7 +59,7 @@ class OpSplit(OperationBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self._split_dtype()
         
         if activation_dtype == 'S8':
             return {
@@ -73,6 +78,13 @@ class OpSplit(OperationBase):
                 'kernel_fn': 'arm_split_f16',
                 'input_c_type': 'float16_t',
                 'output_c_type': 'float16_t'
+            }
+        elif activation_dtype == 'FP32':
+            # arm_split_f32 (ns-cmsis-nn#475): same rank-agnostic signature as arm_split_f16.
+            return {
+                'kernel_fn': 'arm_split_f32',
+                'input_c_type': 'float',
+                'output_c_type': 'float'
             }
         else:
             raise NotImplementedError(f"Unsupported Split dtype: {activation_dtype}")
@@ -96,8 +108,9 @@ class OpSplit(OperationBase):
         
         builder = TemplateContextBuilder()
         
-        # Convert shapes to CMSIS dims
-        input_dims = builder.nhwc_to_cmsis_dims(input_shape)
+        # Convert shapes to CMSIS dims (the kernel takes the real shape array;
+        # the dims struct is a buffer-sizing convenience, so any rank is fine)
+        input_dims = builder.shape_to_cmsis_dims_any_rank(input_shape)
         
         # Extract axis and num_splits/size_splits from descriptor
         axis = int(self.desc.get('axis', -1))
@@ -134,6 +147,9 @@ class OpSplit(OperationBase):
         elif kernel_info["input_c_type"] == "float16_t":
             np_in_dtype = np.float16
             input_q = self._sample_uniform(input_shape, dtype=np_in_dtype)
+        elif kernel_info["input_c_type"] == "float":
+            np_in_dtype = np.float32
+            input_q = self._sample_uniform(input_shape, dtype=np_in_dtype)
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
 
@@ -148,10 +164,15 @@ class OpSplit(OperationBase):
         outputs = []
         for idx, out_data in enumerate(output_arrays):
             out_data = np.array(out_data, dtype=np_in_dtype)
+            size = int(np.prod(out_data.shape))
+            # A zero-extent slice (split_dims entry of 0, accepted by the kernel) still
+            # needs one element of storage and a non-empty golden initializer; the
+            # validation runs over size 0 and compares nothing.
+            golden = out_data if size > 0 else np.zeros(1, dtype=np_in_dtype)
             outputs.append({
                 'name': f"{name}_out_{idx}",
-                'expected_output_array': builder.format_array_as_c_literal(out_data),
-                'size': int(np.prod(out_data.shape)),
+                'expected_output_array': builder.format_array_as_c_literal(golden),
+                'size': size,
             })
         
         # Format arrays
@@ -174,7 +195,7 @@ class OpSplit(OperationBase):
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
         }
-        if kernel_info["input_c_type"] == "float16_t":
+        if kernel_info["input_c_type"] in {"float16_t", "float"}:
             context["validation_mode"] = "float"
         
         # Render templates

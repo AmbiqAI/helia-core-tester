@@ -122,10 +122,19 @@ class OpConcatenation(OperationBase):
             }
         elif activation_dtype in {'FP32', 'FP16'}:
             call_style = str(self.desc.get("hint", {}).get("call_style", "")).lower()
-            if call_style not in {"axis_x", "axis_y", "axis_z", "axis_w"}:
-                call_style = self._axis_call_style(int(self.desc.get("axis", -1)), input_rank)
             suffix = "f16" if activation_dtype == "FP16" else "f32"
             c_type = "float16_t" if activation_dtype == "FP16" else "float"
+            if call_style == "any_rank":
+                # arm_concatenation_f32/f16 (ns-cmsis-nn#475): every input at once,
+                # any rank, any axis, natural row-major layout.
+                return {
+                    'kernel_fn': f'arm_concatenation_{suffix}',
+                    'input_c_type': c_type,
+                    'output_c_type': c_type,
+                    'call_style': call_style,
+                }
+            if call_style not in {"axis_x", "axis_y", "axis_z", "axis_w"}:
+                call_style = self._axis_call_style(int(self.desc.get("axis", -1)), input_rank)
             return {
                 'kernel_fn': f'arm_concatenation_{suffix}_{call_style[-1]}',
                 'input_c_type': c_type,
@@ -205,8 +214,9 @@ class OpConcatenation(OperationBase):
             output_shape[axis] = sum(int(shape[axis]) for shape in input_shapes)
             output_shape = tuple(output_shape)
 
-        # Convert shapes to CMSIS dims
-        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
+        # Convert shapes to CMSIS dims (buffer sizing only; the rank-agnostic call
+        # style hands the kernel the real shape array)
+        output_dims = builder.shape_to_cmsis_dims_any_rank(output_shape)
         output_rank = len(output_shape)
         
         # Calculate input_concat_dims (dimension along axis for each input)
@@ -304,6 +314,11 @@ class OpConcatenation(OperationBase):
         input_concat_dims_array_str = builder.format_array_as_c_literal(np.array(input_concat_dims, dtype=np.int32))
         output_shape_array_str = builder.format_array_as_c_literal(np.array(output_shape, dtype=np.int32))
         
+        def nhwc_component(shape, index: int) -> int:
+            # The per-axis 4-D entry points read these; other ranks only reach the
+            # rank-agnostic kernel, whose template ignores them.
+            return int(shape[index]) if len(shape) == 4 else 0
+
         # Build template context
         context = {
             'name': name,
@@ -319,14 +334,14 @@ class OpConcatenation(OperationBase):
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
             'call_style': call_style,
-            'input_x_array': builder.format_array_as_c_literal(np.array([s[2] for s in input_shapes], dtype=np.int32)),
-            'input_y_array': builder.format_array_as_c_literal(np.array([s[1] for s in input_shapes], dtype=np.int32)),
-            'input_z_array': builder.format_array_as_c_literal(np.array([s[3] for s in input_shapes], dtype=np.int32)),
-            'input_w_array': builder.format_array_as_c_literal(np.array([s[0] for s in input_shapes], dtype=np.int32)),
-            'output_x': int(output_shape[2]),
-            'output_y': int(output_shape[1]),
-            'output_z': int(output_shape[3]),
-            'output_w': int(output_shape[0]),
+            'input_x_array': builder.format_array_as_c_literal(np.array([nhwc_component(s, 2) for s in input_shapes], dtype=np.int32)),
+            'input_y_array': builder.format_array_as_c_literal(np.array([nhwc_component(s, 1) for s in input_shapes], dtype=np.int32)),
+            'input_z_array': builder.format_array_as_c_literal(np.array([nhwc_component(s, 3) for s in input_shapes], dtype=np.int32)),
+            'input_w_array': builder.format_array_as_c_literal(np.array([nhwc_component(s, 0) for s in input_shapes], dtype=np.int32)),
+            'output_x': nhwc_component(output_shape, 2),
+            'output_y': nhwc_component(output_shape, 1),
+            'output_z': nhwc_component(output_shape, 3),
+            'output_w': nhwc_component(output_shape, 0),
             'offsets_array': builder.format_array_as_c_literal(
                 np.array(np.cumsum([0] + [int(s[axis]) for s in input_shapes[:-1]]), dtype=np.int32)
             ),

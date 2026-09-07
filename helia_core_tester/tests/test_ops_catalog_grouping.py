@@ -51,7 +51,7 @@ def test_extension_ops_are_isolated_in_tester_extensions() -> None:
         for spec in iter_operator_specs()
         if spec.parity_kind == "extension"
     }
-    assert extension_operators == {"Fill", "Squeeze", "VariableUpdate"}
+    assert extension_operators == {"Squeeze", "VariableUpdate"}
     for operator in extension_operators:
         spec = get_operator_spec(operator)
         assert spec.family == "TesterExtensions"

@@ -109,7 +109,11 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
         has_f32 = any(dtype == "FP32" for dtype in resolved_tensor_dtypes.values())
         if float_precision == "f16" and not has_f16:
             return False
-        if float_precision == "f32" and not has_f32:
+        # A case that touches FP16 anywhere (arm_dequantize_f16_f32 widens an
+        # FP16 input to an FP32 output) needs the library built with
+        # ARM_NN_ENABLE_F16, which the f32-only leg switches off, so it belongs
+        # to the f16 leg. "both" still takes it.
+        if float_precision == "f32" and (not has_f32 or has_f16):
             return False
         
     # Filter by weight dtype
