@@ -4,7 +4,7 @@
 optimization = "-Ofast"
 verbosity = 0
 fail_fast = true
-# run_jobs = 1   # 0 = auto/use all host cores
+# run_jobs = 4   # default: min(host cores, 4); 0 = use every host core
 
 # Output directories (relative to repo root)
 downloads_dir = "artifacts/downloads"

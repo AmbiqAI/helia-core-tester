@@ -5,6 +5,11 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.bias_init import (
+    HoistedBiasInjectionError,
+    bias_is_hoisted_by_lowering,
+    inject_hoisted_dilation_bias,
+)
 from helia_core_tester.generation.kernel_dispatch import resolve_depthwise_conv_kernel
 
 
@@ -77,6 +82,10 @@ class OpDepthwiseConv(OperationBase):
             'padding': padding,
             'depth_multiplier': self.desc.get('depth_multiplier', 1),
             'use_bias': self.desc.get('use_bias', True),
+            # Fixed seeds keep the weights a function of the descriptor alone, so the
+            # goldens reproduce regardless of case order or the Keras global RNG state
+            # the process happens to be in.
+            'depthwise_initializer': tf.keras.initializers.GlorotUniform(seed=1234),
             'name': 'depthwise_conv'
         }
         
@@ -97,7 +106,21 @@ class OpDepthwiseConv(OperationBase):
             dwconv_kwargs['dilation_rate'] = tuple(dilation)
         
         if dwconv_kwargs['use_bias']:
-            dwconv_kwargs['bias_initializer'] = tf.keras.initializers.RandomUniform(minval=-1.0, maxval=1.0)
+            # A quantized dilated depthwise conv lowers to SpaceToBatchND ->
+            # DepthwiseConv2D -> BatchToSpaceND (-> Add), so a bias set here
+            # would land in a trailing Add at output quantization scale,
+            # outside the op the kernel stands in for. Keeping it zero lets
+            # that Add fold away; the bias those cases are held to is written
+            # into the DEPTHWISE_CONV_2D placeholder after conversion by
+            # inject_hoisted_dilation_bias, ahead of the golden run.
+            hoisted = bias_is_hoisted_by_lowering(
+                dwconv_kwargs.get('dilation_rate', (1, 1)),
+                is_float=str(self.tensor_dtype("input", default="S8")).upper()
+                in {"FP32", "FP16"},
+            )
+            dwconv_kwargs['bias_initializer'] = 'zeros' if hoisted else (
+                tf.keras.initializers.RandomUniform(minval=-1.0, maxval=1.0, seed=4321)
+            )
         
         dwconv = tf.keras.layers.DepthwiseConv2D(**dwconv_kwargs)
         x = dwconv(inputs)
@@ -212,7 +235,21 @@ class OpDepthwiseConv(OperationBase):
         tflite_model = converter.convert()
         with open(out_path, 'wb') as f:
             f.write(tflite_model)
-    
+
+        hoisted = bias_is_hoisted_by_lowering(
+            self.desc.get('dilation', [1, 1]),
+            is_float=str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"},
+        )
+        if self.desc.get('use_bias', True) and hoisted:
+            try:
+                inject_hoisted_dilation_bias(out_path, rep_seed)
+            except HoistedBiasInjectionError as exc:
+                raise ValueError(
+                    f"{self.desc.get('name')}: no accumulator-scale bias was injected "
+                    f"into the lowered dilated depthwise conv, so the case cannot "
+                    f"detect a dropped bias-add: {exc}"
+                ) from exc
+
     def _select_cmsis_depthwise_conv_kernel(self) -> Dict[str, str]:
         info = resolve_depthwise_conv_kernel(
             activation_dtype=self.desc.get("activation_dtype", "S8"),
@@ -568,11 +605,21 @@ class OpDepthwiseConv(OperationBase):
             else:
                 out_tensor_idx = dw_out_tensor_idx
             interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
-            output_data = run_inference_litert_tensor(
-                str(tflite_path),
-                input_data.astype(interpreter_input_dtype),
-                out_tensor_idx,
-            ).astype(float_dtype)
+            def float_reference(
+                operands,
+                _dtype=float_dtype,
+                _in_dtype=interpreter_input_dtype,
+                _out_idx=out_tensor_idx,
+            ):
+                return run_inference_litert_tensor(
+                    str(tflite_path), operands[0].astype(_in_dtype), _out_idx
+                ).astype(_dtype)
+
+            output_data = float_reference([input_data])
+
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=float_reference, inputs=[input_data]
+            )
 
             weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
             biases_array_str = builder.format_array_as_c_literal(biases) if has_biases else ""
@@ -623,6 +670,7 @@ class OpDepthwiseConv(OperationBase):
                 'dw_activation_min_literal': builder.format_float_literal(dw_conv_params['activation_min']),
                 'dw_activation_max_literal': builder.format_float_literal(dw_conv_params['activation_max']),
             }
+            context.update(nonfinite_context)
             includes_api_dir = output_dir / "includes"
             includes_api_dir.mkdir(parents=True, exist_ok=True)
 

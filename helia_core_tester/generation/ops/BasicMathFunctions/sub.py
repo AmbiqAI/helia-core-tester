@@ -12,6 +12,8 @@ class OpSub(BinaryBasicMathBase):
     """
     Subtract operation.
     """
+
+    SIGN_SPAN_OPERANDS = ("input_1", "input_2")
     
     def needs_keras_model(self) -> bool:
         return False
@@ -75,19 +77,18 @@ class OpSub(BinaryBasicMathBase):
                 'output_c_type': 'int16_t',
                 'float_kernel': False,
             }
-        elif activation_dtype == 'FP32':
+        elif activation_dtype in ('FP32', 'FP16'):
+            # The flat float kernel has no dims, so two shapes can only reach the
+            # dims-taking broadcast entry point (ns-cmsis-nn#415).
+            float_broadcast = self._float_broadcast_call(auto_on_shape_mismatch=True)
+            suffix = 'f32' if activation_dtype == 'FP32' else 'f16'
+            c_type = 'float' if activation_dtype == 'FP32' else 'float16_t'
             return {
-                'kernel_fn': 'arm_elementwise_sub_f32',
-                'input_c_type': 'float',
-                'output_c_type': 'float',
+                'kernel_fn': f"arm_elementwise_sub_broadcast_{suffix}" if float_broadcast else f"arm_elementwise_sub_{suffix}",
+                'input_c_type': c_type,
+                'output_c_type': c_type,
                 'float_kernel': True,
-            }
-        elif activation_dtype == 'FP16':
-            return {
-                'kernel_fn': 'arm_elementwise_sub_f16',
-                'input_c_type': 'float16_t',
-                'output_c_type': 'float16_t',
-                'float_kernel': True,
+                'float_broadcast': float_broadcast,
             }
         else:
             raise NotImplementedError(f"Unsupported Sub dtype: {activation_dtype}")
@@ -148,8 +149,8 @@ class OpSub(BinaryBasicMathBase):
         activation_dtype = self.tensor_dtype("input", default="S8")
 
         if kernel_info["float_kernel"]:
-            # The float elementwise sub kernels have no broadcast support, so
-            # both inputs must already share the same shape.
+            # The flat kernels take equal shapes; the broadcast entry point takes the
+            # operands as drawn and the golden broadcasts them by NumPy's rules.
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
             activation_min = float(self.desc.get("act_min", -1.0e30))
             activation_max = float(self.desc.get("act_max", 1.0e30))
@@ -207,6 +208,10 @@ class OpSub(BinaryBasicMathBase):
 
             input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
             input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
+            input1_q, input2_q = self._enforce_int_operand_sign_span(
+                (("input_1", input1_q, input1_zp), ("input_2", input2_q, input2_zp)),
+                steerable=("input_1", "input_2"),
+            )
 
             # Run inference using LiteRT interpreter when shapes match (no broadcast).
             # LiteRT broadcasting can abort in some runtimes, so fall back to a local
@@ -246,6 +251,16 @@ class OpSub(BinaryBasicMathBase):
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
         
         # Build template context
+        # Only the quantized path renders these as integers; the float path passes the
+        # bounds as literals instead, and the +/-INFINITY no-clamp idiom has no integer
+        # image at all, so casting it would raise rather than produce a dead field.
+        if kernel_info["float_kernel"]:
+            out_activation_min_ctx = activation_min
+            out_activation_max_ctx = activation_max
+        else:
+            out_activation_min_ctx = int(activation_min)
+            out_activation_max_ctx = int(activation_max)
+
         context = {
             'name': name,
             'input1_dims': input1_dims,
@@ -261,8 +276,8 @@ class OpSub(BinaryBasicMathBase):
             'out_offset': int(output_zp),
             'out_mult': int(output_mult),
             'out_shift': int(output_shift),
-            'out_activation_min': int(activation_min),
-            'out_activation_max': int(activation_max),
+            'out_activation_min': out_activation_min_ctx,
+            'out_activation_max': out_activation_max_ctx,
             'block_size': int(np.prod(output_shape)),
             'call_style': str(self.desc.get("hint", {}).get("call_style", "")),
             'input1_data_array': input1_array_str,
@@ -277,6 +292,8 @@ class OpSub(BinaryBasicMathBase):
             context["out_activation_min_literal"] = activation_min_literal
             context["out_activation_max_literal"] = activation_max_literal
             context["validation_mode"] = "float"
+            if kernel_info.get("float_broadcast"):
+                context["float_broadcast"] = True
 
         cmake_context = {
             'name': name,

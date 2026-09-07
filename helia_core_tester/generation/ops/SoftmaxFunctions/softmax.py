@@ -382,29 +382,34 @@ class OpSoftmax(OperationBase):
             row_size = int(input_shape[0])
         
         # Generate input data and quantize
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-
         if float_kernel:
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
-            input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(float_dtype)
-        elif kernel_info["input_c_type"] == "int8_t":
-            np_in_dtype = np.int8
-            qmin, qmax = -128, 127
-            input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
-        elif kernel_info["input_c_type"] == "int16_t":
-            np_in_dtype = np.int16
-            qmin, qmax = -32768, 32767
-            input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
+            input_q = self._sample_uniform(input_shape, dtype=float_dtype)
         else:
-            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
+            rng_state = self.rng.__getstate__()
+            self.rng = np.random.default_rng(self.seed)
 
-        self.rng.__setstate__(rng_state)
+            if kernel_info["input_c_type"] == "int8_t":
+                np_in_dtype = np.int8
+                qmin, qmax = -128, 127
+                input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
+            elif kernel_info["input_c_type"] == "int16_t":
+                np_in_dtype = np.int16
+                qmin, qmax = -32768, 32767
+                input_q = self.rng.integers(qmin, qmax + 1, size=input_shape, dtype=np_in_dtype)
+            else:
+                raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
+
+            self.rng.__setstate__(rng_state)
 
         if float_kernel:
-            shifted = input_q.astype(np.float32) - np.max(input_q.astype(np.float32), axis=-1, keepdims=True)
-            exp_vals = np.exp(shifted)
-            output_data = (exp_vals / np.sum(exp_vals, axis=-1, keepdims=True)).astype(input_q.dtype)
+            def float_reference(operands, _dtype=input_q.dtype):
+                values = operands[0].astype(np.float32)
+                shifted = values - np.max(values, axis=-1, keepdims=True)
+                exp_vals = np.exp(shifted)
+                return (exp_vals / np.sum(exp_vals, axis=-1, keepdims=True)).astype(_dtype)
+
+            output_data = float_reference([input_q])
         elif force_cmsis:
             hint = self.desc.get("hint", {})
             if isinstance(hint, dict) and "diff_min" in hint:
@@ -434,6 +439,12 @@ class OpSoftmax(OperationBase):
             output_data = np.array(output_data)
         
         # Format arrays
+        if float_kernel:
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=float_reference, inputs=[input_q]
+            )
+        else:
+            nonfinite_context = {}
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
         
@@ -479,7 +490,8 @@ class OpSoftmax(OperationBase):
             'uses_lut': uses_lut,
             'float_kernel': float_kernel,
         }
-        
+        context.update(nonfinite_context)
+
         # Render templates
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)

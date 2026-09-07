@@ -12,6 +12,8 @@ class OpPReLU(OperationBase):
     """
     PReLU (Parametric ReLU) operation.
     """
+
+    SIGN_SPAN_OPERANDS = ("input", "alpha")
     
     def _prepare_alpha_values(
         self,
@@ -327,7 +329,9 @@ class OpPReLU(OperationBase):
 
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
-        input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(float_dtype)
+        input_q = self._maybe_apply_input_mode(
+            self.rng.uniform(-1.0, 1.0, size=input_shape).astype(float_dtype)
+        )
         self.rng.__setstate__(rng_state)
 
         alpha_bc = alpha.reshape(
@@ -565,6 +569,15 @@ class OpPReLU(OperationBase):
         
         input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
         input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+        # alpha is a constant baked into the TFLite model, so it can only be
+        # waived, never steered: the reference interpreter would keep using the
+        # model's copy and the golden would stop matching the emitted array.
+        # A descriptor that pins input_values chose those exact operands, so
+        # the input is check-only for the same reason the values exist.
+        input_q, _ = self._enforce_int_operand_sign_span(
+            (("input", input_q, input_zp), ("alpha", alpha_q, alpha_zp)),
+            steerable=() if "input_values" in extras else ("input",),
+        )
         
         if kernel_info["input_c_type"] == "int16_t":
             # The LiteRT reference interpreter does not support int16 PReLU, so the

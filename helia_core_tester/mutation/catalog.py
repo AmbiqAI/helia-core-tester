@@ -11,14 +11,50 @@ skipped.
 
 Grounding of the v1 entries:
 
-- drop_conv_bias:        tester#77. The s8/s16 int conv suite ships all-zero
-                         bias, so every s8/s16 case that executes the mutated
-                         code passes with the bias term deleted; the s4 suite
-                         ships nonzero bias and detects the drop. Covers the
-                         s8_s16 kernel, the s4 kernel, the 1xN/1x1 non-fast
-                         route (arm_nn_mat_mult_nt_t_s8), the grouped
-                         row-offset kernel, and the arm_convolve_s8 leftover
-                         loop.
+- drop_conv_bias:        tester#77, tester#98. Measured against ns-cmsis-nn
+                         18a89ff in ghcr.io/ambiqai/ns-cmsis-nn-ci:latest on
+                         cortex-m4, seed 500, --ops Convolve,DepthwiseConv,
+                         over a 123-case set: 51 kill it (24 non-dilated s8
+                         Convolve cases, the 7 dilated s8 Convolve cases that
+                         tester#98 gave an accumulator-scale bias, and 20 s4
+                         cases). Every survivor is a survivor by construction:
+                         * use_bias: false cases, which have no bias to drop;
+                         * s16 convs, because no s16 conv kernel is mutated;
+                         * every DepthwiseConv case -- the mutant patches
+                           convolution kernels only;
+                         * the five s4 cases that do not execute a mutated
+                           route -- convolve_1x1_fast_s4,
+                           convolve_1x1_stride_s4,
+                           convolve_even_rhs50_lhs1_bias_s4,
+                           convolve_odd_rhs3_lhs1_bias_s4 and
+                           convolve_odd_rhs5_lhs1_bias_s4 (no s4 route
+                           through arm_nn_mat_mult_nt_t_s4 is patched).
+                         Covers the s8_s16 kernel, the s4_s16 kernel, the
+                         1xN/1x1 non-fast route (arm_nn_mat_mult_nt_t_s8),
+                         the grouped row-offset kernel, and the
+                         arm_convolve_s8 leftover loop.
+- drop_depthwise_bias:   tester#98. Measured against ns-cmsis-nn 18a89ff in
+                         ghcr.io/ambiqai/ns-cmsis-nn-ci:latest on cortex-m4,
+                         seed 500, --ops Convolve,DepthwiseConv, over the same
+                         123-case set: 16 kill it, all of them DepthwiseConv
+                         cases, the five dilated quantized ones included.
+                         Survivors are the Convolve cases (the mutant patches
+                         the depthwise entry points only), the 14 use_bias:
+                         false depthwise cases, and the 18 bias-carrying
+                         depthwise cases whose wrapper dispatches straight to
+                         an optimized kernel rather than through one of the
+                         three mutated entry points.
+- drop_conv_s16_bias:    tester#98. Same checkout, image, cpu, seed and
+                         123-case set: 9 kill it -- every s16 Convolve case
+                         that carries a bias, the six dilated ones included.
+                         The remaining nine s16 Convolve cases are use_bias:
+                         false; every other survivor is an s8/s4 conv or a
+                         DepthwiseConv case, which no edit here touches. The
+                         arm_convolve_s16_fast_small_kernel.c edits sit inside
+                         that file's ARM_MATH_MVEI branch, so they are inert on
+                         cortex-m4 and the 9/123 figure is the non-MVE routes
+                         only; an MVE run reaches more entry points and differs
+                         by construction.
 - packed_sign_mask_343:  ns-cmsis-nn#343 (packed DSP loop masked the
                          sign-extended halfword with & 0x0FFFF, disagreeing
                          with its own scalar tail). The patch removes the
@@ -37,6 +73,23 @@ Grounding of the v1 entries:
 - broadcast_row_reuse:   the broadcast-walk row-reuse class (the escaped
                          min/max broadcast bug family): the NHWC walk stops
                          advancing input 1 across rows and re-reads row 0.
+- squared_difference_tail_drop, minmax_no_broadcast_tail_drop,
+  requantize_tail_drop: the same tail-drop class as tail_loop_off_by_one,
+                         planted in the three families that gained chunked
+                         cases in issue #81. Each is expressed in every
+                         compiled variant of its kernel, scalar and vectorised
+                         alike: the host scorer builds with ARM_MATH_DSP and no
+                         MVEI, so an MVE-only edit would be dead code there and
+                         score as vacuous, while a scalar-only edit would be
+                         dead code on the FVP targets the suite actually runs.
+                         Their chunked killers are gated on the mve capability,
+                         which is why the CLI generates for cortex-m55.
+
+A mutant may declare ``requires_capabilities``: the capabilities the generated
+corpus needs before any case that could kill it exists at all. Scoring on a CPU
+that lacks one reports NOT_APPLICABLE rather than SURVIVED, because a corpus
+that cannot contain a killer says nothing about the suite's power against that
+bug class, and --fail-on-survivor must not fire on it.
 """
 
 from __future__ import annotations
@@ -73,6 +126,9 @@ class Mutant:
     edits: Tuple[Edit, ...]
     expected_detected_by: str
     refs: Tuple[str, ...] = field(default_factory=tuple)
+    # Capabilities the generation CPU must provide for the corpus to contain
+    # any case that could kill this mutant. Empty means every CPU can score it.
+    requires_capabilities: Tuple[str, ...] = field(default_factory=tuple)
 
 
 MUTANTS_V1: Tuple[Mutant, ...] = (
@@ -113,10 +169,115 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             ),
         ),
         expected_detected_by=(
-            "conv golden cases with a nonzero bias: the s4 suite ships nonzero bias and kills it; "
-            "every s8/s16 case that executes the mutated code survives (tester#77)"
+            "conv golden cases with a nonzero bias. Measured on cortex-m4 against "
+            "ns-cmsis-nn 18a89ff (seed 500, --ops Convolve,DepthwiseConv, 123 cases): "
+            "51 killers, 24 non-dilated s8 Convolve cases, 7 dilated s8 Convolve cases "
+            "and 20 s4 cases. Survivors are the use_bias: false cases, the s16 convs, "
+            "every DepthwiseConv case (the mutant touches conv kernels only), and the "
+            "five s4 cases that do not execute a mutated route (convolve_1x1_fast_s4, "
+            "convolve_1x1_stride_s4, convolve_even_rhs50_lhs1_bias_s4, "
+            "convolve_odd_rhs3_lhs1_bias_s4 and convolve_odd_rhs5_lhs1_bias_s4 -- no s4 "
+            "route through arm_nn_mat_mult_nt_t_s4 is patched) (tester#77, tester#98)"
         ),
-        refs=("AmbiqAI/helia-core-tester#77",),
+        refs=("AmbiqAI/helia-core-tester#77", "AmbiqAI/helia-core-tester#98"),
+    ),
+    Mutant(
+        mutant_id="drop_depthwise_bias",
+        description="Depthwise convolution kernels ignore the bias tensor entirely",
+        family="ConvolutionFunctions",
+        edits=(
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_depthwise_conv_s8.c",
+                pattern="    (void)bias_dims;",
+                replacement="    (void)bias_dims;\n    bias = NULL; /* MUTANT drop_depthwise_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_depthwise_conv_s16.c",
+                pattern="    (void)bias_dims;",
+                replacement="    (void)bias_dims;\n    bias = NULL; /* MUTANT drop_depthwise_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_depthwise_conv_s4.c",
+                pattern="    (void)bias_dims;",
+                replacement="    (void)bias_dims;\n    bias = NULL; /* MUTANT drop_depthwise_bias */",
+                count=1,
+            ),
+        ),
+        expected_detected_by=(
+            "depthwise golden cases with a nonzero bias that reach one of the three "
+            "mutated entry points. Measured on cortex-m4 against ns-cmsis-nn 18a89ff "
+            "(seed 500, --ops Convolve,DepthwiseConv, 123 cases): 16 killers, every one "
+            "a DepthwiseConv case, including all five dilated ones the conv mutants "
+            "cannot reach (depthwise_conv_dilation_s8, depthwise_conv_dilation_s16, "
+            "depthwise_conv_buf_nonopt_dil2_s8, depthwise_conv_dil_2x1_bias_s16 and "
+            "depthwise_conv_fast_false_dil2_bias_s16). Survivors are the Convolve "
+            "cases, the 14 use_bias: false depthwise cases and the 18 bias-carrying "
+            "depthwise cases the wrapper sends to an optimized kernel instead "
+            "(tester#98)"
+        ),
+        refs=("AmbiqAI/helia-core-tester#98",),
+    ),
+    Mutant(
+        mutant_id="drop_conv_s16_bias",
+        description="s16 convolution kernels ignore the bias tensor entirely",
+        family="ConvolutionFunctions",
+        edits=(
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_s16.c",
+                pattern="const int64_t *bias_s64 = (const int64_t *)bias_data_ptr->data;",
+                replacement="const int64_t *bias_s64 = NULL; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_s16.c",
+                pattern="const int32_t *bias_s32 = (const int32_t *)bias_data_ptr->data;",
+                replacement="const int32_t *bias_s32 = NULL; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_nn_mat_mult_kernel_s16.c",
+                pattern="const int64_t *bias_s64 = (const int64_t *)bias_data->data;",
+                replacement="const int64_t *bias_s64 = NULL; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_nn_mat_mult_kernel_s16.c",
+                pattern="const int32_t *bias_s32 = (const int32_t *)bias_data->data;",
+                replacement="const int32_t *bias_s32 = NULL; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_s16_group_ch_mult_1.c",
+                pattern="const bool has_bias = (bias_data != NULL) && (bias_data->data != NULL);",
+                replacement="const bool has_bias = false; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_s16_fast_small_kernel.c",
+                pattern="const int64_t *bias_s64 = (const int64_t *)bias_data->data;",
+                replacement="const int64_t *bias_s64 = NULL; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_s16_fast_small_kernel.c",
+                pattern="const int32_t *bias_s32 = (const int32_t *)bias_data->data;",
+                replacement="const int32_t *bias_s32 = NULL; /* MUTANT drop_conv_s16_bias */",
+                count=1,
+            ),
+        ),
+        expected_detected_by=(
+            "s16 conv golden cases with a nonzero bias. Measured on cortex-m4 against "
+            "ns-cmsis-nn 18a89ff (seed 500, --ops Convolve,DepthwiseConv, 123 cases): "
+            "9 killers, which is every bias-carrying s16 Convolve case in the set, "
+            "including the six dilated ones drop_conv_bias cannot reach "
+            "(convolve_int16xint8_dilation_case_01_s16 through _case_03_s16 and "
+            "convolve_int16xint8xint32_case_04_s16 through _case_06_s16). Survivors "
+            "are the nine use_bias: false s16 Convolve cases and everything that is "
+            "not an s16 conv (tester#98)"
+        ),
+        refs=("AmbiqAI/helia-core-tester#98",),
     ),
     Mutant(
         mutant_id="packed_sign_mask_343",
@@ -201,6 +362,151 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
         ),
         expected_detected_by="broadcast cases where input 1 has more than one row and the walk descends to rows",
         refs=("ns-cmsis-nn#321",),
+    ),
+    Mutant(
+        mutant_id="squared_difference_tail_drop",
+        description="Squared-difference kernels process only the 4-aligned prefix, never the tail",
+        family="BasicMathFunctions",
+        edits=(
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_elementwise_squared_difference_s8.c",
+                pattern="int32_t loop_count = block_size;",
+                replacement="int32_t loop_count = block_size & ~3; /* MUTANT squared_difference_tail_drop */",
+                count=2,
+            ),
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_elementwise_squared_difference_s16.c",
+                pattern="int32_t loop_count = block_size;",
+                replacement="int32_t loop_count = block_size & ~3; /* MUTANT squared_difference_tail_drop */",
+                count=2,
+            ),
+        ),
+        expected_detected_by=(
+            "chunked-equivalence squared_difference s8/s16 cases (singles and offcut): the "
+            "singles pass processes nothing at all while the full call processes its aligned "
+            "prefix. Golden squared-difference cases kill it only when their flat element "
+            "count is not a multiple of 4."
+        ),
+        refs=("AmbiqAI/helia-core-tester#81",),
+    ),
+    Mutant(
+        mutant_id="minmax_no_broadcast_tail_drop",
+        description="min/max no-broadcast inner loop stops one element short of the run",
+        family="BasicMathFunctions",
+        edits=(
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_minimum_s8.c",
+                pattern="    while (flat_size > 0)\n    {\n        int8_t in1 = *input_1++;",
+                replacement=(
+                    "    while (flat_size > 1) /* MUTANT minmax_no_broadcast_tail_drop */\n"
+                    "    {\n        int8_t in1 = *input_1++;"
+                ),
+                count=1,
+            ),
+            # The MVE build compiles the wlstp.8/.16 asm instead of the
+            # scalar loop above, so shortening only that loop would leave the
+            # mutant dead on an MVE target. Trimming the loop-count operand is
+            # the same defect expressed in the vectorised variant.
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_minimum_s8.c",
+                pattern=': [cnt] "r"(flat_size)',
+                replacement=': [cnt] "r"(flat_size - 1) /* MUTANT minmax_no_broadcast_tail_drop */',
+                count=1,
+            ),
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_maximum_s8.c",
+                pattern="    while (flat_size > 0)\n    {\n        int8_t in1 = *input_1++;",
+                replacement=(
+                    "    while (flat_size > 1) /* MUTANT minmax_no_broadcast_tail_drop */\n"
+                    "    {\n        int8_t in1 = *input_1++;"
+                ),
+                count=1,
+            ),
+            # The MVE build compiles the wlstp.8/.16 asm instead of the
+            # scalar loop above, so shortening only that loop would leave the
+            # mutant dead on an MVE target. Trimming the loop-count operand is
+            # the same defect expressed in the vectorised variant.
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_maximum_s8.c",
+                pattern=': [cnt] "r"(flat_size)',
+                replacement=': [cnt] "r"(flat_size - 1) /* MUTANT minmax_no_broadcast_tail_drop */',
+                count=1,
+            ),
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_minimum_s16.c",
+                pattern="    while (flat_size > 0)\n    {\n        int16_t in1 = *input_1++;",
+                replacement=(
+                    "    while (flat_size > 1) /* MUTANT minmax_no_broadcast_tail_drop */\n"
+                    "    {\n        int16_t in1 = *input_1++;"
+                ),
+                count=1,
+            ),
+            # The MVE build compiles the wlstp.8/.16 asm instead of the
+            # scalar loop above, so shortening only that loop would leave the
+            # mutant dead on an MVE target. Trimming the loop-count operand is
+            # the same defect expressed in the vectorised variant.
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_minimum_s16.c",
+                pattern=': [cnt] "r"(flat_size)',
+                replacement=': [cnt] "r"(flat_size - 1) /* MUTANT minmax_no_broadcast_tail_drop */',
+                count=1,
+            ),
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_maximum_s16.c",
+                pattern="    while (flat_size > 0)\n    {\n        int16_t in1 = *input_1++;",
+                replacement=(
+                    "    while (flat_size > 1) /* MUTANT minmax_no_broadcast_tail_drop */\n"
+                    "    {\n        int16_t in1 = *input_1++;"
+                ),
+                count=1,
+            ),
+            # The MVE build compiles the wlstp.8/.16 asm instead of the
+            # scalar loop above, so shortening only that loop would leave the
+            # mutant dead on an MVE target. Trimming the loop-count operand is
+            # the same defect expressed in the vectorised variant.
+            Edit(
+                relpath="Source/BasicMathFunctions/arm_maximum_s16.c",
+                pattern=': [cnt] "r"(flat_size)',
+                replacement=': [cnt] "r"(flat_size - 1) /* MUTANT minmax_no_broadcast_tail_drop */',
+                count=1,
+            ),
+        ),
+        expected_detected_by=(
+            "chunked-equivalence minimum/maximum s8/s16 cases: a size-1 slice writes nothing, "
+            "so the singles pass disagrees with the full call on every element. Golden "
+            "min/max cases kill it too (last element of every contiguous run is stale). "
+            "Both the scalar loop and the MVE loop-count operand carry the edit, so the "
+            "mutant is live in the DSP-only host build and on an MVE target alike."
+        ),
+        refs=("AmbiqAI/helia-core-tester#81",),
+    ),
+    Mutant(
+        mutant_id="requantize_tail_drop",
+        description="arm_requantize_s8_s8 drops the trailing size % 4 elements",
+        family="QuantizationFunctions",
+        edits=(
+            Edit(
+                relpath="Source/QuantizationFunctions/arm_quantize_s8_s8.c",
+                pattern="int32_t count = (size + 3) / 4;",
+                replacement="int32_t count = size / 4; /* MUTANT requantize_tail_drop */",
+                count=1,
+            ),
+            Edit(
+                relpath="Source/QuantizationFunctions/arm_quantize_s8_s8.c",
+                pattern="for (int i = 0; i < size; i++)",
+                replacement="for (int i = 0; i < (size & ~3); i++) /* MUTANT requantize_tail_drop */",
+                count=1,
+            ),
+        ),
+        expected_detected_by=(
+            "chunked-equivalence requantize s8 cases only. The suite's one golden case for this "
+            "kernel, requantize_default_s8, is 1x2x3x2 -- 12 elements, a multiple of 4 -- so it "
+            "cannot see a size % 4 tail drop, and nothing else in the corpus calls it. The "
+            "chunked cases require the mve capability, so scoring this mutant needs a "
+            "generation CPU that has it."
+        ),
+        refs=("AmbiqAI/helia-core-tester#81",),
+        requires_capabilities=("mve",),
     ),
 )
 

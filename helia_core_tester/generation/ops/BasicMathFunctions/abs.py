@@ -26,6 +26,8 @@ class OpAbs(OperationBase):
     Abs operation.
     """
 
+    SIGN_SPAN_OPERANDS = ("input",)
+
     def needs_keras_model(self) -> bool:
         return False
 
@@ -114,11 +116,12 @@ class OpAbs(OperationBase):
             # arm_nn_abs_f32/f16 are pure (input, output, block_size) kernels
             # with no quantization or activation parameters.
             float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
-            rng_state = self.rng.__getstate__()
-            self.rng = np.random.default_rng(self.seed)
-            input_q = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(float_dtype)
-            self.rng.__setstate__(rng_state)
-            output_data = np.abs(input_q).astype(float_dtype)
+            input_q = self._sample_uniform(input_shape, dtype=float_dtype)
+
+            def float_reference(operands, _dtype=float_dtype):
+                return np.abs(operands[0]).astype(_dtype)
+
+            output_data = float_reference([input_q])
             input_zp = output_zp = output_mult = output_shift = needs_rescale = 0
             activation_min = activation_max = 0
         else:
@@ -145,6 +148,13 @@ class OpAbs(OperationBase):
             np_in_dtype = np.int16 if activation_dtype == "S16" else np.int8
             input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
             input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+            # abs is the sign-defining int kernel: its two branches are chosen
+            # by the sign of value - zero_point, so an operand that lands on
+            # one side exercises exactly one of them.
+            (input_q,) = self._enforce_int_operand_sign_span(
+                (("input", input_q, input_zp),),
+                steerable=("input",),
+            )
 
             interpreter = self.load_litert_interpreter(str(tflite_path))
             input_details = interpreter.get_input_details()
@@ -155,6 +165,12 @@ class OpAbs(OperationBase):
             output_data = interpreter.get_tensor(output_details[0]["index"])
             output_data = np.array(output_data)
 
+        if kernel_info["float_kernel"]:
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=float_reference, inputs=[input_q]
+            )
+        else:
+            nonfinite_context = {}
         input_array_str = builder.format_array_as_c_literal(input_q)
         expected_output_array_str = builder.format_array_as_c_literal(output_data)
 
@@ -179,6 +195,7 @@ class OpAbs(OperationBase):
             "kernel_fn": kernel_info["kernel_fn"],
             "float_kernel": kernel_info["float_kernel"],
         }
+        context.update(nonfinite_context)
         if kernel_info["float_kernel"]:
             context["validation_mode"] = "float"
 

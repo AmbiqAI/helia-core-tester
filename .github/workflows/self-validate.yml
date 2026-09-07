@@ -37,6 +37,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The mutation catalog patches kernel source by literal text. Only a real
+  # checkout can show that a pattern or its replacement count has drifted, and
+  # this is the only workflow that has one, so the guarantee lives here rather
+  # than in the pure-Python pytest workflow.
+  mutation-catalog:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout helia-core-tester
+        uses: actions/checkout@v4
+
+      - name: Checkout ns-cmsis-nn
+        uses: actions/checkout@v4
+        with:
+          repository: AmbiqAI/ns-cmsis-nn
+          ref: ${{ github.event.inputs.ns_cmsis_nn_ref || 'main' }}
+          path: ns-cmsis-nn-scratch
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python dependencies (no ARM toolchain needed)
+        run: ./scripts/setup_ci.sh --skip-build-deps
+
+      - name: Apply every catalogued mutant to the checkout
+        env:
+          HELIA_CORE_TESTER_MUTATION_CHECKOUT: ${{ github.workspace }}/ns-cmsis-nn-scratch
+        run: |
+          uv run pytest helia_core_tester/tests/test_mutation_scoring.py -q \
+            -k every_v1_edit_applies_to_a_real_checkout \
+            --no-header -rs
+
   generate-and-compile:
     runs-on: ubuntu-latest
     strategy:

@@ -6,6 +6,12 @@ import os
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.bias_init import (
+    HoistedBiasInjectionError,
+    SignedMagnitudeUniform,
+    bias_is_hoisted_by_lowering,
+    inject_hoisted_dilation_bias,
+)
 from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel
 
 
@@ -96,21 +102,36 @@ class OpConvolve(OperationBase):
         
         use_bias = self.desc.get('use_bias', True)
         # A zero bias_initializer produces an all-zero bias tensor, which the
-        # TFLite converter's constant-folding optimizer strips from the
-        # FLOAT (non-quantized) graph entirely -- the generated CMSIS-NN
-        # test then calls the kernel with a NULL bias pointer, leaving the
-        # bias-add path completely untested. Use a small nonzero uniform
-        # bias, deterministic from the case seed, so real bias data flows
-        # through the golden and the kernel call.
-        # Float cases only: the same Keras model also feeds the QUANTIZED
-        # pipeline, so an ungated nonzero bias would silently perturb every
-        # int8/int16 conv golden (54 cases -- caught by adversarial review).
-        # Int-suite bias enrichment is a separate, deliberate change.
+        # TFLite converter's constant-folding optimizer strips from the graph
+        # entirely -- the generated CMSIS-NN test then calls the kernel with a
+        # NULL bias pointer, leaving the bias-add path completely untested.
+        # Use a nonzero uniform bias, deterministic from the case seed, so
+        # real bias data flows through the golden and the kernel call.
+        #
+        # The quantized magnitude has to clear one output quantization step,
+        # or a dropped bias-add still reproduces the golden bit for bit. The
+        # int suite calibrates from inputs in [-32, 32) and the bias itself
+        # widens the calibrated output range by 2*maxval, so the floor is set
+        # against the widest range a case can produce: every bias-carrying
+        # channel clears at least one output step with margin, the bias
+        # spends only a fraction of the dynamic range at the narrowest range,
+        # and it stays orders of magnitude below the int32 accumulator's
+        # headroom. The float range is unchanged.
+        #
+        # A quantized dilated conv keeps a zero Keras bias: it lowers to
+        # SpaceToBatchND -> Conv2D -> BatchToSpaceND (-> Add), and a bias set
+        # here would land in a trailing Add in the output quantization domain
+        # instead of in the CONV_2D the kernel stands in for. Those cases get
+        # their bias written into the CONV_2D placeholder after conversion by
+        # inject_hoisted_dilation_bias, ahead of the golden run.
         _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
-        bias_initializer = (
-            tf.keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
-            if (use_bias and _case_is_float) else 'zeros'
-        )
+        _bias_hoisted_by_lowering = bias_is_hoisted_by_lowering(dilation, is_float=_case_is_float)
+        if not use_bias or _bias_hoisted_by_lowering:
+            bias_initializer = 'zeros'
+        elif _case_is_float:
+            bias_initializer = tf.keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
+        else:
+            bias_initializer = SignedMagnitudeUniform(minval=2.0, maxval=4.0, seed=self.seed)
 
         conv = tf.keras.layers.Conv2D(
             filters=output_filters,
@@ -218,7 +239,21 @@ class OpConvolve(OperationBase):
         tflite_model = converter.convert()
         with open(out_path, 'wb') as f:
             f.write(tflite_model)
-            
+
+        hoisted = bias_is_hoisted_by_lowering(
+            self.desc.get('dilation', [1, 1]),
+            is_float=str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"},
+        )
+        if self.desc.get('use_bias', True) and hoisted:
+            try:
+                inject_hoisted_dilation_bias(out_path, rep_seed)
+            except HoistedBiasInjectionError as exc:
+                raise ValueError(
+                    f"{self.desc.get('name')}: no accumulator-scale bias was injected "
+                    f"into the lowered dilated conv, so the case cannot detect a "
+                    f"dropped bias-add: {exc}"
+                ) from exc
+
     def _select_cmsis_convolve_kernel(self) -> Dict[str, str]:
         info = resolve_convolve_kernel(
             activation_dtype=self.desc.get("activation_dtype", "S8"),
@@ -327,8 +362,10 @@ class OpConvolve(OperationBase):
             # hoisted ADD operates in the quantized output domain (its
             # operand is not a plain int32 accumulator bias), so reusing this
             # extraction for quantized dtypes would silently substitute the
-            # wrong tensor. Quantized dilated-conv bias handling is out of
-            # scope here and is left untouched.
+            # wrong tensor. Those cases instead get an accumulator-scale bias
+            # written into the placeholder at conversion time by
+            # inject_hoisted_dilation_bias, and the placeholder read above is
+            # then the right tensor.
             if float_kernel and bts_op_index is not None:
                 from helia_core_tester.generation.utils.litert_utils import get_tensor_data_from_litert
 
@@ -567,7 +604,13 @@ class OpConvolve(OperationBase):
         if float_kernel:
             input_q = np.asarray(input_data, dtype=float_dtype)
             interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
-            output_data = self.run_inference(str(tflite_path), input_q.astype(interpreter_input_dtype)).astype(float_dtype)
+
+            def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
+                return self.run_inference(
+                    str(tflite_path), operands[0].astype(_in_dtype)
+                ).astype(_dtype)
+
+            output_data = float_reference([input_q])
         else:
             input_scale = float(self._quant_param_scalar(quant_params['input'], 'scale', 1.0))
             input_zp = int(self._quant_param_scalar(quant_params['input'], 'zero_point', 0))
@@ -609,6 +652,13 @@ class OpConvolve(OperationBase):
                 weight_format_macro = "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"
             elif weight_format not in {"STANDARD", "ARM_NN_WEIGHT_FORMAT_STANDARD"}:
                 raise ValueError(f"Unsupported Convolve weight_format hint: {weight_format}")
+
+        if float_kernel:
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=float_reference, inputs=[input_q]
+            )
+        else:
+            nonfinite_context = {}
 
         # Format arrays
         weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
@@ -676,6 +726,7 @@ class OpConvolve(OperationBase):
             context['conv_activation_max_literal'] = builder.format_float_literal(conv_params['activation_max'])
         else:
             context['quant_params'] = quant_params_dict
+        context.update(nonfinite_context)
 
         # Render templates
         includes_api_dir = output_dir / "includes"

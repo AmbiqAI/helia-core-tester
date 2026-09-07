@@ -167,6 +167,36 @@
     "input_shape": {
       "$ref": "#/$defs/intArray"
     },
+    "input_mode": {
+      "description": "Input generation mode. 'uniform' draws from input_min/input_max. 'nonfinite_sweep' additionally overwrites the leading elements with the tokens named by nonfinite_tokens, leaving the remaining draws finite; float suite only.",
+      "type": "string",
+      "enum": ["uniform", "nonfinite_sweep"]
+    },
+    "nonfinite_tokens": {
+      "description": "Tokens written by 'nonfinite_sweep', in order, one per leading flat element. Defaults to all three. Name a subset where ns-cmsis-nn does not guarantee the omitted token's behaviour.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["nan", "inf", "-inf"]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "nonfinite_positions": {
+      "description": "Flat input indices the tokens are written to, paired element for element with nonfinite_tokens. Defaults to the leading run 0..k-1. Set it where the leading run cannot express the placement: one token per reduction group, or a pooling window the padding only partly covers.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "nonfinite_policy": {
+      "description": "How the golden is compared for a 'nonfinite_sweep' case; required whenever input_mode is 'nonfinite_sweep' and rejected otherwise. 'strict' asserts the reference value on every lane, and is only legitimate where ns-cmsis-nn documents the behaviour or the operator is pure data movement. 'mask' marks as don't-care every lane whose reference output is non-finite and every lane a token can reach, and asserts SUCCESS plus every remaining finite lane, for kernels that document nothing or declare the result unspecified.",
+      "type": "string",
+      "enum": ["strict", "mask"]
+    },
     "filter_shape": {
       "$ref": "#/$defs/intArray"
     },
@@ -222,10 +252,10 @@
       ]
     },
     "act_min": {
-      "type": "integer"
+      "type": ["integer", "number"]
     },
     "act_max": {
-      "type": "integer"
+      "type": ["integer", "number"]
     },
     "activation_type": {
       "type": "string"
@@ -313,7 +343,7 @@
     },
     "kernel": {
       "type": "string",
-      "enum": ["add", "sub", "mul"],
+      "enum": ["add", "sub", "mul", "squared_difference", "minimum", "maximum", "requantize"],
       "description": "ChunkedEquivalence: elementwise kernel family to exercise."
     },
     "element_count": {
@@ -324,6 +354,16 @@
     "chunk_sizes": {
       "$ref": "#/$defs/intArray",
       "description": "ChunkedEquivalence: consecutive slice sizes for the chunked pass; must sum to element_count."
+    },
+    "quant_preset": {
+      "type": "string",
+      "description": "SquaredDifference: named quantization preset variant. 'default' (implied when absent) gives the s8 inputs a moderate asymmetric zero point; 'relu_range' keeps the -128 input zero point that pins every post-offset lane non-negative."
+    },
+    "operand_sign_span_exempt": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "minLength": 1 },
+      "description": "Int elementwise cases: operand name -> reason the operand is intentionally one-signed after its zero point is applied. Waives the generation-time operand sign-span check for that operand only. This schema is not enforced at load time (#100); the same rule is enforced in code by OperationBase._enforce_int_operand_sign_span."
     }
   },
   "$defs": {
@@ -701,6 +741,16 @@
       "$comment": "DynamicUpdateSlice requires operand_shape, update_shape, start_indices",
       "if": { "properties": { "operator": { "const": "DynamicUpdateSlice" } } },
       "then": { "required": ["operand_shape", "update_shape", "start_indices"] }
+    },
+    {
+      "$comment": "A sweep case has to say how its golden is compared. There is no safe default: 'strict' pins a value ns-cmsis-nn may not contract, 'mask' drops lanes a contracted kernel should be asserting, and which one applies is a per-kernel question the descriptor author has to answer. This if/then is not enforced by the descriptor loader, which validates a subset of the schema; the rule that actually fails a policy-less sweep is OperationBase.nonfinite_policy(). Enforcement moves here when #100 lands.",
+      "if": {
+        "properties": { "input_mode": { "const": "nonfinite_sweep" } },
+        "required": ["input_mode"]
+      },
+      "then": {
+        "required": ["nonfinite_policy"]
+      }
     }
   ]
 }

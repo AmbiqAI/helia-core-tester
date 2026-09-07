@@ -51,7 +51,13 @@ def test_all_c_templates_use_standalone_harness_contract() -> None:
         # from the HELIA_VALIDATE_OUTPUTS requirement.
         is_fault_template = path.stem.endswith("_fault.c")
         if not is_fault_template:
-            assert "HELIA_VALIDATE_OUTPUTS(" in text, path
+            # Mask-policy operators (issue #74) reach the same validator through the
+            # shared common/standalone/validation.j2 macro, which picks the masked or
+            # the plain form from the render context.
+            assert (
+                "HELIA_VALIDATE_OUTPUTS(" in text
+                or "validation_outputs(" in text
+            ), path
         assert "HELIA_VALIDATE_RETURN_FAILURES(" in text, path
 
 
@@ -775,6 +781,35 @@ def test_lstm_and_svdf_keep_specialized_shared_validation_contracts() -> None:
     assert '{{ validation_report_limit | default(8) }}' in svdf
     assert "HELIA_VALIDATE_SCALAR_EQ_INT(" in svdf
     assert "HELIA_VALIDATE_OUTPUTS(" in svdf
+
+
+def test_single_shot_recurrent_float_templates_validate_the_whole_output() -> None:
+    # These two render one of two branches depending on a generation-time probe of the
+    # configured ns-cmsis-nn checkout, so no golden fixture pins their text; the size
+    # argument is asserted here instead. Anything narrower than dst_size would leave
+    # output elements uncompared while the case still reported a pass.
+    lstm_f32 = (
+        _templates_root()
+        / "LSTMFunctions"
+        / "lstm_unidirectional"
+        / "lstm_unidirectional_f32.c.j2"
+    ).read_text()
+    gru = (
+        _templates_root()
+        / "LSTMFunctions"
+        / "gru_unidirectional"
+        / "gru_unidirectional.c.j2"
+    ).read_text()
+
+    call_site = (
+        "{{ validation_outputs(validation_mode_token | default(\"FLOAT\"), "
+        "validation_tolerance | default(1), dst_size, "
+        "validation_report_limit | default(8)) }}"
+    )
+    assert lstm_f32.count("validation_outputs(") == 1
+    assert call_site in lstm_f32
+    assert gru.count("validation_outputs(") == 1
+    assert call_site in gru
 
 
 def test_quantize_and_dequantize_render_only_requested_validation_helpers() -> None:

@@ -253,7 +253,10 @@ def test_kernel_source_exists_matches_only_shipped_sources(tmp_path: Path) -> No
 def test_float_mean_descriptors_require_their_kernel_symbol() -> None:
     path = TESTER_ROOT / "assets" / "descriptors" / "BasicMathFunctions" / "mean_float.yaml"
     descriptors = load_descriptor(str(path))
-    assert len(descriptors) == 8
+    # Four axis picks, three single-token non-finite cases, the two-token case and
+    # the two AmbiqAI/ns-cmsis-nn#429 placements, flatten and generic (issue #74),
+    # per dtype.
+    assert len(descriptors) == 20
     for desc in descriptors:
         assert desc["operator"] == "Mean"
         assert desc["suite"] == "float"
@@ -265,7 +268,7 @@ def test_float_mean_descriptors_require_their_kernel_symbol() -> None:
 def test_float_hard_swish_descriptors_require_their_kernel_symbol() -> None:
     path = TESTER_ROOT / "assets" / "descriptors" / "ActivationFunctions" / "hard_swish_float.yaml"
     descriptors = load_descriptor(str(path))
-    assert len(descriptors) == 4
+    assert len(descriptors) == 6
     for desc in descriptors:
         assert desc["operator"] == "HardSwishPrecise"
         assert desc["suite"] == "float"

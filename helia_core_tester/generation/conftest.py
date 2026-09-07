@@ -33,6 +33,8 @@ def pytest_addoption(parser):
                     help="Suite selection: int or float")
     parser.addoption("--float-precision", action="store", default="both",
                     help="Float precision for float suite: f16, f32, or both")
+    parser.addoption("--force-generate", action="store_true", default=False,
+                    help="Regenerate every case, ignoring reuse stamps")
 
 
 def pytest_configure(config):
@@ -45,6 +47,14 @@ def pytest_configure(config):
         if generated_override
         else find_generated_tests_dir(cpu=target_cpu, suite=target_suite, create=False)
     )
+
+    # Without --force-generate the tree is the reuse cache: cases still matching
+    # their stamp are kept and the run prunes whatever falls outside the active
+    # filter (see generation/reuse.py). Only a forced run starts from empty.
+    if not config.getoption("--force-generate"):
+        generated_tests_dir.mkdir(parents=True, exist_ok=True)
+        print("Reusing generated tests directory (stamp-checked per case)")
+        return
 
     # Clean generated tests directory before running
     if generated_tests_dir.exists():
@@ -86,4 +96,5 @@ def test_filters(request):
         'suite': request.config.getoption("--suite"),
         'float_precision': request.config.getoption("--float-precision"),
         'generated_tests_dir': request.config.getoption("--generated-tests-dir"),
+        'force_generate': request.config.getoption("--force-generate"),
     }

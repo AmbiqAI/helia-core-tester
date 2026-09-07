@@ -34,14 +34,33 @@ def _runtime_env(root: Path) -> RuntimeEnvContext:
     )
 
 
-def test_config_run_jobs_default_and_auto(tmp_path: Path, monkeypatch) -> None:
+def test_config_run_jobs_default_is_bounded_and_zero_is_unbounded(tmp_path: Path, monkeypatch) -> None:
     root = _make_config_root(tmp_path)
-    cfg_default = Config(project_root=root, run_jobs=1)
-    assert cfg_default.run_jobs == 1
+    monkeypatch.setattr("helia_core_tester.core.config.os.cpu_count", lambda: 12)
+
+    assert Config(project_root=root).run_jobs == 4
+    assert Config(project_root=root, run_jobs=1).run_jobs == 1
+    assert Config(project_root=root, run_jobs=0).run_jobs == 12
+
+    monkeypatch.setattr("helia_core_tester.core.config.os.cpu_count", lambda: 2)
+    assert Config(project_root=root).run_jobs == 2
+
+    monkeypatch.setattr("helia_core_tester.core.config.os.cpu_count", lambda: None)
+    assert Config(project_root=root).run_jobs == 1
+
+
+def test_config_run_jobs_env_override_beats_the_bounded_default(tmp_path: Path, monkeypatch) -> None:
+    root = _make_config_root(tmp_path)
+    monkeypatch.setenv("HELIA_CORE_TESTER_RUN_JOBS", "7")
+    assert Config(project_root=root).run_jobs == 7
+
+
+def test_fvp_cli_run_jobs_default_matches_the_bounded_config_default(monkeypatch, tmp_path: Path) -> None:
+    from helia_core_tester.fvp.cli import build_arg_parser
 
     monkeypatch.setattr("helia_core_tester.core.config.os.cpu_count", lambda: 12)
-    cfg_auto = Config(project_root=root, run_jobs=0)
-    assert cfg_auto.run_jobs == 12
+    args = build_arg_parser(tmp_path, tmp_path).parse_args([])
+    assert args.run_jobs == 4
 
 
 def test_config_run_jobs_negative_rejected(tmp_path: Path) -> None:
@@ -100,7 +119,8 @@ def test_run_step_routes_suite_both_into_cpu_groups(tmp_path: Path, monkeypatch)
     assert len(result.details["commands"]) == 3
     rendered = [" ".join(cmd) for cmd in seen]
     assert any("--suite int" in cmd and "--cpu cortex-m0,cortex-m4,cortex-m55" in cmd for cmd in rendered)
-    assert any("--suite float" in cmd and "--cpu cortex-m4" in cmd for cmd in rendered)
+    # m0 joins m4 in the f32 group; the float lanes are keyed on effective precision.
+    assert any("--suite float" in cmd and "--cpu cortex-m0,cortex-m4" in cmd for cmd in rendered)
     assert any("--suite float" in cmd and "--cpu cortex-m55" in cmd for cmd in rendered)
 
 
@@ -221,3 +241,58 @@ def test_signal_process_group_falls_back_to_direct_signal_when_same_group(monkey
 
     assert getattr(proc, "sent", None) == 15
     assert called["killpg"] is False
+
+
+@pytest.mark.parametrize("run_jobs", [1, 2])
+def test_corrupted_mask_capture_is_a_failed_result_on_both_run_paths(
+    tmp_path: Path, monkeypatch, run_jobs: int
+) -> None:
+    """A `HELIA_MASKED_LANES: k of n` line with k > n used to raise out of the parser.
+
+    The serial loop lets that abort the whole run and lose the results already
+    collected, while the parallel loop catches it per future, so the two runners
+    disagreed about the same capture. Both must now report the case as a failure and
+    keep going.
+    """
+    from helia_core_tester.fvp import runner as fvp_runner
+    from helia_core_tester.reporting.models import TestStatus
+
+    captures = {
+        "clean.elf": "HELIA_MASKED_LANES: 2 of 8\n0 Failures\n",
+        "corrupt.elf": "HELIA_MASKED_LANES: 9 of 8\n0 Failures\n",
+    }
+
+    def fake_process(*, elf: Path, **kwargs) -> fvp_runner.FvpProcessResult:
+        return fvp_runner.FvpProcessResult(
+            exit_code=0, output=captures[elf.name], duration=0.1
+        )
+
+    monkeypatch.setattr(fvp_runner, "run_fvp_process", fake_process)
+
+    entries = [(tmp_path / name, name) for name in sorted(captures)]
+    results, any_fail = fvp_runner.run_elf_jobs_with_reporting(
+        elf_entries=entries,
+        fvp_exe=tmp_path / "fvp",
+        timeout=10.0,
+        verbosity=0,
+        extra_args=[],
+        env={},
+        cpu="cortex-m55",
+        coverage_ctx=None,
+        run_jobs=run_jobs,
+        fail_fast=False,
+        supervisor=None,
+    )
+
+    by_name = {result.test_name: result for result in results}
+    assert set(by_name) == {"clean", "corrupt"}
+    assert any_fail
+
+    assert by_name["clean"].status == TestStatus.PASS
+    assert by_name["clean"].masked_lanes == 2
+
+    corrupt = by_name["corrupt"]
+    assert corrupt.status == TestStatus.FAIL
+    assert corrupt.error_type == "corrupted_capture"
+    assert corrupt.masked_lanes is None
+    assert corrupt.masked_lanes_total is None

@@ -55,3 +55,52 @@ hint:
 input_shape:
 - 1
 - 8
+---
+# ns-cmsis-nn#289: arm_hard_swish_precise_s8 takes a 256-entry table path on MVE
+# from 1760 elements (HARD_SWISH_PRECISE_S8_LUT_MIN_SIZE). 1759 / 1760 straddle it.
+operator: HardSwishPrecise
+name: hard_swish_precise_vector_1759_below_lut_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1759
+---
+operator: HardSwishPrecise
+name: hard_swish_precise_vector_1760_lut_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1760
+---
+# 4177 = 261 full 16-lane gathers + a 1-element predicated tail.
+operator: HardSwishPrecise
+name: hard_swish_precise_vector_4177_lut_tail1_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 4177
+---
+operator: HardSwishPrecise
+name: hard_swish_precise_nhwc_48x48x16_lut_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 48
+- 48
+- 16

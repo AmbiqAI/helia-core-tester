@@ -6,6 +6,12 @@ import argparse
 import os
 from pathlib import Path
 
+from helia_core_tester.core.config import (
+    DEFAULT_RUN_JOBS_CAP,
+    DEFAULT_TIMEOUT_SECONDS,
+    default_run_jobs,
+)
+
 
 def build_arg_parser(default_downloads_dir: Path, default_source_dir: Path) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Build and run helia-core kernels unit tests on FVP Corstone-300 (Python).")
@@ -30,8 +36,28 @@ def build_arg_parser(default_downloads_dir: Path, default_source_dir: Path) -> a
     ap.add_argument("--source-dir", type=Path, default=default_source_dir, help="CMake source dir (UnitTest root)")
     ap.add_argument("--generator", help="CMake generator (e.g. Ninja)")
     ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4, help="Parallel build jobs")
-    ap.add_argument("--run-jobs", type=int, default=1, help="Parallel FVP test jobs (0 = auto/use all host cores)")
-    ap.add_argument("--timeout-run", type=float, default=0.0, help="Per-test timeout in seconds (0 = none)")
+    ap.add_argument(
+        "--run-jobs",
+        type=int,
+        default=default_run_jobs(),
+        help=(
+            "Parallel FVP test jobs (default: min(host cores, "
+            f"{DEFAULT_RUN_JOBS_CAP})). FVP boot dominates per-case time, so "
+            "parallelism is the lever that matters, but unbounded jobs on a "
+            "shared or metered runner is a cost risk. Pass 0 to opt in to all "
+            "host cores."
+        ),
+    )
+    ap.add_argument(
+        "--timeout-run",
+        type=float,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help=(
+            f"Per-case timeout in seconds (default: {DEFAULT_TIMEOUT_SECONDS:g}). "
+            "0 disables it, which lets a spinning kernel block the run until the "
+            "CI job cap with no per-case result."
+        ),
+    )
     ap.add_argument("--fail-fast", action=argparse.BooleanOptionalAction, default=False, help="Stop on first failure")
     ap.add_argument("--fvp-arg", action="append", default=[], help="Extra args to pass to the FVP (repeatable)")
     ap.add_argument("--no-report", action="store_true", help="Disable comprehensive test reporting (enabled by default)")

@@ -33,6 +33,8 @@ class OpAdd(BinaryBasicMathBase):
     """
     Add operation.
     """
+
+    SIGN_SPAN_OPERANDS = ("input_1", "input_2")
     
     def needs_keras_model(self) -> bool:
         return False
@@ -86,16 +88,15 @@ class OpAdd(BinaryBasicMathBase):
                 'output_c_type': 'int16_t',
                 'float_kernel': False,
             }
-        elif activation_dtype == 'FP32':
-            return {
-                'kernel_fn': 'arm_elementwise_add_f32',
-                'input_c_type': 'float',
-                'output_c_type': 'float',
-                'float_kernel': True,
-            }
-        elif activation_dtype == 'FP16':
+        elif activation_dtype in ('FP32', 'FP16'):
             hint = self.desc.get("hint", {})
-            if str(hint.get("kernel_variant", "")).lower() == "legacy_fp16":
+            legacy_fp16 = activation_dtype == 'FP16' and str(hint.get("kernel_variant", "")).lower() == "legacy_fp16"
+            # Opt-in only: un-hinted mismatched shapes keep the materialised-broadcast
+            # flat call that add_float_{channel,scalar}_broadcast_* already pin.
+            float_broadcast = self._float_broadcast_call(auto_on_shape_mismatch=False)
+            if legacy_fp16 and float_broadcast:
+                raise ValueError("hint.kernel_variant legacy_fp16 has no broadcast entry point")
+            if legacy_fp16:
                 return {
                     'kernel_fn': 'arm_elementwise_add_fp16',
                     'input_c_type': 'float16_t',
@@ -103,12 +104,15 @@ class OpAdd(BinaryBasicMathBase):
                     'float_kernel': True,
                     'legacy_fp16_kernel': True,
                 }
+            suffix = 'f32' if activation_dtype == 'FP32' else 'f16'
+            c_type = 'float' if activation_dtype == 'FP32' else 'float16_t'
             return {
-                'kernel_fn': 'arm_elementwise_add_f16',
-                'input_c_type': 'float16_t',
-                'output_c_type': 'float16_t',
+                'kernel_fn': f"arm_elementwise_add_broadcast_{suffix}" if float_broadcast else f"arm_elementwise_add_{suffix}",
+                'input_c_type': c_type,
+                'output_c_type': c_type,
                 'float_kernel': True,
                 'legacy_fp16_kernel': False,
+                'float_broadcast': float_broadcast,
             }
         else:
             raise NotImplementedError(f"Unsupported Add dtype: {activation_dtype}")
@@ -163,8 +167,10 @@ class OpAdd(BinaryBasicMathBase):
                 activation_min,
                 activation_max,
             ).astype(float_dtype)
-            input1_q = np.broadcast_to(input1_q, output_shape).astype(float_dtype, copy=True)
-            input2_q = np.broadcast_to(input2_q, output_shape).astype(float_dtype, copy=True)
+            if not kernel_info.get("float_broadcast"):
+                # The flat kernel sees the broadcast already materialised.
+                input1_q = np.broadcast_to(input1_q, output_shape).astype(float_dtype, copy=True)
+                input2_q = np.broadcast_to(input2_q, output_shape).astype(float_dtype, copy=True)
             activation_min_literal = builder.format_float_literal(activation_min)
             activation_max_literal = builder.format_float_literal(activation_max)
             mult1 = shift1 = mult2 = shift2 = output_mult = output_shift = left_shift = 0
@@ -203,6 +209,10 @@ class OpAdd(BinaryBasicMathBase):
 
             input2_q = np.round(input2_data / float(input2_scale) + float(input2_zp)).astype(np.int32)
             input2_q = np.clip(input2_q, qmin, qmax).astype(np_in_dtype)
+            input1_q, input2_q = self._enforce_int_operand_sign_span(
+                (("input_1", input1_q, input1_zp), ("input_2", input2_q, input2_zp)),
+                steerable=("input_1", "input_2"),
+            )
 
             if input1_shape == input2_shape:
                 interpreter = self.load_litert_interpreter(str(tflite_path))
@@ -240,6 +250,16 @@ class OpAdd(BinaryBasicMathBase):
         block_size = int(np.prod(output_shape))
         
         # Build template context
+        # Only the quantized path renders these as integers; the float path passes the
+        # bounds as literals instead, and the +/-INFINITY no-clamp idiom has no integer
+        # image at all, so casting it would raise rather than produce a dead field.
+        if kernel_info["float_kernel"]:
+            out_activation_min_ctx = activation_min
+            out_activation_max_ctx = activation_max
+        else:
+            out_activation_min_ctx = int(activation_min)
+            out_activation_max_ctx = int(activation_max)
+
         context = {
             'name': name,
             'input1_dims': input1_dims,
@@ -255,8 +275,8 @@ class OpAdd(BinaryBasicMathBase):
             'out_offset': int(output_zp),
             'out_mult': int(output_mult),
             'out_shift': int(output_shift),
-            'out_activation_min': int(activation_min),
-            'out_activation_max': int(activation_max),
+            'out_activation_min': out_activation_min_ctx,
+            'out_activation_max': out_activation_max_ctx,
             'block_size': int(block_size),
             'input1_data_array': input1_array_str,
             'input2_data_array': input2_array_str,
@@ -271,6 +291,8 @@ class OpAdd(BinaryBasicMathBase):
             context["out_activation_min_literal"] = activation_min_literal
             context["out_activation_max_literal"] = activation_max_literal
             context["validation_mode"] = "float"
+            if kernel_info.get("float_broadcast"):
+                context["float_broadcast"] = True
         
         cmake_context = {
             'name': name,

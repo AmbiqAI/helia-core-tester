@@ -29,3 +29,30 @@ tensor_dtypes:
   input: FP16
   output: FP16
 input_shape: [1, 1, 1, 9]
+---
+# Non-finite cover for the float abs kernels. arm_nn_abs_f32/f16 document no
+# non-finite behaviour at all, so nonfinite_policy is mask: the three token lanes are
+# don't-care -- abs is pointwise, so a token reaches its own lane and no other -- and
+# what the case asserts is that the kernel returns SUCCESS, does not fault or hang,
+# and leaves every one of the 125 finite lanes around the tokens correct. Pinning
+# |NaN| or |-Inf| here would encode observed behaviour as a contract the library has
+# not made.
+operator: Abs
+name: abs_float_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+nonfinite_policy: mask
+---
+operator: Abs
+name: abs_float_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 4, 4, 8]
+input_mode: nonfinite_sweep
+nonfinite_policy: mask

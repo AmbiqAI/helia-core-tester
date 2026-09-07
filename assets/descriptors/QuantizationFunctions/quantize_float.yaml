@@ -1,3 +1,20 @@
+# Non-finite inputs are deliberately not covered here, and the reason is a
+# host-portability one rather than a kernel one. The golden for an FP32 -> S8
+# quantize is produced by the TFLite reference, which divides by the scale and casts
+# the float to int32 before clamping to the quantized range. That cast is undefined
+# for NaN and for the infinities, and it is answered by the generation host's FPU,
+# not by TensorFlow: AArch64 FCVTZS gives 0 for NaN and saturates the infinities,
+# while x86 CVTTSS2SI gives INT_MIN for all three. Measured on arm64 the golden comes
+# out 0 / 127 / -128 for NaN / +Inf / -Inf; on the x86 CI host the same descriptor
+# would produce a different golden, so pinning any of them would encode the machine
+# that generated the header rather than what the kernel owes.
+#
+# A don't-care mask does not rescue this either: the mask marks lanes whose float
+# reference is non-finite, and this operator's output is S8, where every value is
+# finite by construction. Covering it needs either a masked integer validator or a
+# quantize reference computed in the generator instead of by the interpreter. See
+# AmbiqAI/helia-core-tester#74.
+
 operator: Quantize
 name: quantize_float_f32_s8_vec17
 suite: float

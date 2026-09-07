@@ -1,4 +1,5 @@
 #include "{{ name }}_lstm_unidirectional.h"
+{% from "common/standalone/validation.j2" import validation_outputs with context %}
 {% include "common/standalone/runtime_common.j2" %}
 {% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
@@ -133,17 +134,7 @@ int32_t {{ name }}_test_case_run(void)
     HELIA_GUARD_CHECK({{ name }}_temp2, "{{ validation_label | default("LSTM") }} temp2", failures);
     {% endif %}
     HELIA_GUARD_CHECK({{ name }}_cell_state, "{{ validation_label | default("LSTM") }} cell_state", failures);
-    HELIA_VALIDATE_OUTPUTS(
-        {{ validation_mode_token | default("FLOAT") }},
-        {{ name }}_output,
-        {{ name }}_expected_output,
-        {{ dst_size }},
-        {{ validation_tolerance | default(1) }},
-        {{ validation_atol }}f,
-        {{ validation_rtol }}f,
-        {{ validation_report_limit | default(8) }},
-        failures
-    );
+{{ validation_outputs(validation_mode_token | default("FLOAT"), validation_tolerance | default(1), dst_size, validation_report_limit | default(8)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 

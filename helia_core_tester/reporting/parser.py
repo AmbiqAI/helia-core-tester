@@ -3,6 +3,7 @@
 import math
 import re
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
@@ -12,7 +13,17 @@ from helia_core_tester.reporting.models import TestResult, TestStatus
 
 class TestResultParser:
     """Parser for standalone failure-count output with legacy Unity fallback."""
-    
+
+    # Once-per-case verdict lines: they close out the output, so a truncated
+    # capture keeps them even when the per-element body is cut.
+    SUMMARY_LINE_PREFIXES = (
+        'HELIA_FLOAT_MAXDIFF',
+        'HELIA_MASKED_LANES',
+        'HELIA_NONFINITE_MISMATCHES',
+        'GuardBreach[',
+    )
+    failure_count_line_pattern = re.compile(r'^\d+\s+Failures$', re.IGNORECASE)
+
     def __init__(self):
         self.test_start_pattern = re.compile(r'Running test: (.+)')
         self.test_pass_pattern = re.compile(r'(.+):test__([^:]+):PASS')
@@ -26,14 +37,19 @@ class TestResultParser:
         # Headroom instrumentation (issue #53): HELIA_FLOAT_MAXDIFF summary line
         # emitted once per float-validated case by HELIA_VALIDATE_FLOATS. The
         # numeric fields also accept a literal nan/inf defensively -- the macro
-        # never prints those (it substitutes negative sentinels for a non-finite
-        # element, issue #75), but a stray one must not make the whole line
+        # never prints those (it excludes non-finite elements from the
+        # measurement, issue #75), but a stray one must not make the whole line
         # unmatchable and silently drop the headroom data.
         _num = r'[-+]?(?:[0-9.]+(?:[eE][-+]?[0-9]+)?|nan|inf)'
         self.float_maxdiff_pattern = re.compile(
             r'HELIA_FLOAT_MAXDIFF\s+maxdiff=(' + _num + r')\s+maxfrac=(' + _num + r')\s+n=(\d+)',
             re.IGNORECASE,
         )
+        # Don't-care lanes (issue #74): HELIA_VALIDATE_FLOATS_MASKED prints this
+        # once per masked tensor. Recording the count is what keeps a mask-policy
+        # case honest in the report -- "passed with every lane masked" and
+        # "passed with one lane masked" are very different claims.
+        self.masked_lanes_pattern = re.compile(r'HELIA_MASKED_LANES:\s*(\d+)\s+of\s+(\d+)')
         # Patterns for extracting output differences
         self.expected_pattern = re.compile(r'(?:Expected|Golden|Reference)[:\s]+([^\n]+)', re.IGNORECASE)
         self.actual_pattern = re.compile(r'(?:Actual|Got|Output|Result)[:\s]+([^\n]+)', re.IGNORECASE)
@@ -44,12 +60,25 @@ class TestResultParser:
         self.zero_failures_pattern = re.compile(r'^0\s+Failures\s*$', re.MULTILINE | re.IGNORECASE)
         # Pattern for "X Failures" where X > 0
         self.nonzero_failures_pattern = re.compile(r'^(\d+)\s+Failures\s*$', re.MULTILINE | re.IGNORECASE)
-        # Buffer overrun guard breach (issue #68): HELIA_GUARD_CHECK prints this
-        # line, distinct from a value mismatch, when a canary byte on either
-        # side of a guarded buffer was corrupted. Must be matched before the
-        # failure-count pattern below, or a guard breach (which also bumps the
-        # printed failure count) is misreported as an ordinary output mismatch.
+        # Buffer overrun guard breach (issue #68): HELIA_GUARD_CHECK prints one
+        # line per breached buffer, distinct from a value mismatch, when a
+        # canary byte on either side of a guarded buffer was corrupted. Matched
+        # before the API-error and failure-count patterns: a breach also bumps
+        # the printed failure count and can co-occur with a non-success status,
+        # and memory corruption is the more severe finding in both cases.
         self.guard_breach_pattern = re.compile(r'GuardBreach\[(?P<label>[^]]+)\]: (?P<dir>[a-z ]+) detected')
+        # Non-finite operand mismatch (issue #75): emitted by
+        # helia_test_nonfinite_mismatch() instead of the %f "Mismatch[...]"
+        # line, because a NaN/Inf operand renders unhelpfully as a number.
+        self.nonfinite_mismatch_pattern = re.compile(
+            r'HELIA_NONFINITE_MISMATCH\[(\d+)\]:\s*exp=(\S+)\s+got=(\S+)'
+        )
+        # Per-tensor count of mismatched non-finite elements. Printed whenever
+        # one occurred, including when the per-element reports above were used
+        # up by earlier failures, so this is the reliable classifier.
+        self.nonfinite_summary_pattern = re.compile(
+            r'HELIA_NONFINITE_MISMATCHES\s+n=(\d+)'
+        )
         # Pattern for "Convolution failed" or API errors
         self.api_error_pattern = re.compile(
             r'(?P<label>[A-Za-z][A-Za-z0-9 _-]*)\s+failed with status\s+(?P<status>-?\d+)',
@@ -90,7 +119,16 @@ class TestResultParser:
         cycles = self._extract_cycles(output)
         memory_usage = self._extract_memory_usage(output)
         max_diff, max_tolerance_fraction = self._extract_float_maxdiff(output)
-        
+        masked_lanes, masked_lanes_total, mask_corruption = self._extract_masked_lanes(output)
+        if mask_corruption is not None:
+            # A masked fraction above 1 would be read downstream as a real
+            # measurement, so the case is failed on the capture rather than on the
+            # kernel, and the counts stay unset.
+            status = TestStatus.FAIL
+            failure_reason = mask_corruption
+            skip_reason = None
+            error_type = "corrupted_capture"
+
         relevant_lines = self._extract_relevant_lines(lines)
         
         # Extract output differences if test failed
@@ -120,6 +158,8 @@ class TestResultParser:
             output_differences=output_differences,
             max_diff=max_diff,
             max_tolerance_fraction=max_tolerance_fraction,
+            masked_lanes=masked_lanes,
+            masked_lanes_total=masked_lanes_total,
         )
     
     def _extract_test_name(self, elf_path: Path) -> str:
@@ -135,17 +175,18 @@ class TestResultParser:
         if exit_code == 124 or "TIMEOUT" in output:
             return TestStatus.TIMEOUT, "Test execution timed out", None, "timeout"
         
+        guard_breaches = [
+            f"{match.group('label').strip()}: {match.group('dir').strip()} detected"
+            for match in self.guard_breach_pattern.finditer(output)
+        ]
+        if guard_breaches:
+            return TestStatus.FAIL, "Guard breach in " + "; ".join(guard_breaches), None, "guard_breach"
+
         api_error_match = self.api_error_pattern.search(output)
         if api_error_match:
             label = api_error_match.group("label").strip()
             status_code = api_error_match.group("status")
             return TestStatus.FAIL, f"{label} API error (status {status_code})", None, "api_error"
-
-        guard_match = self.guard_breach_pattern.search(output)
-        if guard_match:
-            label = guard_match.group("label").strip()
-            direction = guard_match.group("dir").strip()
-            return TestStatus.FAIL, f"Guard breach in {label}: {direction} detected", None, "guard_breach"
 
         if self.zero_failures_pattern.search(output):
             return TestStatus.PASS, None, None, None
@@ -153,6 +194,33 @@ class TestResultParser:
         nonzero_match = self.nonzero_failures_pattern.search(output)
         if nonzero_match:
             failure_count = int(nonzero_match.group(1))
+            nonfinite = self.nonfinite_mismatch_pattern.findall(output)
+            if nonfinite:
+                index, expected, actual = nonfinite[0]
+                return (
+                    TestStatus.FAIL,
+                    f"Non-finite output mismatch: {failure_count} element(s) differ from expected "
+                    f"(first at [{index}]: expected {expected}, got {actual})",
+                    None,
+                    "nonfinite_mismatch",
+                )
+            nonfinite_counts = self.nonfinite_summary_pattern.findall(output)
+            if nonfinite_counts:
+                # The runtime reports individual elements only while failures
+                # stay within the case's report limit (20 by default), so a
+                # tensor with enough finite overruns ahead of the non-finite
+                # element carries only the per-tensor count. The headroom
+                # sentinel cannot stand in for it: the sentinel also fires when
+                # a tensor had no finite element to measure, which would
+                # mislabel a finite overrun in a multi-output case.
+                nonfinite_total = sum(int(count) for count in nonfinite_counts)
+                return (
+                    TestStatus.FAIL,
+                    f"Non-finite output mismatch: {failure_count} element(s) differ from expected "
+                    f"({nonfinite_total} non-finite, reported beyond the per-case report limit)",
+                    None,
+                    "nonfinite_mismatch",
+                )
             return TestStatus.FAIL, f"Output mismatch: {failure_count} element(s) differ from expected", None, "output_mismatch"
 
         fail_matches = self.test_fail_pattern.findall(output)
@@ -222,17 +290,33 @@ class TestResultParser:
         severe one from any single line wins over any finite measurement:
           maxfrac == -1.0             a zero-width tolerance budget was violated
                                       (undefined/infinite fraction, not "small")
-          maxdiff == -1.0, frac -2.0  a non-finite (NaN/Inf) element was seen
-                                      (issue #75); headroom is unmeasurable and
-                                      the kernel output is broken. Reported back
-                                      as (-1.0, -2.0) so no consumer can read it
-                                      as benign near-zero headroom.
+          maxdiff == -1.0, frac -2.0  headroom is unmeasurable (issue #75): a
+                                      non-finite (NaN/Inf) element mismatched,
+                                      or the tensor had no finite element to
+                                      measure. Reported back as (-1.0, -2.0) so
+                                      no consumer can read it as benign
+                                      near-zero headroom. Matched non-finite
+                                      elements do not raise it -- a tensor with
+                                      NaN lanes and finite lanes reports real
+                                      headroom for the finite ones.
         A literal nan/inf token (which the macro does not emit) is treated the
         same as the non-finite sentinel.
+
+        Lines with n=0 measured nothing, so they are ignored while any other
+        line is present.
         """
         matches = self.float_maxdiff_pattern.findall(output)
         if not matches:
             return None, None
+
+        # A zero-length tensor always reports the sentinel -- it compared
+        # nothing -- and a split-style case emits one line per output tensor
+        # into the same output. Letting an empty sibling void the measured
+        # headroom of the tensors that did compare would lose the measurement
+        # for the whole case, so empty lines only speak when nothing else does.
+        measured = [match for match in matches if match[2] != '0']
+        if measured:
+            matches = measured
 
         max_diff = 0.0
         max_frac = 0.0
@@ -258,26 +342,94 @@ class TestResultParser:
             return -1.0, -2.0
         return max_diff, (-1.0 if saw_zero_tol_violation else max_frac)
 
+    def _extract_masked_lanes(
+        self, output: str
+    ) -> Tuple[Optional[int], Optional[int], Optional[str]]:
+        """Masked lanes, the total they are out of, and a corruption reason if any.
+
+        A case with several validated outputs prints one line each, so both counts
+        are summed; the plain validator prints nothing, which is what separates
+        "no lane was masked" (0) from "this case has no mask" (None). The total
+        travels with the count because k alone cannot distinguish one masked lane
+        in a thousand from one in two.
+
+        k > n cannot come from the harness, which cannot mask more lanes than it
+        compared, so the capture is corrupted or interleaved. That is reported as a
+        result, not raised: raising here would abort the whole serial run while the
+        parallel run turned the same capture into a single ERROR entry.
+        """
+        matches = self.masked_lanes_pattern.findall(output)
+        if not matches:
+            return None, None, None
+        masked_total = 0
+        lane_total = 0
+        for masked, total in matches:
+            masked_count, lane_count = int(masked), int(total)
+            if masked_count > lane_count:
+                return None, None, (
+                    f"Corrupted capture: HELIA_MASKED_LANES reported {masked_count} "
+                    f"masked lanes of {lane_count}; the harness cannot mask more lanes "
+                    "than it compared"
+                )
+            masked_total += masked_count
+            lane_total += lane_count
+        return masked_total, lane_total, None
+
     def _extract_relevant_lines(self, lines: List[str]) -> List[str]:
-        """Extract relevant output lines for debugging."""
+        """Extract relevant output lines for debugging.
+
+        `helia_` is a keyword because the runtime's evidence lines
+        (HELIA_NONFINITE_MISMATCH, HELIA_NONFINITE_MISMATCHES,
+        HELIA_FLOAT_MAXDIFF) carry none of the others and are printed before
+        the failure count, so without it they fall outside the retained
+        section and the report keeps the verdict but drops the evidence.
+        `mismatch[` is a keyword for the same reason: the per-element
+        `Mismatch[i]: exp=... got=...` lines print ahead of everything else and
+        carry the failing lane index, which is the only way to tell a kernel
+        defect from a tolerance artefact. `guardbreach[` likewise: the
+        GuardBreach[label] lines (issue #68) name which buffer's canary was
+        corrupted, and are printed right after the kernel call.
+
+        The line cap bounds the per-element body, which is a debugging aid, but
+        it must not bound the verdict: a multi-output case emits enough
+        Mismatch[] lines on its own to push the HELIA_* summaries and the
+        failure count past the cap, so those are re-appended after the
+        truncation marker instead of being dropped with the rest of the tail.
+        """
         relevant = []
         in_test_section = False
-        
+        truncated = False
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-                
-            if any(keyword in line.lower() for keyword in ['test', 'fail', 'pass', 'error', 'assert']):
+
+            if any(keyword in line.lower() for keyword in ['test', 'fail', 'pass', 'error', 'assert', 'helia_', 'mismatch[', 'guardbreach[']):
                 in_test_section = True
-            
+
             if in_test_section:
                 relevant.append(line)
-                
+
                 if len(relevant) > 50:
                     relevant.append("... (truncated)")
+                    truncated = True
                     break
-        
+
+        if not truncated:
+            return relevant
+
+        already_kept = Counter(relevant)
+        for line in lines:
+            line = line.strip()
+            if not (line.startswith(self.SUMMARY_LINE_PREFIXES)
+                    or self.failure_count_line_pattern.match(line)):
+                continue
+            if already_kept[line]:
+                already_kept[line] -= 1
+                continue
+            relevant.append(line)
+
         return relevant
     
     def _extract_output_differences(self, output: str, lines: List[str]) -> Tuple[Optional[str], Optional[str], List[str]]:

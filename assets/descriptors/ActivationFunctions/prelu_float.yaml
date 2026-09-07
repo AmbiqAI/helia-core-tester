@@ -76,3 +76,38 @@ tensor_dtypes:
 # See prelu_float_broadcast_hw_f32: exercises the general broadcast walk.
 input_shape: [1, 3, 4, 5]
 alpha_shape: [1, 1, 4, 5]
+---
+# Non-finite input cover for the float PReLU kernels. PReLU selects per lane on
+# x >= 0, which a NaN fails, so every NaN lane takes the alpha multiply branch
+# and NaN * alpha must still come back NaN -- the select is the thing most likely
+# to get that wrong. -Inf likewise takes the alpha branch and stays signed-infinite
+# for a positive alpha, while +Inf takes the identity branch untouched.
+# Note the contract status: arm_nnfunctions_flt.h:461-481 specifies arm_prelu_f32 as
+# `input >= 0 ? input : input * alpha` and says nothing about non-finite inputs, so
+# these lanes pin what that formula gives on both the scalar and MVE legs rather than
+# a documented guarantee. If a lane ever diverges, the fix is a header statement in
+# ns-cmsis-nn (cf. #333 / #382 for the elementwise and activation families), not a
+# tolerance widened here.
+# Alpha itself is never swept: it stays finite so each lane isolates the input
+# token rather than mixing two non-finite operands.
+operator: PReLU
+name: prelu_float_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 3, 4, 5]
+alpha_shape: [5]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+---
+operator: PReLU
+name: prelu_float_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 3, 4, 5]
+alpha_shape: [5]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict

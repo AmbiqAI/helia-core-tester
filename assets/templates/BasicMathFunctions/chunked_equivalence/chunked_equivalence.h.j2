@@ -19,10 +19,10 @@ static const int32_t {{ name }}_chunk_sizes[{{ name|upper }}_CHUNK_COUNT] = {
 static const {{ input_dtype }} {{ name }}_input1[{{ name|upper }}_ELEMENT_COUNT] = {
 {{ input1_data_array }}
 };
-
+{% if operand_count == 2 %}
 // Input 2 data (sign-diverse post-offset inside the packed region)
 static const {{ input_dtype }} {{ name }}_input2[{{ name|upper }}_ELEMENT_COUNT] = {
 {{ input2_data_array }}
 };
-
+{% endif %}
 #endif

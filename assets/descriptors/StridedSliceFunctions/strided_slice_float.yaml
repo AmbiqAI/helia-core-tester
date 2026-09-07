@@ -267,3 +267,39 @@ strides:
 - -1
 - -1
 - -2
+---
+# Non-finite cover for the float strided-slice kernels. A slice is pure data
+# movement, so bit-exact pass-through of NaN, +Inf and -Inf is the only correct
+# behaviour and the policy is strict. No contract citation is available or needed: a
+# copy has nothing to specify.
+#
+# Exception to the "tokens at flat positions 0..k-1" rule, or rather the reason this
+# case does not slice: every other strided-slice case here begins past element 0, so
+# the swept elements would be dropped before the kernel copied anything and the case
+# would assert nothing. This one takes the whole tensor with unit strides so the
+# tokens are guaranteed to reach the output.
+operator: StridedSlice
+name: strided_slice_float_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [2, 3, 4, 2]
+begin: [0, 0, 0, 0]
+end: [2, 3, 4, 2]
+strides: [1, 1, 1, 1]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+---
+operator: StridedSlice
+name: strided_slice_float_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [2, 3, 4, 2]
+begin: [0, 0, 0, 0]
+end: [2, 3, 4, 2]
+strides: [1, 1, 1, 1]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict

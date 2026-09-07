@@ -292,16 +292,27 @@ class OpBatchMatMul(OperationBase):
         rng_state = self.rng.__getstate__()
         self.rng = np.random.default_rng(self.seed)
         
-        input_lhs_data = self.rng.uniform(-1.0, 1.0, size=input_lhs_shape).astype(float_dtype if float_kernel else np.float32)
+        # Only the LHS is swept: the sweep is defined on the input tensor, and taking it
+        # through _maybe_apply_input_mode rather than _sample_uniform keeps the draw on
+        # self.rng so the RHS that follows it in the stream is unmoved.
+        input_lhs_data = self._maybe_apply_input_mode(
+            self.rng.uniform(-1.0, 1.0, size=input_lhs_shape).astype(float_dtype if float_kernel else np.float32)
+        )
         input_rhs_data = self.rng.uniform(-1.0, 1.0, size=input_rhs_shape).astype(float_dtype if float_kernel else np.float32)
         
         self.rng.__setstate__(rng_state)
         
         if float_kernel:
-            interpreter.set_tensor(input_details[0]['index'], input_lhs_data.astype(input_details[0]['dtype']))
-            interpreter.set_tensor(input_details[1]['index'], input_rhs_data.astype(input_details[1]['dtype']))
-            interpreter.invoke()
-            output_data = np.array(interpreter.get_tensor(output_details[0]['index']), dtype=float_dtype)
+            def float_reference(operands, _dtype=float_dtype):
+                interpreter.set_tensor(input_details[0]['index'], operands[0].astype(input_details[0]['dtype']))
+                interpreter.set_tensor(input_details[1]['index'], operands[1].astype(input_details[1]['dtype']))
+                interpreter.invoke()
+                return np.array(interpreter.get_tensor(output_details[0]['index']), dtype=_dtype)
+
+            output_data = float_reference([input_lhs_data, input_rhs_data])
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=float_reference, inputs=[input_lhs_data, input_rhs_data]
+            )
 
             input_lhs_array_str = builder.format_array_as_c_literal(input_lhs_data)
             input_rhs_array_str = builder.format_array_as_c_literal(input_rhs_data)
@@ -339,6 +350,7 @@ class OpBatchMatMul(OperationBase):
                 'bmm_activation_max_literal': builder.format_float_literal(bmm_params['activation_max']),
                 'validation_mode': 'float',
             }
+            context.update(nonfinite_context)
             includes_api_dir = output_dir / "includes"
             includes_api_dir.mkdir(parents=True, exist_ok=True)
             

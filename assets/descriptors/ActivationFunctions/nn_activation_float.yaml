@@ -102,8 +102,10 @@ input_shape:
 activation_type: ARM_NN_FLT_ACT_TANH
 act_param: 0.0
 # Scalar-fallback floor, NOT the MVE floor: the m55-f16-fallback CI leg
-# compiles the kernel at -O0 with ARM_MATH_AUTOVECTORIZE (scalar f16 tanh),
-# where the worst measured diff is 1.03e-2 at |exp|=0.66 -- the MVE path
+# compiles the kernel at -O0 with ARM_MATH_AUTOVECTORIZE, so it runs
+# arm_nn_tanh_scalar_ref_f16, the scalar twin of the MVE LUT (same [0, 4]
+# 256-segment geometry, arm_nn_activation_flt.h:401-411, ns-cmsis-nn#407);
+# the worst measured diff there is 1.03e-2 at |exp|=0.66 -- the MVE path
 # measures ~0 error here, which is how an earlier audit mistook this
 # override for dead weight and removed it (third-round review caught the
 # fallback leg breaking). rtol 0.02 gives ~1.4x margin over that floor.
@@ -160,8 +162,10 @@ input_shape:
 activation_type: ARM_NN_FLT_ACT_TANH
 act_param: 0.0
 # Scalar-fallback floor, NOT the MVE floor: the m55-f16-fallback CI leg
-# compiles the kernel at -O0 with ARM_MATH_AUTOVECTORIZE (scalar f16 tanh),
-# where the worst measured diff is 1.03e-2 at |exp|=0.66 -- the MVE path
+# compiles the kernel at -O0 with ARM_MATH_AUTOVECTORIZE, so it runs
+# arm_nn_tanh_scalar_ref_f16, the scalar twin of the MVE LUT (same [0, 4]
+# 256-segment geometry, arm_nn_activation_flt.h:401-411, ns-cmsis-nn#407);
+# the worst measured diff there is 1.03e-2 at |exp|=0.66 -- the MVE path
 # measures ~0 error here, which is how an earlier audit mistook this
 # override for dead weight and removed it (third-round review caught the
 # fallback leg breaking). rtol 0.02 gives ~1.4x margin over that floor.
@@ -321,8 +325,10 @@ act_param: 0.0
 # generator default of [-1, 1] (nn_activation_float.py), so no case ever left
 # the first sixth of the f32 tanh LUT or reached any saturation branch. The f32
 # tanh kernel interpolates arm_nn_tanh_lut384_f32 over |x| < 6 and saturates to
-# +/-1 at |x| >= 6; the f16 tanh kernel switches at |x| = 4 (MVE LUT) and
-# |x| = 3 (scalar rational fit). None of that was reachable, so ns-cmsis-nn#303
+# +/-1 at |x| >= 6; the f16 tanh kernel saturates at |x| = 4 on both legs, since
+# arm_nn_tanh_scalar_ref_f16 is a scalar twin of the MVE LUT over the same
+# [0, 4] 256-segment geometry (arm_nn_activation_flt.h:401-411,
+# ns-cmsis-nn#407). None of that was reachable, so ns-cmsis-nn#303
 # (which widened the f32 window from 4 to 6) shipped with no case covering it.
 #
 # WHAT THESE CASES ACTUALLY PIN DOWN. Read this before trusting them as the
@@ -557,10 +563,10 @@ act_param: 0.0
 # Sized for the m55-f16-fallback leg, exactly like the narrow tanh_f16 case
 # above, but the floor is higher here and had to be measured separately rather
 # than copied. Expectations are generated from the MVE LUT model (cortex-m55
-# reports has_mve), while the fallback leg compiles the scalar rational fit
-# x*(27+x^2)/(27+9x^2) with its own |x| > 3 cutoff -- two different algorithms,
-# and widening the input range to +/-8 walks straight through the region where
-# they disagree most.
+# reports has_mve) while the fallback leg compiles a different scalar
+# implementation, and widening the input range to +/-8 walks straight through
+# the region where the two disagree most. The number below is the measurement,
+# not a derivation from either algorithm.
 # Measured by tolerance sweep on the FVP, atol held at 0.001:
 #   m55-f16-mvef     : passes at rtol 0.0 (expectations match the MVE path
 #                      bit-for-bit, so this leg contributes no constraint)
@@ -634,3 +640,228 @@ act_param: 0.0
 # Same measured floor as nn_activation_float_sigmoid_wide_f16:
 # (2.5e-4, 5.0e-4] on both m55-f16 legs, >2x inside the FP16 defaults, and the
 # same 9-vacuous-sample caveat.
+---
+# ---------------------------------------------------------------------------
+# Non-finite input cases (input_mode: nonfinite_sweep).
+#
+# The leading flat elements of the input are overwritten with the tokens named
+# by nonfinite_tokens; the rest keep their uniform draw, so each case is a
+# mixed tensor. That mix is the point: a kernel that predicates a whole vector
+# off on a NaN lane, or that corrupts the lanes neighbouring one, fails
+# differently from a kernel that merely mishandles the token itself.
+#
+# The token set is per case because the contract is per kernel. Sources of
+# record are ns-cmsis-nn Include/arm_nnfunctions_flt.h and
+# Include/Internal/arm_nn_activation_flt.h, with issues AmbiqAI/ns-cmsis-nn#333
+# and #382 for the propagation work and #314 for the tanh soft-float index.
+#
+# Two contracts are pinned here:
+#   - Propagation: NaN in gives NaN out. arm_nnfunctions_flt.h:440-444 gives
+#     this for the RELU, RELU6 and LEAKY_RELU legs only -- they classify NaN on
+#     the integer bit pattern, so it holds on scalar and MVE at -Ofast. The
+#     comparison macro treats both-NaN as equal (tester #75), so these lanes
+#     assert identity, not tolerance.
+#   - Clamping: where the kernel's domain reduction bounds a non-finite input
+#     to a finite result -- tanh(+-Inf) = +-1, sigmoid(+Inf) = 1,
+#     sigmoid(-Inf) = 0, relu6(+Inf) = 6, relu(-Inf) = 0 -- the expected value
+#     is finite and ordinary dtype tolerance applies.
+#
+# Why cortex-m0 matters here: it is the only soft-float leg, so it is the only
+# one where a float->int conversion inside a LUT index calculation goes through
+# __aeabi_f2iz (which returns INT32_MAX for a quiet NaN) rather than
+# VCVT.S32.F32 (which saturates NaN to 0). A NaN case that passes on m55/m4 can
+# still read far out of bounds there.
+#
+# The regression guard for ns-cmsis-nn#314 is exactly one case,
+# nn_activation_float_tanh_nan_softfloat_f32, and it runs on cortex-m0 only.
+# #314 is NaN-only, so the +-Inf sweeps below do not reach it. The case requires
+# the soft_float capability because that is the scope of the contract: the
+# `#if !defined(__ARM_FP)` block at arm_nn_activation_flt.h:103-118 tests the
+# input's bit pattern and returns the NaN quieted, and being an integer test it
+# survives the shipped -Ofast build. Off soft-float there is nothing to assert.
+# Hard-float scalar (cortex-m4) reaches the NaN only through the `ax != ax`
+# cold branch at :123 onward, which -ffinite-math-only deletes -- :69-83 says so
+# in as many words. MVE (every cortex-m55 leg) returns -0.9999877 by design,
+# because vminnmq is IEEE minNum and the vnegq_m predicate fires on unordered
+# lanes (:85-99). Both are documented as outside the contract, so both
+# capability-skip rather than pin an observation.
+#
+# HARDSWISH has no case here at all: arm_nnfunctions_flt.h:445-451 puts the
+# mux's hard swish outside the NaN/Inf contract and points callers who need it
+# at arm_hard_swish_f32, so the standalone cases in hard_swish_float.yaml are
+# where that kernel's non-finite behaviour is asserted.
+operator: NNActivationFloat
+name: nn_activation_float_tanh_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+nonfinite_tokens: [inf, -inf]
+# No NaN lane: the MVE tanh legs saturate with vminnmq, which is IEEE minNum and
+# returns the numeric operand against a quiet NaN, so a NaN lane comes back as
+# tanh(xmax) by design (arm_nn_activation_flt.h:89-93 for f32, :537-554 for f16).
+# Every cortex-m55 leg is MVE, and neither IEEE propagation nor that divergence is
+# a guarantee the header makes, so there is nothing here to assert.
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_nan_softfloat_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+nonfinite_tokens: [nan]
+required_capabilities: [soft_float]
+# The ns-cmsis-nn#314 guard; the block comment above says why it is the only NaN
+# tanh lane in this file and why it is restricted to the soft-float leg. The
+# expected value is NaN and the comparison macro treats both-NaN as equal (tester
+# #75), so the lane asserts that a NaN came back rather than a particular payload
+# -- arm_nn_activation_flt.h:115 quiets the input, and pinning the payload would
+# mean modelling that.
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_sigmoid_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+nonfinite_tokens: [inf, -inf]
+# No NaN lane: arm_nnsupportfunctions_flt.h:184-186 records sigmoid(NaN) == 1.0f as a
+# "defined consequence" of exp(NaN) == exp(80) and states NaN is not a supported input
+# to the softmax/sigmoid kernels. Locking a golden on an input the kernel disclaims
+# would test the tester, not the contract.
+activation_type: ARM_NN_FLT_ACT_SIGMOID
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_relu_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 16]
+input_min: -4.0
+input_max: 4.0
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+activation_type: ARM_NN_FLT_ACT_RELU
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_relu6_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 16]
+input_min: -2.0
+input_max: 8.0
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+activation_type: ARM_NN_FLT_ACT_RELU6
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_leaky_relu_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+activation_type: ARM_NN_FLT_ACT_LEAKY_RELU
+act_param: 0.125
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+nonfinite_tokens: [inf, -inf]
+# No NaN lane: the MVE tanh legs saturate with vminnmq, which is IEEE minNum and
+# returns the numeric operand against a quiet NaN, so a NaN lane comes back as
+# tanh(xmax) by design (arm_nn_activation_flt.h:89-93 for f32, :537-554 for f16).
+# Every cortex-m55 leg is MVE, and neither IEEE propagation nor that divergence is
+# a guarantee the header makes, so there is nothing here to assert.
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+# Same scalar-fallback floor as the other narrow tanh_f16 cases: the goldens are
+# built from the MVE LUT model and the m55-f16-fallback leg compiles a different
+# scalar implementation, measured to disagree by up to 1.03e-2 over |x| <= 1.
+comparison:
+  atol: 0.001
+  rtol: 0.02
+---
+operator: NNActivationFloat
+name: nn_activation_float_sigmoid_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+nonfinite_tokens: [inf, -inf]
+# No NaN lane: arm_nnsupportfunctions_flt.h:184-186 records sigmoid(NaN) == 1.0f as a
+# "defined consequence" of exp(NaN) == exp(80) and states NaN is not a supported input
+# to the softmax/sigmoid kernels. Locking a golden on an input the kernel disclaims
+# would test the tester, not the contract.
+activation_type: ARM_NN_FLT_ACT_SIGMOID
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_relu_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 16]
+input_min: -4.0
+input_max: 4.0
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+activation_type: ARM_NN_FLT_ACT_RELU
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_relu6_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 16]
+input_min: -2.0
+input_max: 8.0
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+activation_type: ARM_NN_FLT_ACT_RELU6
+act_param: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_leaky_relu_nonfinite_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 16]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+activation_type: ARM_NN_FLT_ACT_LEAKY_RELU
+act_param: 0.125

@@ -43,8 +43,10 @@ class TestResult:
     actual_output: Optional[str] = None  # Actual test output
     output_differences: List[str] = field(default_factory=list)  # List of difference details
     project_root: Optional[Path] = None  # For making paths relative
-    max_diff: Optional[float] = None  # Largest raw |actual - expected| observed; -1.0 = non-finite output (float suite only, issue #53)
-    max_tolerance_fraction: Optional[float] = None  # Largest diff/tolerance ratio; -1.0 = zero-width tol budget violated, -2.0 = non-finite output (issue #53/#75)
+    max_diff: Optional[float] = None  # Largest raw |actual - expected| over the finite elements; -1.0 = unmeasurable (float suite only, issue #53)
+    max_tolerance_fraction: Optional[float] = None  # Largest diff/tolerance ratio; -1.0 = zero-width tol budget violated, -2.0 = unmeasurable: a non-finite element mismatched or none was finite (issue #53/#75)
+    masked_lanes: Optional[int] = None  # Output elements the case declared don't-care: reference lane non-finite, or reachable from a swept token (nonfinite_policy: mask, issue #74)
+    masked_lanes_total: Optional[int] = None  # Elements masked_lanes is out of; without it a masked count carries no scale
     
     def _make_path_relative(self, path: str) -> str:
         """Convert absolute path to relative path if project_root is set."""
@@ -107,7 +109,11 @@ class TestResult:
             result["max_diff"] = self.max_diff
         if self.max_tolerance_fraction is not None:
             result["max_tolerance_fraction"] = self.max_tolerance_fraction
-        
+        if self.masked_lanes is not None:
+            result["masked_lanes"] = self.masked_lanes
+        if self.masked_lanes_total is not None:
+            result["masked_lanes_total"] = self.masked_lanes_total
+
         return result
 
 

@@ -5,7 +5,9 @@ FullyConnected operation implementation with dtype-aware quantization.
 from typing import Dict, Any, Optional
 import numpy as np
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
 from helia_core_tester.generation.kernel_dispatch import resolve_fully_connected_kernel
+from helia_core_tester.core.cpu_targets import get_cpu_profile
 import keras
 from pathlib import Path
 
@@ -59,24 +61,33 @@ class OpFullyConnected(OperationBase):
         
         # A zero bias_initializer (Dense's default) produces an all-zero bias
         # tensor, which the TFLite converter's constant-folding optimizer
-        # strips from the FLOAT (non-quantized) graph entirely -- the
-        # generated CMSIS-NN test then calls the kernel with a NULL bias
-        # pointer, leaving the bias-add path completely untested. Use a
-        # small nonzero uniform bias, deterministic from the case seed, so
-        # real bias data flows through the golden and the kernel call.
-        # Float cases only: the same Keras model also feeds the QUANTIZED
-        # pipeline (see convolve.py) -- keep int FC goldens byte-identical.
+        # strips from the graph entirely -- the generated CMSIS-NN test then
+        # calls the kernel with a NULL bias pointer, leaving the bias-add
+        # path completely untested. Use a nonzero uniform bias, deterministic
+        # from the case seed, so real bias data flows through the golden and
+        # the kernel call.
+        #
+        # The quantized magnitude has to clear one output quantization step,
+        # or a dropped bias-add still reproduces the golden bit for bit. FC
+        # sums far fewer terms than conv does, so its calibrated output range
+        # is much narrower and the floor scales down with it: every
+        # bias-carrying channel of an int FC case clears at least one output
+        # step with margin, while the bias costs only a small fraction of the
+        # calibrated dynamic range. The float range is unchanged.
         _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
-        bias_initializer = (
-            keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
-            if (use_bias and _case_is_float) else 'zeros'
-        )
+        if not use_bias:
+            bias_initializer = 'zeros'
+        elif _case_is_float:
+            bias_initializer = keras.initializers.RandomUniform(minval=-0.25, maxval=0.25, seed=self.seed)
+        else:
+            bias_initializer = SignedMagnitudeUniform(minval=0.125, maxval=0.25, seed=self.seed)
 
         # Dense layer without activation (we'll apply activation separately if needed)
         x = keras.layers.Dense(
             output_units,
             activation=None,
             use_bias=use_bias,
+            kernel_initializer=keras.initializers.GlorotUniform(seed=1234),
             bias_initializer=bias_initializer,
             name='dense'
         )(x)
@@ -262,10 +273,14 @@ class OpFullyConnected(OperationBase):
         return 0
     
     def _supports_weight_sum(self) -> bool:
-        """Check if platform supports weight sum optimization."""
-        # For CMSIS-NN, weight sum is supported for S8 fully connected
-        # This is a simplified check - in a real implementation, this would check platform capabilities
-        return True
+        """Check if platform supports weight sum optimization.
+
+        arm_nn_vec_mat_mult_t_s8 reads the precomputed kernel sum only under
+        ARM_MATH_MVEI; every other build reads the bias pointer instead. The
+        generator folds the bias into the kernel sum and then passes a NULL
+        bias, so claiming support on a non-MVE target drops the bias-add.
+        """
+        return get_cpu_profile(self.target_cpu).has_mve
     
     def _should_precompute_weight_sum(self, weights: Optional[np.ndarray], output_dtype: np.dtype) -> bool:
         """Determine if weight sum should be precomputed."""
@@ -605,10 +620,19 @@ class OpFullyConnected(OperationBase):
             input_data = np.asarray(self._sample_uniform(input_shape), dtype=float_dtype)
             from helia_core_tester.generation.utils.litert_utils import run_inference_litert
             interpreter_input_dtype = self.load_litert_interpreter(str(tflite_path)).get_input_details()[0]['dtype']
-            output_data = run_inference_litert(
-                str(tflite_path),
-                input_data.astype(interpreter_input_dtype),
-                subgraph_index=0,
+            def float_reference(operands, _dtype=float_dtype, _in_dtype=interpreter_input_dtype):
+                return np.asarray(
+                    run_inference_litert(
+                        str(tflite_path),
+                        operands[0].astype(_in_dtype),
+                        subgraph_index=0,
+                    ),
+                    dtype=_dtype,
+                )
+
+            output_data = float_reference([input_data])
+            output_data, nonfinite_context = self.apply_nonfinite_policy(
+                output_data, reference=float_reference, inputs=[input_data]
             )
 
             weights_array_str = builder.format_array_as_c_literal(weights) if weights is not None else ""
@@ -636,6 +660,7 @@ class OpFullyConnected(OperationBase):
                 'weights_array': weights_array_str,
                 'biases_array': biases_array_str,
                 'has_biases': has_biases,
+                'has_bias_array': has_biases,
                 'input_data_array': input_data_array_str,
                 'expected_output_array': expected_output_array_str,
                 'input_dtype': kernel_info["input_c_type"],
@@ -655,6 +680,7 @@ class OpFullyConnected(OperationBase):
                 'fc_activation_max_literal': builder.format_float_literal(fc_params['activation_max']),
                 'validation_mode': 'float',
             }
+            context.update(nonfinite_context)
 
             includes_api_dir = output_dir / "includes"
             includes_api_dir.mkdir(parents=True, exist_ok=True)
@@ -791,6 +817,7 @@ class OpFullyConnected(OperationBase):
         # Compute weight sum if needed
         weight_sum = None
         has_weight_sum = False
+        folded_bias = None
         if weight_dtype != "S4" and self._should_precompute_weight_sum(weights, output_dtype):
             from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import vector_sum_s8
             
@@ -820,6 +847,7 @@ class OpFullyConnected(OperationBase):
             
             # If weight_sum is precomputed, biases are consumed into it
             if bias_data is not None:
+                folded_bias = bias_data
                 biases = None
         
         # Format arrays
@@ -854,7 +882,17 @@ class OpFullyConnected(OperationBase):
                 biases = biases.astype(np.int32)
             if has_biases:
                 biases_array_str = builder.format_array_as_c_literal(biases)
-        
+
+        # A bias folded into the kernel sum still has to appear as an array in
+        # the header. The kernel keeps taking a NULL bias pointer, but the
+        # perf-stream bridge reads the bias back out of the header decl, and a
+        # NULL decl is indistinguishable there from a zero bias, so the bridge
+        # would rebuild the kernel sum without the bias term.
+        has_bias_array = has_biases
+        if has_weight_sum and folded_bias is not None:
+            biases_array_str = builder.format_array_as_c_literal(folded_bias.astype(np.int32))
+            has_bias_array = True
+
         weight_sum_array_str = builder.format_array_as_c_literal(weight_sum) if weight_sum is not None else ""
         
         # Generate input data and run inference
@@ -962,6 +1000,7 @@ class OpFullyConnected(OperationBase):
             'weights_array': weights_array_str,
             'biases_array': biases_array_str,
             'has_biases': has_biases,
+            'has_bias_array': has_bias_array,
             'input_data_array': input_data_array_str,
             'expected_output_array': expected_output_array_str,
             'input_dtype': kernel_info["input_c_type"],

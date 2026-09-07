@@ -27,12 +27,19 @@ _CPU_ALIASES = {
 # Maps a canonical cpu name (as used for test generation, build-dir naming,
 # and generated_tests_dir layout) to the actual `-mcpu=...`/`TARGET_CPU`
 # CMake value passed to the compiler, when they differ. "cortex-m55-dsp" is
-# a helia-core-tester-only pseudo target: identical generated test sources
-# and identical physical target as "cortex-m55", just compiled with MVE
-# disabled -- see CMakeLists.txt's ARM_CPU/ARM_FEATURES derivation, which
-# strips this "+nomve" suffix before selecting the CMSIS device header
-# (the physical chip doesn't change, only the instruction-set the compiler
-# targets).
+# a helia-core-tester-only pseudo target: the same physical target as
+# "cortex-m55", just compiled with MVE disabled -- see CMakeLists.txt's
+# ARM_CPU/ARM_FEATURES derivation, which strips this "+nomve" suffix before
+# selecting the CMSIS device header (the physical chip doesn't change, only
+# the instruction-set the compiler targets).
+#
+# For s8 FullyConnected the two targets also differ in where the bias-add
+# happens: the MVE kernel reads a precomputed kernel sum and ignores the bias
+# pointer, so the generator folds the bias into that sum for "cortex-m55" and
+# passes the bias through for "cortex-m55-dsp" (see
+# OpFullyConnected._supports_weight_sum()). A cycle delta between the two
+# targets on those cases therefore includes the bias-add placement, not only
+# the instruction set.
 _TARGET_CPU_CMAKE_OVERRIDES = {
     "cortex-m55-dsp": "cortex-m55+nomve",
 }
@@ -113,20 +120,51 @@ def get_cpu_profile(cpu: str) -> CpuProfile:
             capabilities=frozenset({"dsp", "fp32_execution"}),
         )
     if canon == "cortex-m0":
+        # fp32_execution without fp16_execution: v6-m has no FPU at all, so f32 runs
+        # through the soft-float ABI (-mfloat-abi=soft) and is a buildable
+        # configuration -- ns-cmsis-nn's own CI runs cortex-m0 int-only -- while f16
+        # has no kernel path here. This is the only soft-float leg in the matrix,
+        # which makes it the only one that exercises __aeabi_* float conversion rather
+        # than VCVT -- the two differ on non-finite operands.
+        #
+        # soft_float is a positive capability rather than an inferred negation of
+        # has_dsp/has_mve because ns-cmsis-nn guards some behaviour on
+        # `#if !defined(__ARM_FP)`: a descriptor whose contract exists only in the
+        # soft-float compilation of a kernel requires it, and every hard-float target
+        # capability-skips instead of asserting an unspecified result.
         return CpuProfile(
             cpu=canon,
             has_dsp=False,
             has_mve=False,
-            capabilities=frozenset(),
+            capabilities=frozenset({"fp32_execution", "soft_float"}),
         )
     raise ValueError(f"Unsupported CPU target: {cpu}")
 
 
+def known_capabilities() -> frozenset[str]:
+    """Union of the capabilities any CPU profile declares."""
+    names: set[str] = set()
+    for canon in set(_CPU_ALIASES.values()):
+        names |= get_cpu_profile(canon).capabilities
+    return frozenset(names)
+
+
 def missing_required_capabilities(cpu: str, required_capabilities: Sequence[str]) -> list[str]:
     profile = get_cpu_profile(cpu)
+    known = known_capabilities()
     missing: list[str] = []
     for capability in required_capabilities:
         capability_name = str(capability).strip().lower()
-        if capability_name and not profile.supports_capability(capability_name):
+        if not capability_name:
+            continue
+        # A name no profile declares is unsatisfiable everywhere, so a typo like
+        # "soft-float" would skip the descriptor on the whole matrix and report as
+        # covered. Fail generation instead.
+        if capability_name not in known:
+            raise ValueError(
+                f"Unknown required capability {capability_name!r}; "
+                f"known capabilities are {sorted(known)}"
+            )
+        if not profile.supports_capability(capability_name):
             missing.append(capability_name)
     return missing

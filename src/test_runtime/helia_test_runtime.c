@@ -69,9 +69,93 @@ int helia_test_finish_validation(int failures)
     return failures;
 }
 
+/*
+ * Kept out of the header, and out of every harness translation unit with it:
+ * this classifies a value that has already been widened to double, which is
+ * exactly the shape issue #75 is about. It is safe only here, where `expected`
+ * arrives as a function argument no fast-math-attributed instruction of this
+ * TU produced. Harness code classifies through HELIA_FLOAT_CLASS_OF instead,
+ * which decodes the element at its own storage width.
+ */
+static int helia_test_float_class(double value)
+{
+    return helia_test_float_class_binary64(&value);
+}
+
 double helia_test_float_tolerance(double expected, double atol, double rtol)
 {
+    // A tolerance derived from a non-finite expected value is itself Inf or
+    // NaN, and `diff > tol` is false against either -- a budget that can never
+    // be exceeded (issue #75). Callers classify non-finite elements before
+    // reaching here; this keeps the function safe for any other caller.
+    if (helia_test_float_class(expected) != HELIA_FLOAT_CLASS_FINITE) {
+        return atol;
+    }
     return (atol + (rtol * fabs(expected)));
+}
+
+/*
+ * %.6g rather than %.6f: the finite half of a mixed pairing is often at the
+ * extremes of the range (FLT_MAX against +Inf), where a fixed-point rendering
+ * runs to 39 integer digits and truncates into a mangled number.
+ */
+static const char *helia_test_float_token(
+    int value_class,
+    double value,
+    char *buffer,
+    size_t buffer_size
+)
+{
+    switch (value_class) {
+        case HELIA_FLOAT_CLASS_NAN:
+            return "nan";
+        case HELIA_FLOAT_CLASS_POS_INF:
+            return "+inf";
+        case HELIA_FLOAT_CLASS_NEG_INF:
+            return "-inf";
+        default:
+            break;
+    }
+    snprintf(buffer, buffer_size, "%.6g", value);
+    return buffer;
+}
+
+/*
+ * The caller passes the class it decoded from the element's storage rather
+ * than letting this function re-derive it: reaching a double here costs a
+ * widening conversion, which under -ffinite-math-only is licensed to produce
+ * anything at all for a NaN or Inf operand. Only the finite half of a mixed
+ * pairing is ever rendered from the value.
+ */
+void helia_test_nonfinite_mismatch(
+    int index,
+    int expected_class,
+    double expected,
+    int actual_class,
+    double actual
+)
+{
+    char expected_text[64];
+    char actual_text[64];
+    printf(
+        "HELIA_NONFINITE_MISMATCH[%d]: exp=%s got=%s\r\n",
+        index,
+        helia_test_float_token(expected_class, expected, expected_text, sizeof(expected_text)),
+        helia_test_float_token(actual_class, actual, actual_text, sizeof(actual_text))
+    );
+}
+
+/*
+ * Per-tensor count, so the reporting parser can distinguish a non-finite
+ * mismatch from a tolerance overrun even when the per-element reports were
+ * exhausted by earlier failures. The headroom sentinel cannot carry that
+ * distinction: it also fires for a tensor with no finite element to measure.
+ */
+void helia_test_nonfinite_mismatch_summary(int count)
+{
+    if (count > 0) {
+        printf("HELIA_NONFINITE_MISMATCHES n=%d\r\n", count);
+    }
 }
 
 void helia_guard_arm(uint8_t *head, uint8_t *tail, void *body, size_t body_bytes, bool poison_body)

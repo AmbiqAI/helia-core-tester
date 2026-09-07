@@ -1,0 +1,47 @@
+{#
+ Output validation call site, shared by the operator templates whose descriptors
+ can carry nonfinite_policy: mask (issue #74).
+
+ A mask-policy case adds one context key, nonfinite_mask_array_str, holding the
+ don't-care byte per output element. It is emitted here rather than in the
+ generated .h so no per-operator header template has to know the policy exists,
+ and the plain branch is byte-identical to the call site it replaced so a case
+ without a mask keeps its golden.
+#}
+{% macro validation_outputs(mode, tolerance, size=none, report_limit=none) %}
+{#
+ size and report_limit exist so an operator whose call site names the element
+ count inline (the recurrent families size their output from dst_size, not from
+ a <NAME>_OUTPUT_SIZE macro) can adopt this macro without its finite cases
+ changing a byte.
+#}
+{% set output_size = size if size is not none else name|upper ~ "_OUTPUT_SIZE" %}
+{% set limit = report_limit if report_limit is not none else validation_report_limit | default(20) %}
+{% if nonfinite_mask_array_str %}
+    static const uint8_t {{ name }}_expected_mask[] = {
+{{ nonfinite_mask_array_str }}
+    };
+    HELIA_VALIDATE_FLOATS_MASKED(
+        {{ name }}_output,
+        {{ name }}_expected_output,
+        {{ name }}_expected_mask,
+        {{ output_size }},
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
+        {{ limit }},
+        failures
+    );
+{%- else %}
+    HELIA_VALIDATE_OUTPUTS(
+        {{ mode }},
+        {{ name }}_output,
+        {{ name }}_expected_output,
+        {{ output_size }},
+        {{ tolerance }},
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
+        {{ limit }},
+        failures
+    );
+{%- endif %}
+{%- endmacro %}
