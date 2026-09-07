@@ -1,0 +1,419 @@
+# Refs AmbiqAI/ns-cmsis-nn#295. Bitwise specials; FP32 rsqrt allows one ULP
+# on finite positives, exact on powers of four. FP32 subnormals follow FZ.
+name: rsqrt_float_positive_1_f32
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape:
+- 1
+required_kernel_symbols:
+- arm_rsqrt_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: positive
+---
+name: rsqrt_float_positive_7_f32
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape:
+- 7
+required_kernel_symbols:
+- arm_rsqrt_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: positive
+---
+name: rsqrt_float_positive_8_f32
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape:
+- 8
+required_kernel_symbols:
+- arm_rsqrt_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: positive
+---
+name: rsqrt_float_positive_9_f32
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape:
+- 9
+required_kernel_symbols:
+- arm_rsqrt_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: positive
+---
+name: rsqrt_float_positive_17_f32
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape:
+- 17
+required_kernel_symbols:
+- arm_rsqrt_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: positive
+---
+name: rsqrt_float_positive_257_f32
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape:
+- 257
+required_kernel_symbols:
+- arm_rsqrt_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: positive
+---
+name: rsqrt_float_special_f32
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape:
+- 51
+required_kernel_symbols:
+- arm_rsqrt_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: special
+---
+name: rsqrt_float_special_inplace_f32
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape:
+- 51
+required_kernel_symbols:
+- arm_rsqrt_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: special
+  in_place: true
+---
+name: rsqrt_float_powers_of_four_f32
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape:
+- 127
+required_kernel_symbols:
+- arm_rsqrt_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: powers_of_four
+---
+name: rsqrt_float_null_input_f32
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape:
+- 9
+required_kernel_symbols:
+- arm_rsqrt_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  api_error: null_input
+---
+name: rsqrt_float_null_output_f32
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape:
+- 9
+required_kernel_symbols:
+- arm_rsqrt_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  api_error: null_output
+---
+name: rsqrt_float_zero_block_f32
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape:
+- 9
+required_kernel_symbols:
+- arm_rsqrt_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  api_error: zero_block
+---
+name: rsqrt_float_negative_block_f32
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape:
+- 9
+required_kernel_symbols:
+- arm_rsqrt_f32
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  api_error: negative_block
+---
+name: rsqrt_float_positive_1_f16
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 1
+required_kernel_symbols:
+- arm_rsqrt_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: positive
+---
+name: rsqrt_float_positive_7_f16
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 7
+required_kernel_symbols:
+- arm_rsqrt_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: positive
+---
+name: rsqrt_float_positive_8_f16
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 8
+required_kernel_symbols:
+- arm_rsqrt_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: positive
+---
+name: rsqrt_float_positive_9_f16
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 9
+required_kernel_symbols:
+- arm_rsqrt_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: positive
+---
+name: rsqrt_float_positive_17_f16
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 17
+required_kernel_symbols:
+- arm_rsqrt_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: positive
+---
+name: rsqrt_float_positive_257_f16
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 257
+required_kernel_symbols:
+- arm_rsqrt_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: positive
+---
+name: rsqrt_float_special_f16
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 51
+required_kernel_symbols:
+- arm_rsqrt_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: special
+---
+name: rsqrt_float_special_inplace_f16
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 51
+required_kernel_symbols:
+- arm_rsqrt_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: special
+  in_place: true
+---
+name: rsqrt_float_powers_of_four_f16
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 127
+required_kernel_symbols:
+- arm_rsqrt_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  float_pattern: powers_of_four
+---
+name: rsqrt_float_null_input_f16
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 9
+required_kernel_symbols:
+- arm_rsqrt_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  api_error: null_input
+---
+name: rsqrt_float_null_output_f16
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 9
+required_kernel_symbols:
+- arm_rsqrt_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  api_error: null_output
+---
+name: rsqrt_float_zero_block_f16
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 9
+required_kernel_symbols:
+- arm_rsqrt_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  api_error: zero_block
+---
+name: rsqrt_float_negative_block_f16
+operator: Rsqrt
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape:
+- 9
+required_kernel_symbols:
+- arm_rsqrt_f16
+comparison:
+  atol: 0.0
+  rtol: 0.0
+hint:
+  api_error: negative_block

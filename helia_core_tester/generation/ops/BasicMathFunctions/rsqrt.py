@@ -103,6 +103,15 @@ class OpRsqrt(OperationBase):
         raise NotImplementedError("Rsqrt uses LiteRT-only model generation.")
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
+        if self.tensor_dtype("input") in ("FP16", "FP32"):
+            self._write_tflite_bytes(
+                out_path,
+                build_rsqrt_op(
+                    input_shape=tuple(self.desc["input_shape"]),
+                    dtype=self.tensor_litert_dtype("input"),
+                ),
+            )
+            return
         activation_dtype = self.desc.get("activation_dtype", "S16")
         if activation_dtype != "S16":
             raise NotImplementedError(f"Unsupported Rsqrt dtype: {activation_dtype}")
@@ -156,6 +165,12 @@ class OpRsqrt(OperationBase):
             raise ValueError("Rsqrt test inputs must stay in the non-negative post-offset domain")
 
     def generate_c_files(self, output_dir: Path) -> None:
+        if self.tensor_dtype("input") in ("FP16", "FP32"):
+            from helia_core_tester.generation.ops._shared.sqrt_float import generate_sqrt_float
+
+            generate_sqrt_float(self, output_dir, reciprocal=True)
+            return
+
         from helia_core_tester.generation.utils.litert_utils import get_operator_tensors_from_litert
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         from helia_core_tester.generation.utils.tflite_utils import activation_bounds, scalar_scale_zp

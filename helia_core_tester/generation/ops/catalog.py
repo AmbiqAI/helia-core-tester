@@ -204,8 +204,8 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
     "ReduceMin": _spec("ReduceMin", "BasicMathFunctions", "reduce_min", "OpReduceMin", "BasicMathFunctions/reduce_min.yaml", "BasicMathFunctions/reduce_min"),
     "ArgMax": _spec("ArgMax", "BasicMathFunctions", "argmax", "OpArgMax", "BasicMathFunctions/argmax.yaml", "BasicMathFunctions/argmax"),
     "ArgMin": _spec("ArgMin", "BasicMathFunctions", "argmin", "OpArgMin", "BasicMathFunctions/argmin.yaml", "BasicMathFunctions/argmin"),
-    "Sqrt": _spec("Sqrt", "BasicMathFunctions", "sqrt", "OpSqrt", "BasicMathFunctions/sqrt.yaml", "BasicMathFunctions/sqrt"),
-    "Rsqrt": _spec("Rsqrt", "BasicMathFunctions", "rsqrt", "OpRsqrt", "BasicMathFunctions/rsqrt.yaml", "BasicMathFunctions/rsqrt"),
+    "Sqrt": _spec("Sqrt", "BasicMathFunctions", "sqrt", "OpSqrt", template_relpath="BasicMathFunctions/sqrt", descriptor_relpaths=("BasicMathFunctions/sqrt.yaml", "BasicMathFunctions/sqrt_float.yaml")),
+    "Rsqrt": _spec("Rsqrt", "BasicMathFunctions", "rsqrt", "OpRsqrt", template_relpath="BasicMathFunctions/rsqrt", descriptor_relpaths=("BasicMathFunctions/rsqrt.yaml", "BasicMathFunctions/rsqrt_float.yaml")),
     "Comparison": _spec("Comparison", "ComparisonFunctions", "comparison", "OpComparison", "ComparisonFunctions/comparison.yaml", "ComparisonFunctions/comparison"),
     "Concatenation": _spec(
         "Concatenation",

@@ -138,7 +138,7 @@ OPERATOR_EXTRA_REQUIRED_FIELDS = {'BroadcastTo': ('output_shape',),
  'Tile': ('multiples',),
  'Unpack': ('axis',)}
 
-OPERATOR_FIELD_CONSTRAINTS = {'HardSwishCompat': {'activation_dtype': 'S8'}, 'Rsqrt': {'activation_dtype': 'S16'}}
+OPERATOR_FIELD_CONSTRAINTS = {'HardSwishCompat': {'activation_dtype': 'S8'}}
 
 
 def _operator_descriptor_profile(operator: str) -> str:
@@ -192,6 +192,9 @@ def _validate_profile_requirements(
                 f"{operator}{suffix} requires 'scalar_input_value' (single pixel) or "
                 "hint.extras.input_values (one value per pixel, multi-pixel)"
             )
+
+    if operator == "Rsqrt" and desc.get("activation_dtype") not in ("S16", "FP16", "FP32"):
+        raise ValueError("Rsqrt only supports activation_dtype=S16, FP16, FP32")
 
     for field, expected in OPERATOR_FIELD_CONSTRAINTS.get(operator, {}).items():
         if str(desc.get(field, "")).upper() != str(expected).upper():
