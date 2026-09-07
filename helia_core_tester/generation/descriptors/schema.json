@@ -248,9 +248,11 @@
       "type": "integer"
     },
     "value": {
+      "$comment": "Fill also accepts the non-finite and signed-zero tokens named by ops/BasicMathFunctions/fill.py.",
       "type": [
         "integer",
-        "number"
+        "number",
+        "string"
       ]
     },
     "act_min": {
