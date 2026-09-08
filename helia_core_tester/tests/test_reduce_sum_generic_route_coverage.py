@@ -15,6 +15,8 @@ DESCRIPTORS = (
 )
 
 _NEW_CASES = (
+    "reduce_sum_float_axis_h_adapter_f32",
+    "reduce_sum_float_axis_h_adapter_tail_f16",
     "reduce_sum_float_axis_w_c128_f32",
     "reduce_sum_float_axis_w_rows_tail_f32",
     "reduce_sum_float_axis_w_rows_tail_f16",
@@ -69,9 +71,17 @@ def test_the_suffix_controls_still_take_the_flatten_route(name):
     assert _route_of(_descriptors()[name]) == "flatten"
 
 
-def test_the_reported_shape_is_covered_exactly():
-    # ns-cmsis-nn#484 reports FP32 SUM over [1, 64, 128] reducing axis 1, which reaches the
-    # kernel as NHWC [1, 1, 64, 128] with an axis mask selecting w only.
+def test_the_shape_the_runtime_actually_passes_is_covered():
+    # The model reduces the sequence axis of [1, 64, 128]. heliaRT pads a rank-3 shape at the
+    # end, so the kernel is called with [1, 64, 128, 1] reducing h and retaining w, not with a
+    # width reduction. A route guard written for one axis does not fire for the other, so the
+    # literal layout is pinned here rather than the arithmetic alone.
+    desc = _descriptors()["reduce_sum_float_axis_h_adapter_f32"]
+    assert desc["input_shape"] == [1, 64, 128, 1]
+    assert desc["axes"] == [1]
+
+
+def test_the_width_layout_is_kept_as_an_equivalent_control():
     desc = _descriptors()["reduce_sum_float_axis_w_c128_f32"]
     assert desc["input_shape"] == [1, 1, 64, 128]
     assert desc["axes"] == [2]
@@ -84,7 +94,12 @@ def _c_floats(source: str, symbol: str) -> np.ndarray:
 
 
 @pytest.mark.parametrize(
-    "name", ("reduce_sum_float_axis_w_c128_f32", "reduce_sum_float_axis_w_rows_tail_f32")
+    "name",
+    (
+        "reduce_sum_float_axis_h_adapter_f32",
+        "reduce_sum_float_axis_w_c128_f32",
+        "reduce_sum_float_axis_w_rows_tail_f32",
+    ),
 )
 def test_shipped_golden_agrees_with_the_real_interpreter(tmp_path, name):
     """Runs the generated model through LiteRT on the generated input and compares against the
