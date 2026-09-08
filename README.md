@@ -145,12 +145,14 @@ three-element groups on the innermost axis, and `[nan, inf]` at flat positions 0
 
 A recurrent operator takes one token per case at the first time step of the first batch row.
 The recurrence carries whatever that produces into every later step of that row, so the token
-reaches the whole row and reachability masks it; the descriptors therefore use `batch_size: 2`
-(SVDF: `input_batches: 2`) so the other row stays finite and fully asserted, which is what
-catches a vector leg that poisons a whole register rather than one lane. The LSTM and GRU gates
-swallow an infinity by saturating -- `sigmoid` of an infinity is 1 or 0 and `tanh` of one is
-±1 -- so those cases have a finite reference and are masked purely by measured reachability,
-not by the finiteness of the golden. SVDF's default ±1e30 activation clamps do the same to the
+reaches the whole row; the descriptors therefore use `batch_size: 2` (SVDF: `input_batches: 2`)
+so the other row stays finite and fully asserted, which is what catches a vector leg that
+poisons a whole register rather than one lane. Under `mask` (LSTM, SVDF) reachability masks
+the token's row; under `strict` (GRU) the row is asserted, NaN lanes by class and the rest by
+tolerance. The LSTM and GRU gates swallow an infinity by saturating -- `sigmoid` of an infinity
+is 1 or 0 and `tanh` of one is ±1 -- so those cases have a finite reference; the LSTM ones are
+masked purely by measured reachability, not by the finiteness of the golden. SVDF's default
+±1e30 activation clamps do the same to the
 value, and its `time_batches` exceeds its `sequence_steps` so the step-0 column is still in the
 state ring when the last step produces the output.
 
@@ -166,8 +168,13 @@ non-finite output may be pinned is a per-kernel question.
 
 - `strict` asserts the reference value on every lane. It is only legitimate where ns-cmsis-nn
   documents the behaviour -- the elementwise family, the standalone hard swish, the
-  RELU/RELU6/LEAKY_RELU activations, `arm_reduce_sum_*` and `arm_nn_mean_*` -- or where the
-  operator is pure data movement (pad, reshape, transpose, strided slice, concatenation, split),
+  RELU/RELU6/LEAKY_RELU activations, `arm_reduce_sum_*` and `arm_nn_mean_*`, and
+  `arm_gru_unidirectional_f32`/`_f16`, whose public declarations carry a NaN contract for a
+  token in the input, the previous state or the candidate gate's weight or bias, and state that
+  Inf follows the arithmetic (a token confined to the update or reset gate's weight or bias is
+  absorbed by the kernel while the reference still produces NaN, so such a case stays `mask`)
+  -- or where the operator is pure data movement (pad, reshape, transpose, strided slice,
+  concatenation, split),
   since a copy has no freedom to specify.
 - `mask` marks as don't-care every lane whose *reference* output is non-finite **and** every lane
   a swept token can reach. The second set is the larger one: a pooling window that sees `+Inf`
@@ -177,8 +184,8 @@ non-finite output may be pinned is a per-kernel question.
   marks every output lane that moves. Every remaining lane still has to match, and the case still
   has to return `ARM_CMSIS_NN_SUCCESS` without faulting or timing out. This is for kernels whose
   doxygen block says nothing about non-finite input (the `arm_softmax_f32` block specifies
-  arguments and return status only, and abs, batch norm, `arm_lstm_unidirectional_f32`/`_f16`,
-  `arm_gru_unidirectional_f32`/`_f16` and `arm_svdf_f32` are the same), that declare the
+  arguments and return status only, and abs, batch norm, `arm_lstm_unidirectional_f32`/`_f16`
+  and `arm_svdf_f32` are the same), that declare the
   result unspecified outright (the `arm_minimum_f32` and `arm_maximum_f32` blocks: "The result
   ... for any non-finite input, is unspecified"), or that document legs which disagree: the
   `arm_max_pool_f16` note calls the scalar leg's NaN behaviour unspecified at the shipped

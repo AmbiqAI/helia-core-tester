@@ -4,7 +4,11 @@
 
 {% for out in outputs %}
 #define {{ out.name|upper }}_OUTPUT_SIZE ({{ out.size }})
+{% if out.size > 0 %}
 static {{ output_dtype }} {{ out.name }}_output[{{ out.name|upper }}_OUTPUT_SIZE];
+{% else %}
+static {{ output_dtype }} {{ out.name }}_output[1];  // zero-extent slice: storage only, nothing is compared
+{% endif %}
 {% endfor %}
 
 static {{ output_dtype }}* {{ name }}_output_ptrs[] = {

@@ -69,6 +69,16 @@ int32_t {{ name }}_run(
             (uint32_t){{ name }}_offsets[i]
         );
     }
+{% elif call_style and call_style|lower == 'any_rank' %}
+    kernel_status = {{ kernel_fn }}(
+        input_ptrs,                           // input_data
+        {{ num_inputs }},                     // num_inputs
+        {{ name }}_input_concat_dims,         // axis_sizes
+        {{ output_rank }},                    // output_dims (number of dimensions)
+        {{ name }}_output_shape,              // output_shape
+        {{ axis }},                           // axis
+        output                                // output_data
+    );
 {% else %}
     kernel_status = {{ kernel_fn }}(
         input_ptrs,

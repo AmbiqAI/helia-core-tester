@@ -1,0 +1,11 @@
+#ifndef {{ name|upper }}_H
+#define {{ name|upper }}_H
+#include <stdint.h>
+#include "arm_nnfunctions.h"
+static const {{ word_type }} {{ name }}_input_bits[] = {
+    {{ input_bits | join(', ') }}
+};
+static const {{ word_type }} {{ name }}_expected_bits[] = {
+    {{ expected_bits | join(', ') }}
+};
+#endif

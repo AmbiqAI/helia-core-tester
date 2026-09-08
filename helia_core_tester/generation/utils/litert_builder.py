@@ -1577,6 +1577,165 @@ def build_split_op(
     return builder.build()
 
 
+def build_pack_op(
+    *,
+    input_shape: Iterable[int],
+    num_inputs: int,
+    axis: int,
+    dtype: str = "float32",
+) -> bytes:
+    """PACK: stack ``num_inputs`` equal-shape tensors along a new ``axis``.
+
+    ``input_shape`` may be empty (rank-0 inputs stack into a vector).
+    """
+    _require_litert()
+    tensor_type = _resolve_tensor_type(dtype)
+    shape = tuple(int(dim) for dim in input_shape)
+    num_inputs = int(num_inputs)
+    if num_inputs < 1:
+        raise ValueError("Pack expects at least one input.")
+    rank = len(shape)
+    axis_norm = axis + (rank + 1) if axis < 0 else axis
+    if axis_norm < 0 or axis_norm > rank:
+        raise ValueError(f"Axis {axis} out of range for rank {rank} inputs.")
+    output_shape = shape[:axis_norm] + (num_inputs,) + shape[axis_norm:]
+
+    builder = LiteRtSingleOpBuilder(op_name="PACK")
+    input_indices = [
+        builder.add_tensor(
+            TensorSpec(
+                name=f"input{i + 1}",
+                shape=shape,
+                tensor_type=tensor_type,
+                is_input=True,
+                quantization=_default_quant(tensor_type),
+            )
+        )
+        for i in range(num_inputs)
+    ]
+    output_idx = builder.add_tensor(
+        TensorSpec(
+            name="output",
+            shape=output_shape,
+            tensor_type=tensor_type,
+            is_output=True,
+            quantization=_default_quant(tensor_type),
+        )
+    )
+    options = litert.PackOptionsT()
+    options.valuesCount = num_inputs
+    options.axis = int(axis_norm)
+    builder.add_operator(
+        "PACK",
+        inputs=input_indices,
+        outputs=[output_idx],
+        options=options,
+        options_type=litert.BuiltinOptions.PackOptions,
+    )
+    return builder.build()
+
+
+def build_unpack_op(
+    *,
+    input_shape: Iterable[int],
+    axis: int,
+    dtype: str = "float32",
+) -> bytes:
+    """UNPACK: split ``input_shape[axis]`` slices off ``axis`` and drop that axis."""
+    _require_litert()
+    tensor_type = _resolve_tensor_type(dtype)
+    shape = _normalize_shape(input_shape, op_label="Unpack")
+    rank = len(shape)
+    axis_norm = axis + rank if axis < 0 else axis
+    if axis_norm < 0 or axis_norm >= rank:
+        raise ValueError(f"Axis {axis} out of range for rank {rank}.")
+    num = int(shape[axis_norm])
+    if num < 1:
+        raise ValueError("Unpack axis must have at least one slice.")
+    output_shape = shape[:axis_norm] + shape[axis_norm + 1:]
+
+    builder = LiteRtSingleOpBuilder(op_name="UNPACK")
+    input_idx = builder.add_tensor(
+        TensorSpec(
+            name="input",
+            shape=shape,
+            tensor_type=tensor_type,
+            is_input=True,
+            quantization=_default_quant(tensor_type),
+        )
+    )
+    output_indices = [
+        builder.add_tensor(
+            TensorSpec(
+                name=f"output{i}",
+                shape=output_shape,
+                tensor_type=tensor_type,
+                is_output=True,
+                quantization=_default_quant(tensor_type),
+            )
+        )
+        for i in range(num)
+    ]
+    options = litert.UnpackOptionsT()
+    options.num = num
+    options.axis = int(axis_norm)
+    builder.add_operator(
+        "UNPACK",
+        inputs=[input_idx],
+        outputs=output_indices,
+        options=options,
+        options_type=litert.BuiltinOptions.UnpackOptions,
+    )
+    return builder.build()
+
+
+def build_fill_op(
+    *,
+    output_shape: Iterable[int],
+    dtype: str = "float32",
+) -> bytes:
+    """FILL: a constant int32 dims tensor and a scalar value input produce ``output_shape``."""
+    _require_litert()
+    tensor_type = _resolve_tensor_type(dtype)
+    shape = tuple(int(dim) for dim in output_shape)
+
+    builder = LiteRtSingleOpBuilder(op_name="FILL")
+    dims_idx = builder.add_tensor(
+        TensorSpec(
+            name="dims",
+            shape=(len(shape),),
+            tensor_type=litert.TensorType.INT32,
+            data=list(shape),
+        )
+    )
+    value_idx = builder.add_tensor(
+        TensorSpec(
+            name="value",
+            shape=(),
+            tensor_type=tensor_type,
+            is_input=True,
+            quantization=_default_quant(tensor_type),
+        )
+    )
+    output_idx = builder.add_tensor(
+        TensorSpec(
+            name="output",
+            shape=shape,
+            tensor_type=tensor_type,
+            is_output=True,
+            quantization=_default_quant(tensor_type),
+        )
+    )
+    builder.add_operator(
+        "FILL",
+        inputs=[dims_idx, value_idx],
+        outputs=[output_idx],
+        options=litert.FillOptionsT(),
+        options_type=litert.BuiltinOptions.FillOptions,
+    )
+    return builder.build()
+
+
 def build_strided_slice_op(
     *,
     input_shape: Iterable[int],

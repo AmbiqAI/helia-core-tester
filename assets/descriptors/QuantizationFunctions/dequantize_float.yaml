@@ -24,3 +24,99 @@ tensor_dtypes:
 input_shape: [1, 33]
 hint:
   call_style: per_tensor
+---
+# # arm_dequantize_f16_f32 (ns-cmsis-nn#475) widens float16 to float32 bit-exactly: finite
+# # values, subnormals, signed zeros, infinities and NaNs (sign, quiet bit and payload) all
+# # convert exactly, so the golden is numpy's astype and the comparison is zero-tolerance.
+# # The survey note above ("non-finite inputs are not possible for this operator") holds for
+# # the S8/S16 kernels only; a float16 input carries every class, so the sweep applies here.
+# # The runtime matches NaN by class, so the NaN lane asserts NaN-ness rather than the
+# # payload. A case that touches FP16 runs on the f16 leg (the f32-only leg builds with
+# # ARM_NN_ENABLE_F16 off). required_kernel_symbols skips every case on a checkout without
+# # the symbol. Sizes straddle the 8-element MVE block with tails.
+operator: Dequantize
+name: dequantize_float_f16_widen_vec17_f32
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_dequantize_f16_f32]
+input_shape: [1, 17]
+hint: {call_style: per_tensor}
+---
+# 125 MVE blocks plus a one-element tail.
+operator: Dequantize
+name: dequantize_float_f16_widen_vec1001_f32
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_dequantize_f16_f32]
+input_shape: [1, 1001]
+hint: {call_style: per_tensor}
+---
+# Every draw sits inside +/-6.0e-5, below float16's 6.1035e-5 minimum normal, so the whole vector is subnormal (normal once widened).
+operator: Dequantize
+name: dequantize_float_f16_widen_subnormal_f32
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_dequantize_f16_f32]
+input_shape: [1, 40]
+input_min: -6.0e-5
+input_max: 6.0e-5
+hint: {call_style: per_tensor}
+---
+# NaN, +Inf and -Inf in the leading lanes; the header contract is bit-exact pass-through, so the policy is strict.
+operator: Dequantize
+name: dequantize_float_f16_widen_nonfinite_f32
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_dequantize_f16_f32]
+input_shape: [1, 40]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+hint: {call_style: per_tensor}
+---
+# Signed zeros. The uniform draw of the subnormal case above never lands on an exact
+# zero, so the scalar widening helper's `mant == 0 -> return sign` branch went
+# unexecuted. Half of float16's smallest subnormal is 2.98e-8, so a +/-1.5e-7 draw
+# rounds a fifth of its lanes to +/-0.0 and leaves the rest on the four smallest
+# subnormal magnitudes: both signs of zero and the subnormal path in one case.
+operator: Dequantize
+name: dequantize_float_f16_widen_signed_zero_f32
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_dequantize_f16_f32]
+input_shape: [1, 40]
+input_min: -1.5e-7
+input_max: 1.5e-7
+hint: {call_style: per_tensor}
+---
+# The MVE leg repairs NaN lanes in two places: the 8-element main loop and the
+# predicated tail. 43 elements leave a 3-lane tail after five whole blocks, and
+# nonfinite_positions puts the tokens there, so the tail's repair call is reached
+# (the [1, 40] case above has no tail and exercises only the main-loop repair).
+operator: Dequantize
+name: dequantize_float_f16_widen_nonfinite_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
+required_kernel_symbols: [arm_dequantize_f16_f32]
+input_shape: [1, 43]
+input_mode: nonfinite_sweep
+nonfinite_policy: strict
+nonfinite_positions: [40, 41, 42]
+hint: {call_style: per_tensor}

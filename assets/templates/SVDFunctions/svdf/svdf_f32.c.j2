@@ -10,8 +10,17 @@ static {{ data_dtype }} {{ name }}_output[{{ output_size }}];
 static int32_t run_svdf(void)
 {
     cmsis_nn_context ctx = {0};
-    cmsis_nn_context input_ctx = {.buf = {{ name }}_scratch_input, .size = sizeof({{ name }}_scratch_input)};
-    cmsis_nn_context output_ctx = {.buf = {{ name }}_scratch_output, .size = sizeof({{ name }}_scratch_output)};
+    // The static arrays are the allocation upper bound; the ctx sizes come from the
+    // kernel's own sizers (issue #71).
+    const int32_t scratch_input_bytes = {{ input_ctx_sizer_fn }}(&{{ name }}_input_dims, &{{ name }}_weights_feature_dims);
+    const int32_t scratch_output_bytes = {{ output_ctx_sizer_fn }}(&{{ name }}_svdf_params, &{{ name }}_input_dims, &{{ name }}_weights_feature_dims);
+    if (scratch_input_bytes < 0 || scratch_input_bytes > (int32_t)sizeof({{ name }}_scratch_input) ||
+        scratch_output_bytes < 0 || scratch_output_bytes > (int32_t)sizeof({{ name }}_scratch_output))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    cmsis_nn_context input_ctx = {.buf = {{ name }}_scratch_input, .size = scratch_input_bytes};
+    cmsis_nn_context output_ctx = {.buf = {{ name }}_scratch_output, .size = scratch_output_bytes};
 
     for (int i = 0; i < {{ state_size }}; ++i)
     {
@@ -51,6 +60,53 @@ static int32_t run_svdf(void)
 
 int32_t {{ name }}_test_case_run(void)
 {
+{% if expected_input_ctx_size is defined and expected_input_ctx_size is not none %}
+    // Exact ctx scratch sizes (issue #71), measured by calling the real sizers on host;
+    // target-invariant, so no ISA split.
+    HELIA_VALIDATE_SCALAR_EQ_INT("{{ validation_label | default("SVDF") }}", "input ctx size", {{ expected_input_ctx_size }},
+                                 {{ input_ctx_sizer_fn }}(&{{ name }}_input_dims, &{{ name }}_weights_feature_dims));
+{% endif %}
+{% if expected_output_ctx_size is defined and expected_output_ctx_size is not none %}
+    HELIA_VALIDATE_SCALAR_EQ_INT("{{ validation_label | default("SVDF") }}", "output ctx size", {{ expected_output_ctx_size }},
+                                 {{ output_ctx_sizer_fn }}(&{{ name }}_svdf_params, &{{ name }}_input_dims, &{{ name }}_weights_feature_dims));
+{% endif %}
+{% if ctx_sizer_sentinels %}
+    {
+        // Sizer-only sentinel probes (issue #71); these structs never reach the kernel.
+        cmsis_nn_dims probe_input_dims = {{ name }}_input_dims;
+        cmsis_nn_dims probe_weights_feature_dims = {{ name }}_weights_feature_dims;
+        {{ svdf_params_type }} probe_params = {{ name }}_svdf_params;
+
+        probe_input_dims.n = 0;
+        HELIA_VALIDATE_SCALAR_EQ_INT("{{ validation_label | default("SVDF") }}", "input ctx size (input n == 0)", 0,
+                                     {{ input_ctx_sizer_fn }}(&probe_input_dims, &probe_weights_feature_dims));
+        HELIA_VALIDATE_SCALAR_EQ_INT("{{ validation_label | default("SVDF") }}", "output ctx size (input n == 0)", 0,
+                                     {{ output_ctx_sizer_fn }}(&probe_params, &probe_input_dims, &probe_weights_feature_dims));
+        probe_input_dims.n = {{ name }}_input_dims.n;
+
+        probe_weights_feature_dims.n = -1;
+        HELIA_VALIDATE_SCALAR_EQ_INT("{{ validation_label | default("SVDF") }}", "input ctx size (weights_feature n < 0)", -1,
+                                     {{ input_ctx_sizer_fn }}(&probe_input_dims, &probe_weights_feature_dims));
+        HELIA_VALIDATE_SCALAR_EQ_INT("{{ validation_label | default("SVDF") }}", "output ctx size (weights_feature n < 0)", -1,
+                                     {{ output_ctx_sizer_fn }}(&probe_params, &probe_input_dims, &probe_weights_feature_dims));
+        probe_weights_feature_dims.n = {{ name }}_weights_feature_dims.n;
+
+        HELIA_VALIDATE_SCALAR_EQ_INT("{{ validation_label | default("SVDF") }}", "input ctx size (NULL input_dims)", -1,
+                                     {{ input_ctx_sizer_fn }}(NULL, &probe_weights_feature_dims));
+        HELIA_VALIDATE_SCALAR_EQ_INT("{{ validation_label | default("SVDF") }}", "output ctx size (NULL input_dims)", -1,
+                                     {{ output_ctx_sizer_fn }}(&probe_params, NULL, &probe_weights_feature_dims));
+        HELIA_VALIDATE_SCALAR_EQ_INT("{{ validation_label | default("SVDF") }}", "output ctx size (NULL params)", -1,
+                                     {{ output_ctx_sizer_fn }}(NULL, &probe_input_dims, &probe_weights_feature_dims));
+
+        probe_params.rank = 0;
+        HELIA_VALIDATE_SCALAR_EQ_INT("{{ validation_label | default("SVDF") }}", "output ctx size (rank 0)", -1,
+                                     {{ output_ctx_sizer_fn }}(&probe_params, &probe_input_dims, &probe_weights_feature_dims));
+
+        probe_params.rank = {{ name }}_weights_feature_dims.n + 1;
+        HELIA_VALIDATE_SCALAR_EQ_INT("{{ validation_label | default("SVDF") }}", "output ctx size (rank > weights_feature n)", 0,
+                                     {{ output_ctx_sizer_fn }}(&probe_params, &probe_input_dims, &probe_weights_feature_dims));
+    }
+{% endif %}
     int32_t status = run_svdf();
     HELIA_VALIDATE_STATUS("{{ validation_label | default("SVDF") }}", status);
 
