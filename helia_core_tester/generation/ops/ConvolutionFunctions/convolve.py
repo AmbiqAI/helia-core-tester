@@ -707,6 +707,10 @@ class OpConvolve(OperationBase):
             'buffer_size_needs_layout': bool(kernel_info.get("buffer_size_needs_layout", False)),
             'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
+            # Independently-measured exact scratch size (issue #69): not derived from
+            # calculate_buffer_size_max's conservative allocation formula. Only present
+            # when the descriptor supplies expected_buffer_size; see convolve.c.j2.
+            'expected_buffer_size': self.desc.get('expected_buffer_size'),
             'float_kernel': float_kernel,
             'weight_format_macro': weight_format_macro,
             'conv_params_type': (

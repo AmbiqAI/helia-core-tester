@@ -15,6 +15,16 @@ input_2_shape:
 - 2
 adj_x: false
 adj_y: false
+# Exact scratch size (issue #69): this family sizes its ctx buffer via
+# arm_fully_connected_s8_get_buffer_size() (see kernel_get_buffer_size_fn in
+# batch_matmul.py), not arm_batch_matmul_s8_get_buffer_size() -- measured by
+# calling the real, unmodified function on host for this case's actual
+# generated filter_dims_for_buffer (n=3 [RHS K], c=2 [RHS N]). The DSP/
+# generic leg is bufferless; only MVE needs filter_dims.c * 4.
+expected_buffer_size:
+  generic: 0
+  dsp: 0
+  mve: 8
 ---
 operator: BatchMatMul
 name: batch_matmul_batched_s8
@@ -51,6 +61,11 @@ input_2_shape:
 - 3
 adj_x: false
 adj_y: false
+# Degenerate-0 regime (issue #69): this family sizes its ctx buffer via
+# arm_fully_connected_s16_get_buffer_size() (see kernel_get_buffer_size_fn in
+# batch_matmul.py), which is documented "bufferless" and unconditionally
+# returns 0 -- verified by calling the real function on host.
+expected_buffer_size: 0
 ---
 operator: BatchMatMul
 name: batch_matmul_lhs_transposed_s16

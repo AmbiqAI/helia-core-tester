@@ -11,6 +11,10 @@ tensor_dtypes:
 input_shape: [1, 12]
 filter_shape: [5, 12]
 use_bias: true
+# Degenerate-0 regime (issue #69): arm_fully_connected_f32_get_buffer_size()
+# is documented "Current float32 fully-connected implementations are
+# bufferless" and unconditionally returns 0 for any shape.
+expected_buffer_size: 0
 ---
 operator: FullyConnected
 name: fully_connected_float_no_bias_f32

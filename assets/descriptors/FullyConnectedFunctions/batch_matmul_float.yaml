@@ -11,6 +11,10 @@ input_1_shape: [1, 4, 3]
 input_2_shape: [1, 3, 2]
 adj_x: false
 adj_y: false
+# Degenerate-0 regime (issue #69): arm_batch_matmul_f32_get_buffer_size() is
+# documented "Current float32 batch-matmul implementations are bufferless"
+# and unconditionally returns 0 for any shape.
+expected_buffer_size: 0
 ---
 operator: BatchMatMul
 name: batch_matmul_float_batched_f32

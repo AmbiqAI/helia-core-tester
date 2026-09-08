@@ -17,6 +17,14 @@ strides:
 - 5
 - 9
 padding: SAME
+# Exact scratch size (issue #69), measured by calling the real, unmodified
+# arm_avgpool_s8_get_buffer_size() on host for this case's actual generated
+# (output_x=3, ch_src=20). MVE and the plain generic leg are both the
+# documented degenerate-0 case; only DSP needs ch_src * 4.
+expected_buffer_size:
+  generic: 0
+  dsp: 80
+  mve: 0
 ---
 operator: AvgPool
 name: avg_pool_valid_pool5x9_stride2x1_s8
@@ -137,6 +145,14 @@ strides:
 - 1
 - 2
 padding: SAME
+# Exact scratch size (issue #69), measured by calling the real, unmodified
+# arm_avgpool_s16_get_buffer_size() on host for this case's actual generated
+# (output_x=3, ch_src=17). MVE and the plain generic leg are both the
+# documented degenerate-0 case; only DSP needs ch_src * 4.
+expected_buffer_size:
+  generic: 0
+  dsp: 68
+  mve: 0
 ---
 operator: AvgPool
 name: avg_pool_valid_pool1x1_stride1x2_s16

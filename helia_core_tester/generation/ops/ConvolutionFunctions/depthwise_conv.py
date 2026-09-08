@@ -660,6 +660,9 @@ class OpDepthwiseConv(OperationBase):
                 'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
                 'call_style': kernel_info.get("call_style", "baseline"),
                 'buffer_size_max': buffer_size_max,
+                # Independently-measured exact scratch size (issue #69); see
+                # depthwise_conv.c.j2 and the int-path context above.
+                'expected_buffer_size': self.desc.get('expected_buffer_size'),
                 'force_no_scratch': bool(self._hint().get("force_no_scratch", False)),
                 'float_kernel': True,
                 'dw_conv_params_type': (
@@ -900,8 +903,13 @@ class OpDepthwiseConv(OperationBase):
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
             'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
+            # Independently-measured exact scratch size (issue #69): not derived from
+            # calculate_depthwise_buffer_size_max's conservative allocation formula.
+            # Only present when the descriptor supplies expected_buffer_size; see
+            # depthwise_conv.c.j2.
+            'expected_buffer_size': self.desc.get('expected_buffer_size'),
         }
-        
+
         # Render templates
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)

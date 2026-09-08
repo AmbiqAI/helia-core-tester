@@ -20,6 +20,17 @@ strides:
 - 2
 padding: SAME
 use_bias: true
+# Exact scratch sizes (issue #69), measured by calling the real, unmodified
+# arm_transpose_conv_s8_get_buffer_size{,_mve}() and
+# arm_transpose_conv_s8_get_reverse_conv_buffer_size() on host for this case's
+# actual generated dims (input=[1,9,9,9] filter=[9,6,6,9] output=[1,18,18,9],
+# stride=2x2). input_c=9 does not clear REVERSE_TCOL_EFFICIENT_THRESHOLD (16),
+# so the reverse-conv route is never taken: reverse buffer size is the
+# documented degenerate-0 case, and the ctx size is the ISA-independent
+# rolling-buffer formula (same in every leg since MVE/DSP/generic all fall
+# back to it here).
+expected_buffer_size: 4752
+expected_reverse_buffer_size: 0
 ---
 operator: TransposeConv
 name: transpose_conv_valid_kernel3x3_stride1x3_no_bias_s8
@@ -112,6 +123,17 @@ strides:
 - 1
 padding: SAME
 use_bias: true
+# Exact scratch sizes (issue #69), measured by calling the real, unmodified
+# arm_transpose_conv_s8_get_buffer_size{,_mve}() and
+# arm_transpose_conv_s8_get_reverse_conv_buffer_size() on host for this case's
+# actual generated dims (input=[1,5,3,32] filter=[32,2,2,32] output=[1,5,3,32],
+# stride=1x1). input_c=32 clears REVERSE_TCOL_EFFICIENT_THRESHOLD (16) and
+# stride<=2, so the reverse-conv route is taken; the rolling-buffer size
+# (1024) still dominates MAX(reverse_conv_size, rolling_size) here, and does
+# so identically for MVE/DSP/generic, so the ctx value is the same on every
+# build target for this shape.
+expected_buffer_size: 1024
+expected_reverse_buffer_size: 4096
 ---
 operator: TransposeConv
 name: transpose_conv_reverse_valid_kernel1x1_stride2x2_no_bias_s8
