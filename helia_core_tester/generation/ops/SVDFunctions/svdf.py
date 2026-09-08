@@ -202,6 +202,18 @@ class OpSVDF(OperationBase):
 
         return output.flatten()
 
+    def _ctx_sizer_context(self, sizer_prefix: str) -> Dict[str, Any]:
+        # Issue #71: the harness sizes input_ctx/output_ctx with the kernel's own
+        # sizers. The expected values are measured on host and carried by the
+        # descriptor, never re-derived here.
+        return {
+            "input_ctx_sizer_fn": f"{sizer_prefix}_input_ctx_get_buffer_size",
+            "output_ctx_sizer_fn": f"{sizer_prefix}_output_ctx_get_buffer_size",
+            "expected_input_ctx_size": self.desc.get("expected_input_ctx_size"),
+            "expected_output_ctx_size": self.desc.get("expected_output_ctx_size"),
+            "ctx_sizer_sentinels": bool(self.desc.get("ctx_sizer_sentinels", False)),
+        }
+
     def generate_c_files(self, output_dir: Path) -> None:
         """
         Generate C and H files for SVDF operation.
@@ -304,6 +316,7 @@ class OpSVDF(OperationBase):
                 "output_activation_min_literal": builder.format_float_literal(output_activation_min),
                 "output_activation_max_literal": builder.format_float_literal(output_activation_max),
             }
+            context.update(self._ctx_sizer_context(kernel_fn))
             context.update(nonfinite_context)
             self._write_op_outputs(
                 output_dir,
@@ -438,6 +451,7 @@ class OpSVDF(OperationBase):
             # malloc/free; gate the shared runtime_common.j2 stdlib.h include on it.
             "needs_stdlib": True,
         }
+        context.update(self._ctx_sizer_context(kernel_fn))
 
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)

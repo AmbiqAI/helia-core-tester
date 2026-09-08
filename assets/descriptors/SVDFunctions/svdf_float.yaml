@@ -18,6 +18,11 @@ hint:
   rank: 1
   sequence_steps: 2
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_f32_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=1, feature_batches=4, rank=1): not re-derived in Python.
+expected_input_ctx_size: 16
+expected_output_ctx_size: 16
 ---
 operator: SVDF
 name: svdf_float_no_bias_f32
@@ -39,6 +44,11 @@ hint:
   rank: 1
   sequence_steps: 2
   use_bias: false
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_f32_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=1, feature_batches=4, rank=1): not re-derived in Python.
+expected_input_ctx_size: 16
+expected_output_ctx_size: 16
 ---
 operator: SVDF
 name: svdf_float_rank2_f32
@@ -60,6 +70,13 @@ hint:
   rank: 2
   sequence_steps: 2
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_f32_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=1, feature_batches=4, rank=2): not re-derived in Python.
+expected_input_ctx_size: 16
+expected_output_ctx_size: 8
+# Sizer-only degenerate/-1 sentinel probes (issue #71), one case per kernel.
+ctx_sizer_sentinels: true
 ---
 operator: SVDF
 name: svdf_float_default_f16
@@ -83,6 +100,11 @@ hint:
   rank: 1
   sequence_steps: 2
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_f16_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=1, feature_batches=4, rank=1): not re-derived in Python.
+expected_input_ctx_size: 8
+expected_output_ctx_size: 8
 ---
 operator: SVDF
 name: svdf_float_no_bias_f16
@@ -106,6 +128,11 @@ hint:
   rank: 1
   sequence_steps: 2
   use_bias: false
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_f16_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=1, feature_batches=4, rank=1): not re-derived in Python.
+expected_input_ctx_size: 8
+expected_output_ctx_size: 8
 ---
 operator: SVDF
 name: svdf_float_rank2_f16
@@ -129,6 +156,13 @@ hint:
   rank: 2
   sequence_steps: 2
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_f16_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=1, feature_batches=4, rank=2): not re-derived in Python.
+expected_input_ctx_size: 8
+expected_output_ctx_size: 4
+# Sizer-only degenerate/-1 sentinel probes (issue #71), one case per kernel.
+ctx_sizer_sentinels: true
 ---
 # Issue #74 phase 2c: non-finite inputs for the float SVDF.
 #
@@ -171,6 +205,11 @@ hint:
   rank: 1
   sequence_steps: 2
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_f32_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=4, rank=1): not re-derived in Python.
+expected_input_ctx_size: 32
+expected_output_ctx_size: 32
 ---
 operator: SVDF
 name: svdf_float_nonfinite_inf_f32
@@ -195,6 +234,11 @@ hint:
   rank: 1
   sequence_steps: 2
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_f32_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=4, rank=1): not re-derived in Python.
+expected_input_ctx_size: 32
+expected_output_ctx_size: 32
 ---
 operator: SVDF
 name: svdf_float_nonfinite_neginf_f32
@@ -219,6 +263,11 @@ hint:
   rank: 1
   sequence_steps: 2
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_f32_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=4, rank=1): not re-derived in Python.
+expected_input_ctx_size: 32
+expected_output_ctx_size: 32
 ---
 operator: SVDF
 name: svdf_float_nonfinite_nan_f16
@@ -243,6 +292,11 @@ hint:
   rank: 1
   sequence_steps: 2
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_f16_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=4, rank=1): not re-derived in Python.
+expected_input_ctx_size: 16
+expected_output_ctx_size: 16
 ---
 operator: SVDF
 name: svdf_float_nonfinite_inf_f16
@@ -267,6 +321,11 @@ hint:
   rank: 1
   sequence_steps: 2
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_f16_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=4, rank=1): not re-derived in Python.
+expected_input_ctx_size: 16
+expected_output_ctx_size: 16
 ---
 operator: SVDF
 name: svdf_float_nonfinite_neginf_f16
@@ -291,3 +350,8 @@ hint:
   rank: 1
   sequence_steps: 2
   use_bias: true
+# Exact ctx scratch sizes (issue #71), measured by calling the real, unmodified
+# arm_svdf_f16_{input,output}_ctx_get_buffer_size() on host for this case's dims
+# (input_batches=2, feature_batches=4, rank=1): not re-derived in Python.
+expected_input_ctx_size: 16
+expected_output_ctx_size: 16
