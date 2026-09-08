@@ -13,7 +13,34 @@ class OpSVDF(OperationBase):
     """
     SVDF operation.
     """
-    
+
+    FAULT_KINDS = (
+        "null_ctx_buf",
+        "null_input_ctx_buf",
+        "null_output_ctx_buf",
+        "small_input_ctx_size",
+        "small_output_ctx_size",
+        "zero_rank",
+        "null_input",
+        "null_output",
+    )
+
+    def _check_fault_reachable(self, kind: str, kernel_fn: str, float_kernel: bool) -> None:
+        """Reject fault kinds the selected SVDF kernel does not diagnose."""
+        if float_kernel:
+            if kind == "null_ctx_buf":
+                raise self.fault_unreachable(kind, f"{kernel_fn} ignores ctx")
+            return
+        if kind not in ("null_ctx_buf", "null_input_ctx_buf", "null_output_ctx_buf"):
+            raise self.fault_unreachable(kind, f"{kernel_fn} does not check {kind}")
+        if kind == "null_ctx_buf":
+            if kernel_fn != "arm_svdf_s8":
+                raise self.fault_unreachable(kind, f"{kernel_fn} takes no kernel-sum context")
+            if "mve" not in self.required_capabilities():
+                raise self.fault_unreachable(
+                    kind, "arm_svdf_s8 only checks ctx->buf under ARM_MATH_MVEI; add required_capabilities: [mve]"
+                )
+
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for SVDF operation."""
         input_shape = self.desc['input_shape']
@@ -318,11 +345,17 @@ class OpSVDF(OperationBase):
             }
             context.update(self._ctx_sizer_context(kernel_fn))
             context.update(nonfinite_context)
+            fault = self.fault_kind()
+            c_template = "SVDFunctions/svdf/svdf_f32.c.j2"
+            if fault:
+                self._check_fault_reachable(fault, kernel_fn, True)
+                context.update(self.fault_context())
+                c_template = "SVDFunctions/svdf/svdf_f32_fault.c.j2"
             self._write_op_outputs(
                 output_dir,
                 "svdf",
                 "SVDFunctions/svdf/svdf_f32.h.j2",
-                "SVDFunctions/svdf/svdf_f32.c.j2",
+                c_template,
                 context,
                 {
                     "name": name,
@@ -452,6 +485,13 @@ class OpSVDF(OperationBase):
             "needs_stdlib": True,
         }
         context.update(self._ctx_sizer_context(kernel_fn))
+        fault = self.fault_kind()
+        c_template = "SVDFunctions/svdf/svdf.c.j2"
+        if fault:
+            self._check_fault_reachable(fault, kernel_fn, False)
+            context.update(self.fault_context())
+            context["needs_stdlib"] = False
+            c_template = "SVDFunctions/svdf/svdf_fault.c.j2"
 
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)
@@ -460,7 +500,7 @@ class OpSVDF(OperationBase):
         h_path = includes_api_dir / f"{name}_svdf.h"
         h_path.write_text(h_content)
 
-        c_content = self.render_template("SVDFunctions/svdf/svdf.c.j2", context)
+        c_content = self.render_template(c_template, context)
         c_path = output_dir / f"{name}_svdf.c"
         c_path.write_text(c_content)
 

@@ -54,9 +54,61 @@ def vector_sum_s8(
 class OpDepthwiseConv(OperationBase):
     """DepthwiseConv operation."""
 
+    FAULT_KINDS = (
+        "null_ctx_buf",
+        "null_weight_sum_ctx",
+        "channel_mismatch",
+        "null_input",
+        "null_output",
+        "invalid_layout",
+    )
+
     def _hint(self) -> Dict[str, Any]:
         hint = self.desc.get("hint", {})
         return hint if isinstance(hint, dict) else {}
+
+    def _check_fault_reachable(self, kind: str, context: Dict[str, Any]) -> None:
+        """Reject fault kinds the selected depthwise kernel route does not diagnose."""
+        kernel_fn = context["kernel_fn"]
+        if context.get("float_kernel"):
+            if kind not in ("null_input", "null_output", "invalid_layout"):
+                raise self.fault_unreachable(kind, f"{kernel_fn} has no such guard")
+            if kind == "invalid_layout" and not context.get("kernel_needs_layout"):
+                raise self.fault_unreachable(kind, f"{kernel_fn} takes no layout argument")
+            return
+        if kind in ("null_input", "null_output", "invalid_layout"):
+            raise self.fault_unreachable(kind, f"{kernel_fn} does not check {kind}")
+        if kind == "null_weight_sum_ctx" and kernel_fn != "arm_depthwise_conv_wrapper_s8":
+            raise self.fault_unreachable(kind, f"{kernel_fn} takes no weight-sum context")
+
+        params = context["dw_conv_params"]
+        input_dims = context["input_dims"]
+        filter_dims = context["filter_dims"]
+        optimized = (
+            params["ch_mult"] == 1
+            and input_dims["n"] == 1
+            and params["dilation_w"] == 1
+            and params["dilation_h"] == 1
+        )
+        if kernel_fn == "arm_depthwise_conv_wrapper_s8":
+            is_3x3 = filter_dims["w"] == 3 and filter_dims["h"] == 3
+            optimized = optimized and not (is_3x3 and params["pad_w"] <= 1) and input_dims["c"] != 1
+        elif kernel_fn == "arm_depthwise_conv_wrapper_s16":
+            optimized = optimized and filter_dims["w"] * filter_dims["h"] < 512
+        if not optimized:
+            raise self.fault_unreachable(
+                kind,
+                f"{kernel_fn} only checks it on the optimized route "
+                "(ch_mult 1, batch 1, unit dilation; s8: not a 3x3 filter with pad <= 1 and input_ch > 1; "
+                "s16: filter w*h < 512)",
+            )
+        if kind == "null_ctx_buf" and kernel_fn != "arm_depthwise_conv_wrapper_s4":
+            if "dsp" not in self.required_capabilities() and "mve" not in self.required_capabilities():
+                raise self.fault_unreachable(
+                    kind,
+                    f"{kernel_fn} only checks ctx->buf when the scratch sizer is non-zero, "
+                    "which needs required_capabilities: [dsp] or [mve]",
+                )
 
     def needs_keras_model(self) -> bool:
         return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
@@ -671,6 +723,12 @@ class OpDepthwiseConv(OperationBase):
                 'dw_activation_max_literal': builder.format_float_literal(dw_conv_params['activation_max']),
             }
             context.update(nonfinite_context)
+            fault = self.fault_kind()
+            c_template = "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2"
+            if fault:
+                self._check_fault_reachable(fault, context)
+                context.update(self.fault_context())
+                c_template = "ConvolutionFunctions/depthwise_conv/depthwise_conv_fault.c.j2"
             includes_api_dir = output_dir / "includes"
             includes_api_dir.mkdir(parents=True, exist_ok=True)
 
@@ -679,7 +737,7 @@ class OpDepthwiseConv(OperationBase):
             with open(h_path, 'w') as f:
                 f.write(h_content)
 
-            c_content = self.render_template("ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2", context)
+            c_content = self.render_template(c_template, context)
             c_path = output_dir / f"{name}_depthwise_conv.c"
             with open(c_path, 'w') as f:
                 f.write(c_content)
@@ -901,17 +959,23 @@ class OpDepthwiseConv(OperationBase):
             'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
         }
-        
+        fault = self.fault_kind()
+        c_template = "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2"
+        if fault:
+            self._check_fault_reachable(fault, context)
+            context.update(self.fault_context())
+            c_template = "ConvolutionFunctions/depthwise_conv/depthwise_conv_fault.c.j2"
+
         # Render templates
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
+
         h_content = self.render_template("ConvolutionFunctions/depthwise_conv/depthwise_conv.h.j2", context)
         h_path = includes_api_dir / f"{name}_depthwise_conv.h"
         with open(h_path, 'w') as f:
             f.write(h_content)
-        
-        c_content = self.render_template("ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2", context)
+
+        c_content = self.render_template(c_template, context)
         c_path = output_dir / f"{name}_depthwise_conv.c"
         with open(c_path, 'w') as f:
             f.write(c_content)

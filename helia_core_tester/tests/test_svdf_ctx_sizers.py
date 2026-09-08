@@ -272,10 +272,16 @@ def _raw_svdf_documents() -> dict[str, dict]:
 
 def test_checked_in_yaml_carries_the_documented_sizes() -> None:
     docs = _raw_svdf_documents()
-    assert set(docs) == set(DOCUMENTED_SIZES)
+    # Every documented case must still exist and still carry its measured sizes.
+    assert set(DOCUMENTED_SIZES) <= set(docs)
     for name, (input_bytes, output_bytes) in DOCUMENTED_SIZES.items():
         assert docs[name]["expected_input_ctx_size"] == input_bytes, name
         assert docs[name]["expected_output_ctx_size"] == output_bytes, name
+    # And no case may carry sizes without being documented here, so a new sized case cannot
+    # drift in unmeasured. Fault cases assert a status rather than an output and carry none.
+    sized = {name for name, doc in docs.items() if "expected_input_ctx_size" in doc}
+    assert sized == set(DOCUMENTED_SIZES)
+    assert all("expected_input_ctx_size" not in doc for name, doc in docs.items() if "fault" in doc)
 
 
 def test_checked_in_yaml_arms_sentinels_once_per_kernel() -> None:

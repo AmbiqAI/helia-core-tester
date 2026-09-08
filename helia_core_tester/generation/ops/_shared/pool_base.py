@@ -14,7 +14,13 @@ class PoolFamilyBase(OperationBase):
     OPERATOR_NAME = "AvgPool"
     TEMPLATE_DIR = "PoolingFunctions/avg_pool"
     TEMPLATE_SUFFIX = "avg_pool"
-    
+    FAULT_KINDS = ("zero_dim", "negative_dim", "null_input", "null_output")
+
+    def _check_fault_reachable(self, kind: str, float_kernel: bool, kernel_fn: str) -> None:
+        """Reject fault kinds the selected pooling kernel does not diagnose."""
+        if kind in ("null_input", "null_output") and not float_kernel:
+            raise self.fault_unreachable(kind, f"{kernel_fn} does not check {kind}")
+
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for Pooling operation."""
         input_shape = self.desc['input_shape']
@@ -277,7 +283,13 @@ class PoolFamilyBase(OperationBase):
             context["pool_activation_min_literal"] = builder.format_float_literal(pool_params["activation_min"])
             context["pool_activation_max_literal"] = builder.format_float_literal(pool_params["activation_max"])
         context.update(nonfinite_context)
-        
+        fault = self.fault_kind()
+        c_template = f"{self.TEMPLATE_DIR}/{self.TEMPLATE_SUFFIX}.c.j2"
+        if fault:
+            self._check_fault_reachable(fault, float_kernel, kernel_info["kernel_fn"])
+            context.update(self.fault_context())
+            c_template = f"{self.TEMPLATE_DIR}/{self.TEMPLATE_SUFFIX}_fault.c.j2"
+
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', self.OPERATOR_NAME),
@@ -287,7 +299,7 @@ class PoolFamilyBase(OperationBase):
             output_dir,
             self.TEMPLATE_SUFFIX,
             f"{self.TEMPLATE_DIR}/{self.TEMPLATE_SUFFIX}.h.j2",
-            f"{self.TEMPLATE_DIR}/{self.TEMPLATE_SUFFIX}.c.j2",
+            c_template,
             context,
             cmake_context,
         )

@@ -105,3 +105,51 @@ input_2_shape:
 - 2
 adj_x: false
 adj_y: false
+---
+# Fault-injection cases (issue #72): each case feeds an argument the kernel's
+# own validation rejects and asserts ARM_CMSIS_NN_ARG_ERROR instead of
+# validating outputs. arm_batch_matmul_s8 only validates under ARM_MATH_MVEI.
+operator: BatchMatMul
+name: batch_matmul_fault_null_ctx_buf_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+required_capabilities: [mve]
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 4, 3]
+input_2_shape: [1, 3, 2]
+adj_x: false
+adj_y: false
+fault: null_ctx_buf
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: BatchMatMul
+name: batch_matmul_fault_small_ctx_size_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+required_capabilities: [mve]
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 4, 3]
+input_2_shape: [1, 3, 2]
+adj_x: false
+adj_y: false
+fault: small_ctx_size
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: BatchMatMul
+name: batch_matmul_fault_negative_dim_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+required_capabilities: [mve]
+hint:
+  call_style: per_tensor
+input_1_shape: [1, 4, 3]
+input_2_shape: [1, 3, 2]
+adj_x: false
+adj_y: false
+fault: negative_dim
+expected_status: ARM_CMSIS_NN_ARG_ERROR
