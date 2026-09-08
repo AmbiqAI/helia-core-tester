@@ -2015,6 +2015,9 @@ use_bias: true
 fault: null_ctx_buf
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
+# Observed, not promised: the header documents this guard and disclaims it in the same
+# paragraph, ending that none of it is a guarantee about future versions. Keep the case, but
+# a red result here may mean the kernel exercised that escape clause rather than regressed.
 operator: Convolve
 name: convolve_fault_null_weight_sum_ctx_s8
 activation_dtype: S8
@@ -2031,6 +2034,9 @@ required_capabilities: [mve]
 fault: null_weight_sum_ctx
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
+# Observed, not promised: the header documents this guard and disclaims it in the same
+# paragraph, ending that none of it is a guarantee about future versions. Keep the case, but
+# a red result here may mean the kernel exercised that escape clause rather than regressed.
 operator: Convolve
 name: convolve_fault_null_weight_sum_ctx_1x1_fast_s8
 activation_dtype: S8
@@ -2047,6 +2053,9 @@ required_capabilities: [mve]
 fault: null_weight_sum_ctx
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
+# Observed, not promised: the header documents this guard and disclaims it in the same
+# paragraph, ending that none of it is a guarantee about future versions. Keep the case, but
+# a red result here may mean the kernel exercised that escape clause rather than regressed.
 operator: Convolve
 name: convolve_fault_null_weight_sum_ctx_1x1_stride2_s8
 activation_dtype: S8
@@ -2063,6 +2072,9 @@ required_capabilities: [mve]
 fault: null_weight_sum_ctx
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
+# Observed, not promised: the header documents this guard and disclaims it in the same
+# paragraph, ending that none of it is a guarantee about future versions. Keep the case, but
+# a red result here may mean the kernel exercised that escape clause rather than regressed.
 operator: Convolve
 name: convolve_fault_null_weight_sum_ctx_1xn_s8
 activation_dtype: S8

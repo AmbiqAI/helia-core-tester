@@ -254,6 +254,10 @@ nonfinite_tokens: [nan]
 nonfinite_positions: [72]
 nonfinite_policy: mask
 ---
+# Observed, not promised: the pooling headers describe input_dims as [H, W, C_IN] and say
+# nothing about the batch field this case sets, so the rejection is current behaviour rather
+# than documented contract. In particular nothing stops a future kernel treating an empty
+# batch as a successful no-op.
 operator: AvgPool
 name: avg_pool_fault_zero_dim_f32
 suite: float
@@ -267,6 +271,10 @@ padding: VALID
 fault: zero_dim
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
+# Observed, not promised: the pooling headers describe input_dims as [H, W, C_IN] and say
+# nothing about the batch field this case sets, so the rejection is current behaviour rather
+# than documented contract. In particular nothing stops a future kernel treating an empty
+# batch as a successful no-op.
 operator: AvgPool
 name: avg_pool_fault_zero_dim_f16
 suite: float
@@ -280,6 +288,10 @@ padding: VALID
 fault: zero_dim
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
+# Observed, not promised: the pooling headers describe input_dims as [H, W, C_IN] and say
+# nothing about the batch field this case sets, so the rejection is current behaviour rather
+# than documented contract. In particular nothing stops a future kernel treating an empty
+# batch as a successful no-op.
 operator: AvgPool
 name: avg_pool_fault_negative_dim_f32
 suite: float
@@ -293,6 +305,10 @@ padding: VALID
 fault: negative_dim
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
+# Observed, not promised: the pooling headers describe input_dims as [H, W, C_IN] and say
+# nothing about the batch field this case sets, so the rejection is current behaviour rather
+# than documented contract. In particular nothing stops a future kernel treating an empty
+# batch as a successful no-op.
 operator: AvgPool
 name: avg_pool_fault_negative_dim_f16
 suite: float

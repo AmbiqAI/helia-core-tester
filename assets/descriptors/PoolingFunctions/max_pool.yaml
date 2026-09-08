@@ -221,6 +221,10 @@ padding: VALID
 # Fault-injection cases (issue #72): each case feeds an argument the kernel's
 # own validation rejects and asserts ARM_CMSIS_NN_ARG_ERROR instead of
 # validating outputs.
+# Observed, not promised: the pooling headers describe input_dims as [H, W, C_IN] and say
+# nothing about the batch field this case sets, so the rejection is current behaviour rather
+# than documented contract. In particular nothing stops a future kernel treating an empty
+# batch as a successful no-op.
 operator: MaxPool
 name: max_pool_fault_zero_dim_s8
 activation_dtype: S8
@@ -235,6 +239,10 @@ padding: VALID
 fault: zero_dim
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
+# Observed, not promised: the pooling headers describe input_dims as [H, W, C_IN] and say
+# nothing about the batch field this case sets, so the rejection is current behaviour rather
+# than documented contract. In particular nothing stops a future kernel treating an empty
+# batch as a successful no-op.
 operator: MaxPool
 name: max_pool_fault_zero_dim_s16
 activation_dtype: S16
@@ -249,6 +257,10 @@ padding: VALID
 fault: zero_dim
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
+# Observed, not promised: the pooling headers describe input_dims as [H, W, C_IN] and say
+# nothing about the batch field this case sets, so the rejection is current behaviour rather
+# than documented contract. In particular nothing stops a future kernel treating an empty
+# batch as a successful no-op.
 operator: MaxPool
 name: max_pool_fault_negative_dim_s8
 activation_dtype: S8
@@ -263,6 +275,10 @@ padding: VALID
 fault: negative_dim
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
+# Observed, not promised: the pooling headers describe input_dims as [H, W, C_IN] and say
+# nothing about the batch field this case sets, so the rejection is current behaviour rather
+# than documented contract. In particular nothing stops a future kernel treating an empty
+# batch as a successful no-op.
 operator: MaxPool
 name: max_pool_fault_negative_dim_s16
 activation_dtype: S16

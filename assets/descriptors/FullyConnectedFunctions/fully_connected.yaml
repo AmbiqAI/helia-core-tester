@@ -504,6 +504,9 @@ use_bias: false
 # Fault-injection cases (issue #72): each case feeds an argument the kernel's
 # own validation rejects and asserts ARM_CMSIS_NN_ARG_ERROR instead of
 # validating outputs.
+# Observed, not promised: the header documents this guard and disclaims it in the same
+# paragraph, ending that none of it is a guarantee about future versions. Keep the case, but
+# a red result here may mean the kernel exercised that escape clause rather than regressed.
 operator: FullyConnected
 name: fully_connected_fault_null_ctx_buf_s8
 activation_dtype: S8
