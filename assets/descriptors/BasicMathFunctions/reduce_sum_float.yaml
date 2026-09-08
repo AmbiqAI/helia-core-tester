@@ -34,6 +34,57 @@ tensor_dtypes:
 input_shape: [1, 3, 4, 5]
 axes: [1]
 ---
+# Width-only reduction, keeping channels (#131). The reduced axes are not a contiguous suffix
+# once the kernel's size-one dimensions are folded in, so the flatten-suffix helper in
+# Include/arm_nnsupportfunctions.h returns no suffix and the kernel takes its generic
+# nested-loop route rather than the vectorised flatten helper. The existing axis_h and axis_hw
+# cases reach that route too,
+# but no case reduces width alone, none retains more than sixteen channels, and none keeps more
+# than one row. The generic route holds no vector code of its own, so what a larger retained
+# channel count covers here is the compiler's auto-vectorisation of that loop, and whatever
+# hand-written path replaces it. The goldens come from the family's numpy reference, which is an
+# independent implementation but not an independent accumulation order: reducing a non-innermost
+# axis, numpy sums in the same sequential order a scalar loop does.
+#
+# Only the first case is the shape ns-cmsis-nn#484 reports; the other two are probes. When that
+# issue's channel-preserving spatial path lands, all three move onto it.
+operator: ReduceSum
+name: reduce_sum_float_axis_w_c128_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 1, 64, 128]
+axes: [2]
+# Mirrors the reported model, which drops the reduced axis. The harness dims and the golden are
+# the same either way; only the emitted model's output rank changes.
+keepdims: false
+---
+# Three retained rows, so the generic loop's index arithmetic runs with a varying row index for
+# the first time in this family: every other generic-route case reduces height. Thirty-three
+# retained channels is eight whole float32 vectors and a remainder.
+operator: ReduceSum
+name: reduce_sum_float_axis_w_rows_tail_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 3, 8, 33]
+axes: [2]
+---
+# The float16 twin of the case above rather than of the reported shape: arm_reduce_sum_f16's
+# generic route is the float32 one with a widening load, so the dtype coverage is the same at a
+# ninth of the payload the reported shape would have cost in half precision. It accumulates in
+# float32 and rounds once, which is what the reference does.
+operator: ReduceSum
+name: reduce_sum_float_axis_w_rows_tail_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 3, 8, 33]
+axes: [2]
+---
 operator: ReduceSum
 name: reduce_sum_float_axis_c_f16
 suite: float
