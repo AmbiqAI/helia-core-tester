@@ -364,6 +364,20 @@
       "minProperties": 1,
       "additionalProperties": { "type": "string", "minLength": 1 },
       "description": "Int elementwise cases: operand name -> reason the operand is intentionally one-signed after its zero point is applied. Waives the generation-time operand sign-span check for that operand only. This schema is not enforced at load time (#100); the same rule is enforced in code by OperationBase._enforce_int_operand_sign_span."
+    },
+    "expected_input_ctx_size": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "SVDF: the byte count the published input-context sizer must return for this shape, asserted in the generated harness. Measured from the shipped kernel rather than re-derived, so a sizer and a tester that share a formula error cannot agree with each other (#71). Absent means no assertion is emitted."
+    },
+    "expected_output_ctx_size": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "SVDF: the byte count the published output-context sizer must return for this shape, asserted in the generated harness. Same provenance and same absent-means-no-assertion rule as expected_input_ctx_size (#71)."
+    },
+    "ctx_sizer_sentinels": {
+      "type": "boolean",
+      "description": "SVDF: emit the context sizers' documented failure-mode probes for this case, covering the zero return for a degenerate batch and the negative sentinel for a rank or dimension the sizer rejects. The probes call the sizers only; the structs they build never reach the kernel (#71)."
     }
   },
   "$defs": {
