@@ -38,6 +38,15 @@ int32_t batch_matmul_float_default_f32_run(
         &batch_matmul_float_default_f32_input_rhs_dims,
         &batch_matmul_float_default_f32_output_dims
     );
+    // Armed before the capacity check below: an early return there would otherwise leave
+    // these canaries unstamped, and the unconditional check in _test_case_run would
+    // report a fabricated breach instead of the real sizer error (#68).
+    HELIA_GUARD_ARM(batch_matmul_float_default_f32_buffer, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_STAMP_SLACK(batch_matmul_float_default_f32_buffer, 0u);
+    // The slack is stamped as wholly unused here so that an early return from the
+    // capacity check below leaves every canary in a checked state; it is re-stamped
+    // with the real size once the context is populated (#68).
+
 
     if (required_buffer_size > BATCH_MATMUL_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX) {
         return ARM_CMSIS_NN_ARG_ERROR;
@@ -46,7 +55,6 @@ int32_t batch_matmul_float_default_f32_run(
     // Initialize context buffer
     batch_matmul_float_default_f32_ctx.buf = batch_matmul_float_default_f32_buffer;
     batch_matmul_float_default_f32_ctx.size = required_buffer_size;
-    HELIA_GUARD_ARM(batch_matmul_float_default_f32_buffer, true /* pure scratch: poison to catch read-before-write */);
     HELIA_GUARD_STAMP_SLACK(batch_matmul_float_default_f32_buffer, batch_matmul_float_default_f32_ctx.buf == batch_matmul_float_default_f32_buffer ? (size_t)batch_matmul_float_default_f32_ctx.size : 0u);
 
     // Call batch matmul kernel

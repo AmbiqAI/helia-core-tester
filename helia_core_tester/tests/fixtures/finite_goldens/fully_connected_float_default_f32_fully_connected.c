@@ -39,6 +39,15 @@ int32_t fully_connected_float_default_f32_run(
         &fully_connected_float_default_f32_output_dims,
         ARM_NN_LAYOUT_NHWC
     );
+    // Armed before the capacity check below: an early return there would otherwise leave
+    // these canaries unstamped, and the unconditional check in _test_case_run would
+    // report a fabricated breach instead of the real sizer error (#68).
+    HELIA_GUARD_ARM(fully_connected_float_default_f32_buffer, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_STAMP_SLACK(fully_connected_float_default_f32_buffer, 0u);
+    // The slack is stamped as wholly unused here so that an early return from the
+    // capacity check below leaves every canary in a checked state; it is re-stamped
+    // with the real size once the context is populated (#68).
+
 
     if (required_buffer_size > FULLY_CONNECTED_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX) {
         printf("Buffer size error: required=%d > max=%d\r\n", required_buffer_size, FULLY_CONNECTED_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
@@ -49,7 +58,6 @@ int32_t fully_connected_float_default_f32_run(
     // below (s4 uses NULL, weight_sum variants point ctx.buf elsewhere), but
     // poisoning/guarding it here regardless is harmless and keeps the check
     // in _test_case_run unconditional too.
-    HELIA_GUARD_ARM(fully_connected_float_default_f32_buffer, true /* pure scratch: poison to catch read-before-write */);
 
     // Initialize context buffer
     fully_connected_float_default_f32_ctx.buf = fully_connected_float_default_f32_buffer;

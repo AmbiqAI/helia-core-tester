@@ -12,7 +12,40 @@ class OpTransposeConv(OperationBase):
     """
     TransposeConv operation.
     """
-    
+
+    FAULT_KINDS = (
+        "null_ctx_buf",
+        "null_weight_sum_ctx",
+        "null_reverse_conv_ctx_buf",
+        "nonunit_dilation",
+        "null_input",
+        "null_output",
+        "invalid_layout",
+    )
+
+    def _check_fault_reachable(self, kind: str, context: Dict[str, Any]) -> None:
+        """Reject fault kinds the selected transpose-conv kernel route does not diagnose."""
+        kernel_fn = context["kernel_fn"]
+        if context.get("float_kernel"):
+            if kind not in ("null_input", "null_output", "invalid_layout"):
+                raise self.fault_unreachable(kind, f"{kernel_fn} has no such guard")
+            return
+        if kind in ("null_input", "null_output", "invalid_layout"):
+            raise self.fault_unreachable(kind, f"{kernel_fn} does not check {kind}")
+        if kind in ("null_reverse_conv_ctx_buf", "null_weight_sum_ctx"):
+            params = context["transpose_conv_params"]
+            reverse_conv = (
+                params["stride_w"] <= 2
+                and params["stride_h"] <= 2
+                and context["input_dims"]["c"] > 16
+            )
+            if not reverse_conv:
+                raise self.fault_unreachable(
+                    kind,
+                    f"{kernel_fn} only checks it on the reverse-conv route "
+                    "(stride <= 2 and input channels > 16)",
+                )
+
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for TransposeConv operation.
         """
@@ -438,6 +471,12 @@ class OpTransposeConv(OperationBase):
                 'transpose_activation_max_literal': builder.format_float_literal(transpose_conv_params['activation_max']),
             }
             context.update(nonfinite_context)
+            fault = self.fault_kind()
+            c_template = "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2"
+            if fault:
+                self._check_fault_reachable(fault, context)
+                context.update(self.fault_context())
+                c_template = "ConvolutionFunctions/transpose_conv/transpose_conv_fault.c.j2"
             includes_api_dir = output_dir / "includes"
             includes_api_dir.mkdir(parents=True, exist_ok=True)
             
@@ -446,7 +485,7 @@ class OpTransposeConv(OperationBase):
             with open(h_path, 'w') as f:
                 f.write(h_content)
             
-            c_content = self.render_template("ConvolutionFunctions/transpose_conv/transpose_conv.c.j2", context)
+            c_content = self.render_template(c_template, context)
             c_path = output_dir / f"{name}_transpose_conv.c"
             with open(c_path, 'w') as f:
                 f.write(c_content)
@@ -624,7 +663,13 @@ class OpTransposeConv(OperationBase):
             'buffer_size_max': buffer_size_max,
             'reverse_conv_ctx_size': reverse_conv_ctx_size,
         }
-        
+        fault = self.fault_kind()
+        c_template = "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2"
+        if fault:
+            self._check_fault_reachable(fault, context)
+            context.update(self.fault_context())
+            c_template = "ConvolutionFunctions/transpose_conv/transpose_conv_fault.c.j2"
+
         # Render templates
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)
@@ -634,7 +679,7 @@ class OpTransposeConv(OperationBase):
         with open(h_path, 'w') as f:
             f.write(h_content)
         
-        c_content = self.render_template("ConvolutionFunctions/transpose_conv/transpose_conv.c.j2", context)
+        c_content = self.render_template(c_template, context)
         c_path = output_dir / f"{name}_transpose_conv.c"
         with open(c_path, 'w') as f:
             f.write(c_content)

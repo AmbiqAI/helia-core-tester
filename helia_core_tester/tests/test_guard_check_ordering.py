@@ -28,6 +28,8 @@ RETURNING_VALIDATOR_RE = re.compile(
 )
 GUARD_CHECK_RE = re.compile(r"HELIA_GUARD_CHECK(?:_SLACK)?\(|helia_guard_check\(")
 GUARD_ARM_RE = re.compile(r"HELIA_GUARD_ARM\(|helia_guard_arm\(")
+# A returning validator whose subject is a sizer query rather than a kernel result.
+SIZER_PROBE_RE = re.compile(r"ctx size|_get_buffer_size")
 
 RENDERED_CASES = [
     "convolve_default_s8",
@@ -53,10 +55,22 @@ RENDERED_CPU = "cortex-m55"
 def _first_guard_precedes_first_returning_validator(text: str, label: str) -> None:
     arm = GUARD_ARM_RE.search(text)
     assert arm is not None, f"{label}: no guarded buffer"
-    validator = RETURNING_VALIDATOR_RE.search(text, arm.end())
+    guard = GUARD_CHECK_RE.search(text, arm.end())
+    # Sizer probes call a *_get_buffer_size() function and return on a mismatch, but they run
+    # before the kernel is handed any buffer, so a guard check after them is not the defect
+    # this pins. They are skipped by starting the search at the first guard check when the
+    # validators before it are probes; anything else before the check still fails below.
+    start = arm.end()
+    if guard is not None:
+        probes_only = all(
+            SIZER_PROBE_RE.search(text, m.start(), guard.start())
+            for m in RETURNING_VALIDATOR_RE.finditer(text, arm.end(), guard.start())
+        )
+        if probes_only:
+            start = guard.start()
+    validator = RETURNING_VALIDATOR_RE.search(text, start)
     if validator is None:
         return
-    guard = GUARD_CHECK_RE.search(text, arm.end())
     assert guard is not None, f"{label}: guarded buffers but no guard check"
     assert guard.start() < validator.start(), (
         f"{label}: first guard check at {guard.start()} comes after the first "
@@ -80,27 +94,32 @@ def test_template_guard_check_precedes_returning_validators(template: Path) -> N
 
 
 @pytest.fixture(scope="module")
-def rendered_sources(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
+def _descriptors_by_name() -> dict[str, dict]:
     from helia_core_tester.core.discovery import find_descriptors_dir
     from helia_core_tester.generation.io.descriptors import load_all_descriptors
+
+    return {desc["name"]: desc for desc in load_all_descriptors(str(find_descriptors_dir()))}
+
+
+@pytest.fixture
+def rendered_source(request, tmp_path, _descriptors_by_name) -> str:
+    """Render one case. Per-case rather than a single batch, because a few descriptors read
+    data from an ns-cmsis-nn checkout that the pure-Python job does not have; those skip
+    while the rest still assert. The same templates are covered textually above."""
     import helia_core_tester.generation.test_ops as generation_module
 
-    descriptors = {
-        desc["name"]: desc for desc in load_all_descriptors(str(find_descriptors_dir()))
-    }
-    out_dir = tmp_path_factory.mktemp("guard_ordering")
-    sources: dict[str, str] = {}
-    for case_name in RENDERED_CASES:
-        desc = descriptors[case_name]
-        generation_module.generate_test(desc, str(out_dir), cpu=RENDERED_CPU)
-        case_dir = out_dir / desc["_family"] / case_name
-        (c_file,) = case_dir.glob("*.c")
-        sources[case_name] = c_file.read_text()
-    return sources
+    case_name = request.param
+    desc = _descriptors_by_name[case_name]
+    try:
+        generation_module.generate_test(desc, str(tmp_path), cpu=RENDERED_CPU)
+    except FileNotFoundError as exc:
+        pytest.skip(f"{case_name} needs generation inputs this environment lacks: {exc}")
+    case_dir = tmp_path / desc["_family"] / case_name
+    (c_file,) = case_dir.glob("*.c")
+    return c_file.read_text()
 
 
-@pytest.mark.parametrize("case_name", RENDERED_CASES)
-def test_guard_check_precedes_returning_validators(
-    rendered_sources: dict[str, str], case_name: str
-) -> None:
-    _first_guard_precedes_first_returning_validator(rendered_sources[case_name], case_name)
+@pytest.mark.parametrize("rendered_source", RENDERED_CASES, indirect=True)
+def test_guard_check_precedes_returning_validators(rendered_source: str, request) -> None:
+    case_name = request.node.callspec.params["rendered_source"]
+    _first_guard_precedes_first_returning_validator(rendered_source, case_name)

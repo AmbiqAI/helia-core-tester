@@ -54,6 +54,16 @@ int32_t transpose_conv_float_default_f16_run(
         &transpose_conv_float_default_f16_input_dims,
         &transpose_conv_float_default_f16_filter_dims
     );
+    // Armed before the capacity check below: an early return there would otherwise leave
+    // these canaries unstamped, and the unconditional check in _test_case_run would
+    // report a fabricated breach instead of the real sizer error (#68).
+    HELIA_GUARD_ARM(transpose_conv_float_default_f16_buffer, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_ARM(transpose_conv_float_default_f16_reverse_conv_ctx_buffer, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_STAMP_SLACK(transpose_conv_float_default_f16_buffer, 0u);
+    // The slack is stamped as wholly unused here so that an early return from the
+    // capacity check below leaves every canary in a checked state; it is re-stamped
+    // with the real size once the context is populated (#68).
+
 
     if (required_buffer_size > TRANSPOSE_CONV_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX) {
         printf("Buffer size error: required=%d > max=%d\r\n", required_buffer_size, TRANSPOSE_CONV_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX);
@@ -69,13 +79,11 @@ int32_t transpose_conv_float_default_f16_run(
     // Initialize context buffer
     transpose_conv_float_default_f16_ctx.buf = transpose_conv_float_default_f16_buffer;
     transpose_conv_float_default_f16_ctx.size = required_buffer_size;
-    HELIA_GUARD_ARM(transpose_conv_float_default_f16_buffer, true /* pure scratch: poison to catch read-before-write */);
     HELIA_GUARD_STAMP_SLACK(transpose_conv_float_default_f16_buffer, transpose_conv_float_default_f16_ctx.buf == transpose_conv_float_default_f16_buffer ? (size_t)transpose_conv_float_default_f16_ctx.size : 0u);
 
     // Initialize reverse convolution context buffer (output_ctx parameter)
     transpose_conv_float_default_f16_reverse_conv_ctx.buf = transpose_conv_float_default_f16_reverse_conv_ctx_buffer;
     transpose_conv_float_default_f16_reverse_conv_ctx.size = TRANSPOSE_CONV_FLOAT_DEFAULT_F16_REVERSE_CONV_CTX_SIZE;
-    HELIA_GUARD_ARM(transpose_conv_float_default_f16_reverse_conv_ctx_buffer, true /* pure scratch: poison to catch read-before-write */);
 
 
     // Call transpose convolution kernel

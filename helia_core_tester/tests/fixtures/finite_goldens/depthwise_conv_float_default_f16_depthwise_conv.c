@@ -46,6 +46,15 @@ int32_t depthwise_conv_float_default_f16_run(
         &depthwise_conv_float_default_f16_output_dims,
         ARM_NN_LAYOUT_NHWC
     );
+    // Armed before the capacity check below: an early return there would otherwise leave
+    // these canaries unstamped, and the unconditional check in _test_case_run would
+    // report a fabricated breach instead of the real sizer error (#68).
+    HELIA_GUARD_ARM(depthwise_conv_float_default_f16_buffer, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_STAMP_SLACK(depthwise_conv_float_default_f16_buffer, 0u);
+    // The slack is stamped as wholly unused here so that an early return from the
+    // capacity check below leaves every canary in a checked state; it is re-stamped
+    // with the real size once the context is populated (#68).
+
 
     if (required_buffer_size > DEPTHWISE_CONV_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX) {
         return ARM_CMSIS_NN_ARG_ERROR;
@@ -54,7 +63,6 @@ int32_t depthwise_conv_float_default_f16_run(
     // Initialize context buffer
     // Armed unconditionally: force_no_scratch bypasses depthwise_conv_float_default_f16_buffer entirely,
     // but guarding/poisoning it here regardless is harmless either way.
-    HELIA_GUARD_ARM(depthwise_conv_float_default_f16_buffer, true /* pure scratch: poison to catch read-before-write */);
     depthwise_conv_float_default_f16_ctx.buf = depthwise_conv_float_default_f16_buffer;
     depthwise_conv_float_default_f16_ctx.size = required_buffer_size;
     HELIA_GUARD_STAMP_SLACK(depthwise_conv_float_default_f16_buffer, depthwise_conv_float_default_f16_ctx.buf == depthwise_conv_float_default_f16_buffer ? (size_t)depthwise_conv_float_default_f16_ctx.size : 0u);

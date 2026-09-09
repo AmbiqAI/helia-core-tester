@@ -147,7 +147,7 @@ def missing_header_symbols(symbols: Iterable[str], cmsis_nn_root: Optional[Path]
 
 def kernel_source_exists(symbol: str, cmsis_nn_root: Optional[Path] = None) -> bool:
     """True iff the checkout ships a kernel source file named after ``symbol``
-    (``Source/**/<symbol>.c``).
+    (``Source/**/<symbol>.c``) that actually defines it.
 
     Backstop for the per-symbol declaration probe: kernel sources in
     ns-cmsis-nn are named after their public symbol, so a symbol that is
@@ -155,6 +155,16 @@ def kernel_source_exists(symbol: str, cmsis_nn_root: Optional[Path] = None) -> b
     means the probe missed a declaration (renamed symbol, or a public header
     outside _PUBLIC_HEADER_NAMES) -- a contradiction the caller must surface
     loudly instead of silently skipping every dependent test case.
+
+    The filename alone is not enough, because an umbrella file is named after
+    a symbol family rather than a symbol: on ns-cmsis-nn 7.32.0
+    Source/ConcatenationFunctions/arm_concatenation_f32.c defines only
+    arm_concatenation_f32_{x,y,z,w}, and the bare arm_concatenation_f32 of
+    ns-cmsis-nn#475 does not exist there at all. Matching on the name alone
+    turned that into a false contradiction that failed generation instead of
+    skipping -- exactly the pre-kernel checkout the gate exists to tolerate.
+    So the file has to carry the symbol in declaration shape, which the
+    doxygen `Title: arm_concatenation_f32.c` banner does not.
     """
     name = str(symbol).strip()
     if not name:
@@ -166,9 +176,16 @@ def kernel_source_exists(symbol: str, cmsis_nn_root: Optional[Path] = None) -> b
     if not source_root.is_dir():
         return False
     try:
-        return next(source_root.rglob(f"{name}.c"), None) is not None
+        for candidate in source_root.rglob(f"{name}.c"):
+            try:
+                text = candidate.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if _symbol_declared(name, text):
+                return True
     except OSError:
         return False
+    return False
 
 
 def lstm_int_temp_expected_bytes(*, time_major: bool, batch_size: int, hidden_size: int) -> int:

@@ -69,6 +69,18 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
         &{{ name }}_output_dims
     );
     {% endif %}
+    // Armed before the capacity check below: an early return there would otherwise leave
+    // these canaries unstamped, and the unconditional check in _test_case_run would
+    // report a fabricated breach instead of the real sizer error (#68).
+    HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
+    {% if kernel_fn == 'arm_convolve_wrapper_s8' %}
+    HELIA_GUARD_ARM({{ name }}_weight_sum_buffer, true /* fully recomputed below: poison-safe */);
+    {% endif %}
+    HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, 0u);
+    // The slack is stamped as wholly unused here so that an early return from the
+    // capacity check below leaves every canary in a checked state; it is re-stamped
+    // with the real size once the context is populated (#68).
+
 
     if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
         return ARM_CMSIS_NN_ARG_ERROR;
@@ -77,14 +89,12 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
     // Initialize context buffer
     {{ name }}_ctx.buf = {{ name }}_buffer;
     {{ name }}_ctx.size = required_buffer_size;
-    HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
     HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
 
     {% if kernel_fn == 'arm_convolve_wrapper_s8' %}
     // Initialize weight sum context and buffer
     {{ name }}_weight_sum_ctx.buf = {{ name }}_weight_sum_buffer;
     {{ name }}_weight_sum_ctx.size = {{ name|upper }}_WEIGHT_SUM_BUFFER_SIZE;
-    HELIA_GUARD_ARM({{ name }}_weight_sum_buffer, true /* fully recomputed below: poison-safe */);
 
     // Calculate weight sum (required for s8 convolutions)
     // This pre-computes weight * input_offset + bias for optimization

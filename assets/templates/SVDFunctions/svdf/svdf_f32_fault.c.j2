@@ -1,0 +1,70 @@
+#include "{{ name }}_svdf.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+{# Declare only the buffers this fault mode actually passes to the kernel so a
+   NULL-substituted buffer never becomes an unused static (-Wunused-variable). #}
+static {{ data_dtype }} {{ name }}_state[{{ state_size }}];
+{% if fault != "null_input_ctx_buf" %}static {{ data_dtype }} {{ name }}_scratch_input[{{ scratch_input_size }}];
+{% endif %}{% if fault != "null_output_ctx_buf" %}static {{ data_dtype }} {{ name }}_scratch_output[{{ scratch_output_size }}];
+{% endif %}{% if fault != "null_output" %}static {{ data_dtype }} {{ name }}_output[{{ output_size }}];
+{% endif %}
+
+/*
+ * Fault-injection test case: exercises an {{ kernel_fn }}
+ * argument-validation branch. Fault mode: {{ fault }}.
+ */
+static int32_t run_svdf(void)
+{
+    const cmsis_nn_context ctx = {0};
+    const cmsis_nn_context input_ctx = {
+        .buf = {% if fault == "null_input_ctx_buf" %}NULL{% else %}{{ name }}_scratch_input{% endif %},
+        .size = {% if fault == "null_input_ctx_buf" %}0{% elif fault == "small_input_ctx_size" %}1{% else %}sizeof({{ name }}_scratch_input){% endif %},
+    };
+    const cmsis_nn_context output_ctx = {
+        .buf = {% if fault == "null_output_ctx_buf" %}NULL{% else %}{{ name }}_scratch_output{% endif %},
+        .size = {% if fault == "null_output_ctx_buf" %}0{% elif fault == "small_output_ctx_size" %}1{% else %}sizeof({{ name }}_scratch_output){% endif %},
+    };
+    {{ svdf_params_type }} svdf_params = {{ name }}_svdf_params;
+{% if fault == "zero_rank" %}
+    svdf_params.rank = 0;
+{% endif %}
+    const {{ data_dtype }} *input_arg = {% if fault == "null_input" %}NULL{% else %}{{ name }}_input_sequence{% endif %};
+    {{ data_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};
+
+    for (int i = 0; i < {{ state_size }}; ++i)
+    {
+        {{ name }}_state[i] = {{ name }}_initial_state[i];
+    }
+
+    return {{ kernel_fn }}(
+        &ctx,
+        &input_ctx,
+        &output_ctx,
+        &svdf_params,
+        &{{ name }}_input_dims,
+        input_arg,
+        &{{ name }}_state_dims,
+        {{ name }}_state,
+        &{{ name }}_weights_feature_dims,
+        {{ name }}_weights_feature,
+        &{{ name }}_weights_time_dims,
+        {{ name }}_weights_time,
+        &{{ name }}_bias_dims,
+        {% if use_bias %}{{ name }}_bias{% else %}NULL{% endif %},
+        &{{ name }}_output_dims,
+        output_arg
+    );
+}
+
+int32_t {{ name }}_test_case_run(void)
+{
+    int32_t status = run_svdf();
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ validation_label | default("SVDF") }}",
+        status,
+        {{ expected_status }}
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(0);
+}
+
+{% include "common/standalone/main.j2" %}

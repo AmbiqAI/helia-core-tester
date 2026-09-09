@@ -12,7 +12,7 @@ static const float32_t gru_unidirectional_float_stream_f32_input_tensor[] = {
 };
 
 static const float32_t gru_unidirectional_float_stream_f32_expected_output[] = {
-    -0.115517452f, 0.095142819f, 0.074682564f, -0.202843562f, 0.013375841f, 0.161503345f, 0.01629303f, -0.251079768f, -0.107977241f, 0.219803929f, 0.146138877f, -0.335386336f, -0.319535255f, 0.079132542f, 0.421752572f, -0.310964793f,
+    -0.115517467f, 0.095142797f, 0.074682564f, -0.202843547f, 0.013375819f, 0.161503315f, 0.01629303f, -0.251079768f, -0.107977256f, 0.219803914f, 0.146138877f, -0.335386336f, -0.319535255f, 0.079132512f, 0.421752572f, -0.310964793f,
 };
 
 static const float32_t gru_unidirectional_float_stream_f32_update_gate_input_weights[] = {
@@ -48,7 +48,7 @@ static const float32_t gru_unidirectional_float_stream_f32_reset_gate_hidden_bia
 };
 
 static const float32_t gru_unidirectional_float_stream_f32_candidate_gate_input_weights[] = {
-    0.407314032f, 0.010350822f, 0.301756591f, -0.018031903f, 0.181853503f, 0.227747828f, -0.480828822f, -0.08829283f, -0.340044975f, 0.37707144f, -0.147855431f, -0.08112248f
+    0.407314032f, 1.035082247e-02f, 0.301756591f, -0.018031903f, 0.181853503f, 0.227747828f, -0.480828822f, -0.08829283f, -0.340044975f, 0.37707144f, -0.147855431f, -0.08112248f
 };
 
 static const float32_t gru_unidirectional_float_stream_f32_candidate_gate_hidden_weights[] = {

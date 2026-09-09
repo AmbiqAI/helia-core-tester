@@ -45,7 +45,7 @@ OPERATOR_DESCRIPTOR_PROFILES = {'Abs': 'single_input_unary',
  'DepthwiseConv': 'conv',
  'Dequantize': 'single_input_unary',
  'DynamicUpdateSlice': 'custom',
- 'Fill': 'single_input_unary',
+ 'Fill': 'custom',
  'FullyConnected': 'fully_connected',
  'Gather': 'shape_transform',
  'GatherND': 'shape_transform',
@@ -64,6 +64,7 @@ OPERATOR_DESCRIPTOR_PROFILES = {'Abs': 'single_input_unary',
  'NNActivationFloat': 'single_input_unary',
  'NNActivationS16': 'single_input_unary',
  'PReLU': 'single_input_unary',
+ 'Pack': 'shape_transform',
  'Pad': 'single_input_unary',
  'PReLUScalar': 'single_input_unary',
  'Quantize': 'single_input_unary',
@@ -92,6 +93,7 @@ OPERATOR_DESCRIPTOR_PROFILES = {'Abs': 'single_input_unary',
  'Tanh': 'single_input_unary',
  'Tile': 'shape_transform',
  'Transpose': 'shape_transform',
+ 'Unpack': 'shape_transform',
  'TransposeConv': 'shape_transform',
  'VariableUpdate': 'shape_transform',
  'Where': 'custom'}
@@ -117,11 +119,13 @@ OPERATOR_EXTRA_REQUIRED_FIELDS = {'BroadcastTo': ('output_shape',),
  'Clamp': ('act_min', 'act_max'),
  'Comparison': ('operation',),
  'DynamicUpdateSlice': ('operand_shape', 'update_shape', 'start_indices'),
+ 'Fill': ('output_shape', 'value'),
  'Gather': ('indices_shape',),
  'GatherND': ('indices_shape',),
  'MirrorPad': ('paddings',),
  'Reshape': ('target_shape',),
  'NNActivationFloat': ('activation_type',),
+ 'Pack': ('num_inputs', 'axis'),
  'NNActivationS16': ('activation_type',),
  'PReLUScalar': ('alpha_shape',),
  'Requantize': ('effective_scale_multiplier',
@@ -131,9 +135,10 @@ OPERATOR_EXTRA_REQUIRED_FIELDS = {'BroadcastTo': ('output_shape',),
  'ResizeNearestNeighbor': ('size',),
  'ReverseSequence': ('seq_lengths', 'seq_dim', 'batch_dim'),
  'ScatterNd': ('indices', 'updates'),
- 'Tile': ('multiples',)}
+ 'Tile': ('multiples',),
+ 'Unpack': ('axis',)}
 
-OPERATOR_FIELD_CONSTRAINTS = {'HardSwishCompat': {'activation_dtype': 'S8'}, 'Rsqrt': {'activation_dtype': 'S16'}}
+OPERATOR_FIELD_CONSTRAINTS = {'HardSwishCompat': {'activation_dtype': 'S8'}}
 
 
 def _operator_descriptor_profile(operator: str) -> str:
@@ -187,6 +192,9 @@ def _validate_profile_requirements(
                 f"{operator}{suffix} requires 'scalar_input_value' (single pixel) or "
                 "hint.extras.input_values (one value per pixel, multi-pixel)"
             )
+
+    if operator == "Rsqrt" and desc.get("activation_dtype") not in ("S16", "FP16", "FP32"):
+        raise ValueError("Rsqrt only supports activation_dtype=S16, FP16, FP32")
 
     for field, expected in OPERATOR_FIELD_CONSTRAINTS.get(operator, {}).items():
         if str(desc.get(field, "")).upper() != str(expected).upper():

@@ -315,10 +315,8 @@ def test_f011_half_pixel_downsampling_known_indices():
 
 def test_f011_align_corners_known_indices():
     # in_size=3, out_size=5, align_corners=True: scale = (3-1)/(5-1) = 0.5
-    # scaled = out_idx * 0.5, rounded: 0,0.5->0 or 1(banker's/np.round->0),1,1.5->2,2
-    expected = [
-        int(np.round(i * 0.5)) for i in range(5)
-    ]
+    # scaled = out_idx * 0.5, roundf (ties away from zero): 0, 0.5->1, 1, 1.5->2, 2
+    expected = [0, 1, 1, 2, 2]
     actual = [
         OpResizeNearestNeighbor._nearest_index(i, in_size=3, out_size=5, align_corners=True, half_pixel_centers=False)
         for i in range(5)

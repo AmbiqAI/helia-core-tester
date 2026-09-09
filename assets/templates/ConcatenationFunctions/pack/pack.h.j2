@@ -1,0 +1,35 @@
+#ifndef {{ name|upper }}_PACK_H
+#define {{ name|upper }}_PACK_H
+
+#include <stdint.h>
+// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
+// other translation-unit include that would define them.
+#include <math.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+{% if input_dims_count > 0 %}
+// Shape shared by every input
+static const int32_t {{ name }}_input_shape[] = {
+{{ input_shape_array }}
+};
+{% endif %}
+
+// Output shape (input shape with {{ num_inputs }} inserted at axis {{ axis }})
+static const int32_t {{ name }}_output_shape[] = {
+{{ output_shape_array }}
+};
+
+{% for i in range(num_inputs) %}
+// Input {{ i + 1 }} data (for testing)
+static const {{ input_dtype }} {{ name }}_input{{ i + 1 }}[] = {
+{{ input_data_arrays[i] }}
+};
+{% endfor %}
+
+// Expected output (golden)
+static const {{ output_dtype }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

@@ -1,0 +1,21 @@
+#ifndef {{ name|upper }}_FILL_H
+#define {{ name|upper }}_FILL_H
+
+#include <stdint.h>
+// The fill value and golden may carry NAN/INFINITY, and this header is included
+// ahead of any other translation-unit include that would define them.
+#include <math.h>
+#include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
+
+// Fill value ({{ fill_value_repr }}), held in a static initializer
+static const {{ output_dtype }} {{ name }}_fill_value[1] = {
+{{ fill_value_array }}
+};
+
+// Expected output (golden)
+static const {{ output_dtype }} {{ name }}_expected_output[] = {
+{{ expected_output_array }}
+};
+
+#endif

@@ -464,6 +464,25 @@ void helia_guard_check_at(const char *label, const void *body, size_t body_bytes
         ); \
     } while (0)
 
+/* Bit contracts preserve signed zero and NaN payloads. Refs AmbiqAI/ns-cmsis-nn#295. */
+#define HELIA_VALIDATE_FLOAT_BITS(actual, expected, positive_inf, max_ulp, index, max_reports, failures) \
+    do { \
+        const uint32_t helia_actual = (actual); \
+        const uint32_t helia_expected = (expected); \
+        const uint32_t helia_inf = (positive_inf); \
+        const uint32_t helia_distance = helia_actual > helia_expected \
+            ? helia_actual - helia_expected : helia_expected - helia_actual; \
+        const uint32_t helia_allowed = helia_actual > 0 && helia_actual < helia_inf && \
+            helia_expected > 0 && helia_expected < helia_inf ? (max_ulp) : 0; \
+        if (helia_distance > helia_allowed) { \
+            ++(failures); \
+            if ((failures) <= (max_reports)) { \
+                printf("Mismatch[%d]: exp=0x%lx got=0x%lx\r\n", (int)(index), \
+                       (unsigned long)helia_expected, (unsigned long)helia_actual); \
+            } \
+        } \
+    } while (0)
+
 #define HELIA_VALIDATE_FLOATS(actual, expected, size, atol, rtol, max_reports, failures) \
     HELIA_VALIDATE_FLOATS_MASKED((actual), (expected), NULL, (size), (atol), (rtol), (max_reports), (failures))
 

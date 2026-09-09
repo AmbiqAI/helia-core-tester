@@ -1,0 +1,67 @@
+#include "{{ name }}_max_pool.h"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+{% if requires_kernel_prototype | default(false) %}
+arm_cmsis_nn_status {{ kernel_fn }}(const cmsis_nn_context *ctx,
+                                    const {{ pool_params_type }} *pool_params,
+                                    const cmsis_nn_dims *input_dims,
+                                    const {{ input_dtype }} *src,
+                                    const cmsis_nn_dims *filter_dims,
+                                    const cmsis_nn_dims *output_dims,
+                                    {{ output_dtype }} *dst);
+
+{% endif %}
+{# Declare only the buffers this fault mode actually passes to the kernel so a
+   NULL-substituted buffer never becomes an unused static (-Wunused-variable). #}
+{% if fault != "null_output" %}static {{ output_dtype }} {{ name }}_output[{{ output_dims.n * output_dims.h * output_dims.w * output_dims.c }}];
+{% endif %}{% if buffer_size_max > 0 %}static uint8_t {{ name }}_buffer[{{ buffer_size_max }}];
+{% endif %}
+
+/*
+ * Fault-injection test case: exercises an {{ kernel_fn }}
+ * argument-validation branch. Fault mode: {{ fault }}.
+ */
+static int32_t run_max_pool(void)
+{
+    const cmsis_nn_context ctx = {
+{% if buffer_size_max > 0 %}
+        .buf = {{ name }}_buffer,
+        .size = sizeof({{ name }}_buffer),
+{% else %}
+        .buf = NULL,
+        .size = 0,
+{% endif %}
+    };
+    cmsis_nn_dims input_dims = {{ name }}_input_dims;
+{% if fault == "zero_dim" %}
+    input_dims.n = 0;
+{% elif fault == "negative_dim" %}
+    input_dims.n = -1;
+{% endif %}
+    const {{ input_dtype }} *input_arg = {% if fault == "null_input" %}NULL{% else %}{{ name }}_input{% endif %};
+    {{ output_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};
+
+    return {{ kernel_fn }}(
+        &ctx,
+        &{{ name }}_pool_params,
+        &input_dims,
+        input_arg,
+        &{{ name }}_filter_dims,
+        &{{ name }}_output_dims,
+        output_arg
+    );
+}
+
+int32_t {{ name }}_test_case_run(void)
+{
+    int32_t status = run_max_pool();
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ validation_label | default("Pooling") }}",
+        status,
+        {{ expected_status }}
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(0);
+}
+
+{% include "common/standalone/main.j2" %}

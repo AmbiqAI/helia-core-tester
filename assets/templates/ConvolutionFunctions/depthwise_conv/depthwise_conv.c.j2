@@ -50,6 +50,18 @@ int32_t {{ name }}_run(
         &{{ name }}_output_dims
     );
     {% endif %}
+    // Armed before the capacity check below: an early return there would otherwise leave
+    // these canaries unstamped, and the unconditional check in _test_case_run would
+    // report a fabricated breach instead of the real sizer error (#68).
+    HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
+    {% if kernel_fn == 'arm_depthwise_conv_wrapper_s8' and has_weight_sum %}
+    HELIA_GUARD_ARM({{ name }}_weight_sum_runtime, true /* fully recomputed below: poison-safe */);
+    {% endif %}
+    HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, 0u);
+    // The slack is stamped as wholly unused here so that an early return from the
+    // capacity check below leaves every canary in a checked state; it is re-stamped
+    // with the real size once the context is populated (#68).
+
 
     if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
         return ARM_CMSIS_NN_ARG_ERROR;
@@ -58,7 +70,6 @@ int32_t {{ name }}_run(
     // Initialize context buffer
     // Armed unconditionally: force_no_scratch bypasses {{ name }}_buffer entirely,
     // but guarding/poisoning it here regardless is harmless either way.
-    HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
     {% if force_no_scratch | default(false) %}
     {{ name }}_ctx.buf = NULL;
     {{ name }}_ctx.size = 0;
@@ -70,7 +81,6 @@ int32_t {{ name }}_run(
 
     {% if kernel_fn == 'arm_depthwise_conv_wrapper_s8' and has_weight_sum %}
     // Compute weight sums at runtime when supported; fallback to precomputed values.
-    HELIA_GUARD_ARM({{ name }}_weight_sum_runtime, true /* fully recomputed below: poison-safe */);
     arm_cmsis_nn_status weight_sum_status = arm_depthwise_convolve_weight_sum(
         {{ name }}_weight_sum_runtime,
         NULL,

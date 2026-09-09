@@ -173,6 +173,68 @@ class OperationBase(ABC):
                 )
         return mode
 
+    # Fault kinds a descriptor may request via `fault:`. Each operator lists the
+    # kinds its fault template can inject; an operator with no fault template
+    # keeps the empty default and rejects `fault:` outright.
+    FAULT_KINDS: Tuple[str, ...] = ()
+    EXPECTED_STATUS_VALUES: Tuple[str, ...] = (
+        "ARM_CMSIS_NN_SUCCESS",
+        "ARM_CMSIS_NN_ARG_ERROR",
+        "ARM_CMSIS_NN_NO_IMPL_ERROR",
+        "ARM_CMSIS_NN_FAILURE",
+    )
+
+    def fault_kind(self) -> Optional[str]:
+        """Return the validated `fault:` kind, or None when the descriptor has none."""
+        requested = self.desc.get("fault")
+        if requested is None:
+            return None
+        kind = str(requested).strip().lower()
+        operator = self.desc.get("operator", type(self).__name__)
+        if not kind:
+            raise ValueError(f"fault must name a kind for {operator} descriptor {self.desc.get('name')!r}")
+        if kind not in self.FAULT_KINDS:
+            known = sorted(self.FAULT_KINDS)
+            raise ValueError(
+                f"Unsupported fault {kind!r} for {operator} descriptor {self.desc.get('name')!r}; "
+                + (f"known kinds are {known}" if known else "this operator has no fault cases")
+            )
+        return kind
+
+    def expected_status(self) -> str:
+        """Return the arm_cmsis_nn_status token the kernel call must return."""
+        status = str(self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS")).strip()
+        if status not in self.EXPECTED_STATUS_VALUES:
+            raise ValueError(
+                f"Unsupported expected_status {status!r} for descriptor {self.desc.get('name')!r}; "
+                f"known values are {list(self.EXPECTED_STATUS_VALUES)}"
+            )
+        return status
+
+    def fault_context(self) -> Dict[str, Any]:
+        """Return the template context keys of the `fault:` mechanism (empty without a fault)."""
+        kind = self.fault_kind()
+        if kind is None:
+            return {}
+        return {"fault": kind, "expected_status": self.expected_status()}
+
+    def required_capabilities(self) -> Tuple[str, ...]:
+        """Return the descriptor's `required_capabilities` as lower-case names."""
+        raw = self.desc.get("required_capabilities")
+        if raw is None:
+            return ()
+        if isinstance(raw, str):
+            raw = [raw]
+        return tuple(str(capability).strip().lower() for capability in raw if str(capability).strip())
+
+    def fault_unreachable(self, kind: str, reason: str) -> ValueError:
+        """Build the error for a fault kind whose kernel guard this descriptor cannot reach."""
+        operator = self.desc.get("operator", type(self).__name__)
+        return ValueError(
+            f"Fault {kind!r} is not diagnosed by the kernel for {operator} descriptor "
+            f"{self.desc.get('name')!r}: {reason}"
+        )
+
     def nonfinite_tokens(self) -> Tuple[str, ...]:
         """Return the ordered token names this descriptor's sweep writes."""
         requested = self.desc.get("nonfinite_tokens")
