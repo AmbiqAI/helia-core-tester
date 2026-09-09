@@ -99,8 +99,13 @@ def test_int_template_no_longer_hardcodes_scratch_arithmetic(
     for kernel in INT_KERNELS:
         rendered = _emit(tmp_path, _base_descriptor(checked_in_descriptors, kernel))
         assert "* sizeof(int32_t)" not in rendered
-        assert "malloc(scratch_size);" in rendered
-        assert "malloc(scratch_size_out);" in rendered
+        # The allocation carries guard bytes either side of the scratch (#68), so pin the
+        # sizer feeding malloc rather than the exact expression.
+        assert "malloc((size_t)scratch_size" in rendered or "malloc(scratch_size);" in rendered
+        assert (
+            "malloc((size_t)scratch_size_out" in rendered
+            or "malloc(scratch_size_out);" in rendered
+        )
         # rank feeds the output sizer, so the params must be populated ahead of it.
         assert rendered.index("svdf_params.rank =") < rendered.index(
             f"{kernel}_output_ctx_get_buffer_size(&svdf_params"

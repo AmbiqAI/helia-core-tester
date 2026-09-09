@@ -1,12 +1,16 @@
 #include "{{ name }}_gru_unidirectional.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 {# Declare only the buffers this fault mode actually passes to the kernel:
    a NULL-substituted buffer would otherwise be an unused static
    (-Wunused-variable), which becomes a hard error under -Werror. #}
-{% if fault != "null_output" %}static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
-{% endif %}{% if fault not in ["missing_temp1_prereset", "null_buffers"] %}static {{ data_dtype }} {{ name }}_temp1[{{ hidden_state_size }}];
-{% endif %}{% if fault == "stateful_batch_gt1" %}static {{ data_dtype }} {{ name }}_hidden_state[{{ hidden_state_size }}];
+{% set pass_output = fault != "null_output" %}
+{% set pass_temp1 = fault not in ["missing_temp1_prereset", "null_buffers"] %}
+{% set pass_hidden_state = fault == "stateful_batch_gt1" %}
+{% if pass_output %}{{ helia_guard_declare(data_dtype, name ~ "_output", dst_size) }}
+{% endif %}{% if pass_temp1 %}{{ helia_guard_declare(data_dtype, name ~ "_temp1", hidden_state_size) }}
+{% endif %}{% if pass_hidden_state %}{{ helia_guard_declare(data_dtype, name ~ "_hidden_state", hidden_state_size) }}
 {% endif %}
 
 /*
@@ -56,13 +60,20 @@ static int32_t run_gru(void)
 
 int32_t {{ name }}_test_case_run(void)
 {
-    int32_t status = run_gru();
-    HELIA_VALIDATE_EXPECTED_STATUS(
+{% if pass_output %}    HELIA_GUARD_ARM({{ name }}_output, true /* rejected call must not write it: poison */);
+{% endif %}{% if pass_temp1 %}    HELIA_GUARD_ARM({{ name }}_temp1, true /* pure scratch: poison-safe */);
+{% endif %}{% if pass_hidden_state %}    HELIA_GUARD_ARM({{ name }}_hidden_state, true /* rejected call must not write it: poison */);
+{% endif %}    int32_t status = run_gru();
+    int failures = 0;
+{% if pass_output %}    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("GRU") }} output", failures);
+{% endif %}{% if pass_temp1 %}    HELIA_GUARD_CHECK({{ name }}_temp1, "{{ validation_label | default("GRU") }} temp1", failures);
+{% endif %}{% if pass_hidden_state %}    HELIA_GUARD_CHECK({{ name }}_hidden_state, "{{ validation_label | default("GRU") }} hidden_state", failures);
+{% endif %}    HELIA_VALIDATE_EXPECTED_STATUS(
         "{{ validation_label | default("GRU") }}",
         status,
         {{ expected_status | default("ARM_CMSIS_NN_SUCCESS") }}
     );
-    HELIA_VALIDATE_RETURN_FAILURES(0);
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 
 {% include "common/standalone/main.j2" %}

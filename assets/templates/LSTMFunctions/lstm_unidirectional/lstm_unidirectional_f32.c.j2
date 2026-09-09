@@ -1,6 +1,7 @@
 #include "{{ name }}_lstm_unidirectional.h"
 {% from "common/standalone/validation.j2" import validation_outputs with context %}
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 {% if temp_sizers_available %}
 /*
@@ -13,12 +14,14 @@
  * runs. Refs AmbiqAI/ns-cmsis-nn#377.
  */
 {% endif %}
-static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
+{{ helia_guard_declare(data_dtype, name ~ "_output", dst_size) }}
 {% if not temp_sizers_available %}
-static {{ data_dtype }} {{ name }}_temp1[{{ cell_state_size }}];
-static {{ data_dtype }} {{ name }}_temp2[{{ cell_state_size }}];
+{{ helia_guard_declare(data_dtype, name ~ "_temp1", cell_state_size) }}
+{{ helia_guard_declare(data_dtype, name ~ "_temp2", cell_state_size) }}
 {% endif %}
-static {{ data_dtype }} {{ name }}_cell_state[{{ cell_state_size }}];
+{# cell_state is zero-init on declaration, which is the real recurrent
+   initial state this kernel expects: guarded but not poisoned. #}
+{{ helia_guard_declare(data_dtype, name ~ "_cell_state", cell_state_size) }}
 {% if temp_sizers_available %}
 
 static int {{ name }}_check_temp_sizers(void)
@@ -57,6 +60,13 @@ static int {{ name }}_check_temp_sizers(void)
 
 static int32_t run_lstm(void)
 {
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
+    {% if not temp_sizers_available %}
+    HELIA_GUARD_ARM({{ name }}_temp1, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_ARM({{ name }}_temp2, true /* pure scratch: poison to catch read-before-write */);
+    {% endif %}
+    HELIA_GUARD_ARM({{ name }}_cell_state, false /* zero-init is the real recurrent initial state */);
+
     const {{ lstm_params_type }} params = {
         .time_major = {{ time_major_literal }},
         .batch_size = {{ batch_size }},
@@ -115,9 +125,15 @@ int32_t {{ name }}_test_case_run(void)
 
 {% endif %}
     int32_t status = run_lstm();
+    int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("LSTM") }} output", failures);
+    {% if not temp_sizers_available %}
+    HELIA_GUARD_CHECK({{ name }}_temp1, "{{ validation_label | default("LSTM") }} temp1", failures);
+    HELIA_GUARD_CHECK({{ name }}_temp2, "{{ validation_label | default("LSTM") }} temp2", failures);
+    {% endif %}
+    HELIA_GUARD_CHECK({{ name }}_cell_state, "{{ validation_label | default("LSTM") }} cell_state", failures);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);
 
-    int failures = 0;
 {{ validation_outputs(validation_mode_token | default("FLOAT"), validation_tolerance | default(1), dst_size, validation_report_limit | default(8)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

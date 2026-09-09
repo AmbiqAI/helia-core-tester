@@ -297,21 +297,24 @@ _CASES = [
             "lstm_temp_expected_bytes_flipped": 32,
         },
         "arm_lstm_unidirectional_s8_temp1_get_buffer_size",
-        "static int8_t buffer1[LSTM_BUFFER_SIZE];",
+        # Buffers are guard-wrapped (issue #68); the array itself is the
+        # struct's "body" field, so a legacy-sized buffer1 is pinned by its
+        # element type/count rather than a plain "static T name[N];" line.
+        "int8_t body[LSTM_BUFFER_SIZE];",
     ),
     (
         "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.c.j2",
         _float_lstm_context,
         {},
         "arm_lstm_unidirectional_f32_temp1_get_buffer_size",
-        "static float case_x_temp1[5];",
+        "float body[5];",
     ),
     (
         "LSTMFunctions/gru_unidirectional/gru_unidirectional.c.j2",
         _gru_context,
         {},
         "arm_gru_unidirectional_f32_temp1_get_buffer_size",
-        "static float32_t case_x_temp1[8];",
+        "float32_t body[8];",
     ),
 ]
 
@@ -362,10 +365,27 @@ def test_detected_int_lstm_sizes_buffers_from_expected_constant() -> None:
     )
     assert "#define LSTM_TEMP_EXPECTED_BYTES 16" in rendered
     assert "#define LSTM_TEMP_FLIPPED_EXPECTED_BYTES 32" in rendered
-    assert "static int16_t buffer1[LSTM_TEMP_EXPECTED_BYTES / 2];" in rendered
-    assert "static int8_t buffer1[LSTM_BUFFER_SIZE];" not in rendered
+    # Buffers are guard-wrapped (issue #68): buffer1 is `buffer1_guard.body`,
+    # sized by the block immediately preceding its `#define buffer1 (...)`.
+    assert (
+        "int16_t body[LSTM_TEMP_EXPECTED_BYTES / 2];\n"
+        "    uint8_t tail[HELIA_GUARD_BYTES];\n"
+        "} buffer1_guard;\n"
+        "#define buffer1 (buffer1_guard.body)"
+    ) in rendered
+    assert (
+        "int8_t body[LSTM_BUFFER_SIZE];\n"
+        "    uint8_t tail[HELIA_GUARD_BYTES];\n"
+        "} buffer1_guard;\n"
+        "#define buffer1 (buffer1_guard.body)"
+    ) not in rendered
     # cell_state (buffer3) stays on the legacy allocation: out of the sizers' scope.
-    assert "static int8_t buffer3[LSTM_BUFFER_SIZE];" in rendered
+    assert (
+        "int8_t body[LSTM_BUFFER_SIZE];\n"
+        "    uint8_t tail[HELIA_GUARD_BYTES];\n"
+        "} buffer3_guard;\n"
+        "#define buffer3 (buffer3_guard.body)"
+    ) in rendered
     assert "temp1_bytes_flipped_time_major" in rendered
     assert "temp1_capacity_bytes" in rendered
 
@@ -403,7 +423,13 @@ def test_detected_gru_pre_reset_sizes_temp1_from_sizer_contract() -> None:
             gru_temp1_expected_bytes_flipped=0,
         ),
     )
-    # hidden_size elements, not the legacy batch*hidden heuristic.
-    assert "static float32_t case_x_temp1[4];" in rendered
+    # hidden_size elements, not the legacy batch*hidden heuristic. Guard-wrapped
+    # (issue #68): temp1 is case_x_temp1_guard.body.
+    assert (
+        "float32_t body[4];\n"
+        "    uint8_t tail[HELIA_GUARD_BYTES];\n"
+        "} case_x_temp1_guard;\n"
+        "#define case_x_temp1 (case_x_temp1_guard.body)"
+    ) in rendered
     assert ".temp1 = case_x_temp1," in rendered
     assert "temp1_capacity_bytes" in rendered

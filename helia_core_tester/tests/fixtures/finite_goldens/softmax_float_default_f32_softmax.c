@@ -4,8 +4,14 @@
 #include <stdint.h>
 #include "test_runtime/helia_test_runtime.h"
 
+
 #define SOFTMAX_FLOAT_DEFAULT_F32_OUTPUT_SIZE (1 * 4 * 4 * 3)
-static float softmax_float_default_f32_output[SOFTMAX_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float body[SOFTMAX_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} softmax_float_default_f32_output_guard;
+#define softmax_float_default_f32_output (softmax_float_default_f32_output_guard.body)
 
 int32_t softmax_float_default_f32_run(
     const float* __restrict input,
@@ -23,10 +29,12 @@ int32_t softmax_float_default_f32_run(
 
 int32_t softmax_float_default_f32_test_case_run(void)
 {
+    HELIA_GUARD_ARM(softmax_float_default_f32_output, false /* real output, not scratch: don't poison */);
     int32_t status = softmax_float_default_f32_run(softmax_float_default_f32_input, softmax_float_default_f32_output);
+    int failures = 0;
+    HELIA_GUARD_CHECK(softmax_float_default_f32_output, "Softmax output", failures);
     HELIA_VALIDATE_STATUS("Softmax", status);
 
-    int failures = 0;
     HELIA_VALIDATE_OUTPUTS(
         FLOAT,
         softmax_float_default_f32_output,

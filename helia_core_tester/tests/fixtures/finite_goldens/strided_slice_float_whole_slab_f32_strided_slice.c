@@ -4,8 +4,14 @@
 #include <stdint.h>
 #include "test_runtime/helia_test_runtime.h"
 
+
 #define STRIDED_SLICE_FLOAT_WHOLE_SLAB_F32_OUTPUT_SIZE (1 * 3 * 4 * 2)
-static float strided_slice_float_whole_slab_f32_output[STRIDED_SLICE_FLOAT_WHOLE_SLAB_F32_OUTPUT_SIZE];
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float body[STRIDED_SLICE_FLOAT_WHOLE_SLAB_F32_OUTPUT_SIZE];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} strided_slice_float_whole_slab_f32_output_guard;
+#define strided_slice_float_whole_slab_f32_output (strided_slice_float_whole_slab_f32_output_guard.body)
 
 int32_t strided_slice_float_whole_slab_f32_run(
     const float* __restrict input,
@@ -26,10 +32,12 @@ int32_t strided_slice_float_whole_slab_f32_run(
 
 int32_t strided_slice_float_whole_slab_f32_test_case_run(void)
 {
+    HELIA_GUARD_ARM(strided_slice_float_whole_slab_f32_output, false /* real output, not scratch: don't poison */);
     int32_t status = strided_slice_float_whole_slab_f32_run(strided_slice_float_whole_slab_f32_input, strided_slice_float_whole_slab_f32_output);
+    int failures = 0;
+    HELIA_GUARD_CHECK(strided_slice_float_whole_slab_f32_output, "StridedSlice output", failures);
     HELIA_VALIDATE_STATUS("StridedSlice", status);
 
-    int failures = 0;
     HELIA_VALIDATE_OUTPUTS(
         FLOAT,
         strided_slice_float_whole_slab_f32_output,

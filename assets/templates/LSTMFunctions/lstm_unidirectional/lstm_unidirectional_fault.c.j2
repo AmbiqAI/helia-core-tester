@@ -1,15 +1,18 @@
 #include "{{ name }}_lstm_unidirectional.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 {# Issue #56: port of the GRU fault-injection pattern
    (gru_unidirectional_fault.c.j2) to LSTM. Declare only the buffers this
    fault mode actually passes to the kernel: a NULL-substituted buffer would
    otherwise be an unused static (-Wunused-variable), which becomes a hard
    error under -Werror. #}
-{% if fault != "null_output" %}static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
-{% endif %}{% if fault != "null_buffers" %}static {{ data_dtype }} {{ name }}_temp1[{{ cell_state_size }}];
-static {{ data_dtype }} {{ name }}_temp2[{{ cell_state_size }}];
-static {{ data_dtype }} {{ name }}_cell_state[{{ cell_state_size }}];
+{% set pass_output = fault != "null_output" %}
+{% set pass_buffers = fault != "null_buffers" %}
+{% if pass_output %}{{ helia_guard_declare(data_dtype, name ~ "_output", dst_size) }}
+{% endif %}{% if pass_buffers %}{{ helia_guard_declare(data_dtype, name ~ "_temp1", cell_state_size) }}
+{{ helia_guard_declare(data_dtype, name ~ "_temp2", cell_state_size) }}
+{{ helia_guard_declare(data_dtype, name ~ "_cell_state", cell_state_size) }}
 {% endif %}
 
 /*
@@ -68,13 +71,22 @@ static int32_t run_lstm(void)
 
 int32_t {{ name }}_test_case_run(void)
 {
-    int32_t status = run_lstm();
-    HELIA_VALIDATE_EXPECTED_STATUS(
+{% if pass_output %}    HELIA_GUARD_ARM({{ name }}_output, true /* rejected call must not write it: poison */);
+{% endif %}{% if pass_buffers %}    HELIA_GUARD_ARM({{ name }}_temp1, true /* pure scratch: poison-safe */);
+    HELIA_GUARD_ARM({{ name }}_temp2, true /* pure scratch: poison-safe */);
+    HELIA_GUARD_ARM({{ name }}_cell_state, true /* rejected call must not write it: poison */);
+{% endif %}    int32_t status = run_lstm();
+    int failures = 0;
+{% if pass_output %}    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("LSTM") }} output", failures);
+{% endif %}{% if pass_buffers %}    HELIA_GUARD_CHECK({{ name }}_temp1, "{{ validation_label | default("LSTM") }} temp1", failures);
+    HELIA_GUARD_CHECK({{ name }}_temp2, "{{ validation_label | default("LSTM") }} temp2", failures);
+    HELIA_GUARD_CHECK({{ name }}_cell_state, "{{ validation_label | default("LSTM") }} cell_state", failures);
+{% endif %}    HELIA_VALIDATE_EXPECTED_STATUS(
         "{{ validation_label | default("LSTM") }}",
         status,
         {{ expected_status | default("ARM_CMSIS_NN_SUCCESS") }}
     );
-    HELIA_VALIDATE_RETURN_FAILURES(0);
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 
 {% include "common/standalone/main.j2" %}

@@ -5,3 +5,33 @@
 {% endif %}
 #include "test_runtime/helia_test_runtime.h"
 
+{#
+  helia_guard_declare(type, ident, count) -- issue #68 buffer-overrun guards.
+
+  Wraps a kernel-write-target buffer (output, scratch, weight-sum, context,
+  persistent state) in a fixed canary region on both sides, and #defines the
+  buffer's own name to read through to the guarded body so every existing
+  reference to it (assignment, indexing, `&ident`, passing to a function)
+  keeps compiling completely unchanged -- only the declaration line itself
+  needs to change to opt a buffer into overrun detection.
+
+  Must be a Jinja macro, not a C one: it emits a #define, and the C
+  preprocessor does not rescan macro-expanded text for directives. Each
+  template that uses it imports it explicitly:
+    {% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
+  (a plain {% include %} would render this file's macro *definitions*
+  without making them callable in the includer's own scope).
+
+  Arm with HELIA_GUARD_ARM(ident, poison_body) before the kernel call and
+  verify with HELIA_GUARD_CHECK(ident, label, failures) after -- both plain
+  C macros in helia_test_runtime.h, since neither needs to emit a #define.
+#}
+{% macro helia_guard_declare(type, ident, count) -%}
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    {{ type }} body[{{ count }}];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} {{ ident }}_guard;
+#define {{ ident }} ({{ ident }}_guard.body)
+{%- endmacro %}
+

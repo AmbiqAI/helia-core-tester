@@ -3,11 +3,37 @@
 #include <stdint.h>
 #include "test_runtime/helia_test_runtime.h"
 
-static float lstm_unidirectional_float_stream_f32_output[16];
-static float lstm_unidirectional_float_stream_f32_temp1[4];
-static float lstm_unidirectional_float_stream_f32_temp2[4];
-static float lstm_unidirectional_float_stream_f32_cell_state[4];
-static float lstm_unidirectional_float_stream_f32_hidden_state[4];
+
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float body[16];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} lstm_unidirectional_float_stream_f32_output_guard;
+#define lstm_unidirectional_float_stream_f32_output (lstm_unidirectional_float_stream_f32_output_guard.body)
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float body[4];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} lstm_unidirectional_float_stream_f32_temp1_guard;
+#define lstm_unidirectional_float_stream_f32_temp1 (lstm_unidirectional_float_stream_f32_temp1_guard.body)
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float body[4];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} lstm_unidirectional_float_stream_f32_temp2_guard;
+#define lstm_unidirectional_float_stream_f32_temp2 (lstm_unidirectional_float_stream_f32_temp2_guard.body)
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float body[4];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} lstm_unidirectional_float_stream_f32_cell_state_guard;
+#define lstm_unidirectional_float_stream_f32_cell_state (lstm_unidirectional_float_stream_f32_cell_state_guard.body)
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float body[4];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} lstm_unidirectional_float_stream_f32_hidden_state_guard;
+#define lstm_unidirectional_float_stream_f32_hidden_state (lstm_unidirectional_float_stream_f32_hidden_state_guard.body)
 
 /*
  * Streaming/stateful test case: replays the full sequence across
@@ -24,6 +50,9 @@ static float lstm_unidirectional_float_stream_f32_hidden_state[4];
  */
 static int32_t run_lstm_chunk(int32_t chunk_time_steps, int32_t input_offset, int32_t output_offset)
 {
+    HELIA_GUARD_ARM(lstm_unidirectional_float_stream_f32_temp1, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_ARM(lstm_unidirectional_float_stream_f32_temp2, true /* pure scratch: poison to catch read-before-write */);
+
     const cmsis_nn_lstm_params_f32 params = {
         .time_major = 0,
         .batch_size = 1,
@@ -83,12 +112,40 @@ int32_t lstm_unidirectional_float_stream_f32_test_case_run(void)
     }
 
     int32_t status;
+    int failures = 0;
+    /* Canaries only, no poison: output, cell_state and hidden_state carry
+     * real data across chunks. Re-stamped per chunk so a breach is attributed
+     * to the chunk that caused it and reported once. */
+    HELIA_GUARD_ARM(lstm_unidirectional_float_stream_f32_output, false);
+    HELIA_GUARD_ARM(lstm_unidirectional_float_stream_f32_cell_state, false);
+    HELIA_GUARD_ARM(lstm_unidirectional_float_stream_f32_hidden_state, false);
     status = run_lstm_chunk(2, 0, 0);
+    // Checked before the status validator can return, and before the next
+    // chunk's run_lstm_chunk() re-arms (re-poisons) temp1/temp2 and erases a
+    // breach.
+    HELIA_GUARD_CHECK(lstm_unidirectional_float_stream_f32_temp1, "Lstmunidirectional temp1 (chunk 0)", failures);
+    HELIA_GUARD_CHECK(lstm_unidirectional_float_stream_f32_temp2, "Lstmunidirectional temp2 (chunk 0)", failures);
+    HELIA_GUARD_CHECK(lstm_unidirectional_float_stream_f32_output, "Lstmunidirectional output (chunk 0)", failures);
+    HELIA_GUARD_CHECK(lstm_unidirectional_float_stream_f32_cell_state, "Lstmunidirectional cell_state (chunk 0)", failures);
+    HELIA_GUARD_CHECK(lstm_unidirectional_float_stream_f32_hidden_state, "Lstmunidirectional hidden_state (chunk 0)", failures);
     HELIA_VALIDATE_STATUS("Lstmunidirectional (chunk 0)", status);
+    /* Canaries only, no poison: output, cell_state and hidden_state carry
+     * real data across chunks. Re-stamped per chunk so a breach is attributed
+     * to the chunk that caused it and reported once. */
+    HELIA_GUARD_ARM(lstm_unidirectional_float_stream_f32_output, false);
+    HELIA_GUARD_ARM(lstm_unidirectional_float_stream_f32_cell_state, false);
+    HELIA_GUARD_ARM(lstm_unidirectional_float_stream_f32_hidden_state, false);
     status = run_lstm_chunk(2, 6, 8);
+    // Checked before the status validator can return, and before the next
+    // chunk's run_lstm_chunk() re-arms (re-poisons) temp1/temp2 and erases a
+    // breach.
+    HELIA_GUARD_CHECK(lstm_unidirectional_float_stream_f32_temp1, "Lstmunidirectional temp1 (chunk 1)", failures);
+    HELIA_GUARD_CHECK(lstm_unidirectional_float_stream_f32_temp2, "Lstmunidirectional temp2 (chunk 1)", failures);
+    HELIA_GUARD_CHECK(lstm_unidirectional_float_stream_f32_output, "Lstmunidirectional output (chunk 1)", failures);
+    HELIA_GUARD_CHECK(lstm_unidirectional_float_stream_f32_cell_state, "Lstmunidirectional cell_state (chunk 1)", failures);
+    HELIA_GUARD_CHECK(lstm_unidirectional_float_stream_f32_hidden_state, "Lstmunidirectional hidden_state (chunk 1)", failures);
     HELIA_VALIDATE_STATUS("Lstmunidirectional (chunk 1)", status);
 
-    int failures = 0;
     HELIA_VALIDATE_OUTPUTS(
         FLOAT,
         lstm_unidirectional_float_stream_f32_output,
