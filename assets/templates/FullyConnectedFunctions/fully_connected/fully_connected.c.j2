@@ -36,7 +36,11 @@ int32_t {{ name }}_run(
     );
     {% elif kernel_fn == 'arm_fully_connected_s4' %}
     {% set sizer_fn = none %}
-    int32_t required_buffer_size = 0;
+    // No declaration here. This arm calls no sizer, and its context arm below sets a null
+    // buffer and a zero size without consulting one, so the variable the other arms declare
+    // would be unread. Before #133 the capacity comparison read it unconditionally, which is
+    // what kept it live; now that the checks are gated on a sizer actually having been
+    // called, declaring it here is an unused variable and -Wunused-variable is on.
     {% elif quant_params.per_channel and output_dtype == 'int16_t' %}
     {% set sizer_fn = 'arm_fully_connected_per_channel_s16_get_buffer_size' %}
     // For per-channel S16, use per_channel buffer size function

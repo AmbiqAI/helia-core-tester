@@ -207,9 +207,13 @@ static void convolve_float_default_f32_benchmark_run(void)
     // sizer; this reports the skip and runs nothing (#133).
     //
     // What this still does not do is fail the case. A benchmark reports cycles, not a
-    // verdict, and helia_benchmark_run() has no failure channel to carry one, so the
-    // run ends with zero failures either way. The non-benchmark run of the same case is
-    // what turns a bad sizer answer into a verdict.
+    // verdict, and helia_benchmark_run() has no failure channel to carry one, so the C
+    // failure counter stays zero and main.j2 finishes with zero either way. Note that is
+    // a statement about the counter, not about the report: this output still carries the
+    // marker the failing check printed, and if a benchmark capture were ever fed to
+    // TestResultParser it would be classified a sizer failure. No path does that today.
+    // The non-benchmark run of the same case is what turns a bad sizer answer into a
+    // verdict.
     if (convolve_float_default_f32_bench_init() != ARM_CMSIS_NN_SUCCESS) {
         printf("[BENCH] convolve_float_default_f32 skipped: scratch sizer rejected before the context was populated\r\n");
         return;

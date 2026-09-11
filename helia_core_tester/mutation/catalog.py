@@ -151,6 +151,19 @@ Grounding of the v1 entries:
                            Instrumenting it would be dead template text, so it
                            is left alone and there is no sizer for a mutant to
                            target.
+                         * Two mutants in the class answer a gigabyte rather
+                           than the negative sentinel, because the capacity
+                           check needs its own sabotage: the negative-sentinel
+                           mutants are all caught one line earlier, by the sign
+                           check, so they prove nothing about it. They are
+                           conv_sizer_over_capacity and
+                           avgpool_sizer_over_capacity. Both are killed on main
+                           as well as on the branch, because the comparison the
+                           FITS macro replaces already caught an oversized
+                           answer; they are a no-regression control rather than
+                           evidence of new detection. The FITS half has mutants
+                           for two of its six call sites, which is deliberate:
+                           a third would re-prove the same macro.
                          * An under-reporting sizer -- one that answers a few
                            bytes short -- is NOT detectable by this work and is
                            deliberately not catalogued: the answer stays
