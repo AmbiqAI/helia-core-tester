@@ -65,16 +65,16 @@ int32_t transpose_conv_float_default_f32_run(
     // with the real size once the context is populated (#68).
 
 
-    if (required_buffer_size > TRANSPOSE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX) {
-        printf("Buffer size error: required=%d > max=%d\r\n", required_buffer_size, TRANSPOSE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
-    if (reverse_required_buffer_size > TRANSPOSE_CONV_FLOAT_DEFAULT_F32_REVERSE_CONV_CTX_SIZE) {
-        printf("Reverse buffer size error: required=%d > max=%d\r\n",
-               reverse_required_buffer_size,
-               TRANSPOSE_CONV_FLOAT_DEFAULT_F32_REVERSE_CONV_CTX_SIZE);
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // The sizer's answer is checked before it becomes a context size (#133). A negative
+    // answer is the documented out-of-range sentinel and never a usable size; an answer
+    // above this case's static means our generation-time bound and the shipped kernel
+    // disagree. They are separate failures because they have separate owners.
+    HELIA_VALIDATE_SIZER("arm_transpose_conv_f32_get_buffer_size", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("arm_transpose_conv_f32_get_buffer_size", required_buffer_size, TRANSPOSE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
+    // The reverse sizer's answer is discarded in favour of a compile-time size, so a negative
+    // return here was previously invisible (#133).
+    HELIA_VALIDATE_SIZER("arm_transpose_conv_f32_get_reverse_conv_buffer_size", reverse_required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("arm_transpose_conv_f32_get_reverse_conv_buffer_size", reverse_required_buffer_size, TRANSPOSE_CONV_FLOAT_DEFAULT_F32_REVERSE_CONV_CTX_SIZE);
 
     // Initialize context buffer
     transpose_conv_float_default_f32_ctx.buf = transpose_conv_float_default_f32_buffer;

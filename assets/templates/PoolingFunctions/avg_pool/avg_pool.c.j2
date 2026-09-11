@@ -43,6 +43,15 @@ int32_t {{ name }}_run(
     // of leaving its canary unstamped whenever kernel_get_buffer_size_fn
     // is absent.
     HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, 0u);
+    // Stamped as wholly unused here, and re-stamped with the real size once the context is
+    // populated. It matters in the renderings that call a sizer: an early return from the
+    // checks below would otherwise leave this canary poisoned, and the unconditional check
+    // in _test_case_run would read that poison and report a fabricated overrun, which the
+    // report parser classifies ahead of the sizer failure that actually occurred (#68).
+    // In the rendering with no sizer there is no early return and this pre-stamp is
+    // redundant, overwritten two statements later; it is emitted unconditionally to keep
+    // this in lockstep with the arm above rather than to guard anything there.
     {% endif %}
     {% if kernel_get_buffer_size_fn %}
     // Calculate required buffer size (for average pooling)
@@ -51,10 +60,12 @@ int32_t {{ name }}_run(
         {{ name }}_input_dims.c     // input channels
     );
 
-    if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
-        printf("Buffer size error: required=%d > max=%d\r\n", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // The sizer's answer is checked before it becomes a context size (#133). A negative
+    // answer is the documented out-of-range sentinel and never a usable size; an answer
+    // above this case's static means our generation-time bound and the shipped kernel
+    // disagree. They are separate failures because they have separate owners.
+    HELIA_VALIDATE_SIZER("{{ kernel_get_buffer_size_fn }}", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("{{ kernel_get_buffer_size_fn }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
 
     // Initialize context buffer
     {{ name }}_ctx.buf = {{ name }}_buffer;

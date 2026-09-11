@@ -38,6 +38,8 @@ extern "C" {
 /* ---------------------------------------------------------------------- */
 
 void helia_test_platform_init(void);
+void helia_test_sizer_invalid(const char *label, long long value);
+void helia_test_sizer_over_capacity(const char *label, long long value, long long capacity);
 void helia_test_finish(int32_t failures);
 
 /* ---------------------------------------------------------------------- */
@@ -259,6 +261,38 @@ void helia_guard_check_at(const char *label, const void *body, size_t body_bytes
                 return helia_test_status_failure((label), helia_status); \
             } \
             return helia_test_expected_status_failure((label), helia_status, helia_expected_status); \
+        } \
+    } while (0)
+
+/*
+ * Scratch-sizer answers (#133). Every *_get_buffer_size() documents a negative
+ * return as the out-of-range sentinel and tells the caller to test for it. The
+ * harness only ever compared the answer against the static it had allocated,
+ * and a negative number is not larger than anything, so the sentinel passed
+ * that check and became the context size. Most kernels never read that field,
+ * so the case then passed while reporting nothing at all.
+ *
+ * Two distinct failures, deliberately not sharing a marker. A negative answer
+ * is the kernel's defect. An answer larger than the static is our defect: the
+ * generation-time bound that sized the buffer disagrees with the shipped
+ * kernel. Reporting both as one error type is what made them indistinguishable.
+ */
+#define HELIA_VALIDATE_SIZER(label, value) \
+    do { \
+        long long helia_sizer_value = (long long)(value); \
+        if (helia_sizer_value < 0) { \
+            helia_test_sizer_invalid((label), helia_sizer_value); \
+            return ARM_CMSIS_NN_ARG_ERROR; \
+        } \
+    } while (0)
+
+#define HELIA_VALIDATE_SIZER_FITS(label, value, capacity) \
+    do { \
+        long long helia_sizer_fits_value = (long long)(value); \
+        long long helia_sizer_fits_capacity = (long long)(capacity); \
+        if (helia_sizer_fits_value > helia_sizer_fits_capacity) { \
+            helia_test_sizer_over_capacity((label), helia_sizer_fits_value, helia_sizer_fits_capacity); \
+            return ARM_CMSIS_NN_ARG_ERROR; \
         } \
     } while (0)
 

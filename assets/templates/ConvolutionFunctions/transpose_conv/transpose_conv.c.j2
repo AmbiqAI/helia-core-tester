@@ -41,6 +41,7 @@ int32_t {{ name }}_run(
         &{{ name }}_filter_dims,
         &{{ name }}_output_dims
     );
+    {% set reverse_sizer_fn = kernel_get_reverse_buffer_size_fn %}
     int32_t reverse_required_buffer_size = {{ kernel_get_reverse_buffer_size_fn }}(
         &{{ name }}_transpose_conv_params,
         &{{ name }}_input_dims,
@@ -53,6 +54,7 @@ int32_t {{ name }}_run(
         &{{ name }}_filter_dims,
         &{{ name }}_output_dims
     );
+    {% set reverse_sizer_fn = 'arm_transpose_conv_s8_get_reverse_conv_buffer_size' %}
     int32_t reverse_required_buffer_size = arm_transpose_conv_s8_get_reverse_conv_buffer_size(
         &{{ name }}_transpose_conv_params,
         &{{ name }}_input_dims,
@@ -73,16 +75,16 @@ int32_t {{ name }}_run(
     // with the real size once the context is populated (#68).
 
 
-    if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
-        printf("Buffer size error: required=%d > max=%d\r\n", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
-    if (reverse_required_buffer_size > {{ name|upper }}_REVERSE_CONV_CTX_SIZE) {
-        printf("Reverse buffer size error: required=%d > max=%d\r\n",
-               reverse_required_buffer_size,
-               {{ name|upper }}_REVERSE_CONV_CTX_SIZE);
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // The sizer's answer is checked before it becomes a context size (#133). A negative
+    // answer is the documented out-of-range sentinel and never a usable size; an answer
+    // above this case's static means our generation-time bound and the shipped kernel
+    // disagree. They are separate failures because they have separate owners.
+    HELIA_VALIDATE_SIZER("{{ kernel_get_buffer_size_fn }}", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("{{ kernel_get_buffer_size_fn }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
+    // The reverse sizer's answer is discarded in favour of a compile-time size, so a negative
+    // return here was previously invisible (#133).
+    HELIA_VALIDATE_SIZER("{{ reverse_sizer_fn }}", reverse_required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("{{ reverse_sizer_fn }}", reverse_required_buffer_size, {{ name|upper }}_REVERSE_CONV_CTX_SIZE);
 
     // Initialize context buffer
     {{ name }}_ctx.buf = {{ name }}_buffer;

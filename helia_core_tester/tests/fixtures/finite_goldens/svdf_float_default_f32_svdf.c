@@ -36,18 +36,25 @@ static int32_t run_svdf(void)
     // kernel's own sizers (issue #71).
     const int32_t scratch_input_bytes = arm_svdf_f32_input_ctx_get_buffer_size(&svdf_float_default_f32_input_dims, &svdf_float_default_f32_weights_feature_dims);
     const int32_t scratch_output_bytes = arm_svdf_f32_output_ctx_get_buffer_size(&svdf_float_default_f32_svdf_params, &svdf_float_default_f32_input_dims, &svdf_float_default_f32_weights_feature_dims);
-    if (scratch_input_bytes < 0 || scratch_input_bytes > (int32_t)sizeof(svdf_float_default_f32_scratch_input) ||
-        scratch_output_bytes < 0 || scratch_output_bytes > (int32_t)sizeof(svdf_float_default_f32_scratch_output))
-    {
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
-    cmsis_nn_context input_ctx = {.buf = svdf_float_default_f32_scratch_input, .size = scratch_input_bytes};
-    cmsis_nn_context output_ctx = {.buf = svdf_float_default_f32_scratch_output, .size = scratch_output_bytes};
-
+    // Armed before the sizer checks below, not after. _test_case_run checks all four of
+    // these canaries unconditionally once run_svdf returns, so an early return from a
+    // check would otherwise leave them zero-initialised and report four fabricated
+    // breaches. The parser classifies a guard breach ahead of a sizer failure, so that
+    // would hide the very classification this change adds (#68, #133).
     HELIA_GUARD_ARM(svdf_float_default_f32_state, false /* recurrent state seeded below: don't poison */);
     HELIA_GUARD_ARM(svdf_float_default_f32_scratch_input, true /* pure scratch: poison to catch read-before-write */);
     HELIA_GUARD_ARM(svdf_float_default_f32_scratch_output, true /* pure scratch: poison to catch read-before-write */);
     HELIA_GUARD_ARM(svdf_float_default_f32_output, false /* real output, not scratch: don't poison */);
+
+    // One condition previously collapsed four distinct answers into one silent return, so
+    // the report could not say which sizer answered or whether the fault was the kernel's
+    // (a negative sentinel) or ours (a static too small for the answer). Refs #133.
+    HELIA_VALIDATE_SIZER("arm_svdf_f32_input_ctx_get_buffer_size", scratch_input_bytes);
+    HELIA_VALIDATE_SIZER_FITS("arm_svdf_f32_input_ctx_get_buffer_size", scratch_input_bytes, (int32_t)sizeof(svdf_float_default_f32_scratch_input));
+    HELIA_VALIDATE_SIZER("arm_svdf_f32_output_ctx_get_buffer_size", scratch_output_bytes);
+    HELIA_VALIDATE_SIZER_FITS("arm_svdf_f32_output_ctx_get_buffer_size", scratch_output_bytes, (int32_t)sizeof(svdf_float_default_f32_scratch_output));
+    cmsis_nn_context input_ctx = {.buf = svdf_float_default_f32_scratch_input, .size = scratch_input_bytes};
+    cmsis_nn_context output_ctx = {.buf = svdf_float_default_f32_scratch_output, .size = scratch_output_bytes};
 
     for (int i = 0; i < 12; ++i)
     {

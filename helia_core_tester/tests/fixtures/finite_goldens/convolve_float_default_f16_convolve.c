@@ -109,9 +109,12 @@ int32_t convolve_float_default_f16_run(
     // with the real size once the context is populated (#68).
 
 
-    if (required_buffer_size > CONVOLVE_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX) {
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // The sizer's answer is checked before it becomes a context size (#133). A negative
+    // answer is the documented out-of-range sentinel and never a usable size; an answer
+    // above this case's static means our generation-time bound and the shipped kernel
+    // disagree. They are separate failures because they have separate owners.
+    HELIA_VALIDATE_SIZER("arm_convolve_f16_get_buffer_size", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("arm_convolve_f16_get_buffer_size", required_buffer_size, CONVOLVE_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX);
 
     // Initialize context buffer
     convolve_float_default_f16_ctx.buf = convolve_float_default_f16_buffer;
@@ -160,9 +163,12 @@ static int32_t convolve_float_default_f16_bench_init(void)
     // with the real size once the context is populated (#68).
 
 
-    if (required_buffer_size > CONVOLVE_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX) {
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // The sizer's answer is checked before it becomes a context size (#133). A negative
+    // answer is the documented out-of-range sentinel and never a usable size; an answer
+    // above this case's static means our generation-time bound and the shipped kernel
+    // disagree. They are separate failures because they have separate owners.
+    HELIA_VALIDATE_SIZER("arm_convolve_f16_get_buffer_size", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("arm_convolve_f16_get_buffer_size", required_buffer_size, CONVOLVE_FLOAT_DEFAULT_F16_BUFFER_SIZE_MAX);
 
     // Initialize context buffer
     convolve_float_default_f16_ctx.buf = convolve_float_default_f16_buffer;
@@ -194,7 +200,24 @@ static int32_t convolve_float_default_f16_bench_op(void)
 
 static void convolve_float_default_f16_benchmark_run(void)
 {
-    convolve_float_default_f16_bench_init();
+    // A sizer check inside _bench_init() returns before the context is populated, so the
+    // benchmark must not proceed on that path: _bench_op() would call the kernel with an
+    // uninitialised context and time whatever happened, recording cycle counts that mean
+    // nothing, or crash. The failing check has already printed its marker naming the
+    // sizer; this reports the skip and runs nothing (#133).
+    //
+    // What this still does not do is fail the case. A benchmark reports cycles, not a
+    // verdict, and helia_benchmark_run() has no failure channel to carry one, so the C
+    // failure counter stays zero and main.j2 finishes with zero either way. Note that is
+    // a statement about the counter, not about the report: this output still carries the
+    // marker the failing check printed, and if a benchmark capture were ever fed to
+    // TestResultParser it would be classified a sizer failure. No path does that today.
+    // The non-benchmark run of the same case is what turns a bad sizer answer into a
+    // verdict.
+    if (convolve_float_default_f16_bench_init() != ARM_CMSIS_NN_SUCCESS) {
+        printf("[BENCH] convolve_float_default_f16 skipped: scratch sizer rejected before the context was populated\r\n");
+        return;
+    }
     helia_benchmark_run("convolve_float_default_f16", convolve_float_default_f16_bench_op);
 }
 #endif // HELIA_BENCHMARK_MODE

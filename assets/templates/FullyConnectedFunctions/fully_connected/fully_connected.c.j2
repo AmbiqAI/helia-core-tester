@@ -20,8 +20,13 @@ int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input,
     {{ output_dtype }}* __restrict output
 ) {
-    // Calculate required buffer size
+    // Calculate required buffer size. Each arm records the sizer it actually calls in
+    // sizer_fn, because the checks below name it in their failure line: reporting
+    // the dispatch-level name here would attribute a per-channel sizer's answer to the
+    // per-tensor one, which is the misattribution #133 exists to remove. The four-bit arm
+    // records nothing, since it calls no sizer at all.
     {% if float_kernel %}
+    {% set sizer_fn = kernel_get_buffer_size_fn %}
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
         &{{ name }}_fc_params,
         &{{ name }}_input_dims,
@@ -30,13 +35,20 @@ int32_t {{ name }}_run(
         {{ kernel_layout }}
     );
     {% elif kernel_fn == 'arm_fully_connected_s4' %}
-    int32_t required_buffer_size = 0;
+    {% set sizer_fn = none %}
+    // No declaration here. This arm calls no sizer, and its context arm below sets a null
+    // buffer and a zero size without consulting one, so the variable the other arms declare
+    // would be unread. Before #133 the capacity comparison read it unconditionally, which is
+    // what kept it live; now that the checks are gated on a sizer actually having been
+    // called, declaring it here is an unused variable and -Wunused-variable is on.
     {% elif quant_params.per_channel and output_dtype == 'int16_t' %}
+    {% set sizer_fn = 'arm_fully_connected_per_channel_s16_get_buffer_size' %}
     // For per-channel S16, use per_channel buffer size function
     int32_t required_buffer_size = arm_fully_connected_per_channel_s16_get_buffer_size(
         &{{ name }}_filter_dims
     );
     {% else %}
+    {% set sizer_fn = kernel_get_buffer_size_fn %}
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
         &{{ name }}_filter_dims
     );
@@ -51,10 +63,14 @@ int32_t {{ name }}_run(
     // with the real size once the context is populated (#68).
 
 
-    if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
-        printf("Buffer size error: required=%d > max=%d\r\n", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // The sizer's answer is checked before it becomes a context size (#133). A negative
+    // answer is the documented out-of-range sentinel and never a usable size; an answer
+    // above this case's static means our generation-time bound and the shipped kernel
+    // disagree. They are separate failures because they have separate owners.
+    {% if sizer_fn %}
+    HELIA_VALIDATE_SIZER("{{ sizer_fn }}", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("{{ sizer_fn }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
+    {% endif %}
 
     // Armed unconditionally: {{ name }}_buffer is only ctx.buf in some branches
     // below (s4 uses NULL, weight_sum variants point ctx.buf elsewhere), but

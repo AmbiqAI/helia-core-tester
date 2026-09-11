@@ -38,6 +38,15 @@ int32_t avg_pool_float_default_f32_run(
     // of leaving its canary unstamped whenever kernel_get_buffer_size_fn
     // is absent.
     HELIA_GUARD_ARM(avg_pool_float_default_f32_buffer, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_STAMP_SLACK(avg_pool_float_default_f32_buffer, 0u);
+    // Stamped as wholly unused here, and re-stamped with the real size once the context is
+    // populated. It matters in the renderings that call a sizer: an early return from the
+    // checks below would otherwise leave this canary poisoned, and the unconditional check
+    // in _test_case_run would read that poison and report a fabricated overrun, which the
+    // report parser classifies ahead of the sizer failure that actually occurred (#68).
+    // In the rendering with no sizer there is no early return and this pre-stamp is
+    // redundant, overwritten two statements later; it is emitted unconditionally to keep
+    // this in lockstep with the arm above rather than to guard anything there.
     // Max pooling doesn't need a buffer
     avg_pool_float_default_f32_ctx.buf = NULL;
     avg_pool_float_default_f32_ctx.size = 0;

@@ -45,9 +45,19 @@ static int32_t run_svdf(void)
     // Scratch sized by the kernel's own ctx sizers (issue #71), not by a local re-derivation.
     const int32_t scratch_size = {{ input_ctx_sizer_fn }}(&{{ name }}_input_dims, &{{ name }}_weights_feature_dims);
     const int32_t scratch_size_out = {{ output_ctx_sizer_fn }}(&svdf_params, &{{ name }}_input_dims, &{{ name }}_weights_feature_dims);
-    if (scratch_size < 0 || scratch_size_out < 0) {
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+{% if has_ctx %}
+    const int32_t buf_size = arm_svdf_s8_get_buffer_size(&{{ name }}_weights_feature_dims);
+{% endif %}
+    // Every sizer answer is checked here, ahead of the first allocation below, so that a
+    // rejecting return leaks nothing and names the sizer that answered. The two staging
+    // sizers were previously checked by a combined condition that returned silently, so
+    // the report could only call it an ordinary argument error; the kernel-sum query was
+    // not checked at all and a negative answer became ctx.size unremarked (#133).
+    HELIA_VALIDATE_SIZER("{{ input_ctx_sizer_fn }}", scratch_size);
+    HELIA_VALIDATE_SIZER("{{ output_ctx_sizer_fn }}", scratch_size_out);
+{% if has_ctx %}
+    HELIA_VALIDATE_SIZER("arm_svdf_s8_get_buffer_size", buf_size);
+{% endif %}
 
     {{ name }}_guard_failures = 0;
 
@@ -70,7 +80,6 @@ static int32_t run_svdf(void)
     }
 
 {% if has_ctx %}
-    const int32_t buf_size = arm_svdf_s8_get_buffer_size(&{{ name }}_weights_feature_dims);
     uint8_t *{{ name }}_ctx_guard_base = buf_size > 0 ? malloc((size_t)buf_size + 2u * HELIA_GUARD_BYTES) : NULL;
     ctx.buf = {{ name }}_ctx_guard_base ? ({{ name }}_ctx_guard_base + HELIA_GUARD_BYTES) : NULL;
     ctx.size = buf_size;

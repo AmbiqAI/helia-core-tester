@@ -31,7 +31,11 @@ int32_t fully_connected_float_default_f32_run(
     const float* __restrict input,
     float* __restrict output
 ) {
-    // Calculate required buffer size
+    // Calculate required buffer size. Each arm records the sizer it actually calls in
+    // sizer_fn, because the checks below name it in their failure line: reporting
+    // the dispatch-level name here would attribute a per-channel sizer's answer to the
+    // per-tensor one, which is the misattribution #133 exists to remove. The four-bit arm
+    // records nothing, since it calls no sizer at all.
     int32_t required_buffer_size = arm_fully_connected_f32_get_buffer_size(
         &fully_connected_float_default_f32_fc_params,
         &fully_connected_float_default_f32_input_dims,
@@ -49,10 +53,12 @@ int32_t fully_connected_float_default_f32_run(
     // with the real size once the context is populated (#68).
 
 
-    if (required_buffer_size > FULLY_CONNECTED_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX) {
-        printf("Buffer size error: required=%d > max=%d\r\n", required_buffer_size, FULLY_CONNECTED_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // The sizer's answer is checked before it becomes a context size (#133). A negative
+    // answer is the documented out-of-range sentinel and never a usable size; an answer
+    // above this case's static means our generation-time bound and the shipped kernel
+    // disagree. They are separate failures because they have separate owners.
+    HELIA_VALIDATE_SIZER("arm_fully_connected_f32_get_buffer_size", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("arm_fully_connected_f32_get_buffer_size", required_buffer_size, FULLY_CONNECTED_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
 
     // Armed unconditionally: fully_connected_float_default_f32_buffer is only ctx.buf in some branches
     // below (s4 uses NULL, weight_sum variants point ctx.buf elsewhere), but
