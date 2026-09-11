@@ -8,7 +8,7 @@ from typing import List
 from helia_core_tester.core.cpu_targets import parse_cpu_list, target_cpu_cmake_value
 from helia_core_tester.core.path_layout import build_dir as canonical_build_dir
 
-from .cli import build_arg_parser
+from .cli import build_arg_parser, resolve_toolchain
 from .cmake import active_test_list, cmake_build, cmake_configure, find_elves
 from .coverage import generate_coverage_reports, new_coverage_context
 from .env import DEFAULT_DL, DEFAULT_SOURCE, REPO_ROOT, detect_paths, is_linux, resolve_gcov_tool
@@ -24,6 +24,10 @@ def parse_cpus(cpu_str: str) -> List[str]:
 def run_main(argv: List[str]) -> int:
     parser = build_arg_parser(default_downloads_dir=DEFAULT_DL, default_source_dir=DEFAULT_SOURCE)
     args = parser.parse_args(argv)
+    try:
+        resolve_toolchain(args)
+    except ValueError as exc:
+        raise FvpScriptError(str(exc)) from exc
 
     # The FVP binaries are Linux-only prebuilt executables (matching the
     # original bash script). --no-run skips the FVP entirely (e.g. a
@@ -36,7 +40,7 @@ def run_main(argv: List[str]) -> int:
     if not args.no_setup:
         from .env import call_setup_dependencies
 
-        call_setup_dependencies(args.downloads_dir)
+        call_setup_dependencies(args.downloads_dir, args.toolchain)
 
     ctx = detect_paths(args)
     env = ctx["env"]
@@ -57,7 +61,7 @@ def run_main(argv: List[str]) -> int:
     if args.run_jobs < 0:
         raise FvpScriptError(f"--run-jobs must be >= 0, got {args.run_jobs}")
 
-    if args.coverage and args.use_arm_compiler:
+    if args.coverage and args.toolchain != "gcc":
         raise FvpScriptError("--coverage is only supported with GCC builds")
     if args.coverage:
         gcov_tool = resolve_gcov_tool(env)

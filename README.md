@@ -65,7 +65,10 @@ HELIA_GCC_VERSION=15.2.rel1 uv run helia_core_tester full --cpu cortex-m55
 
 ### Compiler (`--toolchain`)
 
-`build`, `run` and `full` take `--toolchain gcc|armclang` (default `gcc`; also `toolchain` in `helia_core_tester.toml` and `HELIA_CORE_TESTER_TOOLCHAIN`). `armclang` selects ethos-u-core-platform's `armclang.cmake` and needs Arm Compiler 6 (`armclang`) on `PATH`; it is not fetched by `setup_dependencies.py`. Build output goes to `artifacts/build-<suite>-<cpu>-arm-compiler/`. `--toolchain armclang` is mutually exclusive with `--coverage` (gcov instrumentation is GCC-only). `doctor` reports which of `arm-none-eabi-gcc` / `armclang` it finds.
+`build`, `run` and `full` take `--toolchain gcc|armclang|atfe` (default `gcc`; also `toolchain` in `helia_core_tester.toml` and `HELIA_CORE_TESTER_TOOLCHAIN`). Build output goes to `artifacts/build-<suite>-<cpu>-<tag>/` with tags `gcc`, `arm-compiler` and `atfe`. Anything but `gcc` is mutually exclusive with `--coverage` (gcov instrumentation is GCC-only). `doctor` reports which toolchains it finds.
+
+- `armclang` selects ethos-u-core-platform's `armclang.cmake` and needs Arm Compiler 6 (`armclang`) on `PATH`; it is not fetched by `setup_dependencies.py`.
+- `atfe` is the Arm Toolchain for Embedded (LLVM/clang + lld + picolibc). `setup_dependencies.py --with-atfe` installs the pinned release (19.1.5, the one ns-cmsis-nn's toolchain matrix builds with) into `artifacts/downloads/atfe_download`; `full`/`build`/`run --toolchain atfe` pass that flag for you. The tester carries its own `cmake/toolchain/atfe.cmake` (ethos-u-core-platform ships none for clang) and links with `-nostartfiles` against the CMSIS device startup and `Corstone-300/linker.ld`, with `retarget.c` binding picolibc's stdio to the UART.
 
 ## Canonical Artifacts
 

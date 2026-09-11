@@ -53,6 +53,7 @@ def test_fvp_parser_option_surface_unchanged() -> None:
         "-r", "--no-run",
         "-e", "--no-setup",
         "-a", "--use-arm-compiler",
+        "--toolchain",
         "-p", "--no-venv",
         "-f", "--no-fvp-from-download",
         "-g", "--no-gcc-from-download",

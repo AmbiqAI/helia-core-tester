@@ -161,7 +161,7 @@ def generate(
 def build(
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
     opt: str = typer.Option("-Ofast", help="Optimization level"),
-    toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default) or armclang (Arm Compiler 6 on PATH; not combinable with --coverage)"),
+    toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default), armclang (Arm Compiler 6 on PATH) or atfe (Arm Toolchain for Embedded, downloaded on first use); --coverage needs gcc"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn code coverage instrumentation"),
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Enable Cortex-M55 float MVE paths during coverage builds"),
@@ -207,7 +207,7 @@ def run(
     coverage: bool = typer.Option(False, "--coverage", help="Collect and merge ns-cmsis-nn gcov streams"),
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Write MVE float coverage to the float-mve report lane"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
-    toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default) or armclang (Arm Compiler 6 on PATH; not combinable with --coverage)"),
+    toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default), armclang (Arm Compiler 6 on PATH) or atfe (Arm Toolchain for Embedded, downloaded on first use); --coverage needs gcc"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
     report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
@@ -254,7 +254,7 @@ def full(
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision selection for float suite: f16, f32, or both"),
     opt: str = typer.Option("-Ofast", help="Optimization level"),
-    toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default) or armclang (Arm Compiler 6 on PATH; not combinable with --coverage)"),
+    toolchain: str = typer.Option("gcc", "--toolchain", help="Toolchain: gcc (default), armclang (Arm Compiler 6 on PATH) or atfe (Arm Toolchain for Embedded, downloaded on first use); --coverage needs gcc"),
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     timeout: Optional[float] = typer.Option(None, help=f"Per-case FVP timeout in seconds (default: {DEFAULT_TIMEOUT_SECONDS:g}; 0 disables it and lets a hung kernel block the run)"),
     run_jobs: Optional[int] = typer.Option(None, "--run-jobs", help=f"Parallel FVP run jobs (default: min(host cores, {DEFAULT_RUN_JOBS_CAP}); 0 = every host core). FVP boot dominates per-case time so parallelism is the lever, but unbounded jobs on a shared or metered runner is a cost risk"),
@@ -419,6 +419,11 @@ def doctor(
         typer.echo(f"✓ armclang found ({_tool_version(armclang)}) at {armclang}")
     else:
         typer.echo("⚠ armclang not on PATH (only needed for --toolchain armclang)")
+    atfe_clang = repo_root / "artifacts" / "downloads" / "atfe_download" / "bin" / "clang"
+    if atfe_clang.exists():
+        typer.echo(f"✓ Arm Toolchain for Embedded found ({_tool_version(str(atfe_clang))}) at {atfe_clang}")
+    else:
+        typer.echo("⚠ Arm Toolchain for Embedded not downloaded (only needed for --toolchain atfe; fetched on first use)")
 
     key_dirs = {
         "assets/descriptors": "Test descriptors",

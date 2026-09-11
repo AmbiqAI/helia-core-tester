@@ -32,14 +32,16 @@ def bootstrap_runtime_env(
 ) -> RuntimeEnvContext:
     """Resolve dependency/toolchain/FVP paths once and return a locked context."""
     resolved_downloads = Path(downloads_dir).resolve()
+    toolchain = normalize_toolchain(toolchain)
     if ensure_setup:
-        call_setup_dependencies(resolved_downloads)
+        call_setup_dependencies(resolved_downloads, toolchain)
 
     args = SimpleNamespace(
         downloads_dir=resolved_downloads,
         ethos_path=None,
         cmsis5_path=None,
-        use_arm_compiler=normalize_toolchain(toolchain) == "armclang",
+        toolchain=toolchain,
+        use_arm_compiler=toolchain == "armclang",
         no_gcc_from_download=False,
         no_fvp_from_download=False,
     )
@@ -83,6 +85,7 @@ def build_locked_fvp_flags(
         "--no-gcc-from-download",
         "--no-fvp-from-download",
     ]
-    if normalize_toolchain(toolchain) == "armclang":
-        flags.append("--use-arm-compiler")
+    toolchain = normalize_toolchain(toolchain)
+    if toolchain != "gcc":
+        flags += ["--toolchain", toolchain]
     return flags

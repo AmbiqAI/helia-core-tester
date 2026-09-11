@@ -8,6 +8,7 @@ CMSIS-NN unit tests, similar to the Setup_Environment() function in build_and_ru
 Dependencies downloaded:
 - Corstone300 FVP (Fixed Virtual Platform)
 - ARM GCC toolchain
+- Arm Toolchain for Embedded (LLVM/clang; --with-atfe, for --toolchain atfe)
 - CMSIS-5 library
 - Ethos-U core platform
 - nsx-ambiq-sdk (real-hardware board bring-up; --skip-nsx-sdk to opt out)
@@ -46,6 +47,17 @@ GCC_VERSION_RE = re.compile(r"^\d+\.\d+\.rel\d+$")
 GCC_VERSION_MARKER = ".helia_gcc_version"
 _SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
+# Arm Toolchain for Embedded (clang/lld/picolibc). Pinned to the release the
+# ns-cmsis-nn toolchain matrix builds with (ci/toolchains/atfe.json).
+ATFE_VERSION = "19.1.5"
+ATFE_DIRNAME = "atfe_download"
+ATFE_VERSION_MARKER = ".helia_atfe_version"
+_ATFE_URL = (
+    "https://github.com/ARM-software/LLVM-embedded-toolchain-for-Arm/releases/download/"
+    "release-{version}/{archive}"
+)
+_ATFE_ARCH_TAGS = {"x86_64": "x86_64", "aarch64": "AArch64"}
+
 # Releases up to 15.2.rel1 are served from developer.arm.com; from 15.3.rel1 Arm
 # publishes to its GitLab package registry instead and the old path 404s.
 _GCC_GITLAB_FIRST_RELEASE = (15, 3)
@@ -63,6 +75,8 @@ _GCC_GITLAB_URL = (
 #     be selected with --gcc-version; its digest is then taken from
 #     --gcc-sha256 / HELIA_GCC_SHA256 or, failing that, fetched from that same
 #     sidecar at install time (see resolve_gcc_sha256()).
+#   - Arm Toolchain for Embedded, keyed (dependency, version, architecture):
+#     published as <archive>.sha256 next to each GitHub release asset.
 #   - Corstone-300 FVP 11.24_13, keyed (dependency, architecture): Arm does not
 #     publish a SHA-256 sidecar for this archive; the digest below was computed
 #     directly from a fresh download of the official Arm URL referenced in
@@ -81,6 +95,8 @@ PINNED_SHA256 = {
     ("arm_gcc", "15.2.rel1", "aarch64"): "d061559d814b205ed30c5b7c577c03317ec447ca51cd5a159d26b12a5bbeb20c",
     ("arm_gcc", "15.3.rel1", "x86_64"): "563bebb2b97d53382b956d6ee1fe61e2cae26699901417234a37df505ef9b5fa",
     ("arm_gcc", "15.3.rel1", "aarch64"): "06979e0c8171de58e5dc2a2b2019330a290f30930f27728af98a83e1a7369b3a",
+    ("atfe", "19.1.5", "x86_64"): "34ee877aadc78c5e9f067e603a1bc9745ed93ca7ae5dbfc9b4406508dc153920",
+    ("atfe", "19.1.5", "aarch64"): "5e2f6b8c77464371ae2d7445114b4bdc19f56138e8aa864495181b52f57d0b85",
     ("corstone300", "x86_64"): "6ea4096ecf8a8c06d6e76e21cae494f0c7139374cb33f6bc3964d189b84539a9",
     ("corstone300", "aarch64"): "9b43da6a688220c707cd1801baf9cf4f5fb37d6dc77587b9071347411a64fd56",
 }
@@ -440,6 +456,58 @@ def setup_arm_gcc(
 
     (gcc_dir / GCC_VERSION_MARKER).write_text(version + "\n", encoding="utf-8")
     print(f"ARM GCC {version} setup complete")
+
+
+def atfe_download_url(version: str, arch: str) -> str:
+    archive = f"LLVM-ET-Arm-{version}-Linux-{_ATFE_ARCH_TAGS[arch]}.tar.xz"
+    return _ATFE_URL.format(version=version, archive=archive)
+
+
+def read_installed_atfe_version(atfe_dir: Path) -> Optional[str]:
+    marker = atfe_dir / ATFE_VERSION_MARKER
+    if not marker.exists():
+        return None
+    return marker.read_text(encoding="utf-8").strip() or None
+
+
+def setup_atfe(downloads_dir: Path, force: bool = False) -> None:
+    """Download and setup the Arm Toolchain for Embedded (ATFE_VERSION)."""
+    atfe_dir = downloads_dir / ATFE_DIRNAME
+    version = ATFE_VERSION
+
+    if atfe_dir.exists() and not force:
+        installed = read_installed_atfe_version(atfe_dir)
+        if installed != version:
+            raise RuntimeError(
+                f"Arm Toolchain for Embedded {installed or '<unknown>'} is installed at {atfe_dir} "
+                f"but {version} is pinned. Pass --force to replace it (or delete that directory)."
+            )
+        print(f"Arm Toolchain for Embedded {installed} already installed. Pass --force to reinstall.")
+        return
+
+    if force and atfe_dir.exists():
+        print("Removing existing Arm Toolchain for Embedded installation...")
+        shutil.rmtree(atfe_dir)
+
+    arch = get_architecture()
+    url = atfe_download_url(version, arch)
+    expected_sha256 = PINNED_SHA256[("atfe", version, arch)]
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        archive_file = temp_path / "atfe.tar.xz"
+        download_file(url, archive_file, f"Arm Toolchain for Embedded {version}", expected_sha256)
+
+        temp_extract = temp_path / "extracted"
+        extract_tar_gz(archive_file, temp_extract, strip_components=0)
+        toolchain_dirs = [d for d in temp_extract.iterdir() if d.is_dir()]
+        if not toolchain_dirs:
+            raise RuntimeError("Could not find toolchain directory in archive")
+        print(f"Moving toolchain from {toolchain_dirs[0].name} to {atfe_dir}")
+        shutil.move(str(toolchain_dirs[0]), str(atfe_dir))
+
+    (atfe_dir / ATFE_VERSION_MARKER).write_text(version + "\n", encoding="utf-8")
+    print(f"Arm Toolchain for Embedded {version} setup complete")
 
 
 def setup_cmsis5(downloads_dir: Path, force: bool = False) -> None:
@@ -834,6 +902,11 @@ Examples:
         help="Skip ARM GCC toolchain download"
     )
     parser.add_argument(
+        "--with-atfe",
+        action="store_true",
+        help=f"Also install the Arm Toolchain for Embedded {ATFE_VERSION} (needed only for --toolchain atfe)"
+    )
+    parser.add_argument(
         "--skip-cmsis5",
         action="store_true",
         help="Skip CMSIS-5 download"
@@ -905,6 +978,10 @@ Examples:
 
         if host_os_supported and not args.skip_gcc:
             setup_arm_gcc(args.downloads_dir, args.force, version=gcc_version, sha256=args.gcc_sha256)
+            print()
+
+        if host_os_supported and args.with_atfe:
+            setup_atfe(args.downloads_dir, args.force)
             print()
         
         if not args.skip_cmsis5:

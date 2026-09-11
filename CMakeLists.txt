@@ -204,6 +204,11 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^cortex-m4(\\+|$)")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^cortex-m7(\\+|$)")
   add_compile_options(-mfloat-abi=hard -mfpu=fpv5-d16)
   add_link_options(   -mfloat-abi=hard -mfpu=fpv5-d16)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^cortex-m55(\\+|$)" AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
+  # An explicit -mfpu overrides the CPU's FPU feature set under clang and
+  # drops MVE-FP; let -mcpu pick the FPU (matches ns-cmsis-nn's atfe.cmake).
+  add_compile_options(-mfloat-abi=hard)
+  add_link_options(   -mfloat-abi=hard)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^cortex-m33(\\+|$)" OR CMAKE_SYSTEM_PROCESSOR MATCHES "^cortex-m55(\\+|$)")
   add_compile_options(-mfloat-abi=hard -mfpu=fpv5-sp-d16)
   add_link_options(   -mfloat-abi=hard -mfpu=fpv5-sp-d16)

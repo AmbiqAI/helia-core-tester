@@ -10,7 +10,7 @@ from pathlib import Path
 VALID_SUITES = {"int", "float", "float-mve"}
 
 # toolchain (CLI/config name) -> compiler tag used in build-<suite>-<cpu>-<tag>.
-COMPILER_TAGS = {"gcc": "gcc", "armclang": "arm-compiler"}
+COMPILER_TAGS = {"gcc": "gcc", "armclang": "arm-compiler", "atfe": "atfe"}
 VALID_TOOLCHAINS = frozenset(COMPILER_TAGS)
 
 

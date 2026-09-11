@@ -19,6 +19,8 @@ from .errors import FvpScriptError
 FVP_EXE_NAME = "FVP_Corstone_SSE-300_Ethos-U55"
 FVP_DIR_X86 = "Linux64_GCC-9.3"
 FVP_DIR_AARCH64 = "Linux64_armv8l_GCC-9.3"
+ATFE_DIRNAME = "atfe_download"
+ATFE_ROOT_ENV = "HELIA_ATFE_ROOT"
 
 REPO_ROOT = find_repo_root()
 ARTIFACTS_DIR = artifacts_root(REPO_ROOT)
@@ -63,16 +65,16 @@ def ensure_exe_on_path(name: str) -> Optional[str]:
     return shutil.which(name)
 
 
-def call_setup_dependencies(downloads_dir: Path) -> None:
+def call_setup_dependencies(downloads_dir: Path, toolchain: str = "gcc") -> None:
     setup = find_setup_dependencies_script(REPO_ROOT)
     if not setup or not setup.exists():
         print("No setup_dependencies.py found; skipping dependency setup.")
         return
     print("Ensuring dependencies via setup_dependencies.py")
-    rc = subprocess.call(
-        [sys.executable, str(setup), "--downloads-dir", str(downloads_dir)],
-        cwd=str(REPO_ROOT),
-    )
+    cmd = [sys.executable, str(setup), "--downloads-dir", str(downloads_dir)]
+    if toolchain == "atfe":
+        cmd.append("--with-atfe")
+    rc = subprocess.call(cmd, cwd=str(REPO_ROOT))
     if rc != 0:
         raise FvpScriptError(f"Dependency setup failed (rc={rc})")
 
@@ -114,9 +116,23 @@ def detect_paths(args) -> dict:
     if not cmsis5.exists():
         raise FvpScriptError(f"CMSIS_5 not found: {cmsis5}. Run without -e or point -C to a valid path.")
 
-    if args.use_arm_compiler:
+    toolchain = getattr(args, "toolchain", None) or ("armclang" if args.use_arm_compiler else "gcc")
+    if toolchain == "armclang":
         toolchain_file = ethos / "cmake" / "toolchain" / "armclang.cmake"
         compiler_tag = compiler_tag_for_toolchain("armclang")
+    elif toolchain == "atfe":
+        # ethos-u-core-platform ships no clang toolchain file, so the tester
+        # carries its own and points it at the downloaded install via env.
+        toolchain_file = REPO_ROOT / "cmake" / "toolchain" / "atfe.cmake"
+        compiler_tag = compiler_tag_for_toolchain("atfe")
+        atfe_root = dl / ATFE_DIRNAME
+        if not (atfe_root / "bin" / "clang").exists():
+            raise FvpScriptError(
+                f"Arm Toolchain for Embedded not found at {atfe_root}. "
+                "Run setup_dependencies.py --with-atfe (or helia_core_tester full --toolchain atfe)."
+            )
+        env[ATFE_ROOT_ENV] = str(atfe_root)
+        prepend_path(atfe_root / "bin", env)
     else:
         toolchain_file = ethos / "cmake" / "toolchain" / "arm-none-eabi-gcc.cmake"
         compiler_tag = compiler_tag_for_toolchain("gcc")

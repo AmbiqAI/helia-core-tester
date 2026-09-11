@@ -11,6 +11,7 @@ from helia_core_tester.core.config import (
     DEFAULT_TIMEOUT_SECONDS,
     default_run_jobs,
 )
+from helia_core_tester.core.path_layout import VALID_TOOLCHAINS
 
 
 def build_arg_parser(default_downloads_dir: Path, default_source_dir: Path) -> argparse.ArgumentParser:
@@ -23,7 +24,9 @@ def build_arg_parser(default_downloads_dir: Path, default_source_dir: Path) -> a
     ap.add_argument("-b", "--no-build", action="store_true", help="Skip build (only run)")
     ap.add_argument("-r", "--no-run", action="store_true", help="Skip run (only build)")
     ap.add_argument("-e", "--no-setup", action="store_true", help="Skip dependency setup")
-    ap.add_argument("-a", "--use-arm-compiler", action="store_true", help="Use Arm Compiler (default: GCC)")
+    ap.add_argument("-a", "--use-arm-compiler", action="store_true", help="Use Arm Compiler (alias for --toolchain armclang)")
+    ap.add_argument("--toolchain", choices=sorted(VALID_TOOLCHAINS), default=None,
+                   help="Toolchain: gcc (default), armclang (Arm Compiler 6 on PATH) or atfe (Arm Toolchain for Embedded from downloads)")
     ap.add_argument("-p", "--no-venv", action="store_true", help="(Kept for parity; no effect on CMake build)")
     ap.add_argument("-f", "--no-fvp-from-download", action="store_true", help="Do NOT use downloaded FVP; use FVP from PATH")
     ap.add_argument("-g", "--no-gcc-from-download", action="store_true", help="Do NOT use downloaded GCC; use system GCC")
@@ -65,3 +68,13 @@ def build_arg_parser(default_downloads_dir: Path, default_source_dir: Path) -> a
                    help="Report formats to generate (default: json)")
     ap.add_argument("--quiet", action="store_true", help="Quiet mode (no output)")
     return ap
+
+
+def resolve_toolchain(args: argparse.Namespace) -> str:
+    """Fold the legacy -a/--use-arm-compiler flag into args.toolchain."""
+    if args.use_arm_compiler:
+        if args.toolchain not in (None, "armclang"):
+            raise ValueError(f"--use-arm-compiler conflicts with --toolchain {args.toolchain}")
+        args.toolchain = "armclang"
+    args.toolchain = args.toolchain or "gcc"
+    return args.toolchain

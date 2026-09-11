@@ -44,8 +44,9 @@ def test_compiler_tag_mapping() -> None:
     assert path_layout.compiler_tag_for_toolchain("gcc") == "gcc"
     assert path_layout.compiler_tag_for_toolchain("armclang") == "arm-compiler"
     assert path_layout.compiler_tag_for_toolchain(" ArmClang ") == "arm-compiler"
+    assert path_layout.compiler_tag_for_toolchain("atfe") == "atfe"
     with pytest.raises(ValueError, match="Unsupported toolchain"):
-        path_layout.compiler_tag_for_toolchain("atfe")
+        path_layout.compiler_tag_for_toolchain("iar")
 
 
 def test_build_dir_helper_for_armclang(tmp_path: Path) -> None:
@@ -59,18 +60,20 @@ def test_build_dir_helper_for_armclang(tmp_path: Path) -> None:
 # --- locked flags / bootstrap -------------------------------------------------
 
 
-def test_locked_flags_emit_use_arm_compiler_only_for_armclang(tmp_path: Path) -> None:
+def test_locked_flags_emit_toolchain_only_for_non_gcc(tmp_path: Path) -> None:
     gcc_flags = build_locked_fvp_flags(None, tmp_path)
     default_flags = build_locked_fvp_flags(None, tmp_path, "gcc")
     armclang_flags = build_locked_fvp_flags(None, tmp_path, "armclang")
+    atfe_flags = build_locked_fvp_flags(None, tmp_path, "atfe")
 
     assert gcc_flags == default_flags
-    assert "--use-arm-compiler" not in gcc_flags
+    assert "--toolchain" not in gcc_flags
     assert "--no-gcc-from-download" in gcc_flags
-    assert armclang_flags == [*gcc_flags, "--use-arm-compiler"]
+    assert armclang_flags == [*gcc_flags, "--toolchain", "armclang"]
+    assert atfe_flags == [*gcc_flags, "--toolchain", "atfe"]
 
 
-def test_bootstrap_runtime_env_passes_use_arm_compiler(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_bootstrap_runtime_env_passes_toolchain(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen: list = []
 
     def fake_detect_paths(args):
@@ -81,26 +84,53 @@ def test_bootstrap_runtime_env_passes_use_arm_compiler(monkeypatch: pytest.Monke
             "ethos": tmp_path / "ethos",
             "cmsis5": tmp_path / "cmsis5",
             "toolchain_file": tmp_path / "armclang.cmake",
-            "compiler_tag": "arm-compiler" if args.use_arm_compiler else "gcc",
+            "compiler_tag": path_layout.compiler_tag_for_toolchain(args.toolchain),
             "fvp_exe": tmp_path / "fvp",
         }
 
-    def fail_setup(_dl):
+    def fail_setup(_dl, _toolchain="gcc"):
         raise AssertionError("ensure_setup=False must not call setup_dependencies")
 
     monkeypatch.setattr(runtime_env_module, "detect_paths", fake_detect_paths)
     monkeypatch.setattr(runtime_env_module, "call_setup_dependencies", fail_setup)
 
     ctx = bootstrap_runtime_env(downloads_dir=tmp_path, ensure_setup=False, toolchain="armclang")
+    assert seen[-1].toolchain == "armclang"
     assert seen[-1].use_arm_compiler is True
     assert ctx.compiler_tag == "arm-compiler"
 
-    ctx = bootstrap_runtime_env(downloads_dir=tmp_path, ensure_setup=False)
+    ctx = bootstrap_runtime_env(downloads_dir=tmp_path, ensure_setup=False, toolchain="atfe")
+    assert seen[-1].toolchain == "atfe"
     assert seen[-1].use_arm_compiler is False
+    assert ctx.compiler_tag == "atfe"
+
+    ctx = bootstrap_runtime_env(downloads_dir=tmp_path, ensure_setup=False)
+    assert seen[-1].toolchain == "gcc"
     assert ctx.compiler_tag == "gcc"
 
     with pytest.raises(ValueError, match="Unsupported toolchain"):
-        bootstrap_runtime_env(downloads_dir=tmp_path, ensure_setup=False, toolchain="atfe")
+        bootstrap_runtime_env(downloads_dir=tmp_path, ensure_setup=False, toolchain="iar")
+
+
+def test_bootstrap_runtime_env_setup_requests_atfe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    seen: list = []
+    monkeypatch.setattr(runtime_env_module, "call_setup_dependencies", lambda dl, toolchain="gcc": seen.append(toolchain))
+    monkeypatch.setattr(
+        runtime_env_module,
+        "detect_paths",
+        lambda args: {
+            "env": {},
+            "dl": tmp_path,
+            "ethos": tmp_path,
+            "cmsis5": tmp_path,
+            "toolchain_file": tmp_path,
+            "compiler_tag": "atfe",
+            "fvp_exe": tmp_path,
+        },
+    )
+    bootstrap_runtime_env(downloads_dir=tmp_path, ensure_setup=True, toolchain="atfe")
+    bootstrap_runtime_env(downloads_dir=tmp_path, ensure_setup=True)
+    assert seen == ["atfe", "gcc"]
 
 
 # --- Config -------------------------------------------------------------------
@@ -120,14 +150,21 @@ def test_config_armclang_build_dir(tmp_path: Path) -> None:
     assert cfg.build_dir_for("cortex-m55", suite="int").name == "build-int-cortex-m55-arm-compiler"
 
 
+def test_config_atfe_build_dir(tmp_path: Path) -> None:
+    cfg = _config(_init_repo_root(tmp_path), toolchain="atfe")
+    assert cfg.compiler_tag == "atfe"
+    assert cfg.build_dir_for("cortex-m55", suite="int").name == "build-int-cortex-m55-atfe"
+
+
 def test_config_rejects_unknown_toolchain(tmp_path: Path) -> None:
     with pytest.raises(ConfigurationError, match="Invalid toolchain"):
-        _config(_init_repo_root(tmp_path), toolchain="atfe")
+        _config(_init_repo_root(tmp_path), toolchain="iar")
 
 
-def test_config_rejects_coverage_with_armclang(tmp_path: Path) -> None:
+@pytest.mark.parametrize("toolchain", ["armclang", "atfe"])
+def test_config_rejects_coverage_with_non_gcc(tmp_path: Path, toolchain: str) -> None:
     with pytest.raises(ConfigurationError, match="--coverage is only supported with the gcc toolchain"):
-        _config(_init_repo_root(tmp_path), toolchain="armclang", coverage=True)
+        _config(_init_repo_root(tmp_path), toolchain=toolchain, coverage=True)
 
 
 def test_config_toolchain_from_toml_and_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -146,18 +183,20 @@ def test_config_toolchain_from_toml_and_env(monkeypatch: pytest.MonkeyPatch, tmp
 
 
 @pytest.mark.parametrize("step_cls", [BuildStep, RunStep])
-def test_step_commands_carry_use_arm_compiler_only_for_armclang(tmp_path: Path, step_cls) -> None:
+@pytest.mark.parametrize("toolchain", ["armclang", "atfe"])
+def test_step_commands_carry_toolchain_only_for_non_gcc(tmp_path: Path, step_cls, toolchain: str) -> None:
     root = _init_repo_root(tmp_path)
+    tag = path_layout.compiler_tag_for_toolchain(toolchain)
 
     gcc_cmds = step_cls(_config(root), runtime_env=_runtime_env(root))._plan_details().commands
-    armclang_cmds = step_cls(
-        _config(root, toolchain="armclang"), runtime_env=_runtime_env(root, "arm-compiler")
+    other_cmds = step_cls(
+        _config(root, toolchain=toolchain), runtime_env=_runtime_env(root, tag)
     )._plan_details().commands
 
-    assert gcc_cmds and armclang_cmds
-    assert all("--use-arm-compiler" not in cmd for cmd in gcc_cmds)
-    assert all("--use-arm-compiler" in cmd for cmd in armclang_cmds)
-    assert all("--no-gcc-from-download" in cmd for cmd in armclang_cmds)
+    assert gcc_cmds and other_cmds
+    assert all("--toolchain" not in cmd for cmd in gcc_cmds)
+    assert all(cmd[cmd.index("--toolchain") + 1] == toolchain for cmd in other_cmds)
+    assert all("--no-gcc-from-download" in cmd for cmd in other_cmds)
 
 
 def test_run_step_validate_looks_for_armclang_build_dir(tmp_path: Path) -> None:
@@ -169,6 +208,8 @@ def test_run_step_validate_looks_for_armclang_build_dir(tmp_path: Path) -> None:
     assert RunStep(_config(root)).validate() is None
     error = RunStep(_config(root, toolchain="armclang")).validate()
     assert error is not None and "build-int-cortex-m55-arm-compiler" in error
+    error = RunStep(_config(root, toolchain="atfe")).validate()
+    assert error is not None and "build-int-cortex-m55-atfe" in error
 
 
 def test_steps_bootstrap_with_config_toolchain(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -226,25 +267,27 @@ def test_cli_toolchain_reaches_config_for_full(monkeypatch: pytest.MonkeyPatch, 
 # `full` prints its plan via the logger, not typer.echo, so it is covered by the
 # FakePipeline test above instead.
 @pytest.mark.parametrize("command", ["build", "run"])
-def test_cli_plan_output_shows_use_arm_compiler(tmp_path: Path, command: str) -> None:
+@pytest.mark.parametrize("toolchain", ["armclang", "atfe"])
+def test_cli_plan_output_shows_toolchain(tmp_path: Path, command: str, toolchain: str) -> None:
     from helia_core_tester.cli import app
 
     root = _init_repo_root(tmp_path)
     (root / "helia_core_tester" / "fvp").mkdir(parents=True)
     (root / "helia_core_tester" / "fvp" / "build_and_run_fvp.py").write_text("")
-    args = [command, "--plan", "--toolchain", "armclang", "--repo-root", str(root)]
+    args = [command, "--plan", "--toolchain", toolchain, "--repo-root", str(root)]
 
     result = CliRunner().invoke(app, args)
     text = _cli_text(result)
     assert result.exit_code == 0, text
-    assert "--use-arm-compiler" in text
+    assert f"--toolchain {toolchain}" in text
 
 
 @pytest.mark.parametrize("command", ["build", "run", "full"])
-def test_cli_rejects_coverage_with_armclang(tmp_path: Path, command: str) -> None:
+@pytest.mark.parametrize("toolchain", ["armclang", "atfe"])
+def test_cli_rejects_coverage_with_non_gcc(tmp_path: Path, command: str, toolchain: str) -> None:
     from helia_core_tester.cli import app
 
     root = _init_repo_root(tmp_path)
-    result = CliRunner().invoke(app, [command, "--plan", "--toolchain", "armclang", "--coverage", "--repo-root", str(root)])
+    result = CliRunner().invoke(app, [command, "--plan", "--toolchain", toolchain, "--coverage", "--repo-root", str(root)])
     assert result.exit_code != 0
     assert isinstance(result.exception, ConfigurationError) or "only supported with the gcc toolchain" in _cli_text(result)

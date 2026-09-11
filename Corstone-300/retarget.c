@@ -25,6 +25,7 @@
     #include <time.h>
 #else
     #include <errno.h>
+    #include <stdio.h>
     #include <string.h>
     #include <sys/stat.h>
 #endif
@@ -88,6 +89,39 @@ int fgetc(FILE *f)
 int SER_PutChar(int c) { return UartPutc(c); }
 
 int SER_GetChar(void) { return UartPutc(UartGetc()); }
+#endif
+
+#if defined(__PICOLIBC__)
+/*
+ * picolibc (Arm Toolchain for Embedded) has no newlib-style _write/_read
+ * syscalls: stdio goes through a FILE bound to the UART directly. The
+ * toolchain file links with -nostartfiles, so _start (reached from the CMSIS
+ * Reset_Handler via __cmsis_start) is provided here too.
+ */
+static int picolibc_uart_put(char c, FILE *f)
+{
+    (void)f;
+    return UartPutc((unsigned char)c);
+}
+
+static int picolibc_uart_get(FILE *f)
+{
+    (void)f;
+    return SER_GetChar();
+}
+
+static FILE picolibc_uart_stream = FDEV_SETUP_STREAM(picolibc_uart_put, picolibc_uart_get, NULL, _FDEV_SETUP_RW);
+
+FILE *const stdin = &picolibc_uart_stream;
+FILE *const stdout = &picolibc_uart_stream;
+FILE *const stderr = &picolibc_uart_stream;
+
+extern int main(void);
+
+__attribute__((noreturn)) void _start(void)
+{
+    exit(main());
+}
 #endif
 
 #if defined(__ARMCC_VERSION) && (__ARMCC_VERSION >= 6100100) && !defined(GCCCOMPILER)
@@ -248,7 +282,7 @@ __attribute__((weak)) char *(_sys_command_string)(char *cmd, int len)
 
 __attribute__((weak)) void(_sys_exit)(int return_code) { exit(return_code); }
 
-#else
+#elif !defined(__PICOLIBC__)
 /**
    Copied from CMSIS/DSP/DSP_Lib_TestSuite/Common/platform/GCC/Retarget.c
 */
