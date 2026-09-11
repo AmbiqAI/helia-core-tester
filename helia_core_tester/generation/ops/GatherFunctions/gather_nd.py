@@ -37,7 +37,9 @@ class OpGatherND(OperationBase):
         cannot do; accepting it would silently gather at the input type and compare against
         a golden built at the same type, proving nothing about the mismatch it asked for.
         """
-        dtype = get_resolved_tensor_dtype(self.desc, "input", "S8")
+        # No default: resolve_tensor_dtypes already raises on a descriptor with no input
+        # dtype, so a fallback here would be unreachable code that reads like a safety net.
+        dtype = get_resolved_tensor_dtype(self.desc, "input")
         output_dtype = get_resolved_tensor_dtype(self.desc, "output", dtype)
         if output_dtype != dtype:
             raise ValueError(

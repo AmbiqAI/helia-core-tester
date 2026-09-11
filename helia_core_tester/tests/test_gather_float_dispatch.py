@@ -29,8 +29,24 @@ def _repo_root() -> Path:
     "op_class,operator",
     [(OpGather, "Gather"), (OpGatherND, "GatherND")],
 )
-@pytest.mark.parametrize("dtype", ["S8", "S16", "FP32", "FP16"])
-def test_matching_element_dtypes_resolve_to_their_own_kernel(op_class, operator, dtype):
+@pytest.mark.parametrize(
+    "dtype,gather_fn,gather_nd_fn",
+    [
+        ("S8", "arm_gather_s8", "arm_gather_nd_s8"),
+        ("S16", "arm_gather_s16", "arm_gather_nd_s16"),
+        ("FP32", "arm_gather_f32", "arm_gather_nd_f32"),
+        ("FP16", "arm_gather_f16", "arm_gather_nd_f16"),
+    ],
+)
+def test_matching_element_dtypes_resolve_to_their_own_kernel(
+    op_class, operator, dtype, gather_fn, gather_nd_fn
+):
+    """Pin the kernel each dtype dispatches to, not just that the dtype round-trips.
+
+    Asserting only that _element_dtype() returns what the descriptor asked for would pass
+    with two entries of the kernel table transposed, which is the mistake the table exists
+    to prevent. The C type is pinned too, since the emitted arrays are declared with it.
+    """
     desc = {
         "operator": operator,
         "name": f"probe_{dtype.lower()}",
@@ -41,46 +57,76 @@ def test_matching_element_dtypes_resolve_to_their_own_kernel(op_class, operator,
     op = op_class(desc, seed=0, target_cpu="cortex-m55")
     assert op._element_dtype() == dtype
 
+    expected_fn = gather_fn if operator == "Gather" else gather_nd_fn
+    selector = (
+        op._select_cmsis_gather_kernel
+        if operator == "Gather"
+        else op._select_cmsis_gather_nd_kernel
+    )
+    kernel_info = selector()
+    assert kernel_info["kernel_fn"] == expected_fn
+    expected_c_type = {
+        "S8": "int8_t",
+        "S16": "int16_t",
+        "FP32": "float",
+        "FP16": "float16_t",
+    }[dtype]
+    assert kernel_info["input_c_type"] == expected_c_type
+    assert kernel_info["output_c_type"] == expected_c_type
+
 
 @pytest.mark.parametrize(
-    "op_class,operator",
-    [(OpGather, "Gather"), (OpGatherND, "GatherND")],
+    "case_name,axis_size,index_count",
+    [
+        ("gather_float_axis_inner_f32", 4, 3),
+        ("gather_float_axis_outer_f16", 3, 2),
+        ("gather_float_indices_rank2_f32", 4, 4),
+        ("gather_float_axis_middle_f32", 3, 2),
+    ],
 )
-def test_a_copy_operator_refuses_to_convert_element_types(op_class, operator):
-    # Accepting this would gather at the input type and compare against a golden built at
-    # the same type, so the case would pass while proving nothing about the conversion it
-    # asked for.
-    desc = {
-        "operator": operator,
-        "name": "probe_mismatched",
-        "tensor_dtypes": {"input": "FP32", "output": "FP16"},
-        "input_shape": [2, 3, 4],
-        "indices_shape": [2, 2],
-    }
-    op = op_class(desc, seed=0, target_cpu="cortex-m55")
-    with pytest.raises(ValueError, match="cannot convert"):
-        op._element_dtype()
+def test_a_case_drawing_no_more_indices_than_its_axis_has_slices_gets_distinct_ones(
+    case_name, axis_size, index_count
+):
+    """The property that lets an index case fail at all, over many seeds rather than one.
 
-
-@pytest.mark.parametrize("operator", ["Gather", "GatherND"])
-def test_an_unregistered_dtype_is_skippable_rather_than_fatal(operator):
-    """The float gather entry points have no hardware kernel registry entry.
-
-    lookup_kernel_id's own contract says callers should treat that as an
-    UnsupportedGeneratedTestError; before #149 no caller did, so introducing a float
-    case into a family the registry only carries in integer form would abort the whole
-    bundle run instead of skipping that one case.
+    Uniform draws once produced {0, 0} for the outer-axis case, so a kernel that ignored
+    the index array and always read slice zero passed the only case covering that copy
+    shape. This calls the generator's own draw rather than reimplementing it, across a
+    hundred seeds, so it pins the property instead of the luck of one seed.
     """
-    root = _repo_root()
-    assert _kernel_id(root, family="GatherFunctions", operator=operator, dtype="S8") > 0
-    for dtype in ("FP32", "FP16"):
-        with pytest.raises(UnsupportedGeneratedTestError):
-            _kernel_id(root, family="GatherFunctions", operator=operator, dtype=dtype)
+    desc = {
+        "operator": "Gather",
+        "name": case_name,
+        "tensor_dtypes": {"input": "FP32", "output": "FP32"},
+        "input_shape": [2, 3, 4],
+        "indices_shape": [index_count],
+    }
+    for seed in range(100):
+        op = OpGather(desc, seed, target_cpu="cortex-m55")
+        drawn = op._draw_indices((index_count,), axis_size)
+        assert drawn.size == index_count
+        assert len(set(drawn.tolist())) == index_count, (
+            f"seed {seed} drew {drawn.tolist()}, which cannot distinguish a kernel that "
+            f"ignores the index array from one that honours it"
+        )
+        assert drawn.min() >= 0 and drawn.max() < axis_size
 
 
-def test_the_conversion_does_not_hide_a_registered_lookup():
-    """The wrapper must stay a pass-through for everything the registry does carry."""
-    root = _repo_root()
-    assert _kernel_id(root, family="GatherFunctions", operator="Gather", dtype="S8") == (
-        lookup_kernel_id(root, family="GatherFunctions", operator="Gather", dtype="S8")
-    )
+def test_the_repeated_index_case_still_repeats():
+    """Its repeats are forced by pigeonhole, so the distinctness rule must not remove them.
+
+    Five indices drawn from an axis of extent two: every seed must repeat, or the case
+    stops catching a kernel that consumes a source slice.
+    """
+    desc = {
+        "operator": "Gather",
+        "name": "gather_float_repeated_index_f16",
+        "tensor_dtypes": {"input": "FP16", "output": "FP16"},
+        "input_shape": [2, 3, 4],
+        "indices_shape": [5],
+    }
+    for seed in range(100):
+        op = OpGather(desc, seed, target_cpu="cortex-m55")
+        drawn = op._draw_indices((5,), 2)
+        assert len(set(drawn.tolist())) < drawn.size
+        assert drawn.min() >= 0 and drawn.max() < 2

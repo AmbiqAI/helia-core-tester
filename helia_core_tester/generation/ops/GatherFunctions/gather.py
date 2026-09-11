@@ -37,7 +37,9 @@ class OpGather(OperationBase):
         cannot do; accepting it would silently gather at the input type and compare against
         a golden built at the same type, proving nothing about the mismatch it asked for.
         """
-        dtype = get_resolved_tensor_dtype(self.desc, "input", "S8")
+        # No default: resolve_tensor_dtypes already raises on a descriptor with no input
+        # dtype, so a fallback here would be unreachable code that reads like a safety net.
+        dtype = get_resolved_tensor_dtype(self.desc, "input")
         output_dtype = get_resolved_tensor_dtype(self.desc, "output", dtype)
         if output_dtype != dtype:
             raise ValueError(
@@ -82,6 +84,26 @@ class OpGather(OperationBase):
             "input_c_type": c_type,
             "output_c_type": c_type,
         }
+
+    def _draw_indices(self, indices_shape: tuple[int, ...], axis_size: int) -> np.ndarray:
+        """Draw the index array, distinct wherever the shape allows it.
+
+        Distinctness is the property that lets an index case fail. Drawing uniformly left
+        it to the seed, and one seed produced {0, 0} for the outer-axis case -- the only
+        case covering that copy shape -- so a kernel that ignored the index array and
+        always read slice zero passed it.
+
+        When there are more indices than the axis has slices, repeats are forced by
+        pigeonhole and are the point rather than a weakness: that is how the repeated-index
+        case gets its repeats, and it is the case that catches a kernel consuming a source
+        slice or advancing the source pointer once per output slice.
+        """
+        index_count = int(np.prod(indices_shape))
+        if index_count <= axis_size:
+            flat_indices = self.rng.choice(axis_size, size=index_count, replace=False)
+        else:
+            flat_indices = self.rng.integers(0, axis_size, size=index_count)
+        return flat_indices.astype(np.int32).reshape(indices_shape)
 
     @staticmethod
     def _shape_to_dims(shape: tuple[int, ...]) -> Dict[str, int]:
@@ -143,7 +165,7 @@ class OpGather(OperationBase):
             input_q = self.rng.integers(-2000, 2001, size=input_shape).astype(np_in_dtype)
 
         axis_size = int(input_shape[axis])
-        indices_q = self.rng.integers(0, axis_size, size=indices_shape, dtype=np.int32)
+        indices_q = self._draw_indices(indices_shape, axis_size)
 
         self.rng.__setstate__(rng_state)
 

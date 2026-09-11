@@ -27,7 +27,7 @@ import numpy as np
 import yaml
 
 from .case_bundle import BlobInfo, CaseBundle, _blob_info, _case_root, _manifest_blob_entry, _write_blob, _write_manifest
-from .kernel_registry import UnknownKernelError, lookup_kernel_id
+from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_kernel_id
 from helia_core_tester.generation.io.dtypes import resolve_comparison
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -45,9 +45,18 @@ def _kernel_id(project_root, **lookup):
     escape instead aborts the whole bundle run over one unbridgeable case, so a
     descriptor family gaining a dtype the registry does not carry -- float GATHER
     is the case that exposed this -- takes every other case down with it.
+
+    An ambiguous registry is the opposite situation and stays fatal. Skipping there would
+    turn a self-contradicting registry into a quiet drop of every case for the duplicated
+    tuple, reported only by a skip count that fails nothing.
     """
     try:
         return lookup_kernel_id(project_root, **lookup)
+    except AmbiguousKernelError:
+        # Deliberately not converted. A registry holding two entries for one tuple is
+        # corrupt data, not a gap: converting it would silently drop every case for that
+        # tuple from the run behind a "skipped N" line that fails nothing.
+        raise
     except UnknownKernelError as exc:
         raise UnsupportedGeneratedTestError(str(exc)) from exc
 

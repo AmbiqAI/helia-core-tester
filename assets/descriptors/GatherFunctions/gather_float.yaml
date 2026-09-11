@@ -11,7 +11,8 @@
 # Element values are whole numbers drawn from a wide range, so elements are mostly
 # distinct and a misplaced index usually lands on a visibly different value. It is a
 # strong hint, not a guarantee: with a few dozen draws from four thousand values a
-# duplicate is likely somewhere, and two of these cases do carry one.
+# duplicate is likely somewhere, and two of these cases do carry one. The indices
+# themselves are not left to chance -- see the repeated-index case below.
 #
 # required_kernel_symbols skips a case on a checkout that does not declare its kernel.
 # ns-cmsis-nn#496 is still a draft, so without the pin the first tester pin bump onto a
@@ -68,8 +69,10 @@ batch_dims: 0
 ---
 # Repeated indices, forced by pigeonhole rather than by a flag: five indices are
 # drawn from an axis of extent two, so at least one source slice is copied more
-# than once. A kernel that consumed a source slice, or advanced the source
-# pointer per output slice, would fail here and pass every other case.
+# than once. A kernel that consumed a source slice, or advanced the source pointer
+# once per output slice, fails here. This is the only case where a repeat is
+# guaranteed: every other case draws fewer indices than its axis has slices, and the
+# generator draws those without replacement, so they are all distinct.
 operator: Gather
 name: gather_float_repeated_index_f16
 suite: float
@@ -83,4 +86,27 @@ comparison:
 input_shape: [2, 3, 4]
 indices_shape: [5]
 axis: 0
+batch_dims: 0
+---
+# A middle-axis gather, the shape none of the cases above has. The kernel computes its
+# source base as (batch * outer + outer_i) * axis_size * inner, where outer is the product
+# of the dimensions before the axis and inner the product of those after it. Every case
+# above leaves one of those factors at 1 -- the four shapes give (outer, inner) of (2,1),
+# (1,4), (6,1) and (1,12) -- so a kernel that dropped the inner term from that product
+# would pass all of them: where inner is 1 the term is a no-op, and where outer is 1 the
+# base is 0 regardless. Here outer is 2 and inner is 4, so both factors are live and the
+# whole product is exercised.
+operator: Gather
+name: gather_float_axis_middle_f32
+suite: float
+required_kernel_symbols: [arm_gather_f32]
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison:
+  atol: 0
+  rtol: 0
+input_shape: [2, 3, 4]
+indices_shape: [2]
+axis: 1
 batch_dims: 0
