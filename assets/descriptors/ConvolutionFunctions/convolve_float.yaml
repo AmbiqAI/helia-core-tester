@@ -153,9 +153,6 @@ strides: [1, 1]
 padding: SAME
 groups: 4
 use_bias: true
-comparison:
-  atol: 0.025
-  rtol: 0.025
 ---
 operator: Convolve
 name: convolve_float_group_depthwise_f16
@@ -173,9 +170,6 @@ strides: [1, 1]
 padding: SAME
 groups: 16
 use_bias: true
-comparison:
-  atol: 0.025
-  rtol: 0.025
 ---
 operator: Convolve
 name: convolve_float_group_small_kernel_f16
@@ -193,9 +187,6 @@ strides: [1, 1]
 padding: VALID
 groups: 4
 use_bias: false
-comparison:
-  atol: 0.025
-  rtol: 0.025
 ---
 operator: Convolve
 name: convolve_float_stride2_valid_f16
