@@ -8,11 +8,18 @@
 # tolerance does prove exactness. Signed zero, NaN payloads and subnormals are
 # raw-bit properties the kernel lane covers with unit tests of its own.
 #
-# Element values are whole numbers drawn from a wide range so that every element
-# is distinct in practice: that is what makes a misplaced index visible.
+# Element values are whole numbers drawn from a wide range, so elements are mostly
+# distinct and a misplaced index usually lands on a visibly different value. It is a
+# strong hint, not a guarantee: with a few dozen draws from four thousand values a
+# duplicate is likely somewhere, and two of these cases do carry one.
+#
+# required_kernel_symbols skips a case on a checkout that does not declare its kernel.
+# ns-cmsis-nn#496 is still a draft, so without the pin the first tester pin bump onto a
+# checkout without these symbols would fail the whole float link instead of skipping.
 operator: Gather
 name: gather_float_axis_inner_f32
 suite: float
+required_kernel_symbols: [arm_gather_f32]
 tensor_dtypes:
   input: FP32
   output: FP32
@@ -29,6 +36,7 @@ batch_dims: 0
 operator: Gather
 name: gather_float_axis_outer_f16
 suite: float
+required_kernel_symbols: [arm_gather_f16]
 tensor_dtypes:
   input: FP16
   output: FP16
@@ -46,6 +54,7 @@ batch_dims: 0
 operator: Gather
 name: gather_float_indices_rank2_f32
 suite: float
+required_kernel_symbols: [arm_gather_f32]
 tensor_dtypes:
   input: FP32
   output: FP32
@@ -64,6 +73,7 @@ batch_dims: 0
 operator: Gather
 name: gather_float_repeated_index_f16
 suite: float
+required_kernel_symbols: [arm_gather_f16]
 tensor_dtypes:
   input: FP16
   output: FP16

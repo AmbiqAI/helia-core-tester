@@ -9,7 +9,6 @@ from helia_core_tester.generation.io.dtypes import (
     descriptor_dtype_to_c_type,
     descriptor_dtype_to_litert_dtype,
     get_resolved_tensor_dtype,
-    is_float_dtype,
 )
 from helia_core_tester.generation.ops._shared.base import OperationBase
 
