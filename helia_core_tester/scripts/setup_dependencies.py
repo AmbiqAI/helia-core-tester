@@ -46,15 +46,23 @@ GCC_VERSION_RE = re.compile(r"^\d+\.\d+\.rel\d+$")
 GCC_VERSION_MARKER = ".helia_gcc_version"
 _SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
+# Releases up to 15.2.rel1 are served from developer.arm.com; from 15.3.rel1 Arm
+# publishes to its GitLab package registry instead and the old path 404s.
+_GCC_GITLAB_FIRST_RELEASE = (15, 3)
+_GCC_DEVELOPER_URL = "https://developer.arm.com/-/media/Files/downloads/gnu/{version}/binrel/{archive}"
+_GCC_GITLAB_URL = (
+    "https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/"
+    "gnu-toolchain/{version}/{archive}"
+)
+
 # Pinned SHA-256 digests for all downloaded dependency archives. Values were
 # obtained from Arm's official release artifacts:
 #   - ARM GCC toolchain, keyed (dependency, version, architecture): published by
-#     Arm alongside each release at
-#     https://developer.arm.com/-/media/Files/downloads/gnu/<ver>/binrel/<file>.sha256asc
-#     A release not listed here can still be selected with --gcc-version; its
-#     digest is then taken from --gcc-sha256 / HELIA_GCC_SHA256 or, failing
-#     that, fetched from that same sidecar at install time (see
-#     resolve_gcc_sha256()).
+#     Arm alongside each release as <archive>.sha256asc next to the archive (see
+#     arm_gcc_download_url() for the host). A release not listed here can still
+#     be selected with --gcc-version; its digest is then taken from
+#     --gcc-sha256 / HELIA_GCC_SHA256 or, failing that, fetched from that same
+#     sidecar at install time (see resolve_gcc_sha256()).
 #   - Corstone-300 FVP 11.24_13, keyed (dependency, architecture): Arm does not
 #     publish a SHA-256 sidecar for this archive; the digest below was computed
 #     directly from a fresh download of the official Arm URL referenced in
@@ -71,6 +79,8 @@ PINNED_SHA256 = {
     ("arm_gcc", "14.3.rel1", "aarch64"): "2d465847eb1d05f876270494f51034de9ace9abe87a4222d079f3360240184d3",
     ("arm_gcc", "15.2.rel1", "x86_64"): "597893282ac8c6ab1a4073977f2362990184599643b4c5ee34870a8215783a16",
     ("arm_gcc", "15.2.rel1", "aarch64"): "d061559d814b205ed30c5b7c577c03317ec447ca51cd5a159d26b12a5bbeb20c",
+    ("arm_gcc", "15.3.rel1", "x86_64"): "563bebb2b97d53382b956d6ee1fe61e2cae26699901417234a37df505ef9b5fa",
+    ("arm_gcc", "15.3.rel1", "aarch64"): "06979e0c8171de58e5dc2a2b2019330a290f30930f27728af98a83e1a7369b3a",
     ("corstone300", "x86_64"): "6ea4096ecf8a8c06d6e76e21cae494f0c7139374cb33f6bc3964d189b84539a9",
     ("corstone300", "aarch64"): "9b43da6a688220c707cd1801baf9cf4f5fb37d6dc77587b9071347411a64fd56",
 }
@@ -94,10 +104,9 @@ def resolve_gcc_version(cli_value: Optional[str] = None) -> str:
 
 
 def arm_gcc_download_url(version: str, arch: str) -> str:
-    return (
-        f"https://developer.arm.com/-/media/Files/downloads/gnu/{version}/binrel/"
-        f"arm-gnu-toolchain-{version}-{arch}-arm-none-eabi.tar.xz"
-    )
+    major, minor = (int(part) for part in version.split(".")[:2])
+    template = _GCC_GITLAB_URL if (major, minor) >= _GCC_GITLAB_FIRST_RELEASE else _GCC_DEVELOPER_URL
+    return template.format(version=version, archive=f"arm-gnu-toolchain-{version}-{arch}-arm-none-eabi.tar.xz")
 
 
 def parse_sha256_sidecar(text: str) -> str:
@@ -372,7 +381,6 @@ def setup_arm_gcc(
     """
     gcc_dir = downloads_dir / "arm_gcc_download"
     version = resolve_gcc_version(version)
-    print(f"ARM GCC version: {version}")
 
     if gcc_dir.exists() and not force:
         installed = read_installed_gcc_version(gcc_dir)
@@ -783,7 +791,7 @@ Examples:
     python3 scripts/setup_dependencies.py --force
     python3 scripts/setup_dependencies.py --gcc-version 13.2.rel1 --force
     HELIA_GCC_VERSION=15.2.rel1 python3 scripts/setup_dependencies.py --force
-    python3 scripts/setup_dependencies.py --gcc-version 15.3.rel1 --gcc-sha256 <hex> --force
+    python3 scripts/setup_dependencies.py --gcc-version 16.1.rel1 --gcc-sha256 <hex> --force
         """
     )
 

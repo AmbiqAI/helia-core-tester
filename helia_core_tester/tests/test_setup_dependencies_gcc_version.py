@@ -7,17 +7,30 @@ import pytest
 from helia_core_tester.scripts import setup_dependencies as sd
 
 
-PINNED_VERSIONS = ("13.2.rel1", "13.3.rel1", "14.2.rel1", "14.3.rel1", "15.2.rel1")
+DEVELOPER_HOSTED = ("13.2.rel1", "13.3.rel1", "14.2.rel1", "14.3.rel1", "15.2.rel1")
+GITLAB_HOSTED = ("15.3.rel1",)
+PINNED_VERSIONS = DEVELOPER_HOSTED + GITLAB_HOSTED
+UNPINNED_VERSION = "16.1.rel1"
 FAKE_DIGEST = "ab" * 32
 
 
 @pytest.mark.parametrize("arch", ["x86_64", "aarch64"])
-@pytest.mark.parametrize("version", PINNED_VERSIONS)
-def test_download_url_per_version_and_arch(version: str, arch: str) -> None:
+@pytest.mark.parametrize("version", DEVELOPER_HOSTED)
+def test_download_url_developer_arm_com_up_to_15_2(version: str, arch: str) -> None:
     url = sd.arm_gcc_download_url(version, arch)
     assert url == (
         f"https://developer.arm.com/-/media/Files/downloads/gnu/{version}/binrel/"
         f"arm-gnu-toolchain-{version}-{arch}-arm-none-eabi.tar.xz"
+    )
+
+
+@pytest.mark.parametrize("arch", ["x86_64", "aarch64"])
+@pytest.mark.parametrize("version", GITLAB_HOSTED + (UNPINNED_VERSION,))
+def test_download_url_gitlab_registry_from_15_3(version: str, arch: str) -> None:
+    url = sd.arm_gcc_download_url(version, arch)
+    assert url == (
+        "https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/"
+        f"gnu-toolchain/{version}/arm-gnu-toolchain-{version}-{arch}-arm-none-eabi.tar.xz"
     )
 
 
@@ -92,7 +105,7 @@ def test_parse_sha256_sidecar_rejects_malformed(bad: str) -> None:
 def test_unpinned_version_fetches_sidecar_and_prints_note(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    version, arch = "15.3.rel1", "x86_64"
+    version, arch = UNPINNED_VERSION, "x86_64"
     assert ("arm_gcc", version, arch) not in sd.PINNED_SHA256
     expected_url = sd.arm_gcc_download_url(version, arch) + ".sha256asc"
     seen: list[str] = []
@@ -126,7 +139,7 @@ def test_unpinned_version_sidecar_failure_points_at_override(monkeypatch: pytest
 
     monkeypatch.setattr(sd.urllib.request, "urlopen", fake_urlopen)
     with pytest.raises(RuntimeError, match="--gcc-sha256"):
-        sd.resolve_gcc_sha256("15.3.rel1", "x86_64")
+        sd.resolve_gcc_sha256(UNPINNED_VERSION, "x86_64")
 
 
 def test_explicit_sha256_override_wins_over_table(monkeypatch: pytest.MonkeyPatch) -> None:
