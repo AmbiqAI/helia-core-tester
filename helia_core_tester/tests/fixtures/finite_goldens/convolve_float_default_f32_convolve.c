@@ -200,12 +200,20 @@ static int32_t convolve_float_default_f32_bench_op(void)
 
 static void convolve_float_default_f32_benchmark_run(void)
 {
-    // Recorded, not fixed (#133): this call discards its status, so the sizer checks inside
-    // _bench_init() cannot fail a benchmark case. A benchmark reports cycles, not a verdict,
-    // and helia_benchmark_run() has no failure channel to report one on, so wiring the status
-    // through here would need a benchmark-side verdict path that does not exist. The
-    // non-benchmark run of the same case does carry the check.
-    convolve_float_default_f32_bench_init();
+    // A sizer check inside _bench_init() returns before the context is populated, so the
+    // benchmark must not proceed on that path: _bench_op() would call the kernel with an
+    // uninitialised context and time whatever happened, recording cycle counts that mean
+    // nothing, or crash. The failing check has already printed its marker naming the
+    // sizer; this reports the skip and runs nothing (#133).
+    //
+    // What this still does not do is fail the case. A benchmark reports cycles, not a
+    // verdict, and helia_benchmark_run() has no failure channel to carry one, so the
+    // run ends with zero failures either way. The non-benchmark run of the same case is
+    // what turns a bad sizer answer into a verdict.
+    if (convolve_float_default_f32_bench_init() != ARM_CMSIS_NN_SUCCESS) {
+        printf("[BENCH] convolve_float_default_f32 skipped: scratch sizer rejected before the context was populated\r\n");
+        return;
+    }
     helia_benchmark_run("convolve_float_default_f32", convolve_float_default_f32_bench_op);
 }
 #endif // HELIA_BENCHMARK_MODE
