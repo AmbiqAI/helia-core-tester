@@ -63,9 +63,12 @@ int32_t {{ name }}_run(
     // with the real size once the context is populated (#68).
 
 
-    if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // The sizer's answer is checked before it becomes a context size (#133). A negative
+    // answer is the documented out-of-range sentinel and never a usable size; an answer
+    // above this case's static means our generation-time bound and the shipped kernel
+    // disagree. They are separate failures because they have separate owners.
+    HELIA_VALIDATE_SIZER("{{ kernel_get_buffer_size_fn }}", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("{{ kernel_get_buffer_size_fn }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
 
     // Initialize context buffer
     // Armed unconditionally: force_no_scratch bypasses {{ name }}_buffer entirely,

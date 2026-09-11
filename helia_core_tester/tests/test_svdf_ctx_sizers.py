@@ -84,8 +84,20 @@ def test_each_kernel_sizes_scratch_through_its_own_sizers(
         if other != kernel:
             assert f"{other}_input_ctx_get_buffer_size(" not in rendered
             assert f"{other}_output_ctx_get_buffer_size(" not in rendered
-    # A negative sizer result must be rejected before any allocation or kernel call.
-    assert "return ARM_CMSIS_NN_ARG_ERROR;" in rendered
+    # A negative sizer result must be rejected before any allocation or kernel call. The
+    # rejection now runs through HELIA_VALIDATE_SIZER, which names the sizer that answered
+    # rather than returning silently (#133), so pin the check and its position rather than
+    # the bare return the macro now carries.
+    input_check = f'HELIA_VALIDATE_SIZER("{kernel}_input_ctx_get_buffer_size"'
+    output_check = f'HELIA_VALIDATE_SIZER("{kernel}_output_ctx_get_buffer_size"'
+    assert input_check in rendered
+    assert output_check in rendered
+    first_allocation = min(
+        (rendered.index(token) for token in ("malloc(", f"{kernel}(") if token in rendered),
+        default=len(rendered),
+    )
+    assert rendered.index(input_check) < first_allocation
+    assert rendered.index(output_check) < first_allocation
 
 
 def test_int_template_no_longer_hardcodes_scratch_arithmetic(
@@ -118,8 +130,17 @@ def test_float_template_keeps_static_arrays_as_upper_bound(
 ) -> None:
     name = KERNEL_CASES[kernel]
     rendered = _emit(tmp_path, _base_descriptor(checked_in_descriptors, kernel))
-    assert f"scratch_input_bytes > (int32_t)sizeof({name}_scratch_input)" in rendered
-    assert f"scratch_output_bytes > (int32_t)sizeof({name}_scratch_output)" in rendered
+    # The static array is still the declared upper bound; the comparison that enforces it
+    # moved into HELIA_VALIDATE_SIZER_FITS, which names the sizer whose answer overran it
+    # so the report can say whose defect it is (#133).
+    assert (
+        f'HELIA_VALIDATE_SIZER_FITS("{kernel}_input_ctx_get_buffer_size", '
+        f"scratch_input_bytes, (int32_t)sizeof({name}_scratch_input))" in rendered
+    )
+    assert (
+        f'HELIA_VALIDATE_SIZER_FITS("{kernel}_output_ctx_get_buffer_size", '
+        f"scratch_output_bytes, (int32_t)sizeof({name}_scratch_output))" in rendered
+    )
     assert f".buf = {name}_scratch_input, .size = scratch_input_bytes" in rendered
     assert f".buf = {name}_scratch_output, .size = scratch_output_bytes" in rendered
     assert f".size = sizeof({name}_scratch_input)" not in rendered

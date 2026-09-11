@@ -56,9 +56,12 @@ int32_t depthwise_conv_float_default_f32_run(
     // with the real size once the context is populated (#68).
 
 
-    if (required_buffer_size > DEPTHWISE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX) {
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // The sizer's answer is checked before it becomes a context size (#133). A negative
+    // answer is the documented out-of-range sentinel and never a usable size; an answer
+    // above this case's static means our generation-time bound and the shipped kernel
+    // disagree. They are separate failures because they have separate owners.
+    HELIA_VALIDATE_SIZER("arm_depthwise_conv_f32_get_buffer_size", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("arm_depthwise_conv_f32_get_buffer_size", required_buffer_size, DEPTHWISE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
 
     // Initialize context buffer
     // Armed unconditionally: force_no_scratch bypasses depthwise_conv_float_default_f32_buffer entirely,

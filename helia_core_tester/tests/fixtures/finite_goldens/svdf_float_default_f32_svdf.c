@@ -36,11 +36,13 @@ static int32_t run_svdf(void)
     // kernel's own sizers (issue #71).
     const int32_t scratch_input_bytes = arm_svdf_f32_input_ctx_get_buffer_size(&svdf_float_default_f32_input_dims, &svdf_float_default_f32_weights_feature_dims);
     const int32_t scratch_output_bytes = arm_svdf_f32_output_ctx_get_buffer_size(&svdf_float_default_f32_svdf_params, &svdf_float_default_f32_input_dims, &svdf_float_default_f32_weights_feature_dims);
-    if (scratch_input_bytes < 0 || scratch_input_bytes > (int32_t)sizeof(svdf_float_default_f32_scratch_input) ||
-        scratch_output_bytes < 0 || scratch_output_bytes > (int32_t)sizeof(svdf_float_default_f32_scratch_output))
-    {
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // One condition previously collapsed four distinct answers into one silent return, so
+    // the report could not say which sizer answered or whether the fault was the kernel's
+    // (a negative sentinel) or ours (a static too small for the answer). Refs #133.
+    HELIA_VALIDATE_SIZER("arm_svdf_f32_input_ctx_get_buffer_size", scratch_input_bytes);
+    HELIA_VALIDATE_SIZER_FITS("arm_svdf_f32_input_ctx_get_buffer_size", scratch_input_bytes, (int32_t)sizeof(svdf_float_default_f32_scratch_input));
+    HELIA_VALIDATE_SIZER("arm_svdf_f32_output_ctx_get_buffer_size", scratch_output_bytes);
+    HELIA_VALIDATE_SIZER_FITS("arm_svdf_f32_output_ctx_get_buffer_size", scratch_output_bytes, (int32_t)sizeof(svdf_float_default_f32_scratch_output));
     cmsis_nn_context input_ctx = {.buf = svdf_float_default_f32_scratch_input, .size = scratch_input_bytes};
     cmsis_nn_context output_ctx = {.buf = svdf_float_default_f32_scratch_output, .size = scratch_output_bytes};
 

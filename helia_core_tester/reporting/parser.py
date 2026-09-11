@@ -21,6 +21,8 @@ class TestResultParser:
         'HELIA_MASKED_LANES',
         'HELIA_NONFINITE_MISMATCHES',
         'GuardBreach[',
+        'HELIA_SIZER_INVALID[',
+        'HELIA_SIZER_OVER_CAPACITY[',
     )
     failure_count_line_pattern = re.compile(r'^\d+\s+Failures$', re.IGNORECASE)
 
@@ -80,6 +82,32 @@ class TestResultParser:
             r'HELIA_NONFINITE_MISMATCHES\s+n=(\d+)'
         )
         # Pattern for "Convolution failed" or API errors
+        # A sizer answering outside its contract, and our own scratch bound
+        # disagreeing with the shipped kernel. Both are emitted just before the
+        # harness unwinds with ARM_CMSIS_NN_ARG_ERROR, so both must be matched
+        # ahead of api_error below; otherwise that rule claims the line first
+        # and these classifications are unreachable. They are kept apart on
+        # purpose: a negative answer is the kernel's defect, an answer larger
+        # than the static this case allocated is ours.
+        self.sizer_invalid_pattern = re.compile(
+            r'HELIA_SIZER_INVALID\[([^\]]*)\]:\s*(-?\d+)'
+        )
+        self.sizer_over_capacity_pattern = re.compile(
+            r'HELIA_SIZER_OVER_CAPACITY\[([^\]]*)\]:\s*(-?\d+)\s*>\s*(-?\d+)'
+        )
+        # A sizer size assertion failing arrives on the generic scalar-mismatch line, which
+        # would otherwise be classified as an ordinary output mismatch: the subject naming a
+        # buffer size is what separates "this kernel computed the wrong values" from "this
+        # kernel asked for the wrong amount of scratch". Matched after the two markers above
+        # and before the generic failure count below.
+        # The subject class excludes newline as well as colon: a bare [^:] would let the
+        # subject run backwards across earlier lines, so an unrelated colon-free line
+        # preceding a scalar mismatch could both widen the reported reason and, if it
+        # happened to carry the words, claim the classification.
+        self.sizer_expectation_pattern = re.compile(
+            r'(?P<label>.+?) (?P<subject>[^:\n]*(?:buffer|ctx) size[^:\n]*) mismatch: '
+            r'expected (?P<expected>-?\d+) got (?P<actual>-?\d+)'
+        )
         self.api_error_pattern = re.compile(
             r'(?P<label>[A-Za-z][A-Za-z0-9 _-]*)\s+failed with status\s+(?P<status>-?\d+)',
             re.IGNORECASE,
@@ -182,6 +210,28 @@ class TestResultParser:
         if guard_breaches:
             return TestStatus.FAIL, "Guard breach in " + "; ".join(guard_breaches), None, "guard_breach"
 
+        sizer_invalid_match = self.sizer_invalid_pattern.search(output)
+        if sizer_invalid_match:
+            sizer, value = sizer_invalid_match.groups()
+            return (
+                TestStatus.FAIL,
+                f"Sizer contract violation: {sizer} returned {value}, which the header "
+                "documents as the out-of-range sentinel and never a usable buffer size",
+                None,
+                "sizer_contract",
+            )
+
+        sizer_capacity_match = self.sizer_over_capacity_pattern.search(output)
+        if sizer_capacity_match:
+            sizer, value, capacity = sizer_capacity_match.groups()
+            return (
+                TestStatus.FAIL,
+                f"Scratch bound disagrees with the kernel: {sizer} asked for {value} bytes "
+                f"against the {capacity}-byte static this case allocates",
+                None,
+                "sizer_capacity",
+            )
+
         api_error_match = self.api_error_pattern.search(output)
         if api_error_match:
             label = api_error_match.group("label").strip()
@@ -220,6 +270,17 @@ class TestResultParser:
                     f"({nonfinite_total} non-finite, reported beyond the per-case report limit)",
                     None,
                     "nonfinite_mismatch",
+                )
+            sizer_expectation = self.sizer_expectation_pattern.search(output)
+            if sizer_expectation:
+                subject = sizer_expectation.group("subject").strip()
+                expected = sizer_expectation.group("expected")
+                actual = sizer_expectation.group("actual")
+                return (
+                    TestStatus.FAIL,
+                    f"Sizer answered {actual} where {expected} was expected for the {subject}",
+                    None,
+                    "sizer_contract",
                 )
             return TestStatus.FAIL, f"Output mismatch: {failure_count} element(s) differ from expected", None, "output_mismatch"
 

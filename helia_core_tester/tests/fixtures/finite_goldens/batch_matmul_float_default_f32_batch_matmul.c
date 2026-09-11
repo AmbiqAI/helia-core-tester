@@ -48,9 +48,12 @@ int32_t batch_matmul_float_default_f32_run(
     // with the real size once the context is populated (#68).
 
 
-    if (required_buffer_size > BATCH_MATMUL_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX) {
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // The sizer's answer is checked before it becomes a context size (#133). A negative
+    // answer is the documented out-of-range sentinel and never a usable size; an answer
+    // above this case's static means our generation-time bound and the shipped kernel
+    // disagree. They are separate failures because they have separate owners.
+    HELIA_VALIDATE_SIZER("arm_batch_matmul_f32_get_buffer_size", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("arm_batch_matmul_f32_get_buffer_size", required_buffer_size, BATCH_MATMUL_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
 
     // Initialize context buffer
     batch_matmul_float_default_f32_ctx.buf = batch_matmul_float_default_f32_buffer;

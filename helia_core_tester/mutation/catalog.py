@@ -109,6 +109,57 @@ Grounding of the v1 entries:
                          blame the suite for a path the scorer cannot compile.
                          The FVP cortex-m55 runs are the check for those.
 
+- conv_sizer_negative, depthwise_sizer_negative, fc_sizer_negative,
+  avgpool_sizer_negative, transpose_conv_sizer_negative,
+  transpose_conv_reverse_sizer_negative, svdf_kernel_sum_sizer_negative:
+                         the scratch-sizer sentinel class behind tester#133.
+                         Each makes one *_get_buffer_size() the harness calls
+                         return the documented negative out-of-range value with
+                         a minimal literal edit. Before #133 that answer became
+                         ctx.size unremarked -- a negative number is not larger
+                         than the static the case allocated, so the capacity
+                         comparison passed, and most kernels never read
+                         ctx.size -- and every one of these mutants survived.
+                         Where a kernel family exposes plain / _dsp / _mve
+                         sizer entry points, all of them are patched by the one
+                         edit, because the harness calls whichever the
+                         generation CPU selected. Batch matmul has no entry of
+                         its own: the harness sizes its int cases with
+                         arm_fully_connected_{s8,s16}_get_buffer_size, so
+                         fc_sizer_negative covers it. Transpose conv gets two
+                         mutants rather than one because HELIA_VALIDATE_SIZER
+                         returns on the first failure, so a forward-sizer
+                         mutation would mask the reverse-sizer check.
+
+                         Scope of the class, and why each boundary is where it
+                         is:
+                         * Each mutant patches the _s8 sizer file of its
+                           family only. The s4 and s16 sizers live in sibling
+                           arm_*_get_buffer_sizes_s4.c / _s16.c files and are
+                           deliberately untouched, so s4 and s16 cases are
+                           survivors by construction; each entry says so.
+                         * The float sizers are untouched because host_build.py
+                           excludes f16/f32 sources from the mutation library,
+                           so a float edit would be dead code on the scorer and
+                           would score as vacuous.
+                         * Only average pooling has a mutant in the pooling
+                           family, and only average pooling carries the checks.
+                           pool_base.py sets kernel_get_buffer_size_fn for avg
+                           pool alone, so max_pool.c.j2's sizer block never
+                           renders and its capacity constant is zero, which
+                           would reject any positive answer if it ever did.
+                           Instrumenting it would be dead template text, so it
+                           is left alone and there is no sizer for a mutant to
+                           target.
+                         * An under-reporting sizer -- one that answers a few
+                           bytes short -- is NOT detectable by this work and is
+                           deliberately not catalogued: the answer stays
+                           non-negative, stays below the conservatively sized
+                           static, and is read by nothing on that route, so
+                           neither #133 check can fire. Catching it needs the
+                           harness to compare the answer against an independent
+                           bound, which is separate work.
+
 A mutant may declare ``requires_capabilities``: the capabilities the generated
 corpus needs before any case that could kill it exists at all. Scoring on a CPU
 that lacks one reports NOT_APPLICABLE rather than SURVIVED, because a corpus
@@ -856,6 +907,304 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             "kernel returns SUCCESS instead of the asserted ARM_CMSIS_NN_ARG_ERROR."
         ),
         refs=("AmbiqAI/helia-core-tester#72",),
+    ),
+    # ------------------------------------------------------------------------
+    # Scratch-sizer sentinel mutants (tester#133). Each one makes a
+    # *_get_buffer_size() the harness actually calls return the documented
+    # negative out-of-range sentinel with a minimal literal edit. Before #133 a
+    # negative answer flowed into ctx.size unremarked -- it is not larger than
+    # the static the case allocated, so the capacity comparison passed, and most
+    # kernels never read ctx.size -- and every one of these mutants survived.
+    # They exist to prove HELIA_VALIDATE_SIZER catches something. See the module
+    # docstring for the scope of the class and for the one sizer defect it
+    # deliberately does not cover.
+    # ------------------------------------------------------------------------
+    Mutant(
+        mutant_id="conv_sizer_negative",
+        description="The s8 convolution wrapper sizer returns the -1 out-of-range sentinel",
+        family="ConvolutionFunctions",
+        edits=(
+            # One literal, three replacements: the harness calls whichever of the
+            # three wrapper entry points its generation CPU selected
+            # (arm_convolve_wrapper_s8_get_buffer_size on a plain target, _dsp on
+            # cortex-m4, _mve on cortex-m55), so all three bodies have to answer
+            # -1 for the mutant to be reachable on every target. The dispatch
+            # line is what makes the anchor exact: `(void)output_dims;` alone
+            # matches five times in this file, and the two extra sites --
+            # arm_convolve_s8_get_weights_sum_size and the non-MVE leg of
+            # arm_convolve_1_x_n_s8_get_buffer_size -- are deliberately left alone.
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_get_buffer_sizes_s8.c",
+                pattern=(
+                    "    (void)output_dims;\n"
+                    "    if (arm_nn_is_convolve_1x1(conv_params, input_dims, filter_dims))\n"
+                ),
+                replacement=(
+                    "    (void)output_dims;\n"
+                    "    return -1; /* MUTANT conv_sizer_negative */\n"
+                    "    if (arm_nn_is_convolve_1x1(conv_params, input_dims, filter_dims))\n"
+                ),
+                count=3,
+            ),
+        ),
+        expected_detected_by=(
+            "every s8 Convolve case, through HELIA_VALIDATE_SIZER (tester#133). s4 and s16 "
+            "Convolve cases survive by construction: their wrapper sizers live in "
+            "arm_convolve_get_buffer_sizes_s4.c and _s16.c, which this mutant does not touch."
+        ),
+        refs=("AmbiqAI/helia-core-tester#133",),
+    ),
+    # The FITS half of the pair needs its own sabotage: a sizer that answers a
+    # value larger than the static the case allocated. These two say the answer
+    # is a gigabyte, which no generated case reserves, so HELIA_VALIDATE_SIZER
+    # passes it and HELIA_VALIDATE_SIZER_FITS is the check that has to fire.
+    # Without them the FITS macro would ship with no evidence that it detects
+    # anything, since the negative-sentinel mutants above are all caught one
+    # line earlier.
+    Mutant(
+        mutant_id="conv_sizer_over_capacity",
+        description="The s8 convolution wrapper sizer answers a gigabyte, far above any case's static",
+        family="ConvolutionFunctions",
+        edits=(
+            # Same anchor and the same three wrapper bodies as
+            # conv_sizer_negative; only the answer differs, so a kill here is
+            # attributable to the capacity check rather than the sign check.
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_convolve_get_buffer_sizes_s8.c",
+                pattern=(
+                    "    (void)output_dims;\n"
+                    "    if (arm_nn_is_convolve_1x1(conv_params, input_dims, filter_dims))\n"
+                ),
+                replacement=(
+                    "    (void)output_dims;\n"
+                    "    return 0x40000000; /* MUTANT conv_sizer_over_capacity */\n"
+                    "    if (arm_nn_is_convolve_1x1(conv_params, input_dims, filter_dims))\n"
+                ),
+                count=3,
+            ),
+        ),
+        expected_detected_by=(
+            "every s8 Convolve case, through HELIA_VALIDATE_SIZER_FITS (tester#133). The "
+            "answer is positive, so the sign check passes it through and only the capacity "
+            "comparison can catch it. Reported as sizer_capacity rather than sizer_contract: "
+            "in production that pairing means our generation-time bound is too small, which "
+            "is the tester's defect and not the kernel's."
+        ),
+        refs=("AmbiqAI/helia-core-tester#133",),
+    ),
+    Mutant(
+        mutant_id="avgpool_sizer_over_capacity",
+        description="The s8 average pooling sizer answers a gigabyte, far above any case's static",
+        family="PoolingFunctions",
+        edits=(
+            # A second family, so a kill is not a property of the convolution
+            # template alone. The insertion goes after the existing range guard
+            # in each of the three bodies, which leaves that guard's own -1
+            # behaviour intact and makes the gigabyte the only new answer.
+            Edit(
+                relpath="Source/PoolingFunctions/arm_avgpool_get_buffer_sizes_s8.c",
+                pattern=(
+                    "    if ((ch_src < 0) || (required_bytes > INT32_MAX))\n"
+                    "    {\n"
+                    "        return -1;\n"
+                    "    }\n"
+                ),
+                replacement=(
+                    "    if ((ch_src < 0) || (required_bytes > INT32_MAX))\n"
+                    "    {\n"
+                    "        return -1;\n"
+                    "    }\n"
+                    "    return 0x40000000; /* MUTANT avgpool_sizer_over_capacity */\n"
+                ),
+                count=3,
+            ),
+        ),
+        expected_detected_by=(
+            "every s8 AvgPool case, through HELIA_VALIDATE_SIZER_FITS (tester#133). s16 avg "
+            "pool cases survive: their sizer is in arm_avgpool_get_buffer_sizes_s16.c."
+        ),
+        refs=("AmbiqAI/helia-core-tester#133",),
+    ),
+    Mutant(
+        mutant_id="depthwise_sizer_negative",
+        description="The s8 depthwise convolution wrapper sizer returns the -1 out-of-range sentinel",
+        family="ConvolutionFunctions",
+        edits=(
+            # The same three-variant story as conv: plain, _dsp and _mve wrappers
+            # each open with this declaration and each is the entry point for one
+            # class of target. Seeding it at -1 and returning immediately keeps
+            # `size` used, so the edit introduces no unused local.
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_depthwise_conv_get_buffer_sizes_s8.c",
+                pattern="    int32_t size = 0;\n",
+                replacement=(
+                    "    int32_t size = -1;\n"
+                    "    return size; /* MUTANT depthwise_sizer_negative */\n"
+                ),
+                count=3,
+            ),
+        ),
+        expected_detected_by=(
+            "every s8 DepthwiseConv case, through HELIA_VALIDATE_SIZER (tester#133). s4 and "
+            "s16 depthwise cases survive by construction -- their wrapper sizers are in "
+            "arm_depthwise_conv_get_buffer_sizes_s4.c and _s16.c."
+        ),
+        refs=("AmbiqAI/helia-core-tester#133",),
+    ),
+    Mutant(
+        mutant_id="fc_sizer_negative",
+        description="The s8 fully connected kernel-sum sizer returns the -1 out-of-range sentinel",
+        family="FullyConnectedFunctions",
+        edits=(
+            # The dispatcher and both legs carry the identical range guard, so one
+            # literal forces the kernel's own -1 sentinel out of whichever entry
+            # point the generation CPU picked. This strengthens the guard to
+            # always-true rather than removing it: the guard-removal class is a
+            # separate concern and is catalogued separately.
+            Edit(
+                relpath="Source/FullyConnectedFunctions/arm_fully_connected_get_buffer_sizes_s8.c",
+                pattern="    if ((filter_dims->c < 0) || (required_bytes > INT32_MAX))\n",
+                replacement=(
+                    "    if (1 || (filter_dims->c < 0) || (required_bytes > INT32_MAX)) "
+                    "/* MUTANT fc_sizer_negative */\n"
+                ),
+                count=3,
+            ),
+        ),
+        expected_detected_by=(
+            "every s8 FullyConnected case and every s8 BatchMatMul case, through "
+            "HELIA_VALIDATE_SIZER (tester#133). Batch matmul is covered here rather than by a "
+            "mutant of its own: the kernel does ship arm_batch_matmul_s8_get_buffer_size, but "
+            "the batch matmul harness does not call it -- resolve_batch_matmul_kernel() hands "
+            "the template arm_fully_connected_s8_get_buffer_size for int8 and "
+            "arm_fully_connected_s16_get_buffer_size for int16 -- so the s8 batch matmul route "
+            "is this sizer. s16 cases of both families survive: their sizer is in "
+            "arm_fully_connected_get_buffer_sizes_s16.c."
+        ),
+        refs=("AmbiqAI/helia-core-tester#133",),
+    ),
+    Mutant(
+        mutant_id="avgpool_sizer_negative",
+        description="The s8 average pooling sizer returns the -1 out-of-range sentinel",
+        family="PoolingFunctions",
+        edits=(
+            # The avg pool harness always calls the undecorated
+            # arm_avgpool_s8_get_buffer_size, which dispatches to the _dsp or _mve
+            # leg; all three bodies carry this guard and all three are forced.
+            Edit(
+                relpath="Source/PoolingFunctions/arm_avgpool_get_buffer_sizes_s8.c",
+                pattern="    if ((ch_src < 0) || (required_bytes > INT32_MAX))\n",
+                replacement=(
+                    "    if (1 || (ch_src < 0) || (required_bytes > INT32_MAX)) "
+                    "/* MUTANT avgpool_sizer_negative */\n"
+                ),
+                count=3,
+            ),
+        ),
+        expected_detected_by=(
+            "every s8 AvgPool case, through HELIA_VALIDATE_SIZER (tester#133). This sizer "
+            "legitimately answers 0 for many shapes, which is why a wrong answer here had to be "
+            "distinguished by sign rather than by being falsy. s16 avg pool cases survive: "
+            "their sizer is in arm_avgpool_get_buffer_sizes_s16.c. Max pool has no mutant in "
+            "this class at all -- pool_base.py gives a kernel_get_buffer_size_fn to avg pool "
+            "only, so max_pool.c.j2's sizer block never renders and is not instrumented."
+        ),
+        refs=("AmbiqAI/helia-core-tester#133",),
+    ),
+    Mutant(
+        mutant_id="transpose_conv_sizer_negative",
+        description="The s8 transpose convolution forward sizer returns the -1 out-of-range sentinel",
+        family="ConvolutionFunctions",
+        edits=(
+            # arm_transpose_conv_s8_get_buffer_size() and its _mve leg each
+            # propagate a negative rolling-buffer size through this guard; forcing
+            # it true is the smallest edit that makes both answer -1. The harness
+            # always calls the undecorated entry point, which is the MVE leg's
+            # only caller on an MVE build.
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_transpose_conv_get_buffer_sizes_s8.c",
+                pattern="    if (rolling_size < 0)\n",
+                replacement=(
+                    "    if (1 || (rolling_size < 0)) "
+                    "/* MUTANT transpose_conv_sizer_negative */\n"
+                ),
+                count=2,
+            ),
+        ),
+        expected_detected_by=(
+            "every s8 TransposeConv case, through the first HELIA_VALIDATE_SIZER in the "
+            "transpose conv template (tester#133)."
+        ),
+        refs=("AmbiqAI/helia-core-tester#133",),
+    ),
+    Mutant(
+        mutant_id="transpose_conv_reverse_sizer_negative",
+        description="arm_transpose_conv_s8_get_reverse_conv_buffer_size returns the -1 out-of-range sentinel",
+        family="ConvolutionFunctions",
+        edits=(
+            # Kept separate from transpose_conv_sizer_negative on purpose:
+            # HELIA_VALIDATE_SIZER returns ARM_CMSIS_NN_ARG_ERROR on the first
+            # failure, so a forward-sizer mutation would fail the case before the
+            # reverse check ever ran and the reverse check would go unproven.
+            # This sizer has no -1 path of its own, so the sentinel is planted as
+            # an unconditional early return at the top of the function.
+            Edit(
+                relpath="Source/ConvolutionFunctions/arm_transpose_conv_get_buffer_sizes_s8.c",
+                pattern=(
+                    "int32_t arm_transpose_conv_s8_get_reverse_conv_buffer_size("
+                    "const cmsis_nn_transpose_conv_params *transpose_conv_params,\n"
+                    "                                                           "
+                    "const cmsis_nn_dims *input_dims,\n"
+                    "                                                           "
+                    "const cmsis_nn_dims *filter_dims)\n"
+                    "{\n"
+                ),
+                replacement=(
+                    "int32_t arm_transpose_conv_s8_get_reverse_conv_buffer_size("
+                    "const cmsis_nn_transpose_conv_params *transpose_conv_params,\n"
+                    "                                                           "
+                    "const cmsis_nn_dims *input_dims,\n"
+                    "                                                           "
+                    "const cmsis_nn_dims *filter_dims)\n"
+                    "{\n"
+                    "    return -1; /* MUTANT transpose_conv_reverse_sizer_negative */\n"
+                ),
+                count=1,
+            ),
+        ),
+        expected_detected_by=(
+            "every s8 TransposeConv case, through the second HELIA_VALIDATE_SIZER in the "
+            "transpose conv template (tester#133). This is the route the change was written "
+            "for: the reverse sizer's answer is discarded in favour of a compile-time "
+            "REVERSE_CONV_CTX_SIZE, so nothing downstream could ever have noticed the sentinel."
+        ),
+        refs=("AmbiqAI/helia-core-tester#133",),
+    ),
+    Mutant(
+        mutant_id="svdf_kernel_sum_sizer_negative",
+        description="arm_svdf_s8_get_buffer_size (the kernel-sum sizer) returns the -1 out-of-range sentinel",
+        family="SVDFunctions",
+        edits=(
+            # The SVDF template calls the undecorated arm_svdf_s8_get_buffer_size;
+            # the dispatcher and both legs carry the same guard, so one literal
+            # covers every target.
+            Edit(
+                relpath="Source/SVDFunctions/arm_svdf_get_buffer_sizes_s8.c",
+                pattern="    if ((weights_feature_dims->n < 0) || (required_bytes > INT32_MAX))\n",
+                replacement=(
+                    "    if (1 || (weights_feature_dims->n < 0) || (required_bytes > INT32_MAX)) "
+                    "/* MUTANT svdf_kernel_sum_sizer_negative */\n"
+                ),
+                count=3,
+            ),
+        ),
+        expected_detected_by=(
+            "every SVDF case that allocates a kernel-sum context (the has_ctx branch of the "
+            "svdf template), through HELIA_VALIDATE_SIZER (tester#133). The two staging "
+            "contexts were already size-checked by tester#71; this query was not, and its "
+            "negative answer became ctx.size unremarked."
+        ),
+        refs=("AmbiqAI/helia-core-tester#133",),
     ),
 )
 

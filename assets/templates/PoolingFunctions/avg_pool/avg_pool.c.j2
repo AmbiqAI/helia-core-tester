@@ -43,6 +43,12 @@ int32_t {{ name }}_run(
     // of leaving its canary unstamped whenever kernel_get_buffer_size_fn
     // is absent.
     HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
+    HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, 0u);
+    // The slack is stamped as wholly unused here so that an early return from the sizer
+    // checks below leaves every canary in a checked state; it is re-stamped with the real
+    // size once the context is populated. Without this pre-stamp the unconditional check
+    // in _test_case_run reads the poison and reports a fabricated overrun, which the
+    // report parser classifies ahead of the sizer failure that actually occurred (#68).
     {% endif %}
     {% if kernel_get_buffer_size_fn %}
     // Calculate required buffer size (for average pooling)
@@ -51,10 +57,12 @@ int32_t {{ name }}_run(
         {{ name }}_input_dims.c     // input channels
     );
 
-    if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
-        printf("Buffer size error: required=%d > max=%d\r\n", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // The sizer's answer is checked before it becomes a context size (#133). A negative
+    // answer is the documented out-of-range sentinel and never a usable size; an answer
+    // above this case's static means our generation-time bound and the shipped kernel
+    // disagree. They are separate failures because they have separate owners.
+    HELIA_VALIDATE_SIZER("{{ kernel_get_buffer_size_fn }}", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("{{ kernel_get_buffer_size_fn }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
 
     // Initialize context buffer
     {{ name }}_ctx.buf = {{ name }}_buffer;

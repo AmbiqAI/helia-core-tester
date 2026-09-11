@@ -82,9 +82,12 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
     // with the real size once the context is populated (#68).
 
 
-    if (required_buffer_size > {{ name|upper }}_BUFFER_SIZE_MAX) {
-        return ARM_CMSIS_NN_ARG_ERROR;
-    }
+    // The sizer's answer is checked before it becomes a context size (#133). A negative
+    // answer is the documented out-of-range sentinel and never a usable size; an answer
+    // above this case's static means our generation-time bound and the shipped kernel
+    // disagree. They are separate failures because they have separate owners.
+    HELIA_VALIDATE_SIZER("{{ kernel_get_buffer_size_fn }}", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("{{ kernel_get_buffer_size_fn }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
 
     // Initialize context buffer
     {{ name }}_ctx.buf = {{ name }}_buffer;
@@ -245,6 +248,11 @@ static int32_t {{ name }}_bench_op(void)
 {% if not use_batch_harness %}
 static void {{ name }}_benchmark_run(void)
 {
+    // Recorded, not fixed (#133): this call discards its status, so the sizer checks inside
+    // _bench_init() cannot fail a benchmark case. A benchmark reports cycles, not a verdict,
+    // and helia_benchmark_run() has no failure channel to report one on, so wiring the status
+    // through here would need a benchmark-side verdict path that does not exist. The
+    // non-benchmark run of the same case does carry the check.
     {{ name }}_bench_init();
     helia_benchmark_run("{{ name }}", {{ name }}_bench_op);
 }

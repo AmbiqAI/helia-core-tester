@@ -231,3 +231,19 @@ void helia_guard_check_at(const char *label, const void *body, size_t body_bytes
         }
     }
 }
+
+/*
+ * Printed rather than returning a bare argument error, so the report can tell a
+ * sizer answering outside its documented contract from a kernel rejecting its
+ * arguments. The failure count is left to the caller's existing status path so
+ * a case still emits exactly one failure summary line.
+ */
+void helia_test_sizer_invalid(const char *label, long long value)
+{
+    printf("HELIA_SIZER_INVALID[%s]: %lld\r\n", label, value);
+}
+
+void helia_test_sizer_over_capacity(const char *label, long long value, long long capacity)
+{
+    printf("HELIA_SIZER_OVER_CAPACITY[%s]: %lld > %lld\r\n", label, value, capacity);
+}
