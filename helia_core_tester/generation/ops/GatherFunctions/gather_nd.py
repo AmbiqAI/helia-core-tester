@@ -30,8 +30,20 @@ class OpGatherND(OperationBase):
     """
 
     def _element_dtype(self) -> str:
-        """The resolved element dtype, which for a copy operator is input and output alike."""
+        """The resolved element dtype, which for a copy operator is input and output alike.
+
+        Input and output must agree. GatherND moves values without converting them, so a
+        descriptor asking for different element types is expressing something the kernel
+        cannot do; accepting it would silently gather at the input type and compare against
+        a golden built at the same type, proving nothing about the mismatch it asked for.
+        """
         dtype = get_resolved_tensor_dtype(self.desc, "input", "S8")
+        output_dtype = get_resolved_tensor_dtype(self.desc, "output", dtype)
+        if output_dtype != dtype:
+            raise ValueError(
+                f"GatherND copies elements and cannot convert them: descriptor "
+                f"{self.desc.get('name')!r} asks for input {dtype} with output {output_dtype}."
+            )
         if dtype not in _GATHER_ND_KERNEL_BY_DTYPE:
             raise NotImplementedError(f"Unsupported GatherND dtype: {dtype}")
         return dtype
