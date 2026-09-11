@@ -1,0 +1,54 @@
+# Float GATHER_ND cases for arm_gather_nd_f32 and arm_gather_nd_f16
+# (AmbiqAI/ns-cmsis-nn#496). The zero-tolerance rationale and the element-value
+# choice are the same as gather_float.yaml.
+#
+# The inferred output shape is indices_shape[:-1] + params_shape[tuple_width:],
+# where tuple_width is the final indices dimension.
+#
+# A single-width tuple: each coordinate selects one leading slice, so the output
+# carries three trailing params dimensions. This is the widest contiguous copy
+# the operator makes.
+operator: GatherND
+name: gather_nd_float_tuple_width1_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison:
+  atol: 0
+  rtol: 0
+input_shape: [3, 2, 2, 2]
+indices_shape: [2, 1]
+batch_dims: 0
+---
+# A full-coordinate tuple: tuple width equals the params rank, so each
+# coordinate names a single element and the copy is one element wide. This is
+# the opposite extreme from the case above and the one where a per-slice
+# copy loop degenerates.
+operator: GatherND
+name: gather_nd_float_full_coord_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison:
+  atol: 0
+  rtol: 0
+input_shape: [2, 3, 4]
+indices_shape: [2, 3]
+batch_dims: 0
+---
+# A rank-four inferred output: indices_shape[:-1] = [2, 2] and
+# params_shape[2:] = [4, 5]. Rank four is the largest the kernel accepts.
+operator: GatherND
+name: gather_nd_float_rank4_output_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison:
+  atol: 0
+  rtol: 0
+input_shape: [2, 3, 4, 5]
+indices_shape: [2, 2, 2]
+batch_dims: 0

@@ -1,0 +1,76 @@
+# Float GATHER cases for arm_gather_f32 and arm_gather_f16 (AmbiqAI/ns-cmsis-nn#496).
+#
+# Gather moves values and never computes one, so the comparison budget is zero
+# rather than a numeric tolerance. Zero tolerance is not bit-exactness: the
+# comparator classifies each element as finite, NaN, +Inf or -Inf before
+# comparing, so a signed zero matches a positive zero and any NaN matches any
+# other NaN. These cases carry only ordinary finite values, for which zero
+# tolerance does prove exactness. Signed zero, NaN payloads and subnormals are
+# raw-bit properties the kernel lane covers with unit tests of its own.
+#
+# Element values are whole numbers drawn from a wide range so that every element
+# is distinct in practice: that is what makes a misplaced index visible.
+operator: Gather
+name: gather_float_axis_inner_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison:
+  atol: 0
+  rtol: 0
+input_shape: [2, 4]
+indices_shape: [3]
+axis: 1
+batch_dims: 0
+---
+# Outer axis in half precision: the gathered slice is a whole trailing block
+# rather than a strided pick, which is the copy shape the vector path takes.
+operator: Gather
+name: gather_float_axis_outer_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison:
+  atol: 0
+  rtol: 0
+input_shape: [3, 2, 2]
+indices_shape: [2]
+axis: 0
+batch_dims: 0
+---
+# A two-dimensional index set on the innermost axis, so the inferred output is
+# rank four: input[:axis] + indices_shape + input[axis+1:] = [2, 3] + [2, 2].
+# Rank four is the largest the kernel accepts.
+operator: Gather
+name: gather_float_indices_rank2_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+comparison:
+  atol: 0
+  rtol: 0
+input_shape: [2, 3, 4]
+indices_shape: [2, 2]
+axis: 2
+batch_dims: 0
+---
+# Repeated indices, forced by pigeonhole rather than by a flag: five indices are
+# drawn from an axis of extent two, so at least one source slice is copied more
+# than once. A kernel that consumed a source slice, or advanced the source
+# pointer per output slice, would fail here and pass every other case.
+operator: Gather
+name: gather_float_repeated_index_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+comparison:
+  atol: 0
+  rtol: 0
+input_shape: [2, 3, 4]
+indices_shape: [5]
+axis: 0
+batch_dims: 0

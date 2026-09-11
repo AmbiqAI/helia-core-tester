@@ -279,8 +279,28 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("FullyConnectedFunctions/batch_matmul.yaml", "FullyConnectedFunctions/batch_matmul_float.yaml"),
         template_relpath="FullyConnectedFunctions/batch_matmul",
     ),
-    "Gather": _spec("Gather", "GatherFunctions", "gather", "OpGather", "GatherFunctions/gather.yaml", "GatherFunctions/gather"),
-    "GatherND": _spec("GatherND", "GatherFunctions", "gather_nd", "OpGatherND", "GatherFunctions/gather_nd.yaml", "GatherFunctions/gather_nd"),
+    "Gather": _spec(
+        "Gather",
+        "GatherFunctions",
+        "gather",
+        "OpGather",
+        template_relpath="GatherFunctions/gather",
+        descriptor_relpaths=(
+            "GatherFunctions/gather.yaml",
+            "GatherFunctions/gather_float.yaml",
+        ),
+    ),
+    "GatherND": _spec(
+        "GatherND",
+        "GatherFunctions",
+        "gather_nd",
+        "OpGatherND",
+        template_relpath="GatherFunctions/gather_nd",
+        descriptor_relpaths=(
+            "GatherFunctions/gather_nd.yaml",
+            "GatherFunctions/gather_nd_float.yaml",
+        ),
+    ),
     "LSTMUnidirectional": _spec(
         "LSTMUnidirectional",
         "LSTMFunctions",
