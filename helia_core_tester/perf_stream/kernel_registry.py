@@ -31,6 +31,17 @@ class UnknownKernelError(Exception):
     """Raised when a (family, operator, dtype) tuple has no registered kernel_id."""
 
 
+class AmbiguousKernelError(UnknownKernelError):
+    """Raised when the registry holds more than one entry for the same tuple.
+
+    A subclass so existing ``except UnknownKernelError`` handlers keep catching it, but a
+    distinct type so a caller that means "this dtype is not registered, skip the case" can
+    avoid swallowing a registry that contradicts itself. Those are opposite situations: the
+    first is an expected gap, the second is corrupt data that would otherwise silently drop
+    every case for the duplicated tuple.
+    """
+
+
 def _registry_path(project_root: Path) -> Path:
     return project_root / _REGISTRY_RELATIVE_PATH
 
@@ -63,6 +74,8 @@ def lookup_kernel_id(
 
     Raises UnknownKernelError if the tuple isn't registered -- callers should treat that as
     an UnsupportedGeneratedTestError-worthy condition, not silently default to any kernel_id.
+    Raises AmbiguousKernelError, a subclass, if the registry holds more than one entry for
+    the tuple. That one is corrupt data rather than an expected gap and should stay fatal.
     """
     candidates: list[KernelEntry] = []
     for entry in load_kernel_registry(project_root):
@@ -72,7 +85,7 @@ def lookup_kernel_id(
     if weight_dtype is not None:
         matches = [entry for entry in candidates if entry.weight_dtype == weight_dtype]
         if len(matches) > 1:
-            raise UnknownKernelError(
+            raise AmbiguousKernelError(
                 f"Ambiguous kernel registry entries for family={family!r} operator={operator!r} "
                 f"dtype={dtype!r} weight_dtype={weight_dtype!r}: "
                 f"{[e.cmsis_function for e in matches]} -- registry must have at most one "
@@ -83,7 +96,7 @@ def lookup_kernel_id(
 
     unweighted_matches = [entry for entry in candidates if entry.weight_dtype is None]
     if len(unweighted_matches) > 1:
-        raise UnknownKernelError(
+        raise AmbiguousKernelError(
             f"Ambiguous kernel registry entries for family={family!r} operator={operator!r} "
             f"dtype={dtype!r} (no weight_dtype): {[e.cmsis_function for e in unweighted_matches]} -- "
             f"registry must have at most one entry per (family, operator, dtype, weight_dtype) tuple."

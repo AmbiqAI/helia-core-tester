@@ -27,13 +27,38 @@ import numpy as np
 import yaml
 
 from .case_bundle import BlobInfo, CaseBundle, _blob_info, _case_root, _manifest_blob_entry, _write_blob, _write_manifest
-from .kernel_registry import lookup_kernel_id
+from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_kernel_id
 from helia_core_tester.generation.io.dtypes import resolve_comparison
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
 class UnsupportedGeneratedTestError(Exception):
     """Raised when a generated test's operator/dtype isn't bridgeable to real firmware dispatch yet."""
+
+
+def _kernel_id(project_root, **lookup):
+    """``lookup_kernel_id`` with the conversion its own contract asks callers to make.
+
+    An unregistered (family, operator, dtype) tuple is a case this bridge cannot
+    map to firmware dispatch, which is precisely what UnsupportedGeneratedTestError
+    means: callers already catch it and skip. Letting the raw UnknownKernelError
+    escape instead aborts the whole bundle run over one unbridgeable case, so a
+    descriptor family gaining a dtype the registry does not carry -- float GATHER
+    is the case that exposed this -- takes every other case down with it.
+
+    An ambiguous registry is the opposite situation and stays fatal. Skipping there would
+    turn a self-contradicting registry into a quiet drop of every case for the duplicated
+    tuple, reported only by a skip count that fails nothing.
+    """
+    try:
+        return lookup_kernel_id(project_root, **lookup)
+    except AmbiguousKernelError:
+        # Deliberately not converted. A registry holding two entries for one tuple is
+        # corrupt data, not a gap: converting it would silently drop every case for that
+        # tuple from the run behind a "skipped N" line that fails nothing.
+        raise
+    except UnknownKernelError as exc:
+        raise UnsupportedGeneratedTestError(str(exc)) from exc
 
 
 def _align_up(value: int, alignment: int) -> int:
@@ -872,7 +897,7 @@ def _build_convolve_case(
         "operator": operator,
         "family": "ConvolutionFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(
+        "kernel_id": _kernel_id(
             project_root,
             family="ConvolutionFunctions",
             operator="Convolve",
@@ -1025,7 +1050,7 @@ def _build_nn_activation_float_case(
         "operator": operator,
         "family": generated_test.family,
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
+        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -1106,7 +1131,7 @@ def _build_reduce_sum_case(
         "operator": operator,
         "family": generated_test.family,
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
+        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -1204,7 +1229,7 @@ def _build_batch_norm_case(
         "operator": operator,
         "family": generated_test.family,
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
+        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {"activation_kind": layout_map[layout_symbol]},
@@ -1446,7 +1471,7 @@ def _build_depthwise_conv_case(
         "operator": operator,
         "family": "ConvolutionFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(
+        "kernel_id": _kernel_id(
             project_root,
             family="ConvolutionFunctions",
             operator="DepthwiseConv",
@@ -1657,7 +1682,7 @@ def _build_transpose_conv_case(
         "operator": operator,
         "family": generated_test.family,
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype, weight_dtype=weight_dtype),
+        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype, weight_dtype=weight_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -1814,7 +1839,7 @@ def _build_pooling_case(
         "operator": operator,
         "family": "PoolingFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="PoolingFunctions", operator=operator, dtype=activation_dtype),
+        "kernel_id": _kernel_id(project_root, family="PoolingFunctions", operator=operator, dtype=activation_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -1959,7 +1984,7 @@ def _build_pooling_float_case(
         "operator": operator,
         "family": "PoolingFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="PoolingFunctions", operator=operator, dtype=input_dtype),
+        "kernel_id": _kernel_id(project_root, family="PoolingFunctions", operator=operator, dtype=input_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -2177,7 +2202,7 @@ def _build_activation_case(
         "operator": operator,
         "family": "ActivationFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="ActivationFunctions", operator=operator, dtype=activation_dtype),
+        "kernel_id": _kernel_id(project_root, family="ActivationFunctions", operator=operator, dtype=activation_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -2311,7 +2336,7 @@ def _build_quantize_case(
         "operator": operator,
         "family": "QuantizationFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="QuantizationFunctions", operator=operator, dtype=activation_dtype),
+        "kernel_id": _kernel_id(project_root, family="QuantizationFunctions", operator=operator, dtype=activation_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -2442,7 +2467,7 @@ def _build_dequantize_case(
         "operator": operator,
         "family": "QuantizationFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="QuantizationFunctions", operator=operator, dtype=activation_dtype),
+        "kernel_id": _kernel_id(project_root, family="QuantizationFunctions", operator=operator, dtype=activation_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -2537,7 +2562,7 @@ def _build_requantize_case(
         "operator": operator,
         "family": generated_test.family,
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
+        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -2650,7 +2675,7 @@ def _build_comparison_case(
         "operator": registry_operator,
         "family": generated_test.family,
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=registry_operator, dtype=activation_dtype),
+        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=registry_operator, dtype=activation_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": scalar_parameters,
@@ -2796,7 +2821,7 @@ def _build_prelu_case(
         "operator": operator,
         "family": "ActivationFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="ActivationFunctions", operator=operator, dtype=activation_dtype),
+        "kernel_id": _kernel_id(project_root, family="ActivationFunctions", operator=operator, dtype=activation_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": scalar_parameters,
@@ -2919,7 +2944,7 @@ def _build_prelu_scalar_case(
         "operator": operator,
         "family": "ActivationFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="ActivationFunctions", operator=operator, dtype=activation_dtype),
+        "kernel_id": _kernel_id(project_root, family="ActivationFunctions", operator=operator, dtype=activation_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -3061,7 +3086,7 @@ def _build_softmax_case(
         "operator": lookup_operator,
         "family": "SoftmaxFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="SoftmaxFunctions", operator=lookup_operator, dtype=lookup_dtype),
+        "kernel_id": _kernel_id(project_root, family="SoftmaxFunctions", operator=lookup_operator, dtype=lookup_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -3194,7 +3219,7 @@ def _build_abs_case(
         "operator": operator,
         "family": generated_test.family,
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
+        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": scalar_parameters,
@@ -3362,7 +3387,7 @@ def _build_basic_math_reduction_case(
         "operator": operator,
         "family": generated_test.family,
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
+        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": scalar_parameters,
@@ -3484,7 +3509,7 @@ def _build_basic_math_lut_case(
         "operator": operator,
         "family": generated_test.family,
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=registry_operator, dtype=activation_dtype),
+        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=registry_operator, dtype=activation_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": scalar_parameters,
@@ -3644,7 +3669,7 @@ def _write_elementwise_binary_bundle(
         "operator": operator,
         "family": generated_test.family,
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
+        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -4194,7 +4219,7 @@ def _build_fully_connected_case(
         "operator": operator,
         "family": "FullyConnectedFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(
+        "kernel_id": _kernel_id(
             project_root,
             family="FullyConnectedFunctions",
             operator="FullyConnected",
@@ -4366,7 +4391,7 @@ def _build_batch_matmul_case(
         "operator": operator,
         "family": "FullyConnectedFunctions",
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family="FullyConnectedFunctions", operator="BatchMatMul", dtype=activation_dtype, weight_dtype=(activation_dtype if activation_dtype in ("FP32", "FP16") else None)),
+        "kernel_id": _kernel_id(project_root, family="FullyConnectedFunctions", operator="BatchMatMul", dtype=activation_dtype, weight_dtype=(activation_dtype if activation_dtype in ("FP32", "FP16") else None)),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": {
@@ -4458,7 +4483,7 @@ def _build_data_movement_bundle(
         "operator": str(generated_test.descriptor.get("operator", "")),
         "family": generated_test.family,
         "target_cpu": generated_test.cpu,
-        "kernel_id": lookup_kernel_id(project_root, family=generated_test.family, operator=str(generated_test.descriptor.get("operator", "")), dtype=lookup_dtype),
+        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=str(generated_test.descriptor.get("operator", "")), dtype=lookup_dtype),
         "adapter_metadata_schema": 1,
         "source": "generated_test_bridge",
         "serialized_scalar_parameters": scalar_parameters,
