@@ -53,6 +53,26 @@ not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|s
 `hardware build`, `hardware flash [--force]`, `hardware stream` and
 `hardware memory-report`.
 
+PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
+`hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or
+`mve`; `SELECTION` is `all`, `default`, or a comma-separated list of `ARM_PMU_*`
+names from `assets/pmu/armv8m_pmu_events.json`:
+
+```bash
+uv run helia_core_tester hardware run --board apollo510_evb --family ConvolutionFunctions \
+  --pmu-counters mve:all --pmu-counters cpu:default
+uv run helia_core_tester hardware stream --pmu-counters mve:ARM_PMU_MVE_STALL,ARM_PMU_MVE_PRED
+```
+
+The default is every group at its default selection. Each group runs in passes of
+up to four chained 32-bit event counters (the Cortex-M55 PMU has eight 16-bit slots),
+so `mve:all` costs nine passes per case; `ARM_PMU_CPU_CYCLES` is always reported from
+the PMU cycle counter alongside the DWT cycles. `case_summary.csv` gets one column per
+counter (median per invocation) plus `overflow_detected` and `valid_for_regression`;
+`session_summary.json` records the passes, counters and per-stage/per-case timing.
+`--pmu-groups a,b` still works as a deprecated alias for `--pmu-counters a:default
+--pmu-counters b:default`.
+
 Identity resolution rules:
 
 - `--board` is the only identity flag. The CPU, NSX board name, SEGGER device name,
