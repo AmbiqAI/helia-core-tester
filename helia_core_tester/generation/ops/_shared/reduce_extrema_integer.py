@@ -37,6 +37,13 @@ def resize_integer_interpreter(interpreter, shape):
     if input_details[0]["dtype"] != output_details[0]["dtype"]:
         raise ValueError("Reduce extrema requires matching tensor dtypes")
     for key in ("scales", "zero_points"):
+        # Raw-code selection supports per-tensor quantization only. Comparing
+        # per-axis arrays alone would ignore which dimensions they describe.
+        if any(
+            np.asarray(details[0]["quantization_parameters"][key]).size != 1
+            for details in (input_details, output_details)
+        ):
+            raise ValueError("Reduce extrema requires per-tensor quantization")
         if not np.array_equal(
             input_details[0]["quantization_parameters"][key],
             output_details[0]["quantization_parameters"][key],
