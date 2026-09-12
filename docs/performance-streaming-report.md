@@ -272,12 +272,25 @@ Additionally, the first live Conv2D correctness attempt stalled because the MVE 
 - real correctness execution for `arm_convolve_s8`
 - real output reconstruction on host
 - real DWT cycle measurements from hardware
-- real PMU event measurements from hardware
-- real result-bundle generation from hardware data
+- real PMU event measurements from hardware: `ARM_PMU_CPU_CYCLES` from CCNTR in every
+  pass (120-260 cycles above the DWT window, consistently) plus up to four chained
+  32-bit event counters per pass; `--pmu-counters mve:all --pmu-counters cpu:default`
+  captures all 34 MVE events over 9 passes plus the cpu pass on ConvolutionFunctions
+  cases with every entry `supported=1`
+- real PMU overflow detection: with unchained 16-bit counters a large conv case
+  (`convolve_case_03_s8`, ~238k instructions per invocation) sets the overflow status
+  bit, and the bundle marks it `overflow_detected=true` / `valid_for_regression=false`;
+  the same case chained reads the full count (952344 raw = the unchained low half +
+  14 x 65536) with no overflow
+- 32-case sessions: an 8-case BasicMath run that previously took 2 batches of 4 now
+  runs in a single batch (medians within 0.3% of the pre-change bundle)
+- real result-bundle generation from hardware data, including per-counter columns and
+  wall-clock stage timing
 
 ### Still not verified / still partial
 
-- PMU overflow handling on real hardware was not stress-tested to overflow.
+- The DWT-only firmware path (`__PMU_PRESENT == 0`, e.g. a Cortex-M4 board) is only
+  exercised by the host-compiled C harness, not on hardware.
 - Auto-calibration with `iterations_per_sample = 0` exists in firmware logic but was not exercised in the live Apollo510 run; the live run used fixed `iterations=4` from the case timing plan.
 - The current live session uses one common timing plan for both cases because the host `LOAD_PLAN` format is session-scoped; per-case live timing plans are not implemented yet.
 - JLinkRTTLogger/JLinkRTTClient auto-discovery was not made to work; the working live path uses `pylink` + explicit RTT control-block address.
