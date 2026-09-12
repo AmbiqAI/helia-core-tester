@@ -11,10 +11,11 @@ extern "C" {
 #endif
 
 #define HCT_SERVER_MAX_CASE_ID 96u
-/* Cases per LOAD_PLAN. The host (hardware_run.MAX_CASES_PER_SESSION) must stay in
- * lockstep, and additionally keeps every plan within HCT_SERVER_MAX_RX_PAYLOAD_BYTES. */
+/* Cases per SESSION_PLAN. Advertised to the host in TARGET_INFO (max_cases_per_session),
+ * which sizes its batches from it and keeps every plan within HCT_SERVER_MAX_RX_PAYLOAD_BYTES. */
 #define HCT_SERVER_MAX_CASES 32u
-/* PMU passes per LOAD_PLAN and event counters per pass. Cortex-M55 has 8 x 16-bit
+/* PMU passes per SESSION_PLAN (advertised in TARGET_INFO as max_passes) and event
+ * counters per pass. Cortex-M55 has 8 x 16-bit
  * event counters; a chained pass uses two slots per counter (32-bit), so 4 chained
  * counters fill the PMU. */
 #define HCT_SERVER_MAX_PASSES 16u
@@ -22,8 +23,8 @@ extern "C" {
 #define HCT_SERVER_MAX_COUNTERS_PER_PASS 4u
 #define HCT_SERVER_MAX_BLOBS 8u
 /* Receive buffer the transport loop (benchmark_server_main.c) decodes frames from,
- * and the largest payload that can fit in it -- advertised to the host in HELLO as
- * max_rx_payload so it can size LOAD_PLAN batches. */
+ * and the largest payload that can fit in it -- advertised to the host in TARGET_INFO as
+ * max_rx_payload so it can size SESSION_PLAN batches. */
 #define HCT_SERVER_RX_BUFFER_BYTES 2048u
 #define HCT_SERVER_MAX_RX_PAYLOAD_BYTES (HCT_SERVER_RX_BUFFER_BYTES - HCTP_HEADER_SIZE)
 #define HCT_SERVER_MAX_INPUT_BYTES 4096u
@@ -35,7 +36,7 @@ extern "C" {
 
 typedef enum
 {
-    HCT_SERVER_STATE_WAIT_HELLO_ACK = 0,
+    HCT_SERVER_STATE_WAIT_TARGET_INFO_ACK = 0,
     HCT_SERVER_STATE_WAIT_PLAN = 1,
     HCT_SERVER_STATE_WAIT_CASE_META = 2,
     HCT_SERVER_STATE_WAIT_BLOB_CHUNK = 3,
@@ -62,7 +63,7 @@ typedef struct
     uint32_t bytes_received;
 } hct_server_blob_t;
 
-/* One PMU measurement pass from LOAD_PLAN: which event ids to program into the
+/* One PMU measurement pass from SESSION_PLAN: which event ids to program into the
  * event counters, and whether each counter takes a chained (32-bit) slot pair or a
  * single 16-bit slot. ARM_PMU_CPU_CYCLES is never listed -- CCNTR is always read. */
 typedef struct
@@ -232,7 +233,7 @@ typedef struct
     int32_t axis_c;
     int32_t axis;
     int32_t needs_rescale;
-    /* Phase 7a invalid-argument status-assertion coverage reuses the normal streamed blobs
+    /* Invalid-argument status-assertion cases reuse the normal streamed blobs
      * but sometimes must still pass a real NULL pointer into the kernel, matching the
      * standalone generated harness exactly (BroadcastTo/DynamicUpdateSlice null-input/
      * null-update/null-params/null-output cases). null_arg_mask selects those forced-NULL

@@ -68,7 +68,7 @@ def _align_up(value: int, alignment: int) -> int:
 
 
 def _check_case_arena_capacity(generated_test: GeneratedTestCase, manifest: dict, blobs: tuple[BlobInfo, ...]) -> None:
-    """Retained as a compatibility hook; capacity is negotiated from target HELLO."""
+    """Retained as a compatibility hook; capacity is negotiated from target TARGET_INFO."""
     del generated_test, manifest, blobs
 
 

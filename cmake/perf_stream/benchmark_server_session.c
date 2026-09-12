@@ -255,7 +255,7 @@ static bool has_capacity(size_t payload_length, size_t offset, size_t needed)
  * after every single call, and simply test cursor.overrun (or the return value) once
  * at a convenient point to detect any truncation across the whole sequence. This
  * replaces the previous unchecked read_u8/u16/u32/i32/text helpers, which indexed the
- * buffer and advanced the offset unconditionally -- a short/truncated LOAD_PLAN,
+ * buffer and advanced the offset unconditionally -- a short/truncated SESSION_PLAN,
  * CASE_META, or BLOB_CHUNK payload could walk the cursor arbitrarily far past the
  * validated payload_length. */
 typedef struct
@@ -555,7 +555,7 @@ static hctp_status_t queue_frame(hct_server_session_t *session,
     return append_frame(session, frame, total_length);
 }
 
-/* Best-effort ERROR reply so a rejected message (bad LOAD_PLAN/CASE_META/
+/* Best-effort ERROR reply so a rejected message (bad SESSION_PLAN/CASE_META/
  * BLOB_CHUNK, etc.) is visible to the host instead of leaving it waiting
  * forever for a reply that will never come (see hct_server_session_accept_frame()).
  * Payload matches the text-message ERROR convention already used by the host's
@@ -801,7 +801,7 @@ static void pmu_sample_stop(const hct_pmu_pass_t *pass, uint32_t slot_mask, uint
 }
 #endif
 
-/* SAMPLE_RESULT v2: u16 sample_index, u32 iterations, u64 cycles (DWT), text pass_name,
+/* SAMPLE_RESULT: u16 sample_index, u32 iterations, u64 cycles (DWT), text pass_name,
  * u8 counter_count, then per counter (text name, u16 event_id, u64 value, u8 overflow,
  * u8 supported). Names are sent empty -- the host resolves them from its catalog by
  * event id. The first entry is always ARM_PMU_CPU_CYCLES from CCNTR (bit 31 of the
@@ -6095,7 +6095,7 @@ static hctp_status_t finish_case(hct_server_session_t *session)
     return queue_session_complete(session);
 }
 
-/* LOAD_PLAN v2: u16 case_count, u8 transfer_mode, u16 warmups, u16 samples,
+/* SESSION_PLAN: u16 case_count, u8 transfer_mode, u16 warmups, u16 samples,
  * u32 iterations_per_sample, u32 min_cycles, u32 max_iterations, u8 pass_count,
  * per pass (text name, u8 chained, u8 counter_count, u16 event_id[counter_count]),
  * then per case (text case_id, u32 kernel_id). Event ids are not validated against
@@ -6160,10 +6160,10 @@ static hctp_status_t parse_pmu_passes(hct_server_session_t *session, hct_cursor_
     return HCTP_STATUS_OK;
 }
 
-static hctp_status_t handle_load_plan(hct_server_session_t *session, const uint8_t *payload, size_t payload_length)
+static hctp_status_t handle_session_plan(hct_server_session_t *session, const uint8_t *payload, size_t payload_length)
 {
     /* F006: every field below is read through the bounded cursor API, which checks
-     * remaining capacity before each access/advance -- a truncated LOAD_PLAN (short
+     * remaining capacity before each access/advance -- a truncated SESSION_PLAN (short
      * header, short pass/case-id text, or a plan cut off mid kernel-id list) is
      * caught by the cursor.overrun checks instead of risking an out-of-bounds read. */
     hct_cursor_t cursor;
@@ -6479,15 +6479,17 @@ void hct_server_session_init(hct_server_session_t *session,
     session->workspace = (uint8_t *)workspace;
     session->workspace_bytes = workspace_bytes;
     session->runtime_arena_capacity = workspace_bytes;
-    session->state = HCT_SERVER_STATE_WAIT_HELLO_ACK;
-    hct_build_hello_frame(session_id,
-                          session->next_outgoing_sequence++,
-                          max_frame_payload,
-                          session->runtime_arena_capacity,
-                          HCT_SERVER_MAX_RX_PAYLOAD_BYTES,
-                          session->outbox,
-                          sizeof(session->outbox),
-                          &frame_length);
+    session->state = HCT_SERVER_STATE_WAIT_TARGET_INFO_ACK;
+    hct_build_target_info_frame(session_id,
+                                session->next_outgoing_sequence++,
+                                max_frame_payload,
+                                session->runtime_arena_capacity,
+                                HCT_SERVER_MAX_RX_PAYLOAD_BYTES,
+                                HCT_SERVER_MAX_CASES,
+                                HCT_SERVER_MAX_PASSES,
+                                session->outbox,
+                                sizeof(session->outbox),
+                                &frame_length);
     session->outbox_length = frame_length;
 }
 
@@ -6512,17 +6514,17 @@ hctp_status_t hct_server_session_accept_frame(hct_server_session_t *session,
 
     switch (frame.header.message_type)
     {
-        case HCTP_MSG_HELLO_ACK:
-            if (session->state != HCT_SERVER_STATE_WAIT_HELLO_ACK)
+        case HCTP_MSG_TARGET_INFO_ACK:
+            if (session->state != HCT_SERVER_STATE_WAIT_TARGET_INFO_ACK)
             {
                 queue_error_frame(session, frame.header.message_type, HCTP_STATUS_INVALID_ARGUMENT);
                 return HCTP_STATUS_INVALID_ARGUMENT;
             }
             session->state = HCT_SERVER_STATE_WAIT_PLAN;
             {
-                /* F008: emit the full catalog as one or more paginated CAPABILITIES
-                 * frames; loop until the chunk builder reports is_final so all 126
-                 * entries reach the host regardless of how many chunks that takes. */
+                /* Emit the full catalog as one or more paginated KERNEL_CATALOG frames;
+                 * loop until the chunk builder reports is_final so every entry reaches
+                 * the host regardless of how many chunks that takes. */
                 size_t chunk_start_index = 0u;
                 bool chunk_is_final = false;
                 do
@@ -6552,13 +6554,13 @@ hctp_status_t hct_server_session_accept_frame(hct_server_session_t *session,
                 } while (!chunk_is_final);
             }
             return HCTP_STATUS_OK;
-        case HCTP_MSG_LOAD_PLAN:
+        case HCTP_MSG_SESSION_PLAN:
             if (session->state != HCT_SERVER_STATE_WAIT_PLAN)
             {
                 queue_error_frame(session, frame.header.message_type, HCTP_STATUS_INVALID_ARGUMENT);
                 return HCTP_STATUS_INVALID_ARGUMENT;
             }
-            status = handle_load_plan(session, frame.payload, frame.header.payload_length);
+            status = handle_session_plan(session, frame.payload, frame.header.payload_length);
             if (status != HCTP_STATUS_OK) queue_error_frame(session, frame.header.message_type, status);
             return status;
         case HCTP_MSG_CASE_META:
@@ -6605,37 +6607,6 @@ hctp_status_t hct_server_session_accept_frame(hct_server_session_t *session,
             status = handle_run_performance(session);
             if (status != HCTP_STATUS_OK) queue_error_frame(session, frame.header.message_type, status);
             return status;
-        case HCTP_MSG_RESET_SESSION:
-            /* The protocol's only in-band recovery from HCT_SERVER_STATE_ERROR --
-             * deliberately not gated on session->state, so it works from any state
-             * (including ERROR) rather than being rejected by it. Re-running
-             * hct_server_session_init() reinitializes every session field and queues
-             * a fresh HELLO frame so the host can restart its handshake exactly as it
-             * would after a cold boot. */
-            hct_server_session_init(session, session->session_id, session->max_frame_payload,
-                                    session->workspace, session->workspace_bytes);
-            return HCTP_STATUS_OK;
-        case HCTP_MSG_PING:
-            /* Answerable from any state, including ERROR, as a liveness probe --
-             * deliberately does not touch session->state either way. */
-            return queue_frame(session, HCTP_MSG_PONG, NULL, 0u);
-        case HCTP_MSG_ABORT_CASE:
-            /* Only meaningful while a case is actually in flight; a wrong-state
-             * ABORT_CASE is reported the same way every other out-of-sequence
-             * message is (queue_error_frame(), no state change) rather than being
-             * escalated to HCT_SERVER_STATE_ERROR by the catch-all default: below. */
-            if (session->state != HCT_SERVER_STATE_WAIT_CASE_META &&
-                session->state != HCT_SERVER_STATE_WAIT_BLOB_CHUNK &&
-                session->state != HCT_SERVER_STATE_WAIT_RUN_CORRECTNESS &&
-                session->state != HCT_SERVER_STATE_WAIT_CORRECTNESS_ACK &&
-                session->state != HCT_SERVER_STATE_WAIT_RUN_PERFORMANCE)
-            {
-                queue_error_frame(session, frame.header.message_type, HCTP_STATUS_INVALID_ARGUMENT);
-                return HCTP_STATUS_INVALID_ARGUMENT;
-            }
-            reset_case_buffers(session);
-            session->state = HCT_SERVER_STATE_WAIT_CASE_META;
-            return queue_frame(session, HCTP_MSG_ACK, NULL, 0u);
         default:
             session->state = HCT_SERVER_STATE_ERROR;
             queue_error_frame(session, frame.header.message_type, HCTP_STATUS_INVALID_ARGUMENT);

@@ -14,7 +14,7 @@ import numpy as np
 from .case_bundle import CaseBundle, BlobInfo, blob_numpy, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
 from .comparison import ComparisonResult, compare_output, compare_status
 from .fake_target import FakeTargetTransport
-from .firmware_messages import CatalogEntry, HelloPayload, decode_catalog_payload, decode_hello_payload
+from .firmware_messages import CatalogEntry, TargetInfo, decode_kernel_catalog, decode_target_info
 from .hctp import HCTP_FLAG_MORE, ByteReader, ByteWriter, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
 from .measurement import (
     CounterPass,
@@ -57,10 +57,10 @@ class SessionResult:
     cases: tuple[CaseRunResult, ...]
     protocol_trace: tuple[str, ...]
     session_complete_cases: int
-    # Number of RTT sessions (LOAD_PLANs) the cases were spread over; >1 only for
+    # Number of RTT sessions (SESSION_PLANs) the cases were spread over; >1 only for
     # hardware_run's batched runner, which merges several sessions into one result.
     batch_count: int = 1
-    hello: HelloPayload | None = None
+    target_info: TargetInfo | None = None
 
     @property
     def case_bundle(self) -> CaseBundle:
@@ -97,7 +97,7 @@ class HostSession:
             tuple(counter_passes) if counter_passes is not None else default_counter_passes()
         )
         self._last_sent_message_type: str | None = None
-        self._hello: HelloPayload | None = None
+        self._target_info: TargetInfo | None = None
 
     @property
     def counter_passes(self) -> tuple[CounterPass, ...]:
@@ -112,7 +112,7 @@ class HostSession:
         *,
         on_case_complete: Callable[[CaseRunResult], None] | None = None,
     ) -> SessionResult:
-        """Run every case in case_bundles over one LOAD_PLAN.
+        """Run every case in case_bundles over one SESSION_PLAN.
 
         If on_case_complete is given, it is invoked with each case's CaseRunResult
         immediately after it finishes (i.e. as soon as its CASE_COMPLETE frame is
@@ -120,15 +120,15 @@ class HostSession:
         per-case progress output instead of waiting for the whole batch/session to
         finish before seeing anything.
         """
-        hello = self._recv_one(MessageType.HELLO)
-        hello_payload = self._decode_hello(hello.payload)
-        self._hello = hello_payload
-        self._session_id = hello.header.session_id
+        target_info_frame = self._recv_one(MessageType.TARGET_INFO)
+        target_info = self._decode_target_info(target_info_frame.payload)
+        self._target_info = target_info
+        self._session_id = target_info_frame.header.session_id
         self._incoming_validator = SessionFrameValidator(session_id=self._session_id, next_sequence_id=1)
-        self._check_counter_passes(hello_payload)
-        self._send(MessageType.HELLO_ACK, b"")
+        self._check_counter_passes(target_info)
+        self._send(MessageType.TARGET_INFO_ACK, b"")
 
-        catalog = self._recv_catalog(hello_payload.catalog_hash)
+        catalog = self._recv_catalog(target_info.catalog_hash)
         known_kernel_ids = {entry.kernel_id for entry in catalog}
         for bundle in case_bundles:
             if bundle.kernel_id not in known_kernel_ids:
@@ -137,7 +137,7 @@ class HostSession:
                     "which is not present in the target's advertised catalog."
                 )
             required = bundle.workspace_bytes_required
-            available = int(hello_payload.runtime_arena_capacity)
+            available = int(target_info.runtime_arena_capacity)
             if required > available:
                 raise RuntimeError(
                     f"Case {bundle.case_id!r} requires {required} workspace bytes, "
@@ -145,13 +145,13 @@ class HostSession:
                 )
 
         plan = self._encode_plan(case_bundles)
-        if len(plan) > hello_payload.max_rx_payload:
+        if len(plan) > target_info.max_rx_payload:
             raise RuntimeError(
-                f"LOAD_PLAN for {len(case_bundles)} case(s) and {len(self._counter_passes)} PMU pass(es) "
+                f"SESSION_PLAN for {len(case_bundles)} case(s) and {len(self._counter_passes)} PMU pass(es) "
                 f"encodes to {len(plan)} bytes, but the target's receive buffer only takes "
-                f"{hello_payload.max_rx_payload}-byte payloads (HELLO max_rx_payload). Split the batch."
+                f"{target_info.max_rx_payload}-byte payloads (TARGET_INFO max_rx_payload). Split the batch."
             )
-        self._send(MessageType.LOAD_PLAN, plan)
+        self._send(MessageType.SESSION_PLAN, plan)
 
         case_map = {bundle.case_id: bundle for bundle in case_bundles}
         results: dict[str, CaseRunResult] = {}
@@ -164,7 +164,7 @@ class HostSession:
 
         while True:
             frame = self._recv_any()
-            if frame.header.message_type == MessageType.CAPABILITIES:
+            if frame.header.message_type == MessageType.KERNEL_CATALOG:
                 continue
             if frame.header.message_type == MessageType.REQUEST_CASE:
                 case_index = ByteReader(frame.payload).u16()
@@ -293,10 +293,10 @@ class HostSession:
             cases=ordered,
             protocol_trace=tuple(self._trace),
             session_complete_cases=session_complete_cases,
-            hello=self._hello,
+            target_info=self._target_info,
         )
 
-    def _check_counter_passes(self, hello: HelloPayload) -> None:
+    def _check_counter_passes(self, target_info: TargetInfo) -> None:
         """Refuse PMU passes the target cannot run, before any plan is sent.
 
         A DWT-only target (no HCT_CAP_PMU_ARMV8M) only ever reports the cycle counter,
@@ -307,19 +307,19 @@ class HostSession:
         needs_events = [counter_pass for counter_pass in self._counter_passes if counter_pass.counters]
         if not needs_events:
             return
-        if not hello.has_pmu:
+        if not target_info.has_pmu:
             names = ", ".join(counter_pass.name for counter_pass in needs_events)
             raise RuntimeError(
-                f"Target {hello.board_id!r} ({hello.target_cpu}) has no Armv8.1-M PMU "
-                f"(capability_flags=0x{hello.capability_flags:08x}); it can only report "
+                f"Target {target_info.board_id!r} ({target_info.target_cpu}) has no Armv8.1-M PMU "
+                f"(capability_flags=0x{target_info.capability_flags:08x}); it can only report "
                 f"ARM_PMU_CPU_CYCLES from DWT. Drop the event-counter passes ({names}) or run on a PMU board."
             )
         for counter_pass in needs_events:
-            if counter_pass.slots_required > hello.pmu_counter_slots:
+            if counter_pass.slots_required > target_info.pmu_counter_slots:
                 raise RuntimeError(
                     f"PMU pass {counter_pass.name!r} needs {counter_pass.slots_required} event-counter "
                     f"slots ({len(counter_pass.counters)} {'chained' if counter_pass.chained else 'unchained'} "
-                    f"counter(s)) but the target advertises only {hello.pmu_counter_slots}."
+                    f"counter(s)) but the target advertises only {target_info.pmu_counter_slots}."
                 )
 
     def _to_raw_samples(self, samples: tuple[SampleResult, ...]) -> list[RawSample]:
@@ -345,21 +345,22 @@ class HostSession:
             )
         return raw
 
-    def _decode_hello(self, payload: bytes) -> HelloPayload:
-        """Every HELLO field: build_id, catalog_hash, max_frame_payload,
+    def _decode_target_info(self, payload: bytes) -> TargetInfo:
+        """Every TARGET_INFO field: build_id, catalog_hash, max_frame_payload,
         runtime_arena_capacity, transfer_mode, output_mode, board_id, target_cpu,
-        transport_kind, capability_flags, pmu_counter_slots, max_rx_payload."""
-        return decode_hello_payload(payload)
+        transport_kind, capability_flags, pmu_counter_slots, max_rx_payload,
+        max_cases_per_session, max_passes."""
+        return decode_target_info(payload)
 
     def _recv_catalog(self, expected_hash: bytes) -> tuple[CatalogEntry, ...]:
-        """F008: accumulate one or more paginated CAPABILITIES chunks (each chunk carries
+        """Accumulate one or more paginated KERNEL_CATALOG chunks (each chunk carries
         HCTP_FLAG_MORE until the final one) into the full kernel catalog, rejecting
         duplicate/missing kernel ids and verifying the assembled catalog's canonical-JSON
-        SHA-256 matches the HELLO frame's advertised catalog_hash before returning."""
+        SHA-256 matches the TARGET_INFO frame's advertised catalog_hash before returning."""
         entries_by_id: dict[int, CatalogEntry] = {}
         while True:
-            frame = self._recv_one(MessageType.CAPABILITIES)
-            for entry in decode_catalog_payload(frame.payload):
+            frame = self._recv_one(MessageType.KERNEL_CATALOG)
+            for entry in decode_kernel_catalog(frame.payload):
                 if entry.kernel_id in entries_by_id:
                     raise RuntimeError(f"Duplicate kernel_id {entry.kernel_id} in paginated catalog.")
                 entries_by_id[entry.kernel_id] = entry
@@ -389,13 +390,13 @@ class HostSession:
         actual_hash = hashlib.sha256(canonical).digest()
         if actual_hash != expected_hash:
             raise RuntimeError(
-                f"Assembled kernel catalog hash {actual_hash.hex()} does not match HELLO "
+                f"Assembled kernel catalog hash {actual_hash.hex()} does not match TARGET_INFO "
                 f"catalog_hash {expected_hash.hex()}."
             )
         return entries
 
     def _encode_plan(self, case_bundles: list[CaseBundle]) -> bytes:
-        return encode_load_plan(case_bundles, self._counter_passes)
+        return encode_session_plan(case_bundles, self._counter_passes)
 
     def _encode_case_meta(self, case_bundle: CaseBundle) -> bytes:
         comparison = case_bundle.comparison
@@ -512,8 +513,8 @@ def _encode_scalar(value: Any) -> int:
     return int(value)
 
 
-def encode_load_plan(case_bundles: Sequence[CaseBundle], counter_passes: Sequence[CounterPass]) -> bytes:
-    """LOAD_PLAN v2: u16 case_count, u8 transfer_mode(=1), u16 warmups, u16 samples,
+def encode_session_plan(case_bundles: Sequence[CaseBundle], counter_passes: Sequence[CounterPass]) -> bytes:
+    """SESSION_PLAN: u16 case_count, u8 transfer_mode(=1), u16 warmups, u16 samples,
     u32 iterations_per_sample, u32 min_cycles, u32 max_iterations, u8 pass_count,
     per pass (text pass_name, u8 chained, u8 counter_count, u16 event_id[counter_count]),
     then per case (text case_id, u32 kernel_id). The timing block is taken from the
@@ -540,8 +541,8 @@ def encode_load_plan(case_bundles: Sequence[CaseBundle], counter_passes: Sequenc
     return writer.finish()
 
 
-def load_plan_size(case_ids: Sequence[str], counter_passes: Sequence[CounterPass]) -> int:
-    """Encoded LOAD_PLAN size for these case ids and passes, without needing bundles --
+def session_plan_size(case_ids: Sequence[str], counter_passes: Sequence[CounterPass]) -> int:
+    """Encoded SESSION_PLAN size for these case ids and passes, without needing bundles --
     hardware_run uses it to keep every batch's plan within the target's receive buffer."""
     size = 2 + 1 + 2 + 2 + 4 + 4 + 4 + 1
     for counter_pass in counter_passes:

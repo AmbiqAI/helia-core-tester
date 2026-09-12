@@ -221,7 +221,7 @@ def test_f012_download_file_accepts_matching_checksum(tmp_path):
 
     from helia_core_tester.scripts.setup_dependencies import download_file
 
-    payload = b"hello world"
+    payload = b"payload bytes"
     expected_sha256 = hashlib.sha256(payload).hexdigest()
 
     class _FakeResponse:

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from .hctp import ByteReader
 
-# HELLO capability_flags bits -- must match the HCT_CAP_* enum in
+# TARGET_INFO capability_flags bits -- must match the HCT_CAP_* enum in
 # cmake/perf_stream/benchmark_server_catalog.h.
 CAP_CASE_STREAMING = 1 << 0
 CAP_CORRECTNESS = 1 << 1
@@ -20,7 +20,7 @@ CAP_PMU_ARMV8M = 1 << 6
 
 
 @dataclass(frozen=True)
-class HelloPayload:
+class TargetInfo:
     build_id: str
     catalog_hash: bytes
     max_frame_payload: int
@@ -31,10 +31,14 @@ class HelloPayload:
     target_cpu: str
     transport_kind: int
     capability_flags: int
-    # v2: number of 16-bit PMU event-counter slots (8 on Cortex-M55, 0 without a PMU)
+    # Number of 16-bit PMU event-counter slots (8 on Cortex-M55, 0 without a PMU)
     # and the largest frame payload the target's receive buffer can hold.
     pmu_counter_slots: int
     max_rx_payload: int
+    # v3: the firmware's fixed session limits (HCT_SERVER_MAX_CASES / HCT_SERVER_MAX_PASSES);
+    # the host batches cases and refuses over-long pass lists from these.
+    max_cases_per_session: int
+    max_passes: int
 
     @property
     def has_pmu(self) -> bool:
@@ -56,9 +60,9 @@ class CatalogEntry:
 
 
 
-def decode_hello_payload(payload: bytes) -> HelloPayload:
+def decode_target_info(payload: bytes) -> TargetInfo:
     reader = ByteReader(payload)
-    return HelloPayload(
+    return TargetInfo(
         build_id=reader.text(),
         catalog_hash=reader.fixed(32),
         max_frame_payload=reader.u32(),
@@ -71,11 +75,13 @@ def decode_hello_payload(payload: bytes) -> HelloPayload:
         capability_flags=reader.u32(),
         pmu_counter_slots=reader.u8(),
         max_rx_payload=reader.u32(),
+        max_cases_per_session=reader.u16(),
+        max_passes=reader.u8(),
     )
 
 
 
-def decode_catalog_payload(payload: bytes) -> tuple[CatalogEntry, ...]:
+def decode_kernel_catalog(payload: bytes) -> tuple[CatalogEntry, ...]:
     reader = ByteReader(payload)
     count = reader.u16()
     entries = []

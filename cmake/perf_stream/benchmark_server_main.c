@@ -26,10 +26,10 @@ static const hct_symbol_ref_t g_hct_symbol_refs[] = {
 volatile uintptr_t g_hct_symbol_registry_anchor;
 volatile size_t g_hct_symbol_registry_count;
 volatile uint32_t g_hct_server_boot_status;
-volatile uint32_t g_hct_last_hello_status;
+volatile uint32_t g_hct_last_target_info_status;
 volatile uint32_t g_hct_last_catalog_status;
 volatile uint32_t g_hct_last_transport_init_status;
-volatile uint32_t g_hct_last_transport_write_hello;
+volatile uint32_t g_hct_last_transport_write_target_info;
 volatile uint32_t g_hct_last_transport_write_catalog;
 volatile uint32_t g_hct_last_abs_dispatch_status;
 volatile uint32_t g_hct_last_conv_dispatch_status;
@@ -157,7 +157,7 @@ int main(void)
                             256u,
                             g_hct_workspace,
                             (uint32_t)sizeof(g_hct_workspace));
-    g_hct_last_hello_status = HCTP_STATUS_OK;
+    g_hct_last_target_info_status = HCTP_STATUS_OK;
     g_hct_last_catalog_status = HCTP_STATUS_OK;
     hct_flush_outbound(&g_hct_session, transport);
 

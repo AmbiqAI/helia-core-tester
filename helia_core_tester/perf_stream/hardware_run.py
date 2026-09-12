@@ -20,22 +20,22 @@ from .hctp import HEADER_SIZE
 from .measurement import CounterPass, counter_passes_for_selection
 from .pmu_catalog import default_selection
 from .result_bundle import write_result_bundle
-from .session import CaseRunResult, HostSession, SessionResult, load_plan_size
+from .session import CaseRunResult, HostSession, SessionResult, session_plan_size
 from .transport import JLinkRttTransport, symbol_address_from_elf
 from ..core.config import VALID_SUITE_MODES
 
 # Must match HCT_SERVER_MAX_CASES in cmake/perf_stream/benchmark_server_session.h.
 # The firmware allocates fixed-size `planned_case_ids`/`planned_kernel_ids` arrays
-# sized to this constant and rejects a LOAD_PLAN that names more cases than this
-# (handle_load_plan() answers with an ERROR frame). Callers with more cases than
+# sized to this constant and rejects a SESSION_PLAN that names more cases than this
+# (handle_session_plan() answers with an ERROR frame). Callers with more cases than
 # this (e.g. run_apollo510_generated_test_session over a whole operator family) are
 # split into multiple sequential sessions; see _run_case_bundles_in_batches() below.
 MAX_CASES_PER_SESSION = 32
 
 # Must match HCT_SERVER_RX_BUFFER_BYTES in benchmark_server_session.h: the firmware
-# decodes host frames out of a fixed 2 KiB receive buffer, so a LOAD_PLAN payload
+# decodes host frames out of a fixed 2 KiB receive buffer, so a SESSION_PLAN payload
 # (case ids can be up to 96 characters, plus one entry per PMU pass) has to fit in
-# it too. The target also advertises this bound in HELLO (max_rx_payload) and the
+# it too. The target also advertises this bound in TARGET_INFO (max_rx_payload) and the
 # session refuses to send a plan that exceeds it; the batch splitter below keeps
 # every plan under this same constant up front.
 FIRMWARE_RX_BUFFER_BYTES = 2048
@@ -54,19 +54,19 @@ def split_case_bundles_into_batches(
     max_cases: int = MAX_CASES_PER_SESSION,
     max_plan_bytes: int = MAX_LOAD_PLAN_PAYLOAD_BYTES,
 ) -> list[list[CaseBundle]]:
-    """Greedily pack cases into batches of at most `max_cases` whose encoded LOAD_PLAN
+    """Greedily pack cases into batches of at most `max_cases` whose encoded SESSION_PLAN
     (with these PMU passes) stays within `max_plan_bytes`. Order is preserved."""
     batches: list[list[CaseBundle]] = []
     current: list[CaseBundle] = []
     for bundle in case_bundles:
         candidate_ids = [b.case_id for b in current] + [bundle.case_id]
-        if current and (len(current) >= max_cases or load_plan_size(candidate_ids, counter_passes) > max_plan_bytes):
+        if current and (len(current) >= max_cases or session_plan_size(candidate_ids, counter_passes) > max_plan_bytes):
             batches.append(current)
             current = []
-        single = load_plan_size([bundle.case_id], counter_passes)
+        single = session_plan_size([bundle.case_id], counter_passes)
         if single > max_plan_bytes:
             raise ValueError(
-                f"Case {bundle.case_id!r} alone needs a {single}-byte LOAD_PLAN with "
+                f"Case {bundle.case_id!r} alone needs a {single}-byte SESSION_PLAN with "
                 f"{len(counter_passes)} PMU pass(es), over the firmware's {max_plan_bytes}-byte "
                 "receive limit. Request fewer counters."
             )
@@ -87,7 +87,7 @@ def _run_single_session(
     build_dir: Path,
     on_case_complete: Callable[[CaseRunResult], None] | None = None,
 ) -> tuple[SessionResult, int]:
-    """Open one fresh (reset-on-open) RTT session and run exactly one LOAD_PLAN
+    """Open one fresh (reset-on-open) RTT session and run exactly one SESSION_PLAN
     worth of case bundles. Callers must keep len(case_bundles) <= MAX_CASES_PER_SESSION
     and the encoded plan within MAX_LOAD_PLAN_PAYLOAD_BYTES (see split_case_bundles_into_batches).
     """
@@ -182,7 +182,7 @@ def _run_case_bundles_in_batches(
     on_case_complete: Callable[[CaseRunResult], None] | None = None,
 ) -> tuple[SessionResult, Path]:
     """Like _run_case_bundles_on_apollo510, but transparently splits case_bundles
-    into batches (at most MAX_CASES_PER_SESSION cases, LOAD_PLAN within the firmware's
+    into batches (at most MAX_CASES_PER_SESSION cases, SESSION_PLAN within the firmware's
     receive buffer) and runs one fresh (reset-on-open) RTT session per batch, merging
     all cases into a single SessionResult/result bundle.
     """
@@ -193,7 +193,7 @@ def _run_case_bundles_in_batches(
     all_trace: list[str] = []
     session_complete_cases = 0
     rtt_address = 0
-    hello = None
+    target_info = None
     batches = split_case_bundles_into_batches(case_bundles, counter_passes)
     batch_count = len(batches)
 
@@ -217,14 +217,14 @@ def _run_case_bundles_in_batches(
         all_cases.extend(result.cases)
         all_trace.extend(f"batch{batch_index}:{entry}" for entry in result.protocol_trace)
         session_complete_cases += result.session_complete_cases
-        hello = hello or result.hello
+        target_info = target_info or result.target_info
 
     merged_result = SessionResult(
         cases=tuple(all_cases),
         protocol_trace=tuple(all_trace),
         session_complete_cases=session_complete_cases,
         batch_count=batch_count,
-        hello=hello,
+        target_info=target_info,
     )
 
     memory_report_path = generate_benchmark_server_memory_report(build_dir=build_dir)
@@ -386,7 +386,7 @@ def run_apollo510_generated_test_session(
     times the kernel again with up to four (chained, 32-bit) event counters.
 
     Transparently splits the discovered/bridged cases into batches of at most
-    MAX_CASES_PER_SESSION (matching firmware HCT_SERVER_MAX_CASES) whose LOAD_PLAN fits
+    MAX_CASES_PER_SESSION (matching firmware HCT_SERVER_MAX_CASES) whose SESSION_PLAN fits
     the firmware receive buffer, and runs one fresh reset-on-open RTT session per batch,
     merging all cases into a single SessionResult/result bundle.
     """

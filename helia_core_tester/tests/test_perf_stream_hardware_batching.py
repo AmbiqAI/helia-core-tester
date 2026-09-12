@@ -1,7 +1,7 @@
 """Regression test for hardware_run.py's session-size batching.
 
 Guards against the real hardware bug hit in practice: `run_apollo510_generated_test_session`
-used to send every discovered/bridged case in a single LOAD_PLAN. The firmware's
+used to send every discovered/bridged case in a single SESSION_PLAN. The firmware's
 HCT_SERVER_MAX_CASES (see cmake/perf_stream/benchmark_server_session.h) bounds the
 cases per plan, and the plan also has to fit the firmware's 2 KiB receive buffer
 (case ids can be 96 characters and every PMU pass adds an entry) -- a plan over
@@ -23,7 +23,7 @@ import pytest
 from helia_core_tester.perf_stream import hardware_run
 from helia_core_tester.perf_stream.boards import resolve_board
 from helia_core_tester.perf_stream.measurement import counter_passes_for_selection
-from helia_core_tester.perf_stream.session import SessionResult, load_plan_size
+from helia_core_tester.perf_stream.session import SessionResult, session_plan_size
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -57,17 +57,17 @@ def test_batches_are_split_by_case_count_and_encoded_plan_size() -> None:
     assert sum(len(b) for b in batches) == 40
     assert [b.case_id for batch in batches for b in batch] == [b.case_id for b in long_ids]
     for batch in batches:
-        assert load_plan_size([b.case_id for b in batch], passes) <= hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES
+        assert session_plan_size([b.case_id for b in batch], passes) <= hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES
     # Adding one more case to any batch would have overflowed the plan.
     for batch, following in zip(batches, batches[1:]):
         ids = [b.case_id for b in batch] + [following[0].case_id]
-        assert load_plan_size(ids, passes) > hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES
+        assert session_plan_size(ids, passes) > hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES
 
     # mve:all is nine passes; the plan header grows but every batch still fits.
     many_passes = counter_passes_for_selection({"mve": "all", "cpu": "default"})
     assert len(many_passes) == 10
     for batch in hardware_run.split_case_bundles_into_batches(long_ids, many_passes):
-        assert load_plan_size([b.case_id for b in batch], many_passes) <= hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES
+        assert session_plan_size([b.case_id for b in batch], many_passes) <= hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES
 
     with pytest.raises(ValueError, match="alone needs"):
         hardware_run.split_case_bundles_into_batches([_DummyCaseBundle("x" * 96)], passes, max_plan_bytes=100)
@@ -102,7 +102,7 @@ def test_run_case_bundles_in_batches_splits_and_merges(tmp_path: Path, monkeypat
         # One fake "case result" per bundle in this batch, tagged with its case_id.
         fake_result = SessionResult(
             cases=tuple(f"result-for-{b.case_id}" for b in case_bundles),  # type: ignore[arg-type]
-            protocol_trace=(f"TX:HELLO_ACK-{case_bundles[0].case_id}",),
+            protocol_trace=(f"TX:TARGET_INFO_ACK-{case_bundles[0].case_id}",),
             session_complete_cases=len(case_bundles),
         )
         return fake_result, 0xDEADBEEF

@@ -195,7 +195,7 @@ def stream_generated_tests(
     progress = make_live_progress_printer(len(preview_bundles), id_width=id_width, err=progress_to_stderr)
 
     # Per-case wall clock: the gap between consecutive CASE_COMPLETEs (the first case of
-    # every batch also absorbs that batch's target reset and HELLO/catalog exchange).
+    # every batch also absorbs that batch's target reset and TARGET_INFO/catalog exchange).
     case_seconds: Dict[str, float] = {}
     stream_started = time.monotonic()
     last_case_done = stream_started

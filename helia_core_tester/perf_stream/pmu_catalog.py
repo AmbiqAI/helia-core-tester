@@ -1,7 +1,7 @@
 """Armv8.1-M PMU event catalog (assets/pmu/armv8m_pmu_events.json).
 
 The catalog is the host-side source of truth for counter names: firmware only ever
-speaks in 16-bit event ids (LOAD_PLAN sends ids, SAMPLE_RESULT echoes them with an
+speaks in 16-bit event ids (SESSION_PLAN sends ids, SAMPLE_RESULT echoes them with an
 empty name) and the host resolves names from here.
 """
 
