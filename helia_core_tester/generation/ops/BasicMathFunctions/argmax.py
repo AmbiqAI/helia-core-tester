@@ -7,6 +7,9 @@ import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.utils.litert_builder import build_arg_reduction_op
+from helia_core_tester.generation.ops._shared.arg_extrema_float import (
+    float_arg_kernel, generate_arg_extrema_float,
+)
 
 
 def build_argmax_op(
@@ -36,11 +39,14 @@ class OpArgMax(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
-        activation_dtype = self.desc.get("activation_dtype", "S8")
+        activation_dtype = self.tensor_dtype("input")
         if activation_dtype == "S8":
             dtype = "int8"
         elif activation_dtype == "S16":
             dtype = "int16"
+        elif activation_dtype in ("FP16", "FP32"):
+            float_arg_kernel(self, "max")
+            dtype = "float16" if activation_dtype == "FP16" else "float32"
         else:
             raise NotImplementedError(f"Unsupported ArgMax dtype: {activation_dtype}")
         model_bytes = build_argmax_op(
@@ -58,6 +64,8 @@ class OpArgMax(OperationBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
+        if self.tensor_dtype("input") in ("FP16", "FP32"):
+            return float_arg_kernel(self, "max")
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         
         if activation_dtype == 'S8':
@@ -79,6 +87,10 @@ class OpArgMax(OperationBase):
         """
         Generate C and H files from templates for ArgMax operation.
         """
+        if self.tensor_dtype("input") in ("FP16", "FP32"):
+            generate_arg_extrema_float(self, output_dir, "max")
+            return
+
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']
