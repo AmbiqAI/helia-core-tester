@@ -173,7 +173,9 @@ def print_run_report(result, skipped: list[tuple], bundle: Path, *, err: bool = 
     return failed_case_ids
 
 
-def build_json_summary(result, skipped: list[tuple], *, session_id: str, board_id: str, bundle: Path) -> dict[str, Any]:
+def build_json_summary(
+    result, skipped: list[tuple], *, session_id: str, board_id: str, bundle: Path, timing: Optional[dict] = None
+) -> dict[str, Any]:
     """The single JSON document `--json` prints on stdout."""
     cases: list[dict[str, Any]] = []
     passed = 0
@@ -185,6 +187,7 @@ def build_json_summary(result, skipped: list[tuple], *, session_id: str, board_i
                 "case_id": case.case_bundle.case_id,
                 "passed": ok,
                 "median_cycles": float(case.statistics.median_cycles),
+                "valid_for_regression": bool(case.statistics.valid_for_regression),
                 "skipped_reason": None,
             }
         )
@@ -194,6 +197,7 @@ def build_json_summary(result, skipped: list[tuple], *, session_id: str, board_i
                 "case_id": test.name,
                 "passed": None,
                 "median_cycles": None,
+                "valid_for_regression": None,
                 "skipped_reason": _clean_skip_reason(test.name, reason),
             }
         )
@@ -203,5 +207,6 @@ def build_json_summary(result, skipped: list[tuple], *, session_id: str, board_i
         "board": board_id,
         "bundle": str(bundle),
         "totals": {"ran": ran, "passed": passed, "failed": ran - passed, "skipped": len(skipped)},
+        "timing": dict(timing or {}),
         "cases": cases,
     }

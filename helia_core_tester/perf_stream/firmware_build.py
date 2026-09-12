@@ -11,6 +11,7 @@ import hashlib
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -199,6 +200,9 @@ class FlashDecision:
     needed: bool
     digest: str
     reason: str
+    # Wall-clock seconds spent in the cmake build and in the J-Link flash (0 when skipped).
+    build_seconds: float = 0.0
+    flash_seconds: float = 0.0
 
 
 def decide_flash(build_dir: Path, serial_no: int, *, force: bool = False) -> FlashDecision:
@@ -252,12 +256,18 @@ def flash_firmware(
 ) -> FlashDecision:
     """Build, then flash through the NSX-generated J-Link target only when the ELF
     differs from what was last flashed to this probe (or `force` is set)."""
+    build_started = time.monotonic()
     build_firmware(board, build_dir=build_dir, jobs=jobs, force_reconfigure=force_reconfigure, serial_no=serial_no)
+    build_seconds = time.monotonic() - build_started
     decision = decide_flash(build_dir, serial_no, force=force)
     if not decision.needed:
         typer.echo(f"[hardware] Skipping flash: {decision.reason}.")
-        return decision
+        return FlashDecision(decision.needed, decision.digest, decision.reason, build_seconds=build_seconds)
     typer.echo(f"[hardware] Flashing {board.id} via J-Link serial {serial_no} ({decision.reason}).")
+    flash_started = time.monotonic()
     build(build_dir, FLASH_TARGET, jobs)
     record_flash(build_dir, serial_no, decision.digest)
-    return decision
+    return FlashDecision(
+        decision.needed, decision.digest, decision.reason,
+        build_seconds=build_seconds, flash_seconds=time.monotonic() - flash_started,
+    )
