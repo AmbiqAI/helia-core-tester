@@ -36,6 +36,7 @@ def ensure_hardware_dependencies(repo_root: Path) -> None:
     from ..scripts.setup_dependencies import (
         nsx_ambiq_sdk_dir,
         setup_arm_gcc,
+        setup_cmsis5,
         setup_neuralspotx,
         setup_nsx_ambiq_sdk,
         setup_nsx_toolchain,
@@ -60,6 +61,9 @@ def ensure_hardware_dependencies(repo_root: Path) -> None:
     )
     neuralspotx_examples_dir = downloads_dir / "neuralspotx" / "examples"
     arm_gcc_dir = downloads_dir / "arm_gcc_download"
+    # CMakeLists.txt's CMSIS_PATH default; the Cortex-M startup/system sources
+    # and CMSIS core headers come from here for the hardware build too.
+    cmsis5_core_dir = downloads_dir / "CMSIS_5" / "CMSIS" / "Core"
     toolchain_file = repo_root / TOOLCHAIN_FILE
 
     if (
@@ -67,6 +71,7 @@ def ensure_hardware_dependencies(repo_root: Path) -> None:
         and board_link_ok
         and neuralspotx_examples_dir.is_dir()
         and arm_gcc_dir.is_dir()
+        and cmsis5_core_dir.is_dir()
         and toolchain_file.exists()
     ):
         return
@@ -81,6 +86,8 @@ def ensure_hardware_dependencies(repo_root: Path) -> None:
     # that never ran setup_dependencies.py has neither.
     if not arm_gcc_dir.is_dir():
         setup_arm_gcc(downloads_dir)
+    if not cmsis5_core_dir.is_dir():
+        setup_cmsis5(downloads_dir)
     if not toolchain_file.exists():
         setup_nsx_toolchain(repo_root, downloads_dir)
     typer.echo("[hardware] Hardware-build dependencies ready.")
