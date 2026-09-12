@@ -17,6 +17,8 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from .jlink_library import missing_library_hint, open_jlink
+
 SERIAL_ENV_VAR = "HPX_JLINK_SERIAL"
 
 
@@ -42,18 +44,19 @@ def _decode(value) -> str:
 def list_probes() -> list[ProbeInfo]:
     """Enumerate USB-connected J-Link probes via pylink's JLINKARM_EMU_GetList.
 
-    Uses a bare `pylink.JLink()` exactly like `transport.JLinkRttTransport`, so the
-    DLL discovery (including a custom `JLINK_PATH`/library location) stays shared.
+    Opens pylink through `jlink_library.open_jlink` exactly like
+    `transport.JLinkRttTransport`, so the library discovery ($HPX_JLINK_DLL,
+    $JLINK_PATH, JLinkExe on PATH, then pylink's default) stays shared.
     Raises ProbeResolutionError when the J-Link DLL itself cannot be loaded.
     """
     import pylink
 
     try:
-        jlink = pylink.JLink()
+        jlink = open_jlink(pylink)
     except Exception as exc:  # pylink raises TypeError when it cannot find the DLL
         raise ProbeResolutionError(
-            f"Cannot load the SEGGER J-Link library through pylink ({exc}). "
-            "Install the SEGGER J-Link software or pass --serial-no explicitly."
+            f"Cannot load the SEGGER J-Link library through pylink ({exc}). {missing_library_hint()} "
+            "Alternatively pass --serial-no explicitly."
         ) from exc
     try:
         emulators = jlink.connected_emulators()

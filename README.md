@@ -64,6 +64,11 @@ Identity resolution rules:
   used as-is; zero or several is an error naming what was found.
   `helia_core_tester probes list` shows the probes, `probes match --board B` prints
   the serial the hardware commands would pick.
+- The J-Link shared library pylink loads is resolved from `$HPX_JLINK_DLL` (the
+  library file), then `$JLINK_PATH` (the `JLinkExe` binary or its directory), then
+  the directory of `JLinkExe` on PATH, then pylink's own search (ldconfig,
+  `/opt/SEGGER`). These are the same variables the lab runners export for hpx;
+  `helia_core_tester doctor` prints which one resolved the library.
 
 `helia_core_tester doctor` reports the hardware toolchain (arm-none-eabi-gcc,
 cmake, the J-Link library, the fetched nsx-ambiq-sdk/neuralspotx checkouts) as

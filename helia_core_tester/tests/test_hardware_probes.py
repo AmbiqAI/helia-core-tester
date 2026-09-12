@@ -66,6 +66,9 @@ def test_list_probes_uses_pylink_enumeration(monkeypatch) -> None:
     class _FakeJLink:
         closed = False
 
+        def __init__(self, lib=None) -> None:
+            _FakeJLink.lib = lib
+
         def connected_emulators(self):
             return [_Info(2, b"J-Link OB\x00\x00"), _Info(1, b"J-Link Plus")]
 

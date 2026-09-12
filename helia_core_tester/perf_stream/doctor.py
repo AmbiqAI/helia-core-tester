@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from .firmware_build import DOWNLOADS_DIR
+from .jlink_library import SOURCE_PYLINK_DEFAULT, find_jlink_library, missing_library_hint
 
 
 @dataclass(frozen=True)
@@ -28,17 +29,22 @@ def _tool_check(tool: str, label: str) -> HardwareCheck:
 
 
 def _jlink_dll_check() -> HardwareCheck:
+    label = "J-Link library (pylink)"
+    found = find_jlink_library()
     try:
         from pylink.library import Library
 
-        library = Library()
+        library = Library(found.path) if found is not None else Library()
         dll = library.dll()
-    except Exception as exc:  # pylink import/DLL discovery failure
-        return HardwareCheck("J-Link library (pylink)", False, f"not loadable: {exc}")
+    except Exception as exc:  # pylink import/DLL load failure
+        where = f" from {found.describe()}" if found is not None else ""
+        return HardwareCheck(label, False, f"not loadable{where}: {exc}")
     if dll is None:
-        return HardwareCheck("J-Link library (pylink)", False, "SEGGER J-Link DLL not found by pylink")
+        return HardwareCheck(label, False, f"SEGGER J-Link DLL not found. {missing_library_hint()}")
+    if found is not None:
+        return HardwareCheck(label, True, found.describe())
     path = getattr(library, "_path", None)
-    return HardwareCheck("J-Link library (pylink)", True, str(path) if path else "loaded")
+    return HardwareCheck(label, True, f"{path or 'loaded'} (via {SOURCE_PYLINK_DEFAULT})")
 
 
 def _git_head(path: Path) -> Optional[str]:
