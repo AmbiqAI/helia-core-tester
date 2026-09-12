@@ -8,8 +8,6 @@ Each contract clause therefore gets a test that fails if the rule is dropped.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 
@@ -41,6 +39,7 @@ def test_canonical_qnan_is_the_bit_pattern_the_contract_names(dtype, qnan):
 
 # --- Equal values retain the first input in row-major order, including zero signs ------
 
+
 @pytest.mark.parametrize("kind", ["max", "min"])
 @pytest.mark.parametrize("dtype", [F32, F16])
 def test_a_tie_retains_the_first_input_and_its_zero_sign(kind, dtype):
@@ -60,16 +59,14 @@ def test_a_tie_retains_the_first_input_and_its_zero_sign(kind, dtype):
 
 
 @pytest.mark.parametrize("kind", ["max", "min"])
-def test_a_tie_among_equal_nonzero_values_keeps_the_first(kind):
-    # Same rule away from zero, where the bits are indistinguishable; this pins the
-    # ordering logic rather than the sign, so a reference that scanned in reverse and
-    # happened to pass the zero test still fails here.
+def test_selection_with_repeated_nonzero_values(kind):
     values = np.array([[F32(2.5), F32(2.5), F32(1.0)]], dtype=F32)
     got = reduce_extrema_reference(values, [1], kind)[0, 0]
     assert got == (F32(2.5) if kind == "max" else F32(1.0))
 
 
 # --- Any NaN in a reduction yields canonical quiet NaN ---------------------------------
+
 
 @pytest.mark.parametrize("kind", ["max", "min"])
 @pytest.mark.parametrize("payload", [0x7FA00001, 0x7F800001, 0xFFC00000])
@@ -83,17 +80,24 @@ def test_any_nan_in_the_domain_yields_the_canonical_quiet_nan(kind, payload):
 @pytest.mark.parametrize("kind", ["max", "min"])
 def test_a_nan_decides_rather_than_competes(kind):
     """A NaN anywhere wins, including last and including against an infinity."""
-    values = np.array([[F32(np.inf), F32(-np.inf), _from_bits(0x7FA00001, F32)]], dtype=F32)
+    values = np.array(
+        [[F32(np.inf), F32(-np.inf), _from_bits(0x7FA00001, F32)]], dtype=F32
+    )
     assert _bits(reduce_extrema_reference(values, [1], kind)[0, 0]) == 0x7FC00000
 
 
 # --- A zero mask copies bits unchanged; a singleton axis canonicalises -----------------
 
+
 def test_a_zero_mask_copies_bits_unchanged_including_nan_payloads():
     payload = _from_bits(0x7FA00001, F32)
     values = np.array([[payload, F32(-0.0), F32(np.inf)]], dtype=F32)
     got = reduce_extrema_reference(values, [], "max")
-    assert [_bits(v) for v in got[0]] == [0x7FA00001, _bits(F32(-0.0)), _bits(F32(np.inf))]
+    assert [_bits(v) for v in got[0]] == [
+        0x7FA00001,
+        _bits(F32(-0.0)),
+        _bits(F32(np.inf)),
+    ]
 
 
 def test_reducing_a_singleton_axis_canonicalises_where_a_zero_mask_would_not():
@@ -111,7 +115,10 @@ def test_reducing_a_singleton_axis_canonicalises_where_a_zero_mask_would_not():
 
 # --- Infinities and subnormals retain their bits ---------------------------------------
 
-@pytest.mark.parametrize("kind,expected_bits", [("max", 0x7F800000), ("min", 0x00000001)])
+
+@pytest.mark.parametrize(
+    "kind,expected_bits", [("max", 0x7F800000), ("min", 0x00000001)]
+)
 def test_infinities_and_subnormals_retain_their_bits(kind, expected_bits):
     smallest_subnormal = _from_bits(0x00000001, F32)
     values = np.array([[F32(np.inf), smallest_subnormal, F32(1.0)]], dtype=F32)
@@ -119,6 +126,7 @@ def test_infinities_and_subnormals_retain_their_bits(kind, expected_bits):
 
 
 # --- An empty reduced domain produces the identity --------------------------------------
+
 
 @pytest.mark.parametrize("kind,expected", [("max", -np.inf), ("min", np.inf)])
 def test_an_empty_reduced_domain_produces_the_identity(kind, expected):
@@ -129,6 +137,7 @@ def test_an_empty_reduced_domain_produces_the_identity(kind, expected):
 
 
 # --- Ordinary selection, cross-checked against numpy where they must agree --------------
+
 
 @pytest.mark.parametrize("kind", ["max", "min"])
 @pytest.mark.parametrize(
@@ -143,7 +152,9 @@ def test_an_empty_reduced_domain_produces_the_identity(kind, expected):
         ((2, 3, 4, 5), [0, 1, 2, 3]),
     ],
 )
-def test_ordinary_selection_agrees_with_numpy_where_the_rules_coincide(kind, shape, axes):
+def test_ordinary_selection_agrees_with_numpy_where_the_rules_coincide(
+    kind, shape, axes
+):
     """Guards the traversal itself.
 
     On data with no ties and no NaN the contract and numpy must agree exactly, so numpy
@@ -153,7 +164,9 @@ def test_ordinary_selection_agrees_with_numpy_where_the_rules_coincide(kind, sha
     rng = np.random.default_rng(20260911)
     values = rng.permutation(int(np.prod(shape))).astype(F32).reshape(shape)
     got = reduce_extrema_reference(values, axes, kind, keepdims=True)
-    want = (np.max if kind == "max" else np.min)(values, axis=tuple(axes), keepdims=True)
+    want = (np.max if kind == "max" else np.min)(
+        values, axis=tuple(axes), keepdims=True
+    )
     assert got.shape == want.shape
     assert np.array_equal(got, want)
 
@@ -168,9 +181,7 @@ def test_keepdims_false_drops_the_reduced_axes(kind):
     assert np.array_equal(got, want)
 
 
-# The four cases the kernel lane demonstrated against this reference at MXCSR 0x9fe2
-# (ns-cmsis-nn#498 review). Each distinguishes correct subnormal ordering from ordering
-# that has treated a subnormal operand as zero.
+# Distinguish subnormal ordering from treating subnormal operands as zero.
 _SUBNORMAL_ORDERING_CASES = [
     ([0x00000000, 0x00000001], "max", 0x00000001),
     ([0x00000001, 0x00000000], "min", 0x00000000),
@@ -181,39 +192,31 @@ _SUBNORMAL_ORDERING_CASES = [
 
 @pytest.mark.parametrize("bits,kind,expected", _SUBNORMAL_ORDERING_CASES)
 def test_subnormal_ordering_is_exact(bits, kind, expected):
-    """Ordering must distinguish subnormals from zero and from each other.
-
-    An earlier version of this reference compared float32 values with > and <, and every
-    one of these returned the wrong element whenever the process had DAZ set, because the
-    hardware reads a subnormal operand as zero. Ordering is now decided on integers
-    decoded from the stored bits, so no comparison instruction is involved.
-
-    These cases replace an earlier test that used [Inf, subnormal, 1] and could not fail
-    for its stated reason: the subnormal still wins that reduction when compared as zero,
-    and its bits survive because the winner is copied whole. It asserted the symptom it
-    was least able to detect.
-    """
+    """Ordering must distinguish subnormals from zero and from each other."""
     values = np.array(bits, dtype=np.uint32).view(F32).reshape(1, len(bits))
     assert _bits(reduce_extrema_reference(values, [1], kind)[0, 0]) == expected
 
 
-def test_subnormal_ordering_holds_with_flush_to_zero_actually_enabled():
-    """The same cases with the control state set and observed, not merely assumed.
-
-    Importing a library that might set FTZ/DAZ proves nothing about the control state, as
-    the kernel lane pointed out. This sets FTZ and DAZ, records the MXCSR value it actually
-    observed, runs the cases, and restores the original value. It skips where the helper
-    that can set MXCSR is unavailable, because the primary guarantee is structural -- the
-    reference performs no floating-point comparison -- and this is the check that the
-    structural claim is true in practice.
-    """
+def test_subnormal_ordering_holds_with_flush_to_zero_actually_enabled(tmp_path):
+    """Set, observe, exercise and restore FTZ/DAZ on an x86 host."""
     import ctypes
+    import platform
+    import shutil
+    import subprocess
 
-    helper = Path(
-        "/home/adamp/heliacore-coordination/artifacts/core498/tester-reference-check/mxcsr.so"
+    cc = shutil.which("cc")
+    if platform.machine().lower() not in ("x86_64", "amd64") or cc is None:
+        pytest.skip("MXCSR control check requires an x86-64 host and C compiler")
+    helper = tmp_path / "mxcsr.so"
+    subprocess.run(
+        [cc, "-shared", "-fPIC", "-x", "c", "-", "-o", str(helper)],
+        input="#include <xmmintrin.h>\n"
+        "unsigned get_mxcsr(void) { return _mm_getcsr(); }\n"
+        "void set_mxcsr(unsigned value) { _mm_setcsr(value); }\n",
+        text=True,
+        capture_output=True,
+        check=True,
     )
-    if not helper.exists():
-        pytest.skip(f"no MXCSR helper at {helper}; structural guarantee is covered above")
 
     lib = ctypes.CDLL(str(helper))
     lib.get_mxcsr.restype = ctypes.c_uint
@@ -223,7 +226,9 @@ def test_subnormal_ordering_holds_with_flush_to_zero_actually_enabled():
     try:
         lib.set_mxcsr((original & ~ftz_daz) | ftz_daz)
         observed = lib.get_mxcsr()
-        assert observed & ftz_daz == ftz_daz, f"asked for FTZ+DAZ, MXCSR reads {observed:#x}"
+        assert (
+            observed & ftz_daz == ftz_daz
+        ), f"asked for FTZ+DAZ, MXCSR reads {observed:#x}"
         for bits, kind, expected in _SUBNORMAL_ORDERING_CASES:
             values = np.array(bits, dtype=np.uint32).view(F32).reshape(1, len(bits))
             got = _bits(reduce_extrema_reference(values, [1], kind)[0, 0])
