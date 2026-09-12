@@ -13,7 +13,7 @@ extern "C" {
 #define HCT_SERVER_MAX_CASE_ID 96u
 /* Cases per LOAD_PLAN. The host (hardware_run.MAX_CASES_PER_SESSION) must stay in
  * lockstep, and additionally keeps every plan within HCT_SERVER_MAX_RX_PAYLOAD_BYTES. */
-#define HCT_SERVER_MAX_CASES 4u
+#define HCT_SERVER_MAX_CASES 32u
 /* PMU passes per LOAD_PLAN and event counters per pass. Cortex-M55 has 8 x 16-bit
  * event counters; a chained pass uses two slots per counter (32-bit), so 4 chained
  * counters fill the PMU. */

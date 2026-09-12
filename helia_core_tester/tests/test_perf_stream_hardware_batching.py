@@ -2,12 +2,11 @@
 
 Guards against the real hardware bug hit in practice: `run_apollo510_generated_test_session`
 used to send every discovered/bridged case in a single LOAD_PLAN. The firmware's
-HCT_SERVER_MAX_CASES (see cmake/perf_stream/benchmark_server_session.h) is only 4,
-and handle_load_plan() in benchmark_server_session.c silently drops (no reply frame)
-a plan naming more cases than that -- which manifested on real Apollo510 hardware as
-the host hanging with "Transport stalled without a complete frame." for any
-`hardware stream` invocation discovering more than 4 bridgeable cases
-(the default --family ConvolutionFunctions with no --limit discovers 200+).
+HCT_SERVER_MAX_CASES (see cmake/perf_stream/benchmark_server_session.h) bounds the
+cases per plan, and the plan also has to fit the firmware's 2 KiB receive buffer
+(case ids can be 96 characters and every PMU pass adds an entry) -- a plan over
+either limit is rejected by the target, which used to show up on real Apollo510
+hardware as the host hanging with "Transport stalled without a complete frame."
 
 This test does not touch real hardware/J-Link; it monkeypatches the single-session
 runner and result-bundle writer to verify the batching/merging logic in isolation.
@@ -15,12 +14,18 @@ runner and result-bundle writer to verify the batching/merging logic in isolatio
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from helia_core_tester.perf_stream import hardware_run
 from helia_core_tester.perf_stream.boards import resolve_board
-from helia_core_tester.perf_stream.session import SessionResult
+from helia_core_tester.perf_stream.measurement import counter_passes_for_selection
+from helia_core_tester.perf_stream.session import SessionResult, load_plan_size
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class _DummyCaseBundle:
@@ -29,9 +34,43 @@ class _DummyCaseBundle:
 
 
 def test_max_cases_per_session_matches_firmware_constant() -> None:
-    # Keep this in lockstep with HCT_SERVER_MAX_CASES in
+    # Keep this in lockstep with HCT_SERVER_MAX_CASES / HCT_SERVER_RX_BUFFER_BYTES in
     # cmake/perf_stream/benchmark_server_session.h.
-    assert hardware_run.MAX_CASES_PER_SESSION == 4
+    header = (PROJECT_ROOT / "cmake" / "perf_stream" / "benchmark_server_session.h").read_text()
+    assert hardware_run.MAX_CASES_PER_SESSION == 32
+    assert re.search(r"#define HCT_SERVER_MAX_CASES 32u", header)
+    assert hardware_run.FIRMWARE_RX_BUFFER_BYTES == 2048
+    assert re.search(r"#define HCT_SERVER_RX_BUFFER_BYTES 2048u", header)
+    assert hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES == 2048 - 32
+
+
+def test_batches_are_split_by_case_count_and_encoded_plan_size() -> None:
+    passes = counter_passes_for_selection({"cpu": "default", "memory": "default", "mve": "default"})
+    short = [_DummyCaseBundle(f"case_{i}") for i in range(70)]
+    assert [len(b) for b in hardware_run.split_case_bundles_into_batches(short, passes)] == [32, 32, 6]
+
+    # 96-character case ids (HCT_SERVER_MAX_CASE_ID) cannot all fit 32 to a plan: each
+    # costs 102 bytes on the wire, so the 2016-byte rx bound caps a batch well below 32.
+    long_ids = [_DummyCaseBundle(f"{i:04d}_" + "x" * 91) for i in range(40)]
+    batches = hardware_run.split_case_bundles_into_batches(long_ids, passes)
+    assert all(len(b) < 32 for b in batches)
+    assert sum(len(b) for b in batches) == 40
+    assert [b.case_id for batch in batches for b in batch] == [b.case_id for b in long_ids]
+    for batch in batches:
+        assert load_plan_size([b.case_id for b in batch], passes) <= hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES
+    # Adding one more case to any batch would have overflowed the plan.
+    for batch, following in zip(batches, batches[1:]):
+        ids = [b.case_id for b in batch] + [following[0].case_id]
+        assert load_plan_size(ids, passes) > hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES
+
+    # mve:all is nine passes; the plan header grows but every batch still fits.
+    many_passes = counter_passes_for_selection({"mve": "all", "cpu": "default"})
+    assert len(many_passes) == 10
+    for batch in hardware_run.split_case_bundles_into_batches(long_ids, many_passes):
+        assert load_plan_size([b.case_id for b in batch], many_passes) <= hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES
+
+    with pytest.raises(ValueError, match="alone needs"):
+        hardware_run.split_case_bundles_into_batches([_DummyCaseBundle("x" * 96)], passes, max_plan_bytes=100)
 
 
 def test_run_single_session_rejects_oversized_plan_instead_of_hanging(tmp_path: Path) -> None:
@@ -43,7 +82,7 @@ def test_run_single_session_rejects_oversized_plan_instead_of_hanging(tmp_path: 
             serial_no=1,
             chip_name="AP510NFA-CBR",
             speed_khz=4000,
-            requested_counter_groups=("cpu",),
+            counter_passes=counter_passes_for_selection({"cpu": "default"}),
             build_dir=tmp_path,
         )
         assert False, "expected ValueError for an oversized single-session plan"
@@ -52,12 +91,12 @@ def test_run_single_session_rejects_oversized_plan_instead_of_hanging(tmp_path: 
 
 
 def test_run_case_bundles_in_batches_splits_and_merges(tmp_path: Path, monkeypatch) -> None:
-    total_cases = 10  # more than MAX_CASES_PER_SESSION (4) -> 3 batches: 4, 4, 2
+    total_cases = 70  # more than MAX_CASES_PER_SESSION (32) -> 3 batches: 32, 32, 6
     bundles = [_DummyCaseBundle(f"case_{i}") for i in range(total_cases)]
 
     calls: list[list[Any]] = []
 
-    def _fake_run_single_session(project_root, case_bundles, *, serial_no, chip_name, speed_khz, requested_counter_groups, build_dir, on_case_complete=None):
+    def _fake_run_single_session(project_root, case_bundles, *, serial_no, chip_name, speed_khz, counter_passes, build_dir, on_case_complete=None):
         assert len(case_bundles) <= hardware_run.MAX_CASES_PER_SESSION
         calls.append(list(case_bundles))
         # One fake "case result" per bundle in this batch, tagged with its case_id.
@@ -89,22 +128,23 @@ def test_run_case_bundles_in_batches_splits_and_merges(tmp_path: Path, monkeypat
         serial_no=1160002276,
         chip_name="AP510NFA-CBR",
         speed_khz=4000,
-        requested_counter_groups=("cpu", "memory", "mve"),
+        counter_passes=counter_passes_for_selection({"cpu": "default", "memory": "default", "mve": "default"}),
         session_id="test-batching-session",
         build_dir=tmp_path,
         board=resolve_board("apollo510_evb"),
     )
 
-    # Batched into ceil(10/4) = 3 sessions of sizes 4, 4, 2 -- never exceeding the
+    # Batched into ceil(70/32) = 3 sessions of sizes 32, 32, 6 -- never exceeding the
     # firmware's HCT_SERVER_MAX_CASES.
-    assert [len(call) for call in calls] == [4, 4, 2]
-    assert [b.case_id for b in calls[0]] == [f"case_{i}" for i in range(0, 4)]
-    assert [b.case_id for b in calls[1]] == [f"case_{i}" for i in range(4, 8)]
-    assert [b.case_id for b in calls[2]] == [f"case_{i}" for i in range(8, 10)]
+    assert [len(call) for call in calls] == [32, 32, 6]
+    assert [b.case_id for b in calls[0]] == [f"case_{i}" for i in range(0, 32)]
+    assert [b.case_id for b in calls[1]] == [f"case_{i}" for i in range(32, 64)]
+    assert [b.case_id for b in calls[2]] == [f"case_{i}" for i in range(64, 70)]
 
     # All per-batch case results are merged into one SessionResult, in order.
     assert merged_result.cases == tuple(f"result-for-case_{i}" for i in range(total_cases))
     assert merged_result.session_complete_cases == total_cases
+    assert merged_result.batch_count == 3
     assert len(merged_result.protocol_trace) == 3
     assert all(entry.startswith("batch") for entry in merged_result.protocol_trace)
 
