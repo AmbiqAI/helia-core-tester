@@ -703,8 +703,8 @@ Examples:
         action="store_true",
         help="Also fetch the remaining real-hardware build dependencies (neuralspotx and "
         "the generated NSX toolchain file). The nsx-ambiq-sdk clone itself is fetched by "
-        "default now -- pass --skip-nsx-sdk to opt out. `helia_core_tester perf-stream "
-        "flash/build-firmware/run-generated` also fetch these lazily on first use if "
+        "default now -- pass --skip-nsx-sdk to opt out. `helia_core_tester hardware "
+        "build/flash/run` also fetch these lazily on first use if "
         "missing, so this flag is only needed to pre-fetch them ahead of time."
     )
 

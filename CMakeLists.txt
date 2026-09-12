@@ -78,7 +78,7 @@ if(HELIA_HARDWARE_BUILD)
       "HELIA_HARDWARE_BUILD=ON but ${NSX_AMBIQ_SDK_DIR}/modules is missing. "
       "The consolidated SDK bundle is fetched, not tracked in git -- run "
       "`uv run python -m helia_core_tester.scripts.setup_dependencies` "
-      "(or any `helia_core_tester perf-stream` hardware command, which fetches "
+      "(or any `helia_core_tester hardware` command, which fetches "
       "it lazily) before configuring.")
   endif()
 
