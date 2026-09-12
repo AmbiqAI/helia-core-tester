@@ -417,7 +417,7 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
     # (server objects, cmsis-nn, the NSX board/core/perf/startup libraries, the
     # linker script's layout) is hashed with the id slot zeroed and
     # `hct-<sha256[:48]>` is written into that slot in the ELF and .bin in place
-    # (scripts/patch_build_id.py). The firmware advertises it in HELLO; the host
+    # (scripts/patch_build_id.py). The firmware advertises it in TARGET_INFO; the host
     # reads the same string from hct_build_id.txt. Hashing the linked image rather
     # than a subset of its inputs is what makes two builds that differ anywhere
     # get different ids. POST_BUILD commands run in the order they are added, so

@@ -8,20 +8,20 @@ import subprocess
 
 import pytest
 
-from helia_core_tester.perf_stream.firmware_messages import CAP_PMU_ARMV8M, decode_catalog_payload, decode_hello_payload
+from helia_core_tester.perf_stream.firmware_messages import CAP_PMU_ARMV8M, decode_kernel_catalog, decode_target_info
 from helia_core_tester.perf_stream.hctp import HCTP_FLAG_MORE, FrameDecoder, MessageType
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 
-def test_firmware_hello_and_catalog_roundtrip_with_python_decoder(tmp_path: Path) -> None:
+def test_firmware_target_info_and_catalog_roundtrip_with_python_decoder(tmp_path: Path) -> None:
     cc = shutil.which("cc")
     if cc is None:
         pytest.skip("host C compiler not available")
 
     binary = tmp_path / "emit_boot_frames"
-    hello_path = tmp_path / "hello.bin"
+    target_info_path = tmp_path / "target_info.bin"
     catalog_path = tmp_path / "catalog.bin"
 
     subprocess.run(
@@ -44,41 +44,44 @@ def test_firmware_hello_and_catalog_roundtrip_with_python_decoder(tmp_path: Path
         cwd=PROJECT_ROOT,
     )
 
-    subprocess.run([str(binary), str(hello_path), str(catalog_path)], check=True, cwd=PROJECT_ROOT)
+    subprocess.run([str(binary), str(target_info_path), str(catalog_path)], check=True, cwd=PROJECT_ROOT)
 
     decoder = FrameDecoder()
-    [hello_frame] = decoder.feed(hello_path.read_bytes())
-    # F008: the emit tool concatenates every paginated CAPABILITIES chunk (each non-final
+    [target_info_frame] = decoder.feed(target_info_path.read_bytes())
+    # The emit tool concatenates every paginated KERNEL_CATALOG chunk (each non-final
     # chunk carries HCTP_FLAG_MORE) into catalog.bin; decode them all and accumulate.
     catalog_frames = decoder.feed(catalog_path.read_bytes())
     assert len(catalog_frames) >= 1
 
-    assert hello_frame.header.message_type is MessageType.HELLO
+    assert target_info_frame.header.message_type is MessageType.TARGET_INFO
     entries_by_id: dict[int, object] = {}
     for index, frame in enumerate(catalog_frames):
-        assert frame.header.message_type is MessageType.CAPABILITIES
+        assert frame.header.message_type is MessageType.KERNEL_CATALOG
         is_final = index == len(catalog_frames) - 1
         assert bool(frame.header.flags & HCTP_FLAG_MORE) != is_final
-        for entry in decode_catalog_payload(frame.payload):
+        for entry in decode_kernel_catalog(frame.payload):
             assert entry.kernel_id not in entries_by_id, f"duplicate kernel_id {entry.kernel_id}"
             entries_by_id[entry.kernel_id] = entry
     catalog = [entries_by_id[kernel_id] for kernel_id in sorted(entries_by_id)]
 
-    hello = decode_hello_payload(hello_frame.payload)
+    target_info = decode_target_info(target_info_frame.payload)
 
-    assert hello.build_id == "hct-benchmark-server-v0"
-    assert hello.board_id == "apollo510_evb"
-    assert hello.target_cpu == "cortex-m55"
-    assert hello.transport_kind == 1
-    assert hello.max_frame_payload == 256
-    assert hello.runtime_arena_capacity == 32768
-    # v2: a host compile has no __PMU_PRESENT, so the PMU capability is absent and no
+    assert target_info.build_id == "hct-benchmark-server-v0"
+    assert target_info.board_id == "apollo510_evb"
+    assert target_info.target_cpu == "cortex-m55"
+    assert target_info.transport_kind == 1
+    assert target_info.max_frame_payload == 256
+    assert target_info.runtime_arena_capacity == 32768
+    # A host compile has no __PMU_PRESENT, so the PMU capability is absent and no
     # event-counter slots are advertised; max_rx_payload is the 2 KiB rx buffer minus
-    # the 32-byte frame header.
-    assert not hello.capability_flags & CAP_PMU_ARMV8M
-    assert hello.has_pmu is False
-    assert hello.pmu_counter_slots == 0
-    assert hello.max_rx_payload == 2048 - 32
+    # the 32-byte frame header, and the session limits are the firmware's
+    # HCT_SERVER_MAX_CASES / HCT_SERVER_MAX_PASSES.
+    assert not target_info.capability_flags & CAP_PMU_ARMV8M
+    assert target_info.has_pmu is False
+    assert target_info.pmu_counter_slots == 0
+    assert target_info.max_rx_payload == 2048 - 32
+    assert target_info.max_cases_per_session == 32
+    assert target_info.max_passes == 16
     assert len(catalog) == 173
     assert catalog[0].kernel_id == 1
     assert catalog[0].canonical_name == "arm_abs_s8"
@@ -93,4 +96,4 @@ def test_firmware_hello_and_catalog_roundtrip_with_python_decoder(tmp_path: Path
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    assert hello.catalog_hash == hashlib.sha256(canonical).digest()
+    assert target_info.catalog_hash == hashlib.sha256(canonical).digest()

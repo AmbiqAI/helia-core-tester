@@ -52,7 +52,7 @@ def _catalog_hash(entries: list[dict[str, Any]]) -> bytes:
 
 
 class _TargetState(str, Enum):
-    WAIT_HELLO_ACK = "wait_hello_ack"
+    WAIT_TARGET_INFO_ACK = "wait_target_info_ack"
     WAIT_PLAN = "wait_plan"
     WAIT_CASE_META = "wait_case_meta"
     WAIT_BLOB_CHUNK = "wait_blob_chunk"
@@ -224,16 +224,20 @@ class FakeTargetTransport:
         pmu_present: bool = True,
         pmu_counter_slots: int = FAKE_PMU_COUNTER_SLOTS,
         max_rx_payload: int = FAKE_MAX_RX_PAYLOAD,
+        max_cases_per_session: int = MAX_CASES_PER_PLAN,
+        max_passes: int = MAX_PASSES_PER_PLAN,
     ) -> None:
         self.build_id = build_id
         self._session_id = 0xC0DE1234
         self._pmu_present = pmu_present
         self._pmu_counter_slots = pmu_counter_slots if pmu_present else 0
         self._max_rx_payload = max_rx_payload
+        self._max_cases_per_session = max_cases_per_session
+        self._max_passes = max_passes
         self._target_sequence_id = 0
         self._decoder = FrameDecoder(max_payload=4096)
         self._validator = SessionFrameValidator(session_id=self._session_id)
-        self._state = _TargetState.WAIT_HELLO_ACK
+        self._state = _TargetState.WAIT_TARGET_INFO_ACK
         self._outbound = bytearray()
         self._max_frame_payload = max_frame_payload
         self._read_chunk_size = read_chunk_size
@@ -257,7 +261,7 @@ class FakeTargetTransport:
         self._current_blob_id: int | None = None
         self._computed_output = b""
         self._last_iterations = 0
-        self._emit_hello()
+        self._emit_target_info()
 
     @property
     def rewind_count(self) -> int:
@@ -316,9 +320,9 @@ class FakeTargetTransport:
         )
         self._target_sequence_id += 1
 
-    def _emit_hello(self) -> None:
-        """HELLO v2, field for field what hct_build_hello_frame() emits, so the host
-        decodes the fake with the real decode_hello_payload()."""
+    def _emit_target_info(self) -> None:
+        """TARGET_INFO, field for field what hct_build_target_info_frame() emits, so the
+        host decodes the fake with the real decode_target_info()."""
         flags = CAP_CASE_STREAMING | CAP_CORRECTNESS | CAP_PERFORMANCE | CAP_RTT_TRANSPORT | CAP_KERNEL_CATALOG | CAP_ABS_S8
         if self._pmu_present:
             flags |= CAP_PMU_ARMV8M
@@ -335,12 +339,14 @@ class FakeTargetTransport:
         writer.u32(flags)
         writer.u8(self._pmu_counter_slots)
         writer.u32(self._max_rx_payload)
-        self._queue(MessageType.HELLO, writer.finish())
+        writer.u16(self._max_cases_per_session)
+        writer.u8(self._max_passes)
+        self._queue(MessageType.TARGET_INFO, writer.finish())
 
-    def _emit_capabilities(self) -> None:
-        """F008: emit the (small, unpaginated) fake catalog as a single CAPABILITIES
-        frame with HCTP_FLAG_MORE clear, matching the real firmware's paginated
-        protocol contract (a single final chunk is a valid one-chunk "page")."""
+    def _emit_kernel_catalog(self) -> None:
+        """Emit the (small, unpaginated) fake catalog as a single KERNEL_CATALOG frame
+        with HCTP_FLAG_MORE clear, matching the real firmware's paginated protocol
+        contract (a single final chunk is a valid one-chunk "page")."""
         writer = ByteWriter()
         writer.u16(len(self._catalog))
         for entry in self._catalog:
@@ -354,7 +360,7 @@ class FakeTargetTransport:
             writer.u8(1 if entry["repeated_invocation_safe"] else 0)
             writer.u8(1 if entry["mutates_input"] else 0)
             writer.u32(int(entry["scratch_bytes"]))
-        self._queue(MessageType.CAPABILITIES, writer.finish())
+        self._queue(MessageType.KERNEL_CATALOG, writer.finish())
 
     def _queue_error(self, message: str) -> None:
         writer = ByteWriter()
@@ -362,14 +368,14 @@ class FakeTargetTransport:
         self._queue(MessageType.ERROR, writer.finish())
         self._state = _TargetState.COMPLETE
 
-    def _decode_plan(self, payload: bytes) -> dict[str, Any]:
+    def _decode_session_plan(self, payload: bytes) -> dict[str, Any]:
         if len(payload) > self._max_rx_payload:
-            raise ValueError(f"LOAD_PLAN payload {len(payload)} exceeds the fake target's rx buffer ({self._max_rx_payload}).")
+            raise ValueError(f"SESSION_PLAN payload {len(payload)} exceeds the fake target's rx buffer ({self._max_rx_payload}).")
         reader = ByteReader(payload)
         case_count = reader.u16()
-        # Same admission rule as handle_load_plan() in the firmware (HCT_SERVER_MAX_CASES).
-        if case_count == 0 or case_count > MAX_CASES_PER_PLAN:
-            raise ValueError(f"LOAD_PLAN names {case_count} cases; fake target accepts 1..{MAX_CASES_PER_PLAN}.")
+        # Same admission rule as handle_session_plan() in the firmware (HCT_SERVER_MAX_CASES).
+        if case_count == 0 or case_count > self._max_cases_per_session:
+            raise ValueError(f"SESSION_PLAN names {case_count} cases; fake target accepts 1..{self._max_cases_per_session}.")
         transfer_mode = reader.u8()
         warmups = reader.u16()
         samples = reader.u16()
@@ -379,8 +385,8 @@ class FakeTargetTransport:
         passes: list[CounterPass] = []
         pass_count = reader.u8()
         # Same admission rule as parse_pmu_passes() in the firmware (HCT_SERVER_MAX_PASSES).
-        if pass_count > MAX_PASSES_PER_PLAN:
-            raise ValueError(f"LOAD_PLAN names {pass_count} PMU passes; fake target accepts at most {MAX_PASSES_PER_PLAN}.")
+        if pass_count > self._max_passes:
+            raise ValueError(f"SESSION_PLAN names {pass_count} PMU passes; fake target accepts at most {self._max_passes}.")
         for _ in range(pass_count):
             pass_name = reader.text()
             chained = bool(reader.u8())
@@ -392,7 +398,7 @@ class FakeTargetTransport:
                 counters.append(known or CounterDescriptor(f"event_0x{event_id:04x}", event_id, "unknown"))
             group, _, index = pass_name.rpartition("_")
             passes.append(CounterPass(group=group or pass_name, pass_index=int(index or 0), counters=tuple(counters), chained=chained))
-            # Same admission rule as handle_load_plan() in the firmware.
+            # Same admission rule as handle_session_plan() in the firmware.
             slots = (2 if chained else 1) * counter_count
             if counter_count > MAX_COUNTERS_PER_PASS or (self._pmu_present and slots > self._pmu_counter_slots):
                 raise ValueError(f"PMU pass {pass_name!r} needs {slots} slots; fake target has {self._pmu_counter_slots}.")
@@ -401,7 +407,7 @@ class FakeTargetTransport:
             case_id = reader.text()
             # cursor_text() in the firmware needs length + 1 <= HCT_SERVER_MAX_CASE_ID.
             if len(case_id.encode("utf-8")) + 1 > FAKE_MAX_CASE_ID:
-                raise ValueError(f"LOAD_PLAN case id {case_id!r} does not fit the fake target's {FAKE_MAX_CASE_ID}-byte case-id storage (with NUL).")
+                raise ValueError(f"SESSION_PLAN case id {case_id!r} does not fit the fake target's {FAKE_MAX_CASE_ID}-byte case-id storage (with NUL).")
             cases.append({"case_id": case_id, "kernel_id": reader.u32()})
         return {
             "transfer_mode": transfer_mode,
@@ -469,12 +475,12 @@ class FakeTargetTransport:
         }
 
     def _handle_frame(self, frame: Frame) -> None:
-        if frame.header.message_type == MessageType.HELLO_ACK:
+        if frame.header.message_type == MessageType.TARGET_INFO_ACK:
             self._state = _TargetState.WAIT_PLAN
-            self._emit_capabilities()
+            self._emit_kernel_catalog()
             return
-        if frame.header.message_type == MessageType.LOAD_PLAN:
-            self._plan = self._decode_plan(frame.payload)
+        if frame.header.message_type == MessageType.SESSION_PLAN:
+            self._plan = self._decode_session_plan(frame.payload)
             self._state = _TargetState.WAIT_CASE_META
             self._request_case()
             return

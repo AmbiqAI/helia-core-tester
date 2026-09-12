@@ -25,26 +25,28 @@ static int write_file(const char *path, const uint8_t *data, size_t length)
 
 int main(int argc, char **argv)
 {
-    uint8_t hello[512];
+    uint8_t target_info[512];
     uint8_t catalog[16384];
-    size_t hello_len = 0u;
+    size_t target_info_len = 0u;
     size_t catalog_len = 0u;
 
     if (argc != 3)
     {
-        fprintf(stderr, "usage: %s <hello.bin> <catalog.bin>\n", argv[0]);
+        fprintf(stderr, "usage: %s <target_info.bin> <catalog.bin>\n", argv[0]);
         return 64;
     }
-    if (hct_build_hello_frame(0xC0DE1234u, 0u, 256u, 32768u, HCT_SERVER_MAX_RX_PAYLOAD_BYTES, hello, sizeof(hello), &hello_len) != HCTP_STATUS_OK)
+    if (hct_build_target_info_frame(0xC0DE1234u, 0u, 256u, 32768u, HCT_SERVER_MAX_RX_PAYLOAD_BYTES,
+                                    HCT_SERVER_MAX_CASES, HCT_SERVER_MAX_PASSES,
+                                    target_info, sizeof(target_info), &target_info_len) != HCTP_STATUS_OK)
     {
         return 65;
     }
-    if (write_file(argv[1], hello, hello_len) != 0)
+    if (write_file(argv[1], target_info, target_info_len) != 0)
     {
         return 67;
     }
 
-    /* F008: write every paginated CAPABILITIES chunk concatenated into one file so the
+    /* Write every paginated KERNEL_CATALOG chunk concatenated into one file so the
      * test harness can decode the full multi-frame catalog with a single FrameDecoder. */
     {
         size_t start_index = 0u;
@@ -71,6 +73,6 @@ int main(int argc, char **argv)
     {
         return 68;
     }
-    printf("hello=%zu catalog=%zu\n", hello_len, catalog_len);
+    printf("target_info=%zu catalog=%zu\n", target_info_len, catalog_len);
     return 0;
 }

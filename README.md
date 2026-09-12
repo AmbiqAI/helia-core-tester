@@ -42,7 +42,7 @@ uv run helia_core_tester hardware run --board apollo510_evb
 ```
 
 That generates the tests for the board's CPU, builds the firmware, flashes it only
-unless the board already confirms (via its HELLO build id) that it runs this exact
+unless the board already confirms (via its TARGET_INFO build id) that it runs this exact
 build, streams every bridged case,
 writes the result bundle under `artifacts/reports/performance_stream/<session-id>/`,
 and prints the pass/fail summary (`--json` prints one JSON document on stdout

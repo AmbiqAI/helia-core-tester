@@ -63,7 +63,7 @@ _FORCE_FLASH_HELP = (
 )
 _ALLOW_UNVERIFIED_HELP = (
     "Stream even when the build dir has no hct_build_id.txt (firmware built before build-id "
-    "stamping), skipping the HELLO build-id check. Without it a missing stamp is an error."
+    "stamping), skipping the TARGET_INFO build-id check. Without it a missing stamp is an error."
 )
 
 
@@ -207,7 +207,7 @@ def flash(
 ) -> None:
     """Build (if needed) and flash the hct_benchmark_server firmware to --board via J-Link.
     Skipped only when the ELF is unchanged since this build dir last flashed the same
-    probe *and* the board confirms (in HELLO) that it runs this build's id."""
+    probe *and* the board confirms (in TARGET_INFO) that it runs this build's id."""
     from .firmware_build import flash_firmware, resolve_build_dir
 
     spec = _board(board)
@@ -379,7 +379,7 @@ def run(
     fvp_gate: Optional[str] = typer.Option(None, "--fvp-gate", help=_FVP_GATE_HELP),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     skip_generate: bool = typer.Option(False, "--skip-generate", help="Reuse existing artifacts/generated_tests instead of regenerating."),
-    skip_flash: bool = typer.Option(False, "--skip-flash", help="Skip build+flash and reuse whatever firmware is already running on the board (its HELLO build id is still checked against the build dir)."),
+    skip_flash: bool = typer.Option(False, "--skip-flash", help="Skip build+flash and reuse whatever firmware is already running on the board (its TARGET_INFO build id is still checked against the build dir)."),
     force_flash: bool = typer.Option(False, "--force-flash", help=_FORCE_FLASH_HELP + " Mirror of `hardware flash --force`."),
     allow_unverified_firmware: bool = typer.Option(False, "--allow-unverified-firmware", help=_ALLOW_UNVERIFIED_HELP + " Only meaningful with --skip-flash."),
     as_json: bool = typer.Option(False, "--json", help="Print one JSON summary document on stdout (human output goes to stderr)."),

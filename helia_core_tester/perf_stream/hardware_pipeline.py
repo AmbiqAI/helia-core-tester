@@ -85,7 +85,7 @@ def parse_pmu_counters(values: Sequence[str]) -> PmuSelection:
     their command-line order, which is the order the PMU passes run in. Unknown groups,
     counter names and empty name lists (`mve:,`) are rejected here, naming the valid
     choices, and so is a selection that plans more passes than the firmware runs per
-    LOAD_PLAN (measurement.MAX_PASSES_PER_PLAN) -- all before any probe I/O.
+    SESSION_PLAN (measurement.MAX_PASSES_PER_PLAN) -- all before any probe I/O.
     """
     selection: PmuSelection = {}
     for raw in values:
@@ -217,7 +217,7 @@ def stream_generated_tests(
 ) -> HardwareRunOutcome:
     """Stream the generated suite to already-flashed firmware and write the bundle.
 
-    Preflight: the build dir must carry `hct_build_id.txt` so every session's HELLO
+    Preflight: the build dir must carry `hct_build_id.txt` so every session's TARGET_INFO
     can be checked against it; a missing stamp is an error unless
     `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
     """
@@ -257,7 +257,7 @@ def stream_generated_tests(
     progress = make_live_progress_printer(len(bundles), id_width=id_width, err=progress_to_stderr)
 
     # Per-case wall clock: the gap between consecutive CASE_COMPLETEs (the first case of
-    # every batch also absorbs that batch's target reset and HELLO/catalog exchange).
+    # every batch also absorbs that batch's target reset and TARGET_INFO/catalog exchange).
     case_seconds: Dict[str, float] = {}
     stream_started = time.monotonic()
     last_case_done = stream_started

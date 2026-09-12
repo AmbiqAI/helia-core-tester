@@ -79,7 +79,7 @@ static int drain_single_message(hct_server_session_t *session, uint16_t expected
 
 static int drain_catalog_frames(hct_server_session_t *session)
 {
-    /* F008: HELLO_ACK now triggers one or more paginated CAPABILITIES frames (each
+    /* TARGET_INFO_ACK triggers one or more paginated KERNEL_CATALOG frames (each
      * non-final chunk carries HCTP_FLAG_MORE); drain them all before expecting the
      * next protocol message. */
     uint8_t frame_bytes[2048];
@@ -89,7 +89,7 @@ static int drain_catalog_frames(hct_server_session_t *session)
         const size_t frame_length = hct_server_session_take_next_frame(session, frame_bytes, sizeof(frame_bytes));
         if (frame_length == 0u) return 1;
         if (hctp_decode_frame(frame_bytes, frame_length, HCTP_DEFAULT_MAX_PAYLOAD, &frame) != HCTP_STATUS_OK) return 2;
-        if (frame.header.message_type != HCTP_MSG_CAPABILITIES) return 3;
+        if (frame.header.message_type != HCTP_MSG_KERNEL_CATALOG) return 3;
         if ((frame.header.flags & HCTP_FLAG_MORE) == 0u) return 0;
     }
 }
@@ -112,13 +112,13 @@ int main(void)
     static uint8_t workspace[32768u];
 
     hct_server_session_init(&session, 0xC0DE1234u, 256u, workspace, (uint32_t)sizeof(workspace));
-    if (drain_single_message(&session, HCTP_MSG_HELLO, outbound_payload, &outbound_length) != 0) return 10;
+    if (drain_single_message(&session, HCTP_MSG_TARGET_INFO, outbound_payload, &outbound_length) != 0) return 10;
 
     offset = 0u;
-    if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_HELLO_ACK, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 11;
+    if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_TARGET_INFO_ACK, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 11;
     if (drain_catalog_frames(&session) != 0) return 12;
 
-    /* LOAD_PLAN v2: one case, 2 warmups, 3 samples x 4 iterations, and two PMU
+    /* SESSION_PLAN: one case, 2 warmups, 3 samples x 4 iterations, and two PMU
      * passes -- a chained cpu pass (INST_RETIRED, STALL_FRONTEND) and an unchained mve
      * pass (MVE_INST_RETIRED). The host harness has no PMU, so the firmware must accept
      * the passes and report every event counter as unsupported. */
@@ -142,7 +142,7 @@ int main(void)
     write_u16(inbound_payload, &offset, 0x0200u);
     write_text(inbound_payload, &offset, "abs_default_s8_stream_demo");
     write_u32(inbound_payload, &offset, 1u);
-    if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_LOAD_PLAN, session.session_id, next_host_sequence++, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_OK) return 13;
+    if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_SESSION_PLAN, session.session_id, next_host_sequence++, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_OK) return 13;
     if (drain_single_message(&session, HCTP_MSG_REQUEST_CASE, outbound_payload, &outbound_length) != 0) return 14;
 
     offset = 0u;

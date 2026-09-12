@@ -37,7 +37,7 @@ from helia_core_tester.perf_stream.hardware_pipeline import (
     validate_fvp_gate,
 )
 from helia_core_tester.perf_stream.run_summary import build_json_summary
-from helia_core_tester.perf_stream.session import HostSession, read_hello
+from helia_core_tester.perf_stream.session import HostSession, read_target_info
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BOARD = resolve_board("apollo510_evb")
@@ -124,8 +124,8 @@ def test_pmu_counters_parsing_and_deprecated_groups_alias() -> None:
     assert parse_pmu_counters(["mve:all", "cpu:default"]) == {"mve": "all", "cpu": "default"}
     assert parse_pmu_counters(["mve:ARM_PMU_MVE_STALL, ARM_PMU_MVE_PRED"]) == {"mve": ["ARM_PMU_MVE_STALL", "ARM_PMU_MVE_PRED"]}
     # Every group at "all" plans 5 + 4 + 9 = 18 passes: over HCT_SERVER_MAX_PASSES, so the
-    # parser refuses it before generate/build/flash rather than the firmware after HELLO.
-    with pytest.raises(ValueError, match=r"--pmu-counters: 18 PMU passes planned \(cpu_0, .*mve_8\) but the firmware runs at most 16 per LOAD_PLAN"):
+    # parser refuses it before generate/build/flash rather than the firmware after TARGET_INFO.
+    with pytest.raises(ValueError, match=r"--pmu-counters: 18 PMU passes planned \(cpu_0, .*mve_8\) but the firmware runs at most 16 per SESSION_PLAN"):
         parse_pmu_counters(["cpu:all", "memory:all", "mve:all"])
     with pytest.raises(ValueError, match="18 PMU passes planned"):
         resolve_pmu_options(["cpu:all", "memory:all", "mve:all"], None)
@@ -282,10 +282,10 @@ def test_confirm_board_build_id_flashes_when_board_is_silent_or_unstamped(tmp_pa
     _write_elf(build_dir, b"fw", "hct-abc")
     unchanged = FlashDecision(False, "digest", "unchanged", "hct-abc")
 
-    def _no_hello(board, serial, build_dir):
-        raise RuntimeError("Transport stalled before a complete HELLO frame arrived.")
+    def _no_target_info(board, serial, build_dir):
+        raise RuntimeError("Transport stalled before a complete TARGET_INFO frame arrived.")
 
-    silent = confirm_board_build_id(BOARD, SERIAL, build_dir, unchanged, reader=_no_hello)
+    silent = confirm_board_build_id(BOARD, SERIAL, build_dir, unchanged, reader=_no_target_info)
     assert silent.needed and "did not confirm build id hct-abc" in silent.reason and "RuntimeError" in silent.reason
 
     unstamped = confirm_board_build_id(BOARD, SERIAL, build_dir, FlashDecision(False, "digest", "unchanged", None), reader=_silent_board)
@@ -409,10 +409,10 @@ def test_post_link_build_id_rejects_unpatchable_images(tmp_path: Path, capsys) -
     assert script.main(["--elf", str(tmp_path / "missing.elf"), "--output-txt", str(tmp_path / "x.txt")]) == 1
 
 
-# --- HELLO build id verification ------------------------------------------------------
+# --- TARGET_INFO build id verification ------------------------------------------------------
 
 
-def test_session_verifies_hello_build_id(tmp_path: Path) -> None:
+def test_session_verifies_target_info_build_id(tmp_path: Path) -> None:
     bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_id").manifest_path)
 
     result = HostSession(FakeTargetTransport(build_id="hct-aaa")).run_many([bundle], expected_build_id="hct-aaa")
@@ -425,12 +425,12 @@ def test_session_verifies_hello_build_id(tmp_path: Path) -> None:
         HostSession(FakeTargetTransport(build_id="hct-bbb")).run_many([bundle], expected_build_id="hct-aaa")
 
 
-def test_read_hello_returns_the_full_payload_without_acknowledging() -> None:
+def test_read_target_info_returns_the_full_payload_without_acknowledging() -> None:
     transport = FakeTargetTransport(build_id="hct-xyz")
-    hello = read_hello(transport)
-    assert hello.build_id == "hct-xyz" and hello.board_id == "fake_board" and hello.target_cpu == "cortex-m55"
-    assert hello.max_frame_payload == 64 and hello.runtime_arena_capacity == 4096
-    assert transport.read() == b""  # nothing else was sent: the fake is still waiting for HELLO_ACK
+    target_info = read_target_info(transport)
+    assert target_info.build_id == "hct-xyz" and target_info.board_id == "fake_board" and target_info.target_cpu == "cortex-m55"
+    assert target_info.max_frame_payload == 64 and target_info.runtime_arena_capacity == 4096
+    assert transport.read() == b""  # nothing else was sent: the fake is still waiting for TARGET_INFO_ACK
 
 
 # --- configure flags ---------------------------------------------------------------

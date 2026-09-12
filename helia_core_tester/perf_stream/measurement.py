@@ -29,14 +29,14 @@ from .pmu_catalog import (  # noqa: F401 -- CounterDescriptor is re-exported for
 MAX_COUNTERS_PER_PASS = 4
 
 # Must match HCT_SERVER_MAX_PASSES in cmake/perf_stream/benchmark_server_session.h:
-# the firmware stores a LOAD_PLAN's passes in a fixed array of this size and answers
+# the firmware stores a SESSION_PLAN's passes in a fixed array of this size and answers
 # a larger plan with an ERROR frame. Every host entry point (the CLI parser, the
 # session, the batch runner and the fake target) checks the planned pass count
 # against it so an oversized selection fails before any probe I/O. The full
 # catalog -- cpu:all memory:all mve:all -- plans 5 + 4 + 9 = 18 passes and is
 # therefore refused; passes are never split across sessions.
 MAX_PASSES_PER_PLAN = 16
-# Firmware admits 1..HCT_SERVER_MAX_CASES cases per LOAD_PLAN (benchmark_server_session.h).
+# Firmware admits 1..HCT_SERVER_MAX_CASES cases per SESSION_PLAN (benchmark_server_session.h).
 MAX_CASES_PER_PLAN = 32
 
 
@@ -115,7 +115,7 @@ class UnsupportedCounterError(ValueError):
 
 
 class TooManyPassesError(ValueError):
-    """More PMU passes planned than the firmware accepts in one LOAD_PLAN."""
+    """More PMU passes planned than the firmware accepts in one SESSION_PLAN."""
 
 
 def check_pass_count(passes: Iterable[CounterPass], *, limit: int = MAX_PASSES_PER_PLAN) -> None:
@@ -130,7 +130,7 @@ def check_pass_count(passes: Iterable[CounterPass], *, limit: int = MAX_PASSES_P
     names = ", ".join(counter_pass.name for counter_pass in materialized)
     raise TooManyPassesError(
         f"{len(materialized)} PMU passes planned ({names}) but the firmware runs at most "
-        f"{limit} per LOAD_PLAN (HCT_SERVER_MAX_PASSES). Select fewer counters: each group "
+        f"{limit} per SESSION_PLAN (HCT_SERVER_MAX_PASSES). Select fewer counters: each group "
         f"is measured in passes of up to {MAX_COUNTERS_PER_PASS} counters, so the pass count "
         "is the sum over groups of ceil(counters / 4)."
     )

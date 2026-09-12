@@ -11,7 +11,7 @@ dir (a second clone, `--build-dir`, a lab runner sharing the board) did since,
 so a stamp match is only trusted after the board itself confirms it: every
 firmware build carries a content-hash build id (`hct_build_id.txt`, stamped
 into the linked image by scripts/patch_build_id.py as a CMake POST_BUILD step
-and advertised by the firmware in HELLO), and the skip path opens one short
+and advertised by the firmware in TARGET_INFO), and the skip path opens one short
 RTT session to read it.
 """
 
@@ -124,7 +124,7 @@ def elf_path(build_dir: Path) -> Path:
 
 def build_id_path(build_dir: Path) -> Path:
     """`hct_build_id.txt`, written next to the cache by the post-link stamp step (see
-    scripts/patch_build_id.py); the same string the firmware advertises in HELLO."""
+    scripts/patch_build_id.py); the same string the firmware advertises in TARGET_INFO."""
     return build_dir / "hct_build_id.txt"
 
 
@@ -267,7 +267,7 @@ class FlashDecision:
     build_id: Optional[str] = None
     """Build id of the firmware in the build dir (None when the build has no stamp)."""
     board_build_id: Optional[str] = None
-    """What the board reported in HELLO when it was asked (None when it was not, or did not answer)."""
+    """What the board reported in TARGET_INFO when it was asked (None when it was not, or did not answer)."""
     # Wall-clock seconds spent in the cmake build and in the J-Link flash (0 when skipped).
     build_seconds: float = 0.0
     flash_seconds: float = 0.0
@@ -300,13 +300,13 @@ BoardBuildIdReader = Callable[[BoardSpec, int, Path], str]
 
 def board_build_id(board: BoardSpec, serial_no: int, build_dir: Path) -> str:
     """Ask the board which firmware it runs: one short reset-on-open RTT session
-    that reads HELLO and closes without acknowledging it.
+    that reads TARGET_INFO and closes without acknowledging it.
 
     Raises (RuntimeError, TimeoutError, pylink errors) when the board does not
     answer -- the RTT block address comes from this build dir's ELF, so unrelated
-    firmware typically yields no HELLO at all, which callers treat as "flash".
+    firmware typically yields no TARGET_INFO at all, which callers treat as "flash".
     """
-    from .session import read_hello
+    from .session import read_target_info
     from .transport import JLinkRttTransport, symbol_address_from_elf
 
     rtt_address = symbol_address_from_elf(str(elf_path(build_dir)), "_SEGGER_RTT")
@@ -319,7 +319,7 @@ def board_build_id(board: BoardSpec, serial_no: int, build_dir: Path) -> str:
         read_timeout_s=5.0,
     )
     try:
-        return read_hello(transport).build_id
+        return read_target_info(transport).build_id
     finally:
         transport.close()
 
@@ -334,7 +334,7 @@ def confirm_board_build_id(
 ) -> FlashDecision:
     """Board-side half of the decision: turn a provisional "unchanged" into a real
     skip only if the board reports exactly this build dir's build id. A missing
-    host build id, a different id on the board, or no HELLO at all means flash."""
+    host build id, a different id on the board, or no TARGET_INFO at all means flash."""
     if decision.needed:
         return decision
     expected = decision.build_id
@@ -345,7 +345,7 @@ def confirm_board_build_id(
         )
     try:
         actual = reader(board, serial_no, build_dir)
-    except Exception as exc:  # no HELLO, wrong RTT block, probe/DLL trouble: all mean "do not trust the stamp"
+    except Exception as exc:  # no TARGET_INFO, wrong RTT block, probe/DLL trouble: all mean "do not trust the stamp"
         return FlashDecision(
             True, decision.digest,
             f"board did not confirm build id {expected} ({type(exc).__name__}: {exc})", expected,
