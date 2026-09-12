@@ -7,7 +7,9 @@ import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
-from helia_core_tester.generation.utils.tflite_utils import qp_scalar
+from helia_core_tester.generation.ops._shared.reduce_extrema_integer import (
+    boundary_inputs, resize_integer_interpreter,
+)
 from helia_core_tester.generation.io.dtypes import descriptor_dtype_to_c_type
 from helia_core_tester.generation.ops._shared.reduce_extrema_float import generate_reduce_extrema_float
 
@@ -100,9 +102,10 @@ class OpReduceMax(OperationBase):
         # Load interpreter
         interpreter = self.load_litert_interpreter(str(tflite_path))
         
-        # Get input and output details
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
+        # Dynamic LiteRT batches allocate at one until explicitly resized.
+        input_details, output_details = resize_integer_interpreter(
+            interpreter, self.desc["input_shape"]
+        )
         
         input_shape = tuple(input_details[0]['shape'])
         
@@ -125,31 +128,8 @@ class OpReduceMax(OperationBase):
             keepdims=bool(self.desc.get('keepdims', True))
         )
         
-        # Generate input data and quantize
-        rng_state = self.rng.__getstate__()
-        self.rng = np.random.default_rng(self.seed)
-        
-        input_data = self.rng.uniform(-1.0, 1.0, size=input_shape).astype(np.float32)
-        
-        self.rng.__setstate__(rng_state)
-        
-        # Extract quantization
-        input_qp = input_details[0].get('quantization_parameters', {})
-        input_scale = float(qp_scalar(input_qp, 'scales', [1.0]))
-        input_zp = int(qp_scalar(input_qp, 'zero_points', [0]))
-        
-        # Quantize inputs
-        if kernel_info["input_c_type"] == "int8_t":
-            np_in_dtype = np.int8
-            qmin, qmax = -128, 127
-        elif kernel_info["input_c_type"] == "int16_t":
-            np_in_dtype = np.int16
-            qmin, qmax = -32768, 32767
-        else:
-            raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
-        
-        input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
-        input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
+        # Work in integer codes so boundary separation survives quantization.
+        input_q = boundary_inputs(input_shape, axes, input_details[0]["dtype"], "max")
         
         # Run inference
         interpreter.set_tensor(input_details[0]['index'], input_q)
