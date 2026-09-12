@@ -19,11 +19,12 @@ from helia_core_tester.core.path_layout import artifacts_root
 from helia_core_tester.core.pipeline import FullTestPipeline
 from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, RunStep
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
-from helia_core_tester.perf_stream.cli import app as perf_stream_app
+from helia_core_tester.perf_stream.cli import boards as boards_command
+from helia_core_tester.perf_stream.cli import hardware_app, probes_app
 
-# Once, for every subcommand (including perf-stream's) for the lifetime of this
-# process -- see ensure_arm_toolchain_on_path()'s own docstring for why this can't
-# just live at each subprocess call site.
+# Once, for every subcommand (including the hardware group's) for the lifetime of
+# this process -- see ensure_arm_toolchain_on_path()'s own docstring for why this
+# can't just live at each subprocess call site.
 ensure_arm_toolchain_on_path()
 
 app = typer.Typer(
@@ -32,7 +33,9 @@ app = typer.Typer(
     add_completion=False,
 )
 
-app.add_typer(perf_stream_app, name="perf-stream")
+app.add_typer(hardware_app, name="hardware")
+app.add_typer(probes_app, name="probes")
+app.command(name="boards")(boards_command)
 
 
 def _print_plan_item(plan_item) -> None:
@@ -405,6 +408,15 @@ def doctor(
             typer.echo(f"✓ {dir_name}/ exists or will be created ({description})")
         else:
             typer.echo(f"⚠ {dir_name}/ not found ({description})", err=True)
+
+    # Hardware (J-Link/RTT) checks are informational: the FVP path never needs
+    # them, so a missing tool is reported as missing without failing doctor.
+    from .perf_stream.doctor import hardware_checks
+
+    typer.echo("\nHardware (helia_core_tester hardware ...):")
+    for check in hardware_checks(repo_root):
+        marker = "✓" if check.ok else "⚠"
+        typer.echo(f"{marker} {check.label}: {check.detail}")
 
     if all_ok:
         typer.echo("\n✓ All preflight checks passed")

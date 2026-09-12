@@ -6,6 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from .boards import DEFAULT_BOARD_ID, resolve_board
 from .phase0 import _parse_memory_regions, _parse_size_a, _parse_top_symbols, _repo_root, _retained_kernel_count
 from ..scripts.setup_dependencies import nsx_ambiq_sdk_dir
 
@@ -29,7 +30,8 @@ def _probe_binary(tool: str, args: list[str]) -> str:
 
 def generate_benchmark_server_memory_report(*, build_dir: Path | None = None, output_root: Path | None = None) -> Path:
     repo_root = _repo_root()
-    build_root = build_dir or repo_root / "build" / "perf_stream" / "benchmark_server_gcc2"
+    # Default: the board-keyed build dir `hardware build` uses for the default board.
+    build_root = build_dir or resolve_board(DEFAULT_BOARD_ID).build_dir(repo_root)
     out_root = output_root or repo_root / "artifacts" / "perf_stream" / "benchmark_server"
     out_root.mkdir(parents=True, exist_ok=True)
 

@@ -290,36 +290,36 @@ Current remaining boundary:
 
 Loopback/fake-target validation remains the hardware-independent proof path; Apollo510 live RTT now covers the first real-hardware proof path.
 
-## Hardware smoke-test commands
+## Hardware commands
 
-Cross-build the benchmark-server firmware skeleton for Apollo510/Cortex-M55:
+All hardware work goes through the board-keyed `hardware` CLI group (`--board`
+selects a row of `assets/hardware_boards.yaml`, which supplies the CPU, NSX board
+name, SEGGER device name, SWD speed and the `build/perf_stream/<board>` build dir;
+`--serial-no` is optional and falls back to `$HPX_JLINK_SERIAL`, then to the single
+connected J-Link probe enumerated through pylink).
 
-```bash
-cmake -S . -B build/perf_stream/benchmark_server_hw \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/nsx/toolchains/arm-none-eabi-gcc.cmake \
-  -DCMAKE_OSX_ARCHITECTURES= \
-  -DHELIA_HARDWARE_BUILD=ON \
-  -DHELIA_BUILD_GENERATED_TESTS=OFF \
-  -DHELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER=ON \
-  -DHELIA_HARDWARE_BOARD=apollo510_evb \
-  -DTARGET_CPU=cortex-m55 \
-  -DCMAKE_BUILD_TYPE=Release
-
-cmake --build build/perf_stream/benchmark_server_hw --target hct_benchmark_server -j
-```
-
-Flash once through the NSX-generated SEGGER target:
+Cross-build the benchmark-server firmware for the board (fetches nsx-ambiq-sdk,
+neuralspotx and the toolchain file on first use):
 
 ```bash
-cmake --build build/perf_stream/benchmark_server_hw --target hct_benchmark_server_flash
+uv run helia_core_tester hardware build --board apollo510_evb -j
 ```
 
-Run the real host-target RTT session and write a result bundle:
+Flash through the NSX-generated SEGGER target -- skipped automatically when the
+ELF's sha256 matches the last flash to the same probe (`--force` overrides):
 
 ```bash
-uv run python - <<'PY'
-from pathlib import Path
-from helia_core_tester.perf_stream.hardware_run import run_apollo510_stream_session
-run_apollo510_stream_session(Path.cwd(), serial_no=1160002276, session_id='apollo510-live-session')
-PY
+uv run helia_core_tester hardware flash --board apollo510_evb
 ```
+
+Stream the generated suite to the flashed firmware and write a result bundle
+(or run generate -> build -> flash -> stream in one go with `hardware run`):
+
+```bash
+uv run helia_core_tester hardware stream --board apollo510_evb --suite both
+uv run helia_core_tester hardware run --board apollo510_evb --precision fp16 --json
+```
+
+The two-kernel synthetic demo session (`arm_abs_s8` + `arm_convolve_s8`) is still
+available as library code, `hardware_run.run_apollo510_stream_session()`, and is
+covered by the fake-target tests; it is no longer a CLI command.

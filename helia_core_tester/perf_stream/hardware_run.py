@@ -1,13 +1,13 @@
-"""Real Apollo510 RTT hardware runner for the perf-stream benchmark server."""
+"""Real RTT hardware runner for the perf-stream benchmark server (board-keyed; Apollo510 EVB today)."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from datetime import UTC, datetime
 from typing import Callable
 
 from .benchmark_firmware_report import generate_benchmark_server_memory_report
+from .boards import DEFAULT_BOARD_ID, BoardSpec, default_session_id, resolve_board
 from .case_bundle import CaseBundle, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
 from .generated_test_bridge import (
     GeneratedTestCase,
@@ -84,10 +84,10 @@ def _run_case_bundles_on_apollo510(
     requested_counter_groups: tuple[str, ...],
     session_id: str | None,
     build_dir: Path | None,
-    session_id_prefix: str,
+    board: BoardSpec,
     on_case_complete: Callable[[CaseRunResult], None] | None = None,
 ) -> tuple[SessionResult, Path]:
-    build_dir = build_dir or (project_root / "build" / "perf_stream" / "benchmark_server_gcc2")
+    build_dir = build_dir or board.build_dir(project_root)
     result, rtt_address = _run_single_session(
         project_root,
         case_bundles,
@@ -102,23 +102,23 @@ def _run_case_bundles_on_apollo510(
     memory_report_path = generate_benchmark_server_memory_report(build_dir=build_dir)
     memory_report = json.loads(memory_report_path.read_text())
     kernel_catalog = json.loads((project_root / "cmake" / "perf_stream" / "kernel_catalog.json").read_text())
-    sid = session_id or f"{session_id_prefix}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+    sid = session_id or default_session_id(board)
     host_log = (
         f"hardware session_id={sid}\n"
-        f"chip={chip_name} serial={serial_no} speed_khz={speed_khz}\n"
+        f"board={board.id} chip={chip_name} serial={serial_no} speed_khz={speed_khz}\n"
         f"rtt_address=0x{rtt_address:08x}\n"
         f"requested_counter_groups={requested_counter_groups}\n"
         f"protocol_trace_len={len(result.protocol_trace)}\n"
         f"case_ids={[b.case_id for b in case_bundles]}\n"
     )
-    target_log = "real Apollo510 benchmark server over SEGGER RTT\n"
+    target_log = f"real {board.id} benchmark server over SEGGER RTT\n"
     bundle_root = write_result_bundle(
         result,
         session_id=sid,
         output_root=project_root,
         memory_report=memory_report,
         kernel_catalog=kernel_catalog,
-        target_info={"board": "apollo510_evb", "cpu": "cortex-m55", "transport": "jlink-rtt"},
+        target_info=board.target_info(),
         host_log_text=host_log,
         target_log_text=target_log,
     )
@@ -135,15 +135,15 @@ def _run_case_bundles_in_batches(
     requested_counter_groups: tuple[str, ...],
     session_id: str | None,
     build_dir: Path | None,
-    session_id_prefix: str,
+    board: BoardSpec,
     on_case_complete: Callable[[CaseRunResult], None] | None = None,
 ) -> tuple[SessionResult, Path]:
     """Like _run_case_bundles_on_apollo510, but transparently splits case_bundles
     into batches of at most MAX_CASES_PER_SESSION and runs one fresh (reset-on-open)
     RTT session per batch, merging all cases into a single SessionResult/result bundle.
     """
-    build_dir = build_dir or (project_root / "build" / "perf_stream" / "benchmark_server_gcc2")
-    sid = session_id or f"{session_id_prefix}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+    build_dir = build_dir or board.build_dir(project_root)
+    sid = session_id or default_session_id(board)
 
     all_cases: list = []
     all_trace: list[str] = []
@@ -181,21 +181,21 @@ def _run_case_bundles_in_batches(
     kernel_catalog = json.loads((project_root / "cmake" / "perf_stream" / "kernel_catalog.json").read_text())
     host_log = (
         f"hardware session_id={sid}\n"
-        f"chip={chip_name} serial={serial_no} speed_khz={speed_khz}\n"
+        f"board={board.id} chip={chip_name} serial={serial_no} speed_khz={speed_khz}\n"
         f"rtt_address=0x{rtt_address:08x}\n"
         f"requested_counter_groups={requested_counter_groups}\n"
         f"batch_count={batch_count} max_cases_per_session={MAX_CASES_PER_SESSION}\n"
         f"protocol_trace_len={len(merged_result.protocol_trace)}\n"
         f"case_ids={[b.case_id for b in case_bundles]}\n"
     )
-    target_log = "real Apollo510 benchmark server over SEGGER RTT (multi-batch)\n"
+    target_log = f"real {board.id} benchmark server over SEGGER RTT (multi-batch)\n"
     bundle_root = write_result_bundle(
         merged_result,
         session_id=sid,
         output_root=project_root,
         memory_report=memory_report,
         kernel_catalog=kernel_catalog,
-        target_info={"board": "apollo510_evb", "cpu": "cortex-m55", "transport": "jlink-rtt"},
+        target_info=board.target_info(),
         host_log_text=host_log,
         target_log_text=target_log,
     )
@@ -206,24 +206,28 @@ def run_apollo510_stream_session(
     project_root: Path,
     *,
     serial_no: int,
-    chip_name: str = "AP510NFA-CBR",
-    speed_khz: int = 4000,
+    board: BoardSpec | None = None,
+    chip_name: str | None = None,
+    speed_khz: int | None = None,
     requested_counter_groups: tuple[str, ...] = ("cpu", "memory", "mve"),
     session_id: str | None = None,
     build_dir: Path | None = None,
 ) -> tuple[SessionResult, Path]:
+    """Two-kernel synthetic demo session (arm_abs_s8 + arm_convolve_s8); library
+    code only, not exposed on the CLI. `chip_name`/`speed_khz` default to the board's."""
+    board = board or resolve_board(DEFAULT_BOARD_ID)
     abs_bundle = load_case_bundle(build_abs_s8_case_bundle(project_root, case_id="abs_hw_live").manifest_path)
     conv_bundle = load_case_bundle(build_convolve_s8_case_bundle(project_root, case_id="conv_hw_live").manifest_path)
     return _run_case_bundles_on_apollo510(
         project_root,
         [abs_bundle, conv_bundle],
         serial_no=serial_no,
-        chip_name=chip_name,
-        speed_khz=speed_khz,
+        chip_name=chip_name or board.jlink_device,
+        speed_khz=speed_khz or board.swd_speed_khz,
         requested_counter_groups=requested_counter_groups,
         session_id=session_id,
         build_dir=build_dir,
-        session_id_prefix="apollo510-live",
+        board=board,
     )
 
 
@@ -296,12 +300,13 @@ def run_apollo510_generated_test_session(
     project_root: Path,
     *,
     serial_no: int,
-    chip_name: str = "AP510NFA-CBR",
-    speed_khz: int = 4000,
+    board: BoardSpec | None = None,
+    chip_name: str | None = None,
+    speed_khz: int | None = None,
     requested_counter_groups: tuple[str, ...] = ("cpu", "memory", "mve"),
     session_id: str | None = None,
     build_dir: Path | None = None,
-    cpu: str = "cortex-m55",
+    cpu: str | None = None,
     family: str | None = "ConvolutionFunctions",
     name_filter: str | None = None,
     limit: int | None = None,
@@ -314,12 +319,14 @@ def run_apollo510_generated_test_session(
     data) against connected Apollo510 hardware over the streaming HCTP/RTT session,
     instead of the hand-authored abs/convolve demo cases.
 
-    `family=None` bridges every family with real firmware dispatch support (see
-    `build_generated_test_case_bundles`), i.e. runs the complete hardware-supported suite
-    in one session (transparently batched). `suite="int"` (default) or `suite="float"`
-    selects which generated-test tree to discover from. `require_fvp_pass` (default True)
-    is forwarded to `build_generated_test_case_bundles` -- set to False on hosts that
-    cannot run the FVP model at all (see its own docstring).
+    `board` (default apollo510_evb) supplies the SEGGER device name, SWD speed, CPU
+    and result-bundle target info; `chip_name`/`speed_khz`/`cpu` override individual
+    fields when given explicitly. `family=None` bridges every family with real firmware
+    dispatch support (see `build_generated_test_case_bundles`), i.e. runs the complete
+    hardware-supported suite in one session (transparently batched). `suite="int"`
+    (default) or `suite="float"` selects which generated-test tree to discover from.
+    `require_fvp_pass` (default True) is forwarded to `build_generated_test_case_bundles`
+    -- set to False on hosts that cannot run the FVP model at all (see its own docstring).
 
     Transparently splits the discovered/bridged cases into batches of at most
     MAX_CASES_PER_SESSION (matching firmware HCT_SERVER_MAX_CASES) and runs one
@@ -327,6 +334,8 @@ def run_apollo510_generated_test_session(
     SessionResult/result bundle -- sending more cases than that in one LOAD_PLAN
     causes the firmware to silently drop the plan and hang the host.
     """
+    board = board or resolve_board(DEFAULT_BOARD_ID)
+    cpu = cpu or board.cpu
     bundles, skipped = build_generated_test_case_bundles(
         project_root, cpu=cpu, family=family, name_filter=name_filter, limit=limit, suite=suite,
         require_fvp_pass=require_fvp_pass,
@@ -372,12 +381,12 @@ def run_apollo510_generated_test_session(
         project_root,
         bundles,
         serial_no=serial_no,
-        chip_name=chip_name,
-        speed_khz=speed_khz,
+        chip_name=chip_name or board.jlink_device,
+        speed_khz=speed_khz or board.swd_speed_khz,
         requested_counter_groups=requested_counter_groups,
         session_id=session_id,
         build_dir=build_dir,
-        session_id_prefix="apollo510-generated-tests",
+        board=board,
         on_case_complete=on_case_complete,
     )
     return result, bundle_root, skipped

@@ -19,6 +19,8 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester clean-all`
 - `uv run helia_core_tester doctor`
 - `uv run helia_core_tester coverage-merge`
+- `uv run helia_core_tester boards` / `probes list` / `probes match`
+- `uv run helia_core_tester hardware run|build|flash|stream|memory-report`
 
 Removed interfaces:
 - `gap-check` subcommand
@@ -27,6 +29,50 @@ Removed interfaces:
 - `--regen-generated-tests-after-cleanup`
 - report-dir override flags
 - `--include-float` (replaced by `--suite float` or `--suite both`)
+- the `perf-stream` command group and `scripts/run_hardware_perf_suite.sh` (replaced by `hardware run`, see below)
+
+## Hardware CLI
+
+The FVP commands above simulate; `hardware` runs the generated kernel tests on a
+real Ambiq board over SEGGER RTT (one universal `hct_benchmark_server` firmware,
+per-case data streamed from the host). The whole pipeline is one command:
+
+```bash
+uv run helia_core_tester hardware run --board apollo510_evb
+```
+
+That generates the tests for the board's CPU, builds the firmware, flashes it only
+if the ELF changed since the last flash to that probe, streams every bridged case,
+writes the result bundle under `artifacts/reports/performance_stream/<session-id>/`,
+and prints the pass/fail summary (`--json` prints one JSON document on stdout
+instead, with the human output on stderr; the exit code is non-zero on any
+correctness failure). Useful narrowing flags: `--suite int|float|both`,
+`--family`, `--test-name`, `--limit`, `--precision fp16|fp32` (float-only shortcut,
+not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|strict`,
+`--skip-generate`, `--skip-flash`. The steps are also available individually as
+`hardware build`, `hardware flash [--force]`, `hardware stream` and
+`hardware memory-report`.
+
+Identity resolution rules:
+
+- `--board` is the only identity flag. The CPU, NSX board name, SEGGER device name,
+  SWD speed, build dir (`build/perf_stream/<board>`) and default session id
+  (`<board>-<UTC timestamp>`) all come from the row in `assets/hardware_boards.yaml`
+  (`helia_core_tester boards` lists it). Default: `$HPX_BOARD`, else `apollo510_evb`.
+- `--serial-no` is optional: the flag wins, then `$HPX_JLINK_SERIAL`, then the
+  connected J-Link probes enumerated through pylink. Exactly one connected probe is
+  used as-is; zero or several is an error naming what was found.
+  `helia_core_tester probes list` shows the probes, `probes match --board B` prints
+  the serial the hardware commands would pick.
+- The J-Link shared library pylink loads is resolved from `$HPX_JLINK_DLL` (the
+  library file), then `$JLINK_PATH` (the `JLinkExe` binary or its directory), then
+  the directory of `JLinkExe` on PATH, then pylink's own search (ldconfig,
+  `/opt/SEGGER`). These are the same variables the lab runners export for hpx;
+  `helia_core_tester doctor` prints which one resolved the library.
+
+`helia_core_tester doctor` reports the hardware toolchain (arm-none-eabi-gcc,
+cmake, the J-Link library, the fetched nsx-ambiq-sdk/neuralspotx checkouts) as
+informational checks; missing hardware tools do not fail doctor.
 
 ## Suite-Based Runs
 

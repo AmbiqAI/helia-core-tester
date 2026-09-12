@@ -122,8 +122,13 @@ Those 11 failures remain the same pre-existing/unrelated failures previously bas
 ### Benchmark-server build + flash
 
 ```bash
-cmake --build build/perf_stream/benchmark_server_gcc2 --target hct_benchmark_server_flash
+uv run helia_core_tester hardware flash --board apollo510_evb
 ```
+
+(At the time of the original run this was a bare `cmake --build ... --target
+hct_benchmark_server_flash` against `build/perf_stream/benchmark_server_gcc2`; the
+board-keyed CLI now builds into `build/perf_stream/<board>` and flashes only when
+the ELF changed.)
 
 Real transcript captured at:
 
@@ -131,7 +136,12 @@ Real transcript captured at:
 
 ### Real Apollo510 streaming session
 
+The generated suite is streamed with `hardware stream` (or end to end with
+`hardware run`); the two-kernel demo session used for this report is library code:
+
 ```bash
+uv run helia_core_tester hardware stream --board apollo510_evb --serial-no 1160002276
+
 uv run python - <<'PY'
 from pathlib import Path
 from helia_core_tester.perf_stream.hardware_run import run_apollo510_stream_session
@@ -275,13 +285,21 @@ Additionally, the first live Conv2D correctness attempt stalled because the MVE 
 
 ## Exact hardware smoke-test steps
 
-1. Build / flash:
+1. Build / flash (serial resolves from `--serial-no`, `$HPX_JLINK_SERIAL`, or the
+   single connected probe):
 
 ```bash
-cmake --build build/perf_stream/benchmark_server_gcc2 --target hct_benchmark_server_flash
+uv run helia_core_tester hardware flash --board apollo510_evb
 ```
 
-2. Run one live Apollo510 session and write the real result bundle:
+2. Stream the generated suite and write the real result bundle (the whole
+   generate -> build -> flash -> stream pipeline is `hardware run`):
+
+```bash
+uv run helia_core_tester hardware stream --board apollo510_evb --session-id apollo510-live-session
+```
+
+   The two-kernel demo session is still callable as library code:
 
 ```bash
 uv run python - <<'PY'
