@@ -1,6 +1,20 @@
 #include "benchmark_server_catalog.h"
 
 
+/* The PMU capability is decided by the device header of the hardware build
+ * (__PMU_PRESENT / __PMU_NUM_EVENTCNT from apollo*.h via am_mcu_apollo.h); a host
+ * compile or a DWT-only core advertises no PMU and zero slots. */
+#ifdef HELIA_HARDWARE_BUILD
+#include "am_mcu_apollo.h"
+#endif
+#if defined(__PMU_PRESENT) && (__PMU_PRESENT == 1)
+#define HCT_PMU_CAPABILITY_FLAGS HCT_CAP_PMU_ARMV8M
+#define HCT_PMU_COUNTER_SLOTS ((uint8_t)__PMU_NUM_EVENTCNT)
+#else
+#define HCT_PMU_CAPABILITY_FLAGS 0u
+#define HCT_PMU_COUNTER_SLOTS 0u
+#endif
+
 #ifndef HCT_BENCHMARK_SERVER_BOARD_ID
 #define HCT_BENCHMARK_SERVER_BOARD_ID "apollo510_evb"
 #endif
@@ -232,5 +246,11 @@ uint32_t hct_benchmark_server_capability_flags(void)
          | HCT_CAP_PERFORMANCE
          | HCT_CAP_RTT_TRANSPORT
          | HCT_CAP_KERNEL_CATALOG
-         | HCT_CAP_ABS_S8;
+         | HCT_CAP_ABS_S8
+         | HCT_PMU_CAPABILITY_FLAGS;
+}
+
+uint8_t hct_benchmark_server_pmu_counter_slots(void)
+{
+    return HCT_PMU_COUNTER_SLOTS;
 }

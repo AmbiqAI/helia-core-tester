@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "benchmark_server_messages.h"
+#include "benchmark_server_session.h"
 
 static int write_file(const char *path, const uint8_t *data, size_t length)
 {
@@ -34,7 +35,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: %s <hello.bin> <catalog.bin>\n", argv[0]);
         return 64;
     }
-    if (hct_build_hello_frame(0xC0DE1234u, 0u, 256u, 32768u, hello, sizeof(hello), &hello_len) != HCTP_STATUS_OK)
+    if (hct_build_hello_frame(0xC0DE1234u, 0u, 256u, 32768u, HCT_SERVER_MAX_RX_PAYLOAD_BYTES, hello, sizeof(hello), &hello_len) != HCTP_STATUS_OK)
     {
         return 65;
     }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -7,7 +8,9 @@ import subprocess
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CMSIS_NN_ROOT = PROJECT_ROOT.parent.parent
+# The ns-cmsis-nn checkout: $CMSIS_NN_ROOT (what `generate` and the firmware build use),
+# else the tester's conventional location two levels up.
+CMSIS_NN_ROOT = Path(os.environ.get("CMSIS_NN_ROOT") or PROJECT_ROOT.parent.parent)
 
 
 
@@ -48,6 +51,10 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path) -
     result = subprocess.run([str(binary)], check=True, capture_output=True, text=True)
     assert "chunks=" in result.stdout
     assert "bytes=12" in result.stdout
+    # v2: the harness continues through CORRECTNESS_ACK/RUN_PERFORMANCE with two PMU
+    # passes (3 samples each) and checks every SAMPLE_RESULT leads with the CCNTR entry
+    # and reports the event counters unsupported on this PMU-less host build.
+    assert "samples=6 passes=2" in result.stdout
 
 
 def test_shared_c_validation_rejects_range_and_shape_overflow(tmp_path: Path) -> None:

@@ -8,12 +8,22 @@
 #include <string.h>
 
 #include "benchmark_server_adapter.h"
+#include "benchmark_server_catalog.h"
 #include "benchmark_server_messages.h"
 #include "arm_nnfunctions.h"
 
 #ifdef HELIA_HARDWARE_BUILD
 #include "am_mcu_apollo.h"
+#endif
+
+/* The Armv8.1-M PMU (8 x 16-bit event counters + 32-bit CCNTR on Cortex-M55) is only
+ * present when the device header says so; a Cortex-M4 hardware build or the host
+ * harness compile take the DWT-only path below. */
+#if defined(__PMU_PRESENT) && (__PMU_PRESENT == 1)
 #include "pmu_armv8.h"
+#define HCT_PMU_AVAILABLE 1
+#else
+#define HCT_PMU_AVAILABLE 0
 #endif
 
 #define HCT_BLOB_ROLE_UNKNOWN 0u
@@ -661,123 +671,174 @@ static uint32_t dwt_cycles(void)
 {
     return DWT->CYCCNT;
 }
-
-static void pmu_disable_all(void)
-{
-    ARM_PMU_CNTR_Disable(0xFFFFFFFFu);
-}
-
-static void pmu_prepare_group(const char *group)
-{
-    ARM_PMU_Disable();
-    ARM_PMU_CYCCNT_Reset();
-    ARM_PMU_EVCNTR_ALL_Reset();
-    if (strcmp(group, "cpu") == 0)
-    {
-        ARM_PMU_Set_EVTYPER(0, ARM_PMU_INST_RETIRED);
-    }
-    else if (strcmp(group, "memory") == 0)
-    {
-        ARM_PMU_Set_EVTYPER(0, ARM_PMU_MEM_ACCESS);
-    }
-    else if (strcmp(group, "mve") == 0)
-    {
-        ARM_PMU_Set_EVTYPER(0, ARM_PMU_MVE_INST_RETIRED);
-    }
-    ARM_PMU_Enable();
-}
-
-static void pmu_start_group(void)
-{
-    pmu_disable_all();
-    ARM_PMU_CYCCNT_Reset();
-    ARM_PMU_EVCNTR_ALL_Reset();
-    ARM_PMU_CNTR_Enable(1u << 0);
-}
-
-static void pmu_stop_group(void)
-{
-    pmu_disable_all();
-}
 #else
 static void enable_dwt(void) {}
 static uint32_t dwt_cycles(void) { return 0u; }
-static void pmu_prepare_group(const char *group) { (void)group; }
-static void pmu_start_group(void) {}
-static void pmu_stop_group(void) {}
 #endif
 
+/* One measured sample's PMU readings for a pass: the cycle counter plus one value per
+ * requested event counter. `supported` is 0 on a DWT-only build, where only `ccntr`
+ * (taken from DWT) is meaningful. */
+typedef struct
+{
+    uint32_t ccntr;
+    uint8_t ccntr_overflow;
+    uint32_t values[HCT_SERVER_MAX_COUNTERS_PER_PASS];
+    uint8_t overflow[HCT_SERVER_MAX_COUNTERS_PER_PASS];
+    uint8_t supported[HCT_SERVER_MAX_COUNTERS_PER_PASS];
+} hct_pmu_sample_t;
+
+#define HCT_PMU_EVENT_CPU_CYCLES 0x0011u
+
+#if HCT_PMU_AVAILABLE
+#define HCT_PMU_CCNTR_BIT (1u << 31)
+#define HCT_PMU_EVCNTR_MASK 0xFFFFu
+
+/* Slot layout for a pass: counter i lives in slot i, or -- when chained -- in slots 2i
+ * (the event) and 2i+1 (ARM_PMU_CHAIN, incrementing on the even slot's overflow) so the
+ * pair reads as one 32-bit counter. */
+static uint32_t pmu_pass_slot_mask(const hct_pmu_pass_t *pass)
+{
+    uint32_t mask = 0u;
+    uint32_t index;
+    for (index = 0u; index < pass->count; ++index)
+    {
+        if (pass->chained)
+        {
+            mask |= 3u << (2u * index);
+        }
+        else
+        {
+            mask |= 1u << index;
+        }
+    }
+    return mask;
+}
+
+static void pmu_pass_program(const hct_pmu_pass_t *pass)
+{
+    uint32_t index;
+    ARM_PMU_Disable();
+    ARM_PMU_CNTR_Disable(0xFFFFFFFFu);
+    for (index = 0u; index < pass->count; ++index)
+    {
+        if (pass->chained)
+        {
+            ARM_PMU_Set_EVTYPER(2u * index, pass->event_ids[index]);
+            ARM_PMU_Set_EVTYPER(2u * index + 1u, ARM_PMU_CHAIN);
+        }
+        else
+        {
+            ARM_PMU_Set_EVTYPER(index, pass->event_ids[index]);
+        }
+    }
+}
+
+/* Reset every counter and the overflow status, then start the pass's slots and CCNTR
+ * together. Called immediately before the DWT start read of each sample. */
+static void pmu_sample_start(uint32_t slot_mask)
+{
+    ARM_PMU_Disable();
+    ARM_PMU_CNTR_Disable(0xFFFFFFFFu);
+    ARM_PMU_EVCNTR_ALL_Reset();
+    ARM_PMU_CYCCNT_Reset();
+    ARM_PMU_Set_CNTR_OVS(0xFFFFFFFFu);
+    ARM_PMU_CNTR_Enable(slot_mask | HCT_PMU_CCNTR_BIT);
+    ARM_PMU_Enable();
+}
+
+/* Stop the counters, read them and the overflow status register (bit n = slot n,
+ * bit 31 = CCNTR), and clear exactly the overflow bits that were set. A chained
+ * pair's overflow is the high (odd) slot's bit; the low slot overflowing is what
+ * feeds the chain and is expected. */
+static void pmu_sample_stop(const hct_pmu_pass_t *pass, uint32_t slot_mask, uint32_t dwt_elapsed, hct_pmu_sample_t *out)
+{
+    uint32_t ovs;
+    uint32_t index;
+    (void)dwt_elapsed;
+    ARM_PMU_CNTR_Disable(slot_mask | HCT_PMU_CCNTR_BIT);
+    out->ccntr = ARM_PMU_Get_CCNTR();
+    ovs = ARM_PMU_Get_CNTR_OVS();
+    out->ccntr_overflow = (ovs & HCT_PMU_CCNTR_BIT) ? 1u : 0u;
+    for (index = 0u; index < pass->count; ++index)
+    {
+        if (pass->chained)
+        {
+            const uint32_t low = ARM_PMU_Get_EVCNTR(2u * index) & HCT_PMU_EVCNTR_MASK;
+            const uint32_t high = ARM_PMU_Get_EVCNTR(2u * index + 1u) & HCT_PMU_EVCNTR_MASK;
+            out->values[index] = (high << 16) | low;
+            out->overflow[index] = (ovs & (1u << (2u * index + 1u))) ? 1u : 0u;
+        }
+        else
+        {
+            out->values[index] = ARM_PMU_Get_EVCNTR(index) & HCT_PMU_EVCNTR_MASK;
+            out->overflow[index] = (ovs & (1u << index)) ? 1u : 0u;
+        }
+        out->supported[index] = 1u;
+    }
+    if (ovs != 0u)
+    {
+        ARM_PMU_Set_CNTR_OVS(ovs);
+    }
+    ARM_PMU_Disable();
+}
+#else
+static uint32_t pmu_pass_slot_mask(const hct_pmu_pass_t *pass) { (void)pass; return 0u; }
+static void pmu_pass_program(const hct_pmu_pass_t *pass) { (void)pass; }
+static void pmu_sample_start(uint32_t slot_mask) { (void)slot_mask; }
+static void pmu_sample_stop(const hct_pmu_pass_t *pass, uint32_t slot_mask, uint32_t dwt_elapsed, hct_pmu_sample_t *out)
+{
+    uint32_t index;
+    (void)slot_mask;
+    out->ccntr = dwt_elapsed;
+    out->ccntr_overflow = 0u;
+    for (index = 0u; index < pass->count; ++index)
+    {
+        out->values[index] = 0u;
+        out->overflow[index] = 0u;
+        out->supported[index] = 0u;
+    }
+}
+#endif
+
+/* SAMPLE_RESULT v2: u16 sample_index, u32 iterations, u64 cycles (DWT), text pass_name,
+ * u8 counter_count, then per counter (text name, u16 event_id, u64 value, u8 overflow,
+ * u8 supported). Names are sent empty -- the host resolves them from its catalog by
+ * event id. The first entry is always ARM_PMU_CPU_CYCLES from CCNTR (bit 31 of the
+ * overflow status), so DWT `cycles` stays an independent cross-check. */
 static hctp_status_t queue_sample_result(hct_server_session_t *session,
                                          uint16_t sample_index,
                                          uint32_t iterations,
                                          uint64_t cycles,
-                                         const char *group)
+                                         const hct_pmu_pass_t *pass,
+                                         const hct_pmu_sample_t *sample)
 {
     uint8_t payload[256];
     size_t offset = 0u;
-    char pass_name[HCT_SERVER_MAX_GROUP_NAME + 4u];
-    uint8_t counter_count = 0u;
+    uint32_t index;
 
-    snprintf(pass_name, sizeof(pass_name), "%s_0", group);
     write_u16(payload, sizeof(payload), &offset, sample_index);
     write_u32(payload, sizeof(payload), &offset, iterations);
     write_u64(payload, sizeof(payload), &offset, cycles);
-    write_text(payload, sizeof(payload), &offset, pass_name);
+    write_text(payload, sizeof(payload), &offset, pass->name);
+    write_u8(payload, sizeof(payload), &offset, (uint8_t)(1u + pass->count));
 
-    if (strcmp(group, "cpu") == 0)
+    write_text(payload, sizeof(payload), &offset, "");
+    write_u16(payload, sizeof(payload), &offset, HCT_PMU_EVENT_CPU_CYCLES);
+    write_u64(payload, sizeof(payload), &offset, (uint64_t)sample->ccntr);
+    write_u8(payload, sizeof(payload), &offset, sample->ccntr_overflow);
+    write_u8(payload, sizeof(payload), &offset, 1u);
+
+    for (index = 0u; index < pass->count; ++index)
     {
-        counter_count = 2u;
-        write_u8(payload, sizeof(payload), &offset, counter_count);
-        write_text(payload, sizeof(payload), &offset, "ARM_PMU_CPU_CYCLES");
-        write_u16(payload, sizeof(payload), &offset, 0x11u);
-        write_u64(payload, sizeof(payload), &offset, cycles);
-        write_u8(payload, sizeof(payload), &offset, 0u);
-        write_u8(payload, sizeof(payload), &offset, 1u);
-        write_text(payload, sizeof(payload), &offset, "ARM_PMU_INST_RETIRED");
-        write_u16(payload, sizeof(payload), &offset, 0x08u);
-#ifdef HELIA_HARDWARE_BUILD
-        write_u64(payload, sizeof(payload), &offset, (uint64_t)ARM_PMU_Get_EVCNTR(0));
-#else
-        write_u64(payload, sizeof(payload), &offset, 0u);
-#endif
-        write_u8(payload, sizeof(payload), &offset, 0u);
-        write_u8(payload, sizeof(payload), &offset, 1u);
-    }
-    else if (strcmp(group, "memory") == 0)
-    {
-        counter_count = 1u;
-        write_u8(payload, sizeof(payload), &offset, counter_count);
-        write_text(payload, sizeof(payload), &offset, "ARM_PMU_MEM_ACCESS");
-        write_u16(payload, sizeof(payload), &offset, 0x13u);
-#ifdef HELIA_HARDWARE_BUILD
-        write_u64(payload, sizeof(payload), &offset, (uint64_t)ARM_PMU_Get_EVCNTR(0));
-        write_u8(payload, sizeof(payload), &offset, 0u);
-        write_u8(payload, sizeof(payload), &offset, 1u);
-#else
-        write_u64(payload, sizeof(payload), &offset, 0u);
-        write_u8(payload, sizeof(payload), &offset, 0u);
-        write_u8(payload, sizeof(payload), &offset, 0u);
-#endif
-    }
-    else if (strcmp(group, "mve") == 0)
-    {
-        counter_count = 1u;
-        write_u8(payload, sizeof(payload), &offset, counter_count);
-        write_text(payload, sizeof(payload), &offset, "ARM_PMU_MVE_INST_RETIRED");
-        write_u16(payload, sizeof(payload), &offset, 0x0200u);
-#ifdef HELIA_HARDWARE_BUILD
-        write_u64(payload, sizeof(payload), &offset, (uint64_t)ARM_PMU_Get_EVCNTR(0));
-        write_u8(payload, sizeof(payload), &offset, 0u);
-        write_u8(payload, sizeof(payload), &offset, 1u);
-#else
-        write_u64(payload, sizeof(payload), &offset, 0u);
-        write_u8(payload, sizeof(payload), &offset, 0u);
-        write_u8(payload, sizeof(payload), &offset, 0u);
-#endif
-    }
-    else
-    {
-        write_u8(payload, sizeof(payload), &offset, 0u);
+        write_text(payload, sizeof(payload), &offset, "");
+        write_u16(payload, sizeof(payload), &offset, pass->event_ids[index]);
+        write_u64(payload, sizeof(payload), &offset, (uint64_t)sample->values[index]);
+        write_u8(payload, sizeof(payload), &offset, sample->overflow[index]);
+        if (write_u8(payload, sizeof(payload), &offset, sample->supported[index]) != HCTP_STATUS_OK)
+        {
+            return HCTP_STATUS_TRUNCATED_FRAME;
+        }
     }
 
     return queue_frame(session, HCTP_MSG_SAMPLE_RESULT, payload, offset);
@@ -6034,27 +6095,80 @@ static hctp_status_t finish_case(hct_server_session_t *session)
     return queue_session_complete(session);
 }
 
-/* The exact set of names pmu_prepare_group() (above) recognizes. Kept in sync by hand --
- * validated here, at LOAD_PLAN parse time, rather than left to silently no-op at
- * RUN_PERFORMANCE time (pmu_prepare_group() leaves EVTYPER unset/stale for any other
- * string, so the host would otherwise receive a SAMPLE_RESULT mislabeled under a group
- * name whose counters were never actually configured for it). */
-static bool hct_is_known_pmu_group(const char *group)
+/* LOAD_PLAN v2: u16 case_count, u8 transfer_mode, u16 warmups, u16 samples,
+ * u32 iterations_per_sample, u32 min_cycles, u32 max_iterations, u8 pass_count,
+ * per pass (text name, u8 chained, u8 counter_count, u16 event_id[counter_count]),
+ * then per case (text case_id, u32 kernel_id). Event ids are not validated against
+ * a list -- whatever the host asks for is programmed and reported -- but a pass that
+ * cannot fit the PMU (too many counters, or more chained slots than the core has) is
+ * rejected here rather than silently truncated at RUN_PERFORMANCE time. */
+static hctp_status_t parse_pmu_passes(hct_server_session_t *session, hct_cursor_t *cursor)
 {
-    return strcmp(group, "cpu") == 0 ||
-           strcmp(group, "memory") == 0 ||
-           strcmp(group, "mve") == 0;
+    const uint8_t slots_available = hct_benchmark_server_pmu_counter_slots();
+    uint32_t pass_index;
+
+    session->pass_count = cursor_u8(cursor);
+    if (cursor->overrun)
+    {
+        return HCTP_STATUS_TRUNCATED_FRAME;
+    }
+    if (session->pass_count > HCT_SERVER_MAX_PASSES)
+    {
+        return HCTP_STATUS_INVALID_ARGUMENT;
+    }
+    for (pass_index = 0u; pass_index < session->pass_count; ++pass_index)
+    {
+        hct_pmu_pass_t *pass = &session->passes[pass_index];
+        uint32_t counter_index;
+        uint32_t slots_needed;
+        if (!cursor_text(cursor, pass->name, sizeof(pass->name)))
+        {
+            return HCTP_STATUS_TRUNCATED_FRAME;
+        }
+        pass->chained = cursor_u8(cursor) ? 1u : 0u;
+        pass->count = cursor_u8(cursor);
+        if (cursor->overrun)
+        {
+            return HCTP_STATUS_TRUNCATED_FRAME;
+        }
+        if (pass->count > HCT_SERVER_MAX_COUNTERS_PER_PASS)
+        {
+            return HCTP_STATUS_INVALID_ARGUMENT;
+        }
+        for (counter_index = 0u; counter_index < pass->count; ++counter_index)
+        {
+            pass->event_ids[counter_index] = cursor_u16(cursor);
+        }
+        if (cursor->overrun)
+        {
+            return HCTP_STATUS_TRUNCATED_FRAME;
+        }
+        slots_needed = pass->chained ? (2u * pass->count) : pass->count;
+        if (slots_available > 0u && slots_needed > slots_available)
+        {
+            return HCTP_STATUS_INVALID_ARGUMENT;
+        }
+    }
+    if (session->pass_count == 0u)
+    {
+        /* No PMU passes requested: still time the case once (DWT + CCNTR only). */
+        strcpy(session->passes[0].name, "cpu_0");
+        session->passes[0].chained = 1u;
+        session->passes[0].count = 0u;
+        session->pass_count = 1u;
+    }
+    return HCTP_STATUS_OK;
 }
 
 static hctp_status_t handle_load_plan(hct_server_session_t *session, const uint8_t *payload, size_t payload_length)
 {
     /* F006: every field below is read through the bounded cursor API, which checks
      * remaining capacity before each access/advance -- a truncated LOAD_PLAN (short
-     * header, short group/case-id text, or a plan cut off mid kernel-id list) is
-     * caught by the single cursor.overrun check at the end instead of risking an
-     * out-of-bounds read. */
+     * header, short pass/case-id text, or a plan cut off mid kernel-id list) is
+     * caught by the cursor.overrun checks instead of risking an out-of-bounds read. */
     hct_cursor_t cursor;
     uint16_t case_index;
+    hctp_status_t status;
 
     cursor_init(&cursor, payload, payload_length);
 
@@ -6065,7 +6179,6 @@ static hctp_status_t handle_load_plan(hct_server_session_t *session, const uint8
     session->planned_iterations = cursor_u32(&cursor);
     session->min_cycles = cursor_u32(&cursor);
     session->max_iterations = cursor_u32(&cursor);
-    session->requested_group_count = cursor_u8(&cursor);
 
     if (cursor.overrun)
     {
@@ -6075,26 +6188,11 @@ static hctp_status_t handle_load_plan(hct_server_session_t *session, const uint8
     {
         return HCTP_STATUS_INVALID_ARGUMENT;
     }
-    if (session->requested_group_count > HCT_SERVER_MAX_GROUPS)
-    {
-        return HCTP_STATUS_INVALID_ARGUMENT;
-    }
 
-    for (case_index = 0u; case_index < session->requested_group_count; ++case_index)
+    status = parse_pmu_passes(session, &cursor);
+    if (status != HCTP_STATUS_OK)
     {
-        if (!cursor_text(&cursor, session->requested_groups[case_index], sizeof(session->requested_groups[case_index])))
-        {
-            return HCTP_STATUS_TRUNCATED_FRAME;
-        }
-        if (!hct_is_known_pmu_group(session->requested_groups[case_index]))
-        {
-            return HCTP_STATUS_INVALID_ARGUMENT;
-        }
-    }
-    if (session->requested_group_count == 0u)
-    {
-        strcpy(session->requested_groups[0], "cpu");
-        session->requested_group_count = 1u;
+        return status;
     }
 
     for (case_index = 0u; case_index < session->planned_case_count; ++case_index)
@@ -6318,16 +6416,17 @@ static hctp_status_t handle_run_correctness(hct_server_session_t *session)
 
 static hctp_status_t handle_run_performance(hct_server_session_t *session)
 {
-    uint32_t group_index;
+    uint32_t pass_index;
     uint32_t sample_index;
     uint32_t warmup;
     const uint32_t iterations = resolve_iterations(session);
 
-    for (group_index = 0u; group_index < session->requested_group_count; ++group_index)
+    for (pass_index = 0u; pass_index < session->pass_count; ++pass_index)
     {
-        const char *group = session->requested_groups[group_index];
+        const hct_pmu_pass_t *pass = &session->passes[pass_index];
+        const uint32_t slot_mask = pmu_pass_slot_mask(pass);
         enable_dwt();
-        pmu_prepare_group(group);
+        pmu_pass_program(pass);
         for (warmup = 0u; warmup < session->planned_warmups; ++warmup)
         {
             arm_cmsis_nn_status status = run_kernel_once(session);
@@ -6339,10 +6438,11 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
         }
         for (sample_index = 0u; sample_index < session->planned_samples; ++sample_index)
         {
+            hct_pmu_sample_t sample;
             uint32_t iter;
             uint32_t start;
             uint32_t end;
-            pmu_start_group();
+            pmu_sample_start(slot_mask);
             start = dwt_cycles();
             for (iter = 0u; iter < iterations; ++iter)
             {
@@ -6350,13 +6450,13 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
                 session->last_kernel_status = status;
                 if (kernel_status_is_fatal(session, status))
                 {
-                    pmu_stop_group();
+                    pmu_sample_stop(pass, slot_mask, 0u, &sample);
                     return HCTP_STATUS_INVALID_ARGUMENT;
                 }
             }
             end = dwt_cycles();
-            pmu_stop_group();
-            if (queue_sample_result(session, (uint16_t)sample_index, iterations, (uint64_t)(end - start), group) != HCTP_STATUS_OK)
+            pmu_sample_stop(pass, slot_mask, end - start, &sample);
+            if (queue_sample_result(session, (uint16_t)sample_index, iterations, (uint64_t)(end - start), pass, &sample) != HCTP_STATUS_OK)
             {
                 return HCTP_STATUS_TRUNCATED_FRAME;
             }
@@ -6384,6 +6484,7 @@ void hct_server_session_init(hct_server_session_t *session,
                           session->next_outgoing_sequence++,
                           max_frame_payload,
                           session->runtime_arena_capacity,
+                          HCT_SERVER_MAX_RX_PAYLOAD_BYTES,
                           session->outbox,
                           sizeof(session->outbox),
                           &frame_length);
