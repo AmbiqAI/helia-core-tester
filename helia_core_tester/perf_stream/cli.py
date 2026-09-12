@@ -274,7 +274,7 @@ _PMU_GROUPS_HELP = "Deprecated alias for --pmu-counters GROUP:default per listed
 
 def _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id):
     from .hardware_pipeline import StreamOptions, apply_precision, float_precision_for, resolve_pmu_options, validate_fvp_gate
-    from .hardware_run import canonical_suite
+    from .session_runner import canonical_suite
 
     try:
         # Canonicalise before the precision rules so `--suite BOTH` is refused
@@ -343,8 +343,9 @@ def stream(
     Only kernels with real firmware dispatch support are bridged -- see the `_BUILDERS`
     dispatch table in `generated_test_bridge.py` (or call `bridged_families()` at
     runtime). Everything else is reported as skipped with the reason. Bridged cases are
-    batched into groups of at most hardware_run.MAX_CASES_PER_SESSION, each run over its
-    own fresh reset-on-open RTT session and merged into one result bundle.
+    batched by the limits the target advertises (cases and PMU passes per plan, receive
+    buffer), each batch run over its own fresh reset-on-open RTT session and merged into
+    one result bundle.
     """
     from .firmware_build import resolve_build_dir
     from .hardware_pipeline import finalize_timing, stream_generated_tests

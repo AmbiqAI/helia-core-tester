@@ -58,7 +58,7 @@ from .wire import (
 # a char[HCT_SERVER_MAX_CASE_ID] (96, benchmark_server_session.h) and cursor_text()
 # needs one byte for the NUL terminator, so a 96-byte id is rejected as a truncated
 # frame; 95 is the real limit. Checked here before any plan is sent and by
-# hardware_run.split_case_bundles_into_batches before the probe is opened.
+# session_runner (run_case_bundles before the probe is opened, take_batch per batch).
 MAX_CASE_ID_BYTES = 95
 
 

@@ -1,15 +1,17 @@
-"""Regression test for hardware_run.py's session-size batching.
+"""Batching of case bundles into SESSION_PLAN-sized sessions (session_runner.py).
 
-Guards against the real hardware bug hit in practice: `run_apollo510_generated_test_session`
-used to send every discovered/bridged case in a single SESSION_PLAN. The firmware's
-HCT_SERVER_MAX_CASES (see cmake/perf_stream/benchmark_server_session.h) bounds the
-cases per plan, and the plan also has to fit the firmware's 2 KiB receive buffer
-(case ids can be 95 bytes and every PMU pass adds an entry) -- a plan over
-either limit is rejected by the target, which used to show up on real Apollo510
-hardware as the host hanging with "Transport stalled without a complete frame."
+The firmware bounds the cases per plan (HCT_SERVER_MAX_CASES), the PMU passes per
+plan (HCT_SERVER_MAX_PASSES) and the plan payload (its 2 KiB receive buffer; case
+ids can be 95 bytes and every PMU pass adds an entry). A plan over any of them
+is rejected by the target, which used to show up on real hardware as the host
+hanging with "Transport stalled without a complete frame." The host learns all
+three limits from TARGET_INFO and cuts every batch from them. The host constants
+(measurement.MAX_PASSES_PER_PLAN / MAX_CASES_PER_PLAN, session.MAX_CASE_ID_BYTES)
+mirror the firmware header only for the checks that run before the probe is opened
+and for the fake target, and are lockstep-tested against the header here.
 
-This test does not touch real hardware/J-Link; it monkeypatches the single-session
-runner and result-bundle writer to verify the batching/merging logic in isolation.
+These tests do not touch hardware/J-Link: they drive the batching from a fake
+TARGET_INFO and stub the RTT session factory and result-bundle writer.
 """
 
 from __future__ import annotations
@@ -20,13 +22,16 @@ from typing import Any
 
 import pytest
 
-from helia_core_tester.perf_stream import hardware_run, measurement
+from helia_core_tester.perf_stream import measurement, session, session_runner
 from helia_core_tester.perf_stream.boards import resolve_board
-from helia_core_tester.perf_stream.measurement import counter_passes_for_selection
-from helia_core_tester.perf_stream.session import SessionResult
-from helia_core_tester.perf_stream.wire import session_plan_size
+from helia_core_tester.perf_stream.case_bundle import build_abs_s8_case_bundle, load_case_bundle
+from helia_core_tester.perf_stream.fake_target import FakeTargetTransport
+from helia_core_tester.perf_stream.measurement import MAX_COUNTERS_PER_PASS, counter_passes_for_selection
+from helia_core_tester.perf_stream.session import HostSession, SessionResult, TargetLimits
+from helia_core_tester.perf_stream.wire import CAP_PMU_ARMV8M, TargetInfo, session_plan_size
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_PASSES = counter_passes_for_selection({"cpu": "default", "memory": "default", "mve": "default"})
 
 
 class _DummyCaseBundle:
@@ -34,167 +39,256 @@ class _DummyCaseBundle:
         self.case_id = case_id
 
 
-def test_max_cases_per_session_matches_firmware_constant() -> None:
-    # Keep this in lockstep with HCT_SERVER_MAX_CASES / HCT_SERVER_RX_BUFFER_BYTES /
-    # HCT_SERVER_MAX_PASSES in cmake/perf_stream/benchmark_server_session.h.
+def _target_info(**overrides: Any) -> TargetInfo:
+    """A TARGET_INFO like the real apollo510_evb firmware's (32 cases, 16 passes, 2016-byte
+    plans, 8 PMU slots) unless overridden."""
+    fields = dict(
+        build_id="fake", catalog_hash=bytes(32), max_frame_payload=256, runtime_arena_capacity=114688,
+        transfer_mode=1, output_mode=1, board_id="apollo510_evb", target_cpu="cortex-m55", transport_kind=1,
+        capability_flags=CAP_PMU_ARMV8M, pmu_counter_slots=8, max_rx_payload=2048 - 32,
+        max_cases_per_session=32, max_passes=16,
+    )
+    fields.update(overrides)
+    return TargetInfo(**fields)
+
+
+def test_host_constants_match_the_firmware_header() -> None:
+    # Keep the pre-probe checks and the fake target in lockstep with HCT_SERVER_MAX_CASES /
+    # HCT_SERVER_MAX_PASSES / HCT_SERVER_MAX_CASE_ID / HCT_SERVER_RX_BUFFER_BYTES in
+    # cmake/perf_stream/benchmark_server_session.h.
     header = (PROJECT_ROOT / "cmake" / "perf_stream" / "benchmark_server_session.h").read_text()
-    assert hardware_run.MAX_CASES_PER_SESSION == 32
+    assert measurement.MAX_CASES_PER_PLAN == 32
     assert re.search(r"#define HCT_SERVER_MAX_CASES 32u", header)
-    assert hardware_run.FIRMWARE_RX_BUFFER_BYTES == 2048
-    assert re.search(r"#define HCT_SERVER_RX_BUFFER_BYTES 2048u", header)
-    assert hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES == 2048 - 32
-    assert hardware_run.MAX_PASSES_PER_PLAN == 16
+    assert measurement.MAX_PASSES_PER_PLAN == 16
     assert re.search(r"#define HCT_SERVER_MAX_PASSES 16u", header)
-    # The fake target mirrors the same case-count admission rule as handle_session_plan().
-    assert measurement.MAX_CASES_PER_PLAN == hardware_run.MAX_CASES_PER_SESSION
     # char[96] storage and cursor_text() needs the NUL, so 95 payload bytes.
-    assert hardware_run.MAX_CASE_ID_BYTES == 96 - 1
+    assert session.MAX_CASE_ID_BYTES == 96 - 1
     assert re.search(r"#define HCT_SERVER_MAX_CASE_ID 96u", header)
+    assert re.search(r"#define HCT_SERVER_RX_BUFFER_BYTES 2048u", header)
+    # The fake target advertises the same limits by default.
+    info = FakeTargetTransport()
+    assert (info._max_cases_per_session, info._max_passes) == (measurement.MAX_CASES_PER_PLAN, measurement.MAX_PASSES_PER_PLAN)
 
 
-def test_run_single_session_refuses_more_passes_than_the_firmware_runs(tmp_path: Path) -> None:
+def test_run_case_bundles_refuses_more_passes_than_the_firmware_runs_before_opening_the_probe(tmp_path: Path, monkeypatch) -> None:
     # cpu:all memory:all mve:all is 5 + 4 + 9 = 18 passes -- over HCT_SERVER_MAX_PASSES.
     # The runner must refuse before symbol lookup / J-Link, naming the passes and the limit.
     passes = counter_passes_for_selection({"cpu": "all", "memory": "all", "mve": "all"})
     assert len(passes) == 18
-    with pytest.raises(ValueError, match=r"18 PMU passes planned \(cpu_0, .*mve_8\) but the firmware runs at most 16"):
-        hardware_run._run_single_session(
-            tmp_path,
-            [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
-            serial_no=1,
-            chip_name="AP510NFA-CBR",
-            speed_khz=4000,
-            counter_passes=passes,
-            build_dir=tmp_path,
+    monkeypatch.setattr(session_runner, "open_rtt_session", lambda *a, **k: pytest.fail("probe opened"))
+    with pytest.raises(ValueError, match=r"18 PMU passes planned \(cpu_0, .*mve_8\) but the firmware runs at most 16 per SESSION_PLAN"):
+        session_runner.run_case_bundles(
+            tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
+            board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=passes, build_dir=tmp_path,
         )
-    assert not (tmp_path / "perf_stream").exists()
+
+
+class _FakeSession:
+    """Stands in for HostSession: handshake() announces `info`, run_many() records the batch."""
+
+    def __init__(self, info: TargetInfo, calls: list[list[Any]], *, fail: Exception | None = None) -> None:
+        self._info = info
+        self._calls = calls
+        self._fail = fail
+        self.target_info: TargetInfo | None = None
+        self.expected_build_id: str | None = None
+
+    def handshake(self, *, expected_build_id: str | None = None) -> TargetInfo:
+        if self._fail is not None:
+            raise self._fail
+        self.expected_build_id = expected_build_id
+        self.target_info = self._info
+        return self._info
+
+    @property
+    def limits(self) -> TargetLimits:
+        return TargetLimits.from_target_info(self._info)
+
+    def run_many(self, case_bundles, *, on_case_complete=None) -> SessionResult:
+        assert len(case_bundles) <= self.limits.max_cases
+        self._calls.append(list(case_bundles))
+        return SessionResult(
+            cases=tuple(f"result-for-{b.case_id}" for b in case_bundles),  # type: ignore[arg-type]
+            protocol_trace=(f"TX:TARGET_INFO_ACK-{case_bundles[0].case_id}",),
+            session_complete_cases=len(case_bundles),
+        )
+
+
+class _FakeTransport:
+    def __init__(self) -> None:
+        self.closed = 0
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+def test_limits_are_derived_from_target_info() -> None:
+    limits = TargetLimits.from_target_info(_target_info())
+    assert (limits.max_cases, limits.max_plan_bytes, limits.max_passes, limits.pmu_counter_slots) == (32, 2016, 16, 8)
+    assert limits.has_pmu and limits.max_counters_per_pass == MAX_COUNTERS_PER_PASS == 4
+    # The chained-pair planning rule is bounded by the advertised slot count.
+    assert TargetLimits.from_target_info(_target_info(pmu_counter_slots=4)).max_counters_per_pass == 2
+    assert TargetLimits.from_target_info(_target_info(capability_flags=0, pmu_counter_slots=0)).max_counters_per_pass == 0
+    assert TargetLimits.from_target_info(_target_info(max_cases_per_session=7, max_rx_payload=500)).max_cases == 7
 
 
 def test_batches_are_split_by_case_count_and_encoded_plan_size() -> None:
-    passes = counter_passes_for_selection({"cpu": "default", "memory": "default", "mve": "default"})
+    limits = TargetLimits.from_target_info(_target_info())
     short = [_DummyCaseBundle(f"case_{i}") for i in range(70)]
-    assert [len(b) for b in hardware_run.split_case_bundles_into_batches(short, passes)] == [32, 32, 6]
+    assert [len(b) for b in session_runner.split_case_bundles_into_batches(short, DEFAULT_PASSES, limits)] == [32, 32, 6]
+    # A target that takes fewer cases per plan gets smaller batches -- no host constant involved.
+    small = TargetLimits.from_target_info(_target_info(max_cases_per_session=10))
+    assert [len(b) for b in session_runner.split_case_bundles_into_batches(short, DEFAULT_PASSES, small)] == [10] * 7
 
     # 95-byte case ids (the longest the firmware's char[HCT_SERVER_MAX_CASE_ID] takes
     # with its NUL) cannot all fit 32 to a plan: each costs 101 bytes on the wire, so
     # the 2016-byte rx bound caps a batch well below 32.
     long_ids = [_DummyCaseBundle(f"{i:04d}_" + "x" * 90) for i in range(40)]
-    assert all(len(b.case_id.encode("utf-8")) == hardware_run.MAX_CASE_ID_BYTES for b in long_ids)
-    batches = hardware_run.split_case_bundles_into_batches(long_ids, passes)
+    assert all(len(b.case_id.encode("utf-8")) == session.MAX_CASE_ID_BYTES for b in long_ids)
+    batches = session_runner.split_case_bundles_into_batches(long_ids, DEFAULT_PASSES, limits)
     assert all(len(b) < 32 for b in batches)
     assert sum(len(b) for b in batches) == 40
     assert [b.case_id for batch in batches for b in batch] == [b.case_id for b in long_ids]
     for batch in batches:
-        assert session_plan_size([b.case_id for b in batch], passes) <= hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES
+        assert session_plan_size([b.case_id for b in batch], DEFAULT_PASSES) <= limits.max_plan_bytes
     # Adding one more case to any batch would have overflowed the plan.
     for batch, following in zip(batches, batches[1:]):
         ids = [b.case_id for b in batch] + [following[0].case_id]
-        assert session_plan_size(ids, passes) > hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES
+        assert session_plan_size(ids, DEFAULT_PASSES) > limits.max_plan_bytes
 
     # mve:all is nine passes; the plan header grows but every batch still fits.
     many_passes = counter_passes_for_selection({"mve": "all", "cpu": "default"})
     assert len(many_passes) == 10
-    for batch in hardware_run.split_case_bundles_into_batches(long_ids, many_passes):
-        assert session_plan_size([b.case_id for b in batch], many_passes) <= hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES
+    for batch in session_runner.split_case_bundles_into_batches(long_ids, many_passes, limits):
+        assert session_plan_size([b.case_id for b in batch], many_passes) <= limits.max_plan_bytes
 
+    tiny = TargetLimits.from_target_info(_target_info(max_rx_payload=100))
     with pytest.raises(ValueError, match="alone needs"):
-        hardware_run.split_case_bundles_into_batches([_DummyCaseBundle("x" * 95)], passes, max_plan_bytes=100)
+        session_runner.take_batch([_DummyCaseBundle("x" * 95)], DEFAULT_PASSES, tiny)
 
 
-def test_case_ids_over_the_firmware_storage_are_refused_before_any_session() -> None:
+def test_case_ids_over_the_firmware_storage_are_refused_before_any_session(tmp_path: Path, monkeypatch) -> None:
+    limits = TargetLimits.from_target_info(_target_info())
     passes = counter_passes_for_selection({"cpu": "default"})
-    # Exactly 95 bytes fits (char[96] with the NUL); 96 does not, and the splitter says
-    # so before the J-Link session is opened rather than the firmware truncating the plan.
+    # Exactly 95 bytes fits (char[96] with the NUL); 96 does not, and the batcher says
+    # so rather than the firmware truncating the plan.
     ok = _DummyCaseBundle("y" * 95)
-    assert hardware_run.split_case_bundles_into_batches([ok], passes) == [[ok]]
+    assert session_runner.split_case_bundles_into_batches([ok], passes, limits) == [[ok]]
     with pytest.raises(ValueError, match=r"Case id 'y{96}' is 96 bytes; the firmware stores at most 95 \(HCT_SERVER_MAX_CASE_ID 96"):
-        hardware_run.split_case_bundles_into_batches([ok, _DummyCaseBundle("y" * 96)], passes)
+        session_runner.take_batch([ok, _DummyCaseBundle("y" * 96)], passes, limits)
     # The limit is in bytes, not characters: 48 two-byte characters fit, 48 plus one more does not.
-    assert hardware_run.split_case_bundles_into_batches([_DummyCaseBundle("\u00e9" * 47 + "z")], passes)
+    assert session_runner.take_batch([_DummyCaseBundle("\u00e9" * 47 + "z")], passes, limits)
     with pytest.raises(ValueError, match="is 96 bytes"):
-        hardware_run.split_case_bundles_into_batches([_DummyCaseBundle("\u00e9" * 48)], passes)
-
-
-def test_run_single_session_rejects_oversized_plan_instead_of_hanging(tmp_path: Path) -> None:
-    bundles = [_DummyCaseBundle(f"case_{i}") for i in range(hardware_run.MAX_CASES_PER_SESSION + 1)]
-    try:
-        hardware_run._run_single_session(
-            tmp_path,
-            bundles,  # type: ignore[arg-type]
-            serial_no=1,
-            chip_name="AP510NFA-CBR",
-            speed_khz=4000,
-            counter_passes=counter_passes_for_selection({"cpu": "default"}),
-            build_dir=tmp_path,
+        session_runner.take_batch([_DummyCaseBundle("\u00e9" * 48)], passes, limits)
+    # The runner checks every id before the J-Link session is opened.
+    monkeypatch.setattr(session_runner, "open_rtt_session", lambda *a, **k: pytest.fail("probe opened"))
+    with pytest.raises(ValueError, match="is 96 bytes"):
+        session_runner.run_case_bundles(
+            tmp_path, [ok, _DummyCaseBundle("y" * 96)],  # type: ignore[arg-type]
+            board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=passes, build_dir=tmp_path,
         )
-        assert False, "expected ValueError for an oversized single-session plan"
-    except ValueError as exc:
-        assert "HCT_SERVER_MAX_CASES" in str(exc)
 
 
-def test_run_case_bundles_in_batches_splits_and_merges(tmp_path: Path, monkeypatch) -> None:
-    total_cases = 70  # more than MAX_CASES_PER_SESSION (32) -> 3 batches: 32, 32, 6
-    bundles = [_DummyCaseBundle(f"case_{i}") for i in range(total_cases)]
+def test_session_refuses_more_cases_than_the_target_takes(tmp_path: Path) -> None:
+    bundles = [
+        load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id=f"abs_{i}").manifest_path)
+        for i in range(2)
+    ]
+    session = HostSession(FakeTargetTransport(max_cases_per_session=1), counter_passes=counter_passes_for_selection({"cpu": "default"}))
+    with pytest.raises(RuntimeError, match="takes at most 1 per SESSION_PLAN"):
+        session.run_many(bundles)
+    assert "TX:SESSION_PLAN" not in session._trace
+    # Likewise a pass list longer than max_passes is refused at the handshake.
+    session = HostSession(FakeTargetTransport(max_passes=2), counter_passes=DEFAULT_PASSES)
+    with pytest.raises(RuntimeError, match=r"3 PMU passes planned \(cpu_0, memory_0, mve_0\) but target 'fake_board' runs at most 2 per SESSION_PLAN"):
+        session.run_many(bundles[:1])
 
+
+def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path, monkeypatch) -> None:
+    bundles = [_DummyCaseBundle(f"case_{i}") for i in range(70)]
     calls: list[list[Any]] = []
+    transports: list[_FakeTransport] = []
+    announced = {"info": _target_info()}
+    sessions: list[_FakeSession] = []
 
-    def _fake_run_single_session(project_root, case_bundles, *, serial_no, chip_name, speed_khz, counter_passes, build_dir, on_case_complete=None, expected_build_id=None):
-        assert len(case_bundles) <= hardware_run.MAX_CASES_PER_SESSION
-        calls.append(list(case_bundles))
-        # One fake "case result" per bundle in this batch, tagged with its case_id.
-        fake_result = SessionResult(
-            cases=tuple(f"result-for-{b.case_id}" for b in case_bundles),  # type: ignore[arg-type]
-            protocol_trace=(f"TX:TARGET_INFO_ACK-{case_bundles[0].case_id}",),
-            session_complete_cases=len(case_bundles),
-        )
-        return fake_result, 0xDEADBEEF
+    def _open(board, serial_no, *, build_dir, counter_passes):
+        assert (board.id, serial_no, build_dir) == ("apollo510_evb", 1160002276, tmp_path)
+        transport = _FakeTransport()
+        transports.append(transport)
+        session = _FakeSession(announced["info"], calls)
+        sessions.append(session)
+        return session, transport, 0xDEADBEEF
 
-    written_results = {}
+    written: dict[str, Any] = {}
 
     def _fake_write_result_bundle(result, *, session_id, output_root, memory_report, kernel_catalog, target_info, host_log_text, target_log_text):
-        written_results["result"] = result
-        written_results["session_id"] = session_id
-        written_results["target_info"] = target_info
+        written.update(result=result, session_id=session_id, target_info=target_info, host_log=host_log_text)
         return output_root / "artifacts" / "reports" / "performance_stream" / session_id
 
-    monkeypatch.setattr(hardware_run, "_run_single_session", _fake_run_single_session)
-    monkeypatch.setattr(hardware_run, "write_result_bundle", _fake_write_result_bundle)
-    monkeypatch.setattr(hardware_run, "generate_memory_report", lambda board, build_dir=None: tmp_path / "memory_report.json")
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    monkeypatch.setattr(session_runner, "write_result_bundle", _fake_write_result_bundle)
+    monkeypatch.setattr(session_runner, "generate_memory_report", lambda board, project_root=None, build_dir=None: tmp_path / "memory_report.json")
     (tmp_path / "memory_report.json").write_text("{}", encoding="utf-8")
     (tmp_path / "cmake" / "perf_stream").mkdir(parents=True, exist_ok=True)
     (tmp_path / "cmake" / "perf_stream" / "kernel_catalog.json").write_text("[]", encoding="utf-8")
 
-    merged_result, bundle_root = hardware_run._run_case_bundles_in_batches(
+    merged, bundle_root = session_runner.run_case_bundles(
         tmp_path,
         bundles,  # type: ignore[arg-type]
+        board=resolve_board("apollo510_evb"),
         serial_no=1160002276,
-        chip_name="AP510NFA-CBR",
-        speed_khz=4000,
-        counter_passes=counter_passes_for_selection({"cpu": "default", "memory": "default", "mve": "default"}),
+        counter_passes=DEFAULT_PASSES,
         session_id="test-batching-session",
         build_dir=tmp_path,
-        board=resolve_board("apollo510_evb"),
+        expected_build_id="fake",
     )
 
-    # Batched into ceil(70/32) = 3 sessions of sizes 32, 32, 6 -- never exceeding the
-    # firmware's HCT_SERVER_MAX_CASES.
+    # The target advertised 32 cases per plan: ceil(70/32) = 3 sessions of 32, 32, 6,
+    # each over its own transport, closed afterwards.
     assert [len(call) for call in calls] == [32, 32, 6]
     assert [b.case_id for b in calls[0]] == [f"case_{i}" for i in range(0, 32)]
-    assert [b.case_id for b in calls[1]] == [f"case_{i}" for i in range(32, 64)]
     assert [b.case_id for b in calls[2]] == [f"case_{i}" for i in range(64, 70)]
+    assert [t.closed for t in transports] == [1, 1, 1]
 
     # All per-batch case results are merged into one SessionResult, in order.
-    assert merged_result.cases == tuple(f"result-for-case_{i}" for i in range(total_cases))
-    assert merged_result.session_complete_cases == total_cases
-    assert merged_result.batch_count == 3
-    assert len(merged_result.protocol_trace) == 3
-    assert all(entry.startswith("batch") for entry in merged_result.protocol_trace)
+    assert merged.cases == tuple(f"result-for-case_{i}" for i in range(70))
+    assert merged.session_complete_cases == 70
+    assert merged.batch_count == 3
+    assert merged.target_info == announced["info"]
+    # The bundle writer seeds its counter columns from the passes the plan asked for.
+    assert merged.counter_passes == DEFAULT_PASSES
+    # The build dir's id is checked at every session's handshake and reported once.
+    assert [s.expected_build_id for s in sessions] == ["fake"] * 3
+    assert merged.build_id == "fake"
+    assert all(entry.startswith("batch") for entry in merged.protocol_trace) and len(merged.protocol_trace) == 3
 
-    # Exactly one result bundle written for the whole (merged) session, not one per batch.
-    assert written_results["session_id"] == "test-batching-session"
-    # target_info is derived from the board row, not hard-coded.
-    assert written_results["target_info"]["board"] == "apollo510_evb"
-    assert written_results["target_info"]["cpu"] == "cortex-m55"
-    assert written_results["target_info"]["transport"] == "jlink-rtt"
-    assert written_results["result"] is merged_result
+    # Exactly one result bundle for the whole (merged) session, with board-derived target info.
+    assert written["session_id"] == "test-batching-session"
+    assert written["target_info"]["board"] == "apollo510_evb"
+    assert written["target_info"]["cpu"] == "cortex-m55"
+    assert written["target_info"]["transport"] == "jlink-rtt"
+    assert "max_cases_per_session=32 max_session_plan_bytes=2016" in written["host_log"]
+    assert "firmware_build_id=fake" in written["host_log"]
+    assert written["result"] is merged
     assert bundle_root == tmp_path / "artifacts" / "reports" / "performance_stream" / "test-batching-session"
+
+    # A different target announces different limits and the same run batches differently.
+    calls.clear()
+    announced["info"] = _target_info(max_cases_per_session=25)
+    session_runner.run_case_bundles(
+        tmp_path, bundles, board=resolve_board("apollo510_evb"), serial_no=1160002276,  # type: ignore[arg-type]
+        counter_passes=DEFAULT_PASSES, session_id="s", build_dir=tmp_path,
+    )
+    assert [len(call) for call in calls] == [25, 25, 20]
+
+
+def test_run_case_bundles_names_the_batch_when_a_session_fails(tmp_path: Path, monkeypatch) -> None:
+    def _open(board, serial_no, *, build_dir, counter_passes):
+        return _FakeSession(_target_info(), [], fail=RuntimeError("Transport stalled")), _FakeTransport(), 0
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    with pytest.raises(RuntimeError, match=r"Transport stalled \(batch 0, candidate case_ids=\['case_0', 'case_1'\]\)"):
+        session_runner.run_case_bundles(
+            tmp_path, [_DummyCaseBundle("case_0"), _DummyCaseBundle("case_1")],  # type: ignore[arg-type]
+            board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
+        )
