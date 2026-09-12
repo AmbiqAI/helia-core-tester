@@ -389,7 +389,7 @@ def test_session_verifies_hello_build_id(tmp_path: Path) -> None:
 def test_read_hello_returns_the_full_payload_without_acknowledging() -> None:
     transport = FakeTargetTransport(build_id="hct-xyz")
     hello = read_hello(transport)
-    assert hello.build_id == "hct-xyz" and hello.board_id == "fake_board" and hello.target_cpu == "fake-cpu"
+    assert hello.build_id == "hct-xyz" and hello.board_id == "fake_board" and hello.target_cpu == "cortex-m55"
     assert hello.max_frame_payload == 64 and hello.runtime_arena_capacity == 4096
     assert transport.read() == b""  # nothing else was sent: the fake is still waiting for HELLO_ACK
 

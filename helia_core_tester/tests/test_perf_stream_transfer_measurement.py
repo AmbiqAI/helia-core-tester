@@ -9,12 +9,17 @@ from helia_core_tester.perf_stream.measurement import (
     RawCounterValue,
     RawSample,
     StatefulKernelRestrictionError,
+    UnsupportedCounterError,
     auto_calibrate_iterations,
+    compute_counter_medians,
     compute_sample_statistics,
+    counter_names_for_passes,
+    counter_passes_for_selection,
     normalize_samples,
     plan_counter_passes,
     resolve_counter_selection,
 )
+from helia_core_tester.perf_stream.pmu_catalog import DEFAULT_SELECTIONS, counter_by_name, counters_in_group
 from helia_core_tester.perf_stream.transfer import (
     AlignmentError,
     ArenaTracker,
@@ -154,6 +159,46 @@ def test_multiple_pmu_passes_are_planned() -> None:
     passes = plan_counter_passes(counters)
 
     assert [perf_pass.name for perf_pass in passes] == ["cpu_0", "memory_0", "mve_0"]
+    # CPU_CYCLES comes from CCNTR and takes no slot, so the cpu default plans 3 counters.
+    assert [len(perf_pass.counters) for perf_pass in passes] == [3, 4, 4]
+    assert all(perf_pass.chained and perf_pass.slots_required == 2 * len(perf_pass.counters) for perf_pass in passes)
+    assert counter_names_for_passes(passes)[:2] == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED"]
+    assert len(counter_names_for_passes(passes)) == 1 + 3 + 4 + 4
+
+
+def test_all_selection_chunks_a_group_into_passes_of_four() -> None:
+    passes = plan_counter_passes(resolve_counter_selection({"mve": "all"}))
+    assert [perf_pass.name for perf_pass in passes] == [f"mve_{i}" for i in range(9)]
+    assert [len(perf_pass.counters) for perf_pass in passes] == [4] * 8 + [2]
+    assert [c.name for c in passes[0].counters] == [c.name for c in counters_in_group("mve")[:4]]
+    unchained = plan_counter_passes(resolve_counter_selection({"cpu": "all"}), chained=False)
+    assert all(not perf_pass.chained and perf_pass.slots_required == len(perf_pass.counters) for perf_pass in unchained)
+    # explicit names keep their order and dedupe; a cycles-only selection still plans one empty pass
+    explicit = resolve_counter_selection({"mve": ["ARM_PMU_MVE_STALL", "ARM_PMU_MVE_PRED", "ARM_PMU_MVE_STALL"]})
+    assert [c.name for c in explicit] == ["ARM_PMU_MVE_STALL", "ARM_PMU_MVE_PRED"]
+    assert counter_passes_for_selection({"cpu": ["ARM_PMU_CPU_CYCLES"]})[0].counters == ()
+    for group, names in DEFAULT_SELECTIONS.items():
+        assert all(counter_by_name(name) is not None and counter_by_name(name).group == group for name in names)
+
+
+def test_unknown_counter_name_lists_valid_names() -> None:
+    with pytest.raises(UnsupportedCounterError, match="Unsupported counter 'ARM_PMU_BOGUS' for group 'cpu'. Valid names: ARM_PMU_SW_INCR"):
+        resolve_counter_selection({"cpu": ["ARM_PMU_BOGUS"]})
+    # A real name from another group is still rejected for this group.
+    with pytest.raises(UnsupportedCounterError, match="'ARM_PMU_MVE_STALL' for group 'cpu'"):
+        resolve_counter_selection({"cpu": ["ARM_PMU_MVE_STALL"]})
+
+
+def test_counter_medians_span_passes() -> None:
+    normalized = normalize_samples(
+        [
+            RawSample(0, 2, 200, (RawCounterValue("ARM_PMU_CPU_CYCLES", 0x11, 200), RawCounterValue("ARM_PMU_INST_RETIRED", 0x08, 100)), "cpu_0"),
+            RawSample(1, 2, 220, (RawCounterValue("ARM_PMU_CPU_CYCLES", 0x11, 220), RawCounterValue("ARM_PMU_INST_RETIRED", 0x08, 140)), "cpu_0"),
+            RawSample(0, 2, 260, (RawCounterValue("ARM_PMU_CPU_CYCLES", 0x11, 260), RawCounterValue("ARM_PMU_MEM_ACCESS", 0x13, 0, supported=False)), "memory_0"),
+        ]
+    )
+    medians = compute_counter_medians(normalized)
+    assert medians == {"ARM_PMU_CPU_CYCLES": 110.0, "ARM_PMU_INST_RETIRED": 60.0}
 
 
 

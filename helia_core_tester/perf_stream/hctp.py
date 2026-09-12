@@ -9,7 +9,9 @@ import zlib
 
 MAGIC = b"HCT1"
 HEADER_SIZE = 32
-SUPPORTED_VERSION = 1
+# v2: LOAD_PLAN carries explicit PMU passes (event ids), HELLO advertises PMU slots and
+# the target's receive-buffer bound, SAMPLE_RESULT leads with the CCNTR entry.
+SUPPORTED_VERSION = 2
 DEFAULT_MAX_PAYLOAD = 64 * 1024
 
 # F008: set on every non-final paginated CAPABILITIES chunk; cleared on the final chunk.

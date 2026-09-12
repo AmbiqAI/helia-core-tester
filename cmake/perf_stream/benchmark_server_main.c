@@ -38,7 +38,7 @@ volatile uint32_t g_hct_last_transport_read_bytes;
 volatile uint32_t g_hct_last_session_status;
 
 static hct_server_session_t g_hct_session;
-__attribute__((aligned(16))) static uint8_t g_hct_rx_buffer[2048u];
+__attribute__((aligned(16))) static uint8_t g_hct_rx_buffer[HCT_SERVER_RX_BUFFER_BYTES];
 static size_t g_hct_rx_length = 0u;
 
 static void hct_flush_outbound(hct_server_session_t *session, const hct_transport_vtable_t *transport)
