@@ -13,7 +13,6 @@ from helia_core_tester.perf_stream.case_bundle import (
     load_case_bundle,
 )
 from helia_core_tester.perf_stream.fake_target import FakeAbsS8Adapter, FakeKernelAdapter, FakeTargetTransport
-from helia_core_tester.perf_stream.hctp import ByteWriter
 from helia_core_tester.perf_stream.measurement import (
     MAX_CASES_PER_PLAN,
     MAX_PASSES_PER_PLAN,
@@ -31,11 +30,11 @@ from helia_core_tester.perf_stream.pmu_catalog import CPU_CYCLES_EVENT_ID, count
 from helia_core_tester.perf_stream.session import (
     MAX_CASE_ID_BYTES,
     HostSession,
-    encode_session_plan,
     run_fake_abs_vertical_slice,
     run_fake_convolve_vertical_slice,
-    session_plan_size,
+    session_plan_for_bundles,
 )
+from helia_core_tester.perf_stream.wire import PlannedCase, SessionPlan, encode_session_plan, session_plan_size
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -95,10 +94,10 @@ def test_fake_abs_vertical_slice_end_to_end(tmp_path: Path) -> None:
     # target sends empty names).
     for sample in result.samples:
         first = sample.counters[0]
-        assert first["name"] == "ARM_PMU_CPU_CYCLES" and first["event_id"] == CPU_CYCLES_EVENT_ID
-        assert 0 <= first["value"] - sample.cycles < 16
-        assert [c["name"] for c in sample.counters[1:]] == ["ARM_PMU_INST_RETIRED", "ARM_PMU_STALL_FRONTEND", "ARM_PMU_STALL_BACKEND"]
-        assert all(c["overflow"] == 0 and c["supported"] == 1 for c in sample.counters)
+        assert first.name == "ARM_PMU_CPU_CYCLES" and first.event_id == CPU_CYCLES_EVENT_ID
+        assert 0 <= first.value - sample.cycles < 16
+        assert [c.name for c in sample.counters[1:]] == ["ARM_PMU_INST_RETIRED", "ARM_PMU_STALL_FRONTEND", "ARM_PMU_STALL_BACKEND"]
+        assert all(not c.overflow and c.supported for c in sample.counters)
 
     trace = result.protocol_trace
     assert trace[0] == "RX:TARGET_INFO"
@@ -189,9 +188,9 @@ def test_mve_all_plans_nine_passes_and_every_pass_reports_ccntr(tmp_path: Path) 
     case = result.cases[0]
     assert len(case.samples) == 3 * 10
     assert [s.pass_name for s in case.samples][::3] == [p.name for p in passes]
-    assert all(s.counters[0]["name"] == "ARM_PMU_CPU_CYCLES" for s in case.samples)
+    assert all(s.counters[0].name == "ARM_PMU_CPU_CYCLES" for s in case.samples)
     # 34 mve names + CPU_CYCLES + the 3 cpu defaults; mve is unsupported on the abs fake.
-    reported = {c["name"] for s in case.samples for c in s.counters}
+    reported = {c.name for s in case.samples for c in s.counters}
     assert len(reported) == 34 + 1 + 3
     assert len(case.statistics.unsupported_counters) == 34
 
@@ -200,13 +199,14 @@ def test_every_group_all_exceeds_the_firmware_pass_limit_and_fails_before_sessio
     # Every value the --pmu-counters help advertises at once: 21 cpu + 15 memory + 34 mve
     # events plan 5 + 4 + 9 = 18 passes, two over HCT_SERVER_MAX_PASSES. The firmware
     # would answer the SESSION_PLAN with an ERROR frame after flash/TARGET_INFO/catalog; the host
-    # must refuse first, naming the passes and the limit, and never send a plan.
+    # must refuse first (the parser does from MAX_PASSES_PER_PLAN; the session from the
+    # target-advertised max_passes), naming the passes and the limit, and never send a plan.
     bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_all_groups").manifest_path)
     passes = counter_passes_for_selection({"cpu": "all", "memory": "all", "mve": "all"})
     assert len(passes) == 18 and MAX_PASSES_PER_PLAN == 16
 
     session = HostSession(FakeTargetTransport(), counter_passes=passes)
-    with pytest.raises(RuntimeError, match=r"18 PMU passes planned \(cpu_0, cpu_1, cpu_2, cpu_3, cpu_4, memory_0, .*mve_8\) but the firmware runs at most 16 per SESSION_PLAN"):
+    with pytest.raises(RuntimeError, match=r"18 PMU passes planned \(cpu_0, cpu_1, cpu_2, cpu_3, cpu_4, memory_0, .*mve_8\) but target 'fake_board' runs at most 16 per SESSION_PLAN \(TARGET_INFO max_passes\)"):
         session.run_many([bundle])
     assert "TX:SESSION_PLAN" not in session._trace and "TX:TARGET_INFO_ACK" not in session._trace
 
@@ -223,7 +223,7 @@ def test_every_group_all_exceeds_the_firmware_pass_limit_and_fails_before_sessio
     with pytest.raises(TooManyPassesError, match="17 PMU passes planned"):
         check_pass_count(seventeen)
     with pytest.raises(ValueError, match="17 PMU passes; fake target accepts at most 16"):
-        FakeTargetTransport()._decode_session_plan(encode_session_plan([bundle], seventeen))
+        FakeTargetTransport()._admit_session_plan(encode_session_plan(session_plan_for_bundles([bundle], seventeen)))
 
 
 def test_case_id_at_the_firmware_limit_runs_and_one_byte_over_fails_before_session_plan(tmp_path: Path) -> None:
@@ -242,7 +242,7 @@ def test_case_id_at_the_firmware_limit_runs_and_one_byte_over_fails_before_sessi
     assert "TX:SESSION_PLAN" not in session._trace
     # The fake target rejects the same plan the way the firmware's cursor_text() does.
     with pytest.raises(ValueError, match="does not fit the fake target's 96-byte case-id storage"):
-        FakeTargetTransport()._decode_session_plan(encode_session_plan([bundle], passes))
+        FakeTargetTransport()._admit_session_plan(encode_session_plan(session_plan_for_bundles([bundle], passes)))
 
 
 def test_unchained_pass_overflows_sixteen_bit_counter_and_invalidates_case(tmp_path: Path) -> None:
@@ -262,8 +262,8 @@ def test_unchained_pass_overflows_sixteen_bit_counter_and_invalidates_case(tmp_p
         counter_passes=counter_passes_for_selection({"cpu": "default"}, chained=False),
     ).run(bundle)
     case = unchained.cases[0]
-    assert all(c["overflow"] == 1 for s in case.samples for c in s.counters if c["name"] == "ARM_PMU_INST_RETIRED")
-    assert all(c["value"] <= 0xFFFF for s in case.samples for c in s.counters if c["name"] != "ARM_PMU_CPU_CYCLES")
+    assert all(c.overflow for s in case.samples for c in s.counters if c.name == "ARM_PMU_INST_RETIRED")
+    assert all(c.value <= 0xFFFF for s in case.samples for c in s.counters if c.name != "ARM_PMU_CPU_CYCLES")
     assert case.statistics.overflow_detected is True
     assert case.statistics.valid_for_regression is False
     # The DWT cycle statistics are unaffected by an event-counter overflow.
@@ -282,7 +282,7 @@ def test_dwt_only_target_refuses_event_counter_passes_but_times_cycles(tmp_path:
     passes = counter_passes_for_selection({"cpu": ["ARM_PMU_CPU_CYCLES"]})
     assert passes == (CounterPass("cpu", 0, ()),)
     result = HostSession(FakeTargetTransport(pmu_present=False), counter_passes=passes).run(bundle)
-    assert [c["name"] for c in result.samples[0].counters] == ["ARM_PMU_CPU_CYCLES"]
+    assert [c.name for c in result.samples[0].counters] == ["ARM_PMU_CPU_CYCLES"]
     assert result.cases[0].statistics.median_cycles > 0
 
 
@@ -311,11 +311,11 @@ def test_unknown_event_ids_are_reported_with_placeholder_names(tmp_path: Path) -
     bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_unknown").manifest_path)
     exotic = CounterPass("cpu", 0, (counter_by_name("ARM_PMU_INST_RETIRED"), type(counter_by_name("ARM_PMU_INST_RETIRED"))("vendor", 0x0C00, "cpu")))
     result = HostSession(FakeTargetTransport(), counter_passes=(exotic,)).run(bundle)
-    assert [c["name"] for c in result.samples[0].counters] == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED", "event_0x0c00"]
+    assert [c.name for c in result.samples[0].counters] == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED", "event_0x0c00"]
     # A PMU-present target counts whatever it was programmed with: the fake reports the
     # unknown id supported, exactly like firmware, rather than zeroing it.
-    unknown = [c for c in result.samples[0].counters if c["name"] == "event_0x0c00"][0]
-    assert unknown["supported"] == 1
+    unknown = [c for c in result.samples[0].counters if c.name == "event_0x0c00"][0]
+    assert unknown.supported is True
     # The bundle schema is seeded by event id too, so the caller's "vendor" label never
     # becomes a dead column next to the populated placeholder.
     assert counter_names_for_passes((exotic,)) == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED", "event_0x0c00"]
@@ -326,10 +326,9 @@ def test_fake_target_rejects_session_plans_the_firmware_would_reject() -> None:
     # host that bypasses the batch splitter cannot pass on the fake and fail on hardware.
     fake = FakeTargetTransport()
     for case_count in (0, MAX_CASES_PER_PLAN + 1):
-        payload = ByteWriter()
-        payload.u16(case_count)
+        plan = SessionPlan(1, 1, 1, 1, 1, (), tuple(PlannedCase(f"case_{i}", 1) for i in range(case_count)))
         with pytest.raises(ValueError, match=rf"{case_count} cases; fake target accepts 1\.\.{MAX_CASES_PER_PLAN}"):
-            fake._decode_session_plan(payload.finish())
+            fake._admit_session_plan(encode_session_plan(plan))
 
 
 def test_case_too_large_fails(tmp_path: Path) -> None:

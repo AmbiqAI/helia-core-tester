@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from helia_core_tester.perf_stream.firmware_messages import CAP_PMU_ARMV8M, decode_kernel_catalog, decode_target_info
+from helia_core_tester.perf_stream.wire import CAP_PMU_ARMV8M, decode_kernel_catalog, decode_target_info
 from helia_core_tester.perf_stream.hctp import HCTP_FLAG_MORE, FrameDecoder, MessageType
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

@@ -113,8 +113,8 @@ def write_result_bundle(
             if sample.pass_name not in pass_names:
                 pass_names.append(sample.pass_name)
             for counter in sample.counters:
-                if counter["name"] not in counter_names:
-                    counter_names.append(str(counter["name"]))
+                if counter.name not in counter_names:
+                    counter_names.append(counter.name)
         for name in counter_medians:
             if name not in counter_names:
                 counter_names.append(name)
@@ -177,11 +177,11 @@ def write_result_bundle(
                         "iterations": sample.iterations,
                         "cycles": sample.cycles,
                         "cycles_per_invocation": normalized.cycles_per_invocation,
-                        "counter_name": counter["name"],
-                        "event_id": counter["event_id"],
-                        "counter_value": counter["value"],
-                        "overflow": counter["overflow"],
-                        "supported": counter["supported"],
+                        "counter_name": counter.name,
+                        "event_id": counter.event_id,
+                        "counter_value": counter.value,
+                        "overflow": int(counter.overflow),
+                        "supported": int(counter.supported),
                     }
                 )
 
