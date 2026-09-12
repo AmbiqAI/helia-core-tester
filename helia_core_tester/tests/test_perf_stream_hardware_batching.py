@@ -6,7 +6,7 @@ HCT_SERVER_MAX_CASES (see cmake/perf_stream/benchmark_server_session.h) is only 
 and handle_load_plan() in benchmark_server_session.c silently drops (no reply frame)
 a plan naming more cases than that -- which manifested on real Apollo510 hardware as
 the host hanging with "Transport stalled without a complete frame." for any
-`perf-stream run-generated` invocation discovering more than 4 bridgeable cases
+`hardware stream` invocation discovering more than 4 bridgeable cases
 (the default --family ConvolutionFunctions with no --limit discovers 200+).
 
 This test does not touch real hardware/J-Link; it monkeypatches the single-session
@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from helia_core_tester.perf_stream import hardware_run
+from helia_core_tester.perf_stream.boards import resolve_board
 from helia_core_tester.perf_stream.session import SessionResult
 
 
@@ -72,6 +73,7 @@ def test_run_case_bundles_in_batches_splits_and_merges(tmp_path: Path, monkeypat
     def _fake_write_result_bundle(result, *, session_id, output_root, memory_report, kernel_catalog, target_info, host_log_text, target_log_text):
         written_results["result"] = result
         written_results["session_id"] = session_id
+        written_results["target_info"] = target_info
         return output_root / "artifacts" / "reports" / "performance_stream" / session_id
 
     monkeypatch.setattr(hardware_run, "_run_single_session", _fake_run_single_session)
@@ -90,7 +92,7 @@ def test_run_case_bundles_in_batches_splits_and_merges(tmp_path: Path, monkeypat
         requested_counter_groups=("cpu", "memory", "mve"),
         session_id="test-batching-session",
         build_dir=tmp_path,
-        session_id_prefix="apollo510-generated-tests",
+        board=resolve_board("apollo510_evb"),
     )
 
     # Batched into ceil(10/4) = 3 sessions of sizes 4, 4, 2 -- never exceeding the
@@ -108,5 +110,9 @@ def test_run_case_bundles_in_batches_splits_and_merges(tmp_path: Path, monkeypat
 
     # Exactly one result bundle written for the whole (merged) session, not one per batch.
     assert written_results["session_id"] == "test-batching-session"
+    # target_info is derived from the board row, not hard-coded.
+    assert written_results["target_info"]["board"] == "apollo510_evb"
+    assert written_results["target_info"]["cpu"] == "cortex-m55"
+    assert written_results["target_info"]["transport"] == "jlink-rtt"
     assert written_results["result"] is merged_result
     assert bundle_root == tmp_path / "artifacts" / "reports" / "performance_stream" / "test-batching-session"
