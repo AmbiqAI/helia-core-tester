@@ -66,7 +66,7 @@ class OpArgMax(OperationBase):
         """
         if self.tensor_dtype("input") in ("FP16", "FP32"):
             return float_arg_kernel(self, "max")
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input")
         
         if activation_dtype == 'S8':
             return {

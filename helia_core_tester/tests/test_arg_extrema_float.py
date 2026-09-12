@@ -162,3 +162,35 @@ def test_float_dispatch_rejects_integer_input():
     )
     with pytest.raises(ValueError, match="FP16 or FP32"):
         float_arg_kernel(OpArgMin(desc, seed=0, target_cpu="cortex-m55"), "min")
+
+
+@pytest.mark.parametrize("kind", ["min", "max"])
+@pytest.mark.parametrize(
+    "legacy,effective", [(None, "S16"), ("S8", "S16"), ("S16", "S8")]
+)
+def test_integer_arg_emitted_dtype_precedence(tmp_path, kind, legacy, effective):
+    from tensorflow.lite.python import schema_py_generated as schema
+
+    name = f"arg{kind}_dtype"
+    desc = dict(
+        name=name,
+        operator="ArgMin" if kind == "min" else "ArgMax",
+        input_shape=[1, 2, 3, 4],
+        axis=3,
+        tensor_dtypes={"input": effective, "output": "S32"},
+    )
+    if legacy is not None:
+        desc["activation_dtype"] = legacy
+    generate_test(desc, str(tmp_path), seed=500)
+    case = tmp_path / "BasicMathFunctions" / name
+    model = schema.Model.GetRootAsModel((case / f"{name}.tflite").read_bytes(), 0)
+    graph = model.Subgraphs(0)
+    width = 16 if effective == "S16" else 8
+    expected_type = schema.TensorType.INT16 if width == 16 else schema.TensorType.INT8
+    assert graph.Tensors(graph.Inputs(0)).Type() == expected_type
+    assert graph.Tensors(graph.Outputs(0)).Type() == schema.TensorType.INT32
+    source = (case / f"{name}_arg{kind}.c").read_text()
+    header = (case / "includes" / f"{name}_arg{kind}.h").read_text()
+    assert f"arm_arg{kind}_s{width}(" in source
+    assert f"const int{width}_t* __restrict input" in source
+    assert f"const int{width}_t {name}_input[]" in header
