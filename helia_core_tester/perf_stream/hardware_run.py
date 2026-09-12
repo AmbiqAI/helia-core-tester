@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Callable, Sequence
 
-from .benchmark_firmware_report import generate_benchmark_server_memory_report
+from .memory_report import generate_memory_report
 from .boards import DEFAULT_BOARD_ID, BoardSpec, default_session_id, resolve_board
 from .case_bundle import CaseBundle, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
 from .generated_test_bridge import (
@@ -143,7 +143,7 @@ def _run_case_bundles_on_apollo510(
         on_case_complete=on_case_complete,
     )
 
-    memory_report_path = generate_benchmark_server_memory_report(build_dir=build_dir)
+    memory_report_path = generate_memory_report(board, build_dir=build_dir)
     memory_report = json.loads(memory_report_path.read_text())
     kernel_catalog = json.loads((project_root / "cmake" / "perf_stream" / "kernel_catalog.json").read_text())
     sid = session_id or default_session_id(board)
@@ -228,7 +228,7 @@ def _run_case_bundles_in_batches(
         target_info=target_info,
     )
 
-    memory_report_path = generate_benchmark_server_memory_report(build_dir=build_dir)
+    memory_report_path = generate_memory_report(board, build_dir=build_dir)
     memory_report = json.loads(memory_report_path.read_text())
     kernel_catalog = json.loads((project_root / "cmake" / "perf_stream" / "kernel_catalog.json").read_text())
     host_log = (

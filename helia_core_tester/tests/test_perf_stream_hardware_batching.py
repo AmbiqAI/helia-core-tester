@@ -118,7 +118,7 @@ def test_run_case_bundles_in_batches_splits_and_merges(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(hardware_run, "_run_single_session", _fake_run_single_session)
     monkeypatch.setattr(hardware_run, "write_result_bundle", _fake_write_result_bundle)
-    monkeypatch.setattr(hardware_run, "generate_benchmark_server_memory_report", lambda build_dir=None: tmp_path / "memory_report.json")
+    monkeypatch.setattr(hardware_run, "generate_memory_report", lambda board, build_dir=None: tmp_path / "memory_report.json")
     (tmp_path / "memory_report.json").write_text("{}", encoding="utf-8")
     (tmp_path / "cmake" / "perf_stream").mkdir(parents=True, exist_ok=True)
     (tmp_path / "cmake" / "perf_stream" / "kernel_catalog.json").write_text("[]", encoding="utf-8")

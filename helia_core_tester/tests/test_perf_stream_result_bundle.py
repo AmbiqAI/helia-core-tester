@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream.benchmark_firmware_report import generate_benchmark_server_memory_report
+from helia_core_tester.perf_stream.boards import DEFAULT_BOARD_ID, resolve_board
+from helia_core_tester.perf_stream.memory_report import generate_memory_report
 from helia_core_tester.perf_stream.case_bundle import build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
 from helia_core_tester.perf_stream.fake_target import FakeTargetTransport
 from helia_core_tester.perf_stream.measurement import counter_passes_for_selection
@@ -15,7 +16,7 @@ from helia_core_tester.perf_stream.session import HostSession, SessionResult
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# generate_benchmark_server_memory_report() shells out to arm-none-eabi-size/nm/objdump
+# generate_memory_report() shells out to arm-none-eabi-size/nm/objdump
 # against an already-built firmware ELF; both are unavailable in a pure-Python
 # environment (e.g. the pytest.yml CI job, which intentionally skips the ARM toolchain).
 pytestmark = pytest.mark.skipif(
@@ -30,7 +31,7 @@ def test_result_bundle_writer_emits_spec_artifacts(tmp_path: Path) -> None:
     conv_bundle = load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="conv_bundle").manifest_path)
     passes = counter_passes_for_selection({"cpu": "default", "memory": "default", "mve": "default"})
     result = HostSession(FakeTargetTransport(max_frame_payload=15, read_chunk_size=9), counter_passes=passes).run_many([abs_bundle, conv_bundle])
-    memory_report_path = generate_benchmark_server_memory_report()
+    memory_report_path = generate_memory_report(resolve_board(DEFAULT_BOARD_ID))
     memory_report = json.loads(memory_report_path.read_text())
     kernel_catalog = json.loads((PROJECT_ROOT / "cmake" / "perf_stream" / "kernel_catalog.json").read_text())
 
@@ -94,7 +95,7 @@ def test_result_bundle_writer_handles_empty_session(tmp_path: Path) -> None:
     # where session_complete short-circuits before any case runs) must not
     # raise IndexError when writing case_summary.csv / raw_samples.csv.
     result = SessionResult(cases=(), protocol_trace=(), session_complete_cases=0)
-    memory_report_path = generate_benchmark_server_memory_report()
+    memory_report_path = generate_memory_report(resolve_board(DEFAULT_BOARD_ID))
     memory_report = json.loads(memory_report_path.read_text())
     kernel_catalog = json.loads((PROJECT_ROOT / "cmake" / "perf_stream" / "kernel_catalog.json").read_text())
 
