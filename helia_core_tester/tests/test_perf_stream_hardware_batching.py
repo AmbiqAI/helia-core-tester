@@ -23,7 +23,8 @@ import pytest
 from helia_core_tester.perf_stream import hardware_run
 from helia_core_tester.perf_stream.boards import resolve_board
 from helia_core_tester.perf_stream.measurement import counter_passes_for_selection
-from helia_core_tester.perf_stream.session import SessionResult, session_plan_size
+from helia_core_tester.perf_stream.session import SessionResult
+from helia_core_tester.perf_stream.wire import session_plan_size
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

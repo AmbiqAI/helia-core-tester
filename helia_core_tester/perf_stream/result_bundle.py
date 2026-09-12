@@ -167,11 +167,11 @@ def write_result_bundle(
                         "iterations": sample.iterations,
                         "cycles": sample.cycles,
                         "cycles_per_invocation": normalized.cycles_per_invocation,
-                        "counter_name": counter["name"],
-                        "event_id": counter["event_id"],
-                        "counter_value": counter["value"],
-                        "overflow": counter["overflow"],
-                        "supported": counter["supported"],
+                        "counter_name": counter.name,
+                        "event_id": counter.event_id,
+                        "counter_value": counter.value,
+                        "overflow": int(counter.overflow),
+                        "supported": int(counter.supported),
                     }
                 )
 

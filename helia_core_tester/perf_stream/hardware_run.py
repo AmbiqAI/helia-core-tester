@@ -20,8 +20,9 @@ from .hctp import HEADER_SIZE
 from .measurement import CounterPass, counter_passes_for_selection
 from .pmu_catalog import default_selection
 from .result_bundle import write_result_bundle
-from .session import CaseRunResult, HostSession, SessionResult, session_plan_size
+from .session import CaseRunResult, HostSession, SessionResult
 from .transport import JLinkRttTransport, symbol_address_from_elf
+from .wire import session_plan_size
 from ..core.config import VALID_SUITE_MODES
 
 # Must match HCT_SERVER_MAX_CASES in cmake/perf_stream/benchmark_server_session.h.

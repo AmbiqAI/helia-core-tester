@@ -1,27 +1,21 @@
-"""Fake HCTP target used for host-side streaming tests."""
+"""Fake HCTP target used for host-side streaming tests.
+
+Speaks the protocol through the same wire.py codec as the host session: every
+frame it receives is decoded with the host's encoder's counterpart and every frame
+it sends is built with the host's decoder's counterpart, so the two sides can never
+disagree about a payload layout without a round-trip test noticing.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
-import hashlib
-import json
 from typing import Any
 
 import numpy as np
 
 from helia_core_tester.generation.utils.tflite_utils import requantize_np
 
-from .firmware_messages import (
-    CAP_ABS_S8,
-    CAP_CASE_STREAMING,
-    CAP_CORRECTNESS,
-    CAP_KERNEL_CATALOG,
-    CAP_PERFORMANCE,
-    CAP_PMU_ARMV8M,
-    CAP_RTT_TRANSPORT,
-)
-from .hctp import HEADER_SIZE, ByteReader, ByteWriter, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
+from .hctp import HEADER_SIZE, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
 from .measurement import (
     CounterDescriptor,
     CounterPass,
@@ -29,24 +23,63 @@ from .measurement import (
     RawSample,
     auto_calibrate_iterations,
 )
-from .pmu_catalog import CPU_CYCLES_EVENT_ID, CPU_CYCLES_NAME, counter_by_event_id
+from .pmu_catalog import CPU_CYCLES_EVENT_ID, CPU_CYCLES_NAME
 from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLargeError
+from .wire import (
+    CAP_ABS_S8,
+    CAP_CASE_STREAMING,
+    CAP_CORRECTNESS,
+    CAP_KERNEL_CATALOG,
+    CAP_PERFORMANCE,
+    CAP_PMU_ARMV8M,
+    CAP_RTT_TRANSPORT,
+    BlobDescriptor,
+    CaseComplete,
+    CaseMeta,
+    CaseReady,
+    CatalogEntry,
+    CorrectnessResult,
+    ErrorPayload,
+    OutputBegin,
+    OutputChunk,
+    OutputEnd,
+    RequestBlob,
+    RequestCase,
+    SessionComplete,
+    SessionPlan,
+    TargetInfo,
+    decode_blob_chunk,
+    decode_case_meta,
+    decode_session_plan,
+    encode_case_complete,
+    encode_case_ready,
+    encode_correctness_result,
+    encode_error,
+    encode_kernel_catalog,
+    encode_output_begin,
+    encode_output_chunk,
+    encode_output_end,
+    encode_request_blob,
+    encode_request_case,
+    encode_sample_result,
+    encode_session_complete,
+    encode_target_info,
+    kernel_catalog_hash,
+    output_checksum,
+)
 
 # Mirrors the real firmware's fixed limits (benchmark_server_session.h / _main.c) so
-# host tests exercise the same bounds the target enforces.
+# host tests exercise the same bounds the target enforces. All of them are
+# advertised in TARGET_INFO, exactly like the firmware does.
 FAKE_PMU_COUNTER_SLOTS = 8
 FAKE_RX_BUFFER_BYTES = 2048
 FAKE_MAX_RX_PAYLOAD = FAKE_RX_BUFFER_BYTES - HEADER_SIZE
 FAKE_MAX_CASES_PER_SESSION = 32
 FAKE_MAX_PASSES = 16
+FAKE_MAX_COUNTERS_PER_PASS = 4
 EVENT_COUNTER_MASK = 0xFFFF  # one 16-bit slot
 CHAINED_COUNTER_MASK = 0xFFFFFFFF  # two slots chained
 CCNTR_MASK = 0xFFFFFFFF
-
-
-def _catalog_hash(entries: list[dict[str, Any]]) -> bytes:
-    payload = json.dumps(entries, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(payload).digest()
 
 
 class _TargetState(str, Enum):
@@ -60,22 +93,8 @@ class _TargetState(str, Enum):
     COMPLETE = "complete"
 
 
-@dataclass(frozen=True)
-class KernelCatalogEntry:
-    kernel_id: int
-    canonical_name: str
-    operator_family: str
-    api_version: int
-    supported_dtype: str
-    adapter_schema_version: int
-    stateless: bool
-    repeated_invocation_safe: bool
-    mutates_input: bool
-    scratch_bytes: int
-
-
 class FakeKernelAdapter:
-    entry: KernelCatalogEntry
+    entry: CatalogEntry
     supported_groups: tuple[str, ...] = ("cpu",)
     base_cycles_per_iteration: int = 1
 
@@ -154,7 +173,7 @@ class FakeKernelAdapter:
 
 
 class FakeAbsS8Adapter(FakeKernelAdapter):
-    entry = KernelCatalogEntry(1, "arm_abs_s8", "BasicMathFunctions", 1, "S8", 1, True, True, False, 0)
+    entry = CatalogEntry(1, "arm_abs_s8", "BasicMathFunctions", 1, "S8", 1, True, True, False, 0)
     supported_groups = ("cpu",)
     base_cycles_per_iteration = 3
 
@@ -163,7 +182,7 @@ class FakeAbsS8Adapter(FakeKernelAdapter):
 
 
 class FakeConvolveS8Adapter(FakeKernelAdapter):
-    entry = KernelCatalogEntry(2, "arm_convolve_s8", "ConvolutionFunctions", 1, "S8", 1, True, True, False, 64)
+    entry = CatalogEntry(2, "arm_convolve_s8", "ConvolutionFunctions", 1, "S8", 1, True, True, False, 64)
     supported_groups = ("cpu", "memory")
     base_cycles_per_iteration = 19
 
@@ -241,12 +260,11 @@ class FakeTargetTransport:
         self._completed_case_count = 0
         self._case_workspace_history: list[int] = []
         self._current_case_index = 0
-        self._catalog_entries = {adapter.entry.kernel_id: adapter for adapter in (FakeAbsS8Adapter(), FakeConvolveS8Adapter())}
-        self._catalog = [self._catalog_dict(adapter.entry) for adapter in self._catalog_entries.values()]
-        self._catalog_hash = _catalog_hash(self._catalog)
-        self._plan: dict[str, Any] | None = None
-        self._case_meta: dict[str, Any] | None = None
-        self._blob_specs: dict[int, dict[str, Any]] = {}
+        self._adapters = {adapter.entry.kernel_id: adapter for adapter in (FakeAbsS8Adapter(), FakeConvolveS8Adapter())}
+        self._catalog = tuple(adapter.entry for adapter in self._adapters.values())
+        self._plan: SessionPlan | None = None
+        self._case_meta: CaseMeta | None = None
+        self._blob_specs: dict[int, BlobDescriptor] = {}
         self._accumulators: dict[int, BlobAccumulator] = {}
         self._blob_order: list[int] = []
         self._blob_index = 0
@@ -293,20 +311,6 @@ class FakeTargetTransport:
             self._validator.accept(frame)
             self._handle_frame(frame)
 
-    def _catalog_dict(self, entry: KernelCatalogEntry) -> dict[str, Any]:
-        return {
-            "kernel_id": entry.kernel_id,
-            "canonical_name": entry.canonical_name,
-            "operator_family": entry.operator_family,
-            "api_version": entry.api_version,
-            "supported_dtype": entry.supported_dtype,
-            "adapter_schema_version": entry.adapter_schema_version,
-            "stateless": entry.stateless,
-            "repeated_invocation_safe": entry.repeated_invocation_safe,
-            "mutates_input": entry.mutates_input,
-            "scratch_bytes": entry.scratch_bytes,
-        }
-
     def _queue(self, message_type: MessageType, payload: bytes = b"", *, flags: int = 0) -> None:
         self._outbound.extend(
             encode_frame(message_type, payload, session_id=self._session_id, sequence_id=self._target_sequence_id, flags=flags)
@@ -318,147 +322,51 @@ class FakeTargetTransport:
         flags = CAP_CASE_STREAMING | CAP_CORRECTNESS | CAP_PERFORMANCE | CAP_RTT_TRANSPORT | CAP_KERNEL_CATALOG | CAP_ABS_S8
         if self._pmu_present:
             flags |= CAP_PMU_ARMV8M
-        writer = ByteWriter()
-        writer.text("fake-benchmark-server")
-        writer.fixed(self._catalog_hash)
-        writer.u32(self._max_frame_payload)
-        writer.u32(self._runtime_arena_capacity)
-        writer.u8(1)
-        writer.u8(1)
-        writer.text("fake_board")
-        writer.text("cortex-m55" if self._pmu_present else "cortex-m4")
-        writer.u8(1)
-        writer.u32(flags)
-        writer.u8(self._pmu_counter_slots)
-        writer.u32(self._max_rx_payload)
-        writer.u16(self._max_cases_per_session)
-        writer.u8(self._max_passes)
-        self._queue(MessageType.TARGET_INFO, writer.finish())
+        info = TargetInfo(
+            build_id="fake-benchmark-server",
+            catalog_hash=kernel_catalog_hash(self._catalog),
+            max_frame_payload=self._max_frame_payload,
+            runtime_arena_capacity=self._runtime_arena_capacity,
+            transfer_mode=1,
+            output_mode=1,
+            board_id="fake_board",
+            target_cpu="cortex-m55" if self._pmu_present else "cortex-m4",
+            transport_kind=1,
+            capability_flags=flags,
+            pmu_counter_slots=self._pmu_counter_slots,
+            max_rx_payload=self._max_rx_payload,
+            max_cases_per_session=self._max_cases_per_session,
+            max_passes=self._max_passes,
+        )
+        self._queue(MessageType.TARGET_INFO, encode_target_info(info))
 
     def _emit_kernel_catalog(self) -> None:
         """Emit the (small, unpaginated) fake catalog as a single KERNEL_CATALOG frame
         with HCTP_FLAG_MORE clear, matching the real firmware's paginated protocol
         contract (a single final chunk is a valid one-chunk "page")."""
-        writer = ByteWriter()
-        writer.u16(len(self._catalog))
-        for entry in self._catalog:
-            writer.u32(int(entry["kernel_id"]))
-            writer.text(str(entry["canonical_name"]))
-            writer.text(str(entry["operator_family"]))
-            writer.u16(int(entry["api_version"]))
-            writer.text(str(entry["supported_dtype"]))
-            writer.u16(int(entry["adapter_schema_version"]))
-            writer.u8(1 if entry["stateless"] else 0)
-            writer.u8(1 if entry["repeated_invocation_safe"] else 0)
-            writer.u8(1 if entry["mutates_input"] else 0)
-            writer.u32(int(entry["scratch_bytes"]))
-        self._queue(MessageType.KERNEL_CATALOG, writer.finish())
+        self._queue(MessageType.KERNEL_CATALOG, encode_kernel_catalog(self._catalog))
 
     def _queue_error(self, message: str) -> None:
-        writer = ByteWriter()
-        writer.text(message)
-        self._queue(MessageType.ERROR, writer.finish())
+        self._queue(MessageType.ERROR, encode_error(ErrorPayload(message)))
         self._state = _TargetState.COMPLETE
 
-    def _decode_session_plan(self, payload: bytes) -> dict[str, Any]:
+    def _admit_session_plan(self, payload: bytes) -> SessionPlan:
+        """Decode a SESSION_PLAN and apply the same admission rules as the firmware's
+        handle_session_plan(): it must fit the receive buffer, name at most
+        max_cases_per_session cases and max_passes passes, and no pass may need more
+        PMU slots than the target has."""
         if len(payload) > self._max_rx_payload:
             raise ValueError(f"SESSION_PLAN payload {len(payload)} exceeds the fake target's rx buffer ({self._max_rx_payload}).")
-        reader = ByteReader(payload)
-        case_count = reader.u16()
-        if case_count == 0 or case_count > self._max_cases_per_session:
-            raise ValueError(f"SESSION_PLAN names {case_count} cases; fake target takes at most {self._max_cases_per_session}.")
-        transfer_mode = reader.u8()
-        warmups = reader.u16()
-        samples = reader.u16()
-        iterations = reader.u32()
-        min_cycles = reader.u32()
-        max_iterations = reader.u32()
-        passes: list[CounterPass] = []
-        pass_count = reader.u8()
-        if pass_count > self._max_passes:
-            raise ValueError(f"SESSION_PLAN carries {pass_count} PMU passes; fake target takes at most {self._max_passes}.")
-        for _ in range(pass_count):
-            pass_name = reader.text()
-            chained = bool(reader.u8())
-            counter_count = reader.u8()
-            counters = []
-            for _ in range(counter_count):
-                event_id = reader.u16()
-                known = counter_by_event_id(event_id)
-                counters.append(known or CounterDescriptor(f"event_0x{event_id:04x}", event_id, "unknown"))
-            group, _, index = pass_name.rpartition("_")
-            passes.append(CounterPass(group=group or pass_name, pass_index=int(index or 0), counters=tuple(counters), chained=chained))
-            # Same admission rule as handle_session_plan() in the firmware.
-            slots = (2 if chained else 1) * counter_count
-            if counter_count > 4 or (self._pmu_present and slots > self._pmu_counter_slots):
-                raise ValueError(f"PMU pass {pass_name!r} needs {slots} slots; fake target has {self._pmu_counter_slots}.")
-        cases = []
-        for _ in range(case_count):
-            cases.append({"case_id": reader.text(), "kernel_id": reader.u32()})
-        return {
-            "transfer_mode": transfer_mode,
-            "warmups": warmups,
-            "samples": samples,
-            "iterations": iterations,
-            "min_cycles": min_cycles,
-            "max_iterations": max_iterations,
-            "passes": passes,
-            "cases": cases,
-        }
-
-    def _decode_case_meta(self, payload: bytes) -> dict[str, Any]:
-        reader = ByteReader(payload)
-        case_id = reader.text()
-        kernel_id = reader.u32()
-        schema_version = reader.u16()
-        comparison_mode = reader.u8()
-        tolerance = reader.i32()
-        atol_q16 = reader.u32()
-        rtol_q16 = reader.u32()
-        scalar_parameter_count = reader.u8()
-        scalar_parameters = {}
-        for _ in range(scalar_parameter_count):
-            key = reader.text()
-            value = reader.i32()
-            if key == "padding":
-                scalar_parameters[key] = {0: "VALID", 1: "SAME"}[value]
-            else:
-                scalar_parameters[key] = value
-        blob_count = reader.u16()
-        blobs = []
-        for _ in range(blob_count):
-            blob_id = reader.u32()
-            role = reader.text()
-            dtype = reader.text()
-            rank = reader.u8()
-            dims = tuple(reader.u32() for _ in range(6))[:rank]
-            byte_length = reader.u32()
-            alignment = reader.u32()
-            crc32_value = reader.u32()
-            flags = reader.u8()
-            blobs.append({
-                "blob_id": blob_id,
-                "role": role,
-                "dtype": dtype,
-                "dimensions": dims,
-                "byte_length": byte_length,
-                "alignment": alignment,
-                "crc32": crc32_value,
-                "flags": flags,
-            })
-        scratch_bytes = reader.u32()
-        return {
-            "case_id": case_id,
-            "kernel_id": kernel_id,
-            "schema_version": schema_version,
-            "comparison_mode": comparison_mode,
-            "tolerance": tolerance,
-            "atol_q16": atol_q16,
-            "rtol_q16": rtol_q16,
-            "scalar_parameters": scalar_parameters,
-            "blobs": blobs,
-            "scratch_bytes": scratch_bytes,
-        }
+        plan = decode_session_plan(payload)
+        if not plan.cases or len(plan.cases) > self._max_cases_per_session:
+            raise ValueError(f"SESSION_PLAN names {len(plan.cases)} cases; fake target takes at most {self._max_cases_per_session}.")
+        if len(plan.passes) > self._max_passes:
+            raise ValueError(f"SESSION_PLAN carries {len(plan.passes)} PMU passes; fake target takes at most {self._max_passes}.")
+        for counter_pass in plan.passes:
+            slots = counter_pass.slots_required
+            if len(counter_pass.counters) > FAKE_MAX_COUNTERS_PER_PASS or (self._pmu_present and slots > self._pmu_counter_slots):
+                raise ValueError(f"PMU pass {counter_pass.name!r} needs {slots} slots; fake target has {self._pmu_counter_slots}.")
+        return plan
 
     def _handle_frame(self, frame: Frame) -> None:
         if frame.header.message_type == MessageType.TARGET_INFO_ACK:
@@ -466,12 +374,12 @@ class FakeTargetTransport:
             self._emit_kernel_catalog()
             return
         if frame.header.message_type == MessageType.SESSION_PLAN:
-            self._plan = self._decode_session_plan(frame.payload)
+            self._plan = self._admit_session_plan(frame.payload)
             self._state = _TargetState.WAIT_CASE_META
             self._request_case()
             return
         if frame.header.message_type == MessageType.CASE_META:
-            self._case_meta = self._decode_case_meta(frame.payload)
+            self._case_meta = decode_case_meta(frame.payload)
             try:
                 self._prepare_case()
             except CaseTooLargeError as exc:
@@ -496,14 +404,21 @@ class FakeTargetTransport:
         raise ValueError(f"Unsupported fake-target message: {frame.header.message_type}")
 
     def _request_case(self) -> None:
-        writer = ByteWriter()
-        writer.u16(self._current_case_index)
-        self._queue(MessageType.REQUEST_CASE, writer.finish())
+        self._queue(MessageType.REQUEST_CASE, encode_request_case(RequestCase(self._current_case_index)))
+
+    def _scalar_parameters(self) -> dict[str, Any]:
+        """The case's scalars as the fake adapters read them: ints, except the
+        VALID/SAME padding enum which crosses the wire as 0/1."""
+        assert self._case_meta is not None
+        scalars: dict[str, Any] = {}
+        for key, value in self._case_meta.scalar_parameters:
+            scalars[key] = {0: "VALID", 1: "SAME"}[value] if key == "padding" else value
+        return scalars
 
     def _prepare_case(self) -> None:
         assert self._case_meta is not None
-        self._blob_specs = {blob["blob_id"]: blob for blob in self._case_meta["blobs"]}
-        self._blob_order = [blob["blob_id"] for blob in self._case_meta["blobs"]]
+        self._blob_specs = {blob.blob_id: blob for blob in self._case_meta.blobs}
+        self._blob_order = [blob.blob_id for blob in self._case_meta.blobs]
         self._blob_index = 0
         self._pending_offset = 0
         self._current_blob_id = self._blob_order[0]
@@ -511,17 +426,17 @@ class FakeTargetTransport:
             blob_id: BlobAccumulator(
                 BlobTransferSpec(
                     blob_id=blob_id,
-                    byte_length=int(spec["byte_length"]),
-                    expected_crc32=int(spec["crc32"]),
-                    required_alignment=max(1, int(spec["alignment"])),
+                    byte_length=spec.byte_length,
+                    expected_crc32=spec.crc32,
+                    required_alignment=max(1, spec.alignment),
                 )
             )
             for blob_id, spec in self._blob_specs.items()
         }
-        for spec in self._case_meta["blobs"]:
-            self._arena.reserve_aligned(int(spec["byte_length"]), max(1, int(spec["alignment"])))
-        scratch_bytes = int(self._case_meta["scratch_bytes"])
-        output_bytes = int(self._case_meta["scalar_parameters"]["output_capacity_bytes"])
+        for spec in self._case_meta.blobs:
+            self._arena.reserve_aligned(spec.byte_length, max(1, spec.alignment))
+        scratch_bytes = self._case_meta.scratch_bytes
+        output_bytes = int(self._scalar_parameters()["output_capacity_bytes"])
         if scratch_bytes:
             self._arena.reserve_aligned(scratch_bytes, 16)
         if output_bytes:
@@ -530,126 +445,103 @@ class FakeTargetTransport:
     def _request_blob(self) -> None:
         assert self._current_blob_id is not None
         spec = self._blob_specs[self._current_blob_id]
-        remaining = int(spec["byte_length"]) - self._pending_offset
-        writer = ByteWriter()
-        writer.u32(int(spec["blob_id"]))
-        writer.u32(self._pending_offset)
-        writer.u16(min(self._max_frame_payload, remaining))
-        self._queue(MessageType.REQUEST_BLOB, writer.finish())
+        remaining = spec.byte_length - self._pending_offset
+        request = RequestBlob(blob_id=spec.blob_id, offset=self._pending_offset, max_length=min(self._max_frame_payload, remaining))
+        self._queue(MessageType.REQUEST_BLOB, encode_request_blob(request))
 
     def _handle_blob_chunk(self, payload: bytes) -> None:
-        reader = ByteReader(payload)
-        blob_id = reader.u32()
-        offset = reader.u32()
-        chunk = reader.raw()
-        if blob_id != self._current_blob_id:
+        chunk = decode_blob_chunk(payload)
+        if chunk.blob_id != self._current_blob_id:
             raise ValueError("Unexpected blob id.")
-        self._accumulators[blob_id].add_chunk(offset, chunk)
-        self._pending_offset = offset + len(chunk)
-        if self._pending_offset < self._blob_specs[blob_id]["byte_length"]:
+        self._accumulators[chunk.blob_id].add_chunk(chunk.offset, chunk.data)
+        self._pending_offset = chunk.offset + len(chunk.data)
+        if self._pending_offset < self._blob_specs[chunk.blob_id].byte_length:
             self._request_blob()
             return
-        self._accumulators[blob_id].finish()
+        self._accumulators[chunk.blob_id].finish()
         self._blob_index += 1
         if self._blob_index < len(self._blob_order):
             self._current_blob_id = self._blob_order[self._blob_index]
             self._pending_offset = 0
             self._request_blob()
             return
-        writer = ByteWriter()
-        writer.u32(blob_id)
-        writer.u32(self._pending_offset)
-        self._queue(MessageType.CASE_READY, writer.finish())
+        self._queue(MessageType.CASE_READY, encode_case_ready(CaseReady(blob_id=chunk.blob_id, bytes_received=self._pending_offset)))
         self._state = _TargetState.WAIT_RUN_CORRECTNESS
 
     def _case_blobs(self) -> dict[str, np.ndarray]:
         arrays: dict[str, np.ndarray] = {}
         for blob_id, spec in self._blob_specs.items():
             payload = self._accumulators[blob_id].finish()
-            dtype = {"S8": np.int8, "S16": np.int16, "S32": np.int32}[spec["dtype"]]
-            arrays[str(spec["role"])] = np.frombuffer(payload, dtype=dtype).reshape(spec["dimensions"])
+            dtype = {"S8": np.int8, "S16": np.int16, "S32": np.int32}[spec.dtype]
+            arrays[spec.role] = np.frombuffer(payload, dtype=dtype).reshape(spec.dimensions)
         return arrays
 
     def _adapter(self) -> FakeKernelAdapter:
         assert self._case_meta is not None
-        return self._catalog_entries[int(self._case_meta["kernel_id"])]
+        return self._adapters[self._case_meta.kernel_id]
 
     def _run_correctness(self) -> None:
         assert self._case_meta is not None
         blobs = self._case_blobs()
-        output = self._adapter().invoke(blobs, self._case_meta["scalar_parameters"])
+        output = self._adapter().invoke(blobs, self._scalar_parameters())
         self._computed_output = output.tobytes(order="C")
-        result_writer = ByteWriter()
-        result_writer.i32(0)
-        self._queue(MessageType.CORRECTNESS_RESULT, result_writer.finish())
-        begin_writer = ByteWriter()
-        begin_writer.u32(0)
-        begin_writer.u32(len(self._computed_output))
-        self._queue(MessageType.OUTPUT_BEGIN, begin_writer.finish())
+        self._queue(MessageType.CORRECTNESS_RESULT, encode_correctness_result(CorrectnessResult(status=0)))
+        self._queue(MessageType.OUTPUT_BEGIN, encode_output_begin(OutputBegin(length=len(self._computed_output))))
         chunk_size = 11
         for offset in range(0, len(self._computed_output), chunk_size):
             part = self._computed_output[offset : offset + chunk_size]
-            writer = ByteWriter()
-            writer.u32(offset)
-            writer.u32(len(part))
-            writer.fixed(part)
-            self._queue(MessageType.OUTPUT_CHUNK, writer.finish())
-        end_writer = ByteWriter()
-        end_writer.u32(len(self._computed_output))
-        end_writer.u32(np.uint32(np.frombuffer(self._computed_output, dtype=np.uint8).sum()).item())
-        self._queue(MessageType.OUTPUT_END, end_writer.finish())
+            self._queue(MessageType.OUTPUT_CHUNK, encode_output_chunk(OutputChunk(offset=offset, data=part)))
+        end = OutputEnd(length=len(self._computed_output), checksum=output_checksum(self._computed_output))
+        self._queue(MessageType.OUTPUT_END, encode_output_end(end))
+
+    def _as_reported(self, counter: RawCounterValue) -> RawCounterValue:
+        """A DWT-only target still reports the cycle entry but marks every event
+        counter unsupported, exactly like the firmware's __PMU_PRESENT == 0 path."""
+        supported = counter.supported and (self._pmu_present or counter.event_id == CPU_CYCLES_EVENT_ID)
+        return RawCounterValue(
+            name=counter.name,
+            event_id=counter.event_id,
+            value=counter.value if supported else 0,
+            overflow=bool(supported and counter.overflow),
+            supported=supported,
+        )
 
     def _run_performance(self) -> None:
         assert self._plan is not None
         assert self._case_meta is not None
         adapter = self._adapter()
-        passes = list(self._plan["passes"]) or [CounterPass(group="cpu", pass_index=0, counters=())]
-        scalar_parameters = dict(self._case_meta["scalar_parameters"])
-        scalar_parameters["min_cycles"] = int(self._plan["min_cycles"])
-        scalar_parameters["max_iterations"] = int(self._plan["max_iterations"])
+        passes = list(self._plan.passes) or [CounterPass(group="cpu", pass_index=0, counters=())]
+        scalar_parameters = self._scalar_parameters()
+        scalar_parameters["min_cycles"] = self._plan.min_cycles
+        scalar_parameters["max_iterations"] = self._plan.max_iterations
         iterations, samples = adapter.measure(
             self._case_blobs(),
             scalar_parameters,
-            warmups=int(self._plan["warmups"]),
-            samples=int(self._plan["samples"]),
-            iterations=int(self._plan["iterations"]),
+            warmups=self._plan.warmups,
+            samples=self._plan.samples,
+            iterations=self._plan.iterations_per_sample,
             counter_passes=passes,
         )
         self._last_iterations = iterations
         for sample in samples:
-            writer = ByteWriter()
-            writer.u16(sample.sample_index)
-            writer.u32(sample.iterations)
-            writer.u64(sample.cycles)
-            writer.text(sample.pass_name)
-            writer.u8(len(sample.counters))
-            for counter in sample.counters:
-                # A DWT-only target still reports the cycle entry but marks every event
-                # counter unsupported, exactly like the firmware's __PMU_PRESENT == 0 path.
-                supported = counter.supported and (self._pmu_present or counter.event_id == CPU_CYCLES_EVENT_ID)
-                # Firmware never sends names -- the host resolves them by event id.
-                writer.text("")
-                writer.u16(counter.event_id)
-                writer.u64(counter.value if supported else 0)
-                writer.u8(1 if (supported and counter.overflow) else 0)
-                writer.u8(1 if supported else 0)
-            self._queue(MessageType.SAMPLE_RESULT, writer.finish())
-        complete_writer = ByteWriter()
-        complete_writer.text(str(self._case_meta["case_id"]))
-        complete_writer.u8(1)
-        complete_writer.u8(1)
-        complete_writer.u32(self._arena.used_bytes)
-        self._queue(MessageType.CASE_COMPLETE, complete_writer.finish())
+            reported = RawSample(
+                sample_index=sample.sample_index,
+                iterations=sample.iterations,
+                cycles=sample.cycles,
+                counters=tuple(self._as_reported(counter) for counter in sample.counters),
+                pass_name=sample.pass_name,
+            )
+            self._queue(MessageType.SAMPLE_RESULT, encode_sample_result(reported))
+        complete = CaseComplete(case_id=self._case_meta.case_id, workspace_used_bytes=self._arena.used_bytes)
+        self._queue(MessageType.CASE_COMPLETE, encode_case_complete(complete))
         self._case_workspace_history.append(self._arena.used_bytes)
         self._arena.rewind()
         self._rewind_count += 1
         self._completed_case_count += 1
         self._current_case_index += 1
-        if self._current_case_index < len(self._plan["cases"]):
+        if self._current_case_index < len(self._plan.cases):
             self._state = _TargetState.WAIT_CASE_META
             self._request_case()
             return
-        session_writer = ByteWriter()
-        session_writer.u16(self._completed_case_count)
-        self._queue(MessageType.SESSION_COMPLETE, session_writer.finish())
+        self._queue(MessageType.SESSION_COMPLETE, encode_session_complete(SessionComplete(self._completed_case_count)))
         self._state = _TargetState.COMPLETE
