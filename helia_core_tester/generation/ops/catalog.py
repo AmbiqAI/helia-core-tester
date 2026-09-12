@@ -210,8 +210,16 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("BasicMathFunctions/reduce_min.yaml", "BasicMathFunctions/reduce_min_float.yaml"),
         template_relpath="BasicMathFunctions/reduce_min",
     ),
-    "ArgMax": _spec("ArgMax", "BasicMathFunctions", "argmax", "OpArgMax", "BasicMathFunctions/argmax.yaml", "BasicMathFunctions/argmax"),
-    "ArgMin": _spec("ArgMin", "BasicMathFunctions", "argmin", "OpArgMin", "BasicMathFunctions/argmin.yaml", "BasicMathFunctions/argmin"),
+    "ArgMax": _spec(
+        "ArgMax", "BasicMathFunctions", "argmax", "OpArgMax",
+        descriptor_relpaths=("BasicMathFunctions/argmax.yaml", "BasicMathFunctions/argmax_float.yaml"),
+        template_relpath="BasicMathFunctions/argmax",
+    ),
+    "ArgMin": _spec(
+        "ArgMin", "BasicMathFunctions", "argmin", "OpArgMin",
+        descriptor_relpaths=("BasicMathFunctions/argmin.yaml", "BasicMathFunctions/argmin_float.yaml"),
+        template_relpath="BasicMathFunctions/argmin",
+    ),
     "Sqrt": _spec("Sqrt", "BasicMathFunctions", "sqrt", "OpSqrt", template_relpath="BasicMathFunctions/sqrt", descriptor_relpaths=("BasicMathFunctions/sqrt.yaml", "BasicMathFunctions/sqrt_float.yaml")),
     "Rsqrt": _spec("Rsqrt", "BasicMathFunctions", "rsqrt", "OpRsqrt", template_relpath="BasicMathFunctions/rsqrt", descriptor_relpaths=("BasicMathFunctions/rsqrt.yaml", "BasicMathFunctions/rsqrt_float.yaml")),
     "Comparison": _spec("Comparison", "ComparisonFunctions", "comparison", "OpComparison", "ComparisonFunctions/comparison.yaml", "ComparisonFunctions/comparison"),

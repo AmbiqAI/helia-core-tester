@@ -12,9 +12,15 @@ static const cmsis_nn_dims {{ name }}_input_dims = {
 };
 
 // Input data (for testing)
+{% if float_kernel %}
+static const {{ word_type }} {{ name }}_input_bits[] = {
+    {{ input_bits | join(', ') }}
+};
+{% else %}
 static const {{ input_dtype }} {{ name }}_input[] = {
 {{ input_data_array }}
 };
+{% endif %}
 
 // Expected output (golden - int32 indices)
 static const {{ output_dtype }} {{ name }}_expected_output[] = {
