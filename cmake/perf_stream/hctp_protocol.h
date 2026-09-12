@@ -10,7 +10,9 @@ extern "C" {
 
 #define HCTP_HEADER_SIZE 32u
 #define HCTP_MAGIC_U32 0x31544348u
-#define HCTP_SUPPORTED_VERSION 1u
+/* v2: LOAD_PLAN carries explicit PMU passes, HELLO advertises PMU slots and the
+ * receive-buffer bound, SAMPLE_RESULT leads with the CCNTR entry. */
+#define HCTP_SUPPORTED_VERSION 2u
 #define HCTP_DEFAULT_MAX_PAYLOAD (64u * 1024u)
 
 #define HCTP_FLAG_NONE 0u

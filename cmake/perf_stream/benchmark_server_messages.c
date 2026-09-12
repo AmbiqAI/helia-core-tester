@@ -106,6 +106,7 @@ hctp_status_t hct_build_hello_frame(uint32_t session_id,
                                     uint32_t sequence_id,
                                     uint32_t max_frame_payload,
                                     uint32_t runtime_arena_capacity,
+                                    uint32_t max_rx_payload,
                                     uint8_t *frame_bytes,
                                     size_t frame_capacity,
                                     size_t *frame_length)
@@ -133,6 +134,10 @@ hctp_status_t hct_build_hello_frame(uint32_t session_id,
     status = write_u8(payload, sizeof(payload), &offset, HCT_BENCHMARK_SERVER_TRANSPORT_RTT);
     if (status != HCTP_STATUS_OK) return status;
     status = write_u32(payload, sizeof(payload), &offset, hct_benchmark_server_capability_flags());
+    if (status != HCTP_STATUS_OK) return status;
+    status = write_u8(payload, sizeof(payload), &offset, hct_benchmark_server_pmu_counter_slots());
+    if (status != HCTP_STATUS_OK) return status;
+    status = write_u32(payload, sizeof(payload), &offset, max_rx_payload);
     if (status != HCTP_STATUS_OK) return status;
 
     return wrap_frame(HCTP_MSG_HELLO, session_id, sequence_id, HCTP_FLAG_NONE, payload, offset, frame_bytes, frame_capacity, frame_length);

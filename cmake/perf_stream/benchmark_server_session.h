@@ -11,10 +11,21 @@ extern "C" {
 #endif
 
 #define HCT_SERVER_MAX_CASE_ID 96u
-#define HCT_SERVER_MAX_CASES 4u
-#define HCT_SERVER_MAX_GROUPS 4u
-#define HCT_SERVER_MAX_GROUP_NAME 16u
+/* Cases per LOAD_PLAN. The host (hardware_run.MAX_CASES_PER_SESSION) must stay in
+ * lockstep, and additionally keeps every plan within HCT_SERVER_MAX_RX_PAYLOAD_BYTES. */
+#define HCT_SERVER_MAX_CASES 32u
+/* PMU passes per LOAD_PLAN and event counters per pass. Cortex-M55 has 8 x 16-bit
+ * event counters; a chained pass uses two slots per counter (32-bit), so 4 chained
+ * counters fill the PMU. */
+#define HCT_SERVER_MAX_PASSES 16u
+#define HCT_SERVER_MAX_PASS_NAME 16u
+#define HCT_SERVER_MAX_COUNTERS_PER_PASS 4u
 #define HCT_SERVER_MAX_BLOBS 8u
+/* Receive buffer the transport loop (benchmark_server_main.c) decodes frames from,
+ * and the largest payload that can fit in it -- advertised to the host in HELLO as
+ * max_rx_payload so it can size LOAD_PLAN batches. */
+#define HCT_SERVER_RX_BUFFER_BYTES 2048u
+#define HCT_SERVER_MAX_RX_PAYLOAD_BYTES (HCT_SERVER_RX_BUFFER_BYTES - HCTP_HEADER_SIZE)
 #define HCT_SERVER_MAX_INPUT_BYTES 4096u
 #ifndef HCT_SERVER_WORKSPACE_BYTES
 #define HCT_SERVER_WORKSPACE_BYTES 114688u
@@ -51,6 +62,17 @@ typedef struct
     uint32_t bytes_received;
 } hct_server_blob_t;
 
+/* One PMU measurement pass from LOAD_PLAN: which event ids to program into the
+ * event counters, and whether each counter takes a chained (32-bit) slot pair or a
+ * single 16-bit slot. ARM_PMU_CPU_CYCLES is never listed -- CCNTR is always read. */
+typedef struct
+{
+    char name[HCT_SERVER_MAX_PASS_NAME];
+    uint8_t chained;
+    uint8_t count;
+    uint16_t event_ids[HCT_SERVER_MAX_COUNTERS_PER_PASS];
+} hct_pmu_pass_t;
+
 typedef struct
 {
     uint32_t session_id;
@@ -65,8 +87,8 @@ typedef struct
     uint16_t planned_samples;
     uint32_t min_cycles;
     uint32_t max_iterations;
-    uint8_t requested_group_count;
-    char requested_groups[HCT_SERVER_MAX_GROUPS][HCT_SERVER_MAX_GROUP_NAME];
+    uint8_t pass_count;
+    hct_pmu_pass_t passes[HCT_SERVER_MAX_PASSES];
     char planned_case_ids[HCT_SERVER_MAX_CASES][HCT_SERVER_MAX_CASE_ID];
     uint32_t planned_kernel_ids[HCT_SERVER_MAX_CASES];
     uint32_t expected_kernel_id;

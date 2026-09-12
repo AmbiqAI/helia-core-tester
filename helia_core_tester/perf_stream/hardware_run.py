@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 from .benchmark_firmware_report import generate_benchmark_server_memory_report
 from .boards import DEFAULT_BOARD_ID, BoardSpec, default_session_id, resolve_board
@@ -16,21 +16,64 @@ from .generated_test_bridge import (
     build_case_bundle_from_generated_test,
     discover_generated_tests,
 )
+from .hctp import HEADER_SIZE
+from .measurement import CounterPass, counter_passes_for_selection
+from .pmu_catalog import default_selection
 from .result_bundle import write_result_bundle
-from .session import CaseRunResult, HostSession, SessionResult
+from .session import CaseRunResult, HostSession, SessionResult, load_plan_size
 from .transport import JLinkRttTransport, symbol_address_from_elf
 from ..core.config import VALID_SUITE_MODES
 
 # Must match HCT_SERVER_MAX_CASES in cmake/perf_stream/benchmark_server_session.h.
 # The firmware allocates fixed-size `planned_case_ids`/`planned_kernel_ids` arrays
-# sized to this constant and *silently drops* a LOAD_PLAN that names more cases
-# than this (handle_load_plan() returns HCTP_STATUS_INVALID_ARGUMENT with no
-# reply frame sent) -- so a session with more cases than this will hang the
-# host with "Transport stalled without a complete frame." instead of erroring
-# cleanly. Callers with more cases than this (e.g. run_apollo510_generated_test_session
-# over a whole operator family) must split into multiple sequential sessions;
-# see _run_case_bundles_in_batches() below.
-MAX_CASES_PER_SESSION = 4
+# sized to this constant and rejects a LOAD_PLAN that names more cases than this
+# (handle_load_plan() answers with an ERROR frame). Callers with more cases than
+# this (e.g. run_apollo510_generated_test_session over a whole operator family) are
+# split into multiple sequential sessions; see _run_case_bundles_in_batches() below.
+MAX_CASES_PER_SESSION = 32
+
+# Must match HCT_SERVER_RX_BUFFER_BYTES in benchmark_server_session.h: the firmware
+# decodes host frames out of a fixed 2 KiB receive buffer, so a LOAD_PLAN payload
+# (case ids can be up to 96 characters, plus one entry per PMU pass) has to fit in
+# it too. The target also advertises this bound in HELLO (max_rx_payload) and the
+# session refuses to send a plan that exceeds it; the batch splitter below keeps
+# every plan under this same constant up front.
+FIRMWARE_RX_BUFFER_BYTES = 2048
+MAX_LOAD_PLAN_PAYLOAD_BYTES = FIRMWARE_RX_BUFFER_BYTES - HEADER_SIZE
+
+
+def default_counter_passes() -> tuple[CounterPass, ...]:
+    """`cpu:default,memory:default,mve:default` -- the hardware CLI's default."""
+    return counter_passes_for_selection(default_selection())
+
+
+def split_case_bundles_into_batches(
+    case_bundles: Sequence[CaseBundle],
+    counter_passes: Sequence[CounterPass],
+    *,
+    max_cases: int = MAX_CASES_PER_SESSION,
+    max_plan_bytes: int = MAX_LOAD_PLAN_PAYLOAD_BYTES,
+) -> list[list[CaseBundle]]:
+    """Greedily pack cases into batches of at most `max_cases` whose encoded LOAD_PLAN
+    (with these PMU passes) stays within `max_plan_bytes`. Order is preserved."""
+    batches: list[list[CaseBundle]] = []
+    current: list[CaseBundle] = []
+    for bundle in case_bundles:
+        candidate_ids = [b.case_id for b in current] + [bundle.case_id]
+        if current and (len(current) >= max_cases or load_plan_size(candidate_ids, counter_passes) > max_plan_bytes):
+            batches.append(current)
+            current = []
+        single = load_plan_size([bundle.case_id], counter_passes)
+        if single > max_plan_bytes:
+            raise ValueError(
+                f"Case {bundle.case_id!r} alone needs a {single}-byte LOAD_PLAN with "
+                f"{len(counter_passes)} PMU pass(es), over the firmware's {max_plan_bytes}-byte "
+                "receive limit. Request fewer counters."
+            )
+        current.append(bundle)
+    if current:
+        batches.append(current)
+    return batches
 
 
 def _run_single_session(
@@ -40,18 +83,18 @@ def _run_single_session(
     serial_no: int,
     chip_name: str,
     speed_khz: int,
-    requested_counter_groups: tuple[str, ...],
+    counter_passes: Sequence[CounterPass],
     build_dir: Path,
     on_case_complete: Callable[[CaseRunResult], None] | None = None,
 ) -> tuple[SessionResult, int]:
     """Open one fresh (reset-on-open) RTT session and run exactly one LOAD_PLAN
     worth of case bundles. Callers must keep len(case_bundles) <= MAX_CASES_PER_SESSION
-    or the firmware will silently drop the plan (see MAX_CASES_PER_SESSION above).
+    and the encoded plan within MAX_LOAD_PLAN_PAYLOAD_BYTES (see split_case_bundles_into_batches).
     """
     if len(case_bundles) > MAX_CASES_PER_SESSION:
         raise ValueError(
             f"Cannot run {len(case_bundles)} cases in a single session: firmware "
-            f"HCT_SERVER_MAX_CASES={MAX_CASES_PER_SESSION} silently drops larger plans. "
+            f"HCT_SERVER_MAX_CASES={MAX_CASES_PER_SESSION} rejects larger plans. "
             "Split into batches of at most MAX_CASES_PER_SESSION first."
         )
     elf_path = build_dir / "perf_stream" / "hct_benchmark_server.elf"
@@ -66,7 +109,7 @@ def _run_single_session(
         read_timeout_s=10.0,
     )
     try:
-        result = HostSession(transport, requested_counter_groups=requested_counter_groups).run_many(
+        result = HostSession(transport, counter_passes=counter_passes).run_many(
             case_bundles, on_case_complete=on_case_complete
         )
     finally:
@@ -81,7 +124,7 @@ def _run_case_bundles_on_apollo510(
     serial_no: int,
     chip_name: str,
     speed_khz: int,
-    requested_counter_groups: tuple[str, ...],
+    counter_passes: Sequence[CounterPass],
     session_id: str | None,
     build_dir: Path | None,
     board: BoardSpec,
@@ -94,7 +137,7 @@ def _run_case_bundles_on_apollo510(
         serial_no=serial_no,
         chip_name=chip_name,
         speed_khz=speed_khz,
-        requested_counter_groups=requested_counter_groups,
+        counter_passes=counter_passes,
         build_dir=build_dir,
         on_case_complete=on_case_complete,
     )
@@ -107,7 +150,7 @@ def _run_case_bundles_on_apollo510(
         f"hardware session_id={sid}\n"
         f"board={board.id} chip={chip_name} serial={serial_no} speed_khz={speed_khz}\n"
         f"rtt_address=0x{rtt_address:08x}\n"
-        f"requested_counter_groups={requested_counter_groups}\n"
+        f"counter_passes={[p.name for p in counter_passes]}\n"
         f"protocol_trace_len={len(result.protocol_trace)}\n"
         f"case_ids={[b.case_id for b in case_bundles]}\n"
     )
@@ -132,15 +175,16 @@ def _run_case_bundles_in_batches(
     serial_no: int,
     chip_name: str,
     speed_khz: int,
-    requested_counter_groups: tuple[str, ...],
+    counter_passes: Sequence[CounterPass],
     session_id: str | None,
     build_dir: Path | None,
     board: BoardSpec,
     on_case_complete: Callable[[CaseRunResult], None] | None = None,
 ) -> tuple[SessionResult, Path]:
     """Like _run_case_bundles_on_apollo510, but transparently splits case_bundles
-    into batches of at most MAX_CASES_PER_SESSION and runs one fresh (reset-on-open)
-    RTT session per batch, merging all cases into a single SessionResult/result bundle.
+    into batches (at most MAX_CASES_PER_SESSION cases, LOAD_PLAN within the firmware's
+    receive buffer) and runs one fresh (reset-on-open) RTT session per batch, merging
+    all cases into a single SessionResult/result bundle.
     """
     build_dir = build_dir or board.build_dir(project_root)
     sid = session_id or default_session_id(board)
@@ -149,11 +193,11 @@ def _run_case_bundles_in_batches(
     all_trace: list[str] = []
     session_complete_cases = 0
     rtt_address = 0
-    batch_count = (len(case_bundles) + MAX_CASES_PER_SESSION - 1) // MAX_CASES_PER_SESSION
+    hello = None
+    batches = split_case_bundles_into_batches(case_bundles, counter_passes)
+    batch_count = len(batches)
 
-    for batch_index in range(batch_count):
-        start = batch_index * MAX_CASES_PER_SESSION
-        batch = case_bundles[start : start + MAX_CASES_PER_SESSION]
+    for batch_index, batch in enumerate(batches):
         try:
             result, rtt_address = _run_single_session(
                 project_root,
@@ -161,7 +205,7 @@ def _run_case_bundles_in_batches(
                 serial_no=serial_no,
                 chip_name=chip_name,
                 speed_khz=speed_khz,
-                requested_counter_groups=requested_counter_groups,
+                counter_passes=counter_passes,
                 build_dir=build_dir,
                 on_case_complete=on_case_complete,
             )
@@ -173,8 +217,15 @@ def _run_case_bundles_in_batches(
         all_cases.extend(result.cases)
         all_trace.extend(f"batch{batch_index}:{entry}" for entry in result.protocol_trace)
         session_complete_cases += result.session_complete_cases
+        hello = hello or result.hello
 
-    merged_result = SessionResult(cases=tuple(all_cases), protocol_trace=tuple(all_trace), session_complete_cases=session_complete_cases)
+    merged_result = SessionResult(
+        cases=tuple(all_cases),
+        protocol_trace=tuple(all_trace),
+        session_complete_cases=session_complete_cases,
+        batch_count=batch_count,
+        hello=hello,
+    )
 
     memory_report_path = generate_benchmark_server_memory_report(build_dir=build_dir)
     memory_report = json.loads(memory_report_path.read_text())
@@ -183,8 +234,9 @@ def _run_case_bundles_in_batches(
         f"hardware session_id={sid}\n"
         f"board={board.id} chip={chip_name} serial={serial_no} speed_khz={speed_khz}\n"
         f"rtt_address=0x{rtt_address:08x}\n"
-        f"requested_counter_groups={requested_counter_groups}\n"
-        f"batch_count={batch_count} max_cases_per_session={MAX_CASES_PER_SESSION}\n"
+        f"counter_passes={[p.name for p in counter_passes]}\n"
+        f"batch_count={batch_count} max_cases_per_session={MAX_CASES_PER_SESSION} "
+        f"max_load_plan_bytes={MAX_LOAD_PLAN_PAYLOAD_BYTES}\n"
         f"protocol_trace_len={len(merged_result.protocol_trace)}\n"
         f"case_ids={[b.case_id for b in case_bundles]}\n"
     )
@@ -209,13 +261,14 @@ def run_apollo510_stream_session(
     board: BoardSpec | None = None,
     chip_name: str | None = None,
     speed_khz: int | None = None,
-    requested_counter_groups: tuple[str, ...] = ("cpu", "memory", "mve"),
+    counter_passes: Sequence[CounterPass] | None = None,
     session_id: str | None = None,
     build_dir: Path | None = None,
 ) -> tuple[SessionResult, Path]:
     """Two-kernel synthetic demo session (arm_abs_s8 + arm_convolve_s8); library
     code only, not exposed on the CLI. `chip_name`/`speed_khz` default to the board's."""
     board = board or resolve_board(DEFAULT_BOARD_ID)
+    counter_passes = tuple(counter_passes) if counter_passes is not None else default_counter_passes()
     abs_bundle = load_case_bundle(build_abs_s8_case_bundle(project_root, case_id="abs_hw_live").manifest_path)
     conv_bundle = load_case_bundle(build_convolve_s8_case_bundle(project_root, case_id="conv_hw_live").manifest_path)
     return _run_case_bundles_on_apollo510(
@@ -224,7 +277,7 @@ def run_apollo510_stream_session(
         serial_no=serial_no,
         chip_name=chip_name or board.jlink_device,
         speed_khz=speed_khz or board.swd_speed_khz,
-        requested_counter_groups=requested_counter_groups,
+        counter_passes=counter_passes,
         session_id=session_id,
         build_dir=build_dir,
         board=board,
@@ -303,7 +356,7 @@ def run_apollo510_generated_test_session(
     board: BoardSpec | None = None,
     chip_name: str | None = None,
     speed_khz: int | None = None,
-    requested_counter_groups: tuple[str, ...] = ("cpu", "memory", "mve"),
+    counter_passes: Sequence[CounterPass] | None = None,
     session_id: str | None = None,
     build_dir: Path | None = None,
     cpu: str | None = None,
@@ -328,14 +381,18 @@ def run_apollo510_generated_test_session(
     `require_fvp_pass` (default True) is forwarded to `build_generated_test_case_bundles`
     -- set to False on hosts that cannot run the FVP model at all (see its own docstring).
 
+    `counter_passes` (default: every PMU group at its default selection, see
+    pmu_catalog.DEFAULT_SELECTIONS) is the list of PMU passes run per case; each pass
+    times the kernel again with up to four (chained, 32-bit) event counters.
+
     Transparently splits the discovered/bridged cases into batches of at most
-    MAX_CASES_PER_SESSION (matching firmware HCT_SERVER_MAX_CASES) and runs one
-    fresh reset-on-open RTT session per batch, merging all cases into a single
-    SessionResult/result bundle -- sending more cases than that in one LOAD_PLAN
-    causes the firmware to silently drop the plan and hang the host.
+    MAX_CASES_PER_SESSION (matching firmware HCT_SERVER_MAX_CASES) whose LOAD_PLAN fits
+    the firmware receive buffer, and runs one fresh reset-on-open RTT session per batch,
+    merging all cases into a single SessionResult/result bundle.
     """
     board = board or resolve_board(DEFAULT_BOARD_ID)
     cpu = cpu or board.cpu
+    counter_passes = tuple(counter_passes) if counter_passes is not None else default_counter_passes()
     bundles, skipped = build_generated_test_case_bundles(
         project_root, cpu=cpu, family=family, name_filter=name_filter, limit=limit, suite=suite,
         require_fvp_pass=require_fvp_pass,
@@ -383,7 +440,7 @@ def run_apollo510_generated_test_session(
         serial_no=serial_no,
         chip_name=chip_name or board.jlink_device,
         speed_khz=speed_khz or board.swd_speed_khz,
-        requested_counter_groups=requested_counter_groups,
+        counter_passes=counter_passes,
         session_id=session_id,
         build_dir=build_dir,
         board=board,

@@ -6,6 +6,18 @@ from dataclasses import dataclass
 
 from .hctp import ByteReader
 
+# HELLO capability_flags bits -- must match the HCT_CAP_* enum in
+# cmake/perf_stream/benchmark_server_catalog.h.
+CAP_CASE_STREAMING = 1 << 0
+CAP_CORRECTNESS = 1 << 1
+CAP_PERFORMANCE = 1 << 2
+CAP_RTT_TRANSPORT = 1 << 3
+CAP_KERNEL_CATALOG = 1 << 4
+CAP_ABS_S8 = 1 << 5
+# Set only when the firmware was built for a core with the Armv8.1-M PMU
+# (__PMU_PRESENT == 1); absent on DWT-only targets such as Cortex-M4.
+CAP_PMU_ARMV8M = 1 << 6
+
 
 @dataclass(frozen=True)
 class HelloPayload:
@@ -19,6 +31,14 @@ class HelloPayload:
     target_cpu: str
     transport_kind: int
     capability_flags: int
+    # v2: number of 16-bit PMU event-counter slots (8 on Cortex-M55, 0 without a PMU)
+    # and the largest frame payload the target's receive buffer can hold.
+    pmu_counter_slots: int
+    max_rx_payload: int
+
+    @property
+    def has_pmu(self) -> bool:
+        return bool(self.capability_flags & CAP_PMU_ARMV8M)
 
 
 @dataclass(frozen=True)
@@ -49,6 +69,8 @@ def decode_hello_payload(payload: bytes) -> HelloPayload:
         target_cpu=reader.text(),
         transport_kind=reader.u8(),
         capability_flags=reader.u32(),
+        pmu_counter_slots=reader.u8(),
+        max_rx_payload=reader.u32(),
     )
 
 

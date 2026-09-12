@@ -12,18 +12,34 @@ import numpy as np
 
 from helia_core_tester.generation.utils.tflite_utils import requantize_np
 
-from .hctp import ByteReader, ByteWriter, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
+from .firmware_messages import (
+    CAP_ABS_S8,
+    CAP_CASE_STREAMING,
+    CAP_CORRECTNESS,
+    CAP_KERNEL_CATALOG,
+    CAP_PERFORMANCE,
+    CAP_PMU_ARMV8M,
+    CAP_RTT_TRANSPORT,
+)
+from .hctp import HEADER_SIZE, ByteReader, ByteWriter, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
 from .measurement import (
     CounterDescriptor,
-    DEFAULT_COUNTERS,
     CounterPass,
     RawCounterValue,
     RawSample,
     auto_calibrate_iterations,
-    plan_counter_passes,
-    resolve_counter_selection,
 )
+from .pmu_catalog import CPU_CYCLES_EVENT_ID, CPU_CYCLES_NAME, counter_by_event_id
 from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLargeError
+
+# Mirrors the real firmware's fixed limits (benchmark_server_session.h / _main.c) so
+# host tests exercise the same bounds the target enforces.
+FAKE_PMU_COUNTER_SLOTS = 8
+FAKE_RX_BUFFER_BYTES = 2048
+FAKE_MAX_RX_PAYLOAD = FAKE_RX_BUFFER_BYTES - HEADER_SIZE
+EVENT_COUNTER_MASK = 0xFFFF  # one 16-bit slot
+CHAINED_COUNTER_MASK = 0xFFFFFFFF  # two slots chained
+CCNTR_MASK = 0xFFFFFFFF
 
 
 def _catalog_hash(entries: list[dict[str, Any]]) -> bytes:
@@ -89,17 +105,31 @@ class FakeKernelAdapter:
             for sample_index in range(samples):
                 base_cycles = self._base_cycles(blobs) * iterations
                 cycles = base_cycles + (sample_index * 11) + (counter_pass.pass_index * 37) + 100
-                counters = []
+                # Like the firmware: the CCNTR entry leads every sample. It reads a few
+                # cycles above the DWT window because the PMU is started just before the
+                # DWT start read and stopped just after the DWT end read.
+                ccntr = cycles + 3
+                counters = [
+                    RawCounterValue(
+                        name=CPU_CYCLES_NAME,
+                        event_id=CPU_CYCLES_EVENT_ID,
+                        value=ccntr & CCNTR_MASK,
+                        overflow=ccntr > CCNTR_MASK,
+                        supported=True,
+                    )
+                ]
                 for counter in counter_pass.counters:
                     supported = counter.group in self.supported_groups
-                    overflow = counter.name.endswith("INST_RETIRED") and sample_index == samples - 1 and counter_pass.pass_index > 0
                     value = self._counter_value(counter, blobs, iterations, sample_index)
+                    # Honour the real counter widths so tests can provoke an overflow:
+                    # a 16-bit slot wraps unless the pass chains slot pairs into 32 bits.
+                    mask = CHAINED_COUNTER_MASK if counter_pass.chained else EVENT_COUNTER_MASK
                     counters.append(
                         RawCounterValue(
                             name=counter.name,
                             event_id=counter.event_id,
-                            value=value,
-                            overflow=overflow,
+                            value=(value & mask) if supported else 0,
+                            overflow=supported and value > mask,
                             supported=supported,
                         )
                     )
@@ -177,8 +207,20 @@ class FakeConvolveS8Adapter(FakeKernelAdapter):
 class FakeTargetTransport:
     """Synchronous fake transport that simulates a target-side HCTP server."""
 
-    def __init__(self, *, max_frame_payload: int = 64, read_chunk_size: int = 19, runtime_arena_capacity: int = 4096) -> None:
+    def __init__(
+        self,
+        *,
+        max_frame_payload: int = 64,
+        read_chunk_size: int = 19,
+        runtime_arena_capacity: int = 4096,
+        pmu_present: bool = True,
+        pmu_counter_slots: int = FAKE_PMU_COUNTER_SLOTS,
+        max_rx_payload: int = FAKE_MAX_RX_PAYLOAD,
+    ) -> None:
         self._session_id = 0xC0DE1234
+        self._pmu_present = pmu_present
+        self._pmu_counter_slots = pmu_counter_slots if pmu_present else 0
+        self._max_rx_payload = max_rx_payload
         self._target_sequence_id = 0
         self._decoder = FrameDecoder(max_payload=4096)
         self._validator = SessionFrameValidator(session_id=self._session_id)
@@ -266,6 +308,10 @@ class FakeTargetTransport:
         self._target_sequence_id += 1
 
     def _emit_hello(self) -> None:
+        """HELLO v2, field for field what hct_build_hello_frame() emits."""
+        flags = CAP_CASE_STREAMING | CAP_CORRECTNESS | CAP_PERFORMANCE | CAP_RTT_TRANSPORT | CAP_KERNEL_CATALOG | CAP_ABS_S8
+        if self._pmu_present:
+            flags |= CAP_PMU_ARMV8M
         writer = ByteWriter()
         writer.text("fake-benchmark-server")
         writer.fixed(self._catalog_hash)
@@ -273,6 +319,12 @@ class FakeTargetTransport:
         writer.u32(self._runtime_arena_capacity)
         writer.u8(1)
         writer.u8(1)
+        writer.text("fake_board")
+        writer.text("cortex-m55" if self._pmu_present else "cortex-m4")
+        writer.u8(1)
+        writer.u32(flags)
+        writer.u8(self._pmu_counter_slots)
+        writer.u32(self._max_rx_payload)
         self._queue(MessageType.HELLO, writer.finish())
 
     def _emit_capabilities(self) -> None:
@@ -301,6 +353,8 @@ class FakeTargetTransport:
         self._state = _TargetState.COMPLETE
 
     def _decode_plan(self, payload: bytes) -> dict[str, Any]:
+        if len(payload) > self._max_rx_payload:
+            raise ValueError(f"LOAD_PLAN payload {len(payload)} exceeds the fake target's rx buffer ({self._max_rx_payload}).")
         reader = ByteReader(payload)
         case_count = reader.u16()
         transfer_mode = reader.u8()
@@ -309,10 +363,23 @@ class FakeTargetTransport:
         iterations = reader.u32()
         min_cycles = reader.u32()
         max_iterations = reader.u32()
-        requested_groups = []
-        group_count = reader.u8()
-        for _ in range(group_count):
-            requested_groups.append(reader.text())
+        passes: list[CounterPass] = []
+        pass_count = reader.u8()
+        for _ in range(pass_count):
+            pass_name = reader.text()
+            chained = bool(reader.u8())
+            counter_count = reader.u8()
+            counters = []
+            for _ in range(counter_count):
+                event_id = reader.u16()
+                known = counter_by_event_id(event_id)
+                counters.append(known or CounterDescriptor(f"event_0x{event_id:04x}", event_id, "unknown"))
+            group, _, index = pass_name.rpartition("_")
+            passes.append(CounterPass(group=group or pass_name, pass_index=int(index or 0), counters=tuple(counters), chained=chained))
+            # Same admission rule as handle_load_plan() in the firmware.
+            slots = (2 if chained else 1) * counter_count
+            if counter_count > 4 or (self._pmu_present and slots > self._pmu_counter_slots):
+                raise ValueError(f"PMU pass {pass_name!r} needs {slots} slots; fake target has {self._pmu_counter_slots}.")
         cases = []
         for _ in range(case_count):
             cases.append({"case_id": reader.text(), "kernel_id": reader.u32()})
@@ -323,7 +390,7 @@ class FakeTargetTransport:
             "iterations": iterations,
             "min_cycles": min_cycles,
             "max_iterations": max_iterations,
-            "requested_groups": requested_groups,
+            "passes": passes,
             "cases": cases,
         }
 
@@ -524,8 +591,7 @@ class FakeTargetTransport:
         assert self._plan is not None
         assert self._case_meta is not None
         adapter = self._adapter()
-        counters = resolve_counter_selection({group: "default" for group in self._plan["requested_groups"] or ["cpu"]})
-        passes = plan_counter_passes(counters)
+        passes = list(self._plan["passes"]) or [CounterPass(group="cpu", pass_index=0, counters=())]
         scalar_parameters = dict(self._case_meta["scalar_parameters"])
         scalar_parameters["min_cycles"] = int(self._plan["min_cycles"])
         scalar_parameters["max_iterations"] = int(self._plan["max_iterations"])
@@ -546,11 +612,15 @@ class FakeTargetTransport:
             writer.text(sample.pass_name)
             writer.u8(len(sample.counters))
             for counter in sample.counters:
-                writer.text(counter.name)
+                # A DWT-only target still reports the cycle entry but marks every event
+                # counter unsupported, exactly like the firmware's __PMU_PRESENT == 0 path.
+                supported = counter.supported and (self._pmu_present or counter.event_id == CPU_CYCLES_EVENT_ID)
+                # Firmware never sends names -- the host resolves them by event id.
+                writer.text("")
                 writer.u16(counter.event_id)
-                writer.u64(counter.value)
-                writer.u8(1 if counter.overflow else 0)
-                writer.u8(1 if counter.supported else 0)
+                writer.u64(counter.value if supported else 0)
+                writer.u8(1 if (supported and counter.overflow) else 0)
+                writer.u8(1 if supported else 0)
             self._queue(MessageType.SAMPLE_RESULT, writer.finish())
         complete_writer = ByteWriter()
         complete_writer.text(str(self._case_meta["case_id"]))

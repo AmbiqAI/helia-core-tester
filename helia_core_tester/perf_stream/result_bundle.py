@@ -7,7 +7,22 @@ import json
 from pathlib import Path
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
+from .measurement import compute_counter_medians
 from .session import SessionResult
+
+_CASE_SUMMARY_BASE_FIELDS = [
+    "case_id",
+    "kernel_id",
+    "comparison_passed",
+    "mismatch_count",
+    "sample_count",
+    "median_cycles",
+    "mad_cycles",
+    "p90_cycles",
+    "p99_cycles",
+    "fvp_status",
+]
+_CASE_SUMMARY_FLAG_FIELDS = ["overflow_detected", "valid_for_regression"]
 
 
 def _split_protocol_trace_entry(entry: str) -> tuple[int | None, str, str]:
@@ -28,6 +43,19 @@ def _split_protocol_trace_entry(entry: str) -> tuple[int | None, str, str]:
 
 
 
+def write_timing(bundle_root: Path, timing: dict) -> Path:
+    """Merge wall-clock `timing` into an existing bundle's session_summary.json.
+
+    The bundle is written by the batched runner before the pipeline knows the stage
+    totals, so the pipeline adds them afterwards instead of threading a callback
+    through every layer."""
+    path = bundle_root / "session_summary.json"
+    summary = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    summary["timing"] = timing
+    path.write_text(json.dumps(summary, indent=2), encoding="utf-8", newline="\n")
+    return path
+
+
 def write_result_bundle(
     result: SessionResult,
     *,
@@ -38,6 +66,7 @@ def write_result_bundle(
     target_info: dict | None = None,
     host_log_text: str = "session completed\n",
     target_log_text: str = "no physical target log captured\n",
+    timing: dict | None = None,
 ) -> Path:
     bundle_root = output_root / "artifacts" / "reports" / "performance_stream" / session_id
     (bundle_root / "correctness").mkdir(parents=True, exist_ok=True)
@@ -65,9 +94,20 @@ def write_result_bundle(
     case_rows = []
     case_summary_rows = []
     raw_sample_rows = []
+    # Counter names in first-seen order (ARM_PMU_CPU_CYCLES leads every sample) and
+    # the PMU passes run, for the case_summary.csv columns and session_summary.json.
+    counter_names: list[str] = []
+    pass_names: list[str] = []
     passed = 0
     for case in result.cases:
         passed += 1 if case.comparison.passed else 0
+        counter_medians = compute_counter_medians(case.normalized_samples)
+        for name in counter_medians:
+            if name not in counter_names:
+                counter_names.append(name)
+        for sample in case.samples:
+            if sample.pass_name not in pass_names:
+                pass_names.append(sample.pass_name)
         case_rows.append(
             {
                 "case_id": case.case_bundle.case_id,
@@ -81,22 +121,28 @@ def write_result_bundle(
                 "mad_cycles": case.statistics.mad_cycles,
                 "fvp_status": case.case_bundle.fvp_status,
                 "unsupported_counters": list(case.statistics.unsupported_counters),
+                # Median per-invocation value of every supported counter across samples.
+                "counters": counter_medians,
+                "overflow_detected": case.statistics.overflow_detected,
+                "valid_for_regression": case.statistics.valid_for_regression,
             }
         )
-        case_summary_rows.append(
-            {
-                "case_id": case.case_bundle.case_id,
-                "kernel_id": case.case_bundle.kernel_id,
-                "comparison_passed": str(case.comparison.passed).lower(),
-                "mismatch_count": case.comparison.mismatch_count,
-                "sample_count": case.statistics.sample_count,
-                "median_cycles": case.statistics.median_cycles,
-                "mad_cycles": case.statistics.mad_cycles,
-                "p90_cycles": case.statistics.p90_cycles,
-                "p99_cycles": case.statistics.p99_cycles,
-                "fvp_status": case.case_bundle.fvp_status,
-            }
-        )
+        summary_row = {
+            "case_id": case.case_bundle.case_id,
+            "kernel_id": case.case_bundle.kernel_id,
+            "comparison_passed": str(case.comparison.passed).lower(),
+            "mismatch_count": case.comparison.mismatch_count,
+            "sample_count": case.statistics.sample_count,
+            "median_cycles": case.statistics.median_cycles,
+            "mad_cycles": case.statistics.mad_cycles,
+            "p90_cycles": case.statistics.p90_cycles,
+            "p99_cycles": case.statistics.p99_cycles,
+            "fvp_status": case.case_bundle.fvp_status,
+        }
+        summary_row.update(counter_medians)
+        summary_row["overflow_detected"] = str(case.statistics.overflow_detected).lower()
+        summary_row["valid_for_regression"] = str(case.statistics.valid_for_regression).lower()
+        case_summary_rows.append(summary_row)
         (bundle_root / "outputs" / f"{case.case_bundle.case_id}.bin").write_bytes(case.output_bytes)
         (bundle_root / "correctness" / f"{case.case_bundle.case_id}.json").write_text(
             json.dumps(
@@ -130,37 +176,28 @@ def write_result_bundle(
                 )
 
     (bundle_root / "cases.json").write_text(json.dumps(case_rows, indent=2), encoding="utf-8", newline="\n")
-    (bundle_root / "session_summary.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "case_count": len(result.cases),
-                "passed_cases": passed,
-                "failed_cases": len(result.cases) - passed,
-                "session_complete_cases": result.session_complete_cases,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-        newline="\n",
-    )
+    session_summary = {
+        "session_id": session_id,
+        "case_count": len(result.cases),
+        "passed_cases": passed,
+        "failed_cases": len(result.cases) - passed,
+        "session_complete_cases": result.session_complete_cases,
+        "batch_count": int(getattr(result, "batch_count", 1)),
+        "counters": counter_names,
+        "passes": pass_names,
+        "cases_with_overflow": [row["case_id"] for row in case_rows if row["overflow_detected"]],
+    }
+    if timing is not None:
+        session_summary["timing"] = timing
+    (bundle_root / "session_summary.json").write_text(json.dumps(session_summary, indent=2), encoding="utf-8", newline="\n")
     (bundle_root / "memory_report.json").write_text(json.dumps(memory_report, indent=2), encoding="utf-8", newline="\n")
     (bundle_root / "kernel_catalog.json").write_text(json.dumps(kernel_catalog, indent=2), encoding="utf-8", newline="\n")
 
     with (bundle_root / "case_summary.csv").open("w", encoding="utf-8", newline="") as handle:
-        case_summary_fieldnames = list(case_summary_rows[0].keys()) if case_summary_rows else [
-            "case_id",
-            "kernel_id",
-            "comparison_passed",
-            "mismatch_count",
-            "sample_count",
-            "median_cycles",
-            "mad_cycles",
-            "p90_cycles",
-            "p99_cycles",
-            "fvp_status",
-        ]
-        writer = csv.DictWriter(handle, fieldnames=case_summary_fieldnames)
+        # One column per counter name seen in any case (a case that did not run a
+        # counter leaves that cell empty), then the overflow/validity flags.
+        case_summary_fieldnames = _CASE_SUMMARY_BASE_FIELDS + counter_names + _CASE_SUMMARY_FLAG_FIELDS
+        writer = csv.DictWriter(handle, fieldnames=case_summary_fieldnames, restval="")
         writer.writeheader()
         writer.writerows(case_summary_rows)
     with (bundle_root / "raw_samples.csv").open("w", encoding="utf-8", newline="") as handle:

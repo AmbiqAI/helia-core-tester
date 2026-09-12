@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from helia_core_tester.perf_stream.firmware_messages import decode_catalog_payload, decode_hello_payload
+from helia_core_tester.perf_stream.firmware_messages import CAP_PMU_ARMV8M, decode_catalog_payload, decode_hello_payload
 from helia_core_tester.perf_stream.hctp import HCTP_FLAG_MORE, FrameDecoder, MessageType
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -72,6 +72,13 @@ def test_firmware_hello_and_catalog_roundtrip_with_python_decoder(tmp_path: Path
     assert hello.transport_kind == 1
     assert hello.max_frame_payload == 256
     assert hello.runtime_arena_capacity == 32768
+    # v2: a host compile has no __PMU_PRESENT, so the PMU capability is absent and no
+    # event-counter slots are advertised; max_rx_payload is the 2 KiB rx buffer minus
+    # the 32-byte frame header.
+    assert not hello.capability_flags & CAP_PMU_ARMV8M
+    assert hello.has_pmu is False
+    assert hello.pmu_counter_slots == 0
+    assert hello.max_rx_payload == 2048 - 32
     assert len(catalog) == 173
     assert catalog[0].kernel_id == 1
     assert catalog[0].canonical_name == "arm_abs_s8"

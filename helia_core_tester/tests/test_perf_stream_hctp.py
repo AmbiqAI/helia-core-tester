@@ -7,6 +7,7 @@ import pytest
 
 from helia_core_tester.perf_stream.hctp import (
     HEADER_SIZE,
+    SUPPORTED_VERSION,
     ByteReader,
     ByteWriter,
     FrameDecoder,
@@ -71,6 +72,17 @@ def test_unsupported_version_rejected() -> None:
     patched[28:32] = struct.pack("<I", crc32(bytes(patched[:28])))
     with pytest.raises(UnsupportedVersionError):
         decode_header(bytes(patched[:HEADER_SIZE]))
+
+
+def test_protocol_is_v2_and_v1_frames_are_rejected() -> None:
+    # v2 changed LOAD_PLAN (PMU passes), HELLO (PMU slots, max_rx_payload) and
+    # SAMPLE_RESULT (CCNTR entry first); a v1 peer must be refused outright.
+    assert SUPPORTED_VERSION == 2
+    raw = bytearray(_frame(MessageType.PING, b"abc"))
+    struct.pack_into("<H", raw, 4, 1)
+    raw[28:32] = struct.pack("<I", crc32(bytes(raw[:28])))
+    with pytest.raises(UnsupportedVersionError, match="version 1; expected 2"):
+        decode_header(bytes(raw[:HEADER_SIZE]))
 
 
 

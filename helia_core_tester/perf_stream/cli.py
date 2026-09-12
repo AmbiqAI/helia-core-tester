@@ -188,19 +188,31 @@ _PRECISION_HELP = (
 )
 
 
-def _stream_options(suite, family, test_name, limit, precision, pmu_groups, fvp_gate, session_id):
-    from .hardware_pipeline import StreamOptions, apply_precision, parse_pmu_groups, validate_fvp_gate
+_PMU_COUNTERS_HELP = (
+    "PMU counters to capture, as GROUP:SELECTION (repeatable; hpx syntax). GROUP is cpu, "
+    "memory or mve; SELECTION is 'all', 'default', or a comma-separated list of ARM_PMU_* "
+    "names from assets/pmu/armv8m_pmu_events.json, e.g. --pmu-counters mve:all "
+    "--pmu-counters cpu:ARM_PMU_INST_RETIRED,ARM_PMU_STALL. Each group is measured in "
+    "passes of up to 4 chained 32-bit counters; ARM_PMU_CPU_CYCLES is always reported. "
+    "Default: cpu:default memory:default mve:default."
+)
+_PMU_GROUPS_HELP = "Deprecated alias for --pmu-counters GROUP:default per listed group."
+
+
+def _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id):
+    from .hardware_pipeline import StreamOptions, apply_precision, resolve_pmu_options, validate_fvp_gate
     from .hardware_run import normalize_suites
 
     try:
         normalize_suites(suite)
         suite, test_name = apply_precision(precision, suite, test_name)
         validate_fvp_gate(fvp_gate)
+        selection = resolve_pmu_options(pmu_counters or [], pmu_groups, warn=lambda msg: typer.echo(msg, err=True))
     except ValueError as exc:
         _fail(str(exc))
     return StreamOptions(
         suite=suite, family=family, test_name=test_name, limit=limit,
-        pmu_groups=parse_pmu_groups(pmu_groups), fvp_gate=fvp_gate, session_id=session_id,
+        pmu_counters=selection, fvp_gate=fvp_gate, session_id=session_id,
     )
 
 
@@ -219,6 +231,7 @@ def _report(outcome, spec: BoardSpec, *, as_json: bool) -> None:
     if as_json:
         typer.echo(json.dumps(build_json_summary(
             outcome.result, outcome.skipped, session_id=outcome.session_id, board_id=spec.id, bundle=outcome.bundle,
+            timing=outcome.timing,
         ), indent=2))
     if failed:
         typer.echo(typer.style("✗ One or more generated-test cases failed correctness", fg=typer.colors.RED, bold=True), err=True)
@@ -238,7 +251,8 @@ def stream(
     test_name: Optional[str] = typer.Option(None, "--test-name", help="Only bridge generated tests whose directory name contains this substring."),
     limit: Optional[int] = typer.Option(None, "--limit", help="Only bridge the first N discovered generated tests (per suite/family)."),
     precision: Optional[str] = typer.Option(None, "--precision", help=_PRECISION_HELP),
-    pmu_groups: str = typer.Option("cpu,memory,mve", "--pmu-groups", help="Comma-separated PMU counter groups to request."),
+    pmu_counters: Optional[list[str]] = typer.Option(None, "--pmu-counters", help=_PMU_COUNTERS_HELP),
+    pmu_groups: Optional[str] = typer.Option(None, "--pmu-groups", help=_PMU_GROUPS_HELP, hidden=True),
     fvp_gate: Optional[str] = typer.Option(None, "--fvp-gate", help=_FVP_GATE_HELP),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP + " Must hold the flashed firmware's ELF."),
@@ -255,11 +269,11 @@ def stream(
     own fresh reset-on-open RTT session and merged into one result bundle.
     """
     from .firmware_build import resolve_build_dir
-    from .hardware_pipeline import stream_generated_tests
+    from .hardware_pipeline import finalize_timing, stream_generated_tests
 
     spec = _board(board)
     serial = _serial(serial_no)
-    options = _stream_options(suite, family, test_name, limit, precision, pmu_groups, fvp_gate, session_id)
+    options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     try:
         with _quiet_stdout(as_json):
@@ -267,6 +281,7 @@ def stream(
                 _repo_root(), spec, serial, build_dir=resolve_build_dir(_repo_root(), spec, build_dir),
                 options=options, echo=echo, progress_to_stderr=as_json,
             )
+            finalize_timing(outcome, echo=echo)
     except RuntimeError as exc:
         _fail(str(exc))
     _report(outcome, spec, as_json=as_json)
@@ -281,7 +296,8 @@ def run(
     test_name: Optional[str] = typer.Option(None, "--test-name", help="Only bridge generated tests whose directory name contains this substring."),
     limit: Optional[int] = typer.Option(None, "--limit", help="Only bridge the first N discovered generated tests (per suite/family)."),
     precision: Optional[str] = typer.Option(None, "--precision", help=_PRECISION_HELP),
-    pmu_groups: str = typer.Option("cpu,memory,mve", "--pmu-groups", help="Comma-separated PMU counter groups to request."),
+    pmu_counters: Optional[list[str]] = typer.Option(None, "--pmu-counters", help=_PMU_COUNTERS_HELP),
+    pmu_groups: Optional[str] = typer.Option(None, "--pmu-groups", help=_PMU_GROUPS_HELP, hidden=True),
     fvp_gate: Optional[str] = typer.Option(None, "--fvp-gate", help=_FVP_GATE_HELP),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     skip_generate: bool = typer.Option(False, "--skip-generate", help="Reuse existing artifacts/generated_tests instead of regenerating."),
@@ -298,7 +314,7 @@ def run(
 
     spec = _board(board)
     serial = _serial(serial_no)
-    options = _stream_options(suite, family, test_name, limit, precision, pmu_groups, fvp_gate, session_id)
+    options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     try:
         with _quiet_stdout(as_json):

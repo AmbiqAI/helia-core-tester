@@ -110,6 +110,67 @@ The protocol is target-driven after plan load:
 14. target sends `CASE_COMPLETE`
 15. loop until `SESSION_COMPLETE`
 
+### Message payloads (HCTP v2)
+
+All integers are little-endian; `text` is `u16 length + UTF-8 bytes`. Protocol
+version 2 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`) changed three
+payloads; a v1 peer is refused at the header.
+
+`HELLO` (target -> host): `text build_id`, 32-byte catalog SHA-256,
+`u32 max_frame_payload`, `u32 runtime_arena_capacity`, `u8 transfer_mode`,
+`u8 output_mode`, `text board_id`, `text target_cpu`, `u8 transport_kind`,
+`u32 capability_flags`, then (v2) `u8 pmu_counter_slots` and `u32 max_rx_payload`.
+`capability_flags` bit 6 is `HCT_CAP_PMU_ARMV8M`, set only when the firmware was
+built for a core whose device header declares `__PMU_PRESENT == 1`;
+`pmu_counter_slots` is `__PMU_NUM_EVENTCNT` (8 on Cortex-M55, 0 without a PMU).
+`max_rx_payload` is the largest frame payload the target's fixed receive buffer can
+hold (`HCT_SERVER_RX_BUFFER_BYTES - HCTP_HEADER_SIZE`, 2016 today); the host keeps
+every `LOAD_PLAN` within it.
+
+`LOAD_PLAN` (host -> target): `u16 case_count`, `u8 transfer_mode`, `u16 warmups`,
+`u16 samples`, `u32 iterations_per_sample`, `u32 min_cycles`, `u32 max_iterations`,
+then (v2) `u8 pass_count` and per pass `text pass_name`, `u8 chained`,
+`u8 counter_count`, `u16 event_id[counter_count]`, then per case `text case_id`,
+`u32 kernel_id`. The firmware rejects `pass_count > 16`, `counter_count > 4`, and
+(when it has a PMU) a pass needing more slots than it advertised
+(`chained ? 2 * counter_count : counter_count`); event ids are not validated against
+a list -- whatever the host asks for is programmed and reported back. Up to
+`HCT_SERVER_MAX_CASES` (32) cases per plan.
+
+`SAMPLE_RESULT` (target -> host, one per sample per pass): `u16 sample_index`,
+`u32 iterations`, `u64 cycles`, `text pass_name`, `u8 counter_count`, then per
+counter `text name`, `u16 event_id`, `u64 value`, `u8 overflow`, `u8 supported`.
+`cycles` is the DWT `CYCCNT` delta around the timed loop and is kept as an
+independent cross-check. The first counter entry is always `ARM_PMU_CPU_CYCLES`
+(event `0x0011`) read from the PMU cycle counter `CCNTR`, with `overflow` = bit 31
+of the PMU overflow status register; the remaining entries are the pass's event
+counters in plan order. The firmware sends every `name` empty and the host resolves
+names from `assets/pmu/armv8m_pmu_events.json` by event id (unknown ids become
+`event_0x....`). On a DWT-only build the cycle entry is the DWT value and every
+event counter comes back `supported = 0`.
+
+### PMU passes, chained counters and overflow
+
+The host plans counters into passes (`measurement.plan_counter_passes`): per counter
+group, at most four event counters per pass, named `<group>_<n>`. Each pass reruns
+the case's warmups and samples with its counters programmed, so a selection like
+`mve:all` (34 events) costs nine passes. `ARM_PMU_CPU_CYCLES` never occupies an
+event-counter slot -- it is reported from `CCNTR` in every pass -- so it is stripped
+when planning and a cycles-only selection still yields one empty `cpu_0` pass.
+
+Armv8.1-M event counters are 16 bits wide. Passes are chained by default: counter
+`i` is programmed into slot `2i` and slot `2i+1` is programmed with `ARM_PMU_CHAIN`
+(event `0x001E`), which increments on the even slot's overflow, so the pair reads as
+`(high << 16) | low`, a 32-bit counter. Four chained counters use all eight slots.
+Per sample the firmware disables the PMU, resets the event counters and `CCNTR`,
+clears the overflow status (`ARM_PMU_Set_CNTR_OVS(0xFFFFFFFF)`), enables the pass's
+slots plus `CCNTR`, runs the timed loop, disables the counters, reads the values and
+`ARM_PMU_Get_CNTR_OVS()`, and clears the bits that were set. A chained counter's
+overflow is the odd slot's bit; an unchained counter's is its own slot's bit. Any
+overflow in any sample of a case sets `overflow_detected` and clears
+`valid_for_regression` for that case in the result bundle; the DWT cycle statistics
+are unaffected.
+
 ## Kernel catalog
 
 Each target build emits a catalog entry per supported runtime adapter with:
@@ -169,7 +230,12 @@ helia-profiler already provides useful patterns to reuse:
 - overflow-aware result models
 - section-size probing and memory reporting concepts
 
-The streaming implementation should align with those semantics instead of inventing incompatible PMU naming or overflow behavior.
+The streaming implementation aligns with those semantics instead of inventing
+incompatible PMU naming or overflow behavior: the event catalog
+(`assets/pmu/armv8m_pmu_events.json`) is transcribed from heliaPROFILER, the
+`--pmu-counters GROUP:SELECTION` syntax is hpx's, and the firmware's per-sample
+reset/clear-OVS/read/clear-set-bits sequence mirrors the hpx PMU profiler. The
+firmware uses raw CMSIS `pmu_armv8.h` rather than the NSX PMU module.
 
 ## Timing boundaries
 
@@ -186,7 +252,7 @@ Performance measurements may include:
 - required scratch-buffer zeroing/prepare steps when they are part of the kernel contract
 - repeated kernel invocations within one calibrated sample window
 
-The host/fake-target path still simulates timing for hardware-independent tests. The live Apollo510 firmware path now performs real DWT cycle capture and real PMU event capture after correctness passes.
+The host/fake-target path still simulates timing for hardware-independent tests (the fake target honours the 16/32-bit counter widths so overflow handling is testable). The live Apollo510 firmware path performs real DWT cycle capture and real PMU event capture (CCNTR plus up to four chained event counters per pass) after correctness passes.
 
 ## Adding a new adapter
 
