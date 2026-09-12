@@ -3,8 +3,8 @@
 These tests exist to prevent exactly the kind of duplication/drift the codegen was built to
 eliminate: `helia_core_tester/perf_stream/adapter_specs.py` is now the only place a bridged
 kernel's real firmware C dispatch body is authored, and
-`cmake/perf_stream/benchmark_server_session.c`'s generated block is produced from it by
-`scripts/generate_perf_stream_adapters.py`. See that module's docstring for the full
+`cmake/perf_stream/benchmark_server_adapters.gen.c` (bodies plus the kernel-id dispatch)
+is produced from it by `scripts/generate_perf_stream_adapters.py`. See that module's docstring for the full
 rationale (and why the firmware still can't literally reuse the FVP-generated `.c.j2`
 per-descriptor test files -- that would reintroduce the "one ELF per case" scalability
 problem the streaming architecture exists to avoid).
@@ -23,7 +23,7 @@ from helia_core_tester.perf_stream.adapter_specs import (
     GENERATED_BLOCK_BEGIN,
     GENERATED_BLOCK_END,
     generated_test_bridge_scalar_fields,
-    render_generated_adapters_block,
+    render_generated_adapters_source,
 )
 from helia_core_tester.perf_stream.generated_test_bridge import (
     _build_activation_case,
@@ -59,31 +59,51 @@ requires_generated_artifacts = pytest.mark.skipif(
     reason="no generated-test artifacts under artifacts/generated_tests/ "
     "(artifacts/ is gitignored -- run `helia_core_tester generate` first)",
 )
+ADAPTERS_C_PATH = PROJECT_ROOT / "cmake" / "perf_stream" / "benchmark_server_adapters.gen.c"
+ADAPTERS_H_PATH = PROJECT_ROOT / "cmake" / "perf_stream" / "benchmark_server_adapters.h"
 SESSION_C_PATH = PROJECT_ROOT / "cmake" / "perf_stream" / "benchmark_server_session.c"
 GENERATOR_SCRIPT = PROJECT_ROOT / "scripts" / "generate_perf_stream_adapters.py"
 
 
-def test_generated_block_is_present_exactly_once_in_session_c() -> None:
-    text = SESSION_C_PATH.read_text(encoding="utf-8")
-    assert text.count(GENERATED_BLOCK_BEGIN) == 1
-    assert text.count(GENERATED_BLOCK_END) == 1
-    assert text.index(GENERATED_BLOCK_BEGIN) < text.index(GENERATED_BLOCK_END)
+def test_generated_file_is_marked_and_session_c_holds_no_generated_code() -> None:
+    text = ADAPTERS_C_PATH.read_text(encoding="utf-8")
+    assert text.startswith(GENERATED_BLOCK_BEGIN)
+    assert text.count(GENERATED_BLOCK_BEGIN) == 1 and text.count(GENERATED_BLOCK_END) == 1
+    assert text.rstrip("\n").endswith(GENERATED_BLOCK_END)
+    session_c = SESSION_C_PATH.read_text(encoding="utf-8")
+    assert GENERATED_BLOCK_BEGIN not in session_c and GENERATED_BLOCK_END not in session_c
+    assert "hct_run_adapter_once(session)" in session_c
+    assert "run_convolve_once" not in session_c
 
 
-def test_committed_session_c_matches_freshly_rendered_adapter_block() -> None:
+def test_committed_adapters_c_matches_fresh_render() -> None:
     """Drift check: if adapter_specs.py is edited without rerunning the generator, the
-    committed benchmark_server_session.c's generated block will no longer match a fresh
-    render, and this test catches it (mirrors `--check` mode of the generator script).
+    committed benchmark_server_adapters.gen.c no longer matches a fresh render, and this
+    test catches it (mirrors `--check` mode of the generator script).
     """
-    text = SESSION_C_PATH.read_text(encoding="utf-8")
-    begin = text.index(GENERATED_BLOCK_BEGIN)
-    end = text.index(GENERATED_BLOCK_END) + len(GENERATED_BLOCK_END)
-    committed_block = text[begin:end]
-    fresh_block = render_generated_adapters_block().rstrip("\n")
-    assert committed_block == fresh_block, (
-        "benchmark_server_session.c's generated adapter block is out of date -- run "
+    committed = ADAPTERS_C_PATH.read_text(encoding="utf-8")
+    assert committed == render_generated_adapters_source(), (
+        "benchmark_server_adapters.gen.c is out of date -- run "
         "`python scripts/generate_perf_stream_adapters.py` after editing adapter_specs.py."
     )
+
+
+def test_every_kernel_id_is_dispatched_exactly_once() -> None:
+    """The dispatch switch is rendered from each adapter's kernel_ids: every
+    HCT_KERNEL_ID_* the header defines must be routed to exactly one adapter, except
+    the abs ids the hand-written session dispatches itself."""
+    import re
+
+    defined = set(re.findall(r"^#define (HCT_KERNEL_ID_[A-Z0-9_]+) \d+u$", ADAPTERS_H_PATH.read_text(encoding="utf-8"), re.M))
+    hand_written = {"HCT_KERNEL_ID_ABS_S8", "HCT_KERNEL_ID_ABS_S16", "HCT_KERNEL_ID_ABS_F32", "HCT_KERNEL_ID_ABS_F16"}
+    routed = [kernel_id for adapter in FIRMWARE_ADAPTERS for kernel_id in adapter.kernel_ids]
+    assert len(routed) == len(set(routed)), "a kernel id is dispatched by more than one adapter"
+    assert set(routed) == defined - hand_written
+    rendered = render_generated_adapters_source()
+    for adapter in FIRMWARE_ADAPTERS:
+        for kernel_id in adapter.kernel_ids:
+            assert f"        case {kernel_id}:" in rendered
+    assert "arm_cmsis_nn_status hct_run_adapter_once(hct_server_session_t *session)" in rendered
 
 
 def test_generator_script_check_mode_passes_on_committed_file() -> None:
@@ -97,7 +117,7 @@ def test_generator_script_check_mode_passes_on_committed_file() -> None:
 
 
 def test_data_movement_adapters_validate_all_meta_and_output_shapes() -> None:
-    block = render_generated_adapters_block()
+    block = render_generated_adapters_source()
     assert "meta == NULL" not in block
     assert "meta_blob->dtype != HCT_DTYPE_S32" in block
     assert "meta_blob->alignment < sizeof(int32_t)" in block
