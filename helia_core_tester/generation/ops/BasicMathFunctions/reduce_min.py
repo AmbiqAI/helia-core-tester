@@ -55,7 +55,7 @@ class OpReduceMin(OperationBase):
         return model
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
-        """Convert Keras model to TFLite with quantization."""
+        """Convert to TFLite, quantizing only integer element types."""
         if self._element_dtype() in ("FP32", "FP16"):
             converter = tf.lite.TFLiteConverter.from_keras_model(model)
             self._write_tflite_bytes(out_path, converter.convert())
