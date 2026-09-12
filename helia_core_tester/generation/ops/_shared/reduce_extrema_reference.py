@@ -22,6 +22,19 @@ happens to match, but that is an implementation detail rather than a promise.
 Writing the rules out is therefore not busywork: it is the only way to get the bits
 right, and it keeps the reference an independent formulation rather than a borrowing of
 numpy's semantics -- which is the shared-misunderstanding failure #127 turned out to be.
+
+Ordering is decided on integers decoded from the stored bits, never by a floating-point
+comparison. That is not a stylistic choice. An earlier version of this reference compared
+with ``>`` and ``<`` on float32 values and was wrong whenever the process had DAZ set:
+the hardware reads a subnormal operand as zero, so distinct subnormals compare equal to
+each other and to zero, and the selection picks the wrong element. Demonstrated by the
+kernel lane at MXCSR 0x9fe2 (ns-cmsis-nn#498 review), four cases including
+``max(0x00000000, 0x00000001)`` returning ``0x00000000``.
+
+Note what that corrects: an earlier comment here claimed the reference was safe because
+it never widened to float64. Widening was never the mechanism. Staying in float32 does
+nothing, because the comparison instruction itself honours the control state. Only
+removing the floating-point comparison removes the exposure.
 """
 
 from __future__ import annotations
@@ -110,12 +123,35 @@ def _reduce_one_domain(domain: Sequence[np.floating], kind: str, dtype: np.dtype
     if np.isnan(np.asarray(domain, dtype=dtype)).any():
         return canonical_qnan(dtype)
 
-    winner = dtype.type(domain[0])
-    for candidate in domain[1:]:
-        candidate = dtype.type(candidate)
-        better = candidate > winner if kind == "max" else candidate < winner
-        # Strictly better only. An equal value leaves the incumbent in place, which is
-        # what retains the first input's bits -- including its zero sign -- on a tie.
+    raw = np.asarray(domain, dtype=dtype).view(_BITS_DTYPE[dtype])
+    winner_index = 0
+    winner_key = _numeric_order_key(int(raw[0]), dtype)
+    for index in range(1, len(raw)):
+        key = _numeric_order_key(int(raw[index]), dtype)
+        better = key > winner_key if kind == "max" else key < winner_key
+        # Strictly better only. An equal key leaves the incumbent in place, which is what
+        # retains the first input's bits -- including its zero sign -- on a tie.
         if better:
-            winner = candidate
-    return winner
+            winner_key = key
+            winner_index = index
+    return dtype.type(domain[winner_index])
+
+
+def _numeric_order_key(bits: int, dtype: np.dtype) -> int:
+    """An exact integer whose ordering matches the float's numeric ordering.
+
+    Decoded from the stored bits so no floating-point comparison is involved and the
+    process's FP control state cannot influence the result. Subnormals order correctly
+    because their magnitude field is an ordinary small integer here.
+
+    Both zeros map to 0, because +0.0 and -0.0 are numerically equal and the contract
+    therefore treats them as a tie, which the caller resolves in favour of the first
+    element. Ordering them by their bits would make -0.0 strictly smaller and quietly
+    break the clause this reference exists to enforce.
+    """
+    width = 32 if dtype == np.dtype(np.float32) else 16
+    sign = bits >> (width - 1)
+    magnitude = bits & ((1 << (width - 1)) - 1)
+    if magnitude == 0:
+        return 0
+    return -magnitude if sign else magnitude

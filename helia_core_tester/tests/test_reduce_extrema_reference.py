@@ -8,6 +8,8 @@ Each contract clause therefore gets a test that fails if the rule is dropped.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -166,24 +168,72 @@ def test_keepdims_false_drops_the_reduced_axes(kind):
     assert np.array_equal(got, want)
 
 
-def test_subnormals_survive_a_process_that_has_loaded_tensorflow():
-    """Guards against flush-to-zero contamination of the oracle (ns-cmsis-nn#498 review).
+# The four cases the kernel lane demonstrated against this reference at MXCSR 0x9fe2
+# (ns-cmsis-nn#498 review). Each distinguishes correct subnormal ordering from ordering
+# that has treated a subnormal operand as zero.
+_SUBNORMAL_ORDERING_CASES = [
+    ([0x00000000, 0x00000001], "max", 0x00000001),
+    ([0x00000001, 0x00000000], "min", 0x00000000),
+    ([0x00000002, 0x00000001], "min", 0x00000001),
+    ([0x00000000, 0x80000001], "min", 0x80000001),
+]
 
-    The kernel lane's reviewer found that loading a GCC -Ofast host shared library
-    installed FTZ/DAZ in the process, after which a float32-to-float64 conversion in their
-    NumPy reference silently flushed a subnormal to zero. Their kernel was right and the
-    reference was wrong, which is the dangerous direction.
 
-    Generation always imports TensorFlow, so the same exposure exists here. This drives the
-    reference in a process that has loaded it and asserts the subnormal comes back bit for
-    bit. The reference stays in its own float width and never widens, which is why it
-    survives; this test is what keeps that true if someone adds a float64 step later.
+@pytest.mark.parametrize("bits,kind,expected", _SUBNORMAL_ORDERING_CASES)
+def test_subnormal_ordering_is_exact(bits, kind, expected):
+    """Ordering must distinguish subnormals from zero and from each other.
+
+    An earlier version of this reference compared float32 values with > and <, and every
+    one of these returned the wrong element whenever the process had DAZ set, because the
+    hardware reads a subnormal operand as zero. Ordering is now decided on integers
+    decoded from the stored bits, so no comparison instruction is involved.
+
+    These cases replace an earlier test that used [Inf, subnormal, 1] and could not fail
+    for its stated reason: the subnormal still wins that reduction when compared as zero,
+    and its bits survive because the winner is copied whole. It asserted the symptom it
+    was least able to detect.
     """
-    import tensorflow  # noqa: F401  -- imported for its side effects on FP control state
+    values = np.array(bits, dtype=np.uint32).view(F32).reshape(1, len(bits))
+    assert _bits(reduce_extrema_reference(values, [1], kind)[0, 0]) == expected
 
-    smallest_subnormal = _from_bits(0x00000001, F32)
-    values = np.array([[F32(np.inf), smallest_subnormal, F32(1.0)]], dtype=F32)
-    assert _bits(reduce_extrema_reference(values, [1], "min")[0, 0]) == 0x00000001
+
+def test_subnormal_ordering_holds_with_flush_to_zero_actually_enabled():
+    """The same cases with the control state set and observed, not merely assumed.
+
+    Importing a library that might set FTZ/DAZ proves nothing about the control state, as
+    the kernel lane pointed out. This sets FTZ and DAZ, records the MXCSR value it actually
+    observed, runs the cases, and restores the original value. It skips where the helper
+    that can set MXCSR is unavailable, because the primary guarantee is structural -- the
+    reference performs no floating-point comparison -- and this is the check that the
+    structural claim is true in practice.
+    """
+    import ctypes
+
+    helper = Path(
+        "/home/adamp/heliacore-coordination/artifacts/core498/tester-reference-check/mxcsr.so"
+    )
+    if not helper.exists():
+        pytest.skip(f"no MXCSR helper at {helper}; structural guarantee is covered above")
+
+    lib = ctypes.CDLL(str(helper))
+    lib.get_mxcsr.restype = ctypes.c_uint
+    lib.set_mxcsr.argtypes = [ctypes.c_uint]
+    original = lib.get_mxcsr()
+    ftz_daz = 0x8040
+    try:
+        lib.set_mxcsr((original & ~ftz_daz) | ftz_daz)
+        observed = lib.get_mxcsr()
+        assert observed & ftz_daz == ftz_daz, f"asked for FTZ+DAZ, MXCSR reads {observed:#x}"
+        for bits, kind, expected in _SUBNORMAL_ORDERING_CASES:
+            values = np.array(bits, dtype=np.uint32).view(F32).reshape(1, len(bits))
+            got = _bits(reduce_extrema_reference(values, [1], kind)[0, 0])
+            assert got == expected, (
+                f"{kind}{[hex(b) for b in bits]} at MXCSR {observed:#x}: "
+                f"expected {expected:#010x}, got {got:#010x}"
+            )
+    finally:
+        lib.set_mxcsr(original)
+        assert lib.get_mxcsr() == original
 
 
 def test_float16_selection_stays_in_float16():
