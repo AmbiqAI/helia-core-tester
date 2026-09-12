@@ -21,9 +21,9 @@ DOWNLOADS_DIR = "artifacts/downloads"
 
 
 def _default_repo_root() -> Path:
-    from .phase0 import _repo_root
+    from .boards import repo_root
 
-    return _repo_root()
+    return repo_root()
 
 
 def toolchain_bin_dir(repo_root: Optional[Path] = None) -> Path:

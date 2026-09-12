@@ -441,7 +441,7 @@ def captured_cmake(monkeypatch, tmp_path: Path):
     """Run `configure()` without CMake or the dependency fetch; returns the argv it would run."""
     calls: list[list[str]] = []
     monkeypatch.setattr(firmware_build, "ensure_hardware_dependencies", lambda repo_root: None)
-    monkeypatch.setattr(firmware_build, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(firmware_build, "tester_repo_root", lambda: tmp_path)
     monkeypatch.setattr(firmware_build.subprocess, "run", lambda cmd, **kwargs: calls.append(list(cmd)))
     return calls
 

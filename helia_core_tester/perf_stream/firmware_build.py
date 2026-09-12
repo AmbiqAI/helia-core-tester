@@ -29,9 +29,9 @@ from typing import Callable, Optional
 import typer
 
 from .boards import BoardSpec
+from .boards import repo_root as tester_repo_root
 from .jlink_library import JLinkLibraryError, find_jlink_exe
 from .pathutil import is_relative_to
-from .phase0 import _repo_root
 from .toolchain import DOWNLOADS_DIR, add_toolchain_to_path, toolchain_bin_dir
 
 TOOLCHAIN_FILE = "cmake/nsx/toolchains/arm-none-eabi-gcc.cmake"
@@ -146,7 +146,7 @@ def _cached_var(cache_text: str, name: str) -> Optional[str]:
 
 
 def configure(build_dir: Path, board: BoardSpec, force: bool, serial_no: Optional[int] = None) -> None:
-    repo_root = _repo_root()
+    repo_root = tester_repo_root()
     ensure_hardware_dependencies(repo_root)
     cache = build_dir / "CMakeCache.txt"
     if cache.exists() and not force:
@@ -237,9 +237,9 @@ def build(build_dir: Path, target: str, jobs: Optional[int]) -> None:
     # own compiler/linker/objcopy invocations at absolute paths, but this one
     # still needs the toolchain's bin/ on PATH.
     env = os.environ.copy()
-    toolchain_bin = str(toolchain_bin_dir(_repo_root()).resolve())
+    toolchain_bin = str(toolchain_bin_dir(tester_repo_root()).resolve())
     env["PATH"] = f"{toolchain_bin}{os.pathsep}{env.get('PATH', '')}"
-    subprocess.run(cmd, cwd=_repo_root(), check=True, env=env)
+    subprocess.run(cmd, cwd=tester_repo_root(), check=True, env=env)
 
 
 # --- flash-only-if-changed stamp -------------------------------------------------

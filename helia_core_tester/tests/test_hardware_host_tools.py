@@ -10,9 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream import benchmark_firmware_report as report
+from helia_core_tester.perf_stream import memory_report as report
 from helia_core_tester.perf_stream import toolchain
+from helia_core_tester.perf_stream.boards import DEFAULT_BOARD_ID, resolve_board
 from helia_core_tester.perf_stream.pathutil import display_path, is_relative_to
+
+
+BOARD = resolve_board(DEFAULT_BOARD_ID)
 
 
 def _fake_tool(bin_dir: Path, name: str) -> Path:
@@ -94,9 +98,9 @@ def report_env(tmp_path: Path, monkeypatch):
     repo = tmp_path / "repo"
     (repo / "cmake" / "perf_stream").mkdir(parents=True)
     (repo / "cmake" / "perf_stream" / "kernel_catalog.json").write_text("[]")
-    monkeypatch.setattr(report, "_repo_root", lambda: repo)
+    monkeypatch.setattr(report, "repo_root", lambda: repo)
     monkeypatch.setattr(report, "_probe_binary", lambda tool, args: "")
-    monkeypatch.setattr(report, "_parse_memory_regions", lambda path: [])
+    monkeypatch.setattr(report, "parse_memory_regions", lambda path: [])
     return repo
 
 
@@ -110,7 +114,7 @@ def _fake_build(build_dir: Path) -> Path:
 def test_memory_report_paths_are_repo_relative_inside_and_absolute_outside(tmp_path: Path, report_env) -> None:
     repo = report_env
     inside = _fake_build(repo / "build" / "perf_stream" / "apollo510_evb")
-    data = json.loads(report.generate_benchmark_server_memory_report(
+    data = json.loads(report.generate_memory_report(BOARD, 
         build_dir=inside.parent.parent, output_root=tmp_path / "out_in").read_text())
     assert data["artifacts"] == {
         "elf": "build/perf_stream/apollo510_evb/perf_stream/hct_benchmark_server.elf",
@@ -119,7 +123,7 @@ def test_memory_report_paths_are_repo_relative_inside_and_absolute_outside(tmp_p
     }
 
     external = _fake_build(tmp_path / "extbuild")
-    data = json.loads(report.generate_benchmark_server_memory_report(
+    data = json.loads(report.generate_memory_report(BOARD, 
         build_dir=external.parent.parent, output_root=tmp_path / "out_ext").read_text())
     assert data["artifacts"]["elf"] == str(external)
     assert data["artifacts"]["bin"] == str(external.with_suffix(".bin"))
@@ -128,5 +132,5 @@ def test_memory_report_paths_are_repo_relative_inside_and_absolute_outside(tmp_p
 
 def test_memory_report_names_the_missing_elf(tmp_path: Path, report_env) -> None:
     with pytest.raises(FileNotFoundError, match="Built firmware ELF not found") as info:
-        report.generate_benchmark_server_memory_report(build_dir=tmp_path / "never-built", output_root=tmp_path / "out")
+        report.generate_memory_report(BOARD, build_dir=tmp_path / "never-built", output_root=tmp_path / "out")
     assert str(tmp_path / "never-built" / "perf_stream" / "hct_benchmark_server.elf") in str(info.value)

@@ -34,9 +34,8 @@ from typing import Iterator, Optional
 
 import typer
 
-from .benchmark_firmware_report import generate_benchmark_server_memory_report
-from .boards import BoardSpec, UnknownBoardError, default_board_id, load_board_table, resolve_board
-from .phase0 import _repo_root
+from .boards import BoardSpec, UnknownBoardError, default_board_id, load_board_table, repo_root, resolve_board
+from .memory_report import generate_memory_report
 from .probes import ProbeResolutionError, list_probes, resolve_serial
 
 hardware_app = typer.Typer(
@@ -191,7 +190,7 @@ def build(
 
     spec = _board(board)
     with _pipeline_errors(_verbosity(verbosity)):
-        elf = build_firmware(spec, build_dir=resolve_build_dir(_repo_root(), spec, build_dir), jobs=jobs, force_reconfigure=force_reconfigure)
+        elf = build_firmware(spec, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs, force_reconfigure=force_reconfigure)
     typer.echo(f"✓ Firmware build completed successfully: {elf}")
 
 
@@ -214,7 +213,7 @@ def flash(
     serial = _serial(serial_no)
     with _pipeline_errors(_verbosity(verbosity)):
         decision = flash_firmware(
-            spec, serial, build_dir=resolve_build_dir(_repo_root(), spec, build_dir), jobs=jobs,
+            spec, serial, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs,
             force_reconfigure=force_reconfigure, force=force,
         )
     if decision.needed:
@@ -238,7 +237,7 @@ def memory_report(
     # FileNotFoundError, a missing/failing arm-none-eabi-* tool a FileNotFoundError
     # or CalledProcessError.
     with _pipeline_errors(_verbosity(verbosity)):
-        path = generate_benchmark_server_memory_report(build_dir=resolve_build_dir(_repo_root(), spec, build_dir), output_root=output_root)
+        path = generate_memory_report(spec, build_dir=resolve_build_dir(repo_root(), spec, build_dir), output_root=output_root)
     typer.echo(json.dumps(json.loads(path.read_text()), indent=2))
     typer.echo(f"\n✓ Memory report written to {path}")
 
@@ -358,7 +357,7 @@ def stream(
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
         outcome = stream_generated_tests(
-            _repo_root(), spec, serial, build_dir=resolve_build_dir(_repo_root(), spec, build_dir),
+            repo_root(), spec, serial, build_dir=resolve_build_dir(repo_root(), spec, build_dir),
             options=options, echo=echo, progress_to_stderr=as_json, allow_unverified_firmware=allow_unverified_firmware,
         )
         finalize_timing(outcome, echo=echo)
@@ -401,7 +400,7 @@ def run(
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
         outcome = run_hardware_pipeline(
-            _repo_root(), spec, serial, options=options, build_dir=build_dir,
+            repo_root(), spec, serial, options=options, build_dir=build_dir,
             skip_generate=skip_generate, skip_flash=skip_flash, force_flash=force_flash, jobs=jobs,
             force_reconfigure=force_reconfigure, echo=echo, progress_to_stderr=as_json,
             allow_unverified_firmware=allow_unverified_firmware,
