@@ -189,3 +189,22 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
         tmp_path, board, 42, options=StreamOptions(), skip_generate=True, skip_flash=True, echo=lambda _msg: None,
     )
     assert order == ["stream:int:None"]
+
+
+# --- --json keeps stdout clean ----------------------------------------------------
+
+
+def test_stdout_to_stderr_covers_python_and_subprocess_output(capfd) -> None:
+    import subprocess
+    import sys
+
+    from helia_core_tester.perf_stream.run_summary import stdout_to_stderr
+
+    with stdout_to_stderr():
+        print("python-line")
+        subprocess.run([sys.executable, "-c", "print('child-line')"], check=True)
+    print("after-line")
+    out, err = capfd.readouterr()
+    assert "python-line" in err and "child-line" in err
+    assert "python-line" not in out and "child-line" not in out
+    assert "after-line" in out

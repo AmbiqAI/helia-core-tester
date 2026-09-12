@@ -2,11 +2,39 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
+import sys
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional
 
 import typer
+
+
+@contextlib.contextmanager
+def stdout_to_stderr() -> Iterator[None]:
+    """Route everything written to stdout -- Python prints, typer.echo, and the
+    stdout of child processes such as cmake, J-Link and the generation pytest --
+    to stderr for the duration of the block.
+
+    `--json` promises exactly one JSON document on stdout. Redirecting only
+    `sys.stdout` would miss subprocesses, which inherit file descriptor 1, so this
+    swaps the descriptor itself and restores it afterwards.
+    """
+    sys.stdout.flush()
+    sys.stderr.flush()
+    saved_fd = os.dup(1)
+    saved_stream = sys.stdout
+    try:
+        os.dup2(2, 1)
+        sys.stdout = sys.stderr
+        yield
+    finally:
+        sys.stdout.flush()
+        sys.stdout = saved_stream
+        os.dup2(saved_fd, 1)
+        os.close(saved_fd)
 
 
 def _format_case_line(case, *, id_width: int = 0) -> str:

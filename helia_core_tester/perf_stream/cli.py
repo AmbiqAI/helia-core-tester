@@ -16,6 +16,7 @@ and run_summary.py.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -203,6 +204,14 @@ def _stream_options(suite, family, test_name, limit, precision, pmu_groups, fvp_
     )
 
 
+def _quiet_stdout(as_json: bool):
+    """With --json, keep stdout clear for the one JSON document: the firmware build,
+    J-Link flash and generation subprocesses all write to inherited stdout otherwise."""
+    from .run_summary import stdout_to_stderr
+
+    return stdout_to_stderr() if as_json else contextlib.nullcontext()
+
+
 def _report(outcome, spec: BoardSpec, *, as_json: bool) -> None:
     from .run_summary import build_json_summary, print_run_report
 
@@ -253,10 +262,11 @@ def stream(
     options = _stream_options(suite, family, test_name, limit, precision, pmu_groups, fvp_gate, session_id)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     try:
-        outcome = stream_generated_tests(
-            _repo_root(), spec, serial, build_dir=resolve_build_dir(_repo_root(), spec, build_dir),
-            options=options, echo=echo, progress_to_stderr=as_json,
-        )
+        with _quiet_stdout(as_json):
+            outcome = stream_generated_tests(
+                _repo_root(), spec, serial, build_dir=resolve_build_dir(_repo_root(), spec, build_dir),
+                options=options, echo=echo, progress_to_stderr=as_json,
+            )
     except RuntimeError as exc:
         _fail(str(exc))
     _report(outcome, spec, as_json=as_json)
@@ -291,11 +301,12 @@ def run(
     options = _stream_options(suite, family, test_name, limit, precision, pmu_groups, fvp_gate, session_id)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     try:
-        outcome = run_hardware_pipeline(
-            _repo_root(), spec, serial, options=options, build_dir=build_dir,
-            skip_generate=skip_generate, skip_flash=skip_flash, jobs=jobs,
-            force_reconfigure=force_reconfigure, echo=echo, progress_to_stderr=as_json,
-        )
+        with _quiet_stdout(as_json):
+            outcome = run_hardware_pipeline(
+                _repo_root(), spec, serial, options=options, build_dir=build_dir,
+                skip_generate=skip_generate, skip_flash=skip_flash, jobs=jobs,
+                force_reconfigure=force_reconfigure, echo=echo, progress_to_stderr=as_json,
+            )
     except RuntimeError as exc:
         _fail(str(exc))
     _report(outcome, spec, as_json=as_json)
