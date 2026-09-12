@@ -1,0 +1,290 @@
+# Bit-exact fixtures for ns-cmsis-nn#498; integer case defects tracked in #155.
+# Each retained batch and height has distinct extrema; first and last width elements compete.
+operator: ReduceMin
+name: reduce_min_width_boundary_f32
+suite: float
+required_kernel_symbols: [arm_reduce_min_f32]
+tensor_dtypes: {input: FP32, output: FP32}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 2, 3, 2]
+axes: [2]
+hint:
+  extras:
+    input_bits: [
+      0x41500000, 0x41700000, 0x41200000, 0x41900000, 0x40e00000, 0x41a80000, 0x41e80000, 0x41f80000,
+      0x41d00000, 0x42080000, 0x41b80000, 0x42140000, 0x42340000, 0x423c0000, 0x42280000, 0x42480000,
+      0x421c0000, 0x42540000, 0x42740000, 0x427c0000, 0x42680000, 0x42840000, 0x425c0000, 0x428a0000
+    ]
+---
+# Reduce batch with channels; retained height and width remain non-unit.
+operator: ReduceMin
+name: reduce_min_batch_channel_boundary_f32
+suite: float
+required_kernel_symbols: [arm_reduce_min_f32]
+tensor_dtypes: {input: FP32, output: FP32}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 2, 2, 3]
+axes: [0, 3]
+hint:
+  extras:
+    input_bits: [
+      0x41500000, 0x41200000, 0x41200000, 0x41700000, 0x41900000, 0x41900000, 0x41e80000, 0x41d00000,
+      0x41d00000, 0x41f80000, 0x42080000, 0x42080000, 0x41200000, 0x41200000, 0x40e00000, 0x41900000,
+      0x41900000, 0x41a80000, 0x41d00000, 0x41d00000, 0x41b80000, 0x42080000, 0x42080000, 0x42140000
+    ]
+---
+# Nonadjacent reduced axes retain non-unit batch and width, exercising generic strides.
+operator: ReduceMin
+name: reduce_min_height_channel_boundary_f32
+suite: float
+required_kernel_symbols: [arm_reduce_min_f32]
+tensor_dtypes: {input: FP32, output: FP32}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 2, 3, 2]
+axes: [1, 3]
+hint:
+  extras:
+    input_bits: [
+      0x41500000, 0x41200000, 0x41700000, 0x41900000, 0x41e80000, 0x41d00000, 0x41200000, 0x40e00000,
+      0x41900000, 0x41a80000, 0x41d00000, 0x41b80000, 0x41f80000, 0x42080000, 0x42340000, 0x42280000,
+      0x423c0000, 0x42480000, 0x42080000, 0x42140000, 0x42280000, 0x421c0000, 0x42480000, 0x42540000
+    ]
+---
+# All four axes contribute; extrema occupy the first and last elements.
+operator: ReduceMin
+name: reduce_min_all_boundary_f32
+suite: float
+required_kernel_symbols: [arm_reduce_min_f32]
+tensor_dtypes: {input: FP32, output: FP32}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 2, 2, 3]
+axes: [0, 1, 2, 3]
+hint:
+  extras:
+    input_bits: [
+      0x41500000, 0x41200000, 0x41200000, 0x41200000, 0x41200000, 0x41200000, 0x41200000, 0x41200000,
+      0x41200000, 0x41200000, 0x41200000, 0x41200000, 0x41200000, 0x41200000, 0x41200000, 0x41200000,
+      0x41200000, 0x41200000, 0x41200000, 0x41200000, 0x41200000, 0x41200000, 0x41200000, 0x40e00000
+    ]
+---
+# Rows test both zero tie orders, subnormal ordering, infinities, and NaNs at each position.
+operator: ReduceMin
+name: reduce_min_special_f32
+suite: float
+required_kernel_symbols: [arm_reduce_min_f32]
+tensor_dtypes: {input: FP32, output: FP32}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 2, 3, 3]
+axes: [3]
+hint:
+  extras:
+    input_bits: [
+      0x80000000, 0x00000000, 0x00000000, 0x00000000, 0x80000000, 0x80000000, 0x00000000, 0x00000001,
+      0x00000002, 0x80000000, 0x80000001, 0x80000002, 0x3f800000, 0x7f800000, 0x40000000, 0xbf800000,
+      0xff800000, 0xc0000000, 0x7f800001, 0x3f800000, 0x40000000, 0x3f800000, 0xff800003, 0x40000000,
+      0x3f800000, 0x40000000, 0x7fc00007, 0x80000001, 0x00000000, 0x00000001, 0x40400000, 0x40400000,
+      0x40000000, 0xc0400000, 0xc0400000, 0xc0000000
+    ]
+---
+# Zero mask preserves signed signaling/quiet NaN payloads and subnormal bits.
+operator: ReduceMin
+name: reduce_min_copy_f32
+suite: float
+required_kernel_symbols: [arm_reduce_min_f32]
+tensor_dtypes: {input: FP32, output: FP32}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 1, 2, 4]
+axes: []
+hint:
+  extras:
+    input_bits: [
+      0x80000000, 0x00000000, 0x00000001, 0x80000001, 0x7f800000, 0xff800000, 0x7f800001, 0xff800003,
+      0x7fc00007, 0xffc0000b, 0x3f800000, 0xbf800000, 0x00000002, 0x80000002, 0x40400000, 0xc0400000
+    ]
+---
+# The same payloads as copy must canonicalize when a singleton axis is reduced.
+operator: ReduceMin
+name: reduce_min_singleton_f32
+suite: float
+required_kernel_symbols: [arm_reduce_min_f32]
+tensor_dtypes: {input: FP32, output: FP32}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 1, 2, 4]
+axes: [1]
+hint:
+  extras:
+    input_bits: [
+      0x80000000, 0x00000000, 0x00000001, 0x80000001, 0x7f800000, 0xff800000, 0x7f800001, 0xff800003,
+      0x7fc00007, 0xffc0000b, 0x3f800000, 0xbf800000, 0x00000002, 0x80000002, 0x40400000, 0xc0400000
+    ]
+---
+# Empty reduction writes the identity to every retained output.
+operator: ReduceMin
+name: reduce_min_empty_domain_f32
+suite: float
+required_kernel_symbols: [arm_reduce_min_f32]
+tensor_dtypes: {input: FP32, output: FP32}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 0, 3, 2]
+axes: [1]
+hint:
+  extras:
+    input_bits: []
+---
+# No output elements; output guards must remain intact.
+operator: ReduceMin
+name: reduce_min_empty_output_f32
+suite: float
+required_kernel_symbols: [arm_reduce_min_f32]
+tensor_dtypes: {input: FP32, output: FP32}
+comparison: {atol: 0, rtol: 0}
+input_shape: [0, 2, 3, 2]
+axes: [2]
+hint:
+  extras:
+    input_bits: []
+---
+# Each retained batch and height has distinct extrema; first and last width elements compete.
+operator: ReduceMin
+name: reduce_min_width_boundary_f16
+suite: float
+required_kernel_symbols: [arm_reduce_min_f16]
+tensor_dtypes: {input: FP16, output: FP16}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 2, 3, 2]
+axes: [2]
+hint:
+  extras:
+    input_bits: [
+      0x4a80, 0x4b80, 0x4900, 0x4c80, 0x4700, 0x4d40, 0x4f40, 0x4fc0,
+      0x4e80, 0x5040, 0x4dc0, 0x50a0, 0x51a0, 0x51e0, 0x5140, 0x5240,
+      0x50e0, 0x52a0, 0x53a0, 0x53e0, 0x5340, 0x5420, 0x52e0, 0x5450
+    ]
+---
+# Reduce batch with channels; retained height and width remain non-unit.
+operator: ReduceMin
+name: reduce_min_batch_channel_boundary_f16
+suite: float
+required_kernel_symbols: [arm_reduce_min_f16]
+tensor_dtypes: {input: FP16, output: FP16}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 2, 2, 3]
+axes: [0, 3]
+hint:
+  extras:
+    input_bits: [
+      0x4a80, 0x4900, 0x4900, 0x4b80, 0x4c80, 0x4c80, 0x4f40, 0x4e80,
+      0x4e80, 0x4fc0, 0x5040, 0x5040, 0x4900, 0x4900, 0x4700, 0x4c80,
+      0x4c80, 0x4d40, 0x4e80, 0x4e80, 0x4dc0, 0x5040, 0x5040, 0x50a0
+    ]
+---
+# Nonadjacent reduced axes retain non-unit batch and width, exercising generic strides.
+operator: ReduceMin
+name: reduce_min_height_channel_boundary_f16
+suite: float
+required_kernel_symbols: [arm_reduce_min_f16]
+tensor_dtypes: {input: FP16, output: FP16}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 2, 3, 2]
+axes: [1, 3]
+hint:
+  extras:
+    input_bits: [
+      0x4a80, 0x4900, 0x4b80, 0x4c80, 0x4f40, 0x4e80, 0x4900, 0x4700,
+      0x4c80, 0x4d40, 0x4e80, 0x4dc0, 0x4fc0, 0x5040, 0x51a0, 0x5140,
+      0x51e0, 0x5240, 0x5040, 0x50a0, 0x5140, 0x50e0, 0x5240, 0x52a0
+    ]
+---
+# All four axes contribute; extrema occupy the first and last elements.
+operator: ReduceMin
+name: reduce_min_all_boundary_f16
+suite: float
+required_kernel_symbols: [arm_reduce_min_f16]
+tensor_dtypes: {input: FP16, output: FP16}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 2, 2, 3]
+axes: [0, 1, 2, 3]
+hint:
+  extras:
+    input_bits: [
+      0x4a80, 0x4900, 0x4900, 0x4900, 0x4900, 0x4900, 0x4900, 0x4900,
+      0x4900, 0x4900, 0x4900, 0x4900, 0x4900, 0x4900, 0x4900, 0x4900,
+      0x4900, 0x4900, 0x4900, 0x4900, 0x4900, 0x4900, 0x4900, 0x4700
+    ]
+---
+# Rows test both zero tie orders, subnormal ordering, infinities, and NaNs at each position.
+operator: ReduceMin
+name: reduce_min_special_f16
+suite: float
+required_kernel_symbols: [arm_reduce_min_f16]
+tensor_dtypes: {input: FP16, output: FP16}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 2, 3, 3]
+axes: [3]
+hint:
+  extras:
+    input_bits: [
+      0x8000, 0x0000, 0x0000, 0x0000, 0x8000, 0x8000, 0x0000, 0x0001,
+      0x0002, 0x8000, 0x8001, 0x8002, 0x3c00, 0x7c00, 0x4000, 0xbc00,
+      0xfc00, 0xc000, 0x7c01, 0x3c00, 0x4000, 0x3c00, 0xfc03, 0x4000,
+      0x3c00, 0x4000, 0x7e07, 0x8001, 0x0000, 0x0001, 0x4200, 0x4200,
+      0x4000, 0xc200, 0xc200, 0xc000
+    ]
+---
+# Zero mask preserves signed signaling/quiet NaN payloads and subnormal bits.
+operator: ReduceMin
+name: reduce_min_copy_f16
+suite: float
+required_kernel_symbols: [arm_reduce_min_f16]
+tensor_dtypes: {input: FP16, output: FP16}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 1, 2, 4]
+axes: []
+hint:
+  extras:
+    input_bits: [
+      0x8000, 0x0000, 0x0001, 0x8001, 0x7c00, 0xfc00, 0x7c01, 0xfc03,
+      0x7e07, 0xfe0b, 0x3c00, 0xbc00, 0x0002, 0x8002, 0x4200, 0xc200
+    ]
+---
+# The same payloads as copy must canonicalize when a singleton axis is reduced.
+operator: ReduceMin
+name: reduce_min_singleton_f16
+suite: float
+required_kernel_symbols: [arm_reduce_min_f16]
+tensor_dtypes: {input: FP16, output: FP16}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 1, 2, 4]
+axes: [1]
+hint:
+  extras:
+    input_bits: [
+      0x8000, 0x0000, 0x0001, 0x8001, 0x7c00, 0xfc00, 0x7c01, 0xfc03,
+      0x7e07, 0xfe0b, 0x3c00, 0xbc00, 0x0002, 0x8002, 0x4200, 0xc200
+    ]
+---
+# Empty reduction writes the identity to every retained output.
+operator: ReduceMin
+name: reduce_min_empty_domain_f16
+suite: float
+required_kernel_symbols: [arm_reduce_min_f16]
+tensor_dtypes: {input: FP16, output: FP16}
+comparison: {atol: 0, rtol: 0}
+input_shape: [2, 0, 3, 2]
+axes: [1]
+hint:
+  extras:
+    input_bits: []
+---
+# No output elements; output guards must remain intact.
+operator: ReduceMin
+name: reduce_min_empty_output_f16
+suite: float
+required_kernel_symbols: [arm_reduce_min_f16]
+tensor_dtypes: {input: FP16, output: FP16}
+comparison: {atol: 0, rtol: 0}
+input_shape: [0, 2, 3, 2]
+axes: [2]
+hint:
+  extras:
+    input_bits: []

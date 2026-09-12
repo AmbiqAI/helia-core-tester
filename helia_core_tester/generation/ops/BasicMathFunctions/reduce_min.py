@@ -8,6 +8,16 @@ import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.utils.tflite_utils import qp_scalar
+from helia_core_tester.generation.io.dtypes import descriptor_dtype_to_c_type
+from helia_core_tester.generation.ops._shared.reduce_extrema_float import generate_reduce_extrema_float
+
+
+_KERNEL_BY_DTYPE = {
+    "S8": "arm_reduce_min_s8",
+    "S16": "arm_reduce_min_s16",
+    "FP32": "arm_reduce_min_f32",
+    "FP16": "arm_reduce_min_f16",
+}
 
 
 class OpReduceMin(OperationBase):
@@ -15,10 +25,21 @@ class OpReduceMin(OperationBase):
     ReduceMin operation.
     """
     
+    def _element_dtype(self) -> str:
+        dtype = self.tensor_dtype("input")
+        if self.tensor_dtype("output", default=dtype) != dtype:
+            raise ValueError("Reduce extrema requires matching input/output dtypes")
+        if dtype not in _KERNEL_BY_DTYPE:
+            raise NotImplementedError(f"Unsupported reduce extrema dtype: {dtype}")
+        return dtype
+
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for ReduceMin operation."""
         input_shape = self.desc['input_shape']
-        inputs = tf.keras.Input(shape=input_shape[1:], dtype=tf.float32, name='input')
+        inputs = tf.keras.Input(
+            shape=input_shape[1:], dtype=tf.float32, name='input',
+            batch_size=input_shape[0] if self._element_dtype() in ("FP32", "FP16") else None,
+        )
         
         # Get axes and keepdims from descriptor
         axes = self.desc.get('axes', [1, 2])  # Default to spatial dimensions
@@ -35,6 +56,10 @@ class OpReduceMin(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        if self._element_dtype() in ("FP32", "FP16"):
+            converter = tf.lite.TFLiteConverter.from_keras_model(model)
+            self._write_tflite_bytes(out_path, converter.convert())
+            return
         super().convert_to_tflite(model, out_path, rep_seed)
     
     def _select_cmsis_reduce_min_kernel(self) -> Dict[str, str]:
@@ -44,27 +69,24 @@ class OpReduceMin(OperationBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
-        
-        if activation_dtype == 'S8':
-            return {
-                'kernel_fn': 'arm_reduce_min_s8',
-                'input_c_type': 'int8_t',
-                'output_c_type': 'int8_t'
-            }
-        elif activation_dtype == 'S16':
-            return {
-                'kernel_fn': 'arm_reduce_min_s16',
-                'input_c_type': 'int16_t',
-                'output_c_type': 'int16_t'
-            }
-        else:
-            raise NotImplementedError(f"Unsupported ReduceMin dtype: {activation_dtype}")
-    
+        dtype = self._element_dtype()
+        c_type = descriptor_dtype_to_c_type(dtype)
+        return {
+            "kernel_fn": _KERNEL_BY_DTYPE[dtype],
+            "input_c_type": c_type,
+            "output_c_type": c_type,
+        }
+
     def generate_c_files(self, output_dir: Path) -> None:
         """
         Generate C and H files from templates for ReduceMin operation.
         """
+        if self._element_dtype() in ("FP32", "FP16"):
+            generate_reduce_extrema_float(
+                self, output_dir, "min", self._select_cmsis_reduce_min_kernel()
+            )
+            return
+
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
         
         name = self.desc['name']

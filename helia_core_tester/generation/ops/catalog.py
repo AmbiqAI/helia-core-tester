@@ -192,7 +192,11 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("BasicMathFunctions/mean.yaml", "BasicMathFunctions/mean_float.yaml"),
         template_relpath="BasicMathFunctions/mean",
     ),
-    "ReduceMax": _spec("ReduceMax", "BasicMathFunctions", "reduce_max", "OpReduceMax", "BasicMathFunctions/reduce_max.yaml", "BasicMathFunctions/reduce_max"),
+    "ReduceMax": _spec(
+        "ReduceMax", "BasicMathFunctions", "reduce_max", "OpReduceMax",
+        descriptor_relpaths=("BasicMathFunctions/reduce_max.yaml", "BasicMathFunctions/reduce_max_float.yaml"),
+        template_relpath="BasicMathFunctions/reduce_max",
+    ),
     "ReduceSum": _spec(
         "ReduceSum",
         "BasicMathFunctions",
@@ -201,7 +205,11 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "BasicMathFunctions/reduce_sum_float.yaml",
         "BasicMathFunctions/reduce_sum",
     ),
-    "ReduceMin": _spec("ReduceMin", "BasicMathFunctions", "reduce_min", "OpReduceMin", "BasicMathFunctions/reduce_min.yaml", "BasicMathFunctions/reduce_min"),
+    "ReduceMin": _spec(
+        "ReduceMin", "BasicMathFunctions", "reduce_min", "OpReduceMin",
+        descriptor_relpaths=("BasicMathFunctions/reduce_min.yaml", "BasicMathFunctions/reduce_min_float.yaml"),
+        template_relpath="BasicMathFunctions/reduce_min",
+    ),
     "ArgMax": _spec("ArgMax", "BasicMathFunctions", "argmax", "OpArgMax", "BasicMathFunctions/argmax.yaml", "BasicMathFunctions/argmax"),
     "ArgMin": _spec("ArgMin", "BasicMathFunctions", "argmin", "OpArgMin", "BasicMathFunctions/argmin.yaml", "BasicMathFunctions/argmin"),
     "Sqrt": _spec("Sqrt", "BasicMathFunctions", "sqrt", "OpSqrt", template_relpath="BasicMathFunctions/sqrt", descriptor_relpaths=("BasicMathFunctions/sqrt.yaml", "BasicMathFunctions/sqrt_float.yaml")),

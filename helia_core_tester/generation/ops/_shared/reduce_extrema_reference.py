@@ -1,40 +1,9 @@
-"""Independent reference for the float reduce-min and reduce-max bit contract.
+"""Independent float reduce-extrema bit contract (ns-cmsis-nn#498).
 
-The kernel contract (ns-cmsis-nn#498) is a bit contract, not a numeric one:
-
-    Values are selected without floating-point arithmetic, accumulation or conversion.
-    Any NaN in a reduction yields canonical quiet NaN (0x7fc00000); infinities and
-    subnormals retain their bits. Equal numeric values retain the first input in
-    row-major order, including zero signs. A zero mask copies bits unchanged,
-    including NaN payloads. Reducing a singleton axis instead canonicalizes NaNs.
-    An empty reduced domain produces -Inf (max) or +Inf (min).
-
-``numpy`` cannot stand in for this. ``np.max`` keeps the *last* equal element's sign
-where the contract keeps the first::
-
-    np.max([-0.0, 0.0]) -> 0.0     # positive
-    np.max([0.0, -0.0]) -> -0.0    # negative
-
-so a numpy golden would disagree with a correct kernel on every signed-zero tie, and
-would agree with one that had the rule backwards. numpy does canonicalise NaN, which
-happens to match, but that is an implementation detail rather than a promise.
-
-Writing the rules out is therefore not busywork: it is the only way to get the bits
-right, and it keeps the reference an independent formulation rather than a borrowing of
-numpy's semantics -- which is the shared-misunderstanding failure #127 turned out to be.
-
-Ordering is decided on integers decoded from the stored bits, never by a floating-point
-comparison. That is not a stylistic choice. An earlier version of this reference compared
-with ``>`` and ``<`` on float32 values and was wrong whenever the process had DAZ set:
-the hardware reads a subnormal operand as zero, so distinct subnormals compare equal to
-each other and to zero, and the selection picks the wrong element. Demonstrated by the
-kernel lane at MXCSR 0x9fe2 (ns-cmsis-nn#498 review), four cases including
-``max(0x00000000, 0x00000001)`` returning ``0x00000000``.
-
-Note what that corrects: an earlier comment here claimed the reference was safe because
-it never widened to float64. Widening was never the mechanism. Staying in float32 does
-nothing, because the comparison instruction itself honours the control state. Only
-removing the floating-point comparison removes the exposure.
+Reductions canonicalize NaNs and retain the first input on numeric ties;
+zero masks copy bits, while empty domains produce the signed infinity identity.
+NumPy extrema do not preserve the required zero tie order. Integer ordering
+also avoids the process FTZ/DAZ state changing subnormal comparisons.
 """
 
 from __future__ import annotations
@@ -74,8 +43,7 @@ def reduce_extrema_reference(
 
     Selection walks each reduction domain in row-major order and keeps the first element
     that is strictly better than the incumbent, so an equal value never displaces the one
-    before it. That is what preserves the first input's zero sign on a tie, and it is the
-    single place this differs from ``np.max``/``np.min``.
+    before it. This preserves the first input's zero sign on a tie.
     """
     if kind not in ("max", "min"):
         raise ValueError(f"kind must be 'max' or 'min', not {kind!r}")
