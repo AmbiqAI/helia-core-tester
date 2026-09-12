@@ -18,7 +18,8 @@ from typing import Optional
 
 import typer
 
-from .boards import BoardSpec, repo_root
+from .boards import BoardSpec
+from .boards import repo_root as tester_repo_root
 
 TOOLCHAIN_FILE = "cmake/nsx/toolchains/arm-none-eabi-gcc.cmake"
 DOWNLOADS_DIR = "artifacts/downloads"
@@ -112,7 +113,7 @@ def _cached_var(cache_text: str, name: str) -> Optional[str]:
 
 
 def configure(build_dir: Path, board: BoardSpec, force: bool, serial_no: Optional[int] = None) -> None:
-    repo_root = repo_root()
+    repo_root = tester_repo_root()
     ensure_hardware_dependencies(repo_root)
     cache = build_dir / "CMakeCache.txt"
     if cache.exists() and not force:
@@ -172,9 +173,9 @@ def build(build_dir: Path, target: str, jobs: Optional[int]) -> None:
     # own compiler/linker/objcopy invocations at absolute paths, but this one
     # still needs the toolchain's bin/ on PATH.
     env = os.environ.copy()
-    toolchain_bin = str((repo_root() / DOWNLOADS_DIR / "arm_gcc_download" / "bin").resolve())
+    toolchain_bin = str((tester_repo_root() / DOWNLOADS_DIR / "arm_gcc_download" / "bin").resolve())
     env["PATH"] = f"{toolchain_bin}{os.pathsep}{env.get('PATH', '')}"
-    subprocess.run(cmd, cwd=repo_root(), check=True, env=env)
+    subprocess.run(cmd, cwd=tester_repo_root(), check=True, env=env)
 
 
 # --- flash-only-if-changed stamp -------------------------------------------------
