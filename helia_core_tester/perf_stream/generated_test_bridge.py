@@ -5112,6 +5112,6 @@ _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
 def bridged_families() -> list[str]:
     """Distinct operator families with at least one bridged (family, operator) builder
     registered in `_BUILDERS`, in stable sorted order. Used by callers (e.g.
-    `hardware_run.build_generated_test_case_bundles`) that want to bridge every family
+    `session_runner.build_generated_test_case_bundles`) that want to bridge every family
     with real firmware dispatch support instead of a single hardcoded family."""
     return sorted({family for family, _operator in _BUILDERS})
