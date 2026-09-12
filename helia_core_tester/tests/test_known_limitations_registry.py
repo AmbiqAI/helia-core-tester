@@ -1,5 +1,4 @@
-"""Phase 4 of the generation/bridge unification plan: verify the declarative
-known-limitations registry (helia_core_tester.perf_stream.known_limitations)
+"""Verify the declarative known-limitations registry (helia_core_tester.perf_stream.known_limitations)
 correctly gates case bridging centrally in
 build_case_bundle_from_generated_test(), rather than via ad hoc
 `if generated_test.name == "...":` checks buried in individual per-operator
