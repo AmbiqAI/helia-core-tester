@@ -212,8 +212,8 @@ class OpStridedSlice(OperationBase):
         # fall back to computing golden data directly via numpy on the descriptor's
         # true full-size input (bypassing the TFLite interpreter/converter
         # entirely for those cases only); every other case's behavior is
-        # byte-for-byte unchanged. See docs/perf-stream-expansion-progress.md
-        # Phase 7b.
+        # byte-for-byte unchanged. Found while bridging strided_slice_case1_whole_slab_s8
+        # to hardware, where the collapsed golden could never match the kernel's output.
         descriptor_input_shape = tuple(self.desc.get('input_shape', input_shape))
         batch_collapsed = (
             input_shape is not None

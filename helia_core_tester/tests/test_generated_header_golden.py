@@ -185,7 +185,7 @@ def test_finite_case_header_matches_the_checked_in_fixture(tmp_path: Path) -> No
     )
 
 
-# Phase 2a of #74 routes more operators through the shared sampler and moves their
+# The second stage of #74 routes more operators through the shared sampler and moves their
 # validation call sites onto a shared Jinja macro. Both are refactors that must not
 # move a single finite golden, so one case per operator is pinned here -- .h for the
 # tensor data the sampling change could perturb, .c for the call site the macro change
@@ -204,7 +204,7 @@ ROUTED_CASES = [
     ("strided_slice_float_whole_slab_f32", "strided_slice"),
     ("sub_float_default_f32", "sub"),
     ("transpose_float_default_f32", "transpose"),
-    # Phase 2c adds the recurrent float families. The streaming cases stand in for LSTM
+    # The recurrent float families came later. The streaming cases stand in for LSTM
     # and GRU because the single-shot templates branch on a generation-time probe of the
     # configured ns-cmsis-nn checkout (the temp-buffer sizers of ns-cmsis-nn#381), which
     # would make their .c text a property of the machine rather than of this repo. The

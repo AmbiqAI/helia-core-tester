@@ -1,4 +1,4 @@
-"""Phase 6 regression check: run build_case_bundle_from_generated_test() against
+"""Regression check: run build_case_bundle_from_generated_test() against
 every real generated test case under artifacts/generated_tests/int/cortex-m55,
 with require_fvp_pass=False (this sandbox has no FVP reports), and confirm every
 case either bridges successfully or raises UnsupportedGeneratedTestError with a

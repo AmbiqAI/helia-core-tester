@@ -990,8 +990,7 @@ class OperationBase(ABC):
     ) -> None:
         """Write .h, .c, CMakeLists.txt, and a structured JSON sidecar from templates.
 
-        The sidecar (Phase 1 of the generation/bridge unification plan) is
-        rendered from the *same* fully-resolved render context used to
+        The sidecar is rendered from the *same* fully-resolved render context used to
         produce the .c file -- including the validation_*/comparison fields
         computed by TemplateContextBuilder.build_validation_context() -- so it
         is provably in sync with what actually got compiled/executed, instead

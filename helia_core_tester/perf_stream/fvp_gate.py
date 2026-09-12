@@ -1,5 +1,4 @@
-"""FVP-pass gating for the hardware perf-stream bridge (Phase 2 of the
-generation/bridge unification plan).
+"""FVP-pass gating for the hardware perf-stream bridge.
 
 FVP already builds and executes the *real* CMSIS-NN kernel against each
 generated case's golden data via the standalone C harness

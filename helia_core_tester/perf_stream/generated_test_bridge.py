@@ -616,7 +616,7 @@ def build_case_bundle_from_generated_test(
     streamable perf-stream CaseBundle. Dispatches to a per-(family, operator) builder
     registered in `_BUILDERS` -- each builder owns its own header/source extraction logic.
 
-    Phase 2 FVP-pass gate (`require_fvp_pass`, default True): before bridging, checks the
+    FVP-pass gate (`require_fvp_pass`, default True): before bridging, checks the
     most recently recorded FVP test_report_<cpu>_*.json for this exact case name. If FVP
     itself recorded a non-PASS result for this case, refuses to bridge it onto real
     hardware (raises fvp_gate.FvpCaseFailedGateError) rather than silently shipping a
@@ -1450,9 +1450,8 @@ def _build_depthwise_conv_case(
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
     # Policy: integer (S8/S16) convolution operators require an exact (0 tolerance)
     # match. Real hardware has been observed to diverge from the scalar/golden
-    # reference by up to 2 LSB on the dilation/non-optimized accumulation path (see
-    # docs/perf-stream-expansion-progress.md's root-cause investigation), but that is a
-    # known CMSIS-NN kernel-level MVE-vs-scalar rounding issue, not something to be
+    # reference by up to 2 LSB on the dilation/non-optimized accumulation path, but
+    # that is a known CMSIS-NN kernel-level MVE-vs-scalar rounding issue, not something to be
     # papered over with test tolerance for a convolution op. Float (FP16/FP32)
     # activations legitimately diverge between MVE and scalar accumulation and must use
     # the descriptor's resolved float tolerance instead, matching the Convolve builder.
