@@ -37,7 +37,7 @@ That firmware contains:
 
 It does **not** contain descriptor-specific tensors or expected outputs.
 
-## Phase 0 sizing rule
+## Universal size-probe sizing rule
 
 Before adding sharding, build a real linked firmware for Apollo510/Cortex-M55 and measure:
 
@@ -56,7 +56,7 @@ helia-core-tester will:
 
 - generate streamable case bundles directly from the same NumPy/TFLite data used for standalone tests
 - build ordered execution plans
-- validate firmware HELLO/catalog compatibility
+- validate firmware TARGET_INFO/catalog compatibility
 - stream case metadata and blobs in bounded chunks
 - reconstruct streamed outputs
 - reuse existing comparison rules
@@ -67,13 +67,13 @@ helia-core-tester will:
 
 Firmware will:
 
-- expose a versioned HELLO + capability block
+- expose a versioned TARGET_INFO block (capabilities, PMU width, session limits)
 - expose a versioned kernel catalog with stable numeric IDs
 - request cases/blobs from the host (target-driven pull)
 - bind streamed blobs into validated adapter metadata
 - run one correctness invocation
 - stream outputs back once per case
-- run warmups + measured iterations only after host correctness ACK
+- run warmups + measured iterations only after the host's CORRECTNESS_ACK
 - collect DWT cycles and PMU samples outside transfer/protocol work
 - rewind the arena and request the next case without rebooting
 
@@ -94,48 +94,83 @@ The device wire format is **HCTP**, a binary little-endian framed protocol.
 
 The protocol is target-driven after plan load:
 
-1. target sends `HELLO`
-2. host sends `HELLO_ACK`
-3. host sends `LOAD_PLAN`
-4. target sends `REQUEST_CASE`
-5. host sends `CASE_META`
-6. target requests blobs chunk-by-chunk
-7. host sends `BLOB_CHUNK`
-8. target sends `CASE_READY`
-9. host sends `RUN_CORRECTNESS`
-10. target streams output + correctness result
-11. host sends `CORRECTNESS_ACK`
-12. host sends `RUN_PERFORMANCE` when allowed
-13. target streams raw sample results
-14. target sends `CASE_COMPLETE`
-15. loop until `SESSION_COMPLETE`
+1. target sends `TARGET_INFO`
+2. host sends `TARGET_INFO_ACK`
+3. target sends `KERNEL_CATALOG` (one or more pages)
+4. host sends `SESSION_PLAN`
+5. target sends `REQUEST_CASE`
+6. host sends `CASE_META`
+7. target requests blobs chunk-by-chunk (`REQUEST_BLOB`)
+8. host sends `BLOB_CHUNK`
+9. target sends `CASE_READY`
+10. host sends `RUN_CORRECTNESS`
+11. target streams output + correctness result
+12. host sends `CORRECTNESS_ACK`
+13. host sends `RUN_PERFORMANCE` when allowed
+14. target streams raw sample results
+15. target sends `CASE_COMPLETE`
+16. loop until `SESSION_COMPLETE`
 
-### Message payloads (HCTP v2)
+### Messages (HCTP v3)
 
-All integers are little-endian; `text` is `u16 length + UTF-8 bytes`. Protocol
-version 2 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`) changed three
-payloads; a v1 peer is refused at the header.
+Protocol version 3 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
+another version is refused at the header. Message ids are compact and in protocol
+order; every payload is encoded and decoded on the host by exactly one pair of
+functions in `helia_core_tester/perf_stream/wire.py`, which the host session and the
+fake target both use, and which the host-compiled C harnesses check against the
+firmware byte for byte.
 
-`HELLO` (target -> host): `text build_id`, 32-byte catalog SHA-256,
+| id | message | direction | payload |
+| --- | --- | --- | --- |
+| 1 | `TARGET_INFO` | target -> host | build id, catalog hash, capabilities, PMU width, session limits (below) |
+| 2 | `TARGET_INFO_ACK` | host -> target | empty |
+| 3 | `KERNEL_CATALOG` | target -> host | one page of catalog entries; `HCTP_FLAG_MORE` on every non-final page |
+| 4 | `SESSION_PLAN` | host -> target | timing plan, PMU passes, case list (below) |
+| 5 | `REQUEST_CASE` | target -> host | `u16 case_index` |
+| 6 | `CASE_META` | host -> target | case id, kernel id, comparison config, scalars, blob descriptors, scratch bytes |
+| 7 | `REQUEST_BLOB` | target -> host | `u32 blob_id, u32 offset, u16 max_length` |
+| 8 | `BLOB_CHUNK` | host -> target | `u32 blob_id, u32 offset, raw data` |
+| 9 | `CASE_READY` | target -> host | `u32 blob_id, u32 bytes_received` |
+| 10 | `RUN_CORRECTNESS` | host -> target | empty |
+| 11 | `CORRECTNESS_RESULT` | target -> host | `i32 status` |
+| 12 | `OUTPUT_BEGIN` | target -> host | `u32 offset (0), u32 length` |
+| 13 | `OUTPUT_CHUNK` | target -> host | `u32 offset, u32 length, bytes` |
+| 14 | `OUTPUT_END` | target -> host | `u32 length, u32 checksum` |
+| 15 | `CORRECTNESS_ACK` | host -> target | `u8 passed` (informational) |
+| 16 | `RUN_PERFORMANCE` | host -> target | empty |
+| 17 | `SAMPLE_RESULT` | target -> host | one sample of one pass (below) |
+| 18 | `CASE_COMPLETE` | target -> host | `text case_id, u8, u8, u32 workspace_used_bytes` |
+| 19 | `SESSION_COMPLETE` | target -> host | `u16 case_count` |
+| 20 | `ERROR` | target -> host | `text message` |
+
+All integers are little-endian; `text` is `u16 length + UTF-8 bytes`; `raw` is
+`u32 length + bytes`.
+
+`TARGET_INFO` (target -> host): `text build_id`, 32-byte catalog SHA-256,
 `u32 max_frame_payload`, `u32 runtime_arena_capacity`, `u8 transfer_mode`,
 `u8 output_mode`, `text board_id`, `text target_cpu`, `u8 transport_kind`,
-`u32 capability_flags`, then (v2) `u8 pmu_counter_slots` and `u32 max_rx_payload`.
+`u32 capability_flags`, `u8 pmu_counter_slots`, `u32 max_rx_payload`,
+`u16 max_cases_per_session`, `u8 max_passes`.
 `capability_flags` bit 6 is `HCT_CAP_PMU_ARMV8M`, set only when the firmware was
 built for a core whose device header declares `__PMU_PRESENT == 1`;
 `pmu_counter_slots` is `__PMU_NUM_EVENTCNT` (8 on Cortex-M55, 0 without a PMU).
 `max_rx_payload` is the largest frame payload the target's fixed receive buffer can
-hold (`HCT_SERVER_RX_BUFFER_BYTES - HCTP_HEADER_SIZE`, 2016 today); the host keeps
-every `LOAD_PLAN` within it.
+hold (`HCT_SERVER_RX_BUFFER_BYTES - HCTP_HEADER_SIZE`, 2016 today);
+`max_cases_per_session` and `max_passes` are the firmware's `HCT_SERVER_MAX_CASES`
+(32) and `HCT_SERVER_MAX_PASSES` (16). The host keeps no copy of these limits: it
+derives its batching (`session.TargetLimits`) from every session's `TARGET_INFO`,
+cuts each batch so the plan stays within all three, and checks its chained-pair
+planning rule (four counters per pass) against `pmu_counter_slots / 2`.
 
-`LOAD_PLAN` (host -> target): `u16 case_count`, `u8 transfer_mode`, `u16 warmups`,
+`SESSION_PLAN` (host -> target): `u16 case_count`, `u8 transfer_mode`, `u16 warmups`,
 `u16 samples`, `u32 iterations_per_sample`, `u32 min_cycles`, `u32 max_iterations`,
-then (v2) `u8 pass_count` and per pass `text pass_name`, `u8 chained`,
+`u8 pass_count` and per pass `text pass_name`, `u8 chained`,
 `u8 counter_count`, `u16 event_id[counter_count]`, then per case `text case_id`,
-`u32 kernel_id`. The firmware rejects `pass_count > 16`, `counter_count > 4`, and
-(when it has a PMU) a pass needing more slots than it advertised
-(`chained ? 2 * counter_count : counter_count`); event ids are not validated against
-a list -- whatever the host asks for is programmed and reported back. Up to
-`HCT_SERVER_MAX_CASES` (32) cases per plan.
+`u32 kernel_id`. The firmware rejects `pass_count > max_passes`, `counter_count > 4`,
+`case_count > max_cases_per_session` and (when it has a PMU) a pass needing more
+slots than it advertised (`chained ? 2 * counter_count : counter_count`); event ids
+are not validated against a list -- whatever the host asks for is programmed and
+reported back.
 
 `SAMPLE_RESULT` (target -> host, one per sample per pass): `u16 sample_index`,
 `u32 iterations`, `u64 cycles`, `text pass_name`, `u8 counter_count`, then per
@@ -186,7 +221,7 @@ Each target build emits a catalog entry per supported runtime adapter with:
 - scratch sizing behavior
 - optional route-trace support
 
-The target `HELLO` includes a hash of the full catalog. The host refuses plans that reference missing IDs.
+The target `TARGET_INFO` includes a hash of the full catalog. The host refuses plans that reference missing IDs.
 
 ## Adapter model
 
@@ -217,7 +252,7 @@ Default transport is bidirectional SEGGER RTT. In the current live Apollo510 imp
 
 ### Current RTT implementation status
 
-- **Live-real on Apollo510:** the benchmark-server target now boots on real Apollo510 hardware, initializes the real `SEGGER_RTT` target sources from `neuralspotx/examples/coremark/src/rtt/`, emits HELLO over RTT, accepts host frames, requests blobs, and streams correctness/performance results back to the host.
+- **Live-real on Apollo510:** the benchmark-server target now boots on real Apollo510 hardware, initializes the real `SEGGER_RTT` target sources from `neuralspotx/examples/coremark/src/rtt/`, emits TARGET_INFO over RTT, accepts host frames, requests blobs, and streams correctness/performance results back to the host.
 - **Host implementation:** the host now has a real J-Link RTT transport using `pylink-square`. It resolves `_SEGGER_RTT` from the linked ELF and starts RTT with an explicit control-block address.
 - **Observed limitation:** SEGGER CLI auto-discovery (`JLinkRTTLogger`) did not find the control block on this board/firmware, so the working hardware path currently uses explicit RTT block-address startup rather than auto-discovery.
 
@@ -281,20 +316,22 @@ Current examples:
 
 Two sizing checkpoints now exist:
 
-1. **Phase 0 universal size probe**
+1. **Universal size probe** (`memory_report.build_size_probe`)
    - goal: prove the whole retained ns-cmsis-nn library fits for a target profile
-   - artifact: `artifacts/perf_stream/phase0/*/memory_report.json`
-2. **Real benchmark-server firmware image**
+   - artifact: `artifacts/perf_stream/size_probe/*/memory_report.json`
+2. **Real benchmark-server firmware image** (`hardware memory-report`, `memory_report.generate_memory_report`)
    - goal: measure the actual streaming skeleton with protocol, RTT binding, catalog, session state, and adapters
-   - artifact: `artifacts/perf_stream/benchmark_server/memory_report.json`
+   - artifact: `artifacts/perf_stream/benchmark_server/memory_report.json`, copied into every result bundle
 
-Both reports are generated from:
+Both reports come from one analysis (`helia_core_tester/perf_stream/memory_report.py`) of:
 
 - the final linked ELF
 - `arm-none-eabi-size`
 - `arm-none-eabi-nm`
 - `arm-none-eabi-objdump -h`
-- the real Apollo510 linker script memory regions
+- the board's NSX linker script memory regions -- the SoC directory (`soc`) and the
+  flash/RAM region names (`flash_region`, `ram_region`) come from the board's row in
+  `assets/hardware_boards.yaml`
 
 Reported percentages are computed against:
 
@@ -329,8 +366,8 @@ Key files:
 - **Host case generation/comparison/statistics:** real and unit-tested in Python.
 - **Loopback/fake-target transport and end-to-end sessions:** simulated, but executed for real in tests.
 - **Firmware build/profile sizing:** real cross-compiled Cortex-M55 Apollo510 artifacts.
-- **Firmware HELLO/catalog frame construction:** real C implementation, byte-for-byte decoded by the Python HCTP decoder on the host.
-- **Firmware session state machine:** real C implementation for `HELLO_ACK -> CAPABILITIES -> LOAD_PLAN -> REQUEST_CASE -> CASE_META -> REQUEST_BLOB* -> CASE_READY -> RUN_CORRECTNESS -> CORRECTNESS_RESULT/OUTPUT_* -> RUN_PERFORMANCE -> SAMPLE_RESULT -> CASE_COMPLETE -> SESSION_COMPLETE`; executed both in a host-compiled C harness (`arm_abs_s8`) and on real Apollo510 hardware (`arm_abs_s8` + `arm_convolve_s8`).
+- **Firmware TARGET_INFO/catalog frame construction:** real C implementation, byte-for-byte decoded by the Python HCTP decoder on the host.
+- **Firmware session state machine:** real C implementation for `TARGET_INFO_ACK -> KERNEL_CATALOG -> SESSION_PLAN -> REQUEST_CASE -> CASE_META -> REQUEST_BLOB* -> CASE_READY -> RUN_CORRECTNESS -> CORRECTNESS_RESULT/OUTPUT_* -> RUN_PERFORMANCE -> SAMPLE_RESULT -> CASE_COMPLETE -> SESSION_COMPLETE`; executed both in a host-compiled C harness (`arm_abs_s8`) and on real Apollo510 hardware (`arm_abs_s8` + `arm_convolve_s8`).
 - **Firmware RTT transport binding:** real compile-time integration against neuralspotx's SEGGER RTT target sources; exercised on real Apollo510 hardware.
 - **Firmware kernel adapter dispatch:** real C adapters compiled and linked against the real CMSIS-NN APIs. `arm_abs_s8` and `arm_convolve_s8` are now session-executed on real Apollo510 hardware.
 - **Real flash/run/RTT/PMU data capture:** verified on Apollo510 for the current two-operator vertical slice.
@@ -387,5 +424,19 @@ uv run helia_core_tester hardware run --board apollo510_evb --precision fp16 --j
 ```
 
 The two-kernel synthetic demo session (`arm_abs_s8` + `arm_convolve_s8`) is still
-available as library code, `hardware_run.run_apollo510_stream_session()`, and is
-covered by the fake-target tests; it is no longer a CLI command.
+available as library code, `session_runner.run_demo_session()`, and is covered by
+the fake-target tests; it is no longer a CLI command.
+
+## Host modules
+
+- `hctp.py`: framing (header, CRCs, sequence/session validation), `ByteWriter`/`ByteReader`.
+- `wire.py`: the payload codec -- one encode/decode pair per message, shared by the
+  host session and the fake target.
+- `session.py`: `HostSession` (handshake, plan, per-case streaming) and `TargetLimits`,
+  the batching limits derived from `TARGET_INFO`.
+- `session_runner.py`: one RTT session per batch on a `BoardSpec`, case discovery
+  from the generated-test tree, result-bundle writing.
+- `hardware_pipeline.py`: generate -> build -> flash -> stream orchestration behind
+  `hardware run` / `hardware stream`.
+- `memory_report.py`: the flash/RAM report and the universal size probe.
+- `fake_target.py`: the host-side target double the deterministic tests run against.
