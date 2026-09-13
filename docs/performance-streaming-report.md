@@ -22,18 +22,18 @@ This snapshot now includes both the hardware-independent proof path and a live A
   - p99
   - unsupported/overflow propagation
 - Result-bundle writer under `artifacts/reports/performance_stream/<session_id>/`.
-- Real Apollo510 hardware runner: `helia_core_tester/perf_stream/hardware_run.py`.
+- Board-keyed hardware runner: `helia_core_tester/perf_stream/session_runner.py`.
 
 ### Firmware-side
 
 - Apollo510/Cortex-M55 benchmark-server target: `hct_benchmark_server`.
 - Real C HCTP encoder/decoder.
-- Real firmware HELLO + kernel-catalog frame emission.
+- Real firmware TARGET_INFO + kernel-catalog frame emission.
 - Real firmware SEGGER RTT transport binding using neuralspotx RTT target sources.
 - Real firmware session loop for:
-  - `HELLO_ACK`
-  - `CAPABILITIES`
-  - `LOAD_PLAN`
+  - `TARGET_INFO_ACK`
+  - `KERNEL_CATALOG`
+  - `SESSION_PLAN`
   - `REQUEST_CASE`
   - `CASE_META`
   - `REQUEST_BLOB`
@@ -95,6 +95,7 @@ Primary artifacts:
 ```bash
 uv run pytest -q \
   helia_core_tester/tests/test_perf_stream_hctp.py \
+  helia_core_tester/tests/test_perf_stream_wire.py \
   helia_core_tester/tests/test_perf_stream_vertical_slice.py \
   helia_core_tester/tests/test_perf_stream_transfer_measurement.py \
   helia_core_tester/tests/test_perf_stream_c_wire_compat.py \
@@ -144,8 +145,8 @@ uv run helia_core_tester hardware stream --board apollo510_evb --serial-no 11600
 
 uv run python - <<'PY'
 from pathlib import Path
-from helia_core_tester.perf_stream.hardware_run import run_apollo510_stream_session
-run_apollo510_stream_session(Path.cwd(), serial_no=1160002276, session_id='apollo510-live-session')
+from helia_core_tester.perf_stream.session_runner import run_demo_session
+run_demo_session(Path.cwd(), serial_no=1160002276, session_id='apollo510-live-session')
 PY
 ```
 
@@ -167,16 +168,16 @@ Real flash succeeded through the NSX-generated target with the connected on-boar
 - programmed range: `335872 bytes`
 - reported program speed: `210 KB/s`
 
-### Live HELLO / RTT session
+### Live TARGET_INFO / RTT session
 
-The benchmark server emitted a real HELLO frame over RTT and completed a real host-target session using the same HCTP framing bytes as the Python implementation.
+The benchmark server emitted a real TARGET_INFO frame over RTT and completed a real host-target session using the same HCTP framing bytes as the Python implementation.
 
 Observed real protocol sequence for the live run included:
 
-- `RX:HELLO`
-- `TX:HELLO_ACK`
-- `TX:LOAD_PLAN`
-- `RX:CAPABILITIES`
+- `RX:TARGET_INFO`
+- `TX:TARGET_INFO_ACK`
+- `RX:KERNEL_CATALOG`
+- `TX:SESSION_PLAN`
 - `RX:REQUEST_CASE`
 - `TX:CASE_META`
 - `RX:REQUEST_BLOB`
@@ -263,9 +264,9 @@ Additionally, the first live Conv2D correctness attempt stalled because the MVE 
 ### Verified live on Apollo510
 
 - real cross-built firmware flashes and boots
-- real HELLO emission over RTT
+- real TARGET_INFO emission over RTT
 - real host RTT attach through J-Link
-- real HCTP HELLO/ACK/plan/case/blob/correctness/performance/session messaging
+- real HCTP target-info/catalog/plan/case/blob/correctness/performance/session messaging
 - real single-flash persistent session across multiple operators
 - real one-case-at-a-time blob pull from target
 - real correctness execution for `arm_abs_s8`
@@ -292,7 +293,7 @@ Additionally, the first live Conv2D correctness attempt stalled because the MVE 
 - The DWT-only firmware path (`__PMU_PRESENT == 0`, e.g. a Cortex-M4 board) is only
   exercised by the host-compiled C harness, not on hardware.
 - Auto-calibration with `iterations_per_sample = 0` exists in firmware logic but was not exercised in the live Apollo510 run; the live run used fixed `iterations=4` from the case timing plan.
-- The current live session uses one common timing plan for both cases because the host `LOAD_PLAN` format is session-scoped; per-case live timing plans are not implemented yet.
+- The current live session uses one common timing plan for both cases because the host `SESSION_PLAN` format is session-scoped; per-case live timing plans are not implemented yet.
 - JLinkRTTLogger/JLinkRTTClient auto-discovery was not made to work; the working live path uses `pylink` + explicit RTT control-block address.
 - FVP execution remains unverified here.
 
@@ -317,8 +318,8 @@ uv run helia_core_tester hardware stream --board apollo510_evb --session-id apol
 ```bash
 uv run python - <<'PY'
 from pathlib import Path
-from helia_core_tester.perf_stream.hardware_run import run_apollo510_stream_session
-result, bundle = run_apollo510_stream_session(Path.cwd(), serial_no=1160002276, session_id='apollo510-live-session')
+from helia_core_tester.perf_stream.session_runner import run_demo_session
+result, bundle = run_demo_session(Path.cwd(), serial_no=1160002276, session_id='apollo510-live-session')
 print(bundle)
 for case in result.cases:
     print(case.case_bundle.case_id, case.statistics.median_cycles)
