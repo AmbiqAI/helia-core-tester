@@ -42,14 +42,24 @@ GENERATED_BLOCK_BEGIN = (
 )
 GENERATED_BLOCK_END = "/* <<< END GENERATED PERF-STREAM ADAPTERS <<< */"
 
+# Adapters that live in the hand-written benchmark_server_session.c but are dispatched
+# by the generated hct_run_kernel_once() like every other kernel: (function, kernel ids).
+HAND_WRITTEN_DISPATCH: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "hct_run_abs_once",
+        ("HCT_KERNEL_ID_ABS_S8", "HCT_KERNEL_ID_ABS_S16", "HCT_KERNEL_ID_ABS_F32", "HCT_KERNEL_ID_ABS_F16"),
+    ),
+)
+
 
 @dataclass(frozen=True)
 class FirmwareAdapterSpec:
     """One bridged (family, operator) cluster's real firmware C dispatch code.
 
-    `kernel_ids` drives the generated dispatch (`hct_run_adapter_once()`); every id must
+    `kernel_ids` drives the generated dispatch (`hct_run_kernel_once()`); every id must
     be defined in `cmake/perf_stream/benchmark_server_adapters.h` and dispatched exactly
-    once. `scalar_fields` is purely documentation/cross-check metadata (the C body below
+    once (the hand-written abs adapter in benchmark_server_session.c is routed by
+    `HAND_WRITTEN_DISPATCH`). `scalar_fields` is purely documentation/cross-check metadata (the C body below
     is the actual executable source of truth) -- see `generated_test_bridge_scalar_fields()`
     and its use in tests that assert a builder's manifest scalar keys are a subset of what
     the firmware body for that kernel actually reads.
@@ -59,7 +69,7 @@ class FirmwareAdapterSpec:
     function_name: str
     guard: str | None
     # HCT_KERNEL_ID_* macros (benchmark_server_adapters.h) this adapter runs; the
-    # generator renders hct_run_adapter_once()'s dispatch switch from them. Empty for
+    # generator renders hct_run_kernel_once()'s dispatch switch from them. Empty for
     # helpers that other adapters call directly.
     kernel_ids: tuple[str, ...]
     scalar_fields: tuple[str, ...]
@@ -5208,7 +5218,7 @@ def render_generated_adapters_source() -> str:
     """Render `cmake/perf_stream/benchmark_server_adapters.gen.c` in full: the marker
     banner, the includes and forward declarations the bodies rely on, every adapter's
     C body (each wrapped in its `#ifndef {guard}` guard when one is set) and the
-    `hct_run_adapter_once()` dispatch switch built from every adapter's `kernel_ids`.
+    `hct_run_kernel_once()` dispatch switch built from every adapter's `kernel_ids`.
     Written by `scripts/generate_perf_stream_adapters.py`.
     """
     pieces: list[str] = [
@@ -5251,20 +5261,19 @@ def render_generated_adapters_source() -> str:
 
 
 def _render_dispatch() -> list[str]:
-    """`hct_run_adapter_once()`: kernel id -> adapter body, in registry order. The only
-    kernels not routed here are the hand-written abs adapters in benchmark_server_session.c."""
+    """`hct_run_kernel_once()`: kernel id -> adapter, hand-written adapters first, then
+    the generated ones in registry order."""
     lines = [
         "#ifndef HCT_HOST_ABS_ONLY",
-        "arm_cmsis_nn_status hct_run_adapter_once(hct_server_session_t *session)",
+        "arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)",
         "{",
         "    switch (session->expected_kernel_id)",
         "    {",
     ]
-    for adapter in FIRMWARE_ADAPTERS:
-        if not adapter.kernel_ids:
-            continue
-        lines.extend(f"        case {kernel_id}:" for kernel_id in adapter.kernel_ids)
-        lines.append(f"            return {adapter.function_name}(session);")
+    routes = list(HAND_WRITTEN_DISPATCH) + [(a.function_name, a.kernel_ids) for a in FIRMWARE_ADAPTERS if a.kernel_ids]
+    for function_name, kernel_ids in routes:
+        lines.extend(f"        case {kernel_id}:" for kernel_id in kernel_ids)
+        lines.append(f"            return {function_name}(session);")
     lines.extend([
         "        default:",
         "            return ARM_CMSIS_NN_ARG_ERROR;",

@@ -268,10 +268,15 @@ static inline bool null_arg_requested(const hct_server_session_t *session, int32
 }
 
 
-/* Generated dispatch (benchmark_server_adapters.gen.c): runs the adapter for every
- * kernel id except the hand-written abs adapters; ARM_CMSIS_NN_ARG_ERROR for an id it
- * does not know. Not compiled into the HCT_HOST_ABS_ONLY host harness. */
-arm_cmsis_nn_status hct_run_adapter_once(hct_server_session_t *session);
+/* The hand-written abs adapter (benchmark_server_session.c), dispatched like every
+ * generated one. */
+arm_cmsis_nn_status hct_run_abs_once(hct_server_session_t *session);
+
+/* Kernel-id dispatch: runs the adapter for session->expected_kernel_id, or returns
+ * ARM_CMSIS_NN_ARG_ERROR for an id it does not know. Generated into
+ * benchmark_server_adapters.gen.c from adapter_specs.py; the HCT_HOST_ABS_ONLY host
+ * harness, which compiles without that file, defines an abs-only one instead. */
+arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session);
 
 #ifdef __cplusplus
 }
