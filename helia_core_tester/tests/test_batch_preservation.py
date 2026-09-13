@@ -1,0 +1,136 @@
+"""Declared batches must reach both the model and the emitted kernel call."""
+
+from copy import deepcopy
+from pathlib import Path
+import re
+
+from ai_edge_litert.interpreter import Interpreter
+import numpy as np
+import pytest
+import yaml
+
+from helia_core_tester.generation.test_ops import generate_test
+
+ROOT = Path(__file__).resolve().parents[2]
+NAMES = {
+    "fully_connected_float_vector8_f32",
+    "fully_connected_float_vector8_f16",
+    "convolve_kernel1x1_stride_xy_case_01_s8",
+    "depthwise_conv_mult_batches_s8",
+    "convolve_dilation_golden_s8",
+    "batch_matmul_batched_s8",
+    "batch_matmul_batched_s16",
+    "batch_matmul_float_batched_f32",
+    "batch_matmul_float_batched_f16",
+}
+CASES = [
+    (family, desc)
+    for family in ("FullyConnectedFunctions", "ConvolutionFunctions")
+    for path in sorted((ROOT / "assets/descriptors" / family).glob("*.yaml"))
+    for desc in yaml.safe_load_all(path.read_text())
+    if desc and desc.get("name") in NAMES
+]
+assert {desc["name"] for _, desc in CASES} == NAMES
+
+# Exercise the same dilation/bias lowering interaction for both integer widths
+# without adding descriptors to the generated coverage corpus.
+for desc in yaml.safe_load_all(
+    (ROOT / "assets/descriptors/ConvolutionFunctions/depthwise_conv.yaml").read_text()
+):
+    if desc and desc.get("name") in {
+        "depthwise_conv_dilation_s8",
+        "depthwise_conv_dilation_s16",
+    }:
+        desc = deepcopy(desc)
+        desc["input_shape"][0] = 2
+        CASES.append(("ConvolutionFunctions", desc))
+
+
+@pytest.mark.parametrize("family,desc", CASES, ids=[d["name"] for _, d in CASES])
+def test_declared_batches_reach_emitted_data(tmp_path, family, desc):
+    generate_test(desc, str(tmp_path), seed=500)
+    case = tmp_path / family / desc["name"]
+    interpreter = Interpreter(model_path=str(case / f'{desc["name"]}.tflite'))
+    interpreter.allocate_tensors()
+    shapes = (
+        [desc["input_shape"]]
+        if "input_shape" in desc
+        else [desc["input_1_shape"], desc["input_2_shape"]]
+    )
+    assert [d["shape"].tolist() for d in interpreter.get_input_details()] == shapes
+    batch = shapes[0][0]
+    output_shape = interpreter.get_output_details()[0]["shape"].tolist()
+    assert output_shape[0] == batch
+
+    header = "\n".join(p.read_text() for p in (case / "includes").glob("*.h"))
+
+    def dims(role):
+        body = re.search(
+            rf'\b{desc["name"]}_{role}_dims\s*=\s*\{{([^}}]+)', header
+        ).group(1)
+        return {
+            axis: int(value)
+            for axis, value in re.findall(r"\.([nhwc])\s*=\s*(\d+)", body)
+        }
+
+    def array(role):
+        body = re.search(
+            rf'\b{desc["name"]}_{role}\[[^]]*\]\s*=\s*\{{([^}}]+)', header
+        ).group(1)
+        return [value.strip() for value in body.split(",") if value.strip()]
+
+    roles = ["input"] if len(shapes) == 1 else ["input_lhs", "input_rhs"]
+    for role, shape in zip(roles + ["expected_output"], shapes + [output_shape]):
+        values = array(role)
+        emitted_dims = dims("output" if role == "expected_output" else role)
+        assert (
+            len(values)
+            == int(np.prod(shape))
+            == int(np.prod(list(emitted_dims.values())))
+        )
+        assert (
+            emitted_dims["n"] * emitted_dims["h"]
+            if len(shape) == 3
+            else emitted_dims["n"]
+        ) == batch
+        rows = np.asarray(values).reshape(batch, -1)
+        # Reusing the first batch must not reproduce any subsequent input/golden.
+        assert all(not np.array_equal(rows[0], row) for row in rows[1:])
+
+    if desc.get("dilation") and desc.get("use_bias", True):
+        assert any(int(value) != 0 for value in array("biases"))
+
+    if desc["name"] in {
+        "convolve_kernel1x1_stride_xy_case_01_s8",
+        "depthwise_conv_mult_batches_s8",
+    }:
+        from helia_core_tester.perf_stream.generated_test_bridge import (
+            GeneratedTestCase,
+            UnsupportedGeneratedTestError,
+            build_case_bundle_from_generated_test,
+        )
+
+        generated = GeneratedTestCase(desc["name"], "cortex-m55", family, case, desc)
+        # The bridge intentionally rejects multi-batch Conv/Depthwise. Correct
+        # headers must reach that guard, not silently serialize only batch zero.
+        with pytest.raises(UnsupportedGeneratedTestError, match="batch size 2 > 1"):
+            build_case_bundle_from_generated_test(
+                ROOT,
+                generated,
+                output_root=tmp_path / "bridge",
+                require_fvp_pass=False,
+            )
+
+
+def test_single_batch_retains_original_converter(monkeypatch):
+    from helia_core_tester.generation.ops._shared import fixed_batch
+
+    model, converter = object(), object()
+    seen = []
+    monkeypatch.setattr(
+        fixed_batch.tf.lite.TFLiteConverter,
+        "from_keras_model",
+        lambda value: seen.append(value) or converter,
+    )
+    assert fixed_batch.converter_for_batched_model(model, [[1, 3, 4]]) is converter
+    assert seen == [model]

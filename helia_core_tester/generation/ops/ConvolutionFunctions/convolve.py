@@ -6,6 +6,7 @@ import os
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.ops._shared.bias_init import (
     HoistedBiasInjectionError,
     SignedMagnitudeUniform,
@@ -166,7 +167,11 @@ class OpConvolve(OperationBase):
         # their bias written into the CONV_2D placeholder after conversion by
         # inject_hoisted_dilation_bias, ahead of the golden run.
         _case_is_float = str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"}
-        _bias_hoisted_by_lowering = bias_is_hoisted_by_lowering(dilation, is_float=_case_is_float)
+        # Fixed-batch conversion retains native dilation and its bias operand.
+        _bias_hoisted_by_lowering = (
+            input_shape[0] == 1
+            and bias_is_hoisted_by_lowering(dilation, is_float=_case_is_float)
+        )
         if not use_bias or _bias_hoisted_by_lowering:
             bias_initializer = 'zeros'
         elif _case_is_float:
@@ -242,7 +247,7 @@ class OpConvolve(OperationBase):
                 f.write(tflite_model)
             return
 
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        converter = converter_for_batched_model(model, [self.desc['input_shape']])
         
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
         
@@ -285,7 +290,7 @@ class OpConvolve(OperationBase):
             self.desc.get('dilation', [1, 1]),
             is_float=str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"},
         )
-        if self.desc.get('use_bias', True) and hoisted:
+        if self.desc.get('use_bias', True) and hoisted and self.desc['input_shape'][0] == 1:
             try:
                 inject_hoisted_dilation_bias(out_path, rep_seed)
             except HoistedBiasInjectionError as exc:
