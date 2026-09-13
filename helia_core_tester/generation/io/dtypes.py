@@ -152,8 +152,8 @@ def get_resolved_tensor_dtype(desc: Mapping[str, Any], role: str, default: str |
 # hardware manifests all consume the same resolved comparison object.
 _OPERATOR_TOLERANCE_OVERRIDES: Dict[str, int] = {
     "PReLU": 2,
-    # LUT-style requantization with a scalar-vs-MVE rounding divergence on
-    # real hardware -- see docs/perf-stream-expansion-progress.md.
+    # LUT-style requantization with a scalar-vs-MVE rounding divergence of 1 LSB
+    # observed on real Apollo510 hardware against the scalar golden.
     "LeakyRelu": 1,
     "HardSwishCompat": 1,
     # Exact match required, even though hardware has been observed to

@@ -102,14 +102,16 @@ static hctp_status_t wrap_frame(uint16_t message_type,
     return HCTP_STATUS_OK;
 }
 
-hctp_status_t hct_build_hello_frame(uint32_t session_id,
-                                    uint32_t sequence_id,
-                                    uint32_t max_frame_payload,
-                                    uint32_t runtime_arena_capacity,
-                                    uint32_t max_rx_payload,
-                                    uint8_t *frame_bytes,
-                                    size_t frame_capacity,
-                                    size_t *frame_length)
+hctp_status_t hct_build_target_info_frame(uint32_t session_id,
+                                          uint32_t sequence_id,
+                                          uint32_t max_frame_payload,
+                                          uint32_t runtime_arena_capacity,
+                                          uint32_t max_rx_payload,
+                                          uint16_t max_cases_per_session,
+                                          uint8_t max_passes,
+                                          uint8_t *frame_bytes,
+                                          size_t frame_capacity,
+                                          size_t *frame_length)
 {
     uint8_t payload[256];
     size_t offset = 0u;
@@ -139,11 +141,15 @@ hctp_status_t hct_build_hello_frame(uint32_t session_id,
     if (status != HCTP_STATUS_OK) return status;
     status = write_u32(payload, sizeof(payload), &offset, max_rx_payload);
     if (status != HCTP_STATUS_OK) return status;
+    status = write_u16(payload, sizeof(payload), &offset, max_cases_per_session);
+    if (status != HCTP_STATUS_OK) return status;
+    status = write_u8(payload, sizeof(payload), &offset, max_passes);
+    if (status != HCTP_STATUS_OK) return status;
 
-    return wrap_frame(HCTP_MSG_HELLO, session_id, sequence_id, HCTP_FLAG_NONE, payload, offset, frame_bytes, frame_capacity, frame_length);
+    return wrap_frame(HCTP_MSG_TARGET_INFO, session_id, sequence_id, HCTP_FLAG_NONE, payload, offset, frame_bytes, frame_capacity, frame_length);
 }
 
-/* F008: bounded max payload size per CAPABILITIES chunk (well under the write buffer's
+/* Bounded max payload size per KERNEL_CATALOG chunk (well under the write buffer's
  * 512-byte scratch capacity and the firmware's 1 KiB flush buffer / 32 KiB outbox), so a
  * 126-entry catalog is always paginated into multiple frames instead of overflowing a
  * single one. */
@@ -236,7 +242,7 @@ hctp_status_t hct_build_catalog_frame_chunk(uint32_t session_id,
     *next_index = index;
     *is_final = (index >= count);
 
-    return wrap_frame(HCTP_MSG_CAPABILITIES,
+    return wrap_frame(HCTP_MSG_KERNEL_CATALOG,
                       session_id,
                       sequence_id,
                       *is_final ? HCTP_FLAG_NONE : HCTP_FLAG_MORE,

@@ -387,6 +387,7 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/benchmark_server_messages.c"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/benchmark_server_adapter.c"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/benchmark_server_session.c"
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/benchmark_server_adapters.gen.c"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/benchmark_server_transport_rtt.c"
       "${HCT_RTT_BUILD_ROOT}/RTT/SEGGER_RTT.c")
     set_target_properties(hct_benchmark_server PROPERTIES

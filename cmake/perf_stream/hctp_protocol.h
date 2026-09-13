@@ -10,13 +10,15 @@ extern "C" {
 
 #define HCTP_HEADER_SIZE 32u
 #define HCTP_MAGIC_U32 0x31544348u
-/* v2: LOAD_PLAN carries explicit PMU passes, HELLO advertises PMU slots and the
- * receive-buffer bound, SAMPLE_RESULT leads with the CCNTR entry. */
-#define HCTP_SUPPORTED_VERSION 2u
+/* v3: TARGET_INFO / KERNEL_CATALOG / SESSION_PLAN vocabulary with compact message ids
+ * and TARGET_INFO advertising the session limits (max cases per plan, max PMU passes)
+ * next to the PMU slot count and receive-buffer bound. Must match
+ * helia_core_tester/perf_stream/hctp.py. */
+#define HCTP_SUPPORTED_VERSION 3u
 #define HCTP_DEFAULT_MAX_PAYLOAD (64u * 1024u)
 
 #define HCTP_FLAG_NONE 0u
-/* F008: set on every non-final CAPABILITIES chunk when the catalog is too large for a
+/* F008: set on every non-final KERNEL_CATALOG chunk when the catalog is too large for a
  * single frame's payload; the host keeps decoding/accumulating chunks until it receives
  * one without this flag set. */
 #define HCTP_FLAG_MORE (1u << 0)
@@ -35,33 +37,27 @@ typedef enum
 
 typedef enum
 {
-    HCTP_MSG_HELLO = 1,
-    HCTP_MSG_HELLO_ACK = 2,
-    HCTP_MSG_LOAD_PLAN = 3,
-    HCTP_MSG_CASE_META = 4,
-    HCTP_MSG_BLOB_CHUNK = 5,
-    HCTP_MSG_RUN_CORRECTNESS = 6,
-    HCTP_MSG_CORRECTNESS_ACK = 7,
-    HCTP_MSG_RUN_PERFORMANCE = 8,
-    HCTP_MSG_ACK = 9,
-    HCTP_MSG_NACK = 10,
-    HCTP_MSG_ABORT_CASE = 11,
-    HCTP_MSG_RESET_SESSION = 12,
-    HCTP_MSG_PING = 13,
-    HCTP_MSG_CAPABILITIES = 14,
-    HCTP_MSG_REQUEST_CASE = 15,
-    HCTP_MSG_REQUEST_BLOB = 16,
-    HCTP_MSG_CASE_READY = 17,
-    HCTP_MSG_CORRECTNESS_RESULT = 18,
-    HCTP_MSG_OUTPUT_BEGIN = 19,
-    HCTP_MSG_OUTPUT_CHUNK = 20,
-    HCTP_MSG_OUTPUT_END = 21,
-    HCTP_MSG_SAMPLE_RESULT = 22,
-    HCTP_MSG_CASE_COMPLETE = 23,
-    HCTP_MSG_SESSION_COMPLETE = 24,
-    HCTP_MSG_ERROR = 25,
-    HCTP_MSG_LOG = 26,
-    HCTP_MSG_PONG = 27
+    /* HCTP v3 message ids, in protocol order (target -> host unless noted). */
+    HCTP_MSG_TARGET_INFO = 1,
+    HCTP_MSG_TARGET_INFO_ACK = 2,   /* host -> target */
+    HCTP_MSG_KERNEL_CATALOG = 3,
+    HCTP_MSG_SESSION_PLAN = 4,      /* host -> target */
+    HCTP_MSG_REQUEST_CASE = 5,
+    HCTP_MSG_CASE_META = 6,         /* host -> target */
+    HCTP_MSG_REQUEST_BLOB = 7,
+    HCTP_MSG_BLOB_CHUNK = 8,        /* host -> target */
+    HCTP_MSG_CASE_READY = 9,
+    HCTP_MSG_RUN_CORRECTNESS = 10,  /* host -> target */
+    HCTP_MSG_CORRECTNESS_RESULT = 11,
+    HCTP_MSG_OUTPUT_BEGIN = 12,
+    HCTP_MSG_OUTPUT_CHUNK = 13,
+    HCTP_MSG_OUTPUT_END = 14,
+    HCTP_MSG_CORRECTNESS_ACK = 15,  /* host -> target */
+    HCTP_MSG_RUN_PERFORMANCE = 16,  /* host -> target */
+    HCTP_MSG_SAMPLE_RESULT = 17,
+    HCTP_MSG_CASE_COMPLETE = 18,
+    HCTP_MSG_SESSION_COMPLETE = 19,
+    HCTP_MSG_ERROR = 20
 } hctp_message_type_t;
 
 typedef struct

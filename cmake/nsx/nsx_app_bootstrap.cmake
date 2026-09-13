@@ -7,10 +7,10 @@
 # each module's own nsx_require_target()/FATAL_ERROR dependency checks) --
 # there is no vendor-provided top-level "add these N modules for board X"
 # orchestration function. This file is that app-owned orchestration layer.
-# Historically hand-written and kept local/uncommitted per
-# docs/perf-stream-expansion-progress.md; reconstructed here from the SDK's
-# own documented contract plus this repo's own callers (CMakeLists.txt,
-# helia_core_tester/perf_stream/cli.py) rather than from a lost original.
+# Historically hand-written and kept local/uncommitted; reconstructed here
+# from the SDK's own documented contract plus this repo's own callers
+# (CMakeLists.txt, helia_core_tester/perf_stream/cli.py) rather than from a
+# lost original.
 
 include("${CMAKE_CURRENT_LIST_DIR}/nsx_helpers.cmake")
 

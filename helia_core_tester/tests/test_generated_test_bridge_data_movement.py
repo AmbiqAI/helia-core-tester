@@ -126,8 +126,7 @@ def test_strided_slice_batch_collapse_bug_is_fixed(tmp_path: Path) -> None:
     # longer existed. helia_core_tester/generation/ops/StridedSliceFunctions/
     # strided_slice.py now detects that batch-collapse and computes golden data
     # directly via numpy against the descriptor's true full-size input instead,
-    # so this case is bridgeable again -- see docs/perf-stream-expansion-progress.md
-    # Phase 7b.
+    # so this case is bridgeable again.
     cases = discover_generated_tests(PROJECT_ROOT, family="StridedSliceFunctions", name_filter="strided_slice_case1_whole_slab_s8")
     assert cases
     bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False)

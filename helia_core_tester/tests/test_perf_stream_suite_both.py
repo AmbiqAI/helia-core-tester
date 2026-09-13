@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream.hardware_run import (
+from helia_core_tester.perf_stream.session_runner import (
     build_generated_test_case_bundles,
     normalize_suites,
 )

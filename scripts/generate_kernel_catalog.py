@@ -100,7 +100,7 @@ def _canonical_json_bytes(entries: list[dict]) -> bytes:
 
 
 def _catalog_hash(entries: list[dict]) -> bytes:
-    """Canonical *compact* JSON encoding used only for the HELLO hash -- must match the
+    """Canonical *compact* JSON encoding used only for the TARGET_INFO hash -- must match the
     host's re-serialization of kernel_catalog.json (`sort_keys=True,
     separators=(",", ":")`), independent of the pretty file format above."""
     canonical = json.dumps(entries, sort_keys=True, separators=(",", ":")).encode("utf-8")

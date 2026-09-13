@@ -1,4 +1,4 @@
-"""Phase 1 sidecar validation: confirm the structured JSON sidecar emitted
+"""Sidecar validation: confirm the structured JSON sidecar emitted
 alongside each generated test case's .c/.h files is a faithful, in-sync
 reflection of what was actually rendered -- not an independently re-derived
 copy that could silently drift (the exact failure mode that motivated this

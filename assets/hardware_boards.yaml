@@ -3,16 +3,21 @@
 # `--board <id>` is the only identity flag on every hardware command; the
 # remaining per-target facts (NSX board name for the CMake configure, target
 # CPU for `generate`/the bridge, SEGGER device name and SWD speed for the RTT
-# transport, PMU tier, MVE availability, benchmark-server workspace size) are
-# derived from the row here. Loaded by helia_core_tester/perf_stream/boards.py.
+# transport, PMU tier, MVE availability, benchmark-server workspace size, the
+# SoC directory the NSX linker script lives in and the flash/RAM region names
+# the memory report measures against) are derived from the row here. Loaded by
+# helia_core_tester/perf_stream/boards.py.
 schema: hct.hardware_boards
 schema_version: 1
 boards:
   - id: apollo510_evb
     nsx_board: apollo510_evb
+    soc: apollo510
     cpu: cortex-m55
     pmu_tier: armv8m
     has_mve: true
     jlink_device: AP510NFA-CBR
     swd_speed_khz: 4000
     workspace_bytes: 114688
+    flash_region: MCU_MRAM
+    ram_region: MCU_TCM

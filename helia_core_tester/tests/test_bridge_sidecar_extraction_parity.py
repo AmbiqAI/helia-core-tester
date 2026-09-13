@@ -1,5 +1,4 @@
-"""Phase 3 of the generation/bridge unification plan: verify that the
-BasicMathFunctions bridge builders' sidecar-based scalar extraction path
+"""Verify that the BasicMathFunctions bridge builders' sidecar-based scalar extraction path
 (reading structured JSON emitted by `_write_op_outputs()`) produces
 byte-identical `serialized_scalar_parameters` to the legacy regex-based
 extraction path that parses generated `.c` source directly.

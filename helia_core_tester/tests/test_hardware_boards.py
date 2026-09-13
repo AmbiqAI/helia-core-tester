@@ -25,12 +25,15 @@ def test_board_table_seeds_apollo510_evb() -> None:
     assert spec == BoardSpec(
         id="apollo510_evb",
         nsx_board="apollo510_evb",
+        soc="apollo510",
         cpu="cortex-m55",
         pmu_tier="armv8m",
         has_mve=True,
         jlink_device="AP510NFA-CBR",
         swd_speed_khz=4000,
         workspace_bytes=114688,
+        flash_region="MCU_MRAM",
+        ram_region="MCU_TCM",
     )
 
 
@@ -64,8 +67,9 @@ def test_malformed_table_is_rejected(tmp_path: Path) -> None:
     bad = tmp_path / "boards.yaml"
     bad.write_text(
         "schema: hct.hardware_boards\nschema_version: 1\nboards:\n"
-        "  - id: x\n    nsx_board: x\n    cpu: cortex-m55\n    pmu_tier: bogus\n    has_mve: true\n"
-        "    jlink_device: X\n    swd_speed_khz: 1\n    workspace_bytes: 1\n",
+        "  - id: x\n    nsx_board: x\n    soc: x\n    cpu: cortex-m55\n    pmu_tier: bogus\n    has_mve: true\n"
+        "    jlink_device: X\n    swd_speed_khz: 1\n    workspace_bytes: 1\n"
+        "    flash_region: FLASH\n    ram_region: RAM\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="pmu_tier"):

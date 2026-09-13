@@ -174,28 +174,30 @@ def stream_generated_tests(
     progress_to_stderr: bool = False,
 ) -> HardwareRunOutcome:
     """Stream the generated suite to already-flashed firmware and write the bundle."""
-    from .hardware_run import build_generated_test_case_bundles, run_apollo510_generated_test_session
+    from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error, run_case_bundles
 
     session_id = options.session_id or default_session_id(board)
 
-    # Discover the bridgeable case count/case_ids up front (cheap: just descriptor/header
-    # parsing, no hardware I/O) purely so the live progress printer can align its
-    # [N/total] counter and case_id columns from the very first printed line instead of
-    # widening them as longer names are discovered mid-run.
-    preview_bundles, _preview_skipped = build_generated_test_case_bundles(
+    bundles, skipped = build_generated_test_case_bundles(
         repo_root, cpu=board.cpu, family=options.family, name_filter=options.test_name,
         limit=options.limit, suite=options.suite, fvp_gate=options.fvp_gate,
     )
-    id_width = max((len(b.case_id) for b in preview_bundles), default=0)
+    if not bundles:
+        raise no_bridgeable_cases_error(
+            skipped, cpu=board.cpu, family=options.family, name_filter=options.test_name, suite=options.suite,
+        )
+    # The live progress printer aligns its [N/total] counter and case_id columns from
+    # the first printed line instead of widening them as longer names show up mid-run.
+    id_width = max(len(b.case_id) for b in bundles)
     counter_passes = counter_passes_for_selection(options.pmu_counters)
     echo(
         f"[hardware] Streaming generated tests to {board.id} (serial {serial_no}, session {session_id}, "
         f"{len(counter_passes)} PMU pass(es): {', '.join(p.name for p in counter_passes)})..."
     )
-    progress = make_live_progress_printer(len(preview_bundles), id_width=id_width, err=progress_to_stderr)
+    progress = make_live_progress_printer(len(bundles), id_width=id_width, err=progress_to_stderr)
 
     # Per-case wall clock: the gap between consecutive CASE_COMPLETEs (the first case of
-    # every batch also absorbs that batch's target reset and HELLO/catalog exchange).
+    # every batch also absorbs that batch's target reset and TARGET_INFO/catalog exchange).
     case_seconds: Dict[str, float] = {}
     stream_started = time.monotonic()
     last_case_done = stream_started
@@ -207,18 +209,14 @@ def stream_generated_tests(
         last_case_done = now
         progress(case)
 
-    result, bundle, skipped = run_apollo510_generated_test_session(
+    result, bundle = run_case_bundles(
         repo_root,
-        serial_no=serial_no,
+        bundles,
         board=board,
+        serial_no=serial_no,
         counter_passes=counter_passes,
         session_id=session_id,
         build_dir=build_dir,
-        family=options.family,
-        name_filter=options.test_name,
-        limit=options.limit,
-        suite=options.suite,
-        fvp_gate=options.fvp_gate,
         on_case_complete=on_case_complete,
     )
     timing = {

@@ -28,8 +28,8 @@ _CASE_SUMMARY_FLAG_FIELDS = ["overflow_detected", "valid_for_regression"]
 def _split_protocol_trace_entry(entry: str) -> tuple[int | None, str, str]:
     """Parse one protocol_trace entry.
 
-    A single-session run records "direction:message_type" (see Session._trace).
-    hardware_run's batched runner prefixes each entry with "batchN:" before
+    A single-session run records "direction:message_type" (see HostSession._trace).
+    session_runner's batched runner prefixes each entry with "batchN:" before
     merging traces across sessions, giving "batchN:direction:message_type" --
     splitting on the first colon alone would misparse that as
     direction="batchN", message_type="direction:message_type".
@@ -167,11 +167,11 @@ def write_result_bundle(
                         "iterations": sample.iterations,
                         "cycles": sample.cycles,
                         "cycles_per_invocation": normalized.cycles_per_invocation,
-                        "counter_name": counter["name"],
-                        "event_id": counter["event_id"],
-                        "counter_value": counter["value"],
-                        "overflow": counter["overflow"],
-                        "supported": counter["supported"],
+                        "counter_name": counter.name,
+                        "event_id": counter.event_id,
+                        "counter_value": counter.value,
+                        "overflow": int(counter.overflow),
+                        "supported": int(counter.supported),
                     }
                 )
 
