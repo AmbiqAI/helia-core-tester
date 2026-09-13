@@ -134,3 +134,35 @@ def test_single_batch_retains_original_converter(monkeypatch):
     )
     assert fixed_batch.converter_for_batched_model(model, [[1, 3, 4]]) is converter
     assert seen == [model]
+
+
+@pytest.mark.parametrize("input_count", [1, 2])
+def test_batched_converter_accepts_legacy_zip(monkeypatch, input_count):
+    from helia_core_tester.generation.ops._shared import fixed_batch
+
+    # Python 3.8/3.9 zip accepts no keyword arguments.
+    monkeypatch.setattr(fixed_batch, "zip", lambda *values: zip(*values), raising=False)
+    tf = fixed_batch.tf
+    inputs = [tf.keras.Input(batch_shape=(2, 3)) for _ in range(input_count)]
+    output = tf.keras.layers.Add()(inputs) if input_count > 1 else inputs[0] * 2
+    model = tf.keras.Model(inputs, output)
+    converter = fixed_batch.converter_for_batched_model(model, [[2, 3]] * input_count)
+    interpreter = Interpreter(model_content=converter.convert())
+    interpreter.allocate_tensors()
+    assert [item["shape"].tolist() for item in interpreter.get_input_details()] == [
+        [2, 3]
+    ] * input_count
+    assert interpreter.get_output_details()[0]["shape"].tolist() == [2, 3]
+
+
+@pytest.mark.parametrize("shape_count", [1, 3])
+def test_batched_converter_rejects_mismatched_shape_count(shape_count):
+    from helia_core_tester.generation.ops._shared import fixed_batch
+
+    tf = fixed_batch.tf
+    inputs = [tf.keras.Input(batch_shape=(2, 3)) for _ in range(2)]
+    model = tf.keras.Model(inputs, tf.keras.layers.Add()(inputs))
+    with pytest.raises(
+        ValueError, match="Input shape count must match model input count"
+    ):
+        fixed_batch.converter_for_batched_model(model, [[2, 3]] * shape_count)

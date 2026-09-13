@@ -13,9 +13,11 @@ def converter_for_batched_model(model, input_shapes):
         convert_variables_to_constants_v2,
     )
 
+    if len(input_shapes) != len(model.inputs):
+        raise ValueError("Input shape count must match model input count.")
     signature = [
         tf.TensorSpec(shape, dtype=tensor.dtype, name=tensor.name)
-        for shape, tensor in zip(input_shapes, model.inputs, strict=True)
+        for shape, tensor in zip(input_shapes, model.inputs)
     ]
 
     @tf.function(input_signature=signature)
