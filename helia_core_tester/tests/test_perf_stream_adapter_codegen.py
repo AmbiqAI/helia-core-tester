@@ -72,7 +72,7 @@ def test_generated_file_is_marked_and_session_c_holds_no_generated_code() -> Non
     assert text.rstrip("\n").endswith(GENERATED_BLOCK_END)
     session_c = SESSION_C_PATH.read_text(encoding="utf-8")
     assert GENERATED_BLOCK_BEGIN not in session_c and GENERATED_BLOCK_END not in session_c
-    assert "hct_run_adapter_once(session)" in session_c
+    assert "hct_run_kernel_once(session)" in session_c
     assert "run_convolve_once" not in session_c
 
 
@@ -89,21 +89,23 @@ def test_committed_adapters_c_matches_fresh_render() -> None:
 
 
 def test_every_kernel_id_is_dispatched_exactly_once() -> None:
-    """The dispatch switch is rendered from each adapter's kernel_ids: every
-    HCT_KERNEL_ID_* the header defines must be routed to exactly one adapter, except
-    the abs ids the hand-written session dispatches itself."""
+    """The dispatch switch is rendered from each adapter's kernel_ids plus the
+    hand-written routes: every HCT_KERNEL_ID_* the header defines must be routed to
+    exactly one adapter."""
     import re
 
+    from helia_core_tester.perf_stream.adapter_specs import HAND_WRITTEN_DISPATCH
+
     defined = set(re.findall(r"^#define (HCT_KERNEL_ID_[A-Z0-9_]+) \d+u$", ADAPTERS_H_PATH.read_text(encoding="utf-8"), re.M))
-    hand_written = {"HCT_KERNEL_ID_ABS_S8", "HCT_KERNEL_ID_ABS_S16", "HCT_KERNEL_ID_ABS_F32", "HCT_KERNEL_ID_ABS_F16"}
     routed = [kernel_id for adapter in FIRMWARE_ADAPTERS for kernel_id in adapter.kernel_ids]
+    routed += [kernel_id for _function, kernel_ids in HAND_WRITTEN_DISPATCH for kernel_id in kernel_ids]
     assert len(routed) == len(set(routed)), "a kernel id is dispatched by more than one adapter"
-    assert set(routed) == defined - hand_written
+    assert set(routed) == defined
     rendered = render_generated_adapters_source()
-    for adapter in FIRMWARE_ADAPTERS:
-        for kernel_id in adapter.kernel_ids:
-            assert f"        case {kernel_id}:" in rendered
-    assert "arm_cmsis_nn_status hct_run_adapter_once(hct_server_session_t *session)" in rendered
+    for kernel_id in routed:
+        assert f"        case {kernel_id}:" in rendered
+    assert "arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)" in rendered
+    assert "return hct_run_abs_once(session);" in rendered
 
 
 def test_generator_script_check_mode_passes_on_committed_file() -> None:

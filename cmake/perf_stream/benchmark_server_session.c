@@ -730,7 +730,7 @@ static hctp_status_t allocate_blob(hct_server_session_t *session, hct_server_blo
     return HCTP_STATUS_OK;
 }
 
-static arm_cmsis_nn_status run_abs_once(hct_server_session_t *session)
+arm_cmsis_nn_status hct_run_abs_once(hct_server_session_t *session)
 {
     hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
     if (input == NULL)
@@ -795,7 +795,11 @@ static arm_cmsis_nn_status run_abs_once(hct_server_session_t *session)
     }
 }
 
-static arm_cmsis_nn_status run_kernel_once(hct_server_session_t *session)
+#ifdef HCT_HOST_ABS_ONLY
+/* The host harness compiles without benchmark_server_adapters.gen.c (there is no
+ * CMSIS-NN library to link against), so only the hand-written abs adapter is
+ * reachable; the real firmware's dispatch is the generated hct_run_kernel_once(). */
+arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
 {
     switch (session->expected_kernel_id)
     {
@@ -803,15 +807,12 @@ static arm_cmsis_nn_status run_kernel_once(hct_server_session_t *session)
         case HCT_KERNEL_ID_ABS_S16:
         case HCT_KERNEL_ID_ABS_F32:
         case HCT_KERNEL_ID_ABS_F16:
-            return run_abs_once(session);
+            return hct_run_abs_once(session);
         default:
-#ifndef HCT_HOST_ABS_ONLY
-            return hct_run_adapter_once(session);
-#else
             return ARM_CMSIS_NN_ARG_ERROR;
-#endif
     }
 }
+#endif
 
 static uint32_t resolve_iterations(hct_server_session_t *session)
 {
@@ -829,7 +830,7 @@ static uint32_t resolve_iterations(hct_server_session_t *session)
         const uint32_t start = dwt_cycles();
         for (index = 0u; index < iterations; ++index)
         {
-            arm_cmsis_nn_status status = run_kernel_once(session);
+            arm_cmsis_nn_status status = hct_run_kernel_once(session);
             session->last_kernel_status = status;
             if (kernel_status_is_fatal(session, status))
             {
@@ -1172,7 +1173,7 @@ static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint
 
 static hctp_status_t handle_run_correctness(hct_server_session_t *session)
 {
-    arm_cmsis_nn_status status = run_kernel_once(session);
+    arm_cmsis_nn_status status = hct_run_kernel_once(session);
     session->last_kernel_status = status;
     if (kernel_status_is_fatal(session, status))
     {
@@ -1204,7 +1205,7 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
         pmu_pass_program(pass);
         for (warmup = 0u; warmup < session->planned_warmups; ++warmup)
         {
-            arm_cmsis_nn_status status = run_kernel_once(session);
+            arm_cmsis_nn_status status = hct_run_kernel_once(session);
             session->last_kernel_status = status;
             if (kernel_status_is_fatal(session, status))
             {
@@ -1221,7 +1222,7 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
             start = dwt_cycles();
             for (iter = 0u; iter < iterations; ++iter)
             {
-                arm_cmsis_nn_status status = run_kernel_once(session);
+                arm_cmsis_nn_status status = hct_run_kernel_once(session);
                 session->last_kernel_status = status;
                 if (kernel_status_is_fatal(session, status))
                 {
