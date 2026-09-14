@@ -122,18 +122,44 @@ def test_declared_batches_reach_emitted_data(tmp_path, family, desc):
             )
 
 
-def test_single_batch_retains_original_converter(monkeypatch):
+@pytest.mark.parametrize("input_count", [1, 2])
+def test_single_batch_retains_original_converter(monkeypatch, input_count):
     from helia_core_tester.generation.ops._shared import fixed_batch
 
-    model, converter = object(), object()
+    tf = fixed_batch.tf
+    inputs = [tf.keras.Input(batch_shape=(1, 3)) for _ in range(input_count)]
+    output = tf.keras.layers.Add()(inputs) if input_count > 1 else inputs[0] * 2
+    model = tf.keras.Model(inputs, output)
+    converter = object()
     seen = []
     monkeypatch.setattr(
         fixed_batch.tf.lite.TFLiteConverter,
         "from_keras_model",
         lambda value: seen.append(value) or converter,
     )
-    assert fixed_batch.converter_for_batched_model(model, [[1, 3, 4]]) is converter
+    assert (
+        fixed_batch.converter_for_batched_model(model, [[1, 3]] * input_count)
+        is converter
+    )
     assert seen == [model]
+
+
+@pytest.mark.parametrize("shape_count", [0, 1, 3])
+def test_single_batch_rejects_mismatched_shape_count(monkeypatch, shape_count):
+    from helia_core_tester.generation.ops._shared import fixed_batch
+
+    tf = fixed_batch.tf
+    inputs = [tf.keras.Input(batch_shape=(1, 3)) for _ in range(2)]
+    model = tf.keras.Model(inputs, tf.keras.layers.Add()(inputs))
+    seen = []
+    monkeypatch.setattr(
+        tf.lite.TFLiteConverter, "from_keras_model", lambda value: seen.append(value)
+    )
+    with pytest.raises(
+        ValueError, match="Input shape count must match model input count"
+    ):
+        fixed_batch.converter_for_batched_model(model, [[1, 3]] * shape_count)
+    assert seen == []
 
 
 @pytest.mark.parametrize("input_count", [1, 2])
