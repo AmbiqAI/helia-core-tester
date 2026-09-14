@@ -150,20 +150,21 @@ def stream_generated_tests(
             )
         echo(f"[hardware] WARNING: {stamp_missing} Continuing unverified (--allow-unverified-firmware).")
 
-    # Discover the bridgeable case count/case_ids up front (cheap: just descriptor/header
-    # parsing, no hardware I/O) purely so the live progress printer can align its
-    # [N/total] counter and case_id columns from the very first printed line instead of
-    # widening them as longer names are discovered mid-run.
-    preview_bundles, _preview_skipped = build_generated_test_case_bundles(
+    # Bridge the cases once, before any hardware I/O: bridging loads every case's
+    # arrays and runs the FVP gate, so the list is built here and handed to the
+    # session runner rather than rebuilt inside it. Knowing the count and case_ids
+    # up front also lets the live progress printer align its [N/total] counter and
+    # case_id column from the first printed line.
+    bundles, skipped = build_generated_test_case_bundles(
         repo_root, cpu=board.cpu, family=options.family, name_filter=options.test_name,
         limit=options.limit, suite=options.suite, fvp_gate=options.fvp_gate,
     )
-    id_width = max((len(b.case_id) for b in preview_bundles), default=0)
+    id_width = max((len(b.case_id) for b in bundles), default=0)
     echo(
         f"[hardware] Streaming generated tests to {board.id} (serial {serial_no}, session {session_id}, "
         f"firmware build id {expected_build_id or 'unverified'})..."
     )
-    on_case_complete = make_live_progress_printer(len(preview_bundles), id_width=id_width, err=progress_to_stderr)
+    on_case_complete = make_live_progress_printer(len(bundles), id_width=id_width, err=progress_to_stderr)
 
     result, bundle, skipped = run_apollo510_generated_test_session(
         repo_root,
@@ -179,6 +180,8 @@ def stream_generated_tests(
         fvp_gate=options.fvp_gate,
         on_case_complete=on_case_complete,
         expected_build_id=expected_build_id,
+        bundles=bundles,
+        skipped=skipped,
     )
     return HardwareRunOutcome(session_id=session_id, result=result, bundle=bundle, skipped=skipped)
 

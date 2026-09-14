@@ -539,21 +539,34 @@ def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeyp
     from helia_core_tester.perf_stream import hardware_pipeline
 
     seen: dict = {}
+    bridged: list[str] = []
+
+    class _Bundle:
+        case_id = "abs_default_s8_hw_generated"
+
+    preview = ([_Bundle()], [("skipped-case", "reason")])
+
+    def _bridge(*args, **kwargs):
+        bridged.append("bridge")
+        return preview
 
     def _session(repo_root, **kwargs):
         seen.update(kwargs)
-        return object(), tmp_path / "bundle", []
+        return object(), tmp_path / "bundle", kwargs["skipped"]
 
     monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
-    monkeypatch.setattr("helia_core_tester.perf_stream.hardware_run.build_generated_test_case_bundles", lambda *a, **k: ([], []))
+    monkeypatch.setattr("helia_core_tester.perf_stream.hardware_run.build_generated_test_case_bundles", _bridge)
     monkeypatch.setattr("helia_core_tester.perf_stream.hardware_run.run_apollo510_generated_test_session", _session)
 
     build_dir = tmp_path / "bd"
     _write_elf(build_dir, b"fw", "hct-stream")
     echoed: list[str] = []
-    hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=build_dir, options=StreamOptions(), echo=echoed.append)
+    outcome = hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=build_dir, options=StreamOptions(), echo=echoed.append)
     assert seen["expected_build_id"] == "hct-stream"
     assert any("firmware build id hct-stream" in line for line in echoed)
+    # Bridged exactly once: the preview list is what the session runner gets.
+    assert bridged == ["bridge"]
+    assert seen["bundles"] is preview[0] and seen["skipped"] is preview[1] and outcome.skipped is preview[1]
 
 
 def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, monkeypatch) -> None:
@@ -581,6 +594,21 @@ def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, 
     assert seen["expected_build_id"] is None
     assert any("WARNING" in line and "hct_build_id.txt" in line and "unverified" in line for line in echoed)
     assert any("firmware build id unverified" in line for line in echoed)
+
+
+def test_session_runner_uses_prebuilt_bundles_instead_of_bridging_again(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.perf_stream import hardware_run
+
+    def _must_not_bridge(*args, **kwargs):
+        raise AssertionError("bundles were supplied; the runner must not bridge again")
+
+    monkeypatch.setattr(hardware_run, "build_generated_test_case_bundles", _must_not_bridge)
+    # An empty pre-built list follows the same "nothing bridgeable" path as before,
+    # proving the supplied lists are used rather than rebuilt.
+    with pytest.raises(RuntimeError, match="No bridgeable generated tests found"):
+        hardware_run.run_apollo510_generated_test_session(
+            tmp_path, serial_no=1, board=BOARD, family="BasicMathFunctions", bundles=[], skipped=[],
+        )
 
 
 # --- --json keeps stdout clean ----------------------------------------------------

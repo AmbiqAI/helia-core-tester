@@ -334,6 +334,8 @@ def run_apollo510_generated_test_session(
     fvp_gate: str | None = None,
     on_case_complete: Callable[[CaseRunResult], None] | None = None,
     expected_build_id: str | None = None,
+    bundles: list[CaseBundle] | None = None,
+    skipped: list[tuple[GeneratedTestCase, str]] | None = None,
 ) -> tuple[SessionResult, Path, list[tuple[GeneratedTestCase, str]]]:
     """Run real `helia_core_tester generate`-produced kernel tests (with their real golden
     data) against connected Apollo510 hardware over the streaming HCTP/RTT session,
@@ -357,14 +359,21 @@ def run_apollo510_generated_test_session(
     `expected_build_id`, when given, is checked against every session's HELLO so a
     board running some other firmware fails the batch instead of producing a bundle
     that describes firmware that never ran.
+
+    `bundles`/`skipped`, when given, are the output of an earlier
+    `build_generated_test_case_bundles` call with the same discovery arguments and
+    are used as-is: bridging loads every case's arrays and runs the FVP gate, so a
+    caller that already did it for a preview must not pay for it twice.
     """
     board = board or resolve_board(DEFAULT_BOARD_ID)
     cpu = cpu or board.cpu
-    bundles, skipped = build_generated_test_case_bundles(
-        project_root, cpu=cpu, family=family, name_filter=name_filter, limit=limit, suite=suite,
-        require_fvp_pass=require_fvp_pass,
-        fvp_gate=fvp_gate,
-    )
+    if bundles is None:
+        bundles, skipped = build_generated_test_case_bundles(
+            project_root, cpu=cpu, family=family, name_filter=name_filter, limit=limit, suite=suite,
+            require_fvp_pass=require_fvp_pass,
+            fvp_gate=fvp_gate,
+        )
+    skipped = list(skipped or [])
     if not bundles:
         base = (
             f"No bridgeable generated tests found for cpu={cpu} "
