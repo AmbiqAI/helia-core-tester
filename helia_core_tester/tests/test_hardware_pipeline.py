@@ -287,6 +287,23 @@ def captured_cmake(monkeypatch, tmp_path: Path):
     return calls
 
 
+def test_configure_passes_the_board_row_to_cmake(captured_cmake, monkeypatch, tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: None)
+    firmware_build.configure(tmp_path / "bd", BOARD, force=False)
+    [cmd] = captured_cmake
+    assert cmd[:4] == ["cmake", "-S", str(tmp_path), "-B", str(tmp_path / "bd")][:4]
+    assert "-DHELIA_HARDWARE_BOARD=apollo510_evb" in cmd and "-DTARGET_CPU=cortex-m55" in cmd
+    # apollo510_evb's workspace must stay at the historical 114688 so the memory report is unchanged.
+    assert BOARD.workspace_bytes == 114688 and "-DHCT_SERVER_WORKSPACE_BYTES=114688" in cmd
+
+    captured_cmake.clear()
+    other = replace(BOARD, id="other_evb", workspace_bytes=65536)
+    firmware_build.configure(tmp_path / "bd2", other, force=False)
+    assert "-DHCT_SERVER_WORKSPACE_BYTES=65536" in captured_cmake[0]
+
+
 def test_configure_forwards_the_resolved_jlinkexe_to_the_flash_target(captured_cmake, monkeypatch, tmp_path: Path) -> None:
     from helia_core_tester.perf_stream.jlink_library import JLinkExecutable, JLinkLibraryError
 

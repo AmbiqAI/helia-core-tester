@@ -175,6 +175,9 @@ def configure(build_dir: Path, board: BoardSpec, force: bool, serial_no: Optiona
         "-DHELIA_HARDWARE_BUILD=ON",
         f"-DHELIA_HARDWARE_BOARD={board.nsx_board}",
         f"-DTARGET_CPU={board.cpu}",
+        # The board row owns the per-case workspace size; without this every
+        # board silently compiled with the CMakeLists.txt default (114688).
+        f"-DHCT_SERVER_WORKSPACE_BYTES={board.workspace_bytes}",
         "-DARM_NN_ENABLE_F32=ON",
         "-DARM_NN_ENABLE_F16=ON",
         # Overrides CMakeLists.txt's fragile "3 levels up, outside the repo" default
