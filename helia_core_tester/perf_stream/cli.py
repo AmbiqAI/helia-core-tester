@@ -254,7 +254,7 @@ _PRECISION_HELP = (
 
 
 def _stream_options(suite, family, test_name, limit, precision, pmu_groups, fvp_gate, session_id):
-    from .hardware_pipeline import StreamOptions, apply_precision, parse_pmu_groups, validate_fvp_gate
+    from .hardware_pipeline import StreamOptions, apply_precision, float_precision_for, parse_pmu_groups, validate_fvp_gate
     from .hardware_run import normalize_suites
 
     try:
@@ -266,6 +266,7 @@ def _stream_options(suite, family, test_name, limit, precision, pmu_groups, fvp_
     return StreamOptions(
         suite=suite, family=family, test_name=test_name, limit=limit,
         pmu_groups=parse_pmu_groups(pmu_groups), fvp_gate=fvp_gate, session_id=session_id,
+        float_precision=float_precision_for(precision),
     )
 
 

@@ -16,6 +16,8 @@ from .firmware_build import FlashDecision, build_id_path, flash_firmware, read_b
 from .run_summary import make_live_progress_printer
 
 PRECISION_SUFFIX = {"fp16": "_f16", "fp32": "_f32"}
+# `--precision` value -> Config.float_precision value for the generate step.
+PRECISION_FLOAT_PRECISION = {"fp16": "f16", "fp32": "f32"}
 
 
 def apply_precision(precision: Optional[str], suite: str, test_name: Optional[str]) -> tuple[str, Optional[str]]:
@@ -38,6 +40,16 @@ def apply_precision(precision: Optional[str], suite: str, test_name: Optional[st
     return "float", suffix
 
 
+def float_precision_for(precision: Optional[str]) -> Optional[str]:
+    """Config.float_precision the generate step must use for `--precision`, or None to
+    leave it to the TOML/env/default. Without this the shortcut only narrowed the
+    *discovery* filter, so e.g. HELIA_CORE_TESTER_FLOAT_PRECISION=f32 with
+    `--precision fp16` generated no _f16 cases and then found nothing to run."""
+    if precision is None:
+        return None
+    return PRECISION_FLOAT_PRECISION[precision.lower()]
+
+
 def validate_fvp_gate(fvp_gate: Optional[str]) -> None:
     if fvp_gate is None:
         return
@@ -51,18 +63,26 @@ def parse_pmu_groups(pmu_groups: str) -> tuple[str, ...]:
     return tuple(g.strip() for g in pmu_groups.split(",") if g.strip())
 
 
-def generate_tests_for_board(repo_root: Path, board: BoardSpec, suite: str) -> None:
+def generate_tests_for_board(repo_root: Path, board: BoardSpec, suite: str, float_precision: Optional[str] = None) -> None:
     """Run the generate step for the board's CPU and the requested suite, exactly as
-    `helia_core_tester generate --cpu <board.cpu> --suite <suite>` would."""
+    `helia_core_tester generate --cpu <board.cpu> --suite <suite>
+    [--float-precision <float_precision>]` would. `float_precision` (f16/f32/both)
+    is an explicit override when given; otherwise the TOML/env/default applies."""
     from ..core.config import Config
     from ..core.logging import setup_logger
     from ..core.steps import GenerateStep
 
+    overrides = {"project_root", "cpu", "suite"}
+    kwargs = {}
+    if float_precision is not None:
+        kwargs["float_precision"] = float_precision
+        overrides.add("float_precision")
     config = Config(
         project_root=repo_root,
         cpu=board.cpu,
         suite=suite,
-        _explicit_overrides={"project_root", "cpu", "suite"},
+        _explicit_overrides=overrides,
+        **kwargs,
     )
     setup_logger(verbosity=config.verbosity)
     result = GenerateStep(config).execute()
@@ -79,6 +99,8 @@ class StreamOptions:
     pmu_groups: tuple[str, ...] = ("cpu", "memory", "mve")
     fvp_gate: Optional[str] = None
     session_id: Optional[str] = None
+    float_precision: Optional[str] = None
+    """Config.float_precision for the generate step when `--precision` was given (f16/f32)."""
 
 
 @dataclass
@@ -171,8 +193,9 @@ def run_hardware_pipeline(
     if skip_generate:
         echo("[hardware] --skip-generate set; reusing existing artifacts/generated_tests.")
     else:
-        echo(f"[hardware] Generating tests (cpu={board.cpu} suite={options.suite})...")
-        generate_tests_for_board(repo_root, board, options.suite)
+        precision_note = f" float_precision={options.float_precision}" if options.float_precision else ""
+        echo(f"[hardware] Generating tests (cpu={board.cpu} suite={options.suite}{precision_note})...")
+        generate_tests_for_board(repo_root, board, options.suite, float_precision=options.float_precision)
 
     flash: Optional[FlashDecision] = None
     if skip_flash:

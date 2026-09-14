@@ -27,6 +27,8 @@ from helia_core_tester.perf_stream.firmware_build import (
 from helia_core_tester.perf_stream.hardware_pipeline import (
     StreamOptions,
     apply_precision,
+    float_precision_for,
+    generate_tests_for_board,
     parse_pmu_groups,
     run_hardware_pipeline,
     validate_fvp_gate,
@@ -69,6 +71,42 @@ def test_precision_rejects_unknown_value() -> None:
 def test_precision_rejects_test_name() -> None:
     with pytest.raises(ValueError, match=r"--precision and --test-name cannot be combined \(both filter via a single substring match\)\."):
         apply_precision("fp32", "float", "reshape")
+
+
+def test_precision_maps_to_the_generate_steps_float_precision() -> None:
+    assert float_precision_for(None) is None
+    assert float_precision_for("fp16") == "f16"
+    assert float_precision_for("FP32") == "f32"
+
+
+def test_precision_is_an_explicit_override_for_generation(monkeypatch) -> None:
+    """`--precision fp16` must generate _f16 artifacts even when the environment or
+    TOML pins float_precision to f32; without --precision the env value stands."""
+    import helia_core_tester.core.steps as steps
+
+    captured: list = []
+
+    class _FakeGenerateStep:
+        def __init__(self, config) -> None:
+            captured.append(config)
+
+        def execute(self):
+            class _Result:
+                success = True
+                skipped = False
+                message = ""
+
+            return _Result()
+
+    monkeypatch.setattr(steps, "GenerateStep", _FakeGenerateStep)
+    monkeypatch.setenv("HELIA_CORE_TESTER_FLOAT_PRECISION", "f32")
+    monkeypatch.delenv("HELIA_CORE_TESTER_CONFIG", raising=False)
+
+    generate_tests_for_board(PROJECT_ROOT, BOARD, "float", float_precision="f16")
+    assert captured[-1].float_precision == "f16" and captured[-1].suite == "float" and captured[-1].cpu == "cortex-m55"
+
+    generate_tests_for_board(PROJECT_ROOT, BOARD, "float")
+    assert captured[-1].float_precision == "f32"
 
 
 def test_fvp_gate_and_pmu_groups_parsing() -> None:
@@ -372,8 +410,8 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     board = resolve_board("apollo510_evb")
     order: list[str] = []
 
-    def _generate(repo_root, spec, suite):
-        order.append(f"generate:{spec.cpu}:{suite}")
+    def _generate(repo_root, spec, suite, float_precision=None):
+        order.append(f"generate:{spec.cpu}:{suite}:{float_precision}")
 
     def _flash(spec, serial, *, build_dir, jobs, force_reconfigure, force):
         order.append(f"flash:{serial}:{build_dir.relative_to(tmp_path)}:force={force}")
@@ -388,9 +426,9 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     monkeypatch.setattr(hardware_pipeline, "stream_generated_tests", _stream)
 
     outcome = run_hardware_pipeline(
-        tmp_path, board, 42, options=StreamOptions(suite="float", test_name="_f16"), echo=lambda _msg: None,
+        tmp_path, board, 42, options=StreamOptions(suite="float", test_name="_f16", float_precision="f16"), echo=lambda _msg: None,
     )
-    assert order == ["generate:cortex-m55:float", "flash:42:build/perf_stream/apollo510_evb:force=False", "stream:float:_f16"]
+    assert order == ["generate:cortex-m55:float:f16", "flash:42:build/perf_stream/apollo510_evb:force=False", "stream:float:_f16"]
     assert outcome.flash is not None and outcome.flash.needed
 
     order.clear()

@@ -204,6 +204,23 @@ def test_unexpected_exceptions_keep_their_traceback(monkeypatch) -> None:
     assert result.exit_code != 0 and isinstance(result.exception, KeyError)
 
 
+def test_run_precision_reaches_the_generate_step(monkeypatch) -> None:
+    from helia_core_tester.perf_stream import hardware_pipeline
+
+    seen: dict = {}
+
+    def _pipeline(repo_root, spec, serial, *, options, **kwargs):
+        seen["options"] = options
+        raise RuntimeError("stop here")
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _pipeline)
+    runner.invoke(app, ["hardware", "run", "--precision", "fp16"])
+    assert (seen["options"].suite, seen["options"].test_name, seen["options"].float_precision) == ("float", "_f16", "f16")
+    runner.invoke(app, ["hardware", "run", "--suite", "float"])
+    assert seen["options"].float_precision is None
+
+
 def test_run_rejects_skip_flash_with_force_flash(monkeypatch) -> None:
     from helia_core_tester.perf_stream import cli as hardware_cli
 
