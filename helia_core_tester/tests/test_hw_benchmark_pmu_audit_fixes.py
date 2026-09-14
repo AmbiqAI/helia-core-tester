@@ -249,11 +249,11 @@ def test_f012_download_file_accepts_matching_checksum(tmp_path):
 
 
 def test_f012_pinned_hashes_exist_for_both_architectures():
-    from helia_core_tester.scripts.setup_dependencies import PINNED_SHA256
+    from helia_core_tester.scripts.setup_dependencies import DEFAULT_GCC_VERSION, PINNED_SHA256
 
-    for dep in ("arm_gcc", "corstone300"):
-        for arch in ("x86_64", "aarch64"):
-            digest = PINNED_SHA256[(dep, arch)]
+    for arch in ("x86_64", "aarch64"):
+        for key in (("arm_gcc", DEFAULT_GCC_VERSION, arch), ("corstone300", arch)):
+            digest = PINNED_SHA256[key]
             assert len(digest) == 64
             int(digest, 16)  # must be valid hex
 

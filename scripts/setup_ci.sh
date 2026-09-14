@@ -1,6 +1,8 @@
 #!/bin/bash
 # CI Setup Script for Helia-Core-Tester
 # This script sets up the environment for CI builds using uv for Python dependencies
+# HELIA_GCC_VERSION (e.g. 13.2.rel1) selects the ARM GCC release setup_dependencies.py installs;
+# the CI download cache key hashes this file and setup_dependencies.py, not that variable.
 
 set -euo pipefail
 
