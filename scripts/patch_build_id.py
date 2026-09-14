@@ -135,6 +135,9 @@ def stamp(elf_path: Path, bin_path: Optional[Path], output_txt: Path) -> str:
     image, base = assemble_image(bytes(elf), segments)
     slot = find_slot(image, str(elf_path))
     build_id = compute_build_id(image, slot)
+    # Patch the ELF in memory now; both files are only written once the .bin
+    # (when given) has been checked against the image assembled from the ELF.
+    patch_slot(elf, image_file_offset(segments, base, slot), build_id)
 
     if bin_path is not None:
         binary = bytearray(bin_path.read_bytes())
