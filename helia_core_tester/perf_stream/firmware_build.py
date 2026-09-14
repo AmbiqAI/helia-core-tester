@@ -9,9 +9,10 @@ That decision has two halves. The host-side stamp
 flashed *this probe* with the current ELF. It cannot know what another build
 dir (a second clone, `--build-dir`, a lab runner sharing the board) did since,
 so a stamp match is only trusted after the board itself confirms it: every
-firmware build carries a content-hash build id (`hct_build_id.txt`, generated
-by scripts/generate_build_id.py during the CMake build and advertised by the
-firmware in HELLO), and the skip path opens one short RTT session to read it.
+firmware build carries a content-hash build id (`hct_build_id.txt`, stamped
+into the linked image by scripts/patch_build_id.py as a CMake POST_BUILD step
+and advertised by the firmware in HELLO), and the skip path opens one short
+RTT session to read it.
 """
 
 from __future__ import annotations
@@ -115,8 +116,8 @@ def elf_path(build_dir: Path) -> Path:
 
 
 def build_id_path(build_dir: Path) -> Path:
-    """`hct_build_id.txt`, written by the CMake build next to the cache (see
-    scripts/generate_build_id.py); the same string the firmware advertises in HELLO."""
+    """`hct_build_id.txt`, written next to the cache by the post-link stamp step (see
+    scripts/patch_build_id.py); the same string the firmware advertises in HELLO."""
     return build_dir / "hct_build_id.txt"
 
 

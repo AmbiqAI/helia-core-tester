@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import struct
 from pathlib import Path
 
 import pytest
@@ -42,8 +43,8 @@ SERIAL = 1160002276
 
 
 def _load_build_id_script():
-    path = PROJECT_ROOT / "scripts" / "generate_build_id.py"
-    spec = importlib.util.spec_from_file_location("generate_build_id", path)
+    path = PROJECT_ROOT / "scripts" / "patch_build_id.py"
+    spec = importlib.util.spec_from_file_location("patch_build_id", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -264,28 +265,109 @@ def test_read_build_id_handles_missing_and_blank_files(tmp_path: Path) -> None:
     assert read_build_id(tmp_path) == "hct-0123"
 
 
-# --- build id generator (scripts/generate_build_id.py) -------------------------------
+# --- post-link build id (scripts/patch_build_id.py) ------------------------------------
 
 
-def test_build_id_is_a_content_hash_of_the_linked_objects(tmp_path: Path) -> None:
+def _synthetic_elf(segments: list[tuple[int, bytes]]) -> bytes:
+    """A minimal ELF32 little-endian file with one PT_LOAD segment per (lma, payload)."""
+    ehsize, phentsize = 52, 32
+    data_offset = ehsize + phentsize * len(segments)
+    phdrs, body = bytearray(), bytearray()
+    for lma, payload in segments:
+        # p_type=PT_LOAD, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_flags, p_align
+        phdrs += struct.pack("<IIIIIIII", 1, data_offset + len(body), lma, lma, len(payload), len(payload), 5, 4)
+        body += payload
+    ident = b"\x7fELF" + bytes([1, 1, 1, 0]) + bytes(8)
+    header = ident + struct.pack("<HHIIIIIHHHHHH", 2, 40, 1, segments[0][0], ehsize, 0, 0, ehsize, phentsize, len(segments), 0, 0, 0)
+    return bytes(header + phdrs + body)
+
+
+def _synthetic_firmware(build_dir: Path, *, server: bytes, library: bytes, gap: int = 16) -> tuple[Path, Path]:
+    """Write an ELF + .bin pair whose flash image is `server` (holding the build-id slot),
+    a zero gap, then `library` in a second PT_LOAD segment -- standing in for the NSX
+    libraries and linker layout the old object hash never saw."""
     script = _load_build_id_script()
-    objs_a = [tmp_path / "a" / "x.obj", tmp_path / "a" / "y.obj"]
-    objs_b = [tmp_path / "b" / "y.obj", tmp_path / "b" / "x.obj"]
-    for obj in objs_a + objs_b:
-        obj.parent.mkdir(exist_ok=True)
-        obj.write_bytes(b"x-object" if obj.name == "x.obj" else b"y-object")
-    # Same contents -> same id, regardless of build dir or argument order.
-    same_a, same_b = script.compute_build_id(objs_a), script.compute_build_id(list(reversed(objs_b)))
-    assert same_a == same_b
-    assert same_a.startswith("hct-") and len(same_a) == 60
-    objs_b[0].write_bytes(b"x-object-changed")
-    assert script.compute_build_id(objs_b) != same_a
+    assert script.MARKER in server
+    base = 0x00410000
+    elf, binary = elf_path(build_dir), build_dir / "perf_stream" / "hct_benchmark_server.bin"
+    elf.parent.mkdir(parents=True, exist_ok=True)
+    elf.write_bytes(_synthetic_elf([(base, server), (base + len(server) + gap, library)]))
+    binary.write_bytes(server + bytes(gap) + library)  # what objcopy -O binary emits
+    return elf, binary
 
-    out_c, out_txt = tmp_path / "gen" / "hct_build_id.c", tmp_path / "hct_build_id.txt"
-    assert script.main(["--output-c", str(out_c), "--output-txt", str(out_txt), "--", *map(str, objs_a)]) == 0
-    assert out_txt.read_text().strip() == same_a
-    assert f'return "{same_a}";' in out_c.read_text() and "hct_benchmark_server_build_id(void)" in out_c.read_text()
-    assert script.main(["--output-c", str(out_c), "--output-txt", str(out_txt), "--", str(tmp_path / "missing.obj")]) == 1
+
+def _stamp(build_dir: Path) -> str:
+    script = _load_build_id_script()
+    elf, binary = elf_path(build_dir), build_dir / "perf_stream" / "hct_benchmark_server.bin"
+    assert script.main(["--elf", str(elf), "--bin", str(binary), "--output-txt", str(build_id_path(build_dir))]) == 0
+    return read_build_id(build_dir)
+
+
+def _embedded_id(path: Path) -> str:
+    script = _load_build_id_script()
+    data = path.read_bytes()
+    assert data.count(script.MARKER) == 1
+    start = data.index(script.MARKER) + len(script.MARKER)
+    return data[start:data.index(b"\0", start)].decode("ascii")
+
+
+def test_post_link_build_id_covers_the_whole_image(tmp_path: Path) -> None:
+    script = _load_build_id_script()
+    slot = script.MARKER + bytes(script.ID_AREA)
+    server = b"server-code-" + slot + b"-more-server-code"
+    library = b"nsx-board+core+perf+startup+cmsis-nn+linker-layout"
+
+    # Same image from two build dirs -> the same id, and the host-side txt equals the
+    # string embedded in both the ELF and the .bin.
+    build_a, build_b = tmp_path / "a", tmp_path / "b"
+    _synthetic_firmware(build_a, server=server, library=library)
+    _synthetic_firmware(build_b, server=server, library=library)
+    id_a, id_b = _stamp(build_a), _stamp(build_b)
+    assert id_a == id_b
+    assert id_a.startswith("hct-") and len(id_a) == 4 + script.BUILD_ID_HEX_CHARS
+    assert _embedded_id(elf_path(build_a)) == _embedded_id(build_a / "perf_stream" / "hct_benchmark_server.bin") == id_a
+    assert elf_path(build_a).read_bytes() == elf_path(build_b).read_bytes()
+
+    # A byte that only a linked library changes -> a different id (the old object hash missed this).
+    build_c = tmp_path / "c"
+    _synthetic_firmware(build_c, server=server, library=library[:-1] + b"X")
+    id_c = _stamp(build_c)
+    assert id_c != id_a
+    # ...and so does a byte in the server's own code.
+    build_d = tmp_path / "d"
+    _synthetic_firmware(build_d, server=server.replace(b"more", b"MORE"), library=library)
+    assert _stamp(build_d) not in {id_a, id_c}
+
+    # Re-running on an already patched image is a no-op with the same id.
+    before = elf_path(build_a).read_bytes()
+    assert _stamp(build_a) == id_a and elf_path(build_a).read_bytes() == before
+
+
+def test_post_link_build_id_rejects_unpatchable_images(tmp_path: Path, capsys) -> None:
+    script = _load_build_id_script()
+    slot = script.MARKER + bytes(script.ID_AREA)
+
+    def _run(build_dir: Path) -> int:
+        elf, binary = elf_path(build_dir), build_dir / "perf_stream" / "hct_benchmark_server.bin"
+        return script.main(["--elf", str(elf), "--bin", str(binary), "--output-txt", str(build_id_path(build_dir))])
+
+    no_marker = tmp_path / "no_marker"
+    _synthetic_firmware(no_marker, server=b"code" + slot, library=b"lib")
+    elf_path(no_marker).write_bytes(_synthetic_elf([(0x410000, b"code-without-a-slot")]))
+    assert _run(no_marker) == 1 and "marker" in capsys.readouterr().err
+
+    twice = tmp_path / "twice"
+    _synthetic_firmware(twice, server=b"code" + slot + slot, library=b"lib")
+    assert _run(twice) == 1 and "more than once" in capsys.readouterr().err
+
+    # The .bin must be the image assembled from the ELF, byte for byte.
+    stale_bin = tmp_path / "stale_bin"
+    _synthetic_firmware(stale_bin, server=b"code" + slot, library=b"lib")
+    (stale_bin / "perf_stream" / "hct_benchmark_server.bin").write_bytes(b"code" + slot + bytes(16) + b"lib-old")
+    assert _run(stale_bin) == 1 and "does not match" in capsys.readouterr().err
+    assert not build_id_path(stale_bin).exists()
+
+    assert script.main(["--elf", str(tmp_path / "missing.elf"), "--output-txt", str(tmp_path / "x.txt")]) == 1
 
 
 # --- HELLO build id verification ------------------------------------------------------
