@@ -7,7 +7,9 @@ import subprocess
 from pathlib import Path
 
 from .boards import DEFAULT_BOARD_ID, resolve_board
+from .pathutil import display_path
 from .phase0 import _parse_memory_regions, _parse_size_a, _parse_top_symbols, _repo_root, _retained_kernel_count
+from .toolchain import arm_tool
 from ..scripts.setup_dependencies import nsx_ambiq_sdk_dir
 
 
@@ -24,7 +26,7 @@ _SELECTED_ADAPTERS = (
 
 
 def _probe_binary(tool: str, args: list[str]) -> str:
-    return subprocess.run([tool, *args], capture_output=True, text=True, check=True).stdout
+    return subprocess.run([arm_tool(tool), *args], capture_output=True, text=True, check=True).stdout
 
 
 
@@ -36,6 +38,8 @@ def generate_benchmark_server_memory_report(*, build_dir: Path | None = None, ou
     out_root.mkdir(parents=True, exist_ok=True)
 
     elf = build_root / "perf_stream" / "hct_benchmark_server.elf"
+    if not elf.is_file():
+        raise FileNotFoundError(f"Built firmware ELF not found: {elf} -- run `hardware build` for this board/build dir first.")
     linker_script = nsx_ambiq_sdk_dir(repo_root) / "modules" / "nsx-core" / "src" / "apollo510" / "gcc" / "linker_script_sbl.ld"
     size_default = _probe_binary("arm-none-eabi-size", [str(elf)])
     size_sections = _probe_binary("arm-none-eabi-size", ["-A", str(elf)])
@@ -64,10 +68,11 @@ def generate_benchmark_server_memory_report(*, build_dir: Path | None = None, ou
         "schema_version": 1,
         "artifact": "hct_benchmark_server",
         "target": {"board": "apollo510_evb", "cpu": "cortex-m55"},
+        # Repo-relative for the default in-tree build dir, absolute for an external --build-dir.
         "artifacts": {
-            "elf": str(elf.relative_to(repo_root)),
-            "bin": str((build_root / "perf_stream" / "hct_benchmark_server.bin").relative_to(repo_root)),
-            "map": str((build_root / "perf_stream" / "hct_benchmark_server.map").relative_to(repo_root)),
+            "elf": display_path(elf, repo_root),
+            "bin": display_path(build_root / "perf_stream" / "hct_benchmark_server.bin", repo_root),
+            "map": display_path(build_root / "perf_stream" / "hct_benchmark_server.map", repo_root),
         },
         "memory_regions": memory_regions,
         "sections": sections,

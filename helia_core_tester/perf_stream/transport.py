@@ -96,8 +96,10 @@ class JLinkRttTransport:
 
 
 def symbol_address_from_elf(elf_path: str, symbol_name: str) -> int:
+    from .toolchain import arm_tool
+
     result = subprocess.run(
-        ["arm-none-eabi-nm", "-n", elf_path],
+        [arm_tool("arm-none-eabi-nm"), "-n", elf_path],
         check=True,
         capture_output=True,
         text=True,

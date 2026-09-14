@@ -29,10 +29,11 @@ import typer
 
 from .boards import BoardSpec
 from .jlink_library import JLinkLibraryError, find_jlink_exe
+from .pathutil import is_relative_to
 from .phase0 import _repo_root
+from .toolchain import DOWNLOADS_DIR, add_toolchain_to_path, toolchain_bin_dir
 
 TOOLCHAIN_FILE = "cmake/nsx/toolchains/arm-none-eabi-gcc.cmake"
-DOWNLOADS_DIR = "artifacts/downloads"
 SERVER_TARGET = "hct_benchmark_server"
 FLASH_TARGET = "hct_benchmark_server_flash"
 
@@ -68,7 +69,7 @@ def ensure_hardware_dependencies(repo_root: Path) -> None:
     board_symlink = repo_root / "boards" / "apollo510_evb"
     board_link_ok = (
         board_symlink.exists()
-        and board_symlink.resolve().is_relative_to(nsx_ambiq_sdk_dir(repo_root, downloads_dir).resolve())
+        and is_relative_to(board_symlink.resolve(), nsx_ambiq_sdk_dir(repo_root, downloads_dir).resolve())
     )
     neuralspotx_examples_dir = downloads_dir / "neuralspotx" / "examples"
     arm_gcc_dir = downloads_dir / "arm_gcc_download"
@@ -85,6 +86,7 @@ def ensure_hardware_dependencies(repo_root: Path) -> None:
         and cmsis5_core_dir.is_dir()
         and toolchain_file.exists()
     ):
+        add_toolchain_to_path(repo_root)
         return
 
     typer.echo("[hardware] Hardware-build dependencies not found -- fetching them now (first run only)...")
@@ -101,6 +103,10 @@ def ensure_hardware_dependencies(repo_root: Path) -> None:
         setup_cmsis5(downloads_dir)
     if not toolchain_file.exists():
         setup_nsx_toolchain(repo_root, downloads_dir)
+    # This process resolves arm-none-eabi-nm itself later (RTT block address,
+    # memory report); a toolchain that was downloaded just now is not on the
+    # PATH the CLI started with.
+    add_toolchain_to_path(repo_root)
     typer.echo("[hardware] Hardware-build dependencies ready.")
 
 
@@ -225,7 +231,7 @@ def build(build_dir: Path, target: str, jobs: Optional[int]) -> None:
     # own compiler/linker/objcopy invocations at absolute paths, but this one
     # still needs the toolchain's bin/ on PATH.
     env = os.environ.copy()
-    toolchain_bin = str((_repo_root() / DOWNLOADS_DIR / "arm_gcc_download" / "bin").resolve())
+    toolchain_bin = str(toolchain_bin_dir(_repo_root()).resolve())
     env["PATH"] = f"{toolchain_bin}{os.pathsep}{env.get('PATH', '')}"
     subprocess.run(cmd, cwd=_repo_root(), check=True, env=env)
 
