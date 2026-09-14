@@ -6,7 +6,10 @@ Resolution order for every command that needs a probe:
 2. the `HPX_JLINK_SERIAL` environment variable,
 3. enumeration of connected probes through pylink (the same J-Link DLL the RTT
    transport uses) -- exactly one connected probe is used as-is; zero or several
-   is an error that lists what was found and asks for `--serial-no`.
+   is an error that lists what was found and asks for `--serial-no`. An empty
+   first enumeration is retried once after a short pause: a probe that was just
+   plugged in (or a J-Link OB whose board was just powered) can be missing from
+   the first USB scan and present on the next.
 
 Enumeration never shells out to JLinkExe.
 """
@@ -14,12 +17,14 @@ Enumeration never shells out to JLinkExe.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .jlink_library import JLinkLibraryError, missing_library_hint, open_jlink
 
 SERIAL_ENV_VAR = "HPX_JLINK_SERIAL"
+ENUMERATION_RETRY_DELAY_S = 1.0
 
 
 class ProbeResolutionError(RuntimeError):
@@ -85,8 +90,13 @@ def resolve_serial(
     *,
     env: Optional[dict] = None,
     enumerate_probes: Callable[[], list[ProbeInfo]] = list_probes,
+    retry_delay_s: float = ENUMERATION_RETRY_DELAY_S,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> int:
-    """Apply the flag > $HPX_JLINK_SERIAL > enumeration resolution order."""
+    """Apply the flag > $HPX_JLINK_SERIAL > enumeration resolution order.
+
+    Enumeration is re-run once, after `retry_delay_s`, when the first pass finds
+    no probe at all (see the module docstring)."""
     if explicit is not None:
         return int(explicit)
     env = os.environ if env is None else env
@@ -95,6 +105,9 @@ def resolve_serial(
         return _parse_serial(from_env, f"${SERIAL_ENV_VAR}")
 
     probes = enumerate_probes()
+    if not probes:
+        sleep(retry_delay_s)
+        probes = enumerate_probes()
     if len(probes) == 1:
         return probes[0].serial
     if not probes:

@@ -8,12 +8,15 @@ from helia_core_tester.perf_stream import probes
 from helia_core_tester.perf_stream.probes import ProbeInfo, ProbeResolutionError, resolve_serial
 
 
-def _enumerator(found: list[ProbeInfo]):
+def _enumerator(found: list[ProbeInfo], *then: list[ProbeInfo]):
+    """Fake enumerator returning `found` first, then each of `then` on later calls (last one repeats)."""
     calls = {"count": 0}
+    answers = [found, *then]
 
     def _list() -> list[ProbeInfo]:
+        index = min(calls["count"], len(answers) - 1)
         calls["count"] += 1
-        return list(found)
+        return list(answers[index])
 
     _list.calls = calls  # type: ignore[attr-defined]
     return _list
@@ -42,9 +45,25 @@ def test_single_connected_probe_is_used() -> None:
     assert enumerate.calls["count"] == 1
 
 
-def test_zero_probes_errors_and_asks_for_serial() -> None:
+def test_zero_probes_retries_once_then_errors_and_asks_for_serial() -> None:
+    slept: list[float] = []
+    enumerate = _enumerator([])
     with pytest.raises(ProbeResolutionError, match="No connected J-Link probes.*--serial-no"):
-        resolve_serial(None, env={}, enumerate_probes=_enumerator([]))
+        resolve_serial(None, env={}, enumerate_probes=enumerate, retry_delay_s=0.25, sleep=slept.append)
+    assert enumerate.calls["count"] == 2 and slept == [0.25]
+
+
+def test_probe_missing_on_first_enumeration_is_found_on_the_retry() -> None:
+    slept: list[float] = []
+    enumerate = _enumerator([], [ProbeInfo(1160002276, "J-Link OB")])
+    assert resolve_serial(None, env={}, enumerate_probes=enumerate, sleep=slept.append) == 1160002276
+    assert enumerate.calls["count"] == 2 and slept == [probes.ENUMERATION_RETRY_DELAY_S]
+
+    # A non-empty first enumeration is never retried, even when it is ambiguous.
+    enumerate = _enumerator([ProbeInfo(1), ProbeInfo(2)], [ProbeInfo(1)])
+    with pytest.raises(ProbeResolutionError, match="Multiple"):
+        resolve_serial(None, env={}, enumerate_probes=enumerate, sleep=slept.append)
+    assert enumerate.calls["count"] == 1
 
 
 def test_multiple_probes_error_lists_them() -> None:
