@@ -136,9 +136,6 @@ def stamp(elf_path: Path, bin_path: Optional[Path], output_txt: Path) -> str:
     slot = find_slot(image, str(elf_path))
     build_id = compute_build_id(image, slot)
 
-    patch_slot(elf, image_file_offset(segments, base, slot), build_id)
-    elf_path.write_bytes(elf)
-
     if bin_path is not None:
         binary = bytearray(bin_path.read_bytes())
         bin_slot = find_slot(binary, str(bin_path))
@@ -152,6 +149,8 @@ def stamp(elf_path: Path, bin_path: Optional[Path], output_txt: Path) -> str:
                 f"{bin_path} does not match the image assembled from {elf_path}'s PT_LOAD segments "
                 f"({len(binary)} vs {len(image)} bytes, slot at {bin_slot:#x} vs {slot:#x})"
             )
+    elf_path.write_bytes(elf)
+    if bin_path is not None:
         bin_path.write_bytes(binary)
 
     output_txt.parent.mkdir(parents=True, exist_ok=True)
