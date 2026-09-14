@@ -202,6 +202,11 @@ def configure(build_dir: Path, board: BoardSpec, force: bool, serial_no: Optiona
     jlink_exe = _jlink_exe_for_cmake()
     if jlink_exe is not None:
         cmd.append(f"-DNSX_JLINK_EXE={jlink_exe}")
+    else:
+        # Drop any value a previous configure cached, so find_program() searches
+        # PATH afresh instead of flashing through a JLinkExe that has since been
+        # moved or un-configured.
+        cmd.append("-UNSX_JLINK_EXE")
     typer.echo(f"[hardware] Configuring: {' '.join(cmd)}")
     subprocess.run(cmd, cwd=repo_root, check=True)
 

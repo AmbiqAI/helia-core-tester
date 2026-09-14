@@ -254,3 +254,50 @@ def test_doctor_reports_jlinkexe_path_and_source_and_missing_hpx_jlink_dll(monke
     text = _result_text(result)
     assert "✓ JLinkExe (flash target): /opt/SEGGER/JLink/JLinkExe (via $JLINK_PATH)" in text
     assert "⚠ J-Link library (pylink): $HPX_JLINK_DLL=" in text and "gone.so does not exist" in text
+
+
+def test_precision_refuses_suite_both_in_any_spelling(monkeypatch) -> None:
+    """`--suite BOTH` is normalised before the precision rules, so it is refused like `both`
+    instead of slipping through as a float-only run."""
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    for spelling in ("BOTH", "Both", " both "):
+        for command in (["hardware", "stream"], ["hardware", "run", "--skip-generate"]):
+            result = runner.invoke(app, [*command, "--precision", "fp16", "--suite", spelling])
+            assert result.exit_code == 1, (command, spelling)
+            assert "--precision cannot be combined with --suite both" in _result_text(result), (command, spelling)
+
+
+def test_memory_report_missing_elf_is_a_one_line_error(tmp_path) -> None:
+    result = runner.invoke(app, ["hardware", "memory-report", "--build-dir", str(tmp_path / "never-built")])
+    text = _result_text(result)
+    assert result.exit_code == 1 and isinstance(result.exception, SystemExit), text
+    assert "✗ Built firmware ELF not found" in text and "hardware build" in text and "Traceback" not in text
+
+
+def test_stream_requires_the_build_id_stamp_unless_allowed(monkeypatch, tmp_path) -> None:
+    from helia_core_tester.perf_stream import hardware_pipeline
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    unstamped = tmp_path / "legacy"
+    (unstamped / "perf_stream").mkdir(parents=True)
+    (unstamped / "perf_stream" / "hct_benchmark_server.elf").write_bytes(b"legacy")
+    result = runner.invoke(app, ["hardware", "stream", "--build-dir", str(unstamped)])
+    text = _result_text(result)
+    assert result.exit_code == 1 and "hct_build_id.txt not found" in text and "--allow-unverified-firmware" in text, text
+    assert "Traceback" not in text
+
+    seen: dict = {}
+
+    def _stream(repo_root, spec, serial, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(hardware_pipeline, "stream_generated_tests", _stream)
+    runner.invoke(app, ["hardware", "stream", "--build-dir", str(unstamped), "--allow-unverified-firmware"])
+    assert seen["allow_unverified_firmware"] is True
+    runner.invoke(app, ["hardware", "stream", "--build-dir", str(unstamped)])
+    assert seen["allow_unverified_firmware"] is False
+
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _stream)
+    runner.invoke(app, ["hardware", "run", "--skip-generate", "--skip-flash", "--allow-unverified-firmware"])
+    assert seen["allow_unverified_firmware"] is True

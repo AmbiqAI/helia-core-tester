@@ -61,6 +61,10 @@ _FORCE_FLASH_HELP = (
     "Flash even if the ELF is unchanged since the last flash to this probe and the board "
     "already reports this build's id."
 )
+_ALLOW_UNVERIFIED_HELP = (
+    "Stream even when the build dir has no hct_build_id.txt (firmware built before build-id "
+    "stamping), skipping the HELLO build-id check. Without it a missing stamp is an error."
+)
 
 
 def _fail(message: str) -> None:
@@ -224,12 +228,17 @@ def memory_report(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
     output_root: Optional[Path] = typer.Option(None, "--output-root", help="Directory to write memory_report.json into."),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
     """Generate and print the flash/RAM memory_report.json for the linked firmware ELF."""
     from .firmware_build import resolve_build_dir
 
     spec = _board(board)
-    path = generate_benchmark_server_memory_report(build_dir=resolve_build_dir(_repo_root(), spec, build_dir), output_root=output_root)
+    # Same one-line failures as the other hardware commands: a missing ELF is a
+    # FileNotFoundError, a missing/failing arm-none-eabi-* tool a FileNotFoundError
+    # or CalledProcessError.
+    with _pipeline_errors(_verbosity(verbosity)):
+        path = generate_benchmark_server_memory_report(build_dir=resolve_build_dir(_repo_root(), spec, build_dir), output_root=output_root)
     typer.echo(json.dumps(json.loads(path.read_text()), indent=2))
     typer.echo(f"\n✓ Memory report written to {path}")
 
@@ -255,10 +264,12 @@ _PRECISION_HELP = (
 
 def _stream_options(suite, family, test_name, limit, precision, pmu_groups, fvp_gate, session_id):
     from .hardware_pipeline import StreamOptions, apply_precision, float_precision_for, parse_pmu_groups, validate_fvp_gate
-    from .hardware_run import normalize_suites
+    from .hardware_run import canonical_suite
 
     try:
-        normalize_suites(suite)
+        # Canonicalise before the precision rules so `--suite BOTH` is refused
+        # exactly like `--suite both` rather than slipping through as float.
+        suite = canonical_suite(suite)
         suite, test_name = apply_precision(precision, suite, test_name)
         validate_fvp_gate(fvp_gate)
     except ValueError as exc:
@@ -308,6 +319,7 @@ def stream(
     fvp_gate: Optional[str] = typer.Option(None, "--fvp-gate", help=_FVP_GATE_HELP),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP + " Must hold the flashed firmware's ELF."),
+    allow_unverified_firmware: bool = typer.Option(False, "--allow-unverified-firmware", help=_ALLOW_UNVERIFIED_HELP),
     as_json: bool = typer.Option(False, "--json", help="Print one JSON summary document on stdout (human output goes to stderr)."),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -333,7 +345,7 @@ def stream(
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
         outcome = stream_generated_tests(
             _repo_root(), spec, serial, build_dir=resolve_build_dir(_repo_root(), spec, build_dir),
-            options=options, echo=echo, progress_to_stderr=as_json,
+            options=options, echo=echo, progress_to_stderr=as_json, allow_unverified_firmware=allow_unverified_firmware,
         )
     _report(outcome, spec, as_json=as_json)
 
@@ -353,6 +365,7 @@ def run(
     skip_generate: bool = typer.Option(False, "--skip-generate", help="Reuse existing artifacts/generated_tests instead of regenerating."),
     skip_flash: bool = typer.Option(False, "--skip-flash", help="Skip build+flash and reuse whatever firmware is already running on the board (its HELLO build id is still checked against the build dir)."),
     force_flash: bool = typer.Option(False, "--force-flash", help=_FORCE_FLASH_HELP + " Mirror of `hardware flash --force`."),
+    allow_unverified_firmware: bool = typer.Option(False, "--allow-unverified-firmware", help=_ALLOW_UNVERIFIED_HELP + " Only meaningful with --skip-flash."),
     as_json: bool = typer.Option(False, "--json", help="Print one JSON summary document on stdout (human output goes to stderr)."),
     jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel firmware build jobs."),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure the CMake build dir even if it already exists."),
@@ -375,5 +388,6 @@ def run(
             _repo_root(), spec, serial, options=options, build_dir=build_dir,
             skip_generate=skip_generate, skip_flash=skip_flash, force_flash=force_flash, jobs=jobs,
             force_reconfigure=force_reconfigure, echo=echo, progress_to_stderr=as_json,
+            allow_unverified_firmware=allow_unverified_firmware,
         )
     _report(outcome, spec, as_json=as_json)

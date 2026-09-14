@@ -314,7 +314,10 @@ so it covers every linked library and the linker layout, not only the server
 objects -- and advertised in HELLO; the skip path opens one short RTT session to
 read it). Another build dir flashing the same probe, or no HELLO at all, means a
 reflash. `--force` (or `hardware run --force-flash`) overrides, and every stream
-also fails at HELLO if the board's build id is not the build dir's:
+also fails at HELLO if the board's build id is not the build dir's. A build dir
+without `hct_build_id.txt` (firmware built before stamping) is refused by
+`hardware stream` / `hardware run --skip-flash` unless
+`--allow-unverified-firmware` is given:
 
 ```bash
 uv run helia_core_tester hardware flash --board apollo510_evb

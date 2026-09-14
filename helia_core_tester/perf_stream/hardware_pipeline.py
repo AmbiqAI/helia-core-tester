@@ -30,7 +30,7 @@ def apply_precision(precision: Optional[str], suite: str, test_name: Optional[st
     """
     if precision is None:
         return suite, test_name
-    if suite == "both":
+    if str(suite).strip().lower() == "both":
         raise ValueError("--precision cannot be combined with --suite both (it selects float cases only).")
     suffix = PRECISION_SUFFIX.get(precision.lower())
     if suffix is None:
@@ -125,11 +125,30 @@ def stream_generated_tests(
     options: StreamOptions,
     echo: Callable[[str], None],
     progress_to_stderr: bool = False,
+    allow_unverified_firmware: bool = False,
 ) -> HardwareRunOutcome:
-    """Stream the generated suite to already-flashed firmware and write the bundle."""
+    """Stream the generated suite to already-flashed firmware and write the bundle.
+
+    Preflight: the build dir must carry `hct_build_id.txt` so every session's HELLO
+    can be checked against it; a missing stamp is an error unless
+    `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
+    """
     from .hardware_run import build_generated_test_case_bundles, run_apollo510_generated_test_session
 
     session_id = options.session_id or default_session_id(board)
+
+    expected_build_id = read_build_id(build_dir)
+    if expected_build_id is None:
+        stamp_missing = (
+            f"{build_id_path(build_dir)} not found, so the firmware on the board cannot be verified "
+            "against this build dir."
+        )
+        if not allow_unverified_firmware:
+            raise RuntimeError(
+                f"{stamp_missing} Rebuild with `hardware build --board {board.id}` (which stamps it), "
+                "or pass --allow-unverified-firmware to stream to legacy firmware unchecked."
+            )
+        echo(f"[hardware] WARNING: {stamp_missing} Continuing unverified (--allow-unverified-firmware).")
 
     # Discover the bridgeable case count/case_ids up front (cheap: just descriptor/header
     # parsing, no hardware I/O) purely so the live progress printer can align its
@@ -140,12 +159,6 @@ def stream_generated_tests(
         limit=options.limit, suite=options.suite, fvp_gate=options.fvp_gate,
     )
     id_width = max((len(b.case_id) for b in preview_bundles), default=0)
-    expected_build_id = read_build_id(build_dir)
-    if expected_build_id is None:
-        echo(
-            f"[hardware] WARNING: {build_id_path(build_dir)} not found -- the firmware on the board cannot be "
-            "verified against this build dir (rebuild with `hardware build` to stamp it)."
-        )
     echo(
         f"[hardware] Streaming generated tests to {board.id} (serial {serial_no}, session {session_id}, "
         f"firmware build id {expected_build_id or 'unverified'})..."
@@ -184,6 +197,7 @@ def run_hardware_pipeline(
     force_reconfigure: bool = False,
     echo: Callable[[str], None],
     progress_to_stderr: bool = False,
+    allow_unverified_firmware: bool = False,
 ) -> HardwareRunOutcome:
     """generate (board cpu) -> build -> flash unless the board already runs this build -> stream -> bundle."""
     if skip_flash and force_flash:
@@ -207,7 +221,7 @@ def run_hardware_pipeline(
 
     outcome = stream_generated_tests(
         repo_root, board, serial_no, build_dir=resolved_build_dir, options=options,
-        echo=echo, progress_to_stderr=progress_to_stderr,
+        echo=echo, progress_to_stderr=progress_to_stderr, allow_unverified_firmware=allow_unverified_firmware,
     )
     outcome.flash = flash
     return outcome

@@ -258,6 +258,14 @@ def normalize_suites(suite: str) -> tuple[str, ...]:
     return ("int", "float") if normalized == "both" else (normalized,)
 
 
+def canonical_suite(suite: str) -> str:
+    """The lower-cased, validated `--suite` value ("int", "float" or "both"), so
+    every spelling (`BOTH`, ` both `) is compared and forwarded the same way."""
+    normalized = str(suite).strip().lower()
+    normalize_suites(normalized)
+    return normalized
+
+
 def build_generated_test_case_bundles(
     project_root: Path,
     *,

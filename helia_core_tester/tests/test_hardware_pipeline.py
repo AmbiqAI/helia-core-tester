@@ -433,11 +433,13 @@ def test_configure_forwards_the_resolved_jlinkexe_to_the_flash_target(captured_c
     assert "-DNSX_JLINK_EXE=/opt/SEGGER/JLink/JLinkExe" in cmd
     assert f"-DNSX_JLINK_SERIAL={SERIAL}" in cmd
 
-    # Nothing resolved: leave CMake's own find_program(JLinkExe) alone.
+    # Nothing resolved: unset any cached value so CMake's find_program(JLinkExe)
+    # searches PATH afresh instead of reusing a stale path from an earlier configure.
     captured_cmake.clear()
     monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: None)
     firmware_build.configure(tmp_path / "bd", BOARD, force=False)
     assert not any(arg.startswith("-DNSX_JLINK_EXE") for arg in captured_cmake[0])
+    assert "-UNSX_JLINK_EXE" in captured_cmake[0]
 
     # A broken $HPX_JLINK_DLL is doctor's problem, not a reason to refuse `hardware build`.
     captured_cmake.clear()
@@ -448,6 +450,7 @@ def test_configure_forwards_the_resolved_jlinkexe_to_the_flash_target(captured_c
     monkeypatch.setattr(firmware_build, "find_jlink_exe", _broken)
     firmware_build.configure(tmp_path / "bd", BOARD, force=False)
     assert len(captured_cmake) == 1 and not any(arg.startswith("-DNSX_JLINK_EXE") for arg in captured_cmake[0])
+    assert "-UNSX_JLINK_EXE" in captured_cmake[0]
 
 
 # --- --json summary ----------------------------------------------------------------
@@ -499,8 +502,8 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
         order.append(f"flash:{serial}:{build_dir.relative_to(tmp_path)}:force={force}")
         return firmware_build.FlashDecision(True, "abc", "test")
 
-    def _stream(repo_root, spec, serial, *, build_dir, options, echo, progress_to_stderr):
-        order.append(f"stream:{options.suite}:{options.test_name}")
+    def _stream(repo_root, spec, serial, *, build_dir, options, echo, progress_to_stderr, allow_unverified_firmware):
+        order.append(f"stream:{options.suite}:{options.test_name}:unverified={allow_unverified_firmware}")
         return hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[])
 
     monkeypatch.setattr(hardware_pipeline, "generate_tests_for_board", _generate)
@@ -510,20 +513,21 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     outcome = run_hardware_pipeline(
         tmp_path, board, 42, options=StreamOptions(suite="float", test_name="_f16", float_precision="f16"), echo=lambda _msg: None,
     )
-    assert order == ["generate:cortex-m55:float:f16", "flash:42:build/perf_stream/apollo510_evb:force=False", "stream:float:_f16"]
+    assert order == ["generate:cortex-m55:float:f16", "flash:42:build/perf_stream/apollo510_evb:force=False", "stream:float:_f16:unverified=False"]
     assert outcome.flash is not None and outcome.flash.needed
 
     order.clear()
     run_hardware_pipeline(
         tmp_path, board, 42, options=StreamOptions(), skip_generate=True, skip_flash=True, echo=lambda _msg: None,
+        allow_unverified_firmware=True,
     )
-    assert order == ["stream:int:None"]
+    assert order == ["stream:int:None:unverified=True"]
 
     order.clear()
     run_hardware_pipeline(
         tmp_path, board, 42, options=StreamOptions(), skip_generate=True, force_flash=True, echo=lambda _msg: None,
     )
-    assert order == ["flash:42:build/perf_stream/apollo510_evb:force=True", "stream:int:None"]
+    assert order == ["flash:42:build/perf_stream/apollo510_evb:force=True", "stream:int:None:unverified=False"]
 
     with pytest.raises(ValueError, match="--skip-flash and --force-flash"):
         run_hardware_pipeline(
@@ -551,12 +555,32 @@ def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeyp
     assert seen["expected_build_id"] == "hct-stream"
     assert any("firmware build id hct-stream" in line for line in echoed)
 
+
+def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.perf_stream import hardware_pipeline
+
+    seen: dict = {}
+    monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
+    monkeypatch.setattr("helia_core_tester.perf_stream.hardware_run.build_generated_test_case_bundles", lambda *a, **k: ([], []))
+    monkeypatch.setattr(
+        "helia_core_tester.perf_stream.hardware_run.run_apollo510_generated_test_session",
+        lambda repo_root, **kwargs: (seen.update(kwargs), (object(), tmp_path / "bundle", []))[1],
+    )
+
     unstamped = tmp_path / "old"
     _write_elf(unstamped, b"fw")
-    echoed.clear()
-    hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=unstamped, options=StreamOptions(), echo=echoed.append)
+    echoed: list[str] = []
+    with pytest.raises(RuntimeError, match="hct_build_id.txt not found") as info:
+        hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=unstamped, options=StreamOptions(), echo=echoed.append)
+    assert "--allow-unverified-firmware" in str(info.value) and "hardware build --board apollo510_evb" in str(info.value)
+    assert not seen and not echoed  # preflight: nothing streamed, nothing announced
+
+    hardware_pipeline.stream_generated_tests(
+        tmp_path, BOARD, 5, build_dir=unstamped, options=StreamOptions(), echo=echoed.append, allow_unverified_firmware=True,
+    )
     assert seen["expected_build_id"] is None
-    assert any("WARNING" in line and "hct_build_id.txt" in line for line in echoed)
+    assert any("WARNING" in line and "hct_build_id.txt" in line and "unverified" in line for line in echoed)
+    assert any("firmware build id unverified" in line for line in echoed)
 
 
 # --- --json keeps stdout clean ----------------------------------------------------
