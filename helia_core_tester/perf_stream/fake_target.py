@@ -177,7 +177,15 @@ class FakeConvolveS8Adapter(FakeKernelAdapter):
 class FakeTargetTransport:
     """Synchronous fake transport that simulates a target-side HCTP server."""
 
-    def __init__(self, *, max_frame_payload: int = 64, read_chunk_size: int = 19, runtime_arena_capacity: int = 4096) -> None:
+    def __init__(
+        self,
+        *,
+        max_frame_payload: int = 64,
+        read_chunk_size: int = 19,
+        runtime_arena_capacity: int = 4096,
+        build_id: str = "fake-benchmark-server",
+    ) -> None:
+        self.build_id = build_id
         self._session_id = 0xC0DE1234
         self._target_sequence_id = 0
         self._decoder = FrameDecoder(max_payload=4096)
@@ -266,13 +274,19 @@ class FakeTargetTransport:
         self._target_sequence_id += 1
 
     def _emit_hello(self) -> None:
+        # Same field layout as the firmware's hct_build_hello_frame(), so the host
+        # decodes the fake with the real decode_hello_payload().
         writer = ByteWriter()
-        writer.text("fake-benchmark-server")
+        writer.text(self.build_id)
         writer.fixed(self._catalog_hash)
         writer.u32(self._max_frame_payload)
         writer.u32(self._runtime_arena_capacity)
         writer.u8(1)
         writer.u8(1)
+        writer.text("fake_board")
+        writer.text("fake-cpu")
+        writer.u8(0)
+        writer.u32(0)
         self._queue(MessageType.HELLO, writer.finish())
 
     def _emit_capabilities(self) -> None:

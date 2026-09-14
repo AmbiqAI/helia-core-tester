@@ -42,14 +42,15 @@ uv run helia_core_tester hardware run --board apollo510_evb
 ```
 
 That generates the tests for the board's CPU, builds the firmware, flashes it only
-if the ELF changed since the last flash to that probe, streams every bridged case,
+unless the board already confirms (via its HELLO build id) that it runs this exact
+build, streams every bridged case,
 writes the result bundle under `artifacts/reports/performance_stream/<session-id>/`,
 and prints the pass/fail summary (`--json` prints one JSON document on stdout
 instead, with the human output on stderr; the exit code is non-zero on any
 correctness failure). Useful narrowing flags: `--suite int|float|both`,
 `--family`, `--test-name`, `--limit`, `--precision fp16|fp32` (float-only shortcut,
 not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|strict`,
-`--skip-generate`, `--skip-flash`. The steps are also available individually as
+`--skip-generate`, `--skip-flash`, `--force-flash`. The steps are also available individually as
 `hardware build`, `hardware flash [--force]`, `hardware stream` and
 `hardware memory-report`.
 

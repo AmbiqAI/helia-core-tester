@@ -121,6 +121,16 @@ def test_stream_precision_rules_are_enforced_before_hardware(monkeypatch) -> Non
     assert "--precision and --test-name cannot be combined" in _result_text(result)
 
 
+def test_run_rejects_skip_flash_with_force_flash(monkeypatch) -> None:
+    from helia_core_tester.perf_stream import cli as hardware_cli
+
+    monkeypatch.setattr(hardware_cli, "resolve_serial", lambda explicit=None, **_: (_ for _ in ()).throw(
+        AssertionError("probes must not be resolved before option validation")))
+    result = runner.invoke(app, ["hardware", "run", "--skip-flash", "--force-flash"])
+    assert result.exit_code == 1
+    assert "--skip-flash and --force-flash cannot be combined" in _result_text(result)
+
+
 def test_doctor_reports_hardware_section_without_failing_on_missing_tools(monkeypatch) -> None:
     from helia_core_tester.perf_stream import doctor as hw_doctor
 

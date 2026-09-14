@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .boards import BoardSpec, default_session_id
-from .firmware_build import FlashDecision, flash_firmware, resolve_build_dir
+from .firmware_build import FlashDecision, build_id_path, flash_firmware, read_build_id, resolve_build_dir
 from .run_summary import make_live_progress_printer
 
 PRECISION_SUFFIX = {"fp16": "_f16", "fp32": "_f32"}
@@ -118,7 +118,16 @@ def stream_generated_tests(
         limit=options.limit, suite=options.suite, fvp_gate=options.fvp_gate,
     )
     id_width = max((len(b.case_id) for b in preview_bundles), default=0)
-    echo(f"[hardware] Streaming generated tests to {board.id} (serial {serial_no}, session {session_id})...")
+    expected_build_id = read_build_id(build_dir)
+    if expected_build_id is None:
+        echo(
+            f"[hardware] WARNING: {build_id_path(build_dir)} not found -- the firmware on the board cannot be "
+            "verified against this build dir (rebuild with `hardware build` to stamp it)."
+        )
+    echo(
+        f"[hardware] Streaming generated tests to {board.id} (serial {serial_no}, session {session_id}, "
+        f"firmware build id {expected_build_id or 'unverified'})..."
+    )
     on_case_complete = make_live_progress_printer(len(preview_bundles), id_width=id_width, err=progress_to_stderr)
 
     result, bundle, skipped = run_apollo510_generated_test_session(
@@ -134,6 +143,7 @@ def stream_generated_tests(
         suite=options.suite,
         fvp_gate=options.fvp_gate,
         on_case_complete=on_case_complete,
+        expected_build_id=expected_build_id,
     )
     return HardwareRunOutcome(session_id=session_id, result=result, bundle=bundle, skipped=skipped)
 
@@ -147,12 +157,15 @@ def run_hardware_pipeline(
     build_dir: Optional[Path] = None,
     skip_generate: bool = False,
     skip_flash: bool = False,
+    force_flash: bool = False,
     jobs: Optional[int] = None,
     force_reconfigure: bool = False,
     echo: Callable[[str], None],
     progress_to_stderr: bool = False,
 ) -> HardwareRunOutcome:
-    """generate (board cpu) -> build -> flash if the ELF changed -> stream -> bundle."""
+    """generate (board cpu) -> build -> flash unless the board already runs this build -> stream -> bundle."""
+    if skip_flash and force_flash:
+        raise ValueError("--skip-flash and --force-flash cannot be combined.")
     resolved_build_dir = resolve_build_dir(repo_root, board, build_dir)
 
     if skip_generate:
@@ -166,7 +179,7 @@ def run_hardware_pipeline(
         echo("[hardware] --skip-flash set; reusing firmware already running on the board.")
     else:
         flash = flash_firmware(
-            board, serial_no, build_dir=resolved_build_dir, jobs=jobs, force_reconfigure=force_reconfigure
+            board, serial_no, build_dir=resolved_build_dir, jobs=jobs, force_reconfigure=force_reconfigure, force=force_flash,
         )
 
     outcome = stream_generated_tests(

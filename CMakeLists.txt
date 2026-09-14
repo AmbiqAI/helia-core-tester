@@ -344,7 +344,10 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
 
   add_custom_target(hct_kernel_symbol_refs DEPENDS "${HELIA_KERNEL_SYMBOL_REFS_INC}")
 
-  function(_hct_link_perf_stream_target target_name)
+  # Compile-side setup shared by every perf-stream target (and by the
+  # benchmark server's OBJECT library below): generated symbol refs, include
+  # paths, the HELIA_HARDWARE_BUILD define and the warning tweaks.
+  function(_hct_configure_perf_stream_compile target_name)
     add_dependencies(${target_name} hct_kernel_symbol_refs)
     target_include_directories(${target_name} PRIVATE
       "${HELIA_KERNEL_SYMBOL_REFS_DIR}"
@@ -352,6 +355,10 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
       "${CMSIS_PATH}/CMSIS/Core/Include")
     target_compile_definitions(${target_name} PUBLIC HELIA_HARDWARE_BUILD)
     target_compile_options(${target_name} PRIVATE -Wno-cast-function-type)
+  endfunction()
+
+  function(_hct_link_perf_stream_target target_name)
+    _hct_configure_perf_stream_compile(${target_name})
 
     if(HELIA_HARDWARE_BUILD)
       # nsx::cmsis_startup provides Reset_Handler/startup + system source
@@ -380,7 +387,12 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
     configure_file("${NEURALSPOTX_ROOT}/examples/coremark/src/rtt/SEGGER_RTT.h" "${HCT_RTT_BUILD_ROOT}/RTT/SEGGER_RTT.h" COPYONLY)
     configure_file("${NEURALSPOTX_ROOT}/examples/coremark/src/rtt/Config/SEGGER_RTT_Conf.h" "${HCT_RTT_BUILD_ROOT}/Config/SEGGER_RTT_Conf.h" COPYONLY)
 
-    add_executable(hct_benchmark_server
+    # The server's own sources compile into an OBJECT library so the firmware
+    # build id can be hashed over exactly the objects that get linked, without
+    # the dependency cycle a file that is itself linked into the ELF would
+    # create. HCT_BENCHMARK_SERVER_BUILD_ID_GENERATED compiles out the constant
+    # fallback in benchmark_server_catalog.c (kept for host-side unit builds).
+    add_library(hct_benchmark_server_objs OBJECT
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/benchmark_server_main.c"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/hctp_protocol.c"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/benchmark_server_catalog.c"
@@ -389,15 +401,47 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/benchmark_server_session.c"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/benchmark_server_transport_rtt.c"
       "${HCT_RTT_BUILD_ROOT}/RTT/SEGGER_RTT.c")
-    set_target_properties(hct_benchmark_server PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/perf_stream")
-    target_include_directories(hct_benchmark_server PRIVATE
+    target_include_directories(hct_benchmark_server_objs PRIVATE
       "${HCT_RTT_BUILD_ROOT}/RTT"
       "${HCT_RTT_BUILD_ROOT}/Config")
-    target_compile_definitions(hct_benchmark_server PRIVATE
+    target_compile_definitions(hct_benchmark_server_objs PRIVATE
       HCT_BENCHMARK_SERVER_BOARD_ID="${HELIA_HARDWARE_BOARD}"
       HCT_BENCHMARK_SERVER_TARGET_CPU="${TARGET_CPU}"
-      HCT_SERVER_WORKSPACE_BYTES=${HCT_SERVER_WORKSPACE_BYTES})
+      HCT_SERVER_WORKSPACE_BYTES=${HCT_SERVER_WORKSPACE_BYTES}
+      HCT_BENCHMARK_SERVER_BUILD_ID_GENERATED)
+    _hct_configure_perf_stream_compile(hct_benchmark_server_objs)
+    if(HELIA_HARDWARE_BUILD)
+      # Usage requirements only (board defines/includes/flags); the executable
+      # below does the actual linking.
+      target_link_libraries(hct_benchmark_server_objs PRIVATE cmsis-nn nsx::board nsx::core nsx::perf nsx::cmsis_startup)
+    else()
+      target_link_libraries(hct_benchmark_server_objs PRIVATE cmsis-nn retarget cmsis_startup)
+    endif()
+
+    # Per-build firmware identity: `hct-<sha256 of the linked object set>`,
+    # advertised by the firmware in HELLO (hct_build_id.c) and written for the
+    # host next to the build (hct_build_id.txt). Re-runs whenever any server
+    # object or the cmsis-nn archive changes, i.e. whenever the ELF would relink.
+    set(HCT_BUILD_ID_C "${CMAKE_BINARY_DIR}/perf_stream/hct_build_id.c")
+    set(HCT_BUILD_ID_TXT "${CMAKE_BINARY_DIR}/hct_build_id.txt")
+    add_custom_command(
+      OUTPUT "${HCT_BUILD_ID_C}" "${HCT_BUILD_ID_TXT}"
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_build_id.py"
+              --output-c "${HCT_BUILD_ID_C}" --output-txt "${HCT_BUILD_ID_TXT}"
+              -- $<TARGET_OBJECTS:hct_benchmark_server_objs> "$<TARGET_FILE:cmsis-nn>"
+      DEPENDS
+        $<TARGET_OBJECTS:hct_benchmark_server_objs>
+        cmsis-nn
+        "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_build_id.py"
+      COMMENT "Stamping hct_benchmark_server build id"
+      COMMAND_EXPAND_LISTS
+      VERBATIM)
+
+    add_executable(hct_benchmark_server
+      $<TARGET_OBJECTS:hct_benchmark_server_objs>
+      "${HCT_BUILD_ID_C}")
+    set_target_properties(hct_benchmark_server PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/perf_stream")
     _hct_link_perf_stream_target(hct_benchmark_server)
     add_custom_command(TARGET hct_benchmark_server POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different

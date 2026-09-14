@@ -43,10 +43,14 @@ def _run_single_session(
     requested_counter_groups: tuple[str, ...],
     build_dir: Path,
     on_case_complete: Callable[[CaseRunResult], None] | None = None,
+    expected_build_id: str | None = None,
 ) -> tuple[SessionResult, int]:
     """Open one fresh (reset-on-open) RTT session and run exactly one LOAD_PLAN
     worth of case bundles. Callers must keep len(case_bundles) <= MAX_CASES_PER_SESSION
     or the firmware will silently drop the plan (see MAX_CASES_PER_SESSION above).
+
+    `expected_build_id` (the build dir's hct_build_id.txt) makes the session fail
+    at HELLO if the board runs any other firmware.
     """
     if len(case_bundles) > MAX_CASES_PER_SESSION:
         raise ValueError(
@@ -67,7 +71,7 @@ def _run_single_session(
     )
     try:
         result = HostSession(transport, requested_counter_groups=requested_counter_groups).run_many(
-            case_bundles, on_case_complete=on_case_complete
+            case_bundles, on_case_complete=on_case_complete, expected_build_id=expected_build_id
         )
     finally:
         transport.close()
@@ -137,6 +141,7 @@ def _run_case_bundles_in_batches(
     build_dir: Path | None,
     board: BoardSpec,
     on_case_complete: Callable[[CaseRunResult], None] | None = None,
+    expected_build_id: str | None = None,
 ) -> tuple[SessionResult, Path]:
     """Like _run_case_bundles_on_apollo510, but transparently splits case_bundles
     into batches of at most MAX_CASES_PER_SESSION and runs one fresh (reset-on-open)
@@ -149,6 +154,7 @@ def _run_case_bundles_in_batches(
     all_trace: list[str] = []
     session_complete_cases = 0
     rtt_address = 0
+    build_id: str | None = None
     batch_count = (len(case_bundles) + MAX_CASES_PER_SESSION - 1) // MAX_CASES_PER_SESSION
 
     for batch_index in range(batch_count):
@@ -164,6 +170,7 @@ def _run_case_bundles_in_batches(
                 requested_counter_groups=requested_counter_groups,
                 build_dir=build_dir,
                 on_case_complete=on_case_complete,
+                expected_build_id=expected_build_id,
             )
         except RuntimeError as exc:
             batch_case_ids = [b.case_id for b in batch]
@@ -173,8 +180,11 @@ def _run_case_bundles_in_batches(
         all_cases.extend(result.cases)
         all_trace.extend(f"batch{batch_index}:{entry}" for entry in result.protocol_trace)
         session_complete_cases += result.session_complete_cases
+        build_id = build_id or result.build_id
 
-    merged_result = SessionResult(cases=tuple(all_cases), protocol_trace=tuple(all_trace), session_complete_cases=session_complete_cases)
+    merged_result = SessionResult(
+        cases=tuple(all_cases), protocol_trace=tuple(all_trace), session_complete_cases=session_complete_cases, build_id=build_id
+    )
 
     memory_report_path = generate_benchmark_server_memory_report(build_dir=build_dir)
     memory_report = json.loads(memory_report_path.read_text())
@@ -183,6 +193,7 @@ def _run_case_bundles_in_batches(
         f"hardware session_id={sid}\n"
         f"board={board.id} chip={chip_name} serial={serial_no} speed_khz={speed_khz}\n"
         f"rtt_address=0x{rtt_address:08x}\n"
+        f"firmware_build_id={build_id}\n"
         f"requested_counter_groups={requested_counter_groups}\n"
         f"batch_count={batch_count} max_cases_per_session={MAX_CASES_PER_SESSION}\n"
         f"protocol_trace_len={len(merged_result.protocol_trace)}\n"
@@ -314,6 +325,7 @@ def run_apollo510_generated_test_session(
     require_fvp_pass: bool = True,
     fvp_gate: str | None = None,
     on_case_complete: Callable[[CaseRunResult], None] | None = None,
+    expected_build_id: str | None = None,
 ) -> tuple[SessionResult, Path, list[tuple[GeneratedTestCase, str]]]:
     """Run real `helia_core_tester generate`-produced kernel tests (with their real golden
     data) against connected Apollo510 hardware over the streaming HCTP/RTT session,
@@ -333,6 +345,10 @@ def run_apollo510_generated_test_session(
     fresh reset-on-open RTT session per batch, merging all cases into a single
     SessionResult/result bundle -- sending more cases than that in one LOAD_PLAN
     causes the firmware to silently drop the plan and hang the host.
+
+    `expected_build_id`, when given, is checked against every session's HELLO so a
+    board running some other firmware fails the batch instead of producing a bundle
+    that describes firmware that never ran.
     """
     board = board or resolve_board(DEFAULT_BOARD_ID)
     cpu = cpu or board.cpu
@@ -388,6 +404,7 @@ def run_apollo510_generated_test_session(
         build_dir=build_dir,
         board=board,
         on_case_complete=on_case_complete,
+        expected_build_id=expected_build_id,
     )
     return result, bundle_root, skipped
 

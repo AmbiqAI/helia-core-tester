@@ -14,7 +14,7 @@ import numpy as np
 from .case_bundle import CaseBundle, BlobInfo, blob_numpy, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
 from .comparison import ComparisonResult, compare_output, compare_status
 from .fake_target import FakeTargetTransport
-from .firmware_messages import CatalogEntry, decode_catalog_payload
+from .firmware_messages import CatalogEntry, HelloPayload, decode_catalog_payload, decode_hello_payload
 from .hctp import HCTP_FLAG_MORE, ByteReader, ByteWriter, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
 from .measurement import NormalizedSample, RawCounterValue, RawSample, SampleStatistics, compute_sample_statistics, normalize_samples
 from .transport import Transport
@@ -47,6 +47,8 @@ class SessionResult:
     cases: tuple[CaseRunResult, ...]
     protocol_trace: tuple[str, ...]
     session_complete_cases: int
+    build_id: str | None = None
+    """Firmware build id the target advertised in HELLO (None for legacy callers)."""
 
     @property
     def case_bundle(self) -> CaseBundle:
@@ -85,6 +87,7 @@ class HostSession:
         case_bundles: list[CaseBundle],
         *,
         on_case_complete: Callable[[CaseRunResult], None] | None = None,
+        expected_build_id: str | None = None,
     ) -> SessionResult:
         """Run every case in case_bundles over one LOAD_PLAN.
 
@@ -93,14 +96,20 @@ class HostSession:
         decoded), before waiting on the next case -- callers can use this for live
         per-case progress output instead of waiting for the whole batch/session to
         finish before seeing anything.
+
+        If expected_build_id is given, the firmware build id advertised in HELLO
+        must match it exactly, or the session fails before HELLO_ACK -- so a
+        stream against firmware other than the one this host built (another
+        build dir flashed the same probe, a stale board) never silently succeeds.
         """
         hello = self._recv_one(MessageType.HELLO)
-        hello_payload = self._decode_hello(hello.payload)
+        hello_payload = decode_hello_payload(hello.payload)
+        check_build_id(hello_payload.build_id, expected_build_id)
         self._session_id = hello.header.session_id
         self._incoming_validator = SessionFrameValidator(session_id=self._session_id, next_sequence_id=1)
         self._send(MessageType.HELLO_ACK, b"")
 
-        catalog = self._recv_catalog(hello_payload["catalog_hash"])
+        catalog = self._recv_catalog(hello_payload.catalog_hash)
         known_kernel_ids = {entry.kernel_id for entry in catalog}
         for bundle in case_bundles:
             if bundle.kernel_id not in known_kernel_ids:
@@ -109,7 +118,7 @@ class HostSession:
                     "which is not present in the target's advertised catalog."
                 )
             required = bundle.workspace_bytes_required
-            available = int(hello_payload["runtime_arena_capacity"])
+            available = int(hello_payload.runtime_arena_capacity)
             if required > available:
                 raise RuntimeError(
                     f"Case {bundle.case_id!r} requires {required} workspace bytes, "
@@ -254,7 +263,12 @@ class HostSession:
                 raise ValueError(f"Unhandled frame type: {frame.header.message_type}")
 
         ordered = tuple(results[bundle.case_id] for bundle in case_bundles)
-        return SessionResult(cases=ordered, protocol_trace=tuple(self._trace), session_complete_cases=session_complete_cases)
+        return SessionResult(
+            cases=ordered,
+            protocol_trace=tuple(self._trace),
+            session_complete_cases=session_complete_cases,
+            build_id=hello_payload.build_id,
+        )
 
     def _to_raw_samples(self, samples: tuple[SampleResult, ...]) -> list[RawSample]:
         raw: list[RawSample] = []
@@ -278,17 +292,6 @@ class HostSession:
                 )
             )
         return raw
-
-    def _decode_hello(self, payload: bytes) -> dict[str, Any]:
-        reader = ByteReader(payload)
-        return {
-            "build_id": reader.text(),
-            "catalog_hash": reader.fixed(32),
-            "max_frame_payload": reader.u32(),
-            "runtime_arena_capacity": reader.u32(),
-            "transfer_mode": reader.u8(),
-            "output_mode": reader.u8(),
-        }
 
     def _recv_catalog(self, expected_hash: bytes) -> tuple[CatalogEntry, ...]:
         """F008: accumulate one or more paginated CAPABILITIES chunks (each chunk carries
@@ -452,6 +455,39 @@ class HostSession:
         self._last_sent_message_type = message_type.name
         self._transport.write(frame)
 
+
+
+def check_build_id(actual: str, expected: str | None) -> None:
+    """Fail loudly when the firmware's HELLO build id is not the one the host expects."""
+    if expected is None or actual == expected:
+        return
+    raise RuntimeError(
+        f"Firmware build id mismatch: the board reports {actual!r} but the host build dir "
+        f"expects {expected!r}. Another build was flashed to this probe (or the board is "
+        "stale); rerun with `hardware run --force-flash` / `hardware flash --force`, or "
+        "point --build-dir at the build that is actually on the board."
+    )
+
+
+def read_hello(transport: Transport) -> HelloPayload:
+    """Read and decode the firmware's HELLO frame, sending nothing back.
+
+    Used by the flash decision to ask the board which build it is running: the
+    firmware sends HELLO on reset and then waits for HELLO_ACK, so a caller that
+    just reads HELLO and closes leaves the board parked until the next
+    reset-on-open session.
+    """
+    decoder = FrameDecoder(max_payload=4096)
+    while True:
+        chunk = transport.read()
+        if not chunk:
+            raise RuntimeError("Transport stalled before a complete HELLO frame arrived.")
+        for frame in decoder.feed(chunk):
+            if frame.header.message_type == MessageType.ERROR:
+                raise RuntimeError(ByteReader(frame.payload).text())
+            if frame.header.message_type != MessageType.HELLO:
+                raise RuntimeError(f"Expected HELLO, got {frame.header.message_type.name}")
+            return decode_hello_payload(frame.payload)
 
 
 def _encode_scalar(value: Any) -> int:

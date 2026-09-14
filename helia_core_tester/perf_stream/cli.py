@@ -45,6 +45,10 @@ probes_app = typer.Typer(
 _BOARD_HELP = "Board id from assets/hardware_boards.yaml (default: $HPX_BOARD, else apollo510_evb)."
 _SERIAL_HELP = "J-Link probe serial number (default: $HPX_JLINK_SERIAL, else the single connected probe)."
 _BUILD_DIR_HELP = "CMake build directory (default: build/perf_stream/<board>)."
+_FORCE_FLASH_HELP = (
+    "Flash even if the ELF is unchanged since the last flash to this probe and the board "
+    "already reports this build's id."
+)
 
 
 def _fail(message: str) -> None:
@@ -136,10 +140,11 @@ def flash(
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
     jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel build jobs."),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
-    force: bool = typer.Option(False, "--force", help="Flash even if the ELF sha256 matches the last flash to this probe."),
+    force: bool = typer.Option(False, "--force", help=_FORCE_FLASH_HELP),
 ) -> None:
     """Build (if needed) and flash the hct_benchmark_server firmware to --board via J-Link.
-    Skipped when the ELF is unchanged since the last flash to the same probe."""
+    Skipped only when the ELF is unchanged since this build dir last flashed the same
+    probe *and* the board confirms (in HELLO) that it runs this build's id."""
     from .firmware_build import flash_firmware, resolve_build_dir
 
     spec = _board(board)
@@ -285,17 +290,20 @@ def run(
     fvp_gate: Optional[str] = typer.Option(None, "--fvp-gate", help=_FVP_GATE_HELP),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     skip_generate: bool = typer.Option(False, "--skip-generate", help="Reuse existing artifacts/generated_tests instead of regenerating."),
-    skip_flash: bool = typer.Option(False, "--skip-flash", help="Skip build+flash and reuse whatever firmware is already running on the board."),
+    skip_flash: bool = typer.Option(False, "--skip-flash", help="Skip build+flash and reuse whatever firmware is already running on the board (its HELLO build id is still checked against the build dir)."),
+    force_flash: bool = typer.Option(False, "--force-flash", help=_FORCE_FLASH_HELP + " Mirror of `hardware flash --force`."),
     as_json: bool = typer.Option(False, "--json", help="Print one JSON summary document on stdout (human output goes to stderr)."),
     jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel firmware build jobs."),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure the CMake build dir even if it already exists."),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
 ) -> None:
     """The whole hardware pipeline: generate tests for the board's CPU, build the
-    firmware, flash it if the ELF changed, stream the suite, write the result bundle,
-    and print the summary."""
+    firmware, flash it unless the board already runs this exact build, stream the
+    suite, write the result bundle, and print the summary."""
     from .hardware_pipeline import run_hardware_pipeline
 
+    if skip_flash and force_flash:
+        _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
     serial = _serial(serial_no)
     options = _stream_options(suite, family, test_name, limit, precision, pmu_groups, fvp_gate, session_id)
@@ -304,7 +312,7 @@ def run(
         with _quiet_stdout(as_json):
             outcome = run_hardware_pipeline(
                 _repo_root(), spec, serial, options=options, build_dir=build_dir,
-                skip_generate=skip_generate, skip_flash=skip_flash, jobs=jobs,
+                skip_generate=skip_generate, skip_flash=skip_flash, force_flash=force_flash, jobs=jobs,
                 force_reconfigure=force_reconfigure, echo=echo, progress_to_stderr=as_json,
             )
     except RuntimeError as exc:

@@ -2,7 +2,16 @@
 
 Host-side glue only: the firmware under cmake/perf_stream/ and the NSX CMake
 targets are untouched. This module owns the lazy dependency fetch, the CMake
-configure/build invocations, and the "flash only if the ELF changed" stamp.
+configure/build invocations, and the "flash only if the ELF changed" decision.
+
+That decision has two halves. The host-side stamp
+(`<build_dir>/.flashed-<serial>.sha256`) says whether *this build dir* last
+flashed *this probe* with the current ELF. It cannot know what another build
+dir (a second clone, `--build-dir`, a lab runner sharing the board) did since,
+so a stamp match is only trusted after the board itself confirms it: every
+firmware build carries a content-hash build id (`hct_build_id.txt`, generated
+by scripts/generate_build_id.py during the CMake build and advertised by the
+firmware in HELLO), and the skip path opens one short RTT session to read it.
 """
 
 from __future__ import annotations
@@ -13,7 +22,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import typer
 
@@ -102,6 +111,22 @@ def resolve_build_dir(repo_root: Path, board: BoardSpec, override: Optional[Path
 
 def elf_path(build_dir: Path) -> Path:
     return build_dir / "perf_stream" / f"{SERVER_TARGET}.elf"
+
+
+def build_id_path(build_dir: Path) -> Path:
+    """`hct_build_id.txt`, written by the CMake build next to the cache (see
+    scripts/generate_build_id.py); the same string the firmware advertises in HELLO."""
+    return build_dir / "hct_build_id.txt"
+
+
+def read_build_id(build_dir: Path) -> Optional[str]:
+    """The build id of the firmware in `build_dir`, or None when the build predates
+    build-id stamping (or the ELF has not been built at all)."""
+    path = build_id_path(build_dir)
+    if not path.is_file():
+        return None
+    value = path.read_text(encoding="utf-8").strip()
+    return value or None
 
 
 def _cached_var(cache_text: str, name: str) -> Optional[str]:
@@ -199,23 +224,96 @@ class FlashDecision:
     needed: bool
     digest: str
     reason: str
+    build_id: Optional[str] = None
+    """Build id of the firmware in the build dir (None when the build has no stamp)."""
+    board_build_id: Optional[str] = None
+    """What the board reported in HELLO when it was asked (None when it was not, or did not answer)."""
 
 
 def decide_flash(build_dir: Path, serial_no: int, *, force: bool = False) -> FlashDecision:
-    """Compare the built ELF against the stamp for this (build dir, serial)."""
+    """Host-side half of the decision: compare the built ELF against the stamp for
+    this (build dir, serial). A `needed=False` answer here is provisional -- see
+    `confirm_board_build_id`."""
     elf = elf_path(build_dir)
     if not elf.exists():
         raise FileNotFoundError(f"Built firmware ELF not found: {elf}")
     digest = elf_sha256(elf)
+    build_id = read_build_id(build_dir)
     if force:
-        return FlashDecision(True, digest, "--force given")
+        return FlashDecision(True, digest, "--force given", build_id)
     stamp = flash_stamp_path(build_dir, serial_no)
     if not stamp.exists():
-        return FlashDecision(True, digest, f"no flash stamp for serial {serial_no} yet")
+        return FlashDecision(True, digest, f"no flash stamp for serial {serial_no} yet", build_id)
     previous = stamp.read_text(encoding="utf-8").strip()
     if previous == digest:
-        return FlashDecision(False, digest, f"ELF sha256 unchanged since last flash to serial {serial_no}")
-    return FlashDecision(True, digest, "ELF sha256 changed since last flash")
+        return FlashDecision(
+            False, digest, f"ELF sha256 unchanged since last flash to serial {serial_no} (stamp {stamp})", build_id
+        )
+    return FlashDecision(True, digest, "ELF sha256 changed since last flash", build_id)
+
+
+BoardBuildIdReader = Callable[[BoardSpec, int, Path], str]
+
+
+def board_build_id(board: BoardSpec, serial_no: int, build_dir: Path) -> str:
+    """Ask the board which firmware it runs: one short reset-on-open RTT session
+    that reads HELLO and closes without acknowledging it.
+
+    Raises (RuntimeError, TimeoutError, pylink errors) when the board does not
+    answer -- the RTT block address comes from this build dir's ELF, so unrelated
+    firmware typically yields no HELLO at all, which callers treat as "flash".
+    """
+    from .session import read_hello
+    from .transport import JLinkRttTransport, symbol_address_from_elf
+
+    rtt_address = symbol_address_from_elf(str(elf_path(build_dir)), "_SEGGER_RTT")
+    transport = JLinkRttTransport(
+        serial_no=serial_no,
+        chip_name=board.jlink_device,
+        speed_khz=board.swd_speed_khz,
+        rtt_address=rtt_address,
+        reset_on_open=True,
+        read_timeout_s=5.0,
+    )
+    try:
+        return read_hello(transport).build_id
+    finally:
+        transport.close()
+
+
+def confirm_board_build_id(
+    board: BoardSpec,
+    serial_no: int,
+    build_dir: Path,
+    decision: FlashDecision,
+    *,
+    reader: BoardBuildIdReader = board_build_id,
+) -> FlashDecision:
+    """Board-side half of the decision: turn a provisional "unchanged" into a real
+    skip only if the board reports exactly this build dir's build id. A missing
+    host build id, a different id on the board, or no HELLO at all means flash."""
+    if decision.needed:
+        return decision
+    expected = decision.build_id
+    if expected is None:
+        return FlashDecision(
+            True, decision.digest,
+            f"{build_id_path(build_dir)} is missing, so what the board runs cannot be confirmed (rebuild stamps it)",
+        )
+    try:
+        actual = reader(board, serial_no, build_dir)
+    except Exception as exc:  # no HELLO, wrong RTT block, probe/DLL trouble: all mean "do not trust the stamp"
+        return FlashDecision(
+            True, decision.digest,
+            f"board did not confirm build id {expected} ({type(exc).__name__}: {exc})", expected,
+        )
+    if actual != expected:
+        return FlashDecision(
+            True, decision.digest,
+            f"board reports build id {actual}, expected {expected} (another build dir flashed serial {serial_no})",
+            expected, actual,
+        )
+    return FlashDecision(False, decision.digest, f"{decision.reason}; board confirmed build id {expected}", expected, actual)
 
 
 def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
@@ -249,11 +347,16 @@ def flash_firmware(
     jobs: Optional[int] = None,
     force_reconfigure: bool = False,
     force: bool = False,
+    board_build_id_reader: BoardBuildIdReader = board_build_id,
 ) -> FlashDecision:
-    """Build, then flash through the NSX-generated J-Link target only when the ELF
-    differs from what was last flashed to this probe (or `force` is set)."""
+    """Build, then flash through the NSX-generated J-Link target unless the ELF is
+    unchanged since this build dir last flashed this probe *and* the board confirms
+    it is running this build's id (or `force` is set)."""
     build_firmware(board, build_dir=build_dir, jobs=jobs, force_reconfigure=force_reconfigure, serial_no=serial_no)
     decision = decide_flash(build_dir, serial_no, force=force)
+    if not decision.needed:
+        typer.echo(f"[hardware] Stamp says {decision.reason}; asking the board which build it runs...")
+        decision = confirm_board_build_id(board, serial_no, build_dir, decision, reader=board_build_id_reader)
     if not decision.needed:
         typer.echo(f"[hardware] Skipping flash: {decision.reason}.")
         return decision

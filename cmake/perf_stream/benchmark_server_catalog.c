@@ -220,10 +220,15 @@ const char *hct_benchmark_server_target_cpu(void)
     return HCT_BENCHMARK_SERVER_TARGET_CPU;
 }
 
+/* The firmware build defines HCT_BENCHMARK_SERVER_BUILD_ID_GENERATED and links a
+ * per-build hct_build_id.c (scripts/generate_build_id.py, run by CMake) instead;
+ * this constant only serves host-side unit builds of the protocol code. */
+#ifndef HCT_BENCHMARK_SERVER_BUILD_ID_GENERATED
 const char *hct_benchmark_server_build_id(void)
 {
     return "hct-benchmark-server-v0";
 }
+#endif
 
 uint32_t hct_benchmark_server_capability_flags(void)
 {
