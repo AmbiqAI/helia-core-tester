@@ -9,18 +9,28 @@ Exposes three things the top-level `helia_core_tester` app mounts:
 Every hardware command takes `--board` as its only identity flag; the CPU,
 NSX board name, SEGGER device name, SWD speed and build dir are derived from
 the board row. `--serial-no` is optional and resolves flag > $HPX_JLINK_SERIAL
-> probe enumeration (see probes.py). The commands are thin adapters: the
-behaviour lives in boards.py, probes.py, firmware_build.py, hardware_pipeline.py
-and run_summary.py.
+> probe enumeration (see probes.py). Option combinations are validated before
+any probe resolution or hardware I/O, so a bad flag fails with its own message
+rather than a hardware error. The commands are thin adapters: the behaviour
+lives in boards.py, probes.py, firmware_build.py, hardware_pipeline.py and
+run_summary.py.
+
+Failures inside the pipeline -- a cmake/J-Link subprocess exiting non-zero, a
+pylink error, a stalled transport -- print one line and exit 1; the traceback
+is shown with `--verbosity 1` or higher (also `$HELIA_CORE_TESTER_VERBOSITY`,
+the same knob the generate/build/run commands use).
 """
 
 from __future__ import annotations
 
 import contextlib
 import json
+import os
+import subprocess
 import sys
+import traceback
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 import typer
 
@@ -45,6 +55,8 @@ probes_app = typer.Typer(
 _BOARD_HELP = "Board id from assets/hardware_boards.yaml (default: $HPX_BOARD, else apollo510_evb)."
 _SERIAL_HELP = "J-Link probe serial number (default: $HPX_JLINK_SERIAL, else the single connected probe)."
 _BUILD_DIR_HELP = "CMake build directory (default: build/perf_stream/<board>)."
+_VERBOSITY_HELP = "Verbosity level (0-3); 1 or higher prints the full traceback on failure (default: $HELIA_CORE_TESTER_VERBOSITY, else 0)."
+_VERBOSITY_ENV_VAR = "HELIA_CORE_TESTER_VERBOSITY"
 _FORCE_FLASH_HELP = (
     "Flash even if the ELF is unchanged since the last flash to this probe and the board "
     "already reports this build's id."
@@ -54,6 +66,50 @@ _FORCE_FLASH_HELP = (
 def _fail(message: str) -> None:
     typer.echo(f"✗ {message}", err=True)
     sys.exit(1)
+
+
+def _verbosity(explicit: Optional[int]) -> int:
+    if explicit is not None:
+        return explicit
+    raw = os.environ.get(_VERBOSITY_ENV_VAR, "").strip()
+    return int(raw) if raw.isdigit() else 0
+
+
+def _is_jlink_exception(exc: BaseException) -> bool:
+    try:
+        import pylink
+    except ImportError:  # pragma: no cover - pylink is a hard dependency of the transport
+        return False
+    return isinstance(exc, pylink.JLinkException)
+
+
+@contextlib.contextmanager
+def _pipeline_errors(verbosity: int) -> Iterator[None]:
+    """Turn the failures the hardware pipeline is known to raise into one-line errors.
+
+    RuntimeError covers this package's own errors (probe resolution, J-Link library
+    config, session/protocol failures); CalledProcessError is cmake or the J-Link
+    flash target; pylink's JLinkException is the probe/RTT layer; TimeoutError and
+    FileNotFoundError are the transport write timeout and a missing ELF. Anything
+    else is a bug and keeps its traceback.
+    """
+    try:
+        yield
+    except subprocess.CalledProcessError as exc:
+        if verbosity >= 1:
+            traceback.print_exc()
+        command = " ".join(str(part) for part in exc.cmd) if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd)
+        _fail(f"Command failed with exit status {exc.returncode}: {command}")
+    except (RuntimeError, TimeoutError, FileNotFoundError) as exc:
+        if verbosity >= 1:
+            traceback.print_exc()
+        _fail(str(exc))
+    except Exception as exc:
+        if not _is_jlink_exception(exc):
+            raise
+        if verbosity >= 1:
+            traceback.print_exc()
+        _fail(f"J-Link error: {exc}")
 
 
 def _board(board_id: Optional[str]) -> BoardSpec:
@@ -124,12 +180,14 @@ def build(
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
     jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel build jobs."),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
     """Cross-compile the hct_benchmark_server firmware for --board (no flashing)."""
     from .firmware_build import build_firmware, resolve_build_dir
 
     spec = _board(board)
-    elf = build_firmware(spec, build_dir=resolve_build_dir(_repo_root(), spec, build_dir), jobs=jobs, force_reconfigure=force_reconfigure)
+    with _pipeline_errors(_verbosity(verbosity)):
+        elf = build_firmware(spec, build_dir=resolve_build_dir(_repo_root(), spec, build_dir), jobs=jobs, force_reconfigure=force_reconfigure)
     typer.echo(f"✓ Firmware build completed successfully: {elf}")
 
 
@@ -141,6 +199,7 @@ def flash(
     jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel build jobs."),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
     force: bool = typer.Option(False, "--force", help=_FORCE_FLASH_HELP),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
     """Build (if needed) and flash the hct_benchmark_server firmware to --board via J-Link.
     Skipped only when the ELF is unchanged since this build dir last flashed the same
@@ -149,10 +208,11 @@ def flash(
 
     spec = _board(board)
     serial = _serial(serial_no)
-    decision = flash_firmware(
-        spec, serial, build_dir=resolve_build_dir(_repo_root(), spec, build_dir), jobs=jobs,
-        force_reconfigure=force_reconfigure, force=force,
-    )
+    with _pipeline_errors(_verbosity(verbosity)):
+        decision = flash_firmware(
+            spec, serial, build_dir=resolve_build_dir(_repo_root(), spec, build_dir), jobs=jobs,
+            force_reconfigure=force_reconfigure, force=force,
+        )
     if decision.needed:
         typer.echo("✓ Firmware flashed successfully")
     else:
@@ -248,6 +308,7 @@ def stream(
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP + " Must hold the flashed firmware's ELF."),
     as_json: bool = typer.Option(False, "--json", help="Print one JSON summary document on stdout (human output goes to stderr)."),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
     """Stream already-generated kernel tests to already-flashed firmware on --board over
     HCTP/RTT, check correctness, and write the result bundle. Run `generate` and
@@ -262,18 +323,17 @@ def stream(
     from .firmware_build import resolve_build_dir
     from .hardware_pipeline import stream_generated_tests
 
+    # Options first, probe last: a bad flag combination must fail with its own
+    # message, not with whatever probe enumeration happens to hit.
     spec = _board(board)
-    serial = _serial(serial_no)
     options = _stream_options(suite, family, test_name, limit, precision, pmu_groups, fvp_gate, session_id)
+    serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
-    try:
-        with _quiet_stdout(as_json):
-            outcome = stream_generated_tests(
-                _repo_root(), spec, serial, build_dir=resolve_build_dir(_repo_root(), spec, build_dir),
-                options=options, echo=echo, progress_to_stderr=as_json,
-            )
-    except RuntimeError as exc:
-        _fail(str(exc))
+    with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
+        outcome = stream_generated_tests(
+            _repo_root(), spec, serial, build_dir=resolve_build_dir(_repo_root(), spec, build_dir),
+            options=options, echo=echo, progress_to_stderr=as_json,
+        )
     _report(outcome, spec, as_json=as_json)
 
 
@@ -296,6 +356,7 @@ def run(
     jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel firmware build jobs."),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure the CMake build dir even if it already exists."),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
+    verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
     """The whole hardware pipeline: generate tests for the board's CPU, build the
     firmware, flash it unless the board already runs this exact build, stream the
@@ -305,16 +366,13 @@ def run(
     if skip_flash and force_flash:
         _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
-    serial = _serial(serial_no)
     options = _stream_options(suite, family, test_name, limit, precision, pmu_groups, fvp_gate, session_id)
+    serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
-    try:
-        with _quiet_stdout(as_json):
-            outcome = run_hardware_pipeline(
-                _repo_root(), spec, serial, options=options, build_dir=build_dir,
-                skip_generate=skip_generate, skip_flash=skip_flash, force_flash=force_flash, jobs=jobs,
-                force_reconfigure=force_reconfigure, echo=echo, progress_to_stderr=as_json,
-            )
-    except RuntimeError as exc:
-        _fail(str(exc))
+    with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
+        outcome = run_hardware_pipeline(
+            _repo_root(), spec, serial, options=options, build_dir=build_dir,
+            skip_generate=skip_generate, skip_flash=skip_flash, force_flash=force_flash, jobs=jobs,
+            force_reconfigure=force_reconfigure, echo=echo, progress_to_stderr=as_json,
+        )
     _report(outcome, spec, as_json=as_json)

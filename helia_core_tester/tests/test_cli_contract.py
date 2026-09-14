@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import subprocess
+
+import pytest
 from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
@@ -119,6 +122,86 @@ def test_stream_precision_rules_are_enforced_before_hardware(monkeypatch) -> Non
     result = runner.invoke(app, ["hardware", "run", "--precision", "fp32", "--test-name", "x", "--skip-generate", "--skip-flash"])
     assert result.exit_code == 1
     assert "--precision and --test-name cannot be combined" in _result_text(result)
+
+
+def test_option_validation_runs_before_probe_resolution(monkeypatch) -> None:
+    """With no --serial-no and no $HPX_JLINK_SERIAL, a bad option combination must
+    still produce the option error -- never an enumeration/hardware error first."""
+    from helia_core_tester.perf_stream import cli as hardware_cli
+
+    monkeypatch.delenv("HPX_JLINK_SERIAL", raising=False)
+    enumerated: list[str] = []
+
+    def _resolve(explicit=None, **_):
+        enumerated.append("probe")
+        raise hardware_cli.ProbeResolutionError("No connected J-Link probes detected.")
+
+    monkeypatch.setattr(hardware_cli, "resolve_serial", _resolve)
+    for args, expected in (
+        (["hardware", "stream", "--precision", "fp16", "--suite", "both"], "--precision cannot be combined with --suite both"),
+        (["hardware", "run", "--precision", "fp16", "--suite", "both", "--skip-generate"], "--precision cannot be combined with --suite both"),
+        (["hardware", "stream", "--suite", "nope"], "Invalid suite"),
+        (["hardware", "run", "--fvp-gate", "maybe"], "--fvp-gate must be one of"),
+    ):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 1, args
+        text = _result_text(result)
+        assert expected in text and "No connected J-Link probes" not in text, (args, text)
+    assert enumerated == []
+
+    # Valid options: now the probe is resolved, and its error is what the user sees.
+    result = runner.invoke(app, ["hardware", "stream", "--precision", "fp16"])
+    assert result.exit_code == 1 and "No connected J-Link probes" in _result_text(result)
+    assert enumerated == ["probe"]
+
+
+@pytest.mark.parametrize(
+    ("raise_factory", "expected_line"),
+    [
+        (lambda: subprocess.CalledProcessError(2, ["cmake", "--build", "build/x", "--target", "hct_benchmark_server_flash"]),
+         "✗ Command failed with exit status 2: cmake --build build/x --target hct_benchmark_server_flash"),
+        (lambda: __import__("pylink").JLinkException("Could not connect to the target device."),
+         "✗ J-Link error: Could not connect to the target device."),
+        (lambda: TimeoutError("Timed out writing 64 RTT bytes."), "✗ Timed out writing 64 RTT bytes."),
+        (lambda: FileNotFoundError("Built firmware ELF not found: build/x/perf_stream/hct_benchmark_server.elf"),
+         "✗ Built firmware ELF not found"),
+    ],
+)
+def test_pipeline_failures_print_one_line_and_hide_the_traceback_unless_verbose(monkeypatch, raise_factory, expected_line) -> None:
+    from helia_core_tester.perf_stream import hardware_pipeline
+
+    def _boom(*args, **kwargs):
+        raise raise_factory()
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    monkeypatch.delenv("HELIA_CORE_TESTER_VERBOSITY", raising=False)
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _boom)
+    monkeypatch.setattr(hardware_pipeline, "stream_generated_tests", _boom)
+
+    for args in (["hardware", "run", "--skip-generate"], ["hardware", "stream"]):
+        result = runner.invoke(app, args)
+        text = _result_text(result)
+        assert result.exit_code == 1, (args, text)
+        assert expected_line in text and "Traceback" not in text, (args, text)
+
+        verbose = _result_text(runner.invoke(app, args + ["-v", "1"]))
+        assert expected_line in verbose and "Traceback (most recent call last)" in verbose, (args, verbose)
+
+    monkeypatch.setenv("HELIA_CORE_TESTER_VERBOSITY", "2")
+    env_verbose = _result_text(runner.invoke(app, ["hardware", "run", "--skip-generate"]))
+    assert "Traceback (most recent call last)" in env_verbose
+
+
+def test_unexpected_exceptions_keep_their_traceback(monkeypatch) -> None:
+    from helia_core_tester.perf_stream import hardware_pipeline
+
+    def _bug(*args, **kwargs):
+        raise KeyError("case_id")
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    monkeypatch.setattr(hardware_pipeline, "stream_generated_tests", _bug)
+    result = runner.invoke(app, ["hardware", "stream"])
+    assert result.exit_code != 0 and isinstance(result.exception, KeyError)
 
 
 def test_run_rejects_skip_flash_with_force_flash(monkeypatch) -> None:
