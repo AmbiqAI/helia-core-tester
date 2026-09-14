@@ -27,6 +27,7 @@ from typing import Callable, Optional
 import typer
 
 from .boards import BoardSpec
+from .jlink_library import JLinkLibraryError, find_jlink_exe
 from .phase0 import _repo_root
 
 TOOLCHAIN_FILE = "cmake/nsx/toolchains/arm-none-eabi-gcc.cmake"
@@ -183,8 +184,31 @@ def configure(build_dir: Path, board: BoardSpec, force: bool, serial_no: Optiona
     ]
     if serial_no is not None:
         cmd.append(f"-DNSX_JLINK_SERIAL={serial_no}")
+    # nsx_add_segger_targets() otherwise find_program()s JLinkExe on PATH only,
+    # which diverges from the $HPX_JLINK_DLL / $JLINK_PATH resolution the probe
+    # enumeration, RTT transport and doctor use: on a host that sets those
+    # without JLinkExe on PATH the build would succeed and the flash target
+    # would fail minutes later with NSX_JLINK_EXE-NOTFOUND.
+    jlink_exe = _jlink_exe_for_cmake()
+    if jlink_exe is not None:
+        cmd.append(f"-DNSX_JLINK_EXE={jlink_exe}")
     typer.echo(f"[hardware] Configuring: {' '.join(cmd)}")
     subprocess.run(cmd, cwd=repo_root, check=True)
+
+
+def _jlink_exe_for_cmake() -> Optional[str]:
+    """JLinkExe path to bake into the flash target, or None to leave CMake's PATH search.
+    A misconfigured $HPX_JLINK_DLL is reported (doctor says the same) but must not
+    stop a plain `hardware build`, which never touches J-Link."""
+    try:
+        found = find_jlink_exe()
+    except JLinkLibraryError as exc:
+        typer.echo(f"[hardware] WARNING: {exc} -- flash target falls back to JLinkExe on PATH.", err=True)
+        return None
+    if found is None:
+        typer.echo("[hardware] WARNING: JLinkExe not found ($JLINK_PATH, next to the J-Link library, PATH); the flash target will need it.", err=True)
+        return None
+    return found.path
 
 
 def build(build_dir: Path, target: str, jobs: Optional[int]) -> None:

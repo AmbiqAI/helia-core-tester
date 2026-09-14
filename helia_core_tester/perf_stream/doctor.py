@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import Optional
 
 from .firmware_build import DOWNLOADS_DIR
-from .jlink_library import SOURCE_PYLINK_DEFAULT, find_jlink_library, missing_library_hint
+from .jlink_library import (
+    SOURCE_PYLINK_DEFAULT,
+    JLinkLibraryError,
+    find_jlink_exe,
+    find_jlink_library,
+    missing_library_hint,
+)
 
 
 @dataclass(frozen=True)
@@ -30,7 +36,10 @@ def _tool_check(tool: str, label: str) -> HardwareCheck:
 
 def _jlink_dll_check() -> HardwareCheck:
     label = "J-Link library (pylink)"
-    found = find_jlink_library()
+    try:
+        found = find_jlink_library()
+    except JLinkLibraryError as exc:
+        return HardwareCheck(label, False, str(exc))
     try:
         from pylink.library import Library
 
@@ -45,6 +54,18 @@ def _jlink_dll_check() -> HardwareCheck:
         return HardwareCheck(label, True, found.describe())
     path = getattr(library, "_path", None)
     return HardwareCheck(label, True, f"{path or 'loaded'} (via {SOURCE_PYLINK_DEFAULT})")
+
+
+def _jlink_exe_check() -> HardwareCheck:
+    """The `JLinkExe` binary the CMake flash target runs (`hardware flash` / `hardware run`)."""
+    label = "JLinkExe (flash target)"
+    try:
+        found = find_jlink_exe()
+    except JLinkLibraryError as exc:
+        return HardwareCheck(label, False, str(exc))
+    if found is None:
+        return HardwareCheck(label, False, "not found: set $JLINK_PATH to JLinkExe (or its directory) or put JLinkExe on PATH")
+    return HardwareCheck(label, True, found.describe())
 
 
 def _git_head(path: Path) -> Optional[str]:
@@ -82,6 +103,7 @@ def hardware_checks(repo_root: Path) -> list[HardwareCheck]:
         _tool_check("arm-none-eabi-gcc", "arm-none-eabi-gcc (firmware cross-compiler)"),
         _tool_check("cmake", "cmake (firmware build)"),
         _jlink_dll_check(),
+        _jlink_exe_check(),
         _checkout_check("nsx-ambiq-sdk checkout", nsx_ambiq_sdk_dir(repo_root, downloads)),
         _checkout_check("neuralspotx checkout", downloads / "neuralspotx"),
         _board_table_check(),

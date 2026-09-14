@@ -19,6 +19,17 @@ Symlinks are resolved for steps 2 and 3, because packaged installs (Nix, the
 runner tools dir) expose `bin/JLinkExe` as a symlink into the real SEGGER
 directory that holds `libjlinkarm.so`.
 
+`HPX_JLINK_DLL` is explicit configuration: when it names a file that does not
+exist the resolver raises `JLinkLibraryError` instead of quietly falling through
+to a different install.
+
+The CMake flash target (`nsx_add_segger_targets()` in cmake/nsx/nsx_helpers.cmake)
+runs the `JLinkExe` *binary*, not the library. `find_jlink_exe()` resolves it in
+the same spirit so `doctor`, probe enumeration, RTT and flashing all agree on
+one install: `JLINK_PATH` (the binary or its directory), then the directory of
+the resolved library, then `JLinkExe` on PATH. `firmware_build.configure()`
+forwards the result as `-DNSX_JLINK_EXE=`.
+
 The environment variable names are shared with hpx so one runner configuration
 serves both tools; do not rename them.
 """
@@ -40,12 +51,26 @@ SOURCE_DLL_ENV = f"${DLL_ENV_VAR}"
 SOURCE_EXE_ENV = f"${EXE_ENV_VAR}"
 SOURCE_PATH = "JLinkExe on PATH"
 SOURCE_PYLINK_DEFAULT = "pylink default search"
+SOURCE_LIBRARY_DIR = "next to the J-Link library"
 
 WhichFn = Callable[[str], Optional[str]]
 
 
+class JLinkLibraryError(RuntimeError):
+    """An explicitly configured J-Link location (`HPX_JLINK_DLL`) is unusable."""
+
+
 @dataclass(frozen=True)
 class JLinkLibrary:
+    path: str
+    source: str
+
+    def describe(self) -> str:
+        return f"{self.path} (via {self.source})"
+
+
+@dataclass(frozen=True)
+class JLinkExecutable:
     path: str
     source: str
 
@@ -89,14 +114,22 @@ def _library_next_to(exe_or_dir: Path) -> Optional[Path]:
 
 
 def find_jlink_library(env: Optional[Mapping[str, str]] = None, which: WhichFn = shutil.which) -> Optional[JLinkLibrary]:
-    """Return the first J-Link library found by the env / PATH steps, or None for pylink's default."""
+    """Return the first J-Link library found by the env / PATH steps, or None for pylink's default.
+
+    Raises JLinkLibraryError when `HPX_JLINK_DLL` is set but does not name an existing file.
+    """
     env = os.environ if env is None else env
 
     explicit = (env.get(DLL_ENV_VAR) or "").strip()
     if explicit:
         path = Path(explicit).expanduser()
-        if path.is_file():
-            return JLinkLibrary(str(path), SOURCE_DLL_ENV)
+        if not path.is_file():
+            raise JLinkLibraryError(
+                f"{SOURCE_DLL_ENV}={explicit} does not exist (or is not a file). Point it at the "
+                "SEGGER J-Link shared library (libjlinkarm.so) or unset it to fall back to "
+                f"{SOURCE_EXE_ENV} / JLinkExe on PATH."
+            )
+        return JLinkLibrary(str(path), SOURCE_DLL_ENV)
 
     exe_hint = (env.get(EXE_ENV_VAR) or "").strip()
     if exe_hint:
@@ -117,6 +150,58 @@ def find_jlink_library(env: Optional[Mapping[str, str]] = None, which: WhichFn =
 def resolve_jlink_library(env: Optional[Mapping[str, str]] = None, which: WhichFn = shutil.which) -> Optional[str]:
     """Path of the J-Link shared library, or None to let pylink search its default locations."""
     found = find_jlink_library(env, which)
+    return found.path if found is not None else None
+
+
+def _exe_in_dir(directory: Path) -> Optional[Path]:
+    for name in JLINK_EXE_NAMES:
+        candidate = directory / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def find_jlink_exe(env: Optional[Mapping[str, str]] = None, which: WhichFn = shutil.which) -> Optional[JLinkExecutable]:
+    """Locate the `JLinkExe` binary the CMake flash target runs, in the same order as the library.
+
+    1. `JLINK_PATH` -- the binary itself, or a directory holding it.
+    2. The directory of the library `find_jlink_library` resolved (before and after
+       resolving symlinks), so `HPX_JLINK_DLL` alone is enough on the runners.
+    3. `JLinkExe` on PATH.
+
+    Raises JLinkLibraryError for a misconfigured `HPX_JLINK_DLL`, like the library resolver.
+    """
+    env = os.environ if env is None else env
+
+    exe_hint = (env.get(EXE_ENV_VAR) or "").strip()
+    if exe_hint:
+        hint = Path(exe_hint).expanduser()
+        if hint.is_file():
+            return JLinkExecutable(str(hint), SOURCE_EXE_ENV)
+        if hint.is_dir():
+            found = _exe_in_dir(hint)
+            if found is not None:
+                return JLinkExecutable(str(found), SOURCE_EXE_ENV)
+
+    library = find_jlink_library(env, which)
+    if library is not None:
+        library_path = Path(library.path)
+        for directory in (library_path.parent, Path(os.path.realpath(str(library_path))).parent):
+            found = _exe_in_dir(directory)
+            if found is not None:
+                return JLinkExecutable(str(found), f"{SOURCE_LIBRARY_DIR} from {library.source}")
+
+    for name in JLINK_EXE_NAMES:
+        exe = which(name)
+        if exe:
+            return JLinkExecutable(exe, SOURCE_PATH)
+
+    return None
+
+
+def resolve_jlink_exe(env: Optional[Mapping[str, str]] = None, which: WhichFn = shutil.which) -> Optional[str]:
+    """Path of the JLinkExe binary, or None when no step finds one."""
+    found = find_jlink_exe(env, which)
     return found.path if found is not None else None
 
 

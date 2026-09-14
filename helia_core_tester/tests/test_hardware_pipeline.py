@@ -274,6 +274,45 @@ def test_read_hello_returns_the_full_payload_without_acknowledging() -> None:
     assert transport.read() == b""  # nothing else was sent: the fake is still waiting for HELLO_ACK
 
 
+# --- configure flags ---------------------------------------------------------------
+
+
+@pytest.fixture
+def captured_cmake(monkeypatch, tmp_path: Path):
+    """Run `configure()` without CMake or the dependency fetch; returns the argv it would run."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(firmware_build, "ensure_hardware_dependencies", lambda repo_root: None)
+    monkeypatch.setattr(firmware_build, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(firmware_build.subprocess, "run", lambda cmd, **kwargs: calls.append(list(cmd)))
+    return calls
+
+
+def test_configure_forwards_the_resolved_jlinkexe_to_the_flash_target(captured_cmake, monkeypatch, tmp_path: Path) -> None:
+    from helia_core_tester.perf_stream.jlink_library import JLinkExecutable, JLinkLibraryError
+
+    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: JLinkExecutable("/opt/SEGGER/JLink/JLinkExe", "$JLINK_PATH"))
+    firmware_build.configure(tmp_path / "bd", BOARD, force=False, serial_no=SERIAL)
+    [cmd] = captured_cmake
+    assert "-DNSX_JLINK_EXE=/opt/SEGGER/JLink/JLinkExe" in cmd
+    assert f"-DNSX_JLINK_SERIAL={SERIAL}" in cmd
+
+    # Nothing resolved: leave CMake's own find_program(JLinkExe) alone.
+    captured_cmake.clear()
+    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: None)
+    firmware_build.configure(tmp_path / "bd", BOARD, force=False)
+    assert not any(arg.startswith("-DNSX_JLINK_EXE") for arg in captured_cmake[0])
+
+    # A broken $HPX_JLINK_DLL is doctor's problem, not a reason to refuse `hardware build`.
+    captured_cmake.clear()
+
+    def _broken():
+        raise JLinkLibraryError("$HPX_JLINK_DLL=/x/gone.so does not exist")
+
+    monkeypatch.setattr(firmware_build, "find_jlink_exe", _broken)
+    firmware_build.configure(tmp_path / "bd", BOARD, force=False)
+    assert len(captured_cmake) == 1 and not any(arg.startswith("-DNSX_JLINK_EXE") for arg in captured_cmake[0])
+
+
 # --- --json summary ----------------------------------------------------------------
 
 

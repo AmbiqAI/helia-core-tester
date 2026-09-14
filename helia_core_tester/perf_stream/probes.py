@@ -17,7 +17,7 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from .jlink_library import missing_library_hint, open_jlink
+from .jlink_library import JLinkLibraryError, missing_library_hint, open_jlink
 
 SERIAL_ENV_VAR = "HPX_JLINK_SERIAL"
 
@@ -53,6 +53,8 @@ def list_probes() -> list[ProbeInfo]:
 
     try:
         jlink = open_jlink(pylink)
+    except JLinkLibraryError as exc:  # $HPX_JLINK_DLL names a missing file: say exactly that
+        raise ProbeResolutionError(str(exc)) from exc
     except Exception as exc:  # pylink raises TypeError when it cannot find the DLL
         raise ProbeResolutionError(
             f"Cannot load the SEGGER J-Link library through pylink ({exc}). {missing_library_hint()} "
