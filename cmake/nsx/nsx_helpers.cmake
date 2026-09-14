@@ -97,6 +97,6 @@ function(nsx_add_segger_targets target)
         VERBATIM)
 
     add_custom_target(${target}_view
-        COMMENT "No SWO/RTT viewer wired yet for ${target} -- use the perf-stream CLI's RTT session instead."
+        COMMENT "No SWO/RTT viewer wired yet for ${target} -- use `helia_core_tester hardware stream` instead."
         VERBATIM)
 endfunction()

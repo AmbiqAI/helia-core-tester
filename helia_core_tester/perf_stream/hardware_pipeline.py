@@ -1,0 +1,230 @@
+"""Orchestration behind `helia_core_tester hardware run` / `hardware stream`.
+
+Everything here calls the Python entry points directly (the same GenerateStep the
+top-level `generate` command uses, then the firmware build/flash helpers and the
+RTT session runner) -- never a subprocess into the tester's own CLI.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Optional
+
+from .boards import BoardSpec, default_session_id
+from .firmware_build import FlashDecision, build_id_path, flash_firmware, read_build_id, resolve_build_dir
+from .run_summary import make_live_progress_printer
+
+PRECISION_SUFFIX = {"fp16": "_f16", "fp32": "_f32"}
+# `--precision` value -> Config.float_precision value for the generate step.
+PRECISION_FLOAT_PRECISION = {"fp16": "f16", "fp32": "f32"}
+
+
+def apply_precision(precision: Optional[str], suite: str, test_name: Optional[str]) -> tuple[str, Optional[str]]:
+    """Expand `--precision fp16|fp32` into (suite, test_name).
+
+    It forces the float suite and narrows the test-name substring filter to the
+    `_f16`/`_f32` suffix. Refuses `--suite both` (the shortcut selects float cases
+    only) and an explicit `--test-name` (both are a single substring match, so
+    combining them would silently narrow to whichever cases contain both).
+    """
+    if precision is None:
+        return suite, test_name
+    if str(suite).strip().lower() == "both":
+        raise ValueError("--precision cannot be combined with --suite both (it selects float cases only).")
+    suffix = PRECISION_SUFFIX.get(precision.lower())
+    if suffix is None:
+        raise ValueError(f"--precision must be 'fp16' or 'fp32' (got '{precision}').")
+    if test_name:
+        raise ValueError("--precision and --test-name cannot be combined (both filter via a single substring match).")
+    return "float", suffix
+
+
+def float_precision_for(precision: Optional[str]) -> Optional[str]:
+    """Config.float_precision the generate step must use for `--precision`, or None to
+    leave it to the TOML/env/default. Without this the shortcut only narrowed the
+    *discovery* filter, so e.g. HELIA_CORE_TESTER_FLOAT_PRECISION=f32 with
+    `--precision fp16` generated no _f16 cases and then found nothing to run."""
+    if precision is None:
+        return None
+    return PRECISION_FLOAT_PRECISION[precision.lower()]
+
+
+def validate_fvp_gate(fvp_gate: Optional[str]) -> None:
+    if fvp_gate is None:
+        return
+    from .fvp_gate import GATE_POLICIES
+
+    if fvp_gate not in GATE_POLICIES:
+        raise ValueError(f"--fvp-gate must be one of {', '.join(GATE_POLICIES)} (got {fvp_gate!r})")
+
+
+def parse_pmu_groups(pmu_groups: str) -> tuple[str, ...]:
+    return tuple(g.strip() for g in pmu_groups.split(",") if g.strip())
+
+
+def generate_tests_for_board(repo_root: Path, board: BoardSpec, suite: str, float_precision: Optional[str] = None) -> None:
+    """Run the generate step for the board's CPU and the requested suite, exactly as
+    `helia_core_tester generate --cpu <board.cpu> --suite <suite>
+    [--float-precision <float_precision>]` would. `float_precision` (f16/f32/both)
+    is an explicit override when given; otherwise the TOML/env/default applies."""
+    from ..core.config import Config
+    from ..core.logging import setup_logger
+    from ..core.steps import GenerateStep
+
+    overrides = {"project_root", "cpu", "suite"}
+    kwargs = {}
+    if float_precision is not None:
+        kwargs["float_precision"] = float_precision
+        overrides.add("float_precision")
+    config = Config(
+        project_root=repo_root,
+        cpu=board.cpu,
+        suite=suite,
+        _explicit_overrides=overrides,
+        **kwargs,
+    )
+    setup_logger(verbosity=config.verbosity)
+    result = GenerateStep(config).execute()
+    if not (result.success or result.skipped):
+        raise RuntimeError(f"Generation failed: {result.message}")
+
+
+@dataclass
+class StreamOptions:
+    suite: str = "int"
+    family: Optional[str] = None
+    test_name: Optional[str] = None
+    limit: Optional[int] = None
+    pmu_groups: tuple[str, ...] = ("cpu", "memory", "mve")
+    fvp_gate: Optional[str] = None
+    session_id: Optional[str] = None
+    float_precision: Optional[str] = None
+    """Config.float_precision for the generate step when `--precision` was given (f16/f32)."""
+
+
+@dataclass
+class HardwareRunOutcome:
+    session_id: str
+    result: object
+    bundle: Path
+    skipped: list
+    flash: Optional[FlashDecision] = None
+
+    @property
+    def failed_case_ids(self) -> list[str]:
+        return [c.case_bundle.case_id for c in self.result.cases if not c.comparison.passed]
+
+
+def stream_generated_tests(
+    repo_root: Path,
+    board: BoardSpec,
+    serial_no: int,
+    *,
+    build_dir: Path,
+    options: StreamOptions,
+    echo: Callable[[str], None],
+    progress_to_stderr: bool = False,
+    allow_unverified_firmware: bool = False,
+) -> HardwareRunOutcome:
+    """Stream the generated suite to already-flashed firmware and write the bundle.
+
+    Preflight: the build dir must carry `hct_build_id.txt` so every session's HELLO
+    can be checked against it; a missing stamp is an error unless
+    `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
+    """
+    from .hardware_run import build_generated_test_case_bundles, run_apollo510_generated_test_session
+
+    session_id = options.session_id or default_session_id(board)
+
+    expected_build_id = read_build_id(build_dir)
+    if expected_build_id is None:
+        stamp_missing = (
+            f"{build_id_path(build_dir)} not found, so the firmware on the board cannot be verified "
+            "against this build dir."
+        )
+        if not allow_unverified_firmware:
+            raise RuntimeError(
+                f"{stamp_missing} Rebuild with `hardware build --board {board.id}` (which stamps it), "
+                "or pass --allow-unverified-firmware to stream to legacy firmware unchecked."
+            )
+        echo(f"[hardware] WARNING: {stamp_missing} Continuing unverified (--allow-unverified-firmware).")
+
+    # Bridge the cases once, before any hardware I/O: bridging loads every case's
+    # arrays and runs the FVP gate, so the list is built here and handed to the
+    # session runner rather than rebuilt inside it. Knowing the count and case_ids
+    # up front also lets the live progress printer align its [N/total] counter and
+    # case_id column from the first printed line.
+    bundles, skipped = build_generated_test_case_bundles(
+        repo_root, cpu=board.cpu, family=options.family, name_filter=options.test_name,
+        limit=options.limit, suite=options.suite, fvp_gate=options.fvp_gate,
+    )
+    id_width = max((len(b.case_id) for b in bundles), default=0)
+    echo(
+        f"[hardware] Streaming generated tests to {board.id} (serial {serial_no}, session {session_id}, "
+        f"firmware build id {expected_build_id or 'unverified'})..."
+    )
+    on_case_complete = make_live_progress_printer(len(bundles), id_width=id_width, err=progress_to_stderr)
+
+    result, bundle, skipped = run_apollo510_generated_test_session(
+        repo_root,
+        serial_no=serial_no,
+        board=board,
+        requested_counter_groups=options.pmu_groups,
+        session_id=session_id,
+        build_dir=build_dir,
+        family=options.family,
+        name_filter=options.test_name,
+        limit=options.limit,
+        suite=options.suite,
+        fvp_gate=options.fvp_gate,
+        on_case_complete=on_case_complete,
+        expected_build_id=expected_build_id,
+        bundles=bundles,
+        skipped=skipped,
+    )
+    return HardwareRunOutcome(session_id=session_id, result=result, bundle=bundle, skipped=skipped)
+
+
+def run_hardware_pipeline(
+    repo_root: Path,
+    board: BoardSpec,
+    serial_no: int,
+    *,
+    options: StreamOptions,
+    build_dir: Optional[Path] = None,
+    skip_generate: bool = False,
+    skip_flash: bool = False,
+    force_flash: bool = False,
+    jobs: Optional[int] = None,
+    force_reconfigure: bool = False,
+    echo: Callable[[str], None],
+    progress_to_stderr: bool = False,
+    allow_unverified_firmware: bool = False,
+) -> HardwareRunOutcome:
+    """generate (board cpu) -> build -> flash unless the board already runs this build -> stream -> bundle."""
+    if skip_flash and force_flash:
+        raise ValueError("--skip-flash and --force-flash cannot be combined.")
+    resolved_build_dir = resolve_build_dir(repo_root, board, build_dir)
+
+    if skip_generate:
+        echo("[hardware] --skip-generate set; reusing existing artifacts/generated_tests.")
+    else:
+        precision_note = f" float_precision={options.float_precision}" if options.float_precision else ""
+        echo(f"[hardware] Generating tests (cpu={board.cpu} suite={options.suite}{precision_note})...")
+        generate_tests_for_board(repo_root, board, options.suite, float_precision=options.float_precision)
+
+    flash: Optional[FlashDecision] = None
+    if skip_flash:
+        echo("[hardware] --skip-flash set; reusing firmware already running on the board.")
+    else:
+        flash = flash_firmware(
+            board, serial_no, build_dir=resolved_build_dir, jobs=jobs, force_reconfigure=force_reconfigure, force=force_flash,
+        )
+
+    outcome = stream_generated_tests(
+        repo_root, board, serial_no, build_dir=resolved_build_dir, options=options,
+        echo=echo, progress_to_stderr=progress_to_stderr, allow_unverified_firmware=allow_unverified_firmware,
+    )
+    outcome.flash = flash
+    return outcome

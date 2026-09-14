@@ -37,6 +37,8 @@ class JLinkRttTransport:
     ) -> None:
         import pylink
 
+        from .jlink_library import open_jlink
+
         self._pylink = pylink
         self._serial_no = serial_no
         self._chip_name = chip_name
@@ -48,7 +50,7 @@ class JLinkRttTransport:
         self._reset_delay_s = reset_delay_s
         self._read_timeout_s = read_timeout_s
         self._poll_interval_s = poll_interval_s
-        self._jlink = pylink.JLink()
+        self._jlink = open_jlink(pylink)
         self._jlink.open(serial_no=serial_no)
         try:
             self._jlink.set_tif(pylink.enums.JLinkInterfaces.SWD)
@@ -94,8 +96,10 @@ class JLinkRttTransport:
 
 
 def symbol_address_from_elf(elf_path: str, symbol_name: str) -> int:
+    from .toolchain import arm_tool
+
     result = subprocess.run(
-        ["arm-none-eabi-nm", "-n", elf_path],
+        [arm_tool("arm-none-eabi-nm"), "-n", elf_path],
         check=True,
         capture_output=True,
         text=True,

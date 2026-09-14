@@ -78,7 +78,7 @@ if(HELIA_HARDWARE_BUILD)
       "HELIA_HARDWARE_BUILD=ON but ${NSX_AMBIQ_SDK_DIR}/modules is missing. "
       "The consolidated SDK bundle is fetched, not tracked in git -- run "
       "`uv run python -m helia_core_tester.scripts.setup_dependencies` "
-      "(or any `helia_core_tester perf-stream` hardware command, which fetches "
+      "(or any `helia_core_tester hardware` command, which fetches "
       "it lazily) before configuring.")
   endif()
 
@@ -344,7 +344,10 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
 
   add_custom_target(hct_kernel_symbol_refs DEPENDS "${HELIA_KERNEL_SYMBOL_REFS_INC}")
 
-  function(_hct_link_perf_stream_target target_name)
+  # Compile-side setup shared by every perf-stream target (and by the
+  # benchmark server's OBJECT library below): generated symbol refs, include
+  # paths, the HELIA_HARDWARE_BUILD define and the warning tweaks.
+  function(_hct_configure_perf_stream_compile target_name)
     add_dependencies(${target_name} hct_kernel_symbol_refs)
     target_include_directories(${target_name} PRIVATE
       "${HELIA_KERNEL_SYMBOL_REFS_DIR}"
@@ -352,6 +355,10 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
       "${CMSIS_PATH}/CMSIS/Core/Include")
     target_compile_definitions(${target_name} PUBLIC HELIA_HARDWARE_BUILD)
     target_compile_options(${target_name} PRIVATE -Wno-cast-function-type)
+  endfunction()
+
+  function(_hct_link_perf_stream_target target_name)
+    _hct_configure_perf_stream_compile(${target_name})
 
     if(HELIA_HARDWARE_BUILD)
       # nsx::cmsis_startup provides Reset_Handler/startup + system source
@@ -380,6 +387,10 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
     configure_file("${NEURALSPOTX_ROOT}/examples/coremark/src/rtt/SEGGER_RTT.h" "${HCT_RTT_BUILD_ROOT}/RTT/SEGGER_RTT.h" COPYONLY)
     configure_file("${NEURALSPOTX_ROOT}/examples/coremark/src/rtt/Config/SEGGER_RTT_Conf.h" "${HCT_RTT_BUILD_ROOT}/Config/SEGGER_RTT_Conf.h" COPYONLY)
 
+    # HCT_BENCHMARK_SERVER_BUILD_ID_PATCHED compiles out the constant build-id
+    # fallback in benchmark_server_catalog.c (kept for host-side unit builds);
+    # the firmware's id comes from the slot in hct_build_id.c, filled in after
+    # the link below.
     add_executable(hct_benchmark_server
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/benchmark_server_main.c"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/hctp_protocol.c"
@@ -388,6 +399,7 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/benchmark_server_adapter.c"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/benchmark_server_session.c"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/benchmark_server_transport_rtt.c"
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/perf_stream/hct_build_id.c"
       "${HCT_RTT_BUILD_ROOT}/RTT/SEGGER_RTT.c")
     set_target_properties(hct_benchmark_server PROPERTIES
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/perf_stream")
@@ -397,8 +409,32 @@ if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_PERF_STREAM_BENCHMARK_SERVER)
     target_compile_definitions(hct_benchmark_server PRIVATE
       HCT_BENCHMARK_SERVER_BOARD_ID="${HELIA_HARDWARE_BOARD}"
       HCT_BENCHMARK_SERVER_TARGET_CPU="${TARGET_CPU}"
-      HCT_SERVER_WORKSPACE_BYTES=${HCT_SERVER_WORKSPACE_BYTES})
+      HCT_SERVER_WORKSPACE_BYTES=${HCT_SERVER_WORKSPACE_BYTES}
+      HCT_BENCHMARK_SERVER_BUILD_ID_PATCHED)
     _hct_link_perf_stream_target(hct_benchmark_server)
+
+    # Per-build firmware identity, stamped after the link: the whole flash image
+    # (server objects, cmsis-nn, the NSX board/core/perf/startup libraries, the
+    # linker script's layout) is hashed with the id slot zeroed and
+    # `hct-<sha256[:48]>` is written into that slot in the ELF and .bin in place
+    # (scripts/patch_build_id.py). The firmware advertises it in HELLO; the host
+    # reads the same string from hct_build_id.txt. Hashing the linked image rather
+    # than a subset of its inputs is what makes two builds that differ anywhere
+    # get different ids. POST_BUILD commands run in the order they are added, so
+    # this follows nsx_finalize_app()'s objcopy (the .bin exists) and precedes
+    # the copies below (they copy the patched files).
+    set(HCT_BUILD_ID_TXT "${CMAKE_BINARY_DIR}/hct_build_id.txt")
+    set(HCT_PATCH_BUILD_ID_BIN_ARGS)
+    if(HELIA_HARDWARE_BUILD)
+      set(HCT_PATCH_BUILD_ID_BIN_ARGS --bin "$<TARGET_FILE_DIR:hct_benchmark_server>/hct_benchmark_server.bin")
+    endif()
+    add_custom_command(TARGET hct_benchmark_server POST_BUILD
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/patch_build_id.py"
+              --elf "$<TARGET_FILE:hct_benchmark_server>"
+              ${HCT_PATCH_BUILD_ID_BIN_ARGS}
+              --output-txt "${HCT_BUILD_ID_TXT}"
+      COMMENT "Stamping hct_benchmark_server build id (post-link image hash)"
+      VERBATIM)
     add_custom_command(TARGET hct_benchmark_server POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "$<TARGET_FILE_DIR:hct_benchmark_server>/hct_benchmark_server.bin"

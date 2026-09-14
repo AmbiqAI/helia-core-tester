@@ -1,6 +1,13 @@
 # Perf-Stream Full-Coverage Expansion — Session Progress
 
 > Working notes (local only — NOT committed). Session date: 2026-08-11.
+>
+> Command names below predate the board-keyed hardware CLI: `perf-stream flash`
+> is now `hardware flash --board <id>`, `perf-stream run-generated` is
+> `hardware stream --board <id>`, and `scripts/run_hardware_perf_suite.sh` was
+> replaced by `hardware run --board <id>` (same flags; `--skip-fvp-gate` is
+> `--fvp-gate off`, probe serial is auto-resolved). Historical verification
+> lines are kept as run.
 
 ## Goal
 
@@ -150,9 +157,9 @@ before encoding them into the plan.**
 - FVP (Corstone-300) path is the non-hardware reference runner.
 
 ### scripts/ inventory (for reference)
-- `run_hardware_perf_suite.sh` — generate → perf-stream flash →
-  run-generated; currently limited to bridged families; auto-detects probe
-  serial (errors if >1 probe — must default to 1160002276).
+- `run_hardware_perf_suite.sh` (since replaced by `helia_core_tester hardware
+  run`) — generate → flash → stream; currently limited to bridged families;
+  auto-detects probe serial (errors if >1 probe — must default to 1160002276).
 - `test_s4_conv_benchmark.sh` / `test_s4_conv_weight_sum.sh` — S4 conv
   benchmark/coverage pipelines.
 - `generate_perf_stream_adapters.py` — regenerates firmware adapter block.
