@@ -152,7 +152,7 @@ PY
 
 Real transcript captured at:
 
-- `artifacts/perf_stream/hardware_probe/apollo510_hardware_run.txt`
+- the RTT transcript of the first live Apollo510 probe under `artifacts/perf_stream/hardware_probe/` (not committed)
 
 ## Real hardware evidence collected
 
@@ -193,7 +193,7 @@ Observed real protocol sequence for the live run included:
 
 ### Real correctness results
 
-From `artifacts/perf_stream/hardware_probe/apollo510_hardware_run.txt` / `artifacts/reports/performance_stream/apollo510-live-session/`:
+From the first live Apollo510 probe transcript (`artifacts/perf_stream/hardware_probe/`) and `artifacts/reports/performance_stream/apollo510-live-session/`:
 
 - `abs_hw_live` (`arm_abs_s8`): correctness **passed**
 - `conv_hw_live` (`arm_convolve_s8`): correctness **passed**

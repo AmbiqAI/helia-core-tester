@@ -175,11 +175,18 @@ reported back.
 `SAMPLE_RESULT` (target -> host, one per sample per pass): `u16 sample_index`,
 `u32 iterations`, `u64 cycles`, `text pass_name`, `u8 counter_count`, then per
 counter `text name`, `u16 event_id`, `u64 value`, `u8 overflow`, `u8 supported`.
-`cycles` is the DWT `CYCCNT` delta around the timed loop and is kept as an
-independent cross-check. The first counter entry is always `ARM_PMU_CPU_CYCLES`
-(event `0x0011`) read from the PMU cycle counter `CCNTR`, with `overflow` = bit 31
-of the PMU overflow status register; the remaining entries are the pass's event
-counters in plan order. The firmware sends every `name` empty and the host resolves
+`cycles` is the DWT `CYCCNT` delta around the timed loop. The first counter entry
+is always `ARM_PMU_CPU_CYCLES` (event `0x0011`) read from the PMU cycle counter
+`CCNTR`, with `overflow` = bit 31 of the PMU overflow status register. On Armv8.1-M
+`PMU_CCNTR` and `DWT_CYCCNT` may alias the same underlying counter (unverified here:
+not checked against the Armv8.1-M Architecture Reference Manual or the Cortex-M55
+TRM). On Apollo510 `CCNTR` reads 120-250 cycles above the DWT delta per sample
+(about 30 cycles per invocation at four iterations), which is consistent with the
+order the firmware starts and reads the two either way, so `cycles` is not claimed
+as an independent measurement. The u64 `cycles` field is kept for DWT-only targets
+(where it is the only cycle source) and as a read-order sanity check against
+`CCNTR`. The remaining counter entries are the pass's event counters in plan order.
+The firmware sends every `name` empty and the host resolves
 names from `assets/pmu/armv8m_pmu_events.json` by event id (unknown ids become
 `event_0x....`). On a DWT-only build the cycle entry is the DWT value and every
 event counter comes back `supported = 0`.
