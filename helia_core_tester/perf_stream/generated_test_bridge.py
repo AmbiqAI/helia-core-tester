@@ -4714,7 +4714,7 @@ def _build_data_movement_case(
         else:
             axis = int(_extract_call_args(source_text, cmsis_function, expected_count=7)[3])
         add_meta([style_code, len(output_shape), axis, len(input_shapes)])
-        for i, (shape, arr) in enumerate(zip(input_shapes, input_arrays, strict=False), start=1):
+        for i, (shape, arr) in enumerate(zip(input_shapes, input_arrays), start=1):
             arrays.append((i, f"input_{i-1}", activation_dtype, shape, arr, False, False))
         meta_blob_id = len(input_shapes) + 1
         expected_blob_id = len(input_shapes) + 2
