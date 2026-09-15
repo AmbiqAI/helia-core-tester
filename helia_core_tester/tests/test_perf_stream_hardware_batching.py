@@ -292,3 +292,23 @@ def test_run_case_bundles_names_the_batch_when_a_session_fails(tmp_path: Path, m
             tmp_path, [_DummyCaseBundle("case_0"), _DummyCaseBundle("case_1")],  # type: ignore[arg-type]
             board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
         )
+
+
+def test_run_case_bundles_refuses_to_merge_sessions_from_different_firmware(tmp_path: Path, monkeypatch) -> None:
+    # A board reflashed mid-run (or a second host on the probe) announces a different
+    # TARGET_INFO on a later batch; the runner must fail fast instead of merging results
+    # from two firmware builds into one bundle.
+    bundles = [_DummyCaseBundle(f"case_{i}") for i in range(40)]
+    calls: list[list[Any]] = []
+    infos = iter([_target_info(build_id="hct-first"), _target_info(build_id="hct-second", max_passes=8)])
+
+    def _open(board, serial_no, *, build_dir, counter_passes):
+        return _FakeSession(next(infos), calls), _FakeTransport(), 0
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    with pytest.raises(RuntimeError, match=r"TARGET_INFO of batch 1 differs from the first session's.*build_id: 'hct-first' -> 'hct-second'.*max_passes: 16 -> 8"):
+        session_runner.run_case_bundles(
+            tmp_path, bundles, board=resolve_board("apollo510_evb"), serial_no=1160002276,  # type: ignore[arg-type]
+            counter_passes=DEFAULT_PASSES, session_id="s", build_dir=tmp_path,
+        )
+    assert [len(call) for call in calls] == [32]  # the first batch ran; the second never did

@@ -30,7 +30,7 @@ from .pmu_catalog import default_selection
 from .result_bundle import write_result_bundle
 from .session import CaseRunResult, HostSession, SessionResult, TargetLimits, check_case_id_length
 from .transport import JLinkRttTransport, Transport, symbol_address_from_elf
-from .wire import session_plan_size
+from .wire import TargetInfo, session_plan_size
 from ..core.config import VALID_SUITE_MODES
 
 OnCaseComplete = Callable[[CaseRunResult], None]
@@ -107,6 +107,28 @@ def open_rtt_session(
     return HostSession(transport, counter_passes=counter_passes), transport, rtt_address
 
 
+_CONSISTENT_FIELDS = (
+    "build_id", "catalog_hash", "board_id", "target_cpu", "pmu_counter_slots",
+    "max_rx_payload", "max_cases_per_session", "max_passes", "runtime_arena_capacity",
+)
+
+
+def check_target_info_consistent(first: TargetInfo, later: TargetInfo, *, batch_index: int) -> None:
+    """Every batch opens a fresh RTT session; the merged bundle must describe one firmware.
+    Fail fast if a later session announces a different build, catalog or limits (a board
+    reflashed mid-run, or a second host sharing the probe)."""
+    differing = [
+        f"{name}: {getattr(first, name)!r} -> {getattr(later, name)!r}"
+        for name in _CONSISTENT_FIELDS
+        if getattr(first, name) != getattr(later, name)
+    ]
+    if differing:
+        raise RuntimeError(
+            f"TARGET_INFO of batch {batch_index} differs from the first session's; refusing to merge "
+            f"results from different firmware: " + "; ".join(differing)
+        )
+
+
 def run_case_bundles(
     project_root: Path,
     case_bundles: Sequence[CaseBundle],
@@ -155,6 +177,8 @@ def run_case_bundles(
         batch: list[CaseBundle] = []
         try:
             info = session.handshake(expected_build_id=expected_build_id)
+            if target_info is not None:
+                check_target_info_consistent(target_info, info, batch_index=batch_index)
             target_info = target_info or info
             build_id = build_id or info.build_id
             limits = session.limits

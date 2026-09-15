@@ -39,6 +39,16 @@ CAP_PMU_ARMV8M = 1 << 6
 CATALOG_HASH_SIZE = 32
 BLOB_MAX_RANK = 6
 
+
+def _consumed(reader: ByteReader, message: str, value):
+    """Return `value` once `reader` is exhausted; every payload is fixed-layout, so trailing
+    bytes mean a corrupted frame or a peer speaking another protocol version, and are
+    rejected rather than silently ignored."""
+    trailing = reader.remaining()
+    if trailing:
+        raise ValueError(f"{message} payload carries {len(trailing)} trailing byte(s).")
+    return value
+
 # CASE_META comparison_mode codes -- must match HCT_COMPARISON_MODE_* in the firmware.
 COMPARISON_MODE_CODES = {"exact_int": 1, "tolerant_int": 2, "float": 3, "bool": 4, "exact_status": 5}
 COMPARISON_MODE_NAMES = {code: name for name, code in COMPARISON_MODE_CODES.items()}
@@ -98,7 +108,7 @@ def encode_target_info(info: TargetInfo) -> bytes:
 
 def decode_target_info(payload: bytes) -> TargetInfo:
     reader = ByteReader(payload)
-    return TargetInfo(
+    return _consumed(reader, "TARGET_INFO", TargetInfo(
         build_id=reader.text(),
         catalog_hash=reader.fixed(CATALOG_HASH_SIZE),
         max_frame_payload=reader.u32(),
@@ -113,7 +123,7 @@ def decode_target_info(payload: bytes) -> TargetInfo:
         max_rx_payload=reader.u32(),
         max_cases_per_session=reader.u16(),
         max_passes=reader.u8(),
-    )
+    ))
 
 
 # --- KERNEL_CATALOG ------------------------------------------------------------------
@@ -155,7 +165,7 @@ def encode_kernel_catalog(entries: Sequence[CatalogEntry]) -> bytes:
 def decode_kernel_catalog(payload: bytes) -> tuple[CatalogEntry, ...]:
     reader = ByteReader(payload)
     count = reader.u16()
-    return tuple(
+    return _consumed(reader, "KERNEL_CATALOG", tuple(
         CatalogEntry(
             kernel_id=reader.u32(),
             canonical_name=reader.text(),
@@ -169,7 +179,7 @@ def decode_kernel_catalog(payload: bytes) -> tuple[CatalogEntry, ...]:
             scratch_bytes=reader.u32(),
         )
         for _ in range(count)
-    )
+    ))
 
 
 def kernel_catalog_hash(entries: Sequence[CatalogEntry]) -> bytes:
@@ -261,7 +271,7 @@ def decode_session_plan(payload: bytes) -> SessionPlan:
         group, _, index = pass_name.rpartition("_")
         passes.append(CounterPass(group=group or pass_name, pass_index=int(index or 0), counters=counters, chained=chained))
     cases = tuple(PlannedCase(case_id=reader.text(), kernel_id=reader.u32()) for _ in range(case_count))
-    return SessionPlan(
+    return _consumed(reader, "SESSION_PLAN", SessionPlan(
         warmups=warmups,
         samples=samples,
         iterations_per_sample=iterations_per_sample,
@@ -270,7 +280,7 @@ def decode_session_plan(payload: bytes) -> SessionPlan:
         passes=tuple(passes),
         cases=cases,
         transfer_mode=transfer_mode,
-    )
+    ))
 
 
 def session_plan_size(case_ids: Sequence[str], counter_passes: Sequence[CounterPass]) -> int:
@@ -305,7 +315,8 @@ def encode_request_case(request: RequestCase) -> bytes:
 
 
 def decode_request_case(payload: bytes) -> RequestCase:
-    return RequestCase(case_index=ByteReader(payload).u16())
+    reader = ByteReader(payload)
+    return _consumed(reader, "REQUEST_CASE", RequestCase(case_index=reader.u16()))
 
 
 @dataclass(frozen=True)
@@ -391,6 +402,8 @@ def decode_case_meta(payload: bytes) -> CaseMeta:
         role = reader.text()
         dtype = reader.text()
         rank = reader.u8()
+        if rank > BLOB_MAX_RANK:
+            raise ValueError(f"CASE_META blob {blob_id} has rank {rank}; the wire carries at most {BLOB_MAX_RANK} dims.")
         dims = tuple(reader.u32() for _ in range(BLOB_MAX_RANK))[:rank]
         blobs.append(
             BlobDescriptor(
@@ -404,7 +417,7 @@ def decode_case_meta(payload: bytes) -> CaseMeta:
                 mutable_data=bool(reader.u8()),
             )
         )
-    return CaseMeta(
+    return _consumed(reader, "CASE_META", CaseMeta(
         case_id=case_id,
         kernel_id=kernel_id,
         schema_version=schema_version,
@@ -415,7 +428,7 @@ def decode_case_meta(payload: bytes) -> CaseMeta:
         scalar_parameters=scalar_parameters,
         blobs=tuple(blobs),
         scratch_bytes=reader.u32(),
-    )
+    ))
 
 
 # --- REQUEST_BLOB / BLOB_CHUNK / CASE_READY ------------------------------------------
@@ -438,7 +451,7 @@ def encode_request_blob(request: RequestBlob) -> bytes:
 
 def decode_request_blob(payload: bytes) -> RequestBlob:
     reader = ByteReader(payload)
-    return RequestBlob(blob_id=reader.u32(), offset=reader.u32(), max_length=reader.u16())
+    return _consumed(reader, "REQUEST_BLOB", RequestBlob(blob_id=reader.u32(), offset=reader.u32(), max_length=reader.u16()))
 
 
 @dataclass(frozen=True)
@@ -458,7 +471,7 @@ def encode_blob_chunk(chunk: BlobChunk) -> bytes:
 
 def decode_blob_chunk(payload: bytes) -> BlobChunk:
     reader = ByteReader(payload)
-    return BlobChunk(blob_id=reader.u32(), offset=reader.u32(), data=reader.raw())
+    return _consumed(reader, "BLOB_CHUNK", BlobChunk(blob_id=reader.u32(), offset=reader.u32(), data=reader.raw()))
 
 
 @dataclass(frozen=True)
@@ -476,7 +489,7 @@ def encode_case_ready(ready: CaseReady) -> bytes:
 
 def decode_case_ready(payload: bytes) -> CaseReady:
     reader = ByteReader(payload)
-    return CaseReady(blob_id=reader.u32(), bytes_received=reader.u32())
+    return _consumed(reader, "CASE_READY", CaseReady(blob_id=reader.u32(), bytes_received=reader.u32()))
 
 
 # --- correctness: CORRECTNESS_RESULT / OUTPUT_* / CORRECTNESS_ACK ----------------------
@@ -494,7 +507,8 @@ def encode_correctness_result(result: CorrectnessResult) -> bytes:
 
 
 def decode_correctness_result(payload: bytes) -> CorrectnessResult:
-    return CorrectnessResult(status=ByteReader(payload).i32())
+    reader = ByteReader(payload)
+    return _consumed(reader, "CORRECTNESS_RESULT", CorrectnessResult(status=reader.i32()))
 
 
 @dataclass(frozen=True)
@@ -513,7 +527,7 @@ def encode_output_begin(begin: OutputBegin) -> bytes:
 def decode_output_begin(payload: bytes) -> OutputBegin:
     reader = ByteReader(payload)
     offset = reader.u32()
-    return OutputBegin(length=reader.u32(), offset=offset)
+    return _consumed(reader, "OUTPUT_BEGIN", OutputBegin(length=reader.u32(), offset=offset))
 
 
 @dataclass(frozen=True)
@@ -558,7 +572,7 @@ def encode_output_end(end: OutputEnd) -> bytes:
 
 def decode_output_end(payload: bytes) -> OutputEnd:
     reader = ByteReader(payload)
-    return OutputEnd(length=reader.u32(), checksum=reader.u32())
+    return _consumed(reader, "OUTPUT_END", OutputEnd(length=reader.u32(), checksum=reader.u32()))
 
 
 @dataclass(frozen=True)
@@ -573,7 +587,8 @@ def encode_correctness_ack(ack: CorrectnessAck) -> bytes:
 
 
 def decode_correctness_ack(payload: bytes) -> CorrectnessAck:
-    return CorrectnessAck(passed=bool(ByteReader(payload).u8()))
+    reader = ByteReader(payload)
+    return _consumed(reader, "CORRECTNESS_ACK", CorrectnessAck(passed=bool(reader.u8())))
 
 
 # --- SAMPLE_RESULT / CASE_COMPLETE / SESSION_COMPLETE / ERROR --------------------------
@@ -618,7 +633,7 @@ def decode_sample_result(payload: bytes) -> RawSample:
                 supported=bool(reader.u8()),
             )
         )
-    return RawSample(sample_index=sample_index, iterations=iterations, cycles=cycles, counters=tuple(counters), pass_name=pass_name)
+    return _consumed(reader, "SAMPLE_RESULT", RawSample(sample_index=sample_index, iterations=iterations, cycles=cycles, counters=tuple(counters), pass_name=pass_name))
 
 
 @dataclass(frozen=True)
@@ -643,12 +658,12 @@ def decode_case_complete(payload: bytes) -> CaseComplete:
     case_id = reader.text()
     correctness_ran = bool(reader.u8())
     performance_ran = bool(reader.u8())
-    return CaseComplete(
+    return _consumed(reader, "CASE_COMPLETE", CaseComplete(
         case_id=case_id,
         workspace_used_bytes=reader.u32(),
         correctness_ran=correctness_ran,
         performance_ran=performance_ran,
-    )
+    ))
 
 
 @dataclass(frozen=True)
@@ -663,7 +678,8 @@ def encode_session_complete(complete: SessionComplete) -> bytes:
 
 
 def decode_session_complete(payload: bytes) -> SessionComplete:
-    return SessionComplete(case_count=ByteReader(payload).u16())
+    reader = ByteReader(payload)
+    return _consumed(reader, "SESSION_COMPLETE", SessionComplete(case_count=reader.u16()))
 
 
 @dataclass(frozen=True)
@@ -678,4 +694,5 @@ def encode_error(error: ErrorPayload) -> bytes:
 
 
 def decode_error(payload: bytes) -> ErrorPayload:
-    return ErrorPayload(message=ByteReader(payload).text())
+    reader = ByteReader(payload)
+    return _consumed(reader, "ERROR", ErrorPayload(message=reader.text()))

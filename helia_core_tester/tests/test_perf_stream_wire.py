@@ -203,3 +203,40 @@ def test_case_and_session_complete_round_trip() -> None:
 def test_error_round_trip() -> None:
     error = wire.ErrorPayload("message_type=4 status=-1")
     assert wire.decode_error(wire.encode_error(error)) == error
+
+
+# --- malformed payloads are rejected, not tolerated ------------------------------------
+
+
+def test_every_decoder_rejects_trailing_bytes() -> None:
+    info = _target_info()
+    with pytest.raises(ValueError, match=r"TARGET_INFO payload carries 1 trailing byte"):
+        wire.decode_target_info(wire.encode_target_info(info) + b"\x00")
+    with pytest.raises(ValueError, match=r"REQUEST_CASE payload carries 2 trailing byte"):
+        wire.decode_request_case(b"\x01\x00" + b"\xff\xff")
+    with pytest.raises(ValueError, match=r"SESSION_COMPLETE payload carries 1 trailing byte"):
+        wire.decode_session_complete(b"\x00\x02\x00")
+    # The exact-length payloads still decode.
+    assert wire.decode_target_info(wire.encode_target_info(info)) == info
+    assert wire.decode_request_case(b"\x01\x00").case_index == 1
+
+
+def test_case_meta_rejects_rank_above_the_wire_limit() -> None:
+    from helia_core_tester.perf_stream.hctp import ByteWriter
+
+    payload = ByteWriter()
+    payload.text("case")            # case_id
+    payload.u32(1)                  # kernel_id
+    payload.u16(1)                  # schema_version
+    payload.u8(0)                   # comparison_mode
+    payload.i32(0)                  # tolerance
+    payload.u32(0)                  # atol_q16
+    payload.u32(0)                  # rtol_q16
+    payload.u8(0)                   # scalar count
+    payload.u16(1)                  # blob count
+    payload.u32(7)                  # blob_id
+    payload.text("input")           # role
+    payload.text("int8")            # dtype
+    payload.u8(wire.BLOB_MAX_RANK + 1)
+    with pytest.raises(ValueError, match=rf"blob 7 has rank {wire.BLOB_MAX_RANK + 1}; the wire carries at most {wire.BLOB_MAX_RANK}"):
+        wire.decode_case_meta(payload.finish())
