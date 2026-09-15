@@ -5,6 +5,7 @@ import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 
 
 class OpBatchMatMul(OperationBase):
@@ -74,7 +75,12 @@ class OpBatchMatMul(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
-        super().convert_to_tflite(model, out_path, rep_seed)
+        converter = converter_for_batched_model(
+            model, [self.desc['input_1_shape'], self.desc['input_2_shape']]
+        )
+        self._apply_activation_quantization(converter)
+        converter.representative_dataset = self._representative_dataset_gen
+        self._write_tflite_bytes(out_path, converter.convert())
     
     def _numpy_dtype_to_c_type(self, np_dtype: np.dtype) -> str:
         """Map numpy dtype to C type string."""

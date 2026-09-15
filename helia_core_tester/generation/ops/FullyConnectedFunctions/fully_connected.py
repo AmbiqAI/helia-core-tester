@@ -5,6 +5,7 @@ FullyConnected operation implementation with dtype-aware quantization.
 from typing import Dict, Any, Optional
 import numpy as np
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
 from helia_core_tester.generation.kernel_dispatch import resolve_fully_connected_kernel
 from helia_core_tester.core.cpu_targets import get_cpu_profile
@@ -182,7 +183,7 @@ class OpFullyConnected(OperationBase):
         import tensorflow as tf
         
         # Create converter
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        converter = converter_for_batched_model(model, [self.desc['input_shape']])
         
         # Apply quantization based on activation_dtype
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()

@@ -4275,17 +4275,13 @@ def _build_batch_matmul_case(
     *,
     output_root: Path | None = None,
 ) -> CaseBundle:
-    """Bridge a FullyConnectedFunctions BatchMatMul generated test. Unlike FullyConnected,
-    both operands share the same dtype (S8 or S16) and quantization is always a single
-    per-tensor {multiplier, shift} pair (no per-channel array blob) -- see
-    run_batch_matmul_once() in benchmark_server_session.c. adj_x/adj_y are never
-    transmitted: arm_batch_matmul_s8/_s16 never read them (the real generated test's
-    transposed-operand descriptors already pre-arrange their raw lhs/rhs data/dims into
-    the final row-major layout the kernel expects). The real generated test harness
-    always uses a single-invocation shape (input_lhs_dims/input_rhs_dims/output_dims.n
-    == .h == 1) regardless of the descriptor name implying multiple batches -- the same
-    "batch is cosmetic at the single-invocation level" pattern already established for
-    FullyConnected."""
+    """Bridge a BatchMatMul generated test with matching operand/output dtypes.
+
+    Quantized S8/S16 use per-tensor quantization and pre-arranged operands, without
+    transmitting adj_x/adj_y. Their firmware output sizing covers one matrix only,
+    so reject n/h greater than one in either operand or output before creating a bundle.
+    Float F32/F16 retain their full dimensions and transmitted transpose flags.
+    """
     descriptor = generated_test.descriptor
     operator = str(descriptor.get("operator", ""))
     weight_dtype = str(descriptor.get("weight_dtype", descriptor.get("resolved_tensor_dtypes", {}).get("weights", "")))
@@ -4309,6 +4305,13 @@ def _build_batch_matmul_case(
     input_lhs_dims = _extract_dims(header_text, f"{prefix}_input_lhs_dims")
     input_rhs_dims = _extract_dims(header_text, f"{prefix}_input_rhs_dims")
     output_dims = _extract_dims(header_text, f"{prefix}_output_dims")
+    if activation_dtype in ("S8", "S16"):
+        for role, dims in (("input_lhs", input_lhs_dims), ("input_rhs", input_rhs_dims), ("output", output_dims)):
+            if dims["n"] > 1 or dims["h"] > 1:
+                raise UnsupportedGeneratedTestError(
+                    f"{generated_test.name}: quantized BatchMatMul {role} batch dimensions "
+                    f"n={dims['n']}, h={dims['h']} are not yet supported by the perf-stream hardware bridge."
+                )
     input_lhs_shape = tuple(input_lhs_dims[k] for k in ("n", "h", "w", "c"))
     input_rhs_shape = tuple(input_rhs_dims[k] for k in ("n", "h", "w", "c"))
     output_shape = tuple(output_dims[k] for k in ("n", "h", "w", "c"))

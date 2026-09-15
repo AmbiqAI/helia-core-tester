@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.perf_stream.case_bundle import load_case_bundle
-from helia_core_tester.perf_stream.generated_test_bridge import build_case_bundle_from_generated_test, discover_generated_tests
+from helia_core_tester.perf_stream.generated_test_bridge import UnsupportedGeneratedTestError, build_case_bundle_from_generated_test, discover_generated_tests
 from helia_core_tester.perf_stream.kernel_registry import lookup_kernel_id
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -77,20 +77,14 @@ def test_prelu_arg_error_cases_bridge_as_status_assertions(tmp_path: Path) -> No
         assert manifest["expected_output"]["byte_length"] == 0
 
 
-def test_convolve_batch_padded_case_truncates_to_header_dims(tmp_path: Path) -> None:
-    manifest = _bridge(tmp_path, "ConvolutionFunctions", "convolve_kernel1x1_stride_xy_case_01_s8")
-    blobs = {blob["role"]: blob for blob in manifest["blob_roles"]}
-    assert blobs["input_0"]["dimensions"] == [1, 4, 4, 5]
-    assert blobs["input_0"]["byte_length"] == 80
-    assert manifest["expected_output"]["byte_length"] == 20
+def test_convolve_batch_case_rejected_without_truncation(tmp_path: Path) -> None:
+    with pytest.raises(UnsupportedGeneratedTestError, match="batch size 2 > 1"):
+        _bridge(tmp_path, "ConvolutionFunctions", "convolve_kernel1x1_stride_xy_case_01_s8")
 
 
-def test_depthwise_batch_padded_case_truncates_to_header_dims(tmp_path: Path) -> None:
-    manifest = _bridge(tmp_path, "ConvolutionFunctions", "depthwise_conv_mult_batches_s8")
-    blobs = {blob["role"]: blob for blob in manifest["blob_roles"]}
-    assert blobs["input_0"]["dimensions"] == [1, 5, 3, 3]
-    assert blobs["input_0"]["byte_length"] == 45
-    assert manifest["expected_output"]["byte_length"] == 18
+def test_depthwise_batch_case_rejected_without_truncation(tmp_path: Path) -> None:
+    with pytest.raises(UnsupportedGeneratedTestError, match="batch size 2 > 1"):
+        _bridge(tmp_path, "ConvolutionFunctions", "depthwise_conv_mult_batches_s8")
 
 
 def test_pool_batch_padded_case_truncates_to_header_dims(tmp_path: Path) -> None:

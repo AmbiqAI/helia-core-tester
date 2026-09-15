@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.ops._shared.bias_init import (
     HoistedBiasInjectionError,
     bias_is_hoisted_by_lowering,
@@ -165,7 +166,8 @@ class OpDepthwiseConv(OperationBase):
             # that Add fold away; the bias those cases are held to is written
             # into the DEPTHWISE_CONV_2D placeholder after conversion by
             # inject_hoisted_dilation_bias, ahead of the golden run.
-            hoisted = bias_is_hoisted_by_lowering(
+            # Fixed-batch conversion retains native dilation and its bias operand.
+            hoisted = self.desc['input_shape'][0] == 1 and bias_is_hoisted_by_lowering(
                 dwconv_kwargs.get('dilation_rate', (1, 1)),
                 is_float=str(self.tensor_dtype("input", default="S8")).upper()
                 in {"FP32", "FP16"},
@@ -248,7 +250,7 @@ class OpDepthwiseConv(OperationBase):
                 f.write(tflite_model)
             return
 
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        converter = converter_for_batched_model(model, [self.desc['input_shape']])
         
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
         
@@ -292,7 +294,7 @@ class OpDepthwiseConv(OperationBase):
             self.desc.get('dilation', [1, 1]),
             is_float=str(self.tensor_dtype("input", default="S8")).upper() in {"FP32", "FP16"},
         )
-        if self.desc.get('use_bias', True) and hoisted:
+        if self.desc.get('use_bias', True) and hoisted and self.desc['input_shape'][0] == 1:
             try:
                 inject_hoisted_dilation_bias(out_path, rep_seed)
             except HoistedBiasInjectionError as exc:
