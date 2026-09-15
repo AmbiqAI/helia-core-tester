@@ -17,7 +17,7 @@ from .generated_test_bridge import (
     discover_generated_tests,
 )
 from .hctp import HEADER_SIZE
-from .measurement import CounterPass, counter_passes_for_selection
+from .measurement import MAX_PASSES_PER_PLAN, CounterPass, check_pass_count, counter_passes_for_selection
 from .pmu_catalog import default_selection
 from .result_bundle import write_result_bundle
 from .session import CaseRunResult, HostSession, SessionResult, load_plan_size
@@ -40,6 +40,11 @@ MAX_CASES_PER_SESSION = 32
 # every plan under this same constant up front.
 FIRMWARE_RX_BUFFER_BYTES = 2048
 MAX_LOAD_PLAN_PAYLOAD_BYTES = FIRMWARE_RX_BUFFER_BYTES - HEADER_SIZE
+
+# MAX_PASSES_PER_PLAN (HCT_SERVER_MAX_PASSES, imported from measurement.py where the
+# passes are planned) is the third lockstep constant. Passes are never split across
+# sessions -- every batch carries the full pass list -- so a selection over that
+# limit is an error (check_pass_count), not a batching problem.
 
 
 def default_counter_passes() -> tuple[CounterPass, ...]:
@@ -101,6 +106,7 @@ def _run_single_session(
             f"HCT_SERVER_MAX_CASES={MAX_CASES_PER_SESSION} rejects larger plans. "
             "Split into batches of at most MAX_CASES_PER_SESSION first."
         )
+    check_pass_count(counter_passes)
     elf_path = build_dir / "perf_stream" / "hct_benchmark_server.elf"
     rtt_address = symbol_address_from_elf(str(elf_path), "_SEGGER_RTT")
 

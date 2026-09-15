@@ -23,6 +23,8 @@ from .firmware_messages import (
 )
 from .hctp import HEADER_SIZE, ByteReader, ByteWriter, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
 from .measurement import (
+    MAX_COUNTERS_PER_PASS,
+    MAX_PASSES_PER_PLAN,
     CounterDescriptor,
     CounterPass,
     RawCounterValue,
@@ -368,6 +370,9 @@ class FakeTargetTransport:
         max_iterations = reader.u32()
         passes: list[CounterPass] = []
         pass_count = reader.u8()
+        # Same admission rule as parse_pmu_passes() in the firmware (HCT_SERVER_MAX_PASSES).
+        if pass_count > MAX_PASSES_PER_PLAN:
+            raise ValueError(f"LOAD_PLAN names {pass_count} PMU passes; fake target accepts at most {MAX_PASSES_PER_PLAN}.")
         for _ in range(pass_count):
             pass_name = reader.text()
             chained = bool(reader.u8())
@@ -381,7 +386,7 @@ class FakeTargetTransport:
             passes.append(CounterPass(group=group or pass_name, pass_index=int(index or 0), counters=tuple(counters), chained=chained))
             # Same admission rule as handle_load_plan() in the firmware.
             slots = (2 if chained else 1) * counter_count
-            if counter_count > 4 or (self._pmu_present and slots > self._pmu_counter_slots):
+            if counter_count > MAX_COUNTERS_PER_PASS or (self._pmu_present and slots > self._pmu_counter_slots):
                 raise ValueError(f"PMU pass {pass_name!r} needs {slots} slots; fake target has {self._pmu_counter_slots}.")
         cases = []
         for _ in range(case_count):

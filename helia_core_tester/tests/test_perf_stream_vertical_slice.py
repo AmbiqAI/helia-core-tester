@@ -14,7 +14,10 @@ from helia_core_tester.perf_stream.case_bundle import (
 )
 from helia_core_tester.perf_stream.fake_target import FakeAbsS8Adapter, FakeKernelAdapter, FakeTargetTransport
 from helia_core_tester.perf_stream.measurement import (
+    MAX_PASSES_PER_PLAN,
     CounterPass,
+    TooManyPassesError,
+    check_pass_count,
     compute_sample_statistics,
     counter_passes_for_selection,
     normalize_samples,
@@ -22,7 +25,13 @@ from helia_core_tester.perf_stream.measurement import (
     resolve_counter_selection,
 )
 from helia_core_tester.perf_stream.pmu_catalog import CPU_CYCLES_EVENT_ID, counter_by_name
-from helia_core_tester.perf_stream.session import HostSession, load_plan_size, run_fake_abs_vertical_slice, run_fake_convolve_vertical_slice
+from helia_core_tester.perf_stream.session import (
+    HostSession,
+    encode_load_plan,
+    load_plan_size,
+    run_fake_abs_vertical_slice,
+    run_fake_convolve_vertical_slice,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -179,6 +188,36 @@ def test_mve_all_plans_nine_passes_and_every_pass_reports_ccntr(tmp_path: Path) 
     reported = {c["name"] for s in case.samples for c in s.counters}
     assert len(reported) == 34 + 1 + 3
     assert len(case.statistics.unsupported_counters) == 34
+
+
+def test_every_group_all_exceeds_the_firmware_pass_limit_and_fails_before_load_plan(tmp_path: Path) -> None:
+    # Every value the --pmu-counters help advertises at once: 21 cpu + 15 memory + 34 mve
+    # events plan 5 + 4 + 9 = 18 passes, two over HCT_SERVER_MAX_PASSES. The firmware
+    # would answer the LOAD_PLAN with an ERROR frame after flash/HELLO/catalog; the host
+    # must refuse first, naming the passes and the limit, and never send a plan.
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_all_groups").manifest_path)
+    passes = counter_passes_for_selection({"cpu": "all", "memory": "all", "mve": "all"})
+    assert len(passes) == 18 and MAX_PASSES_PER_PLAN == 16
+
+    session = HostSession(FakeTargetTransport(), counter_passes=passes)
+    with pytest.raises(RuntimeError, match=r"18 PMU passes planned \(cpu_0, cpu_1, cpu_2, cpu_3, cpu_4, memory_0, .*mve_8\) but the firmware runs at most 16 per LOAD_PLAN"):
+        session.run_many([bundle])
+    assert "TX:LOAD_PLAN" not in session._trace and "TX:HELLO_ACK" not in session._trace
+
+    # Exactly the limit is accepted (16 x 4 chained counters would need 64 slots, so
+    # build it from single-counter passes) and the fake target runs every pass.
+    single = counter_by_name("ARM_PMU_INST_RETIRED")
+    sixteen = tuple(CounterPass("cpu", i, (single,)) for i in range(MAX_PASSES_PER_PLAN))
+    check_pass_count(sixteen)
+    result = HostSession(FakeTargetTransport(), counter_passes=sixteen).run(bundle)
+    assert len({s.pass_name for s in result.samples}) == MAX_PASSES_PER_PLAN
+
+    # The fake target mirrors parse_pmu_passes(): a 17-pass plan is rejected on decode.
+    seventeen = sixteen + (CounterPass("cpu", 16, (single,)),)
+    with pytest.raises(TooManyPassesError, match="17 PMU passes planned"):
+        check_pass_count(seventeen)
+    with pytest.raises(ValueError, match="17 PMU passes; fake target accepts at most 16"):
+        FakeTargetTransport()._decode_plan(encode_load_plan([bundle], seventeen))
 
 
 def test_unchained_pass_overflows_sixteen_bit_counter_and_invalidates_case(tmp_path: Path) -> None:

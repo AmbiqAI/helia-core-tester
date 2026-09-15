@@ -34,14 +34,34 @@ class _DummyCaseBundle:
 
 
 def test_max_cases_per_session_matches_firmware_constant() -> None:
-    # Keep this in lockstep with HCT_SERVER_MAX_CASES / HCT_SERVER_RX_BUFFER_BYTES in
-    # cmake/perf_stream/benchmark_server_session.h.
+    # Keep this in lockstep with HCT_SERVER_MAX_CASES / HCT_SERVER_RX_BUFFER_BYTES /
+    # HCT_SERVER_MAX_PASSES in cmake/perf_stream/benchmark_server_session.h.
     header = (PROJECT_ROOT / "cmake" / "perf_stream" / "benchmark_server_session.h").read_text()
     assert hardware_run.MAX_CASES_PER_SESSION == 32
     assert re.search(r"#define HCT_SERVER_MAX_CASES 32u", header)
     assert hardware_run.FIRMWARE_RX_BUFFER_BYTES == 2048
     assert re.search(r"#define HCT_SERVER_RX_BUFFER_BYTES 2048u", header)
     assert hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES == 2048 - 32
+    assert hardware_run.MAX_PASSES_PER_PLAN == 16
+    assert re.search(r"#define HCT_SERVER_MAX_PASSES 16u", header)
+
+
+def test_run_single_session_refuses_more_passes_than_the_firmware_runs(tmp_path: Path) -> None:
+    # cpu:all memory:all mve:all is 5 + 4 + 9 = 18 passes -- over HCT_SERVER_MAX_PASSES.
+    # The runner must refuse before symbol lookup / J-Link, naming the passes and the limit.
+    passes = counter_passes_for_selection({"cpu": "all", "memory": "all", "mve": "all"})
+    assert len(passes) == 18
+    with pytest.raises(ValueError, match=r"18 PMU passes planned \(cpu_0, .*mve_8\) but the firmware runs at most 16"):
+        hardware_run._run_single_session(
+            tmp_path,
+            [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
+            serial_no=1,
+            chip_name="AP510NFA-CBR",
+            speed_khz=4000,
+            counter_passes=passes,
+            build_dir=tmp_path,
+        )
+    assert not (tmp_path / "perf_stream").exists()
 
 
 def test_batches_are_split_by_case_count_and_encoded_plan_size() -> None:

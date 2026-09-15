@@ -158,6 +158,14 @@ the case's warmups and samples with its counters programmed, so a selection like
 event-counter slot -- it is reported from `CCNTR` in every pass -- so it is stripped
 when planning and a cycles-only selection still yields one empty `cpu_0` pass.
 
+A plan carries at most `HCT_SERVER_MAX_PASSES` (16) passes; the host mirrors the
+limit as `measurement.MAX_PASSES_PER_PLAN` and refuses a larger selection in the
+`--pmu-counters` parser (before generate/build/flash), in `HostSession` (before
+`HELLO_ACK`) and in the fake target's `LOAD_PLAN` decoder, naming the planned passes.
+Passes are never split across sessions, so `cpu:all memory:all mve:all` (5 + 4 + 9 =
+18 passes) is an error; select fewer counters per run. An empty name list
+(`mve:,`) is rejected the same way instead of degrading to a cycles-only pass.
+
 Armv8.1-M event counters are 16 bits wide. Passes are chained by default: counter
 `i` is programmed into slot `2i` and slot `2i+1` is programmed with `ARM_PMU_CHAIN`
 (event `0x001E`), which increments on the even slot's overflow, so the pair reads as

@@ -15,7 +15,13 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 from .boards import BoardSpec, default_session_id
 from .firmware_build import FlashDecision, build_id_path, flash_firmware, read_build_id, resolve_build_dir
-from .measurement import UnsupportedCounterError, counter_passes_for_selection, resolve_counter_selection
+from .measurement import (
+    TooManyPassesError,
+    UnsupportedCounterError,
+    check_pass_count,
+    counter_passes_for_selection,
+    resolve_counter_selection,
+)
 from .pmu_catalog import GROUPS, default_selection
 from .result_bundle import write_timing
 from .run_summary import make_live_progress_printer
@@ -76,8 +82,10 @@ def parse_pmu_counters(values: Sequence[str]) -> PmuSelection:
 
     SELECTION is `all`, `default`, or a comma-separated list of catalog counter names
     (`mve:all`, `cpu:default`, `mve:ARM_PMU_MVE_STALL,ARM_PMU_MVE_PRED`). Groups keep
-    their command-line order, which is the order the PMU passes run in. Unknown groups
-    and counter names are rejected here, naming the valid choices.
+    their command-line order, which is the order the PMU passes run in. Unknown groups,
+    counter names and empty name lists (`mve:,`) are rejected here, naming the valid
+    choices, and so is a selection that plans more passes than the firmware runs per
+    LOAD_PLAN (measurement.MAX_PASSES_PER_PLAN) -- all before any probe I/O.
     """
     selection: PmuSelection = {}
     for raw in values:
@@ -93,11 +101,22 @@ def parse_pmu_counters(values: Sequence[str]) -> PmuSelection:
         if spec.lower() in ("all", "default"):
             selection[group] = spec.lower()
         else:
-            selection[group] = [name.strip() for name in spec.split(",") if name.strip()]
+            names = [name.strip() for name in spec.split(",")]
+            if not any(names) or not all(names):
+                raise ValueError(
+                    f"--pmu-counters: {raw!r} names an empty counter for group {group!r}; "
+                    "SELECTION must be all, default, or a comma-separated list of ARM_PMU_* names "
+                    "with no blank entries."
+                )
+            selection[group] = names
         try:
             resolve_counter_selection({group: selection[group]})
         except UnsupportedCounterError as exc:
             raise ValueError(f"--pmu-counters: {exc}") from exc
+    try:
+        check_pass_count(counter_passes_for_selection(selection))
+    except TooManyPassesError as exc:
+        raise ValueError(f"--pmu-counters: {exc}") from exc
     return selection
 
 

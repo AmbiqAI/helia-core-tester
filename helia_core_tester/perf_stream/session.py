@@ -22,6 +22,8 @@ from .measurement import (
     RawCounterValue,
     RawSample,
     SampleStatistics,
+    TooManyPassesError,
+    check_pass_count,
     compute_sample_statistics,
     counter_passes_for_selection,
     normalize_samples,
@@ -309,11 +311,18 @@ class HostSession:
     def _check_counter_passes(self, hello: HelloPayload) -> None:
         """Refuse PMU passes the target cannot run, before any plan is sent.
 
+        More passes than the firmware's fixed per-plan array (MAX_PASSES_PER_PLAN, in
+        lockstep with HCT_SERVER_MAX_PASSES) would be answered with an ERROR frame
+        after HELLO/catalog; that is refused here, naming the passes and the limit.
         A DWT-only target (no HCT_CAP_PMU_ARMV8M) only ever reports the cycle counter,
         so any pass asking for event counters would come back `supported=0` -- fail
         loudly instead. With a PMU, a chained counter takes two of the advertised
         16-bit slots, an unchained one takes one.
         """
+        try:
+            check_pass_count(self._counter_passes)
+        except TooManyPassesError as exc:
+            raise RuntimeError(str(exc)) from exc
         needs_events = [counter_pass for counter_pass in self._counter_passes if counter_pass.counters]
         if not needs_events:
             return

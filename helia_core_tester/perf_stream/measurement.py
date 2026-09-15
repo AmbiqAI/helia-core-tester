@@ -27,6 +27,15 @@ from .pmu_catalog import (  # noqa: F401 -- CounterDescriptor is re-exported for
 # counters per pass is the full width of the PMU.
 MAX_COUNTERS_PER_PASS = 4
 
+# Must match HCT_SERVER_MAX_PASSES in cmake/perf_stream/benchmark_server_session.h:
+# the firmware stores a LOAD_PLAN's passes in a fixed array of this size and answers
+# a larger plan with an ERROR frame. Every host entry point (the CLI parser, the
+# session, the batch runner and the fake target) checks the planned pass count
+# against it so an oversized selection fails before any probe I/O. The full
+# catalog -- cpu:all memory:all mve:all -- plans 5 + 4 + 9 = 18 passes and is
+# therefore refused; passes are never split across sessions.
+MAX_PASSES_PER_PLAN = 16
+
 
 @dataclass(frozen=True)
 class CounterPass:
@@ -100,6 +109,28 @@ class StatefulKernelRestrictionError(ValueError):
 
 class UnsupportedCounterError(ValueError):
     pass
+
+
+class TooManyPassesError(ValueError):
+    """More PMU passes planned than the firmware accepts in one LOAD_PLAN."""
+
+
+def check_pass_count(passes: Iterable[CounterPass], *, limit: int = MAX_PASSES_PER_PLAN) -> None:
+    """Raise TooManyPassesError when `passes` exceeds the firmware's per-plan limit.
+
+    The message lists every planned pass so the caller can see which groups drove
+    the count (each group is measured in passes of up to MAX_COUNTERS_PER_PASS).
+    """
+    materialized = list(passes)
+    if len(materialized) <= limit:
+        return
+    names = ", ".join(counter_pass.name for counter_pass in materialized)
+    raise TooManyPassesError(
+        f"{len(materialized)} PMU passes planned ({names}) but the firmware runs at most "
+        f"{limit} per LOAD_PLAN (HCT_SERVER_MAX_PASSES). Select fewer counters: each group "
+        f"is measured in passes of up to {MAX_COUNTERS_PER_PASS} counters, so the pass count "
+        "is the sum over groups of ceil(counters / 4)."
+    )
 
 
 def resolve_counter_selection(selection: dict[str, str | list[str]]) -> list[CounterDescriptor]:

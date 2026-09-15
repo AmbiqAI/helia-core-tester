@@ -123,6 +123,20 @@ def test_fvp_gate_and_pmu_groups_parsing() -> None:
 def test_pmu_counters_parsing_and_deprecated_groups_alias() -> None:
     assert parse_pmu_counters(["mve:all", "cpu:default"]) == {"mve": "all", "cpu": "default"}
     assert parse_pmu_counters(["mve:ARM_PMU_MVE_STALL, ARM_PMU_MVE_PRED"]) == {"mve": ["ARM_PMU_MVE_STALL", "ARM_PMU_MVE_PRED"]}
+    # Every group at "all" plans 5 + 4 + 9 = 18 passes: over HCT_SERVER_MAX_PASSES, so the
+    # parser refuses it before generate/build/flash rather than the firmware after HELLO.
+    with pytest.raises(ValueError, match=r"--pmu-counters: 18 PMU passes planned \(cpu_0, .*mve_8\) but the firmware runs at most 16 per LOAD_PLAN"):
+        parse_pmu_counters(["cpu:all", "memory:all", "mve:all"])
+    with pytest.raises(ValueError, match="18 PMU passes planned"):
+        resolve_pmu_options(["cpu:all", "memory:all", "mve:all"], None)
+    # 4 + 9 = 13 passes is fine; so is a 16-pass selection.
+    assert parse_pmu_counters(["memory:all", "mve:all"]) == {"memory": "all", "mve": "all"}
+    # An empty or blank name list is rejected rather than silently timing cycles only.
+    for empty in (["mve:,"], ["mve: , "], ["mve:ARM_PMU_MVE_STALL,"], ["mve:ARM_PMU_MVE_STALL,,ARM_PMU_MVE_PRED"]):
+        with pytest.raises(ValueError, match=r"--pmu-counters: .* names an empty counter for group 'mve'"):
+            parse_pmu_counters(empty)
+    with pytest.raises(ValueError, match="expects GROUP:SELECTION"):
+        parse_pmu_counters(["mve:"])
     for bad, message in (
         (["mve"], "expects GROUP:SELECTION"),
         (["dsp:all"], "unknown group 'dsp'"),
