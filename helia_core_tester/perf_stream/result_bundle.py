@@ -39,6 +39,9 @@ def write_result_bundle(
     host_log_text: str = "session completed\n",
     target_log_text: str = "no physical target log captured\n",
 ) -> Path:
+    for case in result.cases:
+        if len(case.samples) != len(case.normalized_samples):
+            raise ValueError("Sample and normalized sample counts must match")
     bundle_root = output_root / "artifacts" / "reports" / "performance_stream" / session_id
     (bundle_root / "correctness").mkdir(parents=True, exist_ok=True)
     (bundle_root / "outputs").mkdir(parents=True, exist_ok=True)
@@ -111,7 +114,7 @@ def write_result_bundle(
             encoding="utf-8",
             newline="\n",
         )
-        for sample, normalized in zip(case.samples, case.normalized_samples, strict=True):
+        for sample, normalized in zip(case.samples, case.normalized_samples):
             for counter in sample.counters:
                 raw_sample_rows.append(
                     {
