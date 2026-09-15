@@ -75,7 +75,7 @@
     "event_id": "0x000F",
     "name": "ARM_PMU_UNALIGNED_LDST_RETIRED",
     "group": "cpu",
-    "description": "Unaligned memory memory-reading or memory-writing instruction architecturally executed and condition code check pass"
+    "description": "Unaligned memory-reading or memory-writing instruction architecturally executed and condition code check pass"
   },
   {
     "event_id": "0x0011",
