@@ -34,6 +34,23 @@ from .transport import Transport
 
 _COMPARISON_MODE_TO_CODE = {"exact_int": 1, "tolerant_int": 2, "float": 3, "bool": 4, "exact_status": 5}
 
+# Longest case id (UTF-8 bytes) a LOAD_PLAN may carry. The firmware stores each id in
+# a char[HCT_SERVER_MAX_CASE_ID] (96, benchmark_server_session.h) and cursor_text()
+# needs one byte for the NUL terminator, so a 96-byte id is rejected as a truncated
+# frame; 95 is the real limit. Checked here before any plan is sent and by
+# hardware_run.split_case_bundles_into_batches before the probe is opened.
+MAX_CASE_ID_BYTES = 95
+
+
+def check_case_id_length(case_id: str, *, limit: int = MAX_CASE_ID_BYTES) -> None:
+    """Raise ValueError when `case_id` would not fit the firmware's case-id storage."""
+    length = len(case_id.encode("utf-8"))
+    if length > limit:
+        raise ValueError(
+            f"Case id {case_id!r} is {length} bytes; the firmware stores at most {limit} "
+            f"(HCT_SERVER_MAX_CASE_ID {limit + 1} including the NUL terminator). Shorten the case id."
+        )
+
 
 @dataclass(frozen=True)
 class SampleResult:
@@ -142,6 +159,10 @@ class HostSession:
         catalog = self._recv_catalog(hello_payload.catalog_hash)
         known_kernel_ids = {entry.kernel_id for entry in catalog}
         for bundle in case_bundles:
+            try:
+                check_case_id_length(bundle.case_id)
+            except ValueError as exc:
+                raise RuntimeError(str(exc)) from exc
             if bundle.kernel_id not in known_kernel_ids:
                 raise RuntimeError(
                     f"Case {bundle.case_id!r} references kernel_id {bundle.kernel_id}, "

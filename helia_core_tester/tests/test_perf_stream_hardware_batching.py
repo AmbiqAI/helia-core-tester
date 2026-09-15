@@ -4,7 +4,7 @@ Guards against the real hardware bug hit in practice: `run_apollo510_generated_t
 used to send every discovered/bridged case in a single LOAD_PLAN. The firmware's
 HCT_SERVER_MAX_CASES (see cmake/perf_stream/benchmark_server_session.h) bounds the
 cases per plan, and the plan also has to fit the firmware's 2 KiB receive buffer
-(case ids can be 96 characters and every PMU pass adds an entry) -- a plan over
+(case ids can be 95 bytes and every PMU pass adds an entry) -- a plan over
 either limit is rejected by the target, which used to show up on real Apollo510
 hardware as the host hanging with "Transport stalled without a complete frame."
 
@@ -44,6 +44,9 @@ def test_max_cases_per_session_matches_firmware_constant() -> None:
     assert hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES == 2048 - 32
     assert hardware_run.MAX_PASSES_PER_PLAN == 16
     assert re.search(r"#define HCT_SERVER_MAX_PASSES 16u", header)
+    # char[96] storage and cursor_text() needs the NUL, so 95 payload bytes.
+    assert hardware_run.MAX_CASE_ID_BYTES == 96 - 1
+    assert re.search(r"#define HCT_SERVER_MAX_CASE_ID 96u", header)
 
 
 def test_run_single_session_refuses_more_passes_than_the_firmware_runs(tmp_path: Path) -> None:
@@ -69,9 +72,11 @@ def test_batches_are_split_by_case_count_and_encoded_plan_size() -> None:
     short = [_DummyCaseBundle(f"case_{i}") for i in range(70)]
     assert [len(b) for b in hardware_run.split_case_bundles_into_batches(short, passes)] == [32, 32, 6]
 
-    # 96-character case ids (HCT_SERVER_MAX_CASE_ID) cannot all fit 32 to a plan: each
-    # costs 102 bytes on the wire, so the 2016-byte rx bound caps a batch well below 32.
-    long_ids = [_DummyCaseBundle(f"{i:04d}_" + "x" * 91) for i in range(40)]
+    # 95-byte case ids (the longest the firmware's char[HCT_SERVER_MAX_CASE_ID] takes
+    # with its NUL) cannot all fit 32 to a plan: each costs 101 bytes on the wire, so
+    # the 2016-byte rx bound caps a batch well below 32.
+    long_ids = [_DummyCaseBundle(f"{i:04d}_" + "x" * 90) for i in range(40)]
+    assert all(len(b.case_id.encode("utf-8")) == hardware_run.MAX_CASE_ID_BYTES for b in long_ids)
     batches = hardware_run.split_case_bundles_into_batches(long_ids, passes)
     assert all(len(b) < 32 for b in batches)
     assert sum(len(b) for b in batches) == 40
@@ -90,7 +95,21 @@ def test_batches_are_split_by_case_count_and_encoded_plan_size() -> None:
         assert load_plan_size([b.case_id for b in batch], many_passes) <= hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES
 
     with pytest.raises(ValueError, match="alone needs"):
-        hardware_run.split_case_bundles_into_batches([_DummyCaseBundle("x" * 96)], passes, max_plan_bytes=100)
+        hardware_run.split_case_bundles_into_batches([_DummyCaseBundle("x" * 95)], passes, max_plan_bytes=100)
+
+
+def test_case_ids_over_the_firmware_storage_are_refused_before_any_session() -> None:
+    passes = counter_passes_for_selection({"cpu": "default"})
+    # Exactly 95 bytes fits (char[96] with the NUL); 96 does not, and the splitter says
+    # so before the J-Link session is opened rather than the firmware truncating the plan.
+    ok = _DummyCaseBundle("y" * 95)
+    assert hardware_run.split_case_bundles_into_batches([ok], passes) == [[ok]]
+    with pytest.raises(ValueError, match=r"Case id 'y{96}' is 96 bytes; the firmware stores at most 95 \(HCT_SERVER_MAX_CASE_ID 96"):
+        hardware_run.split_case_bundles_into_batches([ok, _DummyCaseBundle("y" * 96)], passes)
+    # The limit is in bytes, not characters: 48 two-byte characters fit, 48 plus one more does not.
+    assert hardware_run.split_case_bundles_into_batches([_DummyCaseBundle("\u00e9" * 47 + "z")], passes)
+    with pytest.raises(ValueError, match="is 96 bytes"):
+        hardware_run.split_case_bundles_into_batches([_DummyCaseBundle("\u00e9" * 48)], passes)
 
 
 def test_run_single_session_rejects_oversized_plan_instead_of_hanging(tmp_path: Path) -> None:

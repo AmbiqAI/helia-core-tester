@@ -38,6 +38,7 @@ from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLa
 # host tests exercise the same bounds the target enforces.
 FAKE_PMU_COUNTER_SLOTS = 8
 FAKE_RX_BUFFER_BYTES = 2048
+FAKE_MAX_CASE_ID = 96  # HCT_SERVER_MAX_CASE_ID: char[96] storage, so 95 bytes plus the NUL
 FAKE_MAX_RX_PAYLOAD = FAKE_RX_BUFFER_BYTES - HEADER_SIZE
 EVENT_COUNTER_MASK = 0xFFFF  # one 16-bit slot
 CHAINED_COUNTER_MASK = 0xFFFFFFFF  # two slots chained
@@ -390,7 +391,11 @@ class FakeTargetTransport:
                 raise ValueError(f"PMU pass {pass_name!r} needs {slots} slots; fake target has {self._pmu_counter_slots}.")
         cases = []
         for _ in range(case_count):
-            cases.append({"case_id": reader.text(), "kernel_id": reader.u32()})
+            case_id = reader.text()
+            # cursor_text() in the firmware needs length + 1 <= HCT_SERVER_MAX_CASE_ID.
+            if len(case_id.encode("utf-8")) + 1 > FAKE_MAX_CASE_ID:
+                raise ValueError(f"LOAD_PLAN case id {case_id!r} does not fit the fake target's {FAKE_MAX_CASE_ID}-byte case-id storage (with NUL).")
+            cases.append({"case_id": case_id, "kernel_id": reader.u32()})
         return {
             "transfer_mode": transfer_mode,
             "warmups": warmups,

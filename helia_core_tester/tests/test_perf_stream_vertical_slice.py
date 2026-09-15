@@ -26,6 +26,7 @@ from helia_core_tester.perf_stream.measurement import (
 )
 from helia_core_tester.perf_stream.pmu_catalog import CPU_CYCLES_EVENT_ID, counter_by_name
 from helia_core_tester.perf_stream.session import (
+    MAX_CASE_ID_BYTES,
     HostSession,
     encode_load_plan,
     load_plan_size,
@@ -218,6 +219,25 @@ def test_every_group_all_exceeds_the_firmware_pass_limit_and_fails_before_load_p
         check_pass_count(seventeen)
     with pytest.raises(ValueError, match="17 PMU passes; fake target accepts at most 16"):
         FakeTargetTransport()._decode_plan(encode_load_plan([bundle], seventeen))
+
+
+def test_case_id_at_the_firmware_limit_runs_and_one_byte_over_fails_before_load_plan(tmp_path: Path) -> None:
+    assert MAX_CASE_ID_BYTES == 95
+    passes = counter_passes_for_selection({"cpu": "default"})
+    longest = "abs_" + "l" * (MAX_CASE_ID_BYTES - 4)
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id=longest).manifest_path)
+    result = HostSession(FakeTargetTransport(), counter_passes=passes).run(bundle)
+    assert result.cases[0].case_bundle.case_id == longest and result.cases[0].comparison.passed
+
+    over = longest + "l"
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id=over).manifest_path)
+    session = HostSession(FakeTargetTransport(), counter_passes=passes)
+    with pytest.raises(RuntimeError, match=r"is 96 bytes; the firmware stores at most 95 \(HCT_SERVER_MAX_CASE_ID 96 including the NUL"):
+        session.run(bundle)
+    assert "TX:LOAD_PLAN" not in session._trace
+    # The fake target rejects the same plan the way the firmware's cursor_text() does.
+    with pytest.raises(ValueError, match="does not fit the fake target's 96-byte case-id storage"):
+        FakeTargetTransport()._decode_plan(encode_load_plan([bundle], passes))
 
 
 def test_unchained_pass_overflows_sixteen_bit_counter_and_invalidates_case(tmp_path: Path) -> None:

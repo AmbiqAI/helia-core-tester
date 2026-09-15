@@ -20,7 +20,7 @@ from .hctp import HEADER_SIZE
 from .measurement import MAX_PASSES_PER_PLAN, CounterPass, check_pass_count, counter_passes_for_selection
 from .pmu_catalog import default_selection
 from .result_bundle import write_result_bundle
-from .session import CaseRunResult, HostSession, SessionResult, load_plan_size
+from .session import MAX_CASE_ID_BYTES, CaseRunResult, HostSession, SessionResult, check_case_id_length, load_plan_size
 from .transport import JLinkRttTransport, symbol_address_from_elf
 from ..core.config import VALID_SUITE_MODES
 
@@ -34,17 +34,19 @@ MAX_CASES_PER_SESSION = 32
 
 # Must match HCT_SERVER_RX_BUFFER_BYTES in benchmark_server_session.h: the firmware
 # decodes host frames out of a fixed 2 KiB receive buffer, so a LOAD_PLAN payload
-# (case ids can be up to 96 characters, plus one entry per PMU pass) has to fit in
-# it too. The target also advertises this bound in HELLO (max_rx_payload) and the
+# (case ids can be up to MAX_CASE_ID_BYTES = 95 bytes, plus one entry per PMU pass)
+# has to fit in it too. The target also advertises this bound in HELLO (max_rx_payload) and the
 # session refuses to send a plan that exceeds it; the batch splitter below keeps
 # every plan under this same constant up front.
 FIRMWARE_RX_BUFFER_BYTES = 2048
 MAX_LOAD_PLAN_PAYLOAD_BYTES = FIRMWARE_RX_BUFFER_BYTES - HEADER_SIZE
 
 # MAX_PASSES_PER_PLAN (HCT_SERVER_MAX_PASSES, imported from measurement.py where the
-# passes are planned) is the third lockstep constant. Passes are never split across
-# sessions -- every batch carries the full pass list -- so a selection over that
-# limit is an error (check_pass_count), not a batching problem.
+# passes are planned) and MAX_CASE_ID_BYTES (HCT_SERVER_MAX_CASE_ID - 1, imported
+# from session.py where the plan is encoded) are the other lockstep constants.
+# Passes are never split across sessions -- every batch carries the full pass list --
+# so a selection over that limit is an error (check_pass_count), not a batching
+# problem; an over-long case id is likewise refused before the probe is opened.
 
 
 def default_counter_passes() -> tuple[CounterPass, ...]:
@@ -60,10 +62,12 @@ def split_case_bundles_into_batches(
     max_plan_bytes: int = MAX_LOAD_PLAN_PAYLOAD_BYTES,
 ) -> list[list[CaseBundle]]:
     """Greedily pack cases into batches of at most `max_cases` whose encoded LOAD_PLAN
-    (with these PMU passes) stays within `max_plan_bytes`. Order is preserved."""
+    (with these PMU passes) stays within `max_plan_bytes`. Order is preserved. A case
+    id over MAX_CASE_ID_BYTES is refused here, before any session is opened."""
     batches: list[list[CaseBundle]] = []
     current: list[CaseBundle] = []
     for bundle in case_bundles:
+        check_case_id_length(bundle.case_id)
         candidate_ids = [b.case_id for b in current] + [bundle.case_id]
         if current and (len(current) >= max_cases or load_plan_size(candidate_ids, counter_passes) > max_plan_bytes):
             batches.append(current)
