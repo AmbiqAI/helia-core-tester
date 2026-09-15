@@ -10,6 +10,12 @@ import pytest
 import yaml
 
 from helia_core_tester.generation.test_ops import generate_test
+from helia_core_tester.generation.io.dtypes import resolve_comparison
+from helia_core_tester.perf_stream.generated_test_bridge import (
+    GeneratedTestCase,
+    UnsupportedGeneratedTestError,
+    build_case_bundle_from_generated_test,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 NAMES = {
@@ -31,6 +37,16 @@ CASES = [
     if desc and desc.get("name") in NAMES
 ]
 assert {desc["name"] for _, desc in CASES} == NAMES
+
+
+def _generated_case(family, case):
+    descriptor = yaml.safe_load((case / "descriptor.yaml").read_text())
+    descriptor["resolved_comparison"] = resolve_comparison(
+        descriptor, descriptor.get("resolved_tensor_dtypes")
+    )
+    suite = "float" if descriptor["activation_dtype"] in ("FP32", "FP16") else "int"
+    return GeneratedTestCase(case.name, "cortex-m55", family, case, descriptor, suite)
+
 
 # Exercise the same dilation/bias lowering interaction for both integer widths
 # without adding descriptors to the generated coverage corpus.
@@ -104,13 +120,7 @@ def test_declared_batches_reach_emitted_data(tmp_path, family, desc):
         "convolve_kernel1x1_stride_xy_case_01_s8",
         "depthwise_conv_mult_batches_s8",
     }:
-        from helia_core_tester.perf_stream.generated_test_bridge import (
-            GeneratedTestCase,
-            UnsupportedGeneratedTestError,
-            build_case_bundle_from_generated_test,
-        )
-
-        generated = GeneratedTestCase(desc["name"], "cortex-m55", family, case, desc)
+        generated = _generated_case(family, case)
         # The bridge intentionally rejects multi-batch Conv/Depthwise. Correct
         # headers must reach that guard, not silently serialize only batch zero.
         with pytest.raises(UnsupportedGeneratedTestError, match="batch size 2 > 1"):
@@ -120,6 +130,82 @@ def test_declared_batches_reach_emitted_data(tmp_path, family, desc):
                 output_root=tmp_path / "bridge",
                 require_fvp_pass=False,
             )
+
+    if desc["operator"] == "BatchMatMul":
+        generated = _generated_case(family, case)
+        if desc["activation_dtype"] in ("S8", "S16"):
+            with pytest.raises(
+                UnsupportedGeneratedTestError, match="quantized BatchMatMul.*batch"
+            ):
+                build_case_bundle_from_generated_test(
+                    ROOT,
+                    generated,
+                    output_root=tmp_path / "bridge",
+                    require_fvp_pass=False,
+                )
+            assert not (tmp_path / "bridge").exists()
+        else:
+            bundle = build_case_bundle_from_generated_test(
+                ROOT, generated, output_root=tmp_path / "bridge", require_fvp_pass=False
+            )
+            assert len(bundle.blobs) == 3
+            for blob, role in zip(
+                bundle.blobs, ["input_lhs", "input_rhs", "expected_output"]
+            ):
+                emitted = dims("output" if role == "expected_output" else role)
+                assert blob.dimensions == tuple(emitted[k] for k in "nhwc")
+                dtype = np.float16 if desc["activation_dtype"] == "FP16" else np.float32
+                values = np.asarray(
+                    [
+                        float(v.replace("(float16_t)", "").rstrip("f"))
+                        for v in array(role)
+                    ],
+                    dtype=dtype,
+                )
+                assert blob.path.read_bytes() == values.tobytes()
+
+
+@pytest.mark.parametrize("dtype", ["S8", "S16"])
+@pytest.mark.parametrize("role", ["input_lhs", "input_rhs", "output"])
+@pytest.mark.parametrize("axis", ["n", "h"])
+def test_quantized_bmm_bridge_singleton_and_dimension_guards(
+    tmp_path, dtype, role, axis
+):
+    family, original = next(
+        (f, d)
+        for f, d in CASES
+        if d["operator"] == "BatchMatMul" and d["activation_dtype"] == dtype
+    )
+    desc = deepcopy(original)
+    desc["input_1_shape"][0] = desc["input_2_shape"][0] = 1
+    generate_test(desc, str(tmp_path), seed=500)
+    case = tmp_path / family / desc["name"]
+    generated = _generated_case(family, case)
+    bundle = build_case_bundle_from_generated_test(
+        ROOT, generated, output_root=tmp_path / "singleton", require_fvp_pass=False
+    )
+    assert len(bundle.blobs) == 3
+    assert all(blob.dimensions[:2] == (1, 1) for blob in bundle.blobs)
+    header_path = next((case / "includes").glob("*.h"))
+    header = header_path.read_text()
+    # Isolate each admission check in actual headers. Move w into n/h so
+    # array counts stay valid. These are bridge probes, not kernel test cases.
+    pattern = rf'(\b{desc["name"]}_{role}_dims\s*=\s*\{{)([^}}]+)'
+    match = re.search(pattern, header)
+    body = match.group(2)
+    width = int(re.search(r"\.w\s*=\s*(\d+)", body).group(1))
+    assert width > 1
+    changed = re.sub(rf"\.{axis}\s*=\s*1\b", f".{axis} = {width}", body)
+    changed = re.sub(r"\.w\s*=\s*\d+", ".w = 1", changed)
+    header_path.write_text(header[: match.start(2)] + changed + header[match.end(2) :])
+    output_root = tmp_path / "rejected"
+    with pytest.raises(
+        UnsupportedGeneratedTestError, match=rf"quantized BatchMatMul.*{role}.*batch"
+    ):
+        build_case_bundle_from_generated_test(
+            ROOT, generated, output_root=output_root, require_fvp_pass=False
+        )
+    assert not output_root.exists()
 
 
 @pytest.mark.parametrize("input_count", [1, 2])
