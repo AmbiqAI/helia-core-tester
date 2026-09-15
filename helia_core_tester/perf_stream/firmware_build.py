@@ -21,7 +21,8 @@ import hashlib
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -267,6 +268,9 @@ class FlashDecision:
     """Build id of the firmware in the build dir (None when the build has no stamp)."""
     board_build_id: Optional[str] = None
     """What the board reported in HELLO when it was asked (None when it was not, or did not answer)."""
+    # Wall-clock seconds spent in the cmake build and in the J-Link flash (0 when skipped).
+    build_seconds: float = 0.0
+    flash_seconds: float = 0.0
 
 
 def decide_flash(build_dir: Path, serial_no: int, *, force: bool = False) -> FlashDecision:
@@ -391,15 +395,18 @@ def flash_firmware(
     """Build, then flash through the NSX-generated J-Link target unless the ELF is
     unchanged since this build dir last flashed this probe *and* the board confirms
     it is running this build's id (or `force` is set)."""
+    build_started = time.monotonic()
     build_firmware(board, build_dir=build_dir, jobs=jobs, force_reconfigure=force_reconfigure, serial_no=serial_no)
+    build_seconds = time.monotonic() - build_started
     decision = decide_flash(build_dir, serial_no, force=force)
     if not decision.needed:
         typer.echo(f"[hardware] Stamp says {decision.reason}; asking the board which build it runs...")
         decision = confirm_board_build_id(board, serial_no, build_dir, decision, reader=board_build_id_reader)
     if not decision.needed:
         typer.echo(f"[hardware] Skipping flash: {decision.reason}.")
-        return decision
+        return replace(decision, build_seconds=build_seconds)
     typer.echo(f"[hardware] Flashing {board.id} via J-Link serial {serial_no} ({decision.reason}).")
+    flash_started = time.monotonic()
     build(build_dir, FLASH_TARGET, jobs)
     record_flash(build_dir, serial_no, decision.digest)
-    return decision
+    return replace(decision, build_seconds=build_seconds, flash_seconds=time.monotonic() - flash_started)

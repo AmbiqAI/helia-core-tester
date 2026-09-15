@@ -118,6 +118,10 @@ int main(void)
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_HELLO_ACK, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 11;
     if (drain_catalog_frames(&session) != 0) return 12;
 
+    /* LOAD_PLAN v2: one case, 2 warmups, 3 samples x 4 iterations, and two PMU
+     * passes -- a chained cpu pass (INST_RETIRED, STALL_FRONTEND) and an unchained mve
+     * pass (MVE_INST_RETIRED). The host harness has no PMU, so the firmware must accept
+     * the passes and report every event counter as unsupported. */
     offset = 0u;
     write_u16(inbound_payload, &offset, 1u);
     write_u8(inbound_payload, &offset, 1u);
@@ -126,7 +130,16 @@ int main(void)
     write_u32(inbound_payload, &offset, 4u);
     write_u32(inbound_payload, &offset, 512u);
     write_u32(inbound_payload, &offset, 128u);
+    write_u8(inbound_payload, &offset, 2u);
+    write_text(inbound_payload, &offset, "cpu_0");
+    write_u8(inbound_payload, &offset, 1u);
+    write_u8(inbound_payload, &offset, 2u);
+    write_u16(inbound_payload, &offset, 0x0008u);
+    write_u16(inbound_payload, &offset, 0x0023u);
+    write_text(inbound_payload, &offset, "mve_0");
     write_u8(inbound_payload, &offset, 0u);
+    write_u8(inbound_payload, &offset, 1u);
+    write_u16(inbound_payload, &offset, 0x0200u);
     write_text(inbound_payload, &offset, "abs_default_s8_stream_demo");
     write_u32(inbound_payload, &offset, 1u);
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_LOAD_PLAN, session.session_id, next_host_sequence++, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_OK) return 13;
@@ -202,14 +215,79 @@ int main(void)
             {
                 if (memcmp(actual, kExpected, sizeof(kExpected)) != 0) return 24;
                 printf("chunks=%d bytes=%zu state=%d\n", chunk_count, sizeof(kExpected), (int)session.state);
-                return 0;
+                break;
             }
             else
             {
                 return 25;
             }
         }
+        if (session.state != HCT_SERVER_STATE_WAIT_CORRECTNESS_ACK) return 26;
     }
 
-    return 26;
+    /* CORRECTNESS_ACK(pass) -> RUN_PERFORMANCE -> SAMPLE_RESULT x (3 samples x 2 passes)
+     * -> CASE_COMPLETE -> SESSION_COMPLETE. Every SAMPLE_RESULT must lead with the
+     * ARM_PMU_CPU_CYCLES entry (event 0x0011, supported) and list the pass's event ids
+     * after it with supported=0 on this PMU-less host build. */
+    offset = 0u;
+    write_u8(inbound_payload, &offset, 1u);
+    if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_CORRECTNESS_ACK, session.session_id, next_host_sequence++, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_OK) return 27;
+    if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_RUN_PERFORMANCE, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 28;
+    {
+        int sample_count = 0;
+        int cpu_pass_samples = 0;
+        int mve_pass_samples = 0;
+        for (;;)
+        {
+            const size_t frame_length = hct_server_session_take_next_frame(&session, outbound_payload, sizeof(outbound_payload));
+            if (frame_length == 0u) return 29;
+            if (hctp_decode_frame(outbound_payload, frame_length, HCTP_DEFAULT_MAX_PAYLOAD, &frame) != HCTP_STATUS_OK) return 30;
+            if (frame.header.message_type == HCTP_MSG_SAMPLE_RESULT)
+            {
+                const uint8_t *p = frame.payload;
+                size_t pos = 2u + 4u + 8u;
+                uint16_t name_len = (uint16_t)p[pos] | ((uint16_t)p[pos + 1u] << 8);
+                const char *pass_name = (const char *)&p[pos + 2u];
+                uint8_t counter_count;
+                uint16_t first_event;
+                uint8_t first_supported;
+                int expected_counters;
+                pos += 2u + name_len;
+                counter_count = p[pos++];
+                if (p[pos] != 0u || p[pos + 1u] != 0u) return 31;   /* names are sent empty */
+                first_event = (uint16_t)p[pos + 2u] | ((uint16_t)p[pos + 3u] << 8);
+                first_supported = p[pos + 2u + 2u + 8u + 1u];
+                if (first_event != 0x0011u || first_supported != 1u) return 32;
+                expected_counters = (strncmp(pass_name, "cpu_0", name_len) == 0) ? 3 : 2;
+                if (counter_count != expected_counters) return 33;
+                pos += 2u + 2u + 8u + 1u + 1u;
+                {
+                    int index;
+                    for (index = 1; index < counter_count; ++index)
+                    {
+                        const uint8_t supported = p[pos + 2u + 2u + 8u + 1u];
+                        if (supported != 0u) return 34;   /* no PMU on the host build */
+                        pos += 2u + 2u + 8u + 1u + 1u;
+                    }
+                }
+                if (pos != frame.header.payload_length) return 35;
+                if (strncmp(pass_name, "cpu_0", name_len) == 0) ++cpu_pass_samples; else ++mve_pass_samples;
+                ++sample_count;
+            }
+            else if (frame.header.message_type == HCTP_MSG_CASE_COMPLETE)
+            {
+                continue;
+            }
+            else if (frame.header.message_type == HCTP_MSG_SESSION_COMPLETE)
+            {
+                if (sample_count != 6 || cpu_pass_samples != 3 || mve_pass_samples != 3) return 36;
+                printf("samples=%d passes=2 state=%d\n", sample_count, (int)session.state);
+                return 0;
+            }
+            else
+            {
+                return 37;
+            }
+        }
+    }
 }

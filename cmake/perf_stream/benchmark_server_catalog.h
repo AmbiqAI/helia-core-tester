@@ -30,7 +30,10 @@ enum
     HCT_CAP_PERFORMANCE = (1u << 2),
     HCT_CAP_RTT_TRANSPORT = (1u << 3),
     HCT_CAP_KERNEL_CATALOG = (1u << 4),
-    HCT_CAP_ABS_S8 = (1u << 5)
+    HCT_CAP_ABS_S8 = (1u << 5),
+    /* Armv8.1-M PMU event counters are available (__PMU_PRESENT == 1). Absent on
+     * DWT-only cores such as Cortex-M4, where SAMPLE_RESULT only carries cycles. */
+    HCT_CAP_PMU_ARMV8M = (1u << 6)
 };
 
 const hct_kernel_catalog_entry_t *hct_benchmark_server_catalog(size_t *count);
@@ -39,6 +42,9 @@ const char *hct_benchmark_server_board_id(void);
 const char *hct_benchmark_server_target_cpu(void);
 const char *hct_benchmark_server_build_id(void);
 uint32_t hct_benchmark_server_capability_flags(void);
+/* Number of 16-bit PMU event-counter slots (__PMU_NUM_EVENTCNT, 8 on Cortex-M55);
+ * 0 when HCT_CAP_PMU_ARMV8M is not set. */
+uint8_t hct_benchmark_server_pmu_counter_slots(void);
 
 #ifdef __cplusplus
 }

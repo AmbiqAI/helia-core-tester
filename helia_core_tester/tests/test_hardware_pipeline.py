@@ -30,7 +30,9 @@ from helia_core_tester.perf_stream.hardware_pipeline import (
     apply_precision,
     float_precision_for,
     generate_tests_for_board,
+    parse_pmu_counters,
     parse_pmu_groups,
+    resolve_pmu_options,
     run_hardware_pipeline,
     validate_fvp_gate,
 )
@@ -116,6 +118,43 @@ def test_fvp_gate_and_pmu_groups_parsing() -> None:
     with pytest.raises(ValueError, match="--fvp-gate must be one of"):
         validate_fvp_gate("maybe")
     assert parse_pmu_groups("cpu, memory,,mve ") == ("cpu", "memory", "mve")
+
+
+def test_pmu_counters_parsing_and_deprecated_groups_alias() -> None:
+    assert parse_pmu_counters(["mve:all", "cpu:default"]) == {"mve": "all", "cpu": "default"}
+    assert parse_pmu_counters(["mve:ARM_PMU_MVE_STALL, ARM_PMU_MVE_PRED"]) == {"mve": ["ARM_PMU_MVE_STALL", "ARM_PMU_MVE_PRED"]}
+    # Every group at "all" plans 5 + 4 + 9 = 18 passes: over HCT_SERVER_MAX_PASSES, so the
+    # parser refuses it before generate/build/flash rather than the firmware after HELLO.
+    with pytest.raises(ValueError, match=r"--pmu-counters: 18 PMU passes planned \(cpu_0, .*mve_8\) but the firmware runs at most 16 per LOAD_PLAN"):
+        parse_pmu_counters(["cpu:all", "memory:all", "mve:all"])
+    with pytest.raises(ValueError, match="18 PMU passes planned"):
+        resolve_pmu_options(["cpu:all", "memory:all", "mve:all"], None)
+    # 4 + 9 = 13 passes is fine; so is a 16-pass selection.
+    assert parse_pmu_counters(["memory:all", "mve:all"]) == {"memory": "all", "mve": "all"}
+    # An empty or blank name list is rejected rather than silently timing cycles only.
+    for empty in (["mve:,"], ["mve: , "], ["mve:ARM_PMU_MVE_STALL,"], ["mve:ARM_PMU_MVE_STALL,,ARM_PMU_MVE_PRED"]):
+        with pytest.raises(ValueError, match=r"--pmu-counters: .* names an empty counter for group 'mve'"):
+            parse_pmu_counters(empty)
+    with pytest.raises(ValueError, match="expects GROUP:SELECTION"):
+        parse_pmu_counters(["mve:"])
+    for bad, message in (
+        (["mve"], "expects GROUP:SELECTION"),
+        (["dsp:all"], "unknown group 'dsp'"),
+        (["mve:ARM_PMU_NOPE"], "Unsupported counter 'ARM_PMU_NOPE' for group 'mve'. Valid names: ARM_PMU_MVE_INST_RETIRED"),
+        (["cpu:all", "cpu:default"], "given more than once"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            parse_pmu_counters(bad)
+
+    # Neither flag: every group at its default. The deprecated --pmu-groups maps each
+    # listed group to GROUP:default and warns.
+    assert resolve_pmu_options([], None) == {"cpu": "default", "memory": "default", "mve": "default"}
+    warnings: list[str] = []
+    assert resolve_pmu_options([], "mve,cpu", warn=warnings.append) == {"mve": "default", "cpu": "default"}
+    assert warnings and "deprecated" in warnings[0] and "--pmu-counters mve:default" in warnings[0]
+    with pytest.raises(ValueError, match="cannot be combined"):
+        resolve_pmu_options(["mve:all"], "cpu")
+    assert StreamOptions().pmu_counters == {"cpu": "default", "memory": "default", "mve": "default"}
 
 
 # --- flash-only-if-changed ---------------------------------------------------------
@@ -389,7 +428,7 @@ def test_session_verifies_hello_build_id(tmp_path: Path) -> None:
 def test_read_hello_returns_the_full_payload_without_acknowledging() -> None:
     transport = FakeTargetTransport(build_id="hct-xyz")
     hello = read_hello(transport)
-    assert hello.build_id == "hct-xyz" and hello.board_id == "fake_board" and hello.target_cpu == "fake-cpu"
+    assert hello.build_id == "hct-xyz" and hello.board_id == "fake_board" and hello.target_cpu == "cortex-m55"
     assert hello.max_frame_payload == 64 and hello.runtime_arena_capacity == 4096
     assert transport.read() == b""  # nothing else was sent: the fake is still waiting for HELLO_ACK
 
@@ -463,23 +502,26 @@ class _SkippedTest:
 
 def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
     bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_json").manifest_path)
-    result = HostSession(FakeTargetTransport(), requested_counter_groups=("cpu",)).run_many([bundle])
+    result = HostSession(FakeTargetTransport()).run_many([bundle])
     skipped = [(_SkippedTest("conv_x"), "conv_x: operator='Foo' is not bridgeable (bridged today: ['Abs']).")]
 
+    timing = {"generate_s": 0.0, "build_s": 2.5, "flash_s": 0.0, "stream_s": 1.25, "total_s": 3.75, "batch_count": 1, "cases": {"abs_json": 1.25}}
     summary = build_json_summary(
         result, skipped, session_id="apollo510_evb-20260912T000000Z", board_id="apollo510_evb",
         bundle=tmp_path / "artifacts" / "reports" / "performance_stream" / "apollo510_evb-20260912T000000Z",
+        timing=timing,
     )
     encoded = json.loads(json.dumps(summary))  # must be JSON-serialisable as-is
 
-    assert set(encoded) == {"session_id", "board", "bundle", "totals", "cases"}
+    assert set(encoded) == {"session_id", "board", "bundle", "totals", "timing", "cases"}
     assert encoded["session_id"] == "apollo510_evb-20260912T000000Z"
     assert encoded["board"] == "apollo510_evb"
     assert encoded["bundle"].endswith("apollo510_evb-20260912T000000Z")
     assert encoded["totals"] == {"ran": 1, "passed": 1, "failed": 0, "skipped": 1}
+    assert encoded["timing"] == timing
     ran, skip = encoded["cases"]
-    assert set(ran) == {"case_id", "passed", "median_cycles", "skipped_reason"}
-    assert ran == {"case_id": "abs_json", "passed": True, "median_cycles": ran["median_cycles"], "skipped_reason": None}
+    assert set(ran) == {"case_id", "passed", "median_cycles", "valid_for_regression", "skipped_reason"}
+    assert ran == {"case_id": "abs_json", "passed": True, "median_cycles": ran["median_cycles"], "valid_for_regression": True, "skipped_reason": None}
     assert isinstance(ran["median_cycles"], float)
     assert skip["case_id"] == "conv_x" and skip["passed"] is None and skip["median_cycles"] is None
     assert skip["skipped_reason"].startswith("operator='Foo' is not bridgeable")
