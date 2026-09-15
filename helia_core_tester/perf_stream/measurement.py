@@ -19,6 +19,7 @@ from .pmu_catalog import (  # noqa: F401 -- CounterDescriptor is re-exported for
     DEFAULT_SELECTIONS,
     GROUPS,
     CounterDescriptor,
+    counter_name_for_event_id,
     counters_in_group,
 )
 
@@ -35,6 +36,8 @@ MAX_COUNTERS_PER_PASS = 4
 # catalog -- cpu:all memory:all mve:all -- plans 5 + 4 + 9 = 18 passes and is
 # therefore refused; passes are never split across sessions.
 MAX_PASSES_PER_PLAN = 16
+# Firmware admits 1..HCT_SERVER_MAX_CASES cases per LOAD_PLAN (benchmark_server_session.h).
+MAX_CASES_PER_PLAN = 32
 
 
 @dataclass(frozen=True)
@@ -208,8 +211,12 @@ def counter_names_for_passes(passes: Iterable[CounterPass]) -> list[str]:
     names = [CPU_CYCLES_NAME]
     for counter_pass in passes:
         for counter in counter_pass.counters:
-            if counter.name not in names:
-                names.append(counter.name)
+            # The wire carries only the event id (firmware sends an empty name), and
+            # _decode_sample() names each counter from that id. Seed the schema the same
+            # way so a caller's descriptor name can never disagree with the sample rows.
+            name = counter_name_for_event_id(counter.event_id)
+            if name not in names:
+                names.append(name)
     return names
 
 

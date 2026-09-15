@@ -23,6 +23,7 @@ from .firmware_messages import (
 )
 from .hctp import HEADER_SIZE, ByteReader, ByteWriter, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
 from .measurement import (
+    MAX_CASES_PER_PLAN,
     MAX_COUNTERS_PER_PASS,
     MAX_PASSES_PER_PLAN,
     CounterDescriptor,
@@ -122,7 +123,10 @@ class FakeKernelAdapter:
                     )
                 ]
                 for counter in counter_pass.counters:
-                    supported = counter.group in self.supported_groups
+                    # A PMU-present target counts whatever event id it was programmed with
+                    # and reports it supported=1, catalog-known or not; only the fake's
+                    # deliberately unsupported groups (and DWT-only targets) clear it.
+                    supported = counter.group in self.supported_groups or counter.group == "unknown"
                     value = self._counter_value(counter, blobs, iterations, sample_index)
                     # Honour the real counter widths so tests can provoke an overflow:
                     # a 16-bit slot wraps unless the pass chains slot pairs into 32 bits.
@@ -363,6 +367,9 @@ class FakeTargetTransport:
             raise ValueError(f"LOAD_PLAN payload {len(payload)} exceeds the fake target's rx buffer ({self._max_rx_payload}).")
         reader = ByteReader(payload)
         case_count = reader.u16()
+        # Same admission rule as handle_load_plan() in the firmware (HCT_SERVER_MAX_CASES).
+        if case_count == 0 or case_count > MAX_CASES_PER_PLAN:
+            raise ValueError(f"LOAD_PLAN names {case_count} cases; fake target accepts 1..{MAX_CASES_PER_PLAN}.")
         transfer_mode = reader.u8()
         warmups = reader.u16()
         samples = reader.u16()

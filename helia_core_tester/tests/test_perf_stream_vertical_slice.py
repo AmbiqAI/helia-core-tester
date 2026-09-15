@@ -13,12 +13,15 @@ from helia_core_tester.perf_stream.case_bundle import (
     load_case_bundle,
 )
 from helia_core_tester.perf_stream.fake_target import FakeAbsS8Adapter, FakeKernelAdapter, FakeTargetTransport
+from helia_core_tester.perf_stream.hctp import ByteWriter
 from helia_core_tester.perf_stream.measurement import (
+    MAX_CASES_PER_PLAN,
     MAX_PASSES_PER_PLAN,
     CounterPass,
     TooManyPassesError,
     check_pass_count,
     compute_sample_statistics,
+    counter_names_for_passes,
     counter_passes_for_selection,
     normalize_samples,
     plan_counter_passes,
@@ -307,6 +310,24 @@ def test_unknown_event_ids_are_reported_with_placeholder_names(tmp_path: Path) -
     exotic = CounterPass("cpu", 0, (counter_by_name("ARM_PMU_INST_RETIRED"), type(counter_by_name("ARM_PMU_INST_RETIRED"))("vendor", 0x0C00, "cpu")))
     result = HostSession(FakeTargetTransport(), counter_passes=(exotic,)).run(bundle)
     assert [c["name"] for c in result.samples[0].counters] == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED", "event_0x0c00"]
+    # A PMU-present target counts whatever it was programmed with: the fake reports the
+    # unknown id supported, exactly like firmware, rather than zeroing it.
+    unknown = [c for c in result.samples[0].counters if c["name"] == "event_0x0c00"][0]
+    assert unknown["supported"] == 1
+    # The bundle schema is seeded by event id too, so the caller's "vendor" label never
+    # becomes a dead column next to the populated placeholder.
+    assert counter_names_for_passes((exotic,)) == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED", "event_0x0c00"]
+
+
+def test_fake_target_rejects_load_plans_the_firmware_would_reject() -> None:
+    # handle_load_plan() admits 1..HCT_SERVER_MAX_CASES cases; the fake mirrors it so a
+    # host that bypasses the batch splitter cannot pass on the fake and fail on hardware.
+    fake = FakeTargetTransport()
+    for case_count in (0, MAX_CASES_PER_PLAN + 1):
+        payload = ByteWriter()
+        payload.u16(case_count)
+        with pytest.raises(ValueError, match=rf"{case_count} cases; fake target accepts 1\.\.{MAX_CASES_PER_PLAN}"):
+            fake._decode_plan(payload.finish())
 
 
 def test_case_too_large_fails(tmp_path: Path) -> None:

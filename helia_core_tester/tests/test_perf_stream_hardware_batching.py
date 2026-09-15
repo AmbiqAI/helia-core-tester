@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from helia_core_tester.perf_stream import hardware_run
+from helia_core_tester.perf_stream import hardware_run, measurement
 from helia_core_tester.perf_stream.boards import resolve_board
 from helia_core_tester.perf_stream.measurement import counter_passes_for_selection
 from helia_core_tester.perf_stream.session import SessionResult, load_plan_size
@@ -44,6 +44,8 @@ def test_max_cases_per_session_matches_firmware_constant() -> None:
     assert hardware_run.MAX_LOAD_PLAN_PAYLOAD_BYTES == 2048 - 32
     assert hardware_run.MAX_PASSES_PER_PLAN == 16
     assert re.search(r"#define HCT_SERVER_MAX_PASSES 16u", header)
+    # The fake target mirrors the same case-count admission rule as handle_load_plan().
+    assert measurement.MAX_CASES_PER_PLAN == hardware_run.MAX_CASES_PER_SESSION
     # char[96] storage and cursor_text() needs the NUL, so 95 payload bytes.
     assert hardware_run.MAX_CASE_ID_BYTES == 96 - 1
     assert re.search(r"#define HCT_SERVER_MAX_CASE_ID 96u", header)
