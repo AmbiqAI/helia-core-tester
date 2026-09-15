@@ -450,3 +450,17 @@ def test_deliberate_performance_regression_is_detected() -> None:
 
     assert baseline_iterations == candidate_iterations == 4
     assert candidate_stats.median_cycles > baseline_stats.median_cycles
+
+
+def test_host_refuses_more_than_four_counters_per_pass_even_unchained(tmp_path: Path) -> None:
+    # Firmware bounds counter_count at HCT_SERVER_MAX_COUNTERS_PER_PASS (4) whether or not
+    # the pass chains slot pairs; five unchained counters fit eight slots but must still be
+    # refused at the handshake instead of sent as a SESSION_PLAN the firmware rejects.
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_five").manifest_path)
+    names = ["ARM_PMU_INST_RETIRED", "ARM_PMU_STALL_FRONTEND", "ARM_PMU_STALL_BACKEND", "ARM_PMU_MEM_ACCESS", "ARM_PMU_BUS_ACCESS"]
+    five = CounterPass("cpu", 0, tuple(counter_by_name(n) for n in names), chained=False)
+    assert five.slots_required == 5
+    session = HostSession(FakeTargetTransport(pmu_counter_slots=8), counter_passes=(five,))
+    with pytest.raises(RuntimeError, match=r"names 5 counters; the firmware runs at most 4 per pass"):
+        session.run(bundle)
+    assert "TX:SESSION_PLAN" not in session._trace

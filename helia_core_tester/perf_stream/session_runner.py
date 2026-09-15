@@ -184,7 +184,9 @@ def run_case_bundles(
             limits = session.limits
             batch = take_batch(remaining, counter_passes, limits)
             result = session.run_many(batch, on_case_complete=on_case_complete)
-        except RuntimeError as exc:
+        except (RuntimeError, ValueError) as exc:
+            # ValueError: take_batch() found a case that cannot fit the target's advertised
+            # plan size on its own. Re-wrap so the CLI's one-line hardware error covers it.
             candidates = [b.case_id for b in (batch or (remaining[: limits.max_cases] if limits else remaining))]
             raise RuntimeError(f"{exc} (batch {batch_index}, candidate case_ids={candidates})") from exc
         finally:

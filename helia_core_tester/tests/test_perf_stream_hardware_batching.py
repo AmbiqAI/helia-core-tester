@@ -312,3 +312,21 @@ def test_run_case_bundles_refuses_to_merge_sessions_from_different_firmware(tmp_
             counter_passes=DEFAULT_PASSES, session_id="s", build_dir=tmp_path,
         )
     assert [len(call) for call in calls] == [32]  # the first batch ran; the second never did
+
+
+def test_run_case_bundles_wraps_a_case_that_cannot_fit_the_advertised_plan_size(tmp_path: Path, monkeypatch) -> None:
+    # take_batch() raises ValueError when one case alone exceeds max_rx_payload; the runner
+    # must surface it as the RuntimeError the CLI turns into a one-line hardware error.
+    calls: list[list[Any]] = []
+    tiny = _target_info(max_rx_payload=40)
+
+    def _open(board, serial_no, *, build_dir, counter_passes):
+        return _FakeSession(tiny, calls), _FakeTransport(), 0
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    with pytest.raises(RuntimeError, match=r"alone needs a \d+-byte SESSION_PLAN.*\(batch 0, candidate case_ids="):
+        session_runner.run_case_bundles(
+            tmp_path, [_DummyCaseBundle("a_case_id_longer_than_the_tiny_limit")], board=resolve_board("apollo510_evb"),  # type: ignore[arg-type]
+            serial_no=1160002276, counter_passes=DEFAULT_PASSES, session_id="s", build_dir=tmp_path,
+        )
+    assert calls == []

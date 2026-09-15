@@ -74,9 +74,11 @@ def test_unsupported_version_rejected() -> None:
         decode_header(bytes(patched[:HEADER_SIZE]))
 
 
-def test_protocol_is_v2_and_v1_frames_are_rejected() -> None:
+def test_protocol_is_v3_and_older_frames_are_rejected() -> None:
     # v2 changed SESSION_PLAN (PMU passes), TARGET_INFO (PMU slots, max_rx_payload) and
-    # SAMPLE_RESULT (CCNTR entry first); a v1 peer must be refused outright.
+    # SAMPLE_RESULT (CCNTR entry first); v3 renamed the message vocabulary, dropped the
+    # unused messages and added the session limits to TARGET_INFO. Host and firmware are
+    # built from the same commit, so any older peer must be refused outright.
     assert SUPPORTED_VERSION == 3
     raw = bytearray(_frame(MessageType.REQUEST_CASE, b"abc"))
     struct.pack_into("<H", raw, 4, 1)

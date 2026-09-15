@@ -176,6 +176,14 @@ def check_counter_passes(counter_passes: Sequence[CounterPass], info: TargetInfo
             f"ARM_PMU_CPU_CYCLES from DWT. Drop the event-counter passes ({names}) or run on a PMU board."
         )
     for counter_pass in needs_events:
+        # Firmware bounds every pass at HCT_SERVER_MAX_COUNTERS_PER_PASS regardless of
+        # chaining (parse_pmu_passes); refuse here rather than send a plan it rejects.
+        if len(counter_pass.counters) > MAX_COUNTERS_PER_PASS:
+            raise RuntimeError(
+                f"PMU pass {counter_pass.name!r} names {len(counter_pass.counters)} counters; the firmware "
+                f"runs at most {MAX_COUNTERS_PER_PASS} per pass (HCT_SERVER_MAX_COUNTERS_PER_PASS), "
+                "chained or not."
+            )
         if counter_pass.slots_required > info.pmu_counter_slots:
             raise RuntimeError(
                 f"PMU pass {counter_pass.name!r} needs {counter_pass.slots_required} event-counter "
