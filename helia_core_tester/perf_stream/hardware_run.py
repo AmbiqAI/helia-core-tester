@@ -244,6 +244,7 @@ def _run_case_bundles_in_batches(
         build_id=build_id,
         batch_count=batch_count,
         hello=hello,
+        counter_passes=tuple(counter_passes),
     )
 
     memory_report_path = generate_benchmark_server_memory_report(build_dir=build_dir)

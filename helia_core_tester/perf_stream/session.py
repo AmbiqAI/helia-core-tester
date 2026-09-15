@@ -82,6 +82,10 @@ class SessionResult:
     # hardware_run's batched runner, which merges several sessions into one result.
     batch_count: int = 1
     hello: HelloPayload | None = None
+    # The PMU passes the plan asked for. The result bundle derives its counter columns
+    # from these (plus every counter any sample reported), so the schema follows the
+    # selection rather than which counters the target happened to support.
+    counter_passes: tuple[CounterPass, ...] = ()
 
     @property
     def case_bundle(self) -> CaseBundle:
@@ -327,6 +331,7 @@ class HostSession:
             session_complete_cases=session_complete_cases,
             build_id=hello_payload.build_id,
             hello=self._hello,
+            counter_passes=self._counter_passes,
         )
 
     def _check_counter_passes(self, hello: HelloPayload) -> None:

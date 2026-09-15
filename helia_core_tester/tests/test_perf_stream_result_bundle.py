@@ -9,7 +9,7 @@ import pytest
 from helia_core_tester.perf_stream.benchmark_firmware_report import generate_benchmark_server_memory_report
 from helia_core_tester.perf_stream.case_bundle import build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
 from helia_core_tester.perf_stream.fake_target import FakeTargetTransport
-from helia_core_tester.perf_stream.measurement import counter_passes_for_selection
+from helia_core_tester.perf_stream.measurement import counter_names_for_passes, counter_passes_for_selection
 from helia_core_tester.perf_stream.result_bundle import write_result_bundle, write_timing
 from helia_core_tester.perf_stream.session import HostSession, SessionResult
 
@@ -64,20 +64,31 @@ def test_result_bundle_writer_emits_spec_artifacts(tmp_path: Path) -> None:
     assert header[10] == "ARM_PMU_CPU_CYCLES"
     assert header[-2:] == ["overflow_detected", "valid_for_regression"]
     assert "ARM_PMU_INST_RETIRED" in header and "ARM_PMU_MEM_ACCESS" in header
+    # The schema follows the selection, not target support: every selected counter is a
+    # column in plan order, including the four MVE defaults that neither fake adapter
+    # supports (unsupported in every sample of every case), whose cells stay empty.
+    assert header[10:-2] == counter_names_for_passes(passes)
+    assert header[10:-2] == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED", "ARM_PMU_STALL_FRONTEND", "ARM_PMU_STALL_BACKEND",
+                             "ARM_PMU_MEM_ACCESS", "ARM_PMU_L1D_CACHE_REFILL", "ARM_PMU_BUS_ACCESS", "ARM_PMU_BUS_CYCLES",
+                             "ARM_PMU_MVE_INST_RETIRED", "ARM_PMU_MVE_INT_MAC_RETIRED", "ARM_PMU_MVE_LDST_RETIRED", "ARM_PMU_MVE_STALL"]
     abs_row, conv_row = rows
     assert float(abs_row["ARM_PMU_CPU_CYCLES"]) > 0
     assert float(abs_row["ARM_PMU_INST_RETIRED"]) > 0
     assert abs_row["ARM_PMU_MEM_ACCESS"] == ""  # abs fake adapter only supports the cpu group
     assert float(conv_row["ARM_PMU_MEM_ACCESS"]) > 0
+    assert all(row[name] == "" for row in rows for name in header[10:-2] if name.startswith("ARM_PMU_MVE_"))
     assert abs_row["overflow_detected"] == "false" and abs_row["valid_for_regression"] == "true"
 
     cases = json.loads((bundle_root / "cases.json").read_text())
     assert cases[0]["counters"]["ARM_PMU_CPU_CYCLES"] == float(abs_row["ARM_PMU_CPU_CYCLES"])
+    assert "ARM_PMU_MVE_STALL" not in cases[0]["counters"]  # no supported value -> no median
+    # abs supports only the cpu group: memory and mve are unsupported (sorted); conv supports memory.
+    assert cases[0]["unsupported_counters"] == sorted(header[14:-2])
+    assert cases[1]["unsupported_counters"] == ["ARM_PMU_MVE_INST_RETIRED", "ARM_PMU_MVE_INT_MAC_RETIRED", "ARM_PMU_MVE_LDST_RETIRED", "ARM_PMU_MVE_STALL"]
     assert cases[0]["overflow_detected"] is False and cases[0]["valid_for_regression"] is True
 
     summary = json.loads((bundle_root / "session_summary.json").read_text())
-    assert summary["counters"][0] == "ARM_PMU_CPU_CYCLES"
-    assert set(summary["counters"]) == {name for name in header[10:-2]}
+    assert summary["counters"] == header[10:-2]
     assert summary["passes"] == ["cpu_0", "memory_0", "mve_0"]
     assert summary["batch_count"] == 1
     assert summary["cases_with_overflow"] == []

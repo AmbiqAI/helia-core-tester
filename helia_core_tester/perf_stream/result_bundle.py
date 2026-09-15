@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
-from .measurement import compute_counter_medians
+from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
 
 _CASE_SUMMARY_BASE_FIELDS = [
@@ -94,20 +94,27 @@ def write_result_bundle(
     case_rows = []
     case_summary_rows = []
     raw_sample_rows = []
-    # Counter names in first-seen order (ARM_PMU_CPU_CYCLES leads every sample) and
-    # the PMU passes run, for the case_summary.csv columns and session_summary.json.
-    counter_names: list[str] = []
-    pass_names: list[str] = []
+    # Counter columns for case_summary.csv and session_summary.json: every counter the
+    # selected passes asked for (ARM_PMU_CPU_CYCLES first, then plan order), plus any
+    # counter a sample reported that the plan did not list (unknown-id placeholders,
+    # legacy results without counter_passes). A counter the target marked unsupported
+    # in every sample keeps its column with an empty median cell, so the schema is
+    # fixed by the selection rather than by target support.
+    counter_names: list[str] = counter_names_for_passes(result.counter_passes) if result.counter_passes else []
+    pass_names: list[str] = [counter_pass.name for counter_pass in result.counter_passes]
     passed = 0
     for case in result.cases:
         passed += 1 if case.comparison.passed else 0
         counter_medians = compute_counter_medians(case.normalized_samples)
-        for name in counter_medians:
-            if name not in counter_names:
-                counter_names.append(name)
         for sample in case.samples:
             if sample.pass_name not in pass_names:
                 pass_names.append(sample.pass_name)
+            for counter in sample.counters:
+                if counter["name"] not in counter_names:
+                    counter_names.append(str(counter["name"]))
+        for name in counter_medians:
+            if name not in counter_names:
+                counter_names.append(name)
         case_rows.append(
             {
                 "case_id": case.case_bundle.case_id,
@@ -194,8 +201,8 @@ def write_result_bundle(
     (bundle_root / "kernel_catalog.json").write_text(json.dumps(kernel_catalog, indent=2), encoding="utf-8", newline="\n")
 
     with (bundle_root / "case_summary.csv").open("w", encoding="utf-8", newline="") as handle:
-        # One column per counter name seen in any case (a case that did not run a
-        # counter leaves that cell empty), then the overflow/validity flags.
+        # One column per selected/reported counter name (a case with no supported
+        # value for a counter leaves that cell empty), then the overflow/validity flags.
         case_summary_fieldnames = _CASE_SUMMARY_BASE_FIELDS + counter_names + _CASE_SUMMARY_FLAG_FIELDS
         writer = csv.DictWriter(handle, fieldnames=case_summary_fieldnames, restval="")
         writer.writeheader()
