@@ -467,6 +467,9 @@ class FakeTargetTransport:
         self._queue(MessageType.REQUEST_BLOB, encode_request_blob(request))
 
     def _handle_blob_chunk(self, payload: bytes) -> None:
+        # hct_poll_session() applies the rx-buffer limit to every host frame.
+        if len(payload) > self._max_rx_payload:
+            raise ValueError(f"BLOB_CHUNK payload {len(payload)} exceeds the fake target's rx buffer ({self._max_rx_payload}).")
         chunk = decode_blob_chunk(payload)
         if chunk.blob_id != self._current_blob_id:
             raise ValueError("Unexpected blob id.")

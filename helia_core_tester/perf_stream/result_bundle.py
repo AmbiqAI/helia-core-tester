@@ -155,7 +155,8 @@ def write_result_bundle(
         summary_row["valid_for_regression"] = str(case.statistics.valid_for_regression).lower()
         case_summary_rows.append(summary_row)
         (bundle_root / "outputs" / f"{case.case_bundle.case_id}.bin").write_bytes(case.output_bytes)
-        (bundle_root / "correctness" / f"{case.case_bundle.case_id}.json").write_text(
+        write_text_lf(
+            bundle_root / "correctness" / f"{case.case_bundle.case_id}.json",
             json.dumps(
                 {
                     "case_id": case.case_bundle.case_id,
@@ -165,8 +166,6 @@ def write_result_bundle(
                 },
                 indent=2,
             ),
-            encoding="utf-8",
-            newline="\n",
         )
         for sample, normalized in zip(case.samples, case.normalized_samples):
             for counter in sample.counters:

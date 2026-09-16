@@ -486,3 +486,11 @@ def test_host_refuses_a_case_meta_over_the_advertised_receive_limit(tmp_path: Pa
     with pytest.raises(RuntimeError, match=r"CASE_META for case 'abs_meta' is \d+ bytes, over the target's \d+-byte receive limit"):
         session.run(bundle)
     assert "TX:SESSION_PLAN" in session._trace and "TX:CASE_META" not in session._trace
+
+
+def test_fake_target_rejects_a_blob_chunk_over_its_receive_limit() -> None:
+    # Every host frame is bounded by max_rx_payload on the firmware; the fake must not
+    # accept an oversized BLOB_CHUNK that hardware would refuse.
+    fake = FakeTargetTransport(max_rx_payload=64)
+    with pytest.raises(ValueError, match=r"BLOB_CHUNK payload 76 exceeds the fake target's rx buffer \(64\)"):
+        fake._handle_blob_chunk(bytes(76))

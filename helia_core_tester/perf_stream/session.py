@@ -136,7 +136,11 @@ class TargetLimits:
         # checks) can rely on positive limits.
         bad = {
             name: value
-            for name, value in (("max_cases_per_session", int(info.max_cases_per_session)), ("max_rx_payload", int(info.max_rx_payload)))
+            for name, value in (
+                ("max_cases_per_session", int(info.max_cases_per_session)),
+                ("max_rx_payload", int(info.max_rx_payload)),
+                ("max_passes", int(info.max_passes)),
+            )
             if value < 1
         }
         if bad:

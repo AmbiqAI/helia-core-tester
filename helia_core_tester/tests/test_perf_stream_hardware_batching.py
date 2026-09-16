@@ -360,6 +360,10 @@ def test_non_positive_target_limits_are_refused_before_batching() -> None:
         TargetLimits.from_target_info(_target_info(max_cases_per_session=0))
     with pytest.raises(ValueError, match=r"'max_rx_payload': 0"):
         TargetLimits.from_target_info(_target_info(max_rx_payload=0))
+    # max_passes too: firmware turns a zero-pass plan into one cpu_0 pass, so a target
+    # advertising 0 could never honour its own limit.
+    with pytest.raises(ValueError, match=r"'max_passes': 0"):
+        TargetLimits.from_target_info(_target_info(max_passes=0))
     zero = TargetLimits(max_cases=0, max_plan_bytes=2016, max_passes=16, pmu_counter_slots=8, has_pmu=True)
     with pytest.raises(ValueError, match=r"max_cases=0, max_plan_bytes=2016: both must be positive"):
         session_runner.take_batch([_DummyCaseBundle("case_0")], DEFAULT_PASSES, zero)  # type: ignore[list-item]
