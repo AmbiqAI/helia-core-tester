@@ -49,6 +49,11 @@ def take_batch(
     `max_plan_bytes`. Order is preserved. A case id over MAX_CASE_ID_BYTES (the
     firmware's char[HCT_SERVER_MAX_CASE_ID] minus its NUL) is refused here rather than
     by the firmware truncating the plan."""
+    if limits.max_cases < 1 or limits.max_plan_bytes < 1:
+        raise ValueError(
+            f"Cannot batch under limits max_cases={limits.max_cases}, max_plan_bytes={limits.max_plan_bytes}: "
+            "both must be positive (TARGET_INFO max_cases_per_session / max_rx_payload)."
+        )
     batch: list[CaseBundle] = []
     for bundle in case_bundles:
         check_case_id_length(bundle.case_id)

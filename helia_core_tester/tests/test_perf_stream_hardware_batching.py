@@ -351,3 +351,15 @@ def test_run_case_bundles_refuses_a_later_session_with_different_capabilities(tm
             serial_no=1160002276, counter_passes=cycles_only, session_id="s", build_dir=tmp_path,
         )
     assert [len(call) for call in calls] == [32]
+
+
+def test_non_positive_target_limits_are_refused_before_batching() -> None:
+    # take_batch()'s contract is "at most max_cases"; a target advertising 0 must be
+    # refused outright rather than yield a one-case batch the next layer rejects.
+    with pytest.raises(ValueError, match=r"non-positive session limits: \{'max_cases_per_session': 0\}"):
+        TargetLimits.from_target_info(_target_info(max_cases_per_session=0))
+    with pytest.raises(ValueError, match=r"'max_rx_payload': 0"):
+        TargetLimits.from_target_info(_target_info(max_rx_payload=0))
+    zero = TargetLimits(max_cases=0, max_plan_bytes=2016, max_passes=16, pmu_counter_slots=8, has_pmu=True)
+    with pytest.raises(ValueError, match=r"max_cases=0, max_plan_bytes=2016: both must be positive"):
+        session_runner.take_batch([_DummyCaseBundle("case_0")], DEFAULT_PASSES, zero)  # type: ignore[list-item]

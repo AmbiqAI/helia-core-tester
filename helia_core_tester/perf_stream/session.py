@@ -131,6 +131,16 @@ class TargetLimits:
 
     @classmethod
     def from_target_info(cls, info: TargetInfo) -> TargetLimits:
+        # A target that advertises no room for any case or any plan cannot run anything;
+        # refuse the nonsensical TARGET_INFO here so every consumer (batching, handshake
+        # checks) can rely on positive limits.
+        bad = {
+            name: value
+            for name, value in (("max_cases_per_session", int(info.max_cases_per_session)), ("max_rx_payload", int(info.max_rx_payload)))
+            if value < 1
+        }
+        if bad:
+            raise ValueError(f"TARGET_INFO from {info.board_id!r} advertises non-positive session limits: {bad}.")
         return cls(
             max_cases=int(info.max_cases_per_session),
             max_plan_bytes=int(info.max_rx_payload),
