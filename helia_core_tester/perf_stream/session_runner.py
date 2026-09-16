@@ -28,7 +28,7 @@ from .measurement import CounterPass, check_pass_count, counter_passes_for_selec
 from .memory_report import generate_memory_report
 from .pmu_catalog import default_selection
 from .result_bundle import write_result_bundle
-from .session import CaseRunResult, HostSession, SessionResult, TargetLimits, check_case_id_length
+from .session import CaseRunResult, HostSession, SessionResult, TargetLimits, check_case_id_length, check_case_ids_unique
 from .transport import JLinkRttTransport, Transport, symbol_address_from_elf
 from .wire import TargetInfo, session_plan_size
 from ..core.config import VALID_SUITE_MODES
@@ -165,6 +165,9 @@ def run_case_bundles(
     sid = session_id or default_session_id(board)
     counter_passes = tuple(counter_passes)
     check_pass_count(counter_passes)
+    # Whole-run uniqueness, before the probe opens: duplicates split across batches would
+    # bypass the per-session check and overwrite each other's artifacts and timing.
+    check_case_ids_unique([bundle.case_id for bundle in case_bundles])
     for bundle in case_bundles:
         check_case_id_length(bundle.case_id)
 

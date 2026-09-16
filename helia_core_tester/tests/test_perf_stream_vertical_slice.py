@@ -494,3 +494,11 @@ def test_fake_target_rejects_a_blob_chunk_over_its_receive_limit() -> None:
     fake = FakeTargetTransport(max_rx_payload=64)
     with pytest.raises(ValueError, match=r"BLOB_CHUNK payload 76 exceeds the fake target's rx buffer \(64\)"):
         fake._handle_blob_chunk(bytes(76))
+
+
+def test_session_refuses_duplicate_case_ids_before_the_plan(tmp_path: Path) -> None:
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_dup").manifest_path)
+    session = HostSession(FakeTargetTransport())
+    with pytest.raises(RuntimeError, match=r"Duplicate case id\(s\) in one run: \['abs_dup'\]"):
+        session.run_many([bundle, bundle])
+    assert "TX:SESSION_PLAN" not in session._trace

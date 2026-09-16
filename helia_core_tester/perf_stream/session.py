@@ -72,6 +72,20 @@ def check_case_id_length(case_id: str, *, limit: int = MAX_CASE_ID_BYTES) -> Non
         )
 
 
+def check_case_ids_unique(case_ids: Sequence[str]) -> None:
+    """Raise ValueError when two cases share an id. The firmware addresses cases by plan
+    index, but the host keys results, timing and every per-case artifact by id, so a
+    duplicate would silently overwrite another case's results."""
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for case_id in case_ids:
+        if case_id in seen and case_id not in duplicates:
+            duplicates.append(case_id)
+        seen.add(case_id)
+    if duplicates:
+        raise ValueError(f"Duplicate case id(s) in one run: {duplicates}. Every case id must be unique.")
+
+
 @dataclass(frozen=True)
 class CaseRunResult:
     case_bundle: CaseBundle
@@ -348,6 +362,10 @@ class HostSession:
             check_build_id(target_info.build_id, expected_build_id)
 
         known_kernel_ids = {entry.kernel_id for entry in self._catalog}
+        try:
+            check_case_ids_unique([bundle.case_id for bundle in case_bundles])
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
         for bundle in case_bundles:
             try:
                 check_case_id_length(bundle.case_id)

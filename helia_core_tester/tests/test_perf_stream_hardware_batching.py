@@ -367,3 +367,20 @@ def test_non_positive_target_limits_are_refused_before_batching() -> None:
     zero = TargetLimits(max_cases=0, max_plan_bytes=2016, max_passes=16, pmu_counter_slots=8, has_pmu=True)
     with pytest.raises(ValueError, match=r"max_cases=0, max_plan_bytes=2016: both must be positive"):
         session_runner.take_batch([_DummyCaseBundle("case_0")], DEFAULT_PASSES, zero)  # type: ignore[list-item]
+
+
+def test_duplicate_case_ids_are_refused_before_the_probe_opens(tmp_path: Path, monkeypatch) -> None:
+    opened: list[int] = []
+
+    def _open(board, serial_no, *, build_dir, counter_passes):
+        opened.append(1)
+        raise AssertionError("must not open a session")
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    bundles = [_DummyCaseBundle("case_a"), _DummyCaseBundle("case_b"), _DummyCaseBundle("case_a")]
+    with pytest.raises(ValueError, match=r"Duplicate case id\(s\) in one run: \['case_a'\]"):
+        session_runner.run_case_bundles(
+            tmp_path, bundles, board=resolve_board("apollo510_evb"), serial_no=1160002276,  # type: ignore[arg-type]
+            counter_passes=DEFAULT_PASSES, session_id="s", build_dir=tmp_path,
+        )
+    assert opened == []
