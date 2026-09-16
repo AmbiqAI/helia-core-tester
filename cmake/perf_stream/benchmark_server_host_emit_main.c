@@ -51,12 +51,16 @@ int main(int argc, char **argv)
     {
         size_t start_index = 0u;
         bool is_final = false;
+        /* Sequence ids must be monotonic across the paginated chunks (TARGET_INFO took 0),
+         * exactly as benchmark_server_session.c numbers them; the host validator rejects
+         * a repeated id. */
+        uint32_t sequence_id = 1u;
         do
         {
             uint8_t chunk[1024];
             size_t chunk_len = 0u;
             size_t next_index = 0u;
-            if (hct_build_catalog_frame_chunk(0xC0DE1234u, 1u, start_index, chunk, sizeof(chunk), &chunk_len, &next_index, &is_final) != HCTP_STATUS_OK)
+            if (hct_build_catalog_frame_chunk(0xC0DE1234u, sequence_id++, start_index, chunk, sizeof(chunk), &chunk_len, &next_index, &is_final) != HCTP_STATUS_OK)
             {
                 return 66;
             }

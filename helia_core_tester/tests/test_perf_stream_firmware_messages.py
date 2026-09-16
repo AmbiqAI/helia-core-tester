@@ -52,6 +52,9 @@ def test_firmware_target_info_and_catalog_roundtrip_with_python_decoder(tmp_path
     # chunk carries HCTP_FLAG_MORE) into catalog.bin; decode them all and accumulate.
     catalog_frames = decoder.feed(catalog_path.read_bytes())
     assert len(catalog_frames) >= 1
+    # The paginated chunks carry monotonic sequence ids following TARGET_INFO's 0, as the
+    # host's SessionFrameValidator requires; a harness reusing one id would be rejected.
+    assert [frame.header.sequence_id for frame in catalog_frames] == list(range(1, len(catalog_frames) + 1))
 
     assert target_info_frame.header.message_type is MessageType.TARGET_INFO
     entries_by_id: dict[int, object] = {}
