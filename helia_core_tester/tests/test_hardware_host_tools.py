@@ -191,3 +191,17 @@ def test_memory_report_fails_closed_when_a_board_region_is_missing(tmp_path: Pat
     usage = report.analyze_elf(elf, resolve_board(DEFAULT_BOARD_ID), report_env).usage
     assert usage["flash_capacity_bytes"] == 4128768 and usage["tcm_capacity_bytes"] == 507904
     assert usage["flash_gate_pass"] is True and usage["tcm_gate_pass"] is True
+
+
+def test_write_text_lf_is_python38_safe_and_writes_lf(tmp_path: Path) -> None:
+    # Path.write_text(newline=...) only exists from 3.10; the helper must not use it and
+    # must still pin LF line endings.
+    import inspect
+
+    from helia_core_tester.perf_stream import pathutil
+
+    body = inspect.getsource(pathutil.write_text_lf).replace(pathutil.write_text_lf.__doc__ or "", "")
+    assert ".write_text(" not in body and 'newline="\\n"' in body
+    target = tmp_path / "out.txt"
+    pathutil.write_text_lf(target, "a\nb\n")
+    assert target.read_bytes() == b"a\nb\n"

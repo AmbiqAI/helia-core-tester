@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from .boards import DEFAULT_BOARD_ID, BoardSpec, repo_root, resolve_board
-from .pathutil import display_path
+from .pathutil import display_path, write_text_lf
 import os
 
 from .toolchain import arm_tool, toolchain_bin_dir
@@ -149,13 +149,11 @@ class ElfAnalysis:
         return names
 
     def write_tool_outputs(self, out_root: Path) -> None:
-        (out_root / "size.txt").write_text(self.size_summary, encoding="utf-8", newline="\n")
-        (out_root / "size_A.txt").write_text(self.size_sections, encoding="utf-8", newline="\n")
-        (out_root / "symbols.txt").write_text(self.nm_symbols, encoding="utf-8", newline="\n")
-        (out_root / "symbols_size_sort.txt").write_text(self.nm_size_sort, encoding="utf-8", newline="\n")
-        (out_root / "objdump_h.txt").write_text(self.objdump_headers, encoding="utf-8", newline="\n")
-
-
+        write_text_lf(out_root / "size.txt", self.size_summary)
+        write_text_lf(out_root / "size_A.txt", self.size_sections)
+        write_text_lf(out_root / "symbols.txt", self.nm_symbols)
+        write_text_lf(out_root / "symbols_size_sort.txt", self.nm_size_sort)
+        write_text_lf(out_root / "objdump_h.txt", self.objdump_headers)
 def analyze_elf(elf: Path, board: BoardSpec, project_root: Optional[Path] = None) -> ElfAnalysis:
     size_default = _probe_binary("arm-none-eabi-size", [str(elf)], project_root)
     size_sections = _probe_binary("arm-none-eabi-size", ["-A", str(elf)], project_root)
@@ -247,9 +245,9 @@ def generate_memory_report(
         "size_summary": analysis.size_summary,
     }
 
-    (out_root / "memory_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8", newline="\n")
+    write_text_lf(out_root / "memory_report.json", json.dumps(report, indent=2))
     analysis.write_tool_outputs(out_root)
-    (out_root / "kernel_catalog.json").write_text(json.dumps(catalog, indent=2), encoding="utf-8", newline="\n")
+    write_text_lf(out_root / "kernel_catalog.json", json.dumps(catalog, indent=2))
     return out_root / "memory_report.json"
 
 
@@ -344,7 +342,7 @@ def build_size_probe(board: BoardSpec, variant: SizeProbeVariant, *, project_roo
         "retained_public_kernel_count": analysis.retained_public_kernel_count,
         "largest_symbols": analysis.largest_symbols,
     }
-    (probe_root / "memory_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8", newline="\n")
+    write_text_lf(probe_root / "memory_report.json", json.dumps(report, indent=2))
     analysis.write_tool_outputs(probe_root)
     return probe_root
 
