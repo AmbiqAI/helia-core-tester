@@ -42,7 +42,7 @@ uv run helia_core_tester hardware run --board apollo510_evb
 ```
 
 That generates the tests for the board's CPU, builds the firmware, flashes it only
-unless the board already confirms (via its HELLO build id) that it runs this exact
+unless the board already confirms (via its TARGET_INFO build id) that it runs this exact
 build, streams every bridged case,
 writes the result bundle under `artifacts/reports/performance_stream/<session-id>/`,
 and prints the pass/fail summary (`--json` prints one JSON document on stdout
@@ -79,9 +79,15 @@ counter (median per invocation) plus `overflow_detected` and `valid_for_regressi
 Identity resolution rules:
 
 - `--board` is the only identity flag. The CPU, NSX board name, SEGGER device name,
-  SWD speed, build dir (`build/perf_stream/<board>`) and default session id
-  (`<board>-<UTC timestamp>`) all come from the row in `assets/hardware_boards.yaml`
-  (`helia_core_tester boards` lists it). Default: `$HPX_BOARD`, else `apollo510_evb`.
+  SWD speed, build dir (`build/perf_stream/<board>`), default session id
+  (`<board>-<UTC timestamp>`) and the linker-script SoC and flash/RAM region names
+  `hardware memory-report` measures against all come from the row in
+  `assets/hardware_boards.yaml` (`helia_core_tester boards` lists it). Default:
+  `$HPX_BOARD`, else `apollo510_evb`.
+- Session sizing comes from the target: every RTT session starts with the firmware's
+  `TARGET_INFO` (cases and PMU passes per plan, receive-buffer bytes, PMU width) and
+  the host batches the bridged cases from it, so a board with different firmware
+  limits needs no host change.
 - `--serial-no` is optional: the flag wins, then `$HPX_JLINK_SERIAL`, then the
   connected J-Link probes enumerated through pylink. Exactly one connected probe is
   used as-is; zero or several is an error naming what was found.

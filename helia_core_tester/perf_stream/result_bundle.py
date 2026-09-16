@@ -9,6 +9,7 @@ from xml.etree.ElementTree import Element, SubElement, ElementTree
 
 from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
+from .pathutil import write_text_lf
 
 _CASE_SUMMARY_BASE_FIELDS = [
     "case_id",
@@ -28,8 +29,8 @@ _CASE_SUMMARY_FLAG_FIELDS = ["overflow_detected", "valid_for_regression"]
 def _split_protocol_trace_entry(entry: str) -> tuple[int | None, str, str]:
     """Parse one protocol_trace entry.
 
-    A single-session run records "direction:message_type" (see Session._trace).
-    hardware_run's batched runner prefixes each entry with "batchN:" before
+    A single-session run records "direction:message_type" (see HostSession._trace).
+    session_runner's batched runner prefixes each entry with "batchN:" before
     merging traces across sessions, giving "batchN:direction:message_type" --
     splitting on the first colon alone would misparse that as
     direction="batchN", message_type="direction:message_type".
@@ -52,7 +53,7 @@ def write_timing(bundle_root: Path, timing: dict) -> Path:
     path = bundle_root / "session_summary.json"
     summary = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     summary["timing"] = timing
-    path.write_text(json.dumps(summary, indent=2), encoding="utf-8", newline="\n")
+    write_text_lf(path, json.dumps(summary, indent=2))
     return path
 
 
@@ -92,7 +93,7 @@ def write_result_bundle(
             "junit": "junit.xml",
         },
     }
-    (bundle_root / "session_manifest.json").write_text(json.dumps(session_manifest, indent=2), encoding="utf-8", newline="\n")
+    write_text_lf(bundle_root / "session_manifest.json", json.dumps(session_manifest, indent=2))
 
     case_rows = []
     case_summary_rows = []
@@ -113,8 +114,8 @@ def write_result_bundle(
             if sample.pass_name not in pass_names:
                 pass_names.append(sample.pass_name)
             for counter in sample.counters:
-                if counter["name"] not in counter_names:
-                    counter_names.append(str(counter["name"]))
+                if counter.name not in counter_names:
+                    counter_names.append(counter.name)
         for name in counter_medians:
             if name not in counter_names:
                 counter_names.append(name)
@@ -154,7 +155,8 @@ def write_result_bundle(
         summary_row["valid_for_regression"] = str(case.statistics.valid_for_regression).lower()
         case_summary_rows.append(summary_row)
         (bundle_root / "outputs" / f"{case.case_bundle.case_id}.bin").write_bytes(case.output_bytes)
-        (bundle_root / "correctness" / f"{case.case_bundle.case_id}.json").write_text(
+        write_text_lf(
+            bundle_root / "correctness" / f"{case.case_bundle.case_id}.json",
             json.dumps(
                 {
                     "case_id": case.case_bundle.case_id,
@@ -164,8 +166,6 @@ def write_result_bundle(
                 },
                 indent=2,
             ),
-            encoding="utf-8",
-            newline="\n",
         )
         for sample, normalized in zip(case.samples, case.normalized_samples):
             for counter in sample.counters:
@@ -177,15 +177,15 @@ def write_result_bundle(
                         "iterations": sample.iterations,
                         "cycles": sample.cycles,
                         "cycles_per_invocation": normalized.cycles_per_invocation,
-                        "counter_name": counter["name"],
-                        "event_id": counter["event_id"],
-                        "counter_value": counter["value"],
-                        "overflow": counter["overflow"],
-                        "supported": counter["supported"],
+                        "counter_name": counter.name,
+                        "event_id": counter.event_id,
+                        "counter_value": counter.value,
+                        "overflow": int(counter.overflow),
+                        "supported": int(counter.supported),
                     }
                 )
 
-    (bundle_root / "cases.json").write_text(json.dumps(case_rows, indent=2), encoding="utf-8", newline="\n")
+    write_text_lf(bundle_root / "cases.json", json.dumps(case_rows, indent=2))
     session_summary = {
         "session_id": session_id,
         "case_count": len(result.cases),
@@ -199,9 +199,9 @@ def write_result_bundle(
     }
     if timing is not None:
         session_summary["timing"] = timing
-    (bundle_root / "session_summary.json").write_text(json.dumps(session_summary, indent=2), encoding="utf-8", newline="\n")
-    (bundle_root / "memory_report.json").write_text(json.dumps(memory_report, indent=2), encoding="utf-8", newline="\n")
-    (bundle_root / "kernel_catalog.json").write_text(json.dumps(kernel_catalog, indent=2), encoding="utf-8", newline="\n")
+    write_text_lf(bundle_root / "session_summary.json", json.dumps(session_summary, indent=2))
+    write_text_lf(bundle_root / "memory_report.json", json.dumps(memory_report, indent=2))
+    write_text_lf(bundle_root / "kernel_catalog.json", json.dumps(kernel_catalog, indent=2))
 
     with (bundle_root / "case_summary.csv").open("w", encoding="utf-8", newline="") as handle:
         # One column per selected/reported counter name (a case with no supported
@@ -243,6 +243,6 @@ def write_result_bundle(
             failure = SubElement(testcase, "failure", message="correctness mismatch")
             failure.text = f"mismatch_count={case.comparison.mismatch_count}"
     ElementTree(testsuite).write(bundle_root / "junit.xml", encoding="utf-8", xml_declaration=True)
-    (bundle_root / "logs" / "host.log").write_text(host_log_text, encoding="utf-8", newline="\n")
-    (bundle_root / "logs" / "target.log").write_text(target_log_text, encoding="utf-8", newline="\n")
+    write_text_lf(bundle_root / "logs" / "host.log", host_log_text)
+    write_text_lf(bundle_root / "logs" / "target.log", target_log_text)
     return bundle_root

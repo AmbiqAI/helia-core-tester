@@ -48,7 +48,7 @@ def test_result_writer_accepts_legacy_zip(tmp_path, monkeypatch, session, empty)
         rows = list(csv.DictReader(handle))
     case = session.cases[0]
     expected = [
-        (sample.sample_index, normalized.cycles_per_invocation, counter["name"])
+        (sample.sample_index, normalized.cycles_per_invocation, counter.name)
         for sample, normalized in zip(case.samples, case.normalized_samples)
         for counter in sample.counters
     ]

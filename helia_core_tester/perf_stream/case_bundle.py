@@ -11,6 +11,8 @@ import zlib
 
 import numpy as np
 
+from .pathutil import write_text_lf
+
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 from helia_core_tester.generation.utils.tflite_utils import calculate_per_channel_multiplier_shift, requantize_np
@@ -234,7 +236,7 @@ def _write_manifest(case_root: Path, manifest: dict[str, Any]) -> Path:
                 f"expected_output.{key}={expected.get(key)!r} does not match referenced blob {blob.get(key)!r}"
             )
     manifest_path = case_root / "case_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8", newline="\n")
+    write_text_lf(manifest_path, json.dumps(manifest, indent=2))
     return manifest_path
 
 

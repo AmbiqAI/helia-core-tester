@@ -34,9 +34,8 @@ from typing import Iterator, Optional
 
 import typer
 
-from .benchmark_firmware_report import generate_benchmark_server_memory_report
-from .boards import BoardSpec, UnknownBoardError, default_board_id, load_board_table, resolve_board
-from .phase0 import _repo_root
+from .boards import BoardSpec, UnknownBoardError, default_board_id, load_board_table, repo_root, resolve_board
+from .memory_report import generate_memory_report
 from .probes import ProbeResolutionError, list_probes, resolve_serial
 
 hardware_app = typer.Typer(
@@ -63,7 +62,7 @@ _FORCE_FLASH_HELP = (
 )
 _ALLOW_UNVERIFIED_HELP = (
     "Stream even when the build dir has no hct_build_id.txt (firmware built before build-id "
-    "stamping), skipping the HELLO build-id check. Without it a missing stamp is an error."
+    "stamping), skipping the TARGET_INFO build-id check. Without it a missing stamp is an error."
 )
 
 
@@ -191,7 +190,7 @@ def build(
 
     spec = _board(board)
     with _pipeline_errors(_verbosity(verbosity)):
-        elf = build_firmware(spec, build_dir=resolve_build_dir(_repo_root(), spec, build_dir), jobs=jobs, force_reconfigure=force_reconfigure)
+        elf = build_firmware(spec, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs, force_reconfigure=force_reconfigure)
     typer.echo(f"✓ Firmware build completed successfully: {elf}")
 
 
@@ -207,14 +206,14 @@ def flash(
 ) -> None:
     """Build (if needed) and flash the hct_benchmark_server firmware to --board via J-Link.
     Skipped only when the ELF is unchanged since this build dir last flashed the same
-    probe *and* the board confirms (in HELLO) that it runs this build's id."""
+    probe *and* the board confirms (in TARGET_INFO) that it runs this build's id."""
     from .firmware_build import flash_firmware, resolve_build_dir
 
     spec = _board(board)
     serial = _serial(serial_no)
     with _pipeline_errors(_verbosity(verbosity)):
         decision = flash_firmware(
-            spec, serial, build_dir=resolve_build_dir(_repo_root(), spec, build_dir), jobs=jobs,
+            spec, serial, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs,
             force_reconfigure=force_reconfigure, force=force,
         )
     if decision.needed:
@@ -238,7 +237,7 @@ def memory_report(
     # FileNotFoundError, a missing/failing arm-none-eabi-* tool a FileNotFoundError
     # or CalledProcessError.
     with _pipeline_errors(_verbosity(verbosity)):
-        path = generate_benchmark_server_memory_report(build_dir=resolve_build_dir(_repo_root(), spec, build_dir), output_root=output_root)
+        path = generate_memory_report(spec, build_dir=resolve_build_dir(repo_root(), spec, build_dir), output_root=output_root)
     typer.echo(json.dumps(json.loads(path.read_text()), indent=2))
     typer.echo(f"\n✓ Memory report written to {path}")
 
@@ -268,6 +267,8 @@ _PMU_COUNTERS_HELP = (
     "names from assets/pmu/armv8m_pmu_events.json, e.g. --pmu-counters mve:all "
     "--pmu-counters cpu:ARM_PMU_INST_RETIRED,ARM_PMU_STALL. Each group is measured in "
     "passes of up to 4 chained 32-bit counters; ARM_PMU_CPU_CYCLES is always reported. "
+    "One run takes at most 16 passes (HCT_SERVER_MAX_PASSES), so cpu:all memory:all mve:all "
+    "(18) is refused before anything is built or flashed. "
     "Default: cpu:default memory:default mve:default."
 )
 _PMU_GROUPS_HELP = "Deprecated alias for --pmu-counters GROUP:default per listed group."
@@ -275,7 +276,7 @@ _PMU_GROUPS_HELP = "Deprecated alias for --pmu-counters GROUP:default per listed
 
 def _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id):
     from .hardware_pipeline import StreamOptions, apply_precision, float_precision_for, resolve_pmu_options, validate_fvp_gate
-    from .hardware_run import canonical_suite
+    from .session_runner import canonical_suite
 
     try:
         # Canonicalise before the precision rules so `--suite BOTH` is refused
@@ -344,8 +345,9 @@ def stream(
     Only kernels with real firmware dispatch support are bridged -- see the `_BUILDERS`
     dispatch table in `generated_test_bridge.py` (or call `bridged_families()` at
     runtime). Everything else is reported as skipped with the reason. Bridged cases are
-    batched into groups of at most hardware_run.MAX_CASES_PER_SESSION, each run over its
-    own fresh reset-on-open RTT session and merged into one result bundle.
+    batched by the limits the target advertises (cases and PMU passes per plan, receive
+    buffer), each batch run over its own fresh reset-on-open RTT session and merged into
+    one result bundle.
     """
     from .firmware_build import resolve_build_dir
     from .hardware_pipeline import finalize_timing, stream_generated_tests
@@ -358,7 +360,7 @@ def stream(
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
         outcome = stream_generated_tests(
-            _repo_root(), spec, serial, build_dir=resolve_build_dir(_repo_root(), spec, build_dir),
+            repo_root(), spec, serial, build_dir=resolve_build_dir(repo_root(), spec, build_dir),
             options=options, echo=echo, progress_to_stderr=as_json, allow_unverified_firmware=allow_unverified_firmware,
         )
         finalize_timing(outcome, echo=echo)
@@ -379,7 +381,7 @@ def run(
     fvp_gate: Optional[str] = typer.Option(None, "--fvp-gate", help=_FVP_GATE_HELP),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     skip_generate: bool = typer.Option(False, "--skip-generate", help="Reuse existing artifacts/generated_tests instead of regenerating."),
-    skip_flash: bool = typer.Option(False, "--skip-flash", help="Skip build+flash and reuse whatever firmware is already running on the board (its HELLO build id is still checked against the build dir)."),
+    skip_flash: bool = typer.Option(False, "--skip-flash", help="Skip build+flash and reuse whatever firmware is already running on the board (its TARGET_INFO build id is still checked against the build dir)."),
     force_flash: bool = typer.Option(False, "--force-flash", help=_FORCE_FLASH_HELP + " Mirror of `hardware flash --force`."),
     allow_unverified_firmware: bool = typer.Option(False, "--allow-unverified-firmware", help=_ALLOW_UNVERIFIED_HELP + " Only meaningful with --skip-flash."),
     as_json: bool = typer.Option(False, "--json", help="Print one JSON summary document on stdout (human output goes to stderr)."),
@@ -401,7 +403,7 @@ def run(
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
         outcome = run_hardware_pipeline(
-            _repo_root(), spec, serial, options=options, build_dir=build_dir,
+            repo_root(), spec, serial, options=options, build_dir=build_dir,
             skip_generate=skip_generate, skip_flash=skip_flash, force_flash=force_flash, jobs=jobs,
             force_reconfigure=force_reconfigure, echo=echo, progress_to_stderr=as_json,
             allow_unverified_firmware=allow_unverified_firmware,

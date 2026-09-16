@@ -10,9 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream import benchmark_firmware_report as report
+from helia_core_tester.perf_stream import memory_report as report
 from helia_core_tester.perf_stream import toolchain
+from helia_core_tester.perf_stream.boards import DEFAULT_BOARD_ID, resolve_board
 from helia_core_tester.perf_stream.pathutil import display_path, is_relative_to
+
+
+BOARD = resolve_board(DEFAULT_BOARD_ID)
 
 
 def _fake_tool(bin_dir: Path, name: str) -> Path:
@@ -94,9 +98,12 @@ def report_env(tmp_path: Path, monkeypatch):
     repo = tmp_path / "repo"
     (repo / "cmake" / "perf_stream").mkdir(parents=True)
     (repo / "cmake" / "perf_stream" / "kernel_catalog.json").write_text("[]")
-    monkeypatch.setattr(report, "_repo_root", lambda: repo)
-    monkeypatch.setattr(report, "_probe_binary", lambda tool, args: "")
-    monkeypatch.setattr(report, "_parse_memory_regions", lambda path: [])
+    monkeypatch.setattr(report, "repo_root", lambda: repo)
+    monkeypatch.setattr(report, "_probe_binary", lambda tool, args, project_root=None: "")
+    monkeypatch.setattr(
+        report, "parse_memory_regions",
+        lambda path: [{"name": "MCU_MRAM", "capacity": 4128768}, {"name": "MCU_TCM", "capacity": 507904}],
+    )
     return repo
 
 
@@ -110,7 +117,7 @@ def _fake_build(build_dir: Path) -> Path:
 def test_memory_report_paths_are_repo_relative_inside_and_absolute_outside(tmp_path: Path, report_env) -> None:
     repo = report_env
     inside = _fake_build(repo / "build" / "perf_stream" / "apollo510_evb")
-    data = json.loads(report.generate_benchmark_server_memory_report(
+    data = json.loads(report.generate_memory_report(BOARD, 
         build_dir=inside.parent.parent, output_root=tmp_path / "out_in").read_text())
     assert data["artifacts"] == {
         "elf": "build/perf_stream/apollo510_evb/perf_stream/hct_benchmark_server.elf",
@@ -119,7 +126,7 @@ def test_memory_report_paths_are_repo_relative_inside_and_absolute_outside(tmp_p
     }
 
     external = _fake_build(tmp_path / "extbuild")
-    data = json.loads(report.generate_benchmark_server_memory_report(
+    data = json.loads(report.generate_memory_report(BOARD, 
         build_dir=external.parent.parent, output_root=tmp_path / "out_ext").read_text())
     assert data["artifacts"]["elf"] == str(external)
     assert data["artifacts"]["bin"] == str(external.with_suffix(".bin"))
@@ -128,5 +135,73 @@ def test_memory_report_paths_are_repo_relative_inside_and_absolute_outside(tmp_p
 
 def test_memory_report_names_the_missing_elf(tmp_path: Path, report_env) -> None:
     with pytest.raises(FileNotFoundError, match="Built firmware ELF not found") as info:
-        report.generate_benchmark_server_memory_report(build_dir=tmp_path / "never-built", output_root=tmp_path / "out")
+        report.generate_memory_report(BOARD, build_dir=tmp_path / "never-built", output_root=tmp_path / "out")
     assert str(tmp_path / "never-built" / "perf_stream" / "hct_benchmark_server.elf") in str(info.value)
+
+
+def test_memory_report_probes_use_the_requested_checkouts_toolchain(tmp_path: Path, monkeypatch) -> None:
+    # analyze_elf(project_root=...) must reach arm_tool with that root for every binutils
+    # call, so a custom checkout's downloaded toolchain is used rather than PATH.
+    seen: list[tuple[str, Path | None]] = []
+
+    def _fake_arm_tool(name: str, repo_root: Path | None = None) -> str:
+        seen.append((name, repo_root))
+        return "true"  # exits 0 with empty stdout
+
+    monkeypatch.setattr(report, "arm_tool", _fake_arm_tool)
+    assert report._probe_binary("arm-none-eabi-nm", ["ignored"], tmp_path) == ""
+    assert seen == [("arm-none-eabi-nm", tmp_path)]
+    import inspect
+    source = inspect.getsource(report.analyze_elf)
+    assert source.count("_probe_binary(") == 5 and source.count("], project_root)") == 5
+
+
+def test_size_probe_is_board_keyed_and_builds_with_the_toolchain_on_path(report_env: Path, monkeypatch) -> None:
+    # Two boards' probes in one checkout must not share a CMake cache, and the probe's
+    # configure/build must see the downloaded ARM GCC on PATH (the build runs
+    # generate_kernel_symbol_refs.py, whose arm-none-eabi-nm lookup is bare).
+    runs: list[tuple[list[str], str]] = []
+
+    def _fake_run(cmd, *, cwd, env=None):
+        runs.append((cmd, (env or {}).get("PATH", "")))
+        if cmd[:2] == ["cmake", "--build"]:
+            out = Path(cmd[2]) / "probe"
+            out.mkdir(parents=True, exist_ok=True)
+            (out / f"{report.SIZE_PROBE_TARGET}.elf").write_bytes(b"elf")
+
+    monkeypatch.setattr(report, "_run", _fake_run)
+    variant = report.SIZE_PROBE_VARIANTS[0]
+    out_dir = report.build_size_probe(resolve_board(DEFAULT_BOARD_ID), variant, project_root=report_env)
+    board_keyed = report_env / "artifacts" / "perf_stream" / "size_probe" / DEFAULT_BOARD_ID / variant.name
+    assert out_dir == board_keyed or board_keyed in out_dir.parents
+    expected_bin = str(toolchain.toolchain_bin_dir(report_env).resolve())
+    assert len(runs) == 2 and all(path.split(os.pathsep)[0] == expected_bin for _, path in runs)
+
+
+def test_memory_report_fails_closed_when_a_board_region_is_missing(tmp_path: Path, report_env: Path, monkeypatch) -> None:
+    # A mistyped flash_region/ram_region must be a configuration error, not a 0-byte
+    # region that the 75 % gates silently pass.
+    import dataclasses
+    board = dataclasses.replace(resolve_board(DEFAULT_BOARD_ID), ram_region="MCU_TCM_TYPO")
+    elf = tmp_path / "fw.elf"
+    elf.write_bytes(b"elf")
+    with pytest.raises(ValueError, match=r"defines no memory region\(s\) \['MCU_TCM_TYPO'\]; available regions: \['MCU_MRAM', 'MCU_TCM'\]"):
+        report.analyze_elf(elf, board, report_env)
+    # With both regions present the gates are computed against real capacities.
+    usage = report.analyze_elf(elf, resolve_board(DEFAULT_BOARD_ID), report_env).usage
+    assert usage["flash_capacity_bytes"] == 4128768 and usage["tcm_capacity_bytes"] == 507904
+    assert usage["flash_gate_pass"] is True and usage["tcm_gate_pass"] is True
+
+
+def test_write_text_lf_is_python38_safe_and_writes_lf(tmp_path: Path) -> None:
+    # Path.write_text(newline=...) only exists from 3.10; the helper must not use it and
+    # must still pin LF line endings.
+    import inspect
+
+    from helia_core_tester.perf_stream import pathutil
+
+    body = inspect.getsource(pathutil.write_text_lf).replace(pathutil.write_text_lf.__doc__ or "", "")
+    assert ".write_text(" not in body and 'newline="\\n"' in body
+    target = tmp_path / "out.txt"
+    pathutil.write_text_lf(target, "a\nb\n")
+    assert target.read_bytes() == b"a\nb\n"

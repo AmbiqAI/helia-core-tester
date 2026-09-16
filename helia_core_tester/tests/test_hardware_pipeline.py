@@ -37,7 +37,7 @@ from helia_core_tester.perf_stream.hardware_pipeline import (
     validate_fvp_gate,
 )
 from helia_core_tester.perf_stream.run_summary import build_json_summary
-from helia_core_tester.perf_stream.session import HostSession, read_hello
+from helia_core_tester.perf_stream.session import HostSession, read_target_info
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BOARD = resolve_board("apollo510_evb")
@@ -124,8 +124,8 @@ def test_pmu_counters_parsing_and_deprecated_groups_alias() -> None:
     assert parse_pmu_counters(["mve:all", "cpu:default"]) == {"mve": "all", "cpu": "default"}
     assert parse_pmu_counters(["mve:ARM_PMU_MVE_STALL, ARM_PMU_MVE_PRED"]) == {"mve": ["ARM_PMU_MVE_STALL", "ARM_PMU_MVE_PRED"]}
     # Every group at "all" plans 5 + 4 + 9 = 18 passes: over HCT_SERVER_MAX_PASSES, so the
-    # parser refuses it before generate/build/flash rather than the firmware after HELLO.
-    with pytest.raises(ValueError, match=r"--pmu-counters: 18 PMU passes planned \(cpu_0, .*mve_8\) but the firmware runs at most 16 per LOAD_PLAN"):
+    # parser refuses it before generate/build/flash rather than the firmware after TARGET_INFO.
+    with pytest.raises(ValueError, match=r"--pmu-counters: 18 PMU passes planned \(cpu_0, .*mve_8\) but the firmware runs at most 16 per SESSION_PLAN"):
         parse_pmu_counters(["cpu:all", "memory:all", "mve:all"])
     with pytest.raises(ValueError, match="18 PMU passes planned"):
         resolve_pmu_options(["cpu:all", "memory:all", "mve:all"], None)
@@ -282,10 +282,10 @@ def test_confirm_board_build_id_flashes_when_board_is_silent_or_unstamped(tmp_pa
     _write_elf(build_dir, b"fw", "hct-abc")
     unchanged = FlashDecision(False, "digest", "unchanged", "hct-abc")
 
-    def _no_hello(board, serial, build_dir):
-        raise RuntimeError("Transport stalled before a complete HELLO frame arrived.")
+    def _no_target_info(board, serial, build_dir):
+        raise RuntimeError("Transport stalled before a complete TARGET_INFO frame arrived.")
 
-    silent = confirm_board_build_id(BOARD, SERIAL, build_dir, unchanged, reader=_no_hello)
+    silent = confirm_board_build_id(BOARD, SERIAL, build_dir, unchanged, reader=_no_target_info)
     assert silent.needed and "did not confirm build id hct-abc" in silent.reason and "RuntimeError" in silent.reason
 
     unstamped = confirm_board_build_id(BOARD, SERIAL, build_dir, FlashDecision(False, "digest", "unchanged", None), reader=_silent_board)
@@ -409,10 +409,10 @@ def test_post_link_build_id_rejects_unpatchable_images(tmp_path: Path, capsys) -
     assert script.main(["--elf", str(tmp_path / "missing.elf"), "--output-txt", str(tmp_path / "x.txt")]) == 1
 
 
-# --- HELLO build id verification ------------------------------------------------------
+# --- TARGET_INFO build id verification ------------------------------------------------------
 
 
-def test_session_verifies_hello_build_id(tmp_path: Path) -> None:
+def test_session_verifies_target_info_build_id(tmp_path: Path) -> None:
     bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_id").manifest_path)
 
     result = HostSession(FakeTargetTransport(build_id="hct-aaa")).run_many([bundle], expected_build_id="hct-aaa")
@@ -425,12 +425,12 @@ def test_session_verifies_hello_build_id(tmp_path: Path) -> None:
         HostSession(FakeTargetTransport(build_id="hct-bbb")).run_many([bundle], expected_build_id="hct-aaa")
 
 
-def test_read_hello_returns_the_full_payload_without_acknowledging() -> None:
+def test_read_target_info_returns_the_full_payload_without_acknowledging() -> None:
     transport = FakeTargetTransport(build_id="hct-xyz")
-    hello = read_hello(transport)
-    assert hello.build_id == "hct-xyz" and hello.board_id == "fake_board" and hello.target_cpu == "cortex-m55"
-    assert hello.max_frame_payload == 64 and hello.runtime_arena_capacity == 4096
-    assert transport.read() == b""  # nothing else was sent: the fake is still waiting for HELLO_ACK
+    target_info = read_target_info(transport)
+    assert target_info.build_id == "hct-xyz" and target_info.board_id == "fake_board" and target_info.target_cpu == "cortex-m55"
+    assert target_info.max_frame_payload == 64 and target_info.runtime_arena_capacity == 4096
+    assert transport.read() == b""  # nothing else was sent: the fake is still waiting for TARGET_INFO_ACK
 
 
 # --- configure flags ---------------------------------------------------------------
@@ -441,7 +441,7 @@ def captured_cmake(monkeypatch, tmp_path: Path):
     """Run `configure()` without CMake or the dependency fetch; returns the argv it would run."""
     calls: list[list[str]] = []
     monkeypatch.setattr(firmware_build, "ensure_hardware_dependencies", lambda repo_root: None)
-    monkeypatch.setattr(firmware_build, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(firmware_build, "tester_repo_root", lambda: tmp_path)
     monkeypatch.setattr(firmware_build.subprocess, "run", lambda cmd, **kwargs: calls.append(list(cmd)))
     return calls
 
@@ -592,13 +592,13 @@ def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeyp
         bridged.append("bridge")
         return preview
 
-    def _session(repo_root, **kwargs):
-        seen.update(kwargs)
-        return object(), tmp_path / "bundle", kwargs["skipped"]
+    def _session(repo_root, bundles, **kwargs):
+        seen.update(kwargs, bundles=bundles)
+        return object(), tmp_path / "bundle"
 
     monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
-    monkeypatch.setattr("helia_core_tester.perf_stream.hardware_run.build_generated_test_case_bundles", _bridge)
-    monkeypatch.setattr("helia_core_tester.perf_stream.hardware_run.run_apollo510_generated_test_session", _session)
+    monkeypatch.setattr("helia_core_tester.perf_stream.session_runner.build_generated_test_case_bundles", _bridge)
+    monkeypatch.setattr("helia_core_tester.perf_stream.session_runner.run_case_bundles", _session)
 
     build_dir = tmp_path / "bd"
     _write_elf(build_dir, b"fw", "hct-stream")
@@ -608,18 +608,21 @@ def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeyp
     assert any("firmware build id hct-stream" in line for line in echoed)
     # Bridged exactly once: the preview list is what the session runner gets.
     assert bridged == ["bridge"]
-    assert seen["bundles"] is preview[0] and seen["skipped"] is preview[1] and outcome.skipped is preview[1]
+    assert seen["bundles"] is preview[0] and outcome.skipped is preview[1]
 
 
 def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, monkeypatch) -> None:
     from helia_core_tester.perf_stream import hardware_pipeline
 
+    class _Bundle:
+        case_id = "abs_default_s8_hw_generated"
+
     seen: dict = {}
     monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
-    monkeypatch.setattr("helia_core_tester.perf_stream.hardware_run.build_generated_test_case_bundles", lambda *a, **k: ([], []))
+    monkeypatch.setattr("helia_core_tester.perf_stream.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([_Bundle()], []))
     monkeypatch.setattr(
-        "helia_core_tester.perf_stream.hardware_run.run_apollo510_generated_test_session",
-        lambda repo_root, **kwargs: (seen.update(kwargs), (object(), tmp_path / "bundle", []))[1],
+        "helia_core_tester.perf_stream.session_runner.run_case_bundles",
+        lambda repo_root, bundles, **kwargs: (seen.update(kwargs), (object(), tmp_path / "bundle"))[1],
     )
 
     unstamped = tmp_path / "old"
@@ -636,21 +639,6 @@ def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, 
     assert seen["expected_build_id"] is None
     assert any("WARNING" in line and "hct_build_id.txt" in line and "unverified" in line for line in echoed)
     assert any("firmware build id unverified" in line for line in echoed)
-
-
-def test_session_runner_uses_prebuilt_bundles_instead_of_bridging_again(tmp_path: Path, monkeypatch) -> None:
-    from helia_core_tester.perf_stream import hardware_run
-
-    def _must_not_bridge(*args, **kwargs):
-        raise AssertionError("bundles were supplied; the runner must not bridge again")
-
-    monkeypatch.setattr(hardware_run, "build_generated_test_case_bundles", _must_not_bridge)
-    # An empty pre-built list follows the same "nothing bridgeable" path as before,
-    # proving the supplied lists are used rather than rebuilt.
-    with pytest.raises(RuntimeError, match="No bridgeable generated tests found"):
-        hardware_run.run_apollo510_generated_test_session(
-            tmp_path, serial_no=1, board=BOARD, family="BasicMathFunctions", bundles=[], skipped=[],
-        )
 
 
 # --- --json keeps stdout clean ----------------------------------------------------
