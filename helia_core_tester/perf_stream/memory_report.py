@@ -17,6 +17,7 @@ names of the flash and RAM regions in it -- comes from the board table.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -25,8 +26,6 @@ from typing import Iterable, Optional
 
 from .boards import DEFAULT_BOARD_ID, BoardSpec, repo_root, resolve_board
 from .pathutil import display_path, write_text_lf
-import os
-
 from .toolchain import arm_tool, toolchain_bin_dir
 from ..scripts.setup_dependencies import nsx_ambiq_sdk_dir
 
@@ -154,6 +153,8 @@ class ElfAnalysis:
         write_text_lf(out_root / "symbols.txt", self.nm_symbols)
         write_text_lf(out_root / "symbols_size_sort.txt", self.nm_size_sort)
         write_text_lf(out_root / "objdump_h.txt", self.objdump_headers)
+
+
 def analyze_elf(elf: Path, board: BoardSpec, project_root: Optional[Path] = None) -> ElfAnalysis:
     size_default = _probe_binary("arm-none-eabi-size", [str(elf)], project_root)
     size_sections = _probe_binary("arm-none-eabi-size", ["-A", str(elf)], project_root)

@@ -94,6 +94,7 @@ def write_result_bundle(
         },
     }
     write_text_lf(bundle_root / "session_manifest.json", json.dumps(session_manifest, indent=2))
+
     case_rows = []
     case_summary_rows = []
     raw_sample_rows = []
@@ -202,6 +203,7 @@ def write_result_bundle(
     write_text_lf(bundle_root / "session_summary.json", json.dumps(session_summary, indent=2))
     write_text_lf(bundle_root / "memory_report.json", json.dumps(memory_report, indent=2))
     write_text_lf(bundle_root / "kernel_catalog.json", json.dumps(kernel_catalog, indent=2))
+
     with (bundle_root / "case_summary.csv").open("w", encoding="utf-8", newline="") as handle:
         # One column per selected/reported counter name (a case with no supported
         # value for a counter leaves that cell empty), then the overflow/validity flags.
