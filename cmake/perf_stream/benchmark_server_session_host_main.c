@@ -174,6 +174,21 @@ int main(void)
     write_u32(inbound_payload, &offset, 0u);
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_CASE_META, session.session_id, next_host_sequence++, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_OK) return 15;
 
+    /* Regression: a BLOB_CHUNK whose declared length is near UINT32_MAX must be refused
+     * as truncated, never handed to memcpy (has_capacity() used to compute offset+needed,
+     * which wraps on the 32-bit target). Probe on a copy so the real session continues. */
+    {
+        static hct_server_session_t probe;
+        memcpy(&probe, &session, sizeof(probe));
+        offset = 0u;
+        write_u32(inbound_payload, &offset, 1u);
+        write_u32(inbound_payload, &offset, 0u);
+        write_u32(inbound_payload, &offset, 0xFFFFFFF0u);
+        if (hct_server_session_accept_frame(&probe, inbound_frame, encode_frame(HCTP_MSG_BLOB_CHUNK, probe.session_id, next_host_sequence, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_TRUNCATED_FRAME) return 40;
+        if (probe.blobs[probe.current_blob_index].bytes_received != 0u) return 41;
+        if (probe.state != HCT_SERVER_STATE_WAIT_BLOB_CHUNK) return 42;
+    }
+
     while (session.state == HCT_SERVER_STATE_WAIT_BLOB_CHUNK)
     {
         const size_t frame_length = hct_server_session_take_next_frame(&session, outbound_payload, sizeof(outbound_payload));

@@ -27,9 +27,12 @@
 #define HCT_PMU_AVAILABLE 0
 #endif
 
+/* Wrap-proof: `offset + needed` can overflow size_t on the 32-bit target for a
+ * hostile length (e.g. a BLOB_CHUNK declaring ~UINT32_MAX bytes), which would let the
+ * check pass and hand that length to memcpy. Compare against the remaining bytes. */
 static bool has_capacity(size_t payload_length, size_t offset, size_t needed)
 {
-    return offset + needed <= payload_length;
+    return offset <= payload_length && needed <= payload_length - offset;
 }
 
 /* Bounded cursor API (F006): every primitive read below verifies that enough bytes
@@ -1145,7 +1148,7 @@ static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint
     if (blob_id != blob->blob_id) return HCTP_STATUS_INVALID_ARGUMENT;
     if (chunk_offset != blob->bytes_received) return HCTP_STATUS_INVALID_ARGUMENT;
     if (!cursor_require(&cursor, chunk_length)) return HCTP_STATUS_TRUNCATED_FRAME;
-    if (chunk_offset + chunk_length > blob->byte_length) return HCTP_STATUS_INVALID_ARGUMENT;
+    if ((uint64_t)chunk_offset + chunk_length > blob->byte_length) return HCTP_STATUS_INVALID_ARGUMENT;
     if ((uint64_t)blob->arena_offset + chunk_offset + chunk_length > session->workspace_bytes) return HCTP_STATUS_INVALID_ARGUMENT;
     if ((blob->alignment > 1u) && ((chunk_offset % blob->alignment) != 0u)) return HCTP_STATUS_INVALID_ARGUMENT;
 

@@ -169,8 +169,16 @@ def analyze_elf(elf: Path, board: BoardSpec, project_root: Optional[Path] = None
     flash_image_bytes = sections.get(".text", 0) + sections.get(".itcm_text", 0) + sections.get(".data", 0)
     tcm_static_bytes = sections.get(".stack", 0) + sections.get(".data", 0) + sections.get(".bss", 0)
     heap_available_bytes = sections.get(".heap", 0)
-    flash_capacity = region_map.get(board.flash_region, 0)
-    tcm_capacity = region_map.get(board.ram_region, 0)
+    # Fail closed: a missing or mistyped board region is a configuration error, not a
+    # zero-capacity region that the gates below would wave through.
+    missing = [name for name in (board.flash_region, board.ram_region) if name not in region_map]
+    if missing:
+        raise ValueError(
+            f"Linker script for board {board.id!r} defines no memory region(s) {missing}; "
+            f"available regions: {sorted(region_map)}. Check flash_region/ram_region in the board table."
+        )
+    flash_capacity = region_map[board.flash_region]
+    tcm_capacity = region_map[board.ram_region]
     usage = {
         "flash_image_bytes": flash_image_bytes,
         "flash_capacity_bytes": flash_capacity,
@@ -181,8 +189,8 @@ def analyze_elf(elf: Path, board: BoardSpec, project_root: Optional[Path] = None
         "tcm_free_bytes_before_heap": max(0, tcm_capacity - tcm_static_bytes),
         "tcm_percent_used_before_heap": round((tcm_static_bytes / tcm_capacity) * 100, 2) if tcm_capacity else None,
         "heap_available_bytes": heap_available_bytes,
-        "flash_gate_pass": flash_capacity == 0 or flash_image_bytes <= int(flash_capacity * 0.75),
-        "tcm_gate_pass": tcm_capacity == 0 or tcm_static_bytes <= int(tcm_capacity * 0.75),
+        "flash_gate_pass": flash_image_bytes <= int(flash_capacity * 0.75),
+        "tcm_gate_pass": tcm_static_bytes <= int(tcm_capacity * 0.75),
     }
     return ElfAnalysis(
         sections=sections,

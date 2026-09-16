@@ -100,7 +100,10 @@ def report_env(tmp_path: Path, monkeypatch):
     (repo / "cmake" / "perf_stream" / "kernel_catalog.json").write_text("[]")
     monkeypatch.setattr(report, "repo_root", lambda: repo)
     monkeypatch.setattr(report, "_probe_binary", lambda tool, args, project_root=None: "")
-    monkeypatch.setattr(report, "parse_memory_regions", lambda path: [])
+    monkeypatch.setattr(
+        report, "parse_memory_regions",
+        lambda path: [{"name": "MCU_MRAM", "capacity": 4128768}, {"name": "MCU_TCM", "capacity": 507904}],
+    )
     return repo
 
 
@@ -173,3 +176,18 @@ def test_size_probe_is_board_keyed_and_builds_with_the_toolchain_on_path(report_
     assert out_dir == board_keyed or board_keyed in out_dir.parents
     expected_bin = str(toolchain.toolchain_bin_dir(report_env).resolve())
     assert len(runs) == 2 and all(path.split(os.pathsep)[0] == expected_bin for _, path in runs)
+
+
+def test_memory_report_fails_closed_when_a_board_region_is_missing(tmp_path: Path, report_env: Path, monkeypatch) -> None:
+    # A mistyped flash_region/ram_region must be a configuration error, not a 0-byte
+    # region that the 75 % gates silently pass.
+    import dataclasses
+    board = dataclasses.replace(resolve_board(DEFAULT_BOARD_ID), ram_region="MCU_TCM_TYPO")
+    elf = tmp_path / "fw.elf"
+    elf.write_bytes(b"elf")
+    with pytest.raises(ValueError, match=r"defines no memory region\(s\) \['MCU_TCM_TYPO'\]; available regions: \['MCU_MRAM', 'MCU_TCM'\]"):
+        report.analyze_elf(elf, board, report_env)
+    # With both regions present the gates are computed against real capacities.
+    usage = report.analyze_elf(elf, resolve_board(DEFAULT_BOARD_ID), report_env).usage
+    assert usage["flash_capacity_bytes"] == 4128768 and usage["tcm_capacity_bytes"] == 507904
+    assert usage["flash_gate_pass"] is True and usage["tcm_gate_pass"] is True
