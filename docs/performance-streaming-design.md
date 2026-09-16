@@ -341,7 +341,7 @@ Two sizing checkpoints now exist:
 
 1. **Universal size probe** (`memory_report.build_size_probe`)
    - goal: prove the whole retained ns-cmsis-nn library fits for a target profile
-   - artifact: `artifacts/perf_stream/size_probe/*/memory_report.json`
+   - artifact: `artifacts/perf_stream/size_probe/<board>/<variant>/memory_report.json`
 2. **Real benchmark-server firmware image** (`hardware memory-report`, `memory_report.generate_memory_report`)
    - goal: measure the actual streaming skeleton with protocol, RTT binding, catalog, session state, and adapters
    - artifact: `artifacts/perf_stream/benchmark_server/memory_report.json`, copied into every result bundle

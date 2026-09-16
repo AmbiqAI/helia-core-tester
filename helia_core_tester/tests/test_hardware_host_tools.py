@@ -151,3 +151,25 @@ def test_memory_report_probes_use_the_requested_checkouts_toolchain(tmp_path: Pa
     import inspect
     source = inspect.getsource(report.analyze_elf)
     assert source.count("_probe_binary(") == 5 and source.count("], project_root)") == 5
+
+
+def test_size_probe_is_board_keyed_and_builds_with_the_toolchain_on_path(report_env: Path, monkeypatch) -> None:
+    # Two boards' probes in one checkout must not share a CMake cache, and the probe's
+    # configure/build must see the downloaded ARM GCC on PATH (the build runs
+    # generate_kernel_symbol_refs.py, whose arm-none-eabi-nm lookup is bare).
+    runs: list[tuple[list[str], str]] = []
+
+    def _fake_run(cmd, *, cwd, env=None):
+        runs.append((cmd, (env or {}).get("PATH", "")))
+        if cmd[:2] == ["cmake", "--build"]:
+            out = Path(cmd[2]) / "probe"
+            out.mkdir(parents=True, exist_ok=True)
+            (out / f"{report.SIZE_PROBE_TARGET}.elf").write_bytes(b"elf")
+
+    monkeypatch.setattr(report, "_run", _fake_run)
+    variant = report.SIZE_PROBE_VARIANTS[0]
+    out_dir = report.build_size_probe(resolve_board(DEFAULT_BOARD_ID), variant, project_root=report_env)
+    board_keyed = report_env / "artifacts" / "perf_stream" / "size_probe" / DEFAULT_BOARD_ID / variant.name
+    assert out_dir == board_keyed or board_keyed in out_dir.parents
+    expected_bin = str(toolchain.toolchain_bin_dir(report_env).resolve())
+    assert len(runs) == 2 and all(path.split(os.pathsep)[0] == expected_bin for _, path in runs)

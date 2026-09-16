@@ -25,7 +25,9 @@ from typing import Iterable, Optional
 
 from .boards import DEFAULT_BOARD_ID, BoardSpec, repo_root, resolve_board
 from .pathutil import display_path
-from .toolchain import arm_tool
+import os
+
+from .toolchain import arm_tool, toolchain_bin_dir
 from ..scripts.setup_dependencies import nsx_ambiq_sdk_dir
 
 SERVER_TARGET = "hct_benchmark_server"
@@ -261,8 +263,19 @@ SIZE_PROBE_VARIANTS: tuple[SizeProbeVariant, ...] = (
 )
 
 
-def _run(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True)
+def _toolchain_env(project_root: Path) -> dict[str, str]:
+    """The child environment for a size-probe configure/build: the checkout's downloaded
+    ARM GCC `bin/` first on PATH. The CMake build runs generate_kernel_symbol_refs.py,
+    whose `arm-none-eabi-nm` lookup is bare, so the toolchain must be reachable through
+    PATH and not only through the toolchain file (same rule as firmware_build.build())."""
+    env = os.environ.copy()
+    bin_dir = str(toolchain_bin_dir(project_root).resolve())
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    return env
+
+
+def _run(cmd: list[str], *, cwd: Path, env: Optional[dict[str, str]] = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True, env=env)
 
 
 def _configure_size_probe(project_root: Path, build_dir: Path, board: BoardSpec, variant: SizeProbeVariant) -> None:
@@ -282,18 +295,20 @@ def _configure_size_probe(project_root: Path, build_dir: Path, board: BoardSpec,
         f"-DARM_NN_ENABLE_F32={'ON' if variant.enable_f32 else 'OFF'}",
         f"-DARM_NN_ENABLE_F16={'ON' if variant.enable_f16 else 'OFF'}",
     ]
-    _run(cmd, cwd=project_root)
+    _run(cmd, cwd=project_root, env=_toolchain_env(project_root))
 
 
 def build_size_probe(board: BoardSpec, variant: SizeProbeVariant, *, project_root: Optional[Path] = None) -> Path:
     """Configure, build and measure one size-probe variant for `board`; returns the
     directory holding its `memory_report.json` and raw tool outputs."""
     project_root = project_root or repo_root()
-    probe_root = project_root / "artifacts" / "perf_stream" / "size_probe" / variant.name
+    # Board-keyed so two boards' probes in one checkout never share a CMake cache or
+    # overwrite each other's report and raw tool outputs.
+    probe_root = project_root / "artifacts" / "perf_stream" / "size_probe" / board.id / variant.name
     build_dir = probe_root / "build"
     build_dir.mkdir(parents=True, exist_ok=True)
     _configure_size_probe(project_root, build_dir, board, variant)
-    _run(["cmake", "--build", str(build_dir), "--target", SIZE_PROBE_TARGET], cwd=project_root)
+    _run(["cmake", "--build", str(build_dir), "--target", SIZE_PROBE_TARGET], cwd=project_root, env=_toolchain_env(project_root))
 
     out_dir = build_dir / "probe"
     elf = out_dir / f"{SIZE_PROBE_TARGET}.elf"
