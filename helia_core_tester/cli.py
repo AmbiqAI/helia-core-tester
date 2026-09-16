@@ -474,6 +474,8 @@ def coverage_merge(
 
     if exit_code != 0:
         typer.echo("✗ Coverage merge failed: missing required coverage.info inputs", err=True)
+        for source_key, path in sorted(report.missing_coverage_inputs.items()):
+            typer.echo(f"  {source_key}: {path}", err=True)
     else:
         typer.echo("✓ Coverage merge completed")
     sys.exit(exit_code)
