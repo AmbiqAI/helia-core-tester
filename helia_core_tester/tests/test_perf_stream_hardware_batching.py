@@ -26,7 +26,7 @@ from helia_core_tester.perf_stream import measurement, session, session_runner
 from helia_core_tester.perf_stream.boards import resolve_board
 from helia_core_tester.perf_stream.case_bundle import build_abs_s8_case_bundle, load_case_bundle
 from helia_core_tester.perf_stream.fake_target import FakeTargetTransport
-from helia_core_tester.perf_stream.measurement import MAX_COUNTERS_PER_PASS, counter_passes_for_selection
+from helia_core_tester.perf_stream.measurement import MAX_COUNTERS_PER_PASS, CounterPass, counter_passes_for_selection
 from helia_core_tester.perf_stream.session import HostSession, SessionResult, TargetLimits
 from helia_core_tester.perf_stream.wire import CAP_PMU_ARMV8M, TargetInfo, session_plan_size
 
@@ -330,3 +330,24 @@ def test_run_case_bundles_wraps_a_case_that_cannot_fit_the_advertised_plan_size(
             serial_no=1160002276, counter_passes=DEFAULT_PASSES, session_id="s", build_dir=tmp_path,
         )
     assert calls == []
+
+
+def test_run_case_bundles_refuses_a_later_session_with_different_capabilities(tmp_path: Path, monkeypatch) -> None:
+    # A cycles-only plan never trips the PMU validation, so a later session that
+    # advertises different capability_flags (PMU gone, or appeared) must still be refused
+    # rather than merged under the first session's target metadata.
+    calls: list[list[Any]] = []
+    first = _target_info()
+    infos = iter([first, _target_info(capability_flags=first.capability_flags ^ 0x40)])
+
+    def _open(board, serial_no, *, build_dir, counter_passes):
+        return _FakeSession(next(infos), calls), _FakeTransport(), 0
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    cycles_only = (CounterPass("cpu", 0, (), chained=True),)
+    with pytest.raises(RuntimeError, match=r"TARGET_INFO of batch 1 differs.*capability_flags: "):
+        session_runner.run_case_bundles(
+            tmp_path, [_DummyCaseBundle(f"case_{i}") for i in range(40)], board=resolve_board("apollo510_evb"),  # type: ignore[arg-type]
+            serial_no=1160002276, counter_passes=cycles_only, session_id="s", build_dir=tmp_path,
+        )
+    assert [len(call) for call in calls] == [32]

@@ -108,7 +108,7 @@ def open_rtt_session(
 
 
 _CONSISTENT_FIELDS = (
-    "build_id", "catalog_hash", "board_id", "target_cpu", "pmu_counter_slots",
+    "build_id", "catalog_hash", "board_id", "target_cpu", "capability_flags", "pmu_counter_slots",
     "max_rx_payload", "max_cases_per_session", "max_passes", "runtime_arena_capacity",
 )
 

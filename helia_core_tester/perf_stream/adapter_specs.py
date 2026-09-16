@@ -6,15 +6,17 @@ places that could silently drift out of sync:
 
   1. `helia_core_tester/perf_stream/generated_test_bridge.py` -- a Python builder that
      extracts real generated-test tensors/scalars and packages them into a CaseBundle.
-  2. A hand-typed `run_xxx_once()` C function inside `cmake/perf_stream/benchmark_server_session.c`
-     -- firmware code that reads those same blobs/scalars back out of the session struct
-     and calls the real CMSIS-NN kernel.
+  2. A hand-typed `run_xxx_once()` C function in the firmware (historically inside
+     `cmake/perf_stream/benchmark_server_session.c`) -- code that reads those same
+     blobs/scalars back out of the session struct and calls the real CMSIS-NN kernel.
 
 This module collects (2) -- the actual C function bodies -- into ONE Python file per
 adapter, alongside the exact list of session scalar fields each adapter depends on. A
-generator script (`scripts/generate_perf_stream_adapters.py`) renders these bodies into a
-clearly marked, auto-generated block inside `benchmark_server_session.c`, so there is
-exactly one place a maintainer edits the calling convention for a given kernel, instead of
+generator script (`scripts/generate_perf_stream_adapters.py`) renders these bodies, plus
+the `hct_run_kernel_once()` dispatch switch, into the fully generated
+`cmake/perf_stream/benchmark_server_adapters.gen.c` (never edited by hand; `--check`
+detects drift), so there is exactly one place a maintainer edits the calling convention
+for a given kernel, instead of
 two files that must be kept in sync by hand. See `docs/performance-streaming-design.md` for
 why the firmware still can't literally reuse the FVP-generated `.c.j2` template output
 (that template bakes descriptor-specific tensors into flash per test case, which is exactly
