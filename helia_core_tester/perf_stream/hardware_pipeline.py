@@ -85,7 +85,7 @@ def parse_pmu_counters(values: Sequence[str]) -> PmuSelection:
     their command-line order, which is the order the PMU passes run in. Unknown groups,
     counter names and empty name lists (`mve:,`) are rejected here, naming the valid
     choices, and so is a selection that plans more passes than the firmware runs per
-    LOAD_PLAN (measurement.MAX_PASSES_PER_PLAN) -- all before any probe I/O.
+    SESSION_PLAN (measurement.MAX_PASSES_PER_PLAN) -- all before any probe I/O.
     """
     selection: PmuSelection = {}
     for raw in values:
@@ -217,11 +217,11 @@ def stream_generated_tests(
 ) -> HardwareRunOutcome:
     """Stream the generated suite to already-flashed firmware and write the bundle.
 
-    Preflight: the build dir must carry `hct_build_id.txt` so every session's HELLO
+    Preflight: the build dir must carry `hct_build_id.txt` so every session's TARGET_INFO
     can be checked against it; a missing stamp is an error unless
     `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
     """
-    from .hardware_run import build_generated_test_case_bundles, run_apollo510_generated_test_session
+    from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error, run_case_bundles
 
     session_id = options.session_id or default_session_id(board)
 
@@ -240,14 +240,18 @@ def stream_generated_tests(
 
     # Bridge the cases once, before any hardware I/O: bridging loads every case's
     # arrays and runs the FVP gate, so the list is built here and handed to the
-    # session runner rather than rebuilt inside it. Knowing the count and case_ids
-    # up front also lets the live progress printer align its [N/total] counter and
-    # case_id column from the first printed line.
+    # session runner rather than rebuilt inside it.
     bundles, skipped = build_generated_test_case_bundles(
         repo_root, cpu=board.cpu, family=options.family, name_filter=options.test_name,
         limit=options.limit, suite=options.suite, fvp_gate=options.fvp_gate,
     )
-    id_width = max((len(b.case_id) for b in bundles), default=0)
+    if not bundles:
+        raise no_bridgeable_cases_error(
+            skipped, cpu=board.cpu, family=options.family, name_filter=options.test_name, suite=options.suite,
+        )
+    # The live progress printer aligns its [N/total] counter and case_id columns from
+    # the first printed line instead of widening them as longer names show up mid-run.
+    id_width = max(len(b.case_id) for b in bundles)
     counter_passes = counter_passes_for_selection(options.pmu_counters)
     echo(
         f"[hardware] Streaming generated tests to {board.id} (serial {serial_no}, session {session_id}, "
@@ -257,7 +261,7 @@ def stream_generated_tests(
     progress = make_live_progress_printer(len(bundles), id_width=id_width, err=progress_to_stderr)
 
     # Per-case wall clock: the gap between consecutive CASE_COMPLETEs (the first case of
-    # every batch also absorbs that batch's target reset and HELLO/catalog exchange).
+    # every batch also absorbs that batch's target reset and TARGET_INFO/catalog exchange).
     case_seconds: Dict[str, float] = {}
     stream_started = time.monotonic()
     last_case_done = stream_started
@@ -269,22 +273,16 @@ def stream_generated_tests(
         last_case_done = now
         progress(case)
 
-    result, bundle, skipped = run_apollo510_generated_test_session(
+    result, bundle = run_case_bundles(
         repo_root,
-        serial_no=serial_no,
+        bundles,
         board=board,
+        serial_no=serial_no,
         counter_passes=counter_passes,
         session_id=session_id,
         build_dir=build_dir,
-        family=options.family,
-        name_filter=options.test_name,
-        limit=options.limit,
-        suite=options.suite,
-        fvp_gate=options.fvp_gate,
         on_case_complete=on_case_complete,
         expected_build_id=expected_build_id,
-        bundles=bundles,
-        skipped=skipped,
     )
     timing = {
         "stream_s": round(time.monotonic() - stream_started, 4),

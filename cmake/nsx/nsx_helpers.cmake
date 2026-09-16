@@ -7,7 +7,7 @@ set(_NSX_HELPERS_DIR "${CMAKE_CURRENT_LIST_DIR}")
 # cmake/README.md); this file is the thin, app-owned glue that resolves a
 # "consolidated SDK bundle" module name to its on-disk directory and wires the
 # SEGGER J-Link flash/reset custom targets. Deliberately local/uncommitted
-# scaffolding historically -- see docs/perf-stream-expansion-progress.md.
+# scaffolding historically; committed once the hardware CLI depended on it.
 
 # nsx_module_dir_for_name(<name> <out_var>)
 #

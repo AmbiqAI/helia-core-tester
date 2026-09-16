@@ -9,12 +9,14 @@ import zlib
 
 MAGIC = b"HCT1"
 HEADER_SIZE = 32
-# v2: LOAD_PLAN carries explicit PMU passes (event ids), HELLO advertises PMU slots and
-# the target's receive-buffer bound, SAMPLE_RESULT leads with the CCNTR entry.
-SUPPORTED_VERSION = 2
+# v3: TARGET_INFO / KERNEL_CATALOG / SESSION_PLAN vocabulary with compact message ids
+# (the unused ACK/NACK/ABORT_CASE/RESET_SESSION/PING/PONG/LOG messages are gone) and
+# TARGET_INFO advertising the target's session limits (max_cases_per_session,
+# max_passes) next to its PMU slots and receive-buffer bound.
+SUPPORTED_VERSION = 3
 DEFAULT_MAX_PAYLOAD = 64 * 1024
 
-# F008: set on every non-final paginated CAPABILITIES chunk; cleared on the final chunk.
+# F008: set on every non-final paginated KERNEL_CATALOG chunk; cleared on the final chunk.
 HCTP_FLAG_MORE = 1 << 0
 
 _HEADER_WITHOUT_CRC = struct.Struct("<4sHHIIIII")
@@ -54,33 +56,28 @@ class SessionMismatchError(HctpError):
 
 
 class MessageType(IntEnum):
-    HELLO = 1
-    HELLO_ACK = 2
-    LOAD_PLAN = 3
-    CASE_META = 4
-    BLOB_CHUNK = 5
-    RUN_CORRECTNESS = 6
-    CORRECTNESS_ACK = 7
-    RUN_PERFORMANCE = 8
-    ACK = 9
-    NACK = 10
-    ABORT_CASE = 11
-    RESET_SESSION = 12
-    PING = 13
-    CAPABILITIES = 14
-    REQUEST_CASE = 15
-    REQUEST_BLOB = 16
-    CASE_READY = 17
-    CORRECTNESS_RESULT = 18
-    OUTPUT_BEGIN = 19
-    OUTPUT_CHUNK = 20
-    OUTPUT_END = 21
-    SAMPLE_RESULT = 22
-    CASE_COMPLETE = 23
-    SESSION_COMPLETE = 24
-    ERROR = 25
-    LOG = 26
-    PONG = 27
+    """HCTP v3 message ids, in protocol order (target -> host unless noted)."""
+
+    TARGET_INFO = 1
+    TARGET_INFO_ACK = 2  # host -> target
+    KERNEL_CATALOG = 3
+    SESSION_PLAN = 4  # host -> target
+    REQUEST_CASE = 5
+    CASE_META = 6  # host -> target
+    REQUEST_BLOB = 7
+    BLOB_CHUNK = 8  # host -> target
+    CASE_READY = 9
+    RUN_CORRECTNESS = 10  # host -> target
+    CORRECTNESS_RESULT = 11
+    OUTPUT_BEGIN = 12
+    OUTPUT_CHUNK = 13
+    OUTPUT_END = 14
+    CORRECTNESS_ACK = 15  # host -> target
+    RUN_PERFORMANCE = 16  # host -> target
+    SAMPLE_RESULT = 17
+    CASE_COMPLETE = 18
+    SESSION_COMPLETE = 19
+    ERROR = 20
 
 
 @dataclass(frozen=True)

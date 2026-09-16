@@ -33,12 +33,18 @@ class UnknownBoardError(ValueError):
 class BoardSpec:
     id: str
     nsx_board: str
+    # SoC directory under the NSX SDK's modules/nsx-core/src/ (linker script, startup).
+    soc: str
     cpu: str
     pmu_tier: str
     has_mve: bool
     jlink_device: str
     swd_speed_khz: int
     workspace_bytes: int
+    # MEMORY region names in the SoC's linker script that the memory report measures
+    # the firmware image (flash) and its static RAM footprint against.
+    flash_region: str
+    ram_region: str
 
     def build_dir(self, repo_root: Path) -> Path:
         """Board-keyed benchmark-server CMake build directory."""
@@ -57,12 +63,16 @@ class BoardSpec:
         }
 
 
-def _repo_root() -> Path:
+def repo_root() -> Path:
+    """The helia-core-tester checkout this package is imported from."""
     return Path(__file__).resolve().parents[2]
 
 
 def _parse_row(row: dict, path: Path) -> BoardSpec:
-    required = ("id", "nsx_board", "cpu", "pmu_tier", "has_mve", "jlink_device", "swd_speed_khz", "workspace_bytes")
+    required = (
+        "id", "nsx_board", "soc", "cpu", "pmu_tier", "has_mve", "jlink_device", "swd_speed_khz",
+        "workspace_bytes", "flash_region", "ram_region",
+    )
     missing = [key for key in required if key not in row]
     if missing:
         raise ValueError(f"{path}: board row {row.get('id', '?')!r} is missing field(s): {', '.join(missing)}")
@@ -72,18 +82,21 @@ def _parse_row(row: dict, path: Path) -> BoardSpec:
     return BoardSpec(
         id=str(row["id"]),
         nsx_board=str(row["nsx_board"]),
+        soc=str(row["soc"]),
         cpu=str(row["cpu"]),
         pmu_tier=pmu_tier,
         has_mve=bool(row["has_mve"]),
         jlink_device=str(row["jlink_device"]),
         swd_speed_khz=int(row["swd_speed_khz"]),
         workspace_bytes=int(row["workspace_bytes"]),
+        flash_region=str(row["flash_region"]),
+        ram_region=str(row["ram_region"]),
     )
 
 
 def load_board_table(path: Optional[Path] = None) -> tuple[BoardSpec, ...]:
     """Parse the board table. Rows keep their file order; ids must be unique."""
-    path = path or (_repo_root() / _TABLE_RELATIVE_PATH)
+    path = path or (repo_root() / _TABLE_RELATIVE_PATH)
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or data.get("schema") != _EXPECTED_SCHEMA:
         raise ValueError(f"{path}: expected a mapping with schema {_EXPECTED_SCHEMA!r}")

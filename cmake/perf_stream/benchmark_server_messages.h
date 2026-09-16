@@ -15,18 +15,22 @@ extern "C" {
 #define HCT_BENCHMARK_SERVER_OUTPUT_MODE_FULL 1u
 #define HCT_BENCHMARK_SERVER_TRANSPORT_RTT 1u
 
-/* HELLO v2 payload: text build_id, 32-byte catalog hash, u32 max_frame_payload,
- * u32 runtime_arena_capacity, u8 transfer_mode, u8 output_mode, text board_id,
- * text target_cpu, u8 transport_kind, u32 capability_flags, u8 pmu_counter_slots,
- * u32 max_rx_payload (largest frame payload the target's receive buffer holds). */
-hctp_status_t hct_build_hello_frame(uint32_t session_id,
-                                    uint32_t sequence_id,
-                                    uint32_t max_frame_payload,
-                                    uint32_t runtime_arena_capacity,
-                                    uint32_t max_rx_payload,
-                                    uint8_t *frame_bytes,
-                                    size_t frame_capacity,
-                                    size_t *frame_length);
+/* TARGET_INFO payload (HCTP v3): text build_id, 32-byte catalog hash,
+ * u32 max_frame_payload, u32 runtime_arena_capacity, u8 transfer_mode, u8 output_mode,
+ * text board_id, text target_cpu, u8 transport_kind, u32 capability_flags,
+ * u8 pmu_counter_slots, u32 max_rx_payload (largest frame payload the target's receive
+ * buffer holds), u16 max_cases_per_session (cases per SESSION_PLAN) and u8 max_passes
+ * (PMU passes per SESSION_PLAN). The host sizes its batches from the last three. */
+hctp_status_t hct_build_target_info_frame(uint32_t session_id,
+                                          uint32_t sequence_id,
+                                          uint32_t max_frame_payload,
+                                          uint32_t runtime_arena_capacity,
+                                          uint32_t max_rx_payload,
+                                          uint16_t max_cases_per_session,
+                                          uint8_t max_passes,
+                                          uint8_t *frame_bytes,
+                                          size_t frame_capacity,
+                                          size_t *frame_length);
 
 hctp_status_t hct_build_catalog_frame(uint32_t session_id,
                                       uint32_t sequence_id,

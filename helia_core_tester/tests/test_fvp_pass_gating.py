@@ -1,4 +1,4 @@
-"""Phase 2 of the generation/bridge unification plan: FVP-pass gating.
+"""FVP-pass gating of the hardware bridge.
 
 Verifies helia_core_tester.perf_stream.fvp_gate correctly consults the most
 recently recorded FVP test_report_<cpu>_*.json before the hardware bridge

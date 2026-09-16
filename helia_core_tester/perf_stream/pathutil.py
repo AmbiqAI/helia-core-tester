@@ -26,3 +26,12 @@ def display_path(path: Path, root: Path) -> str:
     output root (which `relative_to()` alone would reject with ValueError).
     """
     return str(path.relative_to(root)) if is_relative_to(path, root) else str(path)
+
+
+def write_text_lf(path: Path, text: str) -> None:
+    """Write `text` as UTF-8 with LF newlines on every platform.
+
+    `Path.write_text(newline=...)` only exists from Python 3.10; the project supports
+    3.8, so route through `open()`, which has accepted `newline` since 3.0."""
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
