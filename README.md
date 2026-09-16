@@ -449,7 +449,8 @@ Outputs:
 
 Behavior:
 - for a single suite (`--suite int` or `--suite float`), merge is strict and fails if any requested CPU input is missing.
-- for `--suite both`, merge requires at least one suite input per requested CPU and reports suite-specific missing inputs.
+- for `--suite both`, merge requires both int and float inputs for every requested CPU; missing pairs are named in the failure output and reports.
+- `--include-mve-float` adds optional cortex-m55 float-MVE coverage; it cannot replace a missing required int/float input. Reports are still written when required inputs are missing.
 
 ## Clean Contract
 
