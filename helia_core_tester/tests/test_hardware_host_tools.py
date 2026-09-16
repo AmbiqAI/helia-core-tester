@@ -99,7 +99,7 @@ def report_env(tmp_path: Path, monkeypatch):
     (repo / "cmake" / "perf_stream").mkdir(parents=True)
     (repo / "cmake" / "perf_stream" / "kernel_catalog.json").write_text("[]")
     monkeypatch.setattr(report, "repo_root", lambda: repo)
-    monkeypatch.setattr(report, "_probe_binary", lambda tool, args: "")
+    monkeypatch.setattr(report, "_probe_binary", lambda tool, args, project_root=None: "")
     monkeypatch.setattr(report, "parse_memory_regions", lambda path: [])
     return repo
 
@@ -134,3 +134,20 @@ def test_memory_report_names_the_missing_elf(tmp_path: Path, report_env) -> None
     with pytest.raises(FileNotFoundError, match="Built firmware ELF not found") as info:
         report.generate_memory_report(BOARD, build_dir=tmp_path / "never-built", output_root=tmp_path / "out")
     assert str(tmp_path / "never-built" / "perf_stream" / "hct_benchmark_server.elf") in str(info.value)
+
+
+def test_memory_report_probes_use_the_requested_checkouts_toolchain(tmp_path: Path, monkeypatch) -> None:
+    # analyze_elf(project_root=...) must reach arm_tool with that root for every binutils
+    # call, so a custom checkout's downloaded toolchain is used rather than PATH.
+    seen: list[tuple[str, Path | None]] = []
+
+    def _fake_arm_tool(name: str, repo_root: Path | None = None) -> str:
+        seen.append((name, repo_root))
+        return "true"  # exits 0 with empty stdout
+
+    monkeypatch.setattr(report, "arm_tool", _fake_arm_tool)
+    assert report._probe_binary("arm-none-eabi-nm", ["ignored"], tmp_path) == ""
+    assert seen == [("arm-none-eabi-nm", tmp_path)]
+    import inspect
+    source = inspect.getsource(report.analyze_elf)
+    assert source.count("_probe_binary(") == 5 and source.count("], project_root)") == 5

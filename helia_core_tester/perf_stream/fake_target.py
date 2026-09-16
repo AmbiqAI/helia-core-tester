@@ -393,6 +393,9 @@ class FakeTargetTransport:
             self._request_case()
             return
         if frame.header.message_type == MessageType.CASE_META:
+            # hct_poll_session() applies the rx-buffer limit to every host frame, not just SESSION_PLAN.
+            if len(frame.payload) > self._max_rx_payload:
+                raise ValueError(f"CASE_META payload {len(frame.payload)} exceeds the fake target's rx buffer ({self._max_rx_payload}).")
             self._case_meta = decode_case_meta(frame.payload)
             try:
                 self._prepare_case()

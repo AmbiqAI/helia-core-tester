@@ -157,10 +157,15 @@ built for a core whose device header declares `__PMU_PRESENT == 1`;
 `max_rx_payload` is the largest frame payload the target's fixed receive buffer can
 hold (`HCT_SERVER_RX_BUFFER_BYTES - HCTP_HEADER_SIZE`, 2016 today);
 `max_cases_per_session` and `max_passes` are the firmware's `HCT_SERVER_MAX_CASES`
-(32) and `HCT_SERVER_MAX_PASSES` (16). The host keeps no copy of these limits: it
-derives its batching (`session.TargetLimits`) from every session's `TARGET_INFO`,
-cuts each batch so the plan stays within all three, and checks its chained-pair
-planning rule (four counters per pass) against `pmu_counter_slots / 2`.
+(32) and `HCT_SERVER_MAX_PASSES` (16). After the handshake the advertised values are
+authoritative: the host derives its batching (`session.TargetLimits`) from every
+session's `TARGET_INFO`, cuts each batch so the plan stays within all three, checks
+its chained-pair planning rule (four counters per pass) against `pmu_counter_slots / 2`,
+and refuses any later outbound payload (`CASE_META` included) larger than
+`max_rx_payload`, which the firmware applies to every frame it receives. The host also
+mirrors the two firmware constants as `measurement.MAX_CASES_PER_PLAN` and
+`MAX_PASSES_PER_PLAN` (lockstep-tested against the header), but only as early-rejection
+bounds so `--pmu-counters` can fail at option parsing, before generate, build and flash.
 
 `SESSION_PLAN` (host -> target): `u16 case_count`, `u8 transfer_mode`, `u16 warmups`,
 `u16 samples`, `u32 iterations_per_sample`, `u32 min_cycles`, `u32 max_iterations`,

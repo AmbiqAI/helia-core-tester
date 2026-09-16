@@ -389,7 +389,15 @@ class HostSession:
                 comparison_result = None
                 actual_output_bytes = bytearray()
                 reported_status = None
-                self._send(MessageType.CASE_META, encode_case_meta(case_meta_for_bundle(bundle)))
+                case_meta = encode_case_meta(case_meta_for_bundle(bundle))
+                if len(case_meta) > self.limits.max_plan_bytes:
+                    raise RuntimeError(
+                        f"CASE_META for case {bundle.case_id!r} is {len(case_meta)} bytes, over the target's "
+                        f"{self.limits.max_plan_bytes}-byte receive limit (TARGET_INFO max_rx_payload); "
+                        "the firmware would reject it after accepting the plan. Trim the case's scalar "
+                        "parameters or blob descriptors."
+                    )
+                self._send(MessageType.CASE_META, case_meta)
             elif message_type == MessageType.REQUEST_BLOB:
                 if current_case_id is None:
                     raise RuntimeError("Target requested a blob before selecting a case.")
@@ -533,6 +541,14 @@ class HostSession:
     def _send(self, message_type: MessageType, payload: bytes) -> None:
         if self._session_id is None:
             raise RuntimeError("Session has not been established yet.")
+        # The firmware applies its receive-buffer limit to every host->target frame before
+        # dispatch (hct_poll_session), not only to SESSION_PLAN; refuse centrally so no
+        # outbound payload can stall the session after the handshake.
+        if self._target_info is not None and len(payload) > self._target_info.max_rx_payload:
+            raise RuntimeError(
+                f"{message_type.name} payload is {len(payload)} bytes, over the target's "
+                f"{self._target_info.max_rx_payload}-byte receive limit (TARGET_INFO max_rx_payload)."
+            )
         frame = encode_frame(message_type, payload, session_id=self._session_id, sequence_id=self._outgoing_sequence_id)
         self._outgoing_sequence_id += 1
         self._trace.append(f"TX:{message_type.name}")

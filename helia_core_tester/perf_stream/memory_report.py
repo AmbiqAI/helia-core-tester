@@ -110,8 +110,10 @@ def _retained_kernel_count(output: str) -> int:
     return count
 
 
-def _probe_binary(tool: str, args: Iterable[str]) -> str:
-    return subprocess.run([arm_tool(tool), *args], capture_output=True, text=True, check=True).stdout
+def _probe_binary(tool: str, args: Iterable[str], project_root: Optional[Path] = None) -> str:
+    # `project_root` picks that checkout's downloaded toolchain (arm_tool), so a custom
+    # checkout does not fall back to whatever binutils happen to be on PATH.
+    return subprocess.run([arm_tool(tool, project_root), *args], capture_output=True, text=True, check=True).stdout
 
 
 @dataclass(frozen=True)
@@ -153,11 +155,11 @@ class ElfAnalysis:
 
 
 def analyze_elf(elf: Path, board: BoardSpec, project_root: Optional[Path] = None) -> ElfAnalysis:
-    size_default = _probe_binary("arm-none-eabi-size", [str(elf)])
-    size_sections = _probe_binary("arm-none-eabi-size", ["-A", str(elf)])
-    nm_size_sort = _probe_binary("arm-none-eabi-nm", ["-S", "--size-sort", str(elf)])
-    nm_symbols = _probe_binary("arm-none-eabi-nm", [str(elf)])
-    objdump_headers = _probe_binary("arm-none-eabi-objdump", ["-h", str(elf)])
+    size_default = _probe_binary("arm-none-eabi-size", [str(elf)], project_root)
+    size_sections = _probe_binary("arm-none-eabi-size", ["-A", str(elf)], project_root)
+    nm_size_sort = _probe_binary("arm-none-eabi-nm", ["-S", "--size-sort", str(elf)], project_root)
+    nm_symbols = _probe_binary("arm-none-eabi-nm", [str(elf)], project_root)
+    objdump_headers = _probe_binary("arm-none-eabi-objdump", ["-h", str(elf)], project_root)
 
     sections = _parse_size_a(size_sections)
     memory_regions = parse_memory_regions(linker_script_path(board, project_root))

@@ -304,7 +304,12 @@ def test_session_plan_over_target_rx_buffer_is_refused_before_sending(tmp_path: 
     with pytest.raises(RuntimeError, match=f"encodes to {size} bytes.*only takes {size - 1}-byte"):
         session.run(bundle)
     assert "TX:SESSION_PLAN" not in session._trace
-    HostSession(FakeTargetTransport(max_rx_payload=size), counter_passes=passes).run(bundle)
+    # At exactly the plan size the plan goes out; the case's CASE_META is larger, so the
+    # session must fit that too before the run succeeds (firmware bounds every frame).
+    from helia_core_tester.perf_stream.wire import encode_case_meta
+    from helia_core_tester.perf_stream.session import case_meta_for_bundle
+    fits_everything = max(size, len(encode_case_meta(case_meta_for_bundle(bundle))))
+    HostSession(FakeTargetTransport(max_rx_payload=fits_everything), counter_passes=passes).run(bundle)
 
 
 def test_unknown_event_ids_are_reported_with_placeholder_names(tmp_path: Path) -> None:
@@ -464,3 +469,20 @@ def test_host_refuses_more_than_four_counters_per_pass_even_unchained(tmp_path: 
     with pytest.raises(RuntimeError, match=r"names 5 counters; the firmware runs at most 4 per pass"):
         session.run(bundle)
     assert "TX:SESSION_PLAN" not in session._trace
+
+
+def test_host_refuses_a_case_meta_over_the_advertised_receive_limit(tmp_path: Path) -> None:
+    # Firmware applies max_rx_payload to every host frame, not only SESSION_PLAN. Pick a
+    # limit the plan fits exactly but the case's CASE_META does not: the host must refuse
+    # naming the case, before the frame is sent, instead of stalling after the plan.
+    from helia_core_tester.perf_stream.session import case_meta_for_bundle, default_counter_passes, session_plan_for_bundles
+    from helia_core_tester.perf_stream.wire import encode_case_meta, encode_session_plan
+
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_meta").manifest_path)
+    passes = default_counter_passes()
+    limit = len(encode_session_plan(session_plan_for_bundles([bundle], passes)))
+    assert len(encode_case_meta(case_meta_for_bundle(bundle))) > limit
+    session = HostSession(FakeTargetTransport(max_rx_payload=limit), counter_passes=passes)
+    with pytest.raises(RuntimeError, match=r"CASE_META for case 'abs_meta' is \d+ bytes, over the target's \d+-byte receive limit"):
+        session.run(bundle)
+    assert "TX:SESSION_PLAN" in session._trace and "TX:CASE_META" not in session._trace
