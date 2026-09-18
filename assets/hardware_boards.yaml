@@ -6,7 +6,7 @@
 # transport, PMU tier, MVE availability, benchmark-server workspace size, the
 # SoC directory the NSX linker script lives in and the flash/RAM region names
 # the memory report measures against) are derived from the row here. Loaded by
-# helia_core_tester/perf_stream/boards.py.
+# helia_core_tester/hardware/boards.py.
 schema: hct.hardware_boards
 schema_version: 1
 boards:

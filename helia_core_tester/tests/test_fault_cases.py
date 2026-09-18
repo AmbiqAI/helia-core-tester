@@ -244,7 +244,7 @@ def test_null_substituted_buffers_are_not_declared(
 
 
 def test_hardware_bridge_skips_fault_cases_with_a_clear_reason(tmp_path: Path) -> None:
-    from helia_core_tester.perf_stream.generated_test_bridge import (
+    from helia_core_tester.hardware.generated_test_bridge import (
         GeneratedTestCase,
         UnsupportedGeneratedTestError,
         build_case_bundle_from_generated_test,

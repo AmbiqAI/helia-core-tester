@@ -11,11 +11,11 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream import firmware_build
-from helia_core_tester.perf_stream.boards import resolve_board
-from helia_core_tester.perf_stream.case_bundle import build_abs_s8_case_bundle, load_case_bundle
-from helia_core_tester.perf_stream.fake_target import FakeTargetTransport
-from helia_core_tester.perf_stream.firmware_build import (
+from helia_core_tester.hardware import firmware_build
+from helia_core_tester.hardware.boards import resolve_board
+from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, load_case_bundle
+from helia_core_tester.hardware.fake_target import FakeTargetTransport
+from helia_core_tester.hardware.firmware_build import (
     FlashDecision,
     build_id_path,
     confirm_board_build_id,
@@ -25,7 +25,7 @@ from helia_core_tester.perf_stream.firmware_build import (
     read_build_id,
     record_flash,
 )
-from helia_core_tester.perf_stream.hardware_pipeline import (
+from helia_core_tester.hardware.hardware_pipeline import (
     StreamOptions,
     apply_precision,
     float_precision_for,
@@ -36,8 +36,8 @@ from helia_core_tester.perf_stream.hardware_pipeline import (
     run_hardware_pipeline,
     validate_fvp_gate,
 )
-from helia_core_tester.perf_stream.run_summary import build_json_summary
-from helia_core_tester.perf_stream.session import HostSession, read_target_info
+from helia_core_tester.hardware.run_summary import build_json_summary
+from helia_core_tester.hardware.session import HostSession, read_target_info
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BOARD = resolve_board("apollo510_evb")
@@ -185,7 +185,7 @@ def _board_running(build_id: str):
 
 
 def test_flash_decision_follows_elf_hash(tmp_path: Path) -> None:
-    build_dir = tmp_path / "build" / "perf_stream" / "apollo510_evb"
+    build_dir = tmp_path / "build" / "hardware" / "apollo510_evb"
     _write_elf(build_dir, b"firmware-v1", "hct-v1")
     serial = 1160002276
 
@@ -328,7 +328,7 @@ def _synthetic_firmware(build_dir: Path, *, server: bytes, library: bytes, gap: 
     script = _load_build_id_script()
     assert script.MARKER in server
     base = 0x00410000
-    elf, binary = elf_path(build_dir), build_dir / "perf_stream" / "hct_benchmark_server.bin"
+    elf, binary = elf_path(build_dir), build_dir / "hardware" / "hct_benchmark_server.bin"
     elf.parent.mkdir(parents=True, exist_ok=True)
     elf.write_bytes(_synthetic_elf([(base, server), (base + len(server) + gap, library)]))
     binary.write_bytes(server + bytes(gap) + library)  # what objcopy -O binary emits
@@ -337,7 +337,7 @@ def _synthetic_firmware(build_dir: Path, *, server: bytes, library: bytes, gap: 
 
 def _stamp(build_dir: Path) -> str:
     script = _load_build_id_script()
-    elf, binary = elf_path(build_dir), build_dir / "perf_stream" / "hct_benchmark_server.bin"
+    elf, binary = elf_path(build_dir), build_dir / "hardware" / "hct_benchmark_server.bin"
     assert script.main(["--elf", str(elf), "--bin", str(binary), "--output-txt", str(build_id_path(build_dir))]) == 0
     return read_build_id(build_dir)
 
@@ -364,7 +364,7 @@ def test_post_link_build_id_covers_the_whole_image(tmp_path: Path) -> None:
     id_a, id_b = _stamp(build_a), _stamp(build_b)
     assert id_a == id_b
     assert id_a.startswith("hct-") and len(id_a) == 4 + script.BUILD_ID_HEX_CHARS
-    assert _embedded_id(elf_path(build_a)) == _embedded_id(build_a / "perf_stream" / "hct_benchmark_server.bin") == id_a
+    assert _embedded_id(elf_path(build_a)) == _embedded_id(build_a / "hardware" / "hct_benchmark_server.bin") == id_a
     assert elf_path(build_a).read_bytes() == elf_path(build_b).read_bytes()
 
     # A byte that only a linked library changes -> a different id (the old object hash missed this).
@@ -387,7 +387,7 @@ def test_post_link_build_id_rejects_unpatchable_images(tmp_path: Path, capsys) -
     slot = script.MARKER + bytes(script.ID_AREA)
 
     def _run(build_dir: Path) -> int:
-        elf, binary = elf_path(build_dir), build_dir / "perf_stream" / "hct_benchmark_server.bin"
+        elf, binary = elf_path(build_dir), build_dir / "hardware" / "hct_benchmark_server.bin"
         return script.main(["--elf", str(elf), "--bin", str(binary), "--output-txt", str(build_id_path(build_dir))])
 
     no_marker = tmp_path / "no_marker"
@@ -402,7 +402,7 @@ def test_post_link_build_id_rejects_unpatchable_images(tmp_path: Path, capsys) -
     # The .bin must be the image assembled from the ELF, byte for byte.
     stale_bin = tmp_path / "stale_bin"
     _synthetic_firmware(stale_bin, server=b"code" + slot, library=b"lib")
-    (stale_bin / "perf_stream" / "hct_benchmark_server.bin").write_bytes(b"code" + slot + bytes(16) + b"lib-old")
+    (stale_bin / "hardware" / "hct_benchmark_server.bin").write_bytes(b"code" + slot + bytes(16) + b"lib-old")
     assert _run(stale_bin) == 1 and "does not match" in capsys.readouterr().err
     assert not build_id_path(stale_bin).exists()
 
@@ -464,7 +464,7 @@ def test_configure_passes_the_board_row_to_cmake(captured_cmake, monkeypatch, tm
 
 
 def test_configure_forwards_the_resolved_jlinkexe_to_the_flash_target(captured_cmake, monkeypatch, tmp_path: Path) -> None:
-    from helia_core_tester.perf_stream.jlink_library import JLinkExecutable, JLinkLibraryError
+    from helia_core_tester.hardware.jlink_library import JLinkExecutable, JLinkLibraryError
 
     monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: JLinkExecutable("/opt/SEGGER/JLink/JLinkExe", "$JLINK_PATH"))
     firmware_build.configure(tmp_path / "bd", BOARD, force=False, serial_no=SERIAL)
@@ -508,7 +508,7 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
     timing = {"generate_s": 0.0, "build_s": 2.5, "flash_s": 0.0, "stream_s": 1.25, "total_s": 3.75, "batch_count": 1, "cases": {"abs_json": 1.25}}
     summary = build_json_summary(
         result, skipped, session_id="apollo510_evb-20260912T000000Z", board_id="apollo510_evb",
-        bundle=tmp_path / "artifacts" / "reports" / "performance_stream" / "apollo510_evb-20260912T000000Z",
+        bundle=tmp_path / "artifacts" / "reports" / "hardware" / "apollo510_evb-20260912T000000Z",
         timing=timing,
     )
     encoded = json.loads(json.dumps(summary))  # must be JSON-serialisable as-is
@@ -532,7 +532,7 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
 
 
 def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, monkeypatch) -> None:
-    from helia_core_tester.perf_stream import hardware_pipeline
+    from helia_core_tester.hardware import hardware_pipeline
 
     board = resolve_board("apollo510_evb")
     order: list[str] = []
@@ -555,7 +555,7 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     outcome = run_hardware_pipeline(
         tmp_path, board, 42, options=StreamOptions(suite="float", test_name="_f16", float_precision="f16"), echo=lambda _msg: None,
     )
-    assert order == ["generate:cortex-m55:float:f16", "flash:42:build/perf_stream/apollo510_evb:force=False", "stream:float:_f16:unverified=False"]
+    assert order == ["generate:cortex-m55:float:f16", "flash:42:build/hardware/apollo510_evb:force=False", "stream:float:_f16:unverified=False"]
     assert outcome.flash is not None and outcome.flash.needed
 
     order.clear()
@@ -569,7 +569,7 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     run_hardware_pipeline(
         tmp_path, board, 42, options=StreamOptions(), skip_generate=True, force_flash=True, echo=lambda _msg: None,
     )
-    assert order == ["flash:42:build/perf_stream/apollo510_evb:force=True", "stream:int:None:unverified=False"]
+    assert order == ["flash:42:build/hardware/apollo510_evb:force=True", "stream:int:None:unverified=False"]
 
     with pytest.raises(ValueError, match="--skip-flash and --force-flash"):
         run_hardware_pipeline(
@@ -578,7 +578,7 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
 
 
 def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeypatch) -> None:
-    from helia_core_tester.perf_stream import hardware_pipeline
+    from helia_core_tester.hardware import hardware_pipeline
 
     seen: dict = {}
     bridged: list[str] = []
@@ -597,8 +597,8 @@ def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeyp
         return object(), tmp_path / "bundle"
 
     monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
-    monkeypatch.setattr("helia_core_tester.perf_stream.session_runner.build_generated_test_case_bundles", _bridge)
-    monkeypatch.setattr("helia_core_tester.perf_stream.session_runner.run_case_bundles", _session)
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", _bridge)
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.run_case_bundles", _session)
 
     build_dir = tmp_path / "bd"
     _write_elf(build_dir, b"fw", "hct-stream")
@@ -612,16 +612,16 @@ def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeyp
 
 
 def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, monkeypatch) -> None:
-    from helia_core_tester.perf_stream import hardware_pipeline
+    from helia_core_tester.hardware import hardware_pipeline
 
     class _Bundle:
         case_id = "abs_default_s8_hw_generated"
 
     seen: dict = {}
     monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
-    monkeypatch.setattr("helia_core_tester.perf_stream.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([_Bundle()], []))
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([_Bundle()], []))
     monkeypatch.setattr(
-        "helia_core_tester.perf_stream.session_runner.run_case_bundles",
+        "helia_core_tester.hardware.session_runner.run_case_bundles",
         lambda repo_root, bundles, **kwargs: (seen.update(kwargs), (object(), tmp_path / "bundle"))[1],
     )
 
@@ -648,7 +648,7 @@ def test_stdout_to_stderr_covers_python_and_subprocess_output(capfd) -> None:
     import subprocess
     import sys
 
-    from helia_core_tester.perf_stream.run_summary import stdout_to_stderr
+    from helia_core_tester.hardware.run_summary import stdout_to_stderr
 
     with stdout_to_stderr():
         print("python-line")

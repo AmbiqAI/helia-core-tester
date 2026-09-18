@@ -116,7 +116,7 @@ The protocol is target-driven after plan load:
 Protocol version 3 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
 another version is refused at the header. Message ids are compact and in protocol
 order; every payload is encoded and decoded on the host by exactly one pair of
-functions in `helia_core_tester/perf_stream/wire.py`, which the host session and the
+functions in `helia_core_tester/hardware/wire.py`, which the host session and the
 fake target both use, and which the host-compiled C harnesses check against the
 firmware byte for byte.
 
@@ -321,7 +321,7 @@ The host/fake-target path still simulates timing for hardware-independent tests 
    - streamed blobs
    - scratch requirements
    - repeated-invocation/stateful constraints
-4. Add host-side case-bundle generation in `helia_core_tester/perf_stream/case_bundle.py`.
+4. Add host-side case-bundle generation in `helia_core_tester/hardware/case_bundle.py`.
 5. Add host-side fake-target support for the same operator so protocol tests stay hardware-independent.
 6. Add firmware-side dispatch code that calls the real CMSIS-NN API.
 7. Prove retention in the linked firmware image with `arm-none-eabi-nm`.
@@ -341,12 +341,12 @@ Two sizing checkpoints now exist:
 
 1. **Universal size probe** (`memory_report.build_size_probe`)
    - goal: prove the whole retained ns-cmsis-nn library fits for a target profile
-   - artifact: `artifacts/perf_stream/size_probe/<board>/<variant>/memory_report.json`
+   - artifact: `artifacts/hardware/size_probe/<board>/<variant>/memory_report.json`
 2. **Real benchmark-server firmware image** (`hardware memory-report`, `memory_report.generate_memory_report`)
    - goal: measure the actual streaming skeleton with protocol, RTT binding, catalog, session state, and adapters
-   - artifact: `artifacts/perf_stream/benchmark_server/memory_report.json`, copied into every result bundle
+   - artifact: `artifacts/hardware/benchmark_server/memory_report.json`, copied into every result bundle
 
-Both reports come from one analysis (`helia_core_tester/perf_stream/memory_report.py`) of:
+Both reports come from one analysis (`helia_core_tester/hardware/memory_report.py`) of:
 
 - the final linked ELF
 - `arm-none-eabi-size`
@@ -365,7 +365,7 @@ Reported percentages are computed against:
 
 The streaming run writes a portable bundle under:
 
-`artifacts/reports/performance_stream/<session_id>/`
+`artifacts/reports/hardware/<session_id>/`
 
 Key files:
 
@@ -420,7 +420,7 @@ Loopback/fake-target validation remains the hardware-independent proof path; Apo
 
 All hardware work goes through the board-keyed `hardware` CLI group (`--board`
 selects a row of `assets/hardware_boards.yaml`, which supplies the CPU, NSX board
-name, SEGGER device name, SWD speed and the `build/perf_stream/<board>` build dir;
+name, SEGGER device name, SWD speed and the `build/hardware/<board>` build dir;
 `--serial-no` is optional and falls back to `$HPX_JLINK_SERIAL`, then to the single
 connected J-Link probe enumerated through pylink).
 

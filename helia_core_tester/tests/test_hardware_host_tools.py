@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream import memory_report as report
-from helia_core_tester.perf_stream import toolchain
-from helia_core_tester.perf_stream.boards import DEFAULT_BOARD_ID, resolve_board
-from helia_core_tester.perf_stream.pathutil import display_path, is_relative_to
+from helia_core_tester.hardware import memory_report as report
+from helia_core_tester.hardware import toolchain
+from helia_core_tester.hardware.boards import DEFAULT_BOARD_ID, resolve_board
+from helia_core_tester.hardware.pathutil import display_path, is_relative_to
 
 
 BOARD = resolve_board(DEFAULT_BOARD_ID)
@@ -61,7 +61,7 @@ def test_add_toolchain_to_path_is_idempotent(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_symbol_lookup_and_memory_report_resolve_nm_through_the_helper(tmp_path: Path, monkeypatch) -> None:
-    from helia_core_tester.perf_stream import transport
+    from helia_core_tester.hardware import transport
 
     nm = _fake_tool(toolchain.toolchain_bin_dir(tmp_path), "arm-none-eabi-nm")
     monkeypatch.setattr(toolchain, "_default_repo_root", lambda: tmp_path)
@@ -96,8 +96,8 @@ def test_path_helpers_are_python38_safe(tmp_path: Path) -> None:
 def report_env(tmp_path: Path, monkeypatch):
     """A fake repo root and stubbed binutils so the memory report runs without an ELF toolchain."""
     repo = tmp_path / "repo"
-    (repo / "cmake" / "perf_stream").mkdir(parents=True)
-    (repo / "cmake" / "perf_stream" / "kernel_catalog.json").write_text("[]")
+    (repo / "cmake" / "hardware").mkdir(parents=True)
+    (repo / "cmake" / "hardware" / "kernel_catalog.json").write_text("[]")
     monkeypatch.setattr(report, "repo_root", lambda: repo)
     monkeypatch.setattr(report, "_probe_binary", lambda tool, args, project_root=None: "")
     monkeypatch.setattr(
@@ -108,7 +108,7 @@ def report_env(tmp_path: Path, monkeypatch):
 
 
 def _fake_build(build_dir: Path) -> Path:
-    elf = build_dir / "perf_stream" / "hct_benchmark_server.elf"
+    elf = build_dir / "hardware" / "hct_benchmark_server.elf"
     elf.parent.mkdir(parents=True)
     elf.write_bytes(b"elf")
     return elf
@@ -116,13 +116,13 @@ def _fake_build(build_dir: Path) -> Path:
 
 def test_memory_report_paths_are_repo_relative_inside_and_absolute_outside(tmp_path: Path, report_env) -> None:
     repo = report_env
-    inside = _fake_build(repo / "build" / "perf_stream" / "apollo510_evb")
+    inside = _fake_build(repo / "build" / "hardware" / "apollo510_evb")
     data = json.loads(report.generate_memory_report(BOARD, 
         build_dir=inside.parent.parent, output_root=tmp_path / "out_in").read_text())
     assert data["artifacts"] == {
-        "elf": "build/perf_stream/apollo510_evb/perf_stream/hct_benchmark_server.elf",
-        "bin": "build/perf_stream/apollo510_evb/perf_stream/hct_benchmark_server.bin",
-        "map": "build/perf_stream/apollo510_evb/perf_stream/hct_benchmark_server.map",
+        "elf": "build/hardware/apollo510_evb/hardware/hct_benchmark_server.elf",
+        "bin": "build/hardware/apollo510_evb/hardware/hct_benchmark_server.bin",
+        "map": "build/hardware/apollo510_evb/hardware/hct_benchmark_server.map",
     }
 
     external = _fake_build(tmp_path / "extbuild")
@@ -136,7 +136,7 @@ def test_memory_report_paths_are_repo_relative_inside_and_absolute_outside(tmp_p
 def test_memory_report_names_the_missing_elf(tmp_path: Path, report_env) -> None:
     with pytest.raises(FileNotFoundError, match="Built firmware ELF not found") as info:
         report.generate_memory_report(BOARD, build_dir=tmp_path / "never-built", output_root=tmp_path / "out")
-    assert str(tmp_path / "never-built" / "perf_stream" / "hct_benchmark_server.elf") in str(info.value)
+    assert str(tmp_path / "never-built" / "hardware" / "hct_benchmark_server.elf") in str(info.value)
 
 
 def test_memory_report_probes_use_the_requested_checkouts_toolchain(tmp_path: Path, monkeypatch) -> None:
@@ -172,7 +172,7 @@ def test_size_probe_is_board_keyed_and_builds_with_the_toolchain_on_path(report_
     monkeypatch.setattr(report, "_run", _fake_run)
     variant = report.SIZE_PROBE_VARIANTS[0]
     out_dir = report.build_size_probe(resolve_board(DEFAULT_BOARD_ID), variant, project_root=report_env)
-    board_keyed = report_env / "artifacts" / "perf_stream" / "size_probe" / DEFAULT_BOARD_ID / variant.name
+    board_keyed = report_env / "artifacts" / "hardware" / "size_probe" / DEFAULT_BOARD_ID / variant.name
     assert out_dir == board_keyed or board_keyed in out_dir.parents
     expected_bin = str(toolchain.toolchain_bin_dir(report_env).resolve())
     assert len(runs) == 2 and all(path.split(os.pathsep)[0] == expected_bin for _, path in runs)
@@ -198,7 +198,7 @@ def test_write_text_lf_is_python38_safe_and_writes_lf(tmp_path: Path) -> None:
     # must still pin LF line endings.
     import inspect
 
-    from helia_core_tester.perf_stream import pathutil
+    from helia_core_tester.hardware import pathutil
 
     body = inspect.getsource(pathutil.write_text_lf).replace(pathutil.write_text_lf.__doc__ or "", "")
     assert ".write_text(" not in body and 'newline="\\n"' in body

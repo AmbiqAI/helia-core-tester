@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from helia_core_tester.perf_stream import probes
-from helia_core_tester.perf_stream.probes import ProbeInfo, ProbeResolutionError, resolve_serial
+from helia_core_tester.hardware import probes
+from helia_core_tester.hardware.probes import ProbeInfo, ProbeResolutionError, resolve_serial
 
 
 def _enumerator(found: list[ProbeInfo], *then: list[ProbeInfo]):

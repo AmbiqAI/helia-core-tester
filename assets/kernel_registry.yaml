@@ -1,10 +1,10 @@
-# Shared kernel-id registry for the perf_stream hardware bridge.
+# Shared kernel-id registry for the hardware bridge.
 #
 # This is the single source of truth mapping a bridged (family, operator, dtype[, weight_dtype])
 # tuple to the numeric `kernel_id` sent over HCTP in CASE_META and dispatched by firmware in
-# `cmake/perf_stream/benchmark_server_session.c`'s `run_kernel_once()`. Host
-# (`helia_core_tester/perf_stream/kernel_registry.py`) and firmware
-# (`cmake/perf_stream/benchmark_server_session.h`'s `HCT_KERNEL_ID_*` defines) must agree on
+# `cmake/hardware/benchmark_server_session.c`'s `run_kernel_once()`. Host
+# (`helia_core_tester/hardware/kernel_registry.py`) and firmware
+# (`cmake/hardware/benchmark_server_session.h`'s `HCT_KERNEL_ID_*` defines) must agree on
 # these numbers -- `test_kernel_registry.py` cross-checks the Python side against this file,
 # and a comment in benchmark_server_session.h points back here.
 #

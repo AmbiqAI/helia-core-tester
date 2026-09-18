@@ -25,11 +25,11 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream.generated_test_bridge import (
+from helia_core_tester.hardware.generated_test_bridge import (
     build_case_bundle_from_generated_test,
     discover_generated_tests,
 )
-from helia_core_tester.perf_stream.case_bundle import load_case_bundle
+from helia_core_tester.hardware.case_bundle import load_case_bundle
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -71,7 +71,7 @@ def test_dilated_case_sends_true_nonunit_dilation_from_header(tmp_path: Path) ->
     # conv_params.dilation.w/h=1 unconditionally, silently producing wrong output for
     # any real generated test with dilation != 1 (this was NOT caught by FVP/reference
     # runs of the original CMSIS-NN test suite, which correctly apply dilation directly --
-    # only the perf_stream bridge/firmware path had this gap).
+    # only the hardware bridge/firmware path had this gap).
     scalars = _bridge_scalars(tmp_path, "convolve_2x2_dilation_s8")
     assert scalars["dilation_h"] == 2
     assert scalars["dilation_w"] == 2

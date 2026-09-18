@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream.case_bundle import load_case_bundle
-from helia_core_tester.perf_stream.generated_test_bridge import (
+from helia_core_tester.hardware.case_bundle import load_case_bundle
+from helia_core_tester.hardware.generated_test_bridge import (
     build_case_bundle_from_generated_test,
     discover_generated_tests,
 )
-from helia_core_tester.perf_stream.kernel_registry import lookup_kernel_id
+from helia_core_tester.hardware.kernel_registry import lookup_kernel_id
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
