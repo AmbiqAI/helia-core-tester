@@ -973,3 +973,29 @@ def test_stdout_to_stderr_covers_python_and_subprocess_output(capfd) -> None:
     assert "python-line" in err and "child-line" in err
     assert "python-line" not in out and "child-line" not in out
     assert "after-line" in out
+
+
+def test_a_frozen_sync_refusal_is_repaired_from_the_same_lock(nsx_driver, tmp_path: Path, monkeypatch) -> None:
+    """A module the lock names but the tree has not materialised yet -- the state a
+    fresh --cmsis-nn-root app is in -- is re-materialised from that same lock and
+    verified frozen again, never re-resolved."""
+    api, _ = nsx_driver
+    syncs: list[tuple[bool, bool]] = []
+
+    def _sync(app_dir, **kwargs):
+        api.calls.append(("sync", Path(app_dir), kwargs.get("frozen", False)))
+        syncs.append((kwargs.get("frozen", False), kwargs.get("force", False)))
+        if len(syncs) == 1:
+            raise RuntimeError("Local module 'nsx-cmsis-nn' mirror does not match source. Refusing under --frozen.")
+
+    from neuralspotx import api as nsx_api
+
+    monkeypatch.setattr(nsx_api, "sync_app", _sync)
+
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path / "bd", repo_root=PROJECT_ROOT)
+
+    # frozen (refused) -> non-frozen --force repair -> frozen again (verified).
+    assert syncs == [(True, False), (False, True), (True, False)]
+    # The lock was resolved once, before the first sync, and never again: a repair
+    # must not be able to move a pin.
+    assert api.kinds().count("lock") == 1 and api.kinds().index("lock") == 0

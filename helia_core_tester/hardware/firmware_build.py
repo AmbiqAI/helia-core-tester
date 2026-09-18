@@ -321,8 +321,37 @@ def lock_and_sync(render: AppRender, options: FirmwareOptions) -> str:
             f"NSX produced a dependency lock this build cannot use: {remaining}. "
             f"Delete {app_dir} and retry, or re-run with --update-dependencies."
         )
-    nsx_api.sync_app(app_dir, frozen=True, timeout_s=_SYNC_TIMEOUT_S, emit=emit)
+    _sync_frozen_with_repair(app_dir, emit)
     return mode
+
+
+def _sync_frozen_with_repair(app_dir: Path, emit) -> None:
+    """`nsx sync --frozen`, repairing once and re-verifying if it refuses.
+
+    Frozen is the verification mode: it fails on drift rather than correcting
+    it, which is exactly what makes it worth running on every build. It also
+    fails when a module named by the lock is simply *not materialised yet* --
+    the state a fresh `--cmsis-nn-root` app is in, because the local mirror is
+    written by a sync and the first sync after the lock is the frozen one.
+
+    The repair is a non-frozen `--force` sync, which materialises at the exact
+    commits and content hashes `nsx.lock` already names and never resolves a ref
+    or rewrites the lock, followed by the frozen verification again -- so the
+    guarantee is unchanged and only a missing tree is fixed. heliaPROFILER does
+    the same (`deps/sync.py::_run_frozen_sync_with_repair`) for the same reason.
+    """
+    from neuralspotx import api as nsx_api
+
+    try:
+        nsx_api.sync_app(app_dir, frozen=True, timeout_s=_SYNC_TIMEOUT_S, emit=emit)
+        return
+    except Exception as exc:
+        typer.echo(
+            f"[hardware] Frozen sync rejected the module tree ({exc}); re-materialising it from "
+            "this exact nsx.lock and verifying again."
+        )
+    nsx_api.sync_app(app_dir, frozen=False, force=True, timeout_s=_SYNC_TIMEOUT_S, emit=emit)
+    nsx_api.sync_app(app_dir, frozen=True, timeout_s=_SYNC_TIMEOUT_S, emit=emit)
 
 
 def _prepare_probe_env() -> None:
