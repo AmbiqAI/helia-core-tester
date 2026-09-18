@@ -184,17 +184,22 @@ kernel-candidate A/B is a local `--cmsis-nn-root` run.
 
 Each board job uploads one artifact:
 
+`actions/upload-artifact` strips the paths' common ancestor
+(`artifacts/reports/`), so the artifact unpacks as:
+
 ```text
 hardware-kernels-<run_id>-<board>
-├── artifacts/reports/hardware/<session_id>/     # the result bundle
+├── hardware/<session_id>/          # the result bundle
 │   ├── session_manifest.json
 │   ├── session_summary.json
 │   ├── memory_report.json
 │   ├── case_summary.csv
-│   ├── correctness/ outputs/ logs/
+│   ├── raw_samples.csv
+│   ├── cases.json  kernel_catalog.json  junit.xml
+│   ├── correctness/  outputs/  logs/
 │   ├── hct_provenance.json
 │   └── nsx.lock
-└── artifacts/reports/hardware-nightly-run.json  # the --json run summary
+└── hardware-nightly-run.json       # the --json run summary
 ```
 
 The upload runs whether or not the run passed, and overwrites an artifact of the

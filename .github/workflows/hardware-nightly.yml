@@ -22,12 +22,6 @@ name: Hardware Nightly
 #     ask for the same physical boards, and a runner takes one job at a time.
 
 on:
-  # TEMPORARY, removed before this branch merges. `workflow_dispatch` is only
-  # dispatchable once the workflow is on the default branch, so this is the
-  # only way to prove the job on a real bench before review.
-  push:
-    branches:
-      - ci/hardware-nightly
   schedule:
     # 05:00 UTC nightly (22:00 PDT / 21:00 PST the previous day). hpx's
     # hardware validation nightly is 09:00 UTC on the same benches.
@@ -82,13 +76,10 @@ env:
   # tree is an optimisation, never a stale-firmware risk; deleting the
   # directory on the bench is the escape hatch.
   HCT_CACHE_DIR: ${{ github.workspace }}/../hct-cache
-  # TEMPORARY, removed with the push trigger above: a push-triggered proof run
-  # carries no inputs, and the point of it is to exercise the job's mechanics,
-  # not to spend an evening on the full suite. Take the smoke selection.
   HCT_NIGHTLY_BOARDS: ${{ inputs.boards || '' }}
-  HCT_NIGHTLY_SUITE: ${{ inputs.suite || (github.event_name == 'push' && 'int' || 'both') }}
-  HCT_NIGHTLY_FAMILY: ${{ inputs.family || (github.event_name == 'push' && 'BasicMathFunctions' || '') }}
-  HCT_NIGHTLY_LIMIT: ${{ inputs.limit || (github.event_name == 'push' && '8' || '') }}
+  HCT_NIGHTLY_SUITE: ${{ inputs.suite || 'both' }}
+  HCT_NIGHTLY_FAMILY: ${{ inputs.family || '' }}
+  HCT_NIGHTLY_LIMIT: ${{ inputs.limit || '' }}
   HCT_NIGHTLY_SESSION_SUFFIX: ${{ inputs.session_suffix || '' }}
 
 jobs:
