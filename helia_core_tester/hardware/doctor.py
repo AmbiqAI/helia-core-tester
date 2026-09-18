@@ -156,6 +156,30 @@ def _kernel_source_check(baseline) -> HardwareCheck:
     return HardwareCheck(label, True, f"{CMSIS_NN_PROJECT}@{project.ref} ({project.url})")
 
 
+def _provenance_check(repo_root: Path) -> HardwareCheck:
+    """What each board's default build dir was actually built from, and whether it is qualified.
+
+    Read out of the build dir rather than re-derived: the question is what the
+    image sitting there would measure with, which a fresh render cannot answer.
+    A board that has not been built yet is reported as such, not as a failure --
+    doctor runs on hosts with no board attached.
+    """
+    from .boards import load_board_table
+    from .provenance import describe_build
+
+    label = "Build qualification (hardware run)"
+    try:
+        boards = load_board_table()
+    except Exception as exc:
+        return HardwareCheck(label, False, f"board table unreadable: {exc}")
+    rows = [describe_build(board.build_dir(repo_root), board) for board in boards]
+    # A development-overrides build is a legitimate state (it is what
+    # --cmsis-nn-root is for), so it is reported, not failed; only an unreadable
+    # record is a problem doctor should flag.
+    ok = not any("unreadable" in row for row in rows)
+    return HardwareCheck(label, ok, "; ".join(rows) if rows else "no boards in the table")
+
+
 def _starter_profile_check(repo_root: Path) -> HardwareCheck:
     """Whether the pinned NSX registry actually knows every board in the table."""
     label = "NSX starter profiles"
@@ -191,6 +215,7 @@ def hardware_checks(repo_root: Path) -> list[HardwareCheck]:
         _neuralspotx_check(),
         baseline_check,
         _kernel_source_check(baseline),
+        _provenance_check(repo_root),
         _starter_profile_check(repo_root),
         _jlink_dll_check(),
         _jlink_exe_check(),
