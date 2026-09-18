@@ -264,8 +264,32 @@ def project_ref_overrides(
     return dict(sorted(refs.items()))
 
 
+def project_url_overrides(
+    modules: Sequence[ModuleSpec], baseline: DependencyBaseline
+) -> Dict[str, str]:
+    """Baseline repository URL per project the module list resolves to.
+
+    A baseline pins a commit *in a repository*, and the two halves only mean
+    anything together: a SHA is not a globally unique name, and NSX resolves the
+    URL from its packaged registry unless the manifest overrides it. So a
+    `--baseline` naming a fork would otherwise have its refs fetched from the
+    upstream URL -- either failing, or worse, succeeding on a SHA that happens to
+    exist in both.
+    """
+    urls: Dict[str, str] = {}
+    for spec in modules:
+        if spec.local_path is not None:
+            continue
+        entry = baseline.projects.get(spec.project)
+        if entry is not None:
+            urls[spec.project] = entry.url
+    return dict(sorted(urls.items()))
+
+
 def render_module_registry(
-    profile: Mapping[str, Any], ref_overrides: Mapping[str, str]
+    profile: Mapping[str, Any],
+    ref_overrides: Mapping[str, str],
+    url_overrides: Optional[Mapping[str, str]] = None,
 ) -> str:
     """The `module_registry:` block that holds every pin in force.
 
@@ -298,6 +322,13 @@ def render_module_registry(
     for project, ref in ref_overrides.items():
         entry = projects.get(project) or dict(base_projects.get(project) or {"name": project})
         entry["revision"] = ref
+        # The URL travels with the ref: a starter profile's project_overrides
+        # entry carries only a revision, so without this the app would assert the
+        # baseline's commit while NSX fetched it from the packaged registry's
+        # repository.
+        url = (url_overrides or {}).get(project)
+        if url is not None:
+            entry["url"] = url
         projects[project] = entry
 
     for name, entry in list(modules.items()):
@@ -665,13 +696,49 @@ def render_app(
     toolchain: str = "arm-none-eabi-gcc",
     channel: str = "stable",
 ) -> AppRender:
-    """Render (and write) the NSX app for `board` under `build_dir`."""
+    """Render the NSX app for `board` under `build_dir` and write it to disk."""
+    render = plan_app(
+        board,
+        repo_root=repo_root,
+        build_dir=build_dir,
+        baseline=baseline,
+        cmsis_nn_root=cmsis_nn_root,
+        kernel_options=kernel_options,
+        cmsis_core_include=cmsis_core_include,
+        build_size_probe=build_size_probe,
+        toolchain=toolchain,
+        channel=channel,
+    )
+    write_app(render)
+    return render
+
+
+def plan_app(
+    board: BoardSpec,
+    *,
+    repo_root: Path,
+    build_dir: Path,
+    baseline: DependencyBaseline,
+    cmsis_nn_root: Optional[Path] = None,
+    kernel_options: Optional[KernelOptions] = None,
+    cmsis_core_include: Optional[Path] = None,
+    build_size_probe: bool = False,
+    toolchain: str = "arm-none-eabi-gcc",
+    channel: str = "stable",
+) -> AppRender:
+    """The app this render *would* write, computed without touching the app tree.
+
+    `hardware flash` uses this to compare the inputs in force now against the
+    render state the last `hardware build` recorded, without becoming a build
+    step itself (see `firmware_build.check_build_current`).
+    """
     options = kernel_options or KernelOptions()
     app_dir = app_dir_for(build_dir)
     kernel_source = kernel_source_for(baseline, cmsis_nn_root)
     modules = resolve_modules(board.nsx_board, kernel_source)
     profile = starter_profile(board.nsx_board)
     ref_overrides = project_ref_overrides(modules, baseline)
+    url_overrides = project_url_overrides(modules, baseline)
 
     render = AppRender(
         app_dir=app_dir,
@@ -684,7 +751,7 @@ def render_app(
             board,
             modules,
             ref_overrides,
-            render_module_registry(profile, ref_overrides),
+            render_module_registry(profile, ref_overrides, url_overrides),
             toolchain=toolchain,
             channel=channel,
         ),
@@ -701,7 +768,6 @@ def render_app(
             build_size_probe=build_size_probe,
         ),
     )
-    write_app(render)
     return render
 
 
@@ -713,6 +779,9 @@ def write_app(render: AppRender) -> None:
     placeholder module list is written only when the directory has none yet --
     overwriting NSX's resolved one with the bare name list would strip the
     per-module directory mappings and break the next configure.
+
+    The render *state* is deliberately not written here -- see
+    `commit_render_state`.
     """
     app_dir = render.app_dir
     (app_dir / "cmake" / "nsx").mkdir(parents=True, exist_ok=True)
@@ -721,9 +790,29 @@ def write_app(render: AppRender) -> None:
     if not modules_cmake.is_file():
         _write_if_changed(modules_cmake, render.modules_cmake)
     _write_if_changed(app_dir / "CMakeLists.txt", render.cmakelists)
-    _write_if_changed(
-        app_dir / RENDER_STATE, json.dumps(render.state(), indent=2, sort_keys=True) + "\n"
-    )
+
+
+def commit_render_state(render: AppRender) -> Path:
+    """Record this render as the one the app tree was successfully built from.
+
+    Separate from `write_app` because the state file is not a description of
+    what is on disk, it is a claim that a lock and a module tree matching this
+    render exist -- and `lock_reuse_reason` decides whether to reuse the lock by
+    comparing against it. Writing it at render time made that claim before it
+    was true and hid exactly the case it is there to catch: a baseline edit that
+    does not change `nsx.yml` (a new `baseline_id`, or a pin for a project this
+    board does not resolve) leaves NSX's own manifest hash identical, so the
+    stale lock passes every other check and only the digest can reject it. If
+    the digest has already been overwritten with the new one, nothing does.
+
+    So callers write it after lock, sync and build have all succeeded; until
+    then the previous render's state stands, and an interrupted build re-locks
+    on the next attempt rather than trusting a lock it never verified.
+    """
+    path = render.app_dir / RENDER_STATE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_if_changed(path, json.dumps(render.state(), indent=2, sort_keys=True) + "\n")
+    return path
 
 
 def _write_if_changed(path: Path, text: str) -> bool:

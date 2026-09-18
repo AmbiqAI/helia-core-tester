@@ -20,37 +20,40 @@ tree already matches, and it is what proves the modules on disk are the commits
 Flashing is unchanged from the CMake era: `nsx_finalize_app()` generates the
 same `<target>_flash` J-Link target, and the "flash only if the ELF changed"
 decision still has two halves. The host-side stamp
-(`<build_dir>/.flashed-<serial>.sha256`) says whether *this build dir* last
-flashed *this probe* with the current ELF. It cannot know what another build dir
+(`<build_dir>/nsx_app/build/<board>/.flashed-<serial>.sha256`, next to the image
+it describes) says whether *this build dir* last flashed *this probe* with the
+current ELF. It cannot know what another build dir
 (a second clone, `--build-dir`, a lab runner sharing the board) did since, so a
 stamp match is only trusted after the board itself confirms it: every firmware
-build carries a content-hash build id (`hct_build_id.txt`, stamped into the
-linked image by scripts/patch_build_id.py as a POST_BUILD step and advertised by
-the firmware in TARGET_INFO), and the skip path opens one short RTT session to
-read it.
+build carries a content-hash build id (`hct_build_id.txt`, alongside the image in
+the same directory, stamped into the linked image by scripts/patch_build_id.py as
+a POST_BUILD step and advertised by the firmware in TARGET_INFO), and the skip
+path opens one short RTT session to read it.
 """
 
 from __future__ import annotations
 
 import glob
 import hashlib
+import json
 import os
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 import typer
 
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
-from .dependency_baseline import DependencyBaseline, resolve_baseline
+from .dependency_baseline import NON_NSX_CHECKOUTS, DependencyBaseline, resolve_baseline
 from .jlink_library import JLinkLibraryError, find_jlink_exe
 from .nsx_app import (
     SERVER_TARGET,
     AppRender,
     KernelOptions,
     app_dir_for,
+    commit_render_state,
     nsx_build_dir,
     read_render_state,
     render_app,
@@ -92,7 +95,7 @@ class FirmwareOptions:
         )
 
 
-def ensure_host_tools(repo_root: Path) -> None:
+def ensure_host_tools(repo_root: Path, baseline: Optional[DependencyBaseline] = None) -> None:
     """Fetch and expose the host-side build inputs the NSX app still needs.
 
     Two downloads survive the move to NSX, both shared with the FVP path:
@@ -123,6 +126,64 @@ def ensure_host_tools(repo_root: Path) -> None:
         if not cmsis5_core_dir.is_dir():
             setup_cmsis5(downloads_dir)
     add_toolchain_to_path(repo_root)
+    if baseline is not None:
+        pin_optional_checkouts(repo_root, baseline)
+
+
+def pin_optional_checkouts(repo_root: Path, baseline: DependencyBaseline) -> None:
+    """Put the non-NSX checkouts the firmware consumes on the baseline's commit.
+
+    Everything else the firmware is built from is an NSX module, so `nsx lock`
+    enforces its pin. CMSIS_5 is not: `setup_cmsis5()` shallow-clones the default
+    branch for the FVP path, and the firmware takes `pmu_armv8.h` out of the same
+    tree. Without this the baseline would *claim* a CMSIS_5 commit that nothing
+    checked -- worse than not listing it, because the claim is recorded in every
+    bundle.
+
+    Repointing only ever happens on a clean checkout, and the pin is fetched
+    first because the clone is shallow and will not have it as a local object. A
+    dirty tree is left alone with a warning rather than having someone's edits
+    discarded, and so is a directory that is not a git checkout at all (a
+    vendored copy, a distro package); both are reported as unverified rather
+    than silently accepted.
+    """
+    import subprocess
+
+    for project, dirname in NON_NSX_CHECKOUTS.items():
+        pin = baseline.pin(project)
+        if pin is None:
+            continue
+        path = repo_root / DOWNLOADS_DIR / dirname
+        if not (path / ".git").exists():
+            typer.echo(
+                f"[hardware] WARNING: {path} is not a git checkout, so the baseline's {project} pin "
+                f"{pin[:12]} cannot be verified; building against whatever is there.",
+                err=True,
+            )
+            continue
+        def _git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                ["git", "-C", str(path), *args], capture_output=True, text=True, check=check
+            )
+        try:
+            if _git("rev-parse", "HEAD").stdout.strip() == pin:
+                continue
+            if _git("status", "--porcelain").stdout.strip():
+                typer.echo(
+                    f"[hardware] WARNING: {path} has local changes; leaving it alone instead of "
+                    f"repointing it to the baseline's {project} pin {pin[:12]}.",
+                    err=True,
+                )
+                continue
+            typer.echo(f"[hardware] Repointing {dirname} to the baseline pin {pin[:12]}...")
+            _git("fetch", "--quiet", "--depth=1", "origin", pin)
+            _git("checkout", "--quiet", "--detach", pin)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            typer.echo(
+                f"[hardware] WARNING: could not put {path} on the baseline's {project} pin "
+                f"{pin[:12]} ({exc}); building against whatever is there.",
+                err=True,
+            )
 
 
 def resolve_build_dir(repo_root: Path, board: BoardSpec, override: Optional[Path] = None) -> Path:
@@ -228,12 +289,13 @@ def prepare_app(
     options: FirmwareOptions,
 ) -> AppRender:
     """Render the NSX app for `board` and make sure the host tools are present."""
-    ensure_host_tools(repo_root)
+    baseline = load_baseline(repo_root, options)
+    ensure_host_tools(repo_root, baseline)
     return render_app(
         board,
         repo_root=repo_root,
         build_dir=build_dir,
-        baseline=load_baseline(repo_root, options),
+        baseline=baseline,
         cmsis_nn_root=options.cmsis_nn_root,
         kernel_options=options.kernel_options(),
     )
@@ -370,8 +432,65 @@ def build(render: AppRender, options: FirmwareOptions, target: str, jobs: Option
     )
 
 
-def _needs_configure(render: AppRender) -> bool:
-    return not (render.build_dir / "build.ninja").exists()
+#: What the last successful `nsx configure` of a build tree was configured from.
+CONFIGURE_STATE = ".hct-configured.json"
+
+
+def _configure_identity(render: AppRender, serial_no: Optional[int]) -> Dict[str, Any]:
+    """Everything that decides what `nsx configure` would produce.
+
+    The render digest covers the manifest and the app CMakeLists; the lock hash
+    covers which module trees `nsx sync` materialised; and the board, probe
+    serial and resolved JLinkExe are configure-time arguments that reach the
+    CMake cache without touching any file CMake watches.
+    """
+    lock = render.app_dir / "nsx.lock"
+    return {
+        "render_digest": render.digest,
+        "nsx_lock_sha256": (
+            hashlib.sha256(lock.read_bytes()).hexdigest() if lock.is_file() else None
+        ),
+        "board": render.board.nsx_board,
+        "probe_serial": str(serial_no) if serial_no is not None else None,
+        "jlink_exe": os.environ.get("JLINK_PATH"),
+    }
+
+
+def _configure_reason(render: AppRender, identity: Mapping[str, Any]) -> Optional[str]:
+    """Why the build tree must be (re)configured, or None when it need not be.
+
+    CMake re-runs itself when a file it listed as a configure input changes, and
+    the app CMakeLists and `cmake/nsx/modules.cmake` are both on that list -- so
+    a kernel-switch change or a re-synced module set would be picked up even
+    without this check. It is not enough on its own, though: the probe serial,
+    the resolved JLinkExe path and the board are configure *arguments*, so
+    changing one of them changes the CMake cache with no input file touched and
+    CMake would happily keep the stale cache. Deciding here, from a recorded
+    identity, also stops the correctness of a build depending on a CMake
+    implementation detail.
+    """
+    build_dir = render.build_dir
+    if not (build_dir / "build.ninja").exists():
+        return "the build tree is not configured yet"
+    state_path = build_dir / CONFIGURE_STATE
+    if not state_path.is_file():
+        return "the build tree has no record of what it was configured from"
+    try:
+        previous = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "the build tree's configure record is unreadable"
+    if not isinstance(previous, dict):
+        return "the build tree's configure record is malformed"
+    changed = sorted(k for k in identity if previous.get(k) != identity[k])
+    if changed:
+        return f"the configured inputs changed ({', '.join(changed)})"
+    return None
+
+
+def _record_configure(render: AppRender, identity: Mapping[str, Any]) -> None:
+    path = render.build_dir / CONFIGURE_STATE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dict(identity), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 # --- flash-only-if-changed stamp -------------------------------------------------
@@ -535,11 +654,16 @@ def build_rendered_firmware(
     options = options or FirmwareOptions()
     board = render.board
     lock_and_sync(render, options)
-    if force_reconfigure or _needs_configure(render) or serial_no is not None:
-        # A probe serial is baked into the generated J-Link targets at configure
-        # time, so switching --serial-no against a configured build dir has to
-        # reconfigure for it to take effect.
+    # The probe serial is baked into the generated J-Link targets at configure
+    # time, and the resolved JLinkExe into the CMake cache, so both are part of
+    # the configured identity rather than a blanket "always reconfigure".
+    _prepare_probe_env()
+    identity = _configure_identity(render, serial_no)
+    reason = "--force-reconfigure given" if force_reconfigure else _configure_reason(render, identity)
+    if reason is not None:
+        typer.echo(f"[hardware] Reconfiguring: {reason}.")
         configure(render, options, serial_no=serial_no)
+        _record_configure(render, identity)
     build(render, options, SERVER_TARGET, jobs)
 
     elf = elf_path(build_dir, board)
@@ -560,23 +684,61 @@ def build_rendered_firmware(
         snapshot = lock_snapshot_path(build_dir, board)
         snapshot.parent.mkdir(parents=True, exist_ok=True)
         snapshot.write_bytes(lock.read_bytes())
+    # Only now is the claim the state file makes true: a lock and a module tree
+    # matching this render exist, and an image was built from them. Recording it
+    # earlier is what would let a baseline change that leaves nsx.yml identical
+    # slip past `lock_reuse_reason` (see nsx_app.commit_render_state).
+    commit_render_state(render)
     return elf
 
 
 def kernel_source_root(build_dir: Path, options: Optional[FirmwareOptions] = None) -> Path:
-    """The ns-cmsis-nn tree the firmware was built from, for the generate step.
+    """The ns-cmsis-nn tree the firmware in `build_dir` was built from.
 
-    NSX vendors a git-backed module as a whole-repository clone, so the synced
-    module is a complete checkout -- schemas and reference tables under `Tests/`
-    included -- at exactly the commit the firmware's kernels came from.
-    Generation reading a different checkout than the firmware links is the drift
-    this replaces. With `--cmsis-nn-root` the override wins: that tree is the one
-    being edited, and NSX only mirrors a copy of it into the app.
+    Generation reads kernel schemas and reference tables out of this tree, so it
+    has to be the tree the *flashed image* linked, not the one a flag names now.
+    Those differ in the case this exists to close: `--skip-flash` reuses firmware
+    without building or syncing anything, so an explicit `--cmsis-nn-root` would
+    otherwise silently point generation at a checkout that image was never built
+    from -- the cases and the kernels under test back on separate commits, which
+    is the drift the whole NSX-app change is meant to make impossible.
+
+    So the build's own record wins: when the app tree says what it was built
+    from, an override that disagrees is an error rather than a silent
+    substitution, and the answer is the synced module tree. `nsx sync` mirrors a
+    `--cmsis-nn-root` checkout into that same directory on every build, so for a
+    matching override this is still the live tree's content -- as of the last
+    build, which is precisely what was flashed.
     """
     options = options or FirmwareOptions()
-    if options.cmsis_nn_root is not None:
-        return Path(options.cmsis_nn_root).expanduser().resolve()
-    return synced_kernel_dir(app_dir_for(build_dir))
+    app_dir = app_dir_for(build_dir)
+    synced = synced_kernel_dir(app_dir)
+    requested = (
+        str(Path(options.cmsis_nn_root).expanduser().resolve())
+        if options.cmsis_nn_root is not None
+        else None
+    )
+    recorded = (read_render_state(app_dir) or {}).get("kernel_source")
+
+    if recorded is not None:
+        if requested is not None and recorded != f"path:{requested}":
+            raise RuntimeError(
+                f"--cmsis-nn-root {requested} does not match what the firmware in {build_dir} was "
+                f"built from ({recorded}). Generation would read a different kernel tree than the "
+                f"image under test. Re-run `hardware build --board {board_name(app_dir)}` with this "
+                f"--cmsis-nn-root, or drop the flag to use the tree the image was built from."
+            )
+        if synced.is_dir():
+            return synced
+
+    if requested is not None:
+        return Path(requested)
+    return synced
+
+
+def board_name(app_dir: Path) -> str:
+    """The board an app tree targets, for error messages (best effort)."""
+    return str((read_render_state(app_dir) or {}).get("board") or "<board>")
 
 
 def flash_firmware(

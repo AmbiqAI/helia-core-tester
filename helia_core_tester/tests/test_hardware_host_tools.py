@@ -204,7 +204,7 @@ def test_size_probe_is_board_keyed_and_reuses_the_app_render(report_env: Path, m
     from helia_core_tester.hardware import firmware_build, nsx_app
 
     built: list[tuple[Path, str]] = []
-    monkeypatch.setattr(firmware_build, "ensure_host_tools", lambda repo_root: None)
+    monkeypatch.setattr(firmware_build, "ensure_host_tools", lambda repo_root, baseline=None: None)
     monkeypatch.setattr(firmware_build, "lock_and_sync", lambda render, options: None)
     monkeypatch.setattr(firmware_build, "configure", lambda render, options, **kw: None)
 

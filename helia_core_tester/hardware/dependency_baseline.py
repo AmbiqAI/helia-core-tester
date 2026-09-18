@@ -53,11 +53,17 @@ REQUIRED_PROJECTS: Tuple[str, ...] = (
     NEURALSPOTX_PROJECT,
     PMU_PROJECT,
 )
-# CMSIS_5 is not an NSX project and is not part of an hpx baseline, so a baseline
-# that omits it leaves that checkout unpinned rather than failing to load. The
-# firmware takes only `pmu_armv8.h` from it; the FVP path takes the device
-# startup/system sources.
-OPTIONAL_PROJECTS: Tuple[str, ...] = (CMSIS5_PROJECT,)
+# Projects that are plain checkouts under artifacts/downloads/ rather than NSX
+# modules: `nsx lock` never sees them, so their pin has to be applied by the
+# tester itself (firmware_build.pin_optional_checkouts) and is not enforced by
+# the lock. Mapped to the directory name each lives under.
+#
+# CMSIS_5 is the only one. It is not an NSX project and is not part of an hpx
+# baseline, so a baseline that omits it leaves that checkout unpinned rather than
+# failing to load. The firmware takes only `pmu_armv8.h` from it; the FVP path
+# takes the device startup/system sources.
+NON_NSX_CHECKOUTS: Dict[str, str] = {CMSIS5_PROJECT: "CMSIS_5"}
+OPTIONAL_PROJECTS: Tuple[str, ...] = tuple(NON_NSX_CHECKOUTS)
 
 _COMMIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
 

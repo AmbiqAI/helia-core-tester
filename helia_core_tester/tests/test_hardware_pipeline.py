@@ -221,7 +221,7 @@ def test_flash_decision_requires_built_elf(tmp_path: Path) -> None:
 def fake_toolchain(monkeypatch):
     """Stub configure/build so flash_firmware runs without CMake; returns the list of built targets."""
     built: list[str] = []
-    monkeypatch.setattr(firmware_build, "ensure_host_tools", lambda repo_root: None)
+    monkeypatch.setattr(firmware_build, "ensure_host_tools", lambda repo_root, baseline=None: None)
     monkeypatch.setattr(firmware_build, "lock_and_sync", lambda render, options: None)
     monkeypatch.setattr(firmware_build, "configure", lambda *a, **k: None)
     monkeypatch.setattr(firmware_build, "build", lambda render, options, target, jobs: built.append(target))
@@ -493,7 +493,7 @@ def nsx_driver(monkeypatch, tmp_path: Path):
     for name in ("lock_app", "sync_app", "configure_app", "build_app"):
         monkeypatch.setattr(nsx_api, name, getattr(api, name))
 
-    monkeypatch.setattr(firmware_build, "ensure_host_tools", lambda repo_root: None)
+    monkeypatch.setattr(firmware_build, "ensure_host_tools", lambda repo_root, baseline=None: None)
     monkeypatch.setattr(firmware_build, "tester_repo_root", lambda: PROJECT_ROOT)
     monkeypatch.setattr(firmware_build, "_prepare_probe_env", lambda: None)
     monkeypatch.setattr(firmware_build, "lock_reuse_reason", lambda render: reasons["value"])
@@ -726,3 +726,99 @@ def test_stdout_to_stderr_covers_python_and_subprocess_output(capfd) -> None:
     assert "python-line" in err and "child-line" in err
     assert "python-line" not in out and "child-line" not in out
     assert "after-line" in out
+
+
+# --- review follow-ups -------------------------------------------------------------
+
+
+def test_stale_lock_is_rejected_when_only_the_baseline_changed(tmp_path: Path) -> None:
+    """A baseline edit that leaves nsx.yml identical must still re-resolve the lock.
+
+    `baseline_id` never reaches the manifest, so NSX's own manifest hash is
+    unchanged and every other reuse check passes. Only the render digest can tell,
+    and it can only tell if the previous build's state is still on disk when the
+    decision is made -- which is why the state is committed after a build rather
+    than written while rendering.
+    """
+    from helia_core_tester.hardware.dependency_baseline import parse_baseline, resolve_baseline
+    from helia_core_tester.hardware.nsx_app import commit_render_state, render_app
+
+    build_dir = tmp_path / "bd"
+    baseline = resolve_baseline(PROJECT_ROOT)
+    first = render_app(BOARD, repo_root=PROJECT_ROOT, build_dir=build_dir, baseline=baseline)
+    (first.app_dir / "nsx.lock").write_text("locked\n", encoding="utf-8")
+    commit_render_state(first)
+    # Same baseline: the digest matches, so the decision moves on to NSX's own
+    # lock checks rather than stopping here.
+    assert firmware_build.lock_reuse_reason(first) != (
+        "the rendered manifest or the dependency baseline changed"
+    )
+
+    renamed = parse_baseline({**baseline.to_dict(), "baseline_id": "renamed"})
+    second = render_app(BOARD, repo_root=PROJECT_ROOT, build_dir=build_dir, baseline=renamed)
+    assert second.nsx_yml == first.nsx_yml, "the manifest is unchanged, which is the point"
+    assert firmware_build.lock_reuse_reason(second) == (
+        "the rendered manifest or the dependency baseline changed"
+    )
+
+
+def test_reconfigure_tracks_the_configured_identity(nsx_driver, tmp_path: Path) -> None:
+    """An existing build.ninja is not on its own proof the tree is configured right.
+
+    CMake re-runs itself when a file it listed as a configure input changes, so the
+    app CMakeLists and cmake/nsx/modules.cmake are covered by that. The probe serial
+    and the resolved JLinkExe are configure *arguments*: they change the CMake cache
+    with no input file touched, so only a recorded identity catches them.
+    """
+    api, reasons = nsx_driver
+    build_dir = tmp_path / "bd"
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    reasons["value"] = None
+    api.calls.clear()
+
+    # Nothing changed -> no reconfigure.
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    assert "configure" not in api.kinds()
+
+    # A probe serial is a configure argument, so it must reconfigure...
+    api.calls.clear()
+    firmware_build.build_firmware(
+        BOARD, build_dir=build_dir, serial_no=SERIAL, repo_root=PROJECT_ROOT
+    )
+    assert [c[2] for c in api.calls if c[0] == "configure"] == [str(SERIAL)]
+
+    # ...and the same serial again must not.
+    api.calls.clear()
+    firmware_build.build_firmware(
+        BOARD, build_dir=build_dir, serial_no=SERIAL, repo_root=PROJECT_ROOT
+    )
+    assert "configure" not in api.kinds()
+
+
+def test_kernel_source_root_follows_the_build_not_the_flag(nsx_driver, tmp_path: Path) -> None:
+    """Generation reads the tree the flashed image was built from, or refuses.
+
+    With --skip-flash nothing is built or synced, so an explicit --cmsis-nn-root
+    would otherwise send generation to a checkout the image was never built from.
+    """
+    from helia_core_tester.hardware.nsx_app import app_dir_for, synced_kernel_dir
+
+    build_dir = tmp_path / "bd"
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    synced = synced_kernel_dir(app_dir_for(build_dir))
+    synced.mkdir(parents=True, exist_ok=True)
+
+    # The build recorded a registry-resolved kernel source, so that is the answer.
+    assert firmware_build.kernel_source_root(build_dir) == synced
+
+    other = tmp_path / "some-other-ns-cmsis-nn"
+    other.mkdir()
+    with pytest.raises(RuntimeError, match="does not match what the firmware"):
+        firmware_build.kernel_source_root(
+            build_dir, firmware_build.FirmwareOptions(cmsis_nn_root=other)
+        )
+
+    # With no build to speak of, an override is all there is to go on.
+    assert firmware_build.kernel_source_root(
+        tmp_path / "never-built", firmware_build.FirmwareOptions(cmsis_nn_root=other)
+    ) == other

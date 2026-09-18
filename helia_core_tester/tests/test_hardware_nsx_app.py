@@ -243,6 +243,10 @@ def test_render_is_written_and_stable(render, tmp_path: Path) -> None:
     assert (app_dir / "nsx.yml").read_text() == render.nsx_yml
     assert (app_dir / "CMakeLists.txt").read_text() == render.cmakelists
 
+    # Rendering writes the app but makes no claim about it having been locked,
+    # synced or built -- that is commit_render_state's job, after the fact.
+    assert not (app_dir / nsx_app.RENDER_STATE).exists()
+    nsx_app.commit_render_state(render)
     state = json.loads((app_dir / nsx_app.RENDER_STATE).read_text())
     assert state["render_digest"] == render.digest
     assert state["baseline_id"] == resolve_baseline(PROJECT_ROOT).baseline_id
@@ -319,3 +323,84 @@ def test_write_app_keeps_nsxs_own_modules_cmake(tmp_path: Path) -> None:
         BOARD, repo_root=PROJECT_ROOT, build_dir=build_dir, baseline=resolve_baseline(PROJECT_ROOT)
     )
     assert modules_cmake.read_text() == resolved
+
+
+# --- review follow-ups -------------------------------------------------------------
+
+
+def test_baseline_repository_url_reaches_the_module_registry(tmp_path: Path) -> None:
+    """A pin is a commit *in a repository*; both halves have to reach the manifest.
+
+    NSX resolves each project's URL from its packaged registry unless the app
+    overrides it, and a starter profile's `project_overrides` entry carries only a
+    revision. So a `--baseline` naming a fork would have had its refs fetched from
+    the upstream URL -- failing, or worse succeeding on a SHA present in both.
+    """
+    document = _minimal_document()
+    fork = "https://example.invalid/fork-of-ns-cmsis-nn.git"
+    document["projects"]["ns-cmsis-nn"]["url"] = fork
+    sdk_fork = "https://example.invalid/fork-of-nsx-ambiq-sdk.git"
+    document["projects"]["nsx-ambiq-sdk"]["url"] = sdk_fork
+
+    render = nsx_app.plan_app(
+        BOARD, repo_root=PROJECT_ROOT, build_dir=tmp_path / "bd",
+        baseline=parse_baseline(document),
+    )
+    projects = yaml.safe_load(render.nsx_yml)["module_registry"]["projects"]
+    assert projects["ns-cmsis-nn"]["url"] == fork
+    assert projects["ns-cmsis-nn"]["revision"] == _SHA_A
+    # nsx-ambiq-sdk is the regression case: the starter profile overrides it with a
+    # bare `revision`, so before this it reached the manifest with no url at all and
+    # NSX silently used the packaged registry's repository.
+    assert projects["nsx-ambiq-sdk"]["url"] == sdk_fork
+    assert projects["nsx-ambiq-sdk"]["revision"] == _SHA_B
+
+    # And a different baseline URL is a different render, so it cannot reuse a lock
+    # resolved from the other repository.
+    assert render.digest != nsx_app.plan_app(
+        BOARD, repo_root=PROJECT_ROOT, build_dir=tmp_path / "bd",
+        baseline=parse_baseline(_minimal_document()),
+    ).digest
+
+
+def test_plan_app_writes_nothing(tmp_path: Path) -> None:
+    """`plan_app` answers "what would this render be" without touching the tree."""
+    build_dir = tmp_path / "bd"
+    planned = nsx_app.plan_app(
+        BOARD, repo_root=PROJECT_ROOT, build_dir=build_dir, baseline=resolve_baseline(PROJECT_ROOT)
+    )
+    assert not nsx_app.app_dir_for(build_dir).exists()
+    written = nsx_app.render_app(
+        BOARD, repo_root=PROJECT_ROOT, build_dir=build_dir, baseline=resolve_baseline(PROJECT_ROOT)
+    )
+    assert planned.digest == written.digest
+    assert (nsx_app.app_dir_for(build_dir) / "nsx.yml").read_text() == planned.nsx_yml
+
+
+def test_render_state_is_not_a_side_effect_of_rendering(tmp_path: Path) -> None:
+    """The state file claims a lock and a module tree exist for this render.
+
+    Writing it at render time made the claim before it was true, which hid the one
+    case `lock_reuse_reason` exists for: a baseline edit that leaves `nsx.yml`
+    byte-identical (a new `baseline_id`, or a pin for a project this board does not
+    resolve) keeps NSX's own manifest hash the same, so only the render digest can
+    reject the stale lock -- and it cannot if it has already been overwritten.
+    """
+    build_dir = tmp_path / "bd"
+    baseline = resolve_baseline(PROJECT_ROOT)
+    first = nsx_app.render_app(
+        BOARD, repo_root=PROJECT_ROOT, build_dir=build_dir, baseline=baseline
+    )
+    assert nsx_app.read_render_state(first.app_dir) is None
+    nsx_app.commit_render_state(first)
+    assert nsx_app.read_render_state(first.app_dir)["render_digest"] == first.digest
+
+    renamed = parse_baseline({**baseline.to_dict(), "baseline_id": "renamed-baseline"})
+    second = nsx_app.render_app(
+        BOARD, repo_root=PROJECT_ROOT, build_dir=build_dir, baseline=renamed
+    )
+    assert second.nsx_yml == first.nsx_yml, "the manifest is unchanged, which is the point"
+    assert second.digest != first.digest
+    assert nsx_app.read_render_state(second.app_dir)["render_digest"] == first.digest, (
+        "re-rendering must leave the previous build's state standing"
+    )
