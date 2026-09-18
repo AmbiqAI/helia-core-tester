@@ -58,6 +58,17 @@ def write_timing(bundle_root: Path, timing: dict) -> Path:
     return path
 
 
+def bundle_root_for(output_root: Path, session_id: str) -> Path:
+    """Where one session's result bundle lives under the repo root.
+
+    Its own function because the path is a published contract and not only an
+    implementation detail: the nightly workflow uploads this directory as its
+    artifact, so the contract test can pin the two against each other instead
+    of against a string typed twice.
+    """
+    return output_root / "artifacts" / "reports" / "hardware" / session_id
+
+
 def write_result_bundle(
     result: SessionResult,
     *,
@@ -85,7 +96,7 @@ def write_result_bundle(
     for case in result.cases:
         if len(case.samples) != len(case.normalized_samples):
             raise ValueError("Sample and normalized sample counts must match")
-    bundle_root = output_root / "artifacts" / "reports" / "hardware" / session_id
+    bundle_root = bundle_root_for(output_root, session_id)
     (bundle_root / "correctness").mkdir(parents=True, exist_ok=True)
     (bundle_root / "outputs").mkdir(parents=True, exist_ok=True)
     (bundle_root / "logs").mkdir(parents=True, exist_ok=True)

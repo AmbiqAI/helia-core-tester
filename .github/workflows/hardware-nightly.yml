@@ -1,0 +1,328 @@
+name: Hardware Nightly
+
+# The generated CMSIS-NN kernel suite, run on real boards every night.
+#
+# One job per board. Each self-hosted runner owns exactly one board and
+# advertises it as a label; the job asks for that label and takes the board's
+# probe serial from the runner's environment. The runner contract
+# (HPX_BOARD, HPX_JLINK_SERIAL, labels, packages) is shared with
+# heliaPROFILER's Hardware Validation workflow and documented for this repo in
+# docs/hardware-ci.md.
+#
+# Deliberately not a copy of hpx's workflow where the two repos differ:
+#   * the board matrix comes from assets/hardware_boards.yaml (the plan job
+#     runs helia_core_tester/scripts/board_matrix.py), so the workflow names no
+#     board of its own and a new table row is covered the next night;
+#   * there is no cheap `--list` preview of the case set -- bridging needs the
+#     generated tests -- so the empty-selection guard is the CLI's own
+#     "No bridgeable generated tests found" error plus the totals.ran check
+#     after the run. What *is* previewed up front, before the ~tens of minutes
+#     of generate+build, is the --family input against the bridged family set;
+#   * the schedule is four hours ahead of hpx's 09:00 UTC nightly: these jobs
+#     ask for the same physical boards, and a runner takes one job at a time.
+
+on:
+  schedule:
+    # 05:00 UTC nightly (22:00 PDT / 21:00 PST the previous day). hpx's
+    # hardware validation nightly is 09:00 UTC on the same benches.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      boards:
+        description: "Comma-separated board ids; empty runs every board in assets/hardware_boards.yaml"
+        required: false
+        default: ""
+        type: string
+      suite:
+        description: "Generated-test suite to stream"
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - int
+          - float
+      family:
+        description: "Optional operator family to narrow a smoke run to (e.g. BasicMathFunctions); empty streams every bridged family"
+        required: false
+        default: ""
+        type: string
+      limit:
+        description: "Optional cap on the generated tests bridged per suite/family; empty streams all of them"
+        required: false
+        default: ""
+        type: string
+      session_suffix:
+        description: "Optional suffix appended to the session id nightly-<run_id>-<board>"
+        required: false
+        default: ""
+        type: string
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # The runner service's HOME is a root-owned NixOS-managed directory, so uv
+  # must be told where to cache and where to put the interpreters it installs.
+  # The checkout parent survives actions/checkout's clean, so these are warm
+  # across nights; each board runner has its own work directory.
+  UV_CACHE_DIR: ${{ github.workspace }}/../hct-uv-cache
+  UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/../hct-uv-python
+  # The NSX app tree (nsx.yml, nsx.lock, the synced module checkouts and the
+  # configured build dir) lives outside the workspace for the same reason: a
+  # cold sync clones the whole Ambiq SDK. `hardware build` re-renders and
+  # rebuilds whenever the manifest, baseline or build options change, so a warm
+  # tree is an optimisation, never a stale-firmware risk; deleting the
+  # directory on the bench is the escape hatch.
+  HCT_CACHE_DIR: ${{ github.workspace }}/../hct-cache
+  HCT_NIGHTLY_BOARDS: ${{ inputs.boards || '' }}
+  HCT_NIGHTLY_SUITE: ${{ inputs.suite || 'both' }}
+  HCT_NIGHTLY_FAMILY: ${{ inputs.family || '' }}
+  HCT_NIGHTLY_LIMIT: ${{ inputs.limit || '' }}
+  HCT_NIGHTLY_SESSION_SUFFIX: ${{ inputs.session_suffix || '' }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      boards: ${{ steps.matrix.outputs.boards }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build the board matrix
+        id: matrix
+        run: |
+          # --no-project: the matrix is a board-table read, not a reason to
+          # install TensorFlow on a hosted runner.
+          boards="$(uv run --no-project --with pyyaml \
+            python helia_core_tester/scripts/board_matrix.py --boards "${HCT_NIGHTLY_BOARDS}")"
+          echo "boards=${boards}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### Board matrix"
+            echo ""
+            echo "- Boards: \`${boards}\`"
+            echo "- Suite: \`${HCT_NIGHTLY_SUITE}\`"
+            echo "- Family: \`${HCT_NIGHTLY_FAMILY:-<every bridged family>}\`"
+            echo "- Limit: \`${HCT_NIGHTLY_LIMIT:-<none>}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  benchmark:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        board: ${{ fromJSON(needs.plan.outputs.boards) }}
+    # The board label pins this job to the runner that owns the board, on
+    # whichever bench it is attached to.
+    runs-on: [self-hosted, hpx-hardware, "${{ matrix.board }}"]
+    # No concurrency group, for the reason hpx's workflow gives: a runner takes
+    # one job at a time, so nothing can share a probe, and several runners of
+    # one board type serve jobs in parallel. A group keyed by board would
+    # throttle them back to one. This timeout bounds a hung probe or a stalled
+    # RTT session, not queue time: a board with no online runner stays queued.
+    timeout-minutes: 240
+    env:
+      HCT_NIGHTLY_BOARD: ${{ matrix.board }}
+      # Beside the bundle root, not inside it: `artifacts/reports/hardware/`
+      # holds one directory per session and nothing else.
+      HCT_RUN_JSON: ${{ github.workspace }}/artifacts/reports/hardware-nightly-run.json
+
+    steps:
+      - name: Resolve board and probe from the runner
+        run: |
+          if [[ -z "${HPX_BOARD:-}" || -z "${HPX_JLINK_SERIAL:-}" ]]; then
+            echo "::error::runner does not export HPX_BOARD and HPX_JLINK_SERIAL; it is not configured per the runner contract (docs/hardware-ci.md)" >&2
+            exit 2
+          fi
+          if [[ "${HPX_BOARD}" != "${HCT_NIGHTLY_BOARD}" ]]; then
+            echo "::error::runner owns board '${HPX_BOARD}' but this job targets '${HCT_NIGHTLY_BOARD}'; check the runner's labels" >&2
+            exit 2
+          fi
+          # The summary and empty-selection steps below read the run's JSON
+          # document with jq. The runner service exposes only the contract's
+          # package set on PATH, so a bench built without jq must fail here,
+          # not an hour later after generate, build and flash.
+          if ! command -v jq > /dev/null; then
+            echo "::error::runner has no jq on PATH; it is not configured per the runner contract (docs/hardware-ci.md)" >&2
+            exit 2
+          fi
+
+          # flatc is *not* a hard requirement and must not fail the job.
+          # Generation reaches for it only on the LSTM path, to rewrite a
+          # converted .tflite; every step of that path is wrapped, and a
+          # failure (flatc missing included) falls back to the validated
+          # ns-cmsis-nn UnitTest reference vectors, which `hardware run` points
+          # generation at through CMSIS_NN_ROOT. So LSTM cases are generated
+          # and streamed either way -- what changes is whether their data is
+          # freshly converted or the checked-in reference set. Record which.
+          if command -v flatc > /dev/null; then
+            flatc_state="present ($(command -v flatc))"
+          else
+            flatc_state="absent; LSTM cases use the ns-cmsis-nn UnitTest reference vectors"
+            echo "::notice::flatc is not on the runner PATH; LSTM generation falls back to the ns-cmsis-nn UnitTest reference vectors"
+          fi
+
+          session_id="nightly-${GITHUB_RUN_ID}-${HPX_BOARD}"
+          if [[ -n "${HCT_NIGHTLY_SESSION_SUFFIX}" ]]; then
+            # The session id is also the result-bundle directory name.
+            if [[ ! "${HCT_NIGHTLY_SESSION_SUFFIX}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::session_suffix must match [A-Za-z0-9._-]+; it becomes a directory name" >&2
+              exit 2
+            fi
+            session_id="${session_id}-${HCT_NIGHTLY_SESSION_SUFFIX}"
+          fi
+
+          {
+            echo "HCT_SESSION_ID=${session_id}"
+            echo "HCT_BUILD_DIR=${HCT_CACHE_DIR}/hardware/${HPX_BOARD}"
+            echo "HCT_FLATC_STATE=${flatc_state}"
+          } >> "${GITHUB_ENV}"
+
+          {
+            echo "### Board: ${HPX_BOARD}"
+            echo ""
+            echo "- Runner: \`${RUNNER_NAME}\`"
+            echo "- J-Link serial: \`${HPX_JLINK_SERIAL}\`"
+            echo "- Session id: \`${session_id}\`"
+            echo "- flatc: ${flatc_state}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --locked --python 3.11
+
+      - name: Check host dependencies
+        run: uv run helia_core_tester doctor
+
+      - name: Check the runner can open its probe
+        run: uv run helia_core_tester probes match --board "${HCT_NIGHTLY_BOARD}"
+
+      - name: Preview the selection
+        run: |
+          # There is no host-side preview of the case set (bridging reads the
+          # generated tests, which this job has not produced yet), but a
+          # --family the firmware has no dispatch for selects nothing, and
+          # finding that out after generate+build+flash wastes most of an
+          # hour. Check the input against the bridged family set now.
+          uv run python - <<'PY'
+          import os
+          import sys
+
+          from helia_core_tester.hardware.generated_test_bridge import bridged_families
+
+          families = bridged_families()
+          requested = os.environ.get("HCT_NIGHTLY_FAMILY", "").strip()
+          print(f"Bridged families: {', '.join(families)}")
+          if requested and requested not in families:
+              print(
+                  f"::error::family '{requested}' has no hardware benchmark firmware "
+                  f"dispatch; it would select no case. Bridged families: "
+                  f"{', '.join(families)}",
+                  file=sys.stderr,
+              )
+              sys.exit(2)
+          print(f"Selected family: {requested or '<every bridged family>'}")
+          PY
+
+      - name: Run the hardware kernel suite
+        run: |
+          mkdir -p "$(dirname "${HCT_RUN_JSON}")"
+          args=(
+            hardware run
+            --board "${HPX_BOARD}"
+            --serial-no "${HPX_JLINK_SERIAL}"
+            --suite "${HCT_NIGHTLY_SUITE}"
+            --session-id "${HCT_SESSION_ID}"
+            --build-dir "${HCT_BUILD_DIR}"
+            --json
+          )
+          if [[ -n "${HCT_NIGHTLY_FAMILY}" ]]; then
+            args+=(--family "${HCT_NIGHTLY_FAMILY}")
+          fi
+          if [[ -n "${HCT_NIGHTLY_LIMIT}" ]]; then
+            args+=(--limit "${HCT_NIGHTLY_LIMIT}")
+          fi
+          # --json puts the one JSON document on stdout and every human line
+          # on stderr, so the document survives redirection and the job log
+          # still shows the run. A correctness mismatch exits non-zero here and
+          # fails the job; the document is already written, and the summary and
+          # upload steps below run under always().
+          uv run helia_core_tester "${args[@]}" > "${HCT_RUN_JSON}"
+
+          # A selection that matched nothing used to be possible only as a CLI
+          # error; keep the check anyway, so a green job always means cases ran.
+          ran="$(jq -r '.totals.ran' "${HCT_RUN_JSON}")"
+          if [[ "${ran}" == "0" ]]; then
+            echo "::error::the requested suite/family/limit selected no case on ${HPX_BOARD}" >&2
+            exit 2
+          fi
+
+      - name: Summarise the run
+        if: always()
+        run: |
+          if [[ ! -s "${HCT_RUN_JSON}" ]]; then
+            {
+              echo ""
+              echo "No run summary: the job failed before \`hardware run\` produced one."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          {
+            echo ""
+            echo "### Kernel suite: ${HCT_NIGHTLY_BOARD}"
+            echo ""
+            jq -r '
+              "- Cases: \(.totals.ran) ran, \(.totals.passed) passed, "
+              + "\(.totals.failed) failed, \(.totals.skipped) skipped",
+              "- Kernel source: `\(.dependencies.workspace.inputs.kernel_source // "unrecorded")`",
+              "- Qualification: `\(.dependencies.qualification // "unrecorded")`",
+              "- Bundle: `\(.bundle)`"
+            ' "${HCT_RUN_JSON}"
+            reasons="$(jq -r '(.dependencies.unqualified_reasons // []) | .[]' "${HCT_RUN_JSON}")"
+            if [[ -n "${reasons}" ]]; then
+              echo ""
+              echo "Unqualified because:"
+              echo ""
+              printf '%s\n' "${reasons}" | sed 's/^/- /'
+            fi
+            failed="$(jq -r '[.cases[] | select(.passed == false) | .case_id] | .[]' "${HCT_RUN_JSON}")"
+            if [[ -n "${failed}" ]]; then
+              echo ""
+              echo "Correctness mismatches:"
+              echo ""
+              printf '%s\n' "${failed}" | sed 's/^/- `/; s/$/`/'
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # One artifact per board. Consumers group a run's artifacts by the GitHub
+      # run id, which is in the session id of every bundle. The upload runs on
+      # failure too, so "re-run failed jobs" meets an artifact of the same name
+      # from the first attempt: overwrite it rather than fail.
+      - name: Upload the result bundles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardware-kernels-${{ github.run_id }}-${{ matrix.board }}
+          overwrite: true
+          path: |
+            artifacts/reports/hardware/
+            artifacts/reports/hardware-nightly-run.json
+          if-no-files-found: warn
