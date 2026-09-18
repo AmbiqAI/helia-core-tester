@@ -54,6 +54,14 @@ not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|s
 `hardware build`, `hardware flash [--force]`, `hardware stream` and
 `hardware memory-report`.
 
+The kernels under test come from an ns-cmsis-nn checkout that the firmware compiles
+and the generate step reads (LSTM unit-test data, header probes, tables). It is
+resolved once per run, in this order: `--cmsis-nn-root PATH` on `hardware
+build|flash|run`, then `$CMSIS_NN_ROOT`, then the nested layout where this repo is
+the `Tests/helia-core-tester` submodule of an ns-cmsis-nn checkout. A standalone
+clone with neither set fails with one error naming the flag; `helia_core_tester
+doctor` shows which checkout (and commit) would be used.
+
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
 `hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or
 `mve`; `SELECTION` is `all`, `default`, or a comma-separated list of `ARM_PMU_*`

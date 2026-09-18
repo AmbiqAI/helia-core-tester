@@ -54,6 +54,10 @@ probes_app = typer.Typer(
 _BOARD_HELP = "Board id from assets/hardware_boards.yaml (default: $HPX_BOARD, else apollo510_evb)."
 _SERIAL_HELP = "J-Link probe serial number (default: $HPX_JLINK_SERIAL, else the single connected probe)."
 _BUILD_DIR_HELP = "CMake build directory (default: build/hardware/<board>)."
+_CMSIS_NN_ROOT_HELP = (
+    "ns-cmsis-nn checkout to compile into the firmware and to generate tests against "
+    "(default: $CMSIS_NN_ROOT, else the nested <ns-cmsis-nn>/Tests/helia-core-tester layout)."
+)
 _VERBOSITY_HELP = "Verbosity level (0-3); 1 or higher prints the full traceback on failure (default: $HELIA_CORE_TESTER_VERBOSITY, else 0)."
 _VERBOSITY_ENV_VAR = "HELIA_CORE_TESTER_VERBOSITY"
 _FORCE_FLASH_HELP = (
@@ -183,14 +187,19 @@ def build(
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
     jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel build jobs."),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
     """Cross-compile the hct_benchmark_server firmware for --board (no flashing)."""
+    from .dependency_sources import CmsisNnSelection
     from .firmware_build import build_firmware, resolve_build_dir
 
     spec = _board(board)
     with _pipeline_errors(_verbosity(verbosity)):
-        elf = build_firmware(spec, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs, force_reconfigure=force_reconfigure)
+        elf = build_firmware(
+            spec, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs, force_reconfigure=force_reconfigure,
+            cmsis_nn=CmsisNnSelection(root=cmsis_nn_root),
+        )
     typer.echo(f"✓ Firmware build completed successfully: {elf}")
 
 
@@ -202,11 +211,13 @@ def flash(
     jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel build jobs."),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
     force: bool = typer.Option(False, "--force", help=_FORCE_FLASH_HELP),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
     """Build (if needed) and flash the hct_benchmark_server firmware to --board via J-Link.
     Skipped only when the ELF is unchanged since this build dir last flashed the same
     probe *and* the board confirms (in TARGET_INFO) that it runs this build's id."""
+    from .dependency_sources import CmsisNnSelection
     from .firmware_build import flash_firmware, resolve_build_dir
 
     spec = _board(board)
@@ -214,7 +225,7 @@ def flash(
     with _pipeline_errors(_verbosity(verbosity)):
         decision = flash_firmware(
             spec, serial, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs,
-            force_reconfigure=force_reconfigure, force=force,
+            force_reconfigure=force_reconfigure, force=force, cmsis_nn=CmsisNnSelection(root=cmsis_nn_root),
         )
     if decision.needed:
         typer.echo("✓ Firmware flashed successfully")
@@ -388,11 +399,13 @@ def run(
     jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel firmware build jobs."),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure the CMake build dir even if it already exists."),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
     """The whole hardware pipeline: generate tests for the board's CPU, build the
     firmware, flash it unless the board already runs this exact build, stream the
     suite, write the result bundle, and print the summary."""
+    from .dependency_sources import CmsisNnSelection
     from .hardware_pipeline import run_hardware_pipeline
 
     if skip_flash and force_flash:
@@ -406,6 +419,6 @@ def run(
             repo_root(), spec, serial, options=options, build_dir=build_dir,
             skip_generate=skip_generate, skip_flash=skip_flash, force_flash=force_flash, jobs=jobs,
             force_reconfigure=force_reconfigure, echo=echo, progress_to_stderr=as_json,
-            allow_unverified_firmware=allow_unverified_firmware,
+            allow_unverified_firmware=allow_unverified_firmware, cmsis_nn=CmsisNnSelection(root=cmsis_nn_root),
         )
     _report(outcome, spec, as_json=as_json)

@@ -30,6 +30,7 @@ import typer
 
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
+from .dependency_sources import CmsisNnSelection, ResolvedCmsisNn, describe, resolve_cmsis_nn
 from .jlink_library import JLinkLibraryError, find_jlink_exe
 from .pathutil import is_relative_to
 from .toolchain import DOWNLOADS_DIR, add_toolchain_to_path, toolchain_bin_dir
@@ -145,9 +146,21 @@ def _cached_var(cache_text: str, name: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def configure(build_dir: Path, board: BoardSpec, force: bool, serial_no: Optional[int] = None) -> None:
+def configure(
+    build_dir: Path,
+    board: BoardSpec,
+    force: bool,
+    serial_no: Optional[int] = None,
+    *,
+    cmsis_nn: Optional[CmsisNnSelection] = None,
+) -> ResolvedCmsisNn:
+    """Configure the CMake build dir for `board`; returns the ns-cmsis-nn checkout it was
+    pointed at (flag > $CMSIS_NN_ROOT > nested layout, see dependency_sources)."""
     repo_root = tester_repo_root()
     ensure_hardware_dependencies(repo_root)
+    # Resolved before touching the build dir so a missing checkout is one clear
+    # error instead of CMakeLists.txt's FATAL_ERROR against its `../..` default.
+    resolved = resolve_cmsis_nn(repo_root, cmsis_nn)
     cache = build_dir / "CMakeCache.txt"
     if cache.exists() and not force:
         # A build dir configured before ARM_NN_ENABLE_F16 was added here would
@@ -158,6 +171,11 @@ def configure(build_dir: Path, board: BoardSpec, force: bool, serial_no: Optiona
         # in cmake/nsx/nsx_helpers.cmake), so switching --serial-no against an
         # already-configured build dir requires a reconfigure to take effect.
         serial_stale = serial_no is not None and _cached_var(cache_text, "NSX_JLINK_SERIAL") != str(serial_no)
+        # The kernel checkout is a cache entry too; a build dir configured against
+        # another checkout (or against CMakeLists.txt's `../..` default) would keep
+        # compiling that one, so say so instead of silently reusing it.
+        cached_root = _cached_var(cache_text, "CMSIS_NN_ROOT")
+        root_stale = cached_root is not None and Path(cached_root) != resolved.root
         # Still re-run cmake below in every case (cheap, <1s) rather than skipping
         # outright when already-configured: relying on `cmake --build`'s own
         # internal cmake_check_build_system re-check to be the first
@@ -166,10 +184,15 @@ def configure(build_dir: Path, board: BoardSpec, force: bool, serial_no: Optiona
         # validation) that a direct `cmake -S -B` invocation here never
         # reproduces -- doing that direct invocation unconditionally sidesteps
         # it instead of chasing the underlying CMake behavior.
-        if "ARM_NN_ENABLE_F16:BOOL=ON" in cache_text and not serial_stale:
+        if "ARM_NN_ENABLE_F16:BOOL=ON" in cache_text and not serial_stale and not root_stale:
             typer.echo(f"[hardware] Reusing existing configured build dir: {build_dir}")
         elif serial_stale:
             typer.echo(f"[hardware] Requested --serial-no {serial_no} differs from configured build dir -- reconfiguring.")
+        elif root_stale:
+            typer.echo(
+                f"[hardware] Configured ns-cmsis-nn root {cached_root} differs from {resolved.root} "
+                f"({resolved.selector}) -- reconfiguring."
+            )
         else:
             typer.echo(f"[hardware] Existing build dir at {build_dir} predates ARM_NN_ENABLE_F16 -- reconfiguring.")
     build_dir.mkdir(parents=True, exist_ok=True)
@@ -192,6 +215,9 @@ def configure(build_dir: Path, board: BoardSpec, force: bool, serial_no: Optiona
         # (${CMAKE_CURRENT_SOURCE_DIR}/../../../neuralspotx) with the copy
         # ensure_hardware_dependencies() fetches into artifacts/downloads/.
         f"-DNEURALSPOTX_ROOT={repo_root / DOWNLOADS_DIR / 'neuralspotx'}",
+        # CMakeLists.txt defaults CMSIS_NN_ROOT to `../..` (this repo as the
+        # Tests/helia-core-tester submodule); a standalone clone has nothing there.
+        f"-DCMSIS_NN_ROOT={resolved.root}",
     ]
     if serial_no is not None:
         cmd.append(f"-DNSX_JLINK_SERIAL={serial_no}")
@@ -208,8 +234,10 @@ def configure(build_dir: Path, board: BoardSpec, force: bool, serial_no: Optiona
         # PATH afresh instead of flashing through a JLinkExe that has since been
         # moved or un-configured.
         cmd.append("-UNSX_JLINK_EXE")
+    typer.echo(f"[hardware] ns-cmsis-nn: {describe(resolved)}")
     typer.echo(f"[hardware] Configuring: {' '.join(cmd)}")
     subprocess.run(cmd, cwd=repo_root, check=True)
+    return resolved
 
 
 def _jlink_exe_for_cmake() -> Optional[str]:
@@ -375,9 +403,10 @@ def build_firmware(
     jobs: Optional[int] = None,
     force_reconfigure: bool = False,
     serial_no: Optional[int] = None,
+    cmsis_nn: Optional[CmsisNnSelection] = None,
 ) -> Path:
     """Cross-compile hct_benchmark_server for `board`; returns the ELF path."""
-    configure(build_dir, board, force_reconfigure, serial_no=serial_no)
+    configure(build_dir, board, force_reconfigure, serial_no=serial_no, cmsis_nn=cmsis_nn)
     build(build_dir, SERVER_TARGET, jobs)
     return elf_path(build_dir)
 
@@ -391,12 +420,15 @@ def flash_firmware(
     force_reconfigure: bool = False,
     force: bool = False,
     board_build_id_reader: BoardBuildIdReader = board_build_id,
+    cmsis_nn: Optional[CmsisNnSelection] = None,
 ) -> FlashDecision:
     """Build, then flash through the NSX-generated J-Link target unless the ELF is
     unchanged since this build dir last flashed this probe *and* the board confirms
     it is running this build's id (or `force` is set)."""
     build_started = time.monotonic()
-    build_firmware(board, build_dir=build_dir, jobs=jobs, force_reconfigure=force_reconfigure, serial_no=serial_no)
+    build_firmware(
+        board, build_dir=build_dir, jobs=jobs, force_reconfigure=force_reconfigure, serial_no=serial_no, cmsis_nn=cmsis_nn,
+    )
     build_seconds = time.monotonic() - build_started
     decision = decide_flash(build_dir, serial_no, force=force)
     if not decision.needed:

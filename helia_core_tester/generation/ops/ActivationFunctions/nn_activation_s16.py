@@ -6,6 +6,7 @@ from typing import Dict, Any, List
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.utils.temp_sizer_probe import require_cmsis_nn_root
 
 
 class OpNNActivationS16(OperationBase):
@@ -26,7 +27,9 @@ class OpNNActivationS16(OperationBase):
         raise NotImplementedError("NNActivationS16 does not generate TFLite models.")
 
     def _load_sigmoid_table(self) -> List[int]:
-        table_path = Path(__file__).resolve().parents[5] / "Source" / "NNSupportFunctions" / "arm_nntables.c"
+        # The same checkout the firmware compiles (CMSIS_NN_ROOT / --cmsis-nn-root);
+        # the old parents[N] guess pointed one level short of the nested layout.
+        table_path = require_cmsis_nn_root("sigmoid_table_uint16 from arm_nntables.c") / "Source" / "NNSupportFunctions" / "arm_nntables.c"
         text = table_path.read_text()
         start = text.find("const uint16_t sigmoid_table_uint16[256] = {")
         if start == -1:

@@ -436,14 +436,87 @@ def test_read_target_info_returns_the_full_payload_without_acknowledging() -> No
 # --- configure flags ---------------------------------------------------------------
 
 
+def _fake_checkout(path: Path) -> Path:
+    """A directory that passes for an ns-cmsis-nn checkout (Include/ + Source/)."""
+    (path / "Include").mkdir(parents=True)
+    (path / "Source").mkdir()
+    return path.resolve()
+
+
 @pytest.fixture
 def captured_cmake(monkeypatch, tmp_path: Path):
-    """Run `configure()` without CMake or the dependency fetch; returns the argv it would run."""
+    """Run `configure()` without CMake or the dependency fetch; returns the argv it would run.
+    CMSIS_NN_ROOT points at a fake checkout under tmp_path so the bench's real value
+    (or its absence) never leaks into the assertions."""
     calls: list[list[str]] = []
     monkeypatch.setattr(firmware_build, "ensure_hardware_dependencies", lambda repo_root: None)
     monkeypatch.setattr(firmware_build, "tester_repo_root", lambda: tmp_path)
     monkeypatch.setattr(firmware_build.subprocess, "run", lambda cmd, **kwargs: calls.append(list(cmd)))
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(_fake_checkout(tmp_path / "env-checkout")))
     return calls
+
+
+def test_configure_passes_the_resolved_cmsis_nn_root_to_cmake(captured_cmake, monkeypatch, tmp_path: Path, capsys) -> None:
+    from helia_core_tester.hardware.dependency_sources import CmsisNnSelection, CmsisNnSourceError
+
+    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: None)
+    env_checkout = (tmp_path / "env-checkout").resolve()
+    # Default: $CMSIS_NN_ROOT.
+    resolved = firmware_build.configure(tmp_path / "bd", BOARD, force=False)
+    assert resolved.root == env_checkout and resolved.selector == "env.CMSIS_NN_ROOT"
+    assert f"-DCMSIS_NN_ROOT={env_checkout}" in captured_cmake[0]
+
+    # --cmsis-nn-root wins over the environment.
+    flag_checkout = _fake_checkout(tmp_path / "flag-checkout")
+    captured_cmake.clear()
+    resolved = firmware_build.configure(tmp_path / "bd", BOARD, force=False, cmsis_nn=CmsisNnSelection(root=flag_checkout))
+    assert resolved.selector == "cli.--cmsis-nn-root" and f"-DCMSIS_NN_ROOT={flag_checkout}" in captured_cmake[0]
+
+    # A build dir configured against another checkout is reported, not silently reused.
+    (tmp_path / "bd").mkdir(exist_ok=True)
+    (tmp_path / "bd" / "CMakeCache.txt").write_text(
+        f"ARM_NN_ENABLE_F16:BOOL=ON\nCMSIS_NN_ROOT:PATH={env_checkout}\n", encoding="utf-8"
+    )
+    capsys.readouterr()
+    firmware_build.configure(tmp_path / "bd", BOARD, force=False, cmsis_nn=CmsisNnSelection(root=flag_checkout))
+    assert f"Configured ns-cmsis-nn root {env_checkout} differs from {flag_checkout}" in capsys.readouterr().out
+    capsys.readouterr()
+    firmware_build.configure(tmp_path / "bd", BOARD, force=False)
+    assert "Reusing existing configured build dir" in capsys.readouterr().out
+
+    # Nothing resolvable is one clear error before CMake runs.
+    monkeypatch.delenv("CMSIS_NN_ROOT")
+    captured_cmake.clear()
+    with pytest.raises(CmsisNnSourceError, match="pass --cmsis-nn-root PATH or set CMSIS_NN_ROOT"):
+        firmware_build.configure(tmp_path / "bd", BOARD, force=False)
+    assert captured_cmake == []
+
+
+def test_generate_tests_for_board_forwards_the_kernel_root_as_an_explicit_override(monkeypatch, tmp_path: Path) -> None:
+    import helia_core_tester.core.steps as steps
+
+    captured: list = []
+
+    class _FakeGenerateStep:
+        def __init__(self, config) -> None:
+            captured.append(config)
+
+        def execute(self):
+            class _Result:
+                success = True
+                skipped = False
+                message = ""
+
+            return _Result()
+
+    monkeypatch.setattr(steps, "GenerateStep", _FakeGenerateStep)
+    monkeypatch.delenv("HELIA_CORE_TESTER_CONFIG", raising=False)
+    monkeypatch.delenv("HELIA_CORE_TESTER_CMSIS_NN_ROOT", raising=False)
+    checkout = _fake_checkout(tmp_path / "ns-cmsis-nn")
+    generate_tests_for_board(PROJECT_ROOT, BOARD, "int", cmsis_nn_root=checkout)
+    assert Path(captured[-1].cmsis_nn_root) == checkout
+    generate_tests_for_board(PROJECT_ROOT, BOARD, "int")
+    assert captured[-1].cmsis_nn_root is None
 
 
 def test_configure_passes_the_board_row_to_cmake(captured_cmake, monkeypatch, tmp_path: Path) -> None:
@@ -537,10 +610,13 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     board = resolve_board("apollo510_evb")
     order: list[str] = []
 
-    def _generate(repo_root, spec, suite, float_precision=None):
-        order.append(f"generate:{spec.cpu}:{suite}:{float_precision}")
+    checkout = _fake_checkout(tmp_path / "ns-cmsis-nn")
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(checkout))
 
-    def _flash(spec, serial, *, build_dir, jobs, force_reconfigure, force):
+    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None):
+        order.append(f"generate:{spec.cpu}:{suite}:{float_precision}:{cmsis_nn_root == checkout}")
+
+    def _flash(spec, serial, *, build_dir, jobs, force_reconfigure, force, cmsis_nn):
         order.append(f"flash:{serial}:{build_dir.relative_to(tmp_path)}:force={force}")
         return firmware_build.FlashDecision(True, "abc", "test")
 
@@ -555,15 +631,18 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     outcome = run_hardware_pipeline(
         tmp_path, board, 42, options=StreamOptions(suite="float", test_name="_f16", float_precision="f16"), echo=lambda _msg: None,
     )
-    assert order == ["generate:cortex-m55:float:f16", "flash:42:build/hardware/apollo510_evb:force=False", "stream:float:_f16:unverified=False"]
+    assert order == ["generate:cortex-m55:float:f16:True", "flash:42:build/hardware/apollo510_evb:force=False", "stream:float:_f16:unverified=False"]
     assert outcome.flash is not None and outcome.flash.needed
 
+    # Streaming alone needs no kernel checkout at all.
     order.clear()
+    monkeypatch.delenv("CMSIS_NN_ROOT")
     run_hardware_pipeline(
         tmp_path, board, 42, options=StreamOptions(), skip_generate=True, skip_flash=True, echo=lambda _msg: None,
         allow_unverified_firmware=True,
     )
     assert order == ["stream:int:None:unverified=True"]
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(checkout))
 
     order.clear()
     run_hardware_pipeline(

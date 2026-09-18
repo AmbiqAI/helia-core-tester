@@ -85,6 +85,19 @@ def _checkout_check(label: str, path: Path) -> HardwareCheck:
     return HardwareCheck(label, True, f"{path} @ {head or 'unknown HEAD'}")
 
 
+def _cmsis_nn_check(repo_root: Path) -> HardwareCheck:
+    """The ns-cmsis-nn checkout `hardware build` compiles and `generate` reads."""
+    from .dependency_sources import CmsisNnSourceError, resolve_cmsis_nn
+
+    label = "ns-cmsis-nn checkout"
+    try:
+        resolved = resolve_cmsis_nn(repo_root)
+    except CmsisNnSourceError as exc:
+        return HardwareCheck(label, False, str(exc))
+    head = _git_head(resolved.root)
+    return HardwareCheck(label, True, f"{resolved.root} @ {head or 'unknown HEAD'} ({resolved.selector})")
+
+
 def _board_table_check() -> HardwareCheck:
     try:
         from .boards import load_board_table
@@ -106,5 +119,6 @@ def hardware_checks(repo_root: Path) -> list[HardwareCheck]:
         _jlink_exe_check(),
         _checkout_check("nsx-ambiq-sdk checkout", nsx_ambiq_sdk_dir(repo_root, downloads)),
         _checkout_check("neuralspotx checkout", downloads / "neuralspotx"),
+        _cmsis_nn_check(repo_root),
         _board_table_check(),
     ]

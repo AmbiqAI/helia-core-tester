@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 from .boards import BoardSpec, default_session_id
+from .dependency_sources import CmsisNnSelection, describe, resolve_cmsis_nn
 from .firmware_build import FlashDecision, build_id_path, flash_firmware, read_build_id, resolve_build_dir
 from .measurement import (
     TooManyPassesError,
@@ -147,11 +148,20 @@ def resolve_pmu_options(pmu_counters: Sequence[str], pmu_groups: Optional[str], 
     return default_selection()
 
 
-def generate_tests_for_board(repo_root: Path, board: BoardSpec, suite: str, float_precision: Optional[str] = None) -> None:
+def generate_tests_for_board(
+    repo_root: Path,
+    board: BoardSpec,
+    suite: str,
+    float_precision: Optional[str] = None,
+    cmsis_nn_root: Optional[Path] = None,
+) -> None:
     """Run the generate step for the board's CPU and the requested suite, exactly as
     `helia_core_tester generate --cpu <board.cpu> --suite <suite>
-    [--float-precision <float_precision>]` would. `float_precision` (f16/f32/both)
-    is an explicit override when given; otherwise the TOML/env/default applies."""
+    [--float-precision <float_precision>] [--cmsis-nn-root <cmsis_nn_root>]` would.
+    `float_precision` (f16/f32/both) and `cmsis_nn_root` are explicit overrides when
+    given; otherwise the TOML/env/default applies. The generate step exports
+    `cmsis_nn_root` as CMSIS_NN_ROOT to the generator subprocess, so the same
+    checkout the firmware compiles feeds the LSTM data, header probes and tables."""
     from ..core.config import Config
     from ..core.logging import setup_logger
     from ..core.steps import GenerateStep
@@ -161,6 +171,9 @@ def generate_tests_for_board(repo_root: Path, board: BoardSpec, suite: str, floa
     if float_precision is not None:
         kwargs["float_precision"] = float_precision
         overrides.add("float_precision")
+    if cmsis_nn_root is not None:
+        kwargs["cmsis_nn_root"] = cmsis_nn_root
+        overrides.add("cmsis_nn_root")
     config = Config(
         project_root=repo_root,
         cpu=board.cpu,
@@ -325,11 +338,21 @@ def run_hardware_pipeline(
     echo: Callable[[str], None],
     progress_to_stderr: bool = False,
     allow_unverified_firmware: bool = False,
+    cmsis_nn: Optional[CmsisNnSelection] = None,
 ) -> HardwareRunOutcome:
     """generate (board cpu) -> build -> flash unless the board already runs this build -> stream -> bundle."""
     if skip_flash and force_flash:
         raise ValueError("--skip-flash and --force-flash cannot be combined.")
     resolved_build_dir = resolve_build_dir(repo_root, board, build_dir)
+    # One checkout for both the generate step and the firmware build, resolved before
+    # either starts so a missing one fails here and not minutes into generation.
+    # Streaming alone (--skip-generate --skip-flash) does not need it.
+    kernels = None
+    if not (skip_generate and skip_flash):
+        kernels = resolve_cmsis_nn(repo_root, cmsis_nn)
+        if skip_flash:
+            # Otherwise configure() prints the same line for the firmware build.
+            echo(f"[hardware] ns-cmsis-nn: {describe(kernels)}")
 
     generate_s = 0.0
     if skip_generate:
@@ -338,7 +361,9 @@ def run_hardware_pipeline(
         precision_note = f" float_precision={options.float_precision}" if options.float_precision else ""
         echo(f"[hardware] Generating tests (cpu={board.cpu} suite={options.suite}{precision_note})...")
         generate_started = time.monotonic()
-        generate_tests_for_board(repo_root, board, options.suite, float_precision=options.float_precision)
+        generate_tests_for_board(
+            repo_root, board, options.suite, float_precision=options.float_precision, cmsis_nn_root=kernels.root,
+        )
         generate_s = time.monotonic() - generate_started
 
     flash: Optional[FlashDecision] = None
@@ -347,6 +372,7 @@ def run_hardware_pipeline(
     else:
         flash = flash_firmware(
             board, serial_no, build_dir=resolved_build_dir, jobs=jobs, force_reconfigure=force_reconfigure, force=force_flash,
+            cmsis_nn=cmsis_nn,
         )
 
     outcome = stream_generated_tests(

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from .boards import DEFAULT_BOARD_ID, BoardSpec, repo_root, resolve_board
+from .dependency_sources import CmsisNnSelection, resolve_cmsis_nn
 from .pathutil import display_path, write_text_lf
 from .toolchain import arm_tool, toolchain_bin_dir
 from ..scripts.setup_dependencies import nsx_ambiq_sdk_dir
@@ -285,7 +286,12 @@ def _run(cmd: list[str], *, cwd: Path, env: Optional[dict[str, str]] = None) -> 
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True, env=env)
 
 
-def _configure_size_probe(project_root: Path, build_dir: Path, board: BoardSpec, variant: SizeProbeVariant) -> None:
+def _configure_size_probe(
+    project_root: Path, build_dir: Path, board: BoardSpec, variant: SizeProbeVariant, cmsis_nn_root: Path
+) -> None:
+    """The size probe's own CMake configure. It is independent of firmware_build.configure()
+    (own build dir, own -D list), so every kernel-root or flag define the firmware build
+    passes has to be mirrored here."""
     toolchain = project_root / "cmake" / "nsx" / "toolchains" / "arm-none-eabi-gcc.cmake"
     cmd = [
         "cmake",
@@ -301,20 +307,28 @@ def _configure_size_probe(project_root: Path, build_dir: Path, board: BoardSpec,
         f"-DTARGET_CPU={board.cpu}",
         f"-DARM_NN_ENABLE_F32={'ON' if variant.enable_f32 else 'OFF'}",
         f"-DARM_NN_ENABLE_F16={'ON' if variant.enable_f16 else 'OFF'}",
+        f"-DCMSIS_NN_ROOT={cmsis_nn_root}",
     ]
     _run(cmd, cwd=project_root, env=_toolchain_env(project_root))
 
 
-def build_size_probe(board: BoardSpec, variant: SizeProbeVariant, *, project_root: Optional[Path] = None) -> Path:
+def build_size_probe(
+    board: BoardSpec,
+    variant: SizeProbeVariant,
+    *,
+    project_root: Optional[Path] = None,
+    cmsis_nn: Optional[CmsisNnSelection] = None,
+) -> Path:
     """Configure, build and measure one size-probe variant for `board`; returns the
     directory holding its `memory_report.json` and raw tool outputs."""
     project_root = project_root or repo_root()
+    resolved = resolve_cmsis_nn(project_root, cmsis_nn)
     # Board-keyed so two boards' probes in one checkout never share a CMake cache or
     # overwrite each other's report and raw tool outputs.
     probe_root = project_root / "artifacts" / "hardware" / "size_probe" / board.id / variant.name
     build_dir = probe_root / "build"
     build_dir.mkdir(parents=True, exist_ok=True)
-    _configure_size_probe(project_root, build_dir, board, variant)
+    _configure_size_probe(project_root, build_dir, board, variant, resolved.root)
     _run(["cmake", "--build", str(build_dir), "--target", SIZE_PROBE_TARGET], cwd=project_root, env=_toolchain_env(project_root))
 
     out_dir = build_dir / "probe"

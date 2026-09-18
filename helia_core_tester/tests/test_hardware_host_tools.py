@@ -170,12 +170,20 @@ def test_size_probe_is_board_keyed_and_builds_with_the_toolchain_on_path(report_
             (out / f"{report.SIZE_PROBE_TARGET}.elf").write_bytes(b"elf")
 
     monkeypatch.setattr(report, "_run", _fake_run)
+    checkout = report_env / "ns-cmsis-nn"
+    (checkout / "Include").mkdir(parents=True)
+    (checkout / "Source").mkdir()
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(checkout))
     variant = report.SIZE_PROBE_VARIANTS[0]
     out_dir = report.build_size_probe(resolve_board(DEFAULT_BOARD_ID), variant, project_root=report_env)
     board_keyed = report_env / "artifacts" / "hardware" / "size_probe" / DEFAULT_BOARD_ID / variant.name
     assert out_dir == board_keyed or board_keyed in out_dir.parents
     expected_bin = str(toolchain.toolchain_bin_dir(report_env).resolve())
     assert len(runs) == 2 and all(path.split(os.pathsep)[0] == expected_bin for _, path in runs)
+    # The probe is a second, independent CMake configure: it must be pointed at the
+    # same kernel checkout as the firmware build instead of CMakeLists.txt's `../..`.
+    configure_cmd = runs[0][0]
+    assert f"-DCMSIS_NN_ROOT={checkout.resolve()}" in configure_cmd
 
 
 def test_memory_report_fails_closed_when_a_board_region_is_missing(tmp_path: Path, report_env: Path, monkeypatch) -> None:
