@@ -654,6 +654,13 @@ Each batch of cases is one RTT session, and each session starts like an hpx capt
    then buffer size. Only if that finds nothing does J-Link's own auto-scan run. The
    scan never wipes: the phase-0 wipe is safe only because a reset follows it.
 
+   The name bonus is a *ranking* signal, not a filter, and measurably has to be:
+   scanning right after a reset routinely catches the block in SEGGER's own
+   pre-`hct_rtt_init` state (channel 0 still "Terminal", 1024 bytes) before the
+   firmware renames it to `HCTP_UP`. That window is also why the pre-clean earns
+   its keep in scan mode -- a stale block that *does* carry the name would
+   otherwise outscore the live one during it.
+
 `HCT_RTT_DISCOVERY=scan|address|auto` forces a path, which is how the discovery and
 pre-clean code is exercised on hardware without deleting the ELF that address comes
 from.
