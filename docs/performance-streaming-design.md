@@ -352,7 +352,9 @@ Both reports come from one analysis (`helia_core_tester/hardware/memory_report.p
 - `arm-none-eabi-size`
 - `arm-none-eabi-nm`
 - `arm-none-eabi-objdump -h`
-- the board's NSX linker script memory regions -- the SoC directory (`soc`) and the
+- the board's NSX linker script memory regions -- read back out of the `-T` flag in
+  the build tree's generated Ninja file, i.e. the script the linker actually used,
+  with the SoC's default script in the synced SDK module as the fallback. The
   flash/RAM region names (`flash_region`, `ram_region`) come from the board's row in
   `assets/hardware_boards.yaml`
 
@@ -360,6 +362,62 @@ Reported percentages are computed against:
 
 - `MCU_MRAM` for flash image bytes
 - `MCU_TCM` for static TCM usage before heap
+
+## Kernel build parity
+
+The point of running these cases on real silicon is to measure the kernels as they
+will actually ship, which means the firmware has to compile ns-cmsis-nn the way
+every other consumer does. It did not: the firmware used to be built by pointing
+CMake at this repo's root `CMakeLists.txt` with `HELIA_HARDWARE_BUILD=ON`, which
+`add_subdirectory()`-ed the kernel repo under a flag set assembled here rather than
+by the kernels' own NSX module.
+
+Building the firmware as an NSX app fixes that by construction: `nsx-cmsis-nn` is
+added as a module, so it brings its own `nsx/CMakeLists.txt`, its own
+`NSX_CMSIS_NN_OPTIMIZATION`, and the board's `nsx::board_flags`. The effective
+kernel compile line on `apollo510_evb`/arm-none-eabi-gcc is now:
+
+```
+-O3 -DNDEBUG -std=gnu11 -Ofast -mthumb -mcpu=cortex-m55 -mfloat-abi=hard
+-fshort-enums -ffunction-sections -fdata-sections -fomit-frame-pointer
+-fno-exceptions -MMD -MP -Wall -g -O3 -ffast-math
+```
+
+with `-DCMSIS_NN_USE_REQUANTIZE_INLINE_ASSEMBLY`, `-DARM_NN_ENABLE_F32=1`,
+`-DARM_NN_ENABLE_F16=1` and the board/SoC define set (`ARMCM55`, `AM_PART_APOLLO510`,
+`NSX_SOC_HAS_MVE=1`, ...). That flag list is **byte-identical to heliaPROFILER's**
+for the same board and toolchain, so a kernel number from this tool and one from hpx
+are measurements of the same binary shape.
+
+Two differences from the old line are worth naming:
+
+- **`-mfpu` is gone.** The old path applied a global
+  `add_compile_options(-mfloat-abi=hard -mfpu=fpv5-sp-d16)` to everything, including
+  the kernels. `-mfpu=fpv5-sp-d16` names a scalar single-precision FPU, which is not
+  what a Cortex-M55 with MVE has; `-mcpu=cortex-m55` already selects the right
+  FP/MVE feature set and adding `-mfpu` on top only narrows it. NSX's board flags
+  set `-mcpu` and `-mfloat-abi` and stop there.
+- **Requantize inline assembly is ON.** `NSX_CMSIS_NN_USE_REQUANTIZE_INLINE_ASM`
+  defaults to `OFF` in the module, and the old path never set it either way. The app
+  forces it `ON`, matching hpx. `--no-requantize-inline-asm` is the A/B control; it
+  changes the rendered `CMakeLists.txt`, hence the render digest, so a build
+  directory cannot silently carry the other setting.
+
+Both kernel switches are written into the app's `CMakeLists.txt` above
+`nsx_bootstrap_app()` rather than passed as `-D` at configure time: an `option()`
+default cannot be overridden once its module has been added.
+
+### A/B session ids
+
+A firmware change that moves the numbers is worth measuring against the mechanism it
+replaces, on the same board with the same generated cases. The convention is one
+session id per (leg, repetition, case group) -- `ab-<leg>-<rep>-<group>`, e.g.
+`ab-A-1-basicmath` -- with the legs interleaved rather than run in blocks, so probe
+or thermal drift shows up as A-vs-A disagreement instead of as a result. Reject the
+comparison if the two A repetitions disagree by more than ~0.1 % on a case; read a
+kernel-level regression as >1 % slower with `ARM_PMU_INST_RETIRED` up and
+`ARM_PMU_MVE_INST_RETIRED` down, which is the signature of a lost vectorisation
+rather than of noise.
 
 ## Result bundle
 
@@ -424,8 +482,10 @@ name, SEGGER device name, SWD speed and the `build/hardware/<board>` build dir;
 `--serial-no` is optional and falls back to `$HPX_JLINK_SERIAL`, then to the single
 connected J-Link probe enumerated through pylink).
 
-Cross-build the benchmark-server firmware for the board (fetches nsx-ambiq-sdk,
-neuralspotx and the toolchain file on first use):
+Build the benchmark-server firmware for the board. The firmware is an NSX app
+(rendered into `build/hardware/<board>/nsx_app/`, then locked/synced/configured/built
+through `neuralspotx.api` -- see "Kernel build parity" below), so the first build
+resolves and vendors the SDK, board and kernel modules into that app:
 
 ```bash
 uv run helia_core_tester hardware build --board apollo510_evb -j
