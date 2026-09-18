@@ -61,6 +61,18 @@ def resolve_cmsis_nn_root() -> Optional[Path]:
     return root
 
 
+def require_cmsis_nn_root(purpose: str) -> Path:
+    """resolve_cmsis_nn_root() for generators that cannot run without the checkout
+    (e.g. a table or schema read from it): raises with the fix spelled out."""
+    root = resolve_cmsis_nn_root()
+    if root is None:
+        raise RuntimeError(
+            f"No ns-cmsis-nn checkout found ({purpose}): set CMSIS_NN_ROOT or pass "
+            f"--cmsis-nn-root to an ns-cmsis-nn checkout (a directory with Include/ and Source/)."
+        )
+    return root
+
+
 _COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
 
 

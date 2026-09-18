@@ -6,6 +6,7 @@ import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops.catalog import get_operator_spec
+from helia_core_tester.generation.utils.temp_sizer_probe import require_cmsis_nn_root
 
 
 class OpLSTMUnidirectional(OperationBase):
@@ -409,7 +410,9 @@ class OpLSTMUnidirectional(OperationBase):
             output_zero_point_override = int(output_zero_point_override)
 
         templates_dir = Path(find_tester_templates_dir()) / get_operator_spec("LSTMUnidirectional").template_relpath / "json"
-        schema_path = Path(__file__).resolve().parents[4] / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
+        # The same checkout the firmware compiles (CMSIS_NN_ROOT / --cmsis-nn-root);
+        # the old parents[N] guess pointed one level short of the nested layout.
+        schema_path = require_cmsis_nn_root("LSTM schema.fbs") / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
         work_dir = Path(output_dir) / "_lstm_tmp"
         work_dir.mkdir(parents=True, exist_ok=True)
 
