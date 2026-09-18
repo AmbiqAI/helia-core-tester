@@ -543,7 +543,8 @@ uv run helia_core_tester hardware build --board apollo510_evb -j
 Flash through the NSX-generated SEGGER target -- skipped automatically when the
 ELF's sha256 matches the last flash to the same probe from this build dir *and*
 the board confirms it is running this build (every build carries a content-hash
-build id in `<build_dir>/hct_build_id.txt`, stamped into the linked image after
+build id in `<build_dir>/nsx_app/build/<board>/hct_build_id.txt` -- next to the
+image, see `firmware_build.build_id_path()` -- stamped into the linked image after
 the link by `scripts/patch_build_id.py` -- a sha256 over the whole flash image,
 so it covers every linked library and the linker layout, not only the server
 objects -- and advertised in TARGET_INFO; the skip path opens one short RTT session to
