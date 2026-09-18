@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 from .boards import BoardSpec, default_session_id
-from .firmware_build import FlashDecision, build_id_path, flash_firmware, read_build_id, resolve_build_dir
+from .firmware_build import (
+    FirmwareOptions,
+    FlashDecision,
+    build_id_path,
+    flash_firmware,
+    kernel_source_root,
+    read_build_id,
+    resolve_build_dir,
+)
 from .measurement import (
     TooManyPassesError,
     UnsupportedCounterError,
@@ -147,11 +155,23 @@ def resolve_pmu_options(pmu_counters: Sequence[str], pmu_groups: Optional[str], 
     return default_selection()
 
 
-def generate_tests_for_board(repo_root: Path, board: BoardSpec, suite: str, float_precision: Optional[str] = None) -> None:
+def generate_tests_for_board(
+    repo_root: Path,
+    board: BoardSpec,
+    suite: str,
+    float_precision: Optional[str] = None,
+    cmsis_nn_root: Optional[Path] = None,
+) -> None:
     """Run the generate step for the board's CPU and the requested suite, exactly as
     `helia_core_tester generate --cpu <board.cpu> --suite <suite>
     [--float-precision <float_precision>]` would. `float_precision` (f16/f32/both)
-    is an explicit override when given; otherwise the TOML/env/default applies."""
+    is an explicit override when given; otherwise the TOML/env/default applies.
+
+    `cmsis_nn_root` is the kernel checkout the *firmware* was built from (the
+    synced NSX module, or `--cmsis-nn-root`). Generation reads schemas and
+    reference tables out of it, so passing it is what keeps the cases and the
+    kernels under test on the same commit instead of leaving generation to find
+    a checkout of its own through `$CMSIS_NN_ROOT`."""
     from ..core.config import Config
     from ..core.logging import setup_logger
     from ..core.steps import GenerateStep
@@ -161,6 +181,9 @@ def generate_tests_for_board(repo_root: Path, board: BoardSpec, suite: str, floa
     if float_precision is not None:
         kwargs["float_precision"] = float_precision
         overrides.add("float_precision")
+    if cmsis_nn_root is not None:
+        kwargs["cmsis_nn_root"] = cmsis_nn_root
+        overrides.add("cmsis_nn_root")
     config = Config(
         project_root=repo_root,
         cpu=board.cpu,
@@ -225,10 +248,10 @@ def stream_generated_tests(
 
     session_id = options.session_id or default_session_id(board)
 
-    expected_build_id = read_build_id(build_dir)
+    expected_build_id = read_build_id(build_dir, board)
     if expected_build_id is None:
         stamp_missing = (
-            f"{build_id_path(build_dir)} not found, so the firmware on the board cannot be verified "
+            f"{build_id_path(build_dir, board)} not found, so the firmware on the board cannot be verified "
             "against this build dir."
         )
         if not allow_unverified_firmware:
@@ -322,6 +345,7 @@ def run_hardware_pipeline(
     force_flash: bool = False,
     jobs: Optional[int] = None,
     force_reconfigure: bool = False,
+    firmware_options: Optional[FirmwareOptions] = None,
     echo: Callable[[str], None],
     progress_to_stderr: bool = False,
     allow_unverified_firmware: bool = False,
@@ -330,24 +354,41 @@ def run_hardware_pipeline(
     if skip_flash and force_flash:
         raise ValueError("--skip-flash and --force-flash cannot be combined.")
     resolved_build_dir = resolve_build_dir(repo_root, board, build_dir)
+    firmware_options = firmware_options or FirmwareOptions()
 
-    generate_s = 0.0
-    if skip_generate:
-        echo("[hardware] --skip-generate set; reusing existing artifacts/generated_tests.")
-    else:
-        precision_note = f" float_precision={options.float_precision}" if options.float_precision else ""
-        echo(f"[hardware] Generating tests (cpu={board.cpu} suite={options.suite}{precision_note})...")
-        generate_started = time.monotonic()
-        generate_tests_for_board(repo_root, board, options.suite, float_precision=options.float_precision)
-        generate_s = time.monotonic() - generate_started
-
+    # Build first, generate second: generation reads its kernel schemas and
+    # reference tables out of the ns-cmsis-nn tree NSX synced for this build, so
+    # that tree has to exist before the generate step runs. (It also means a
+    # firmware build failure costs nothing in generation time.)
     flash: Optional[FlashDecision] = None
     if skip_flash:
         echo("[hardware] --skip-flash set; reusing firmware already running on the board.")
     else:
         flash = flash_firmware(
-            board, serial_no, build_dir=resolved_build_dir, jobs=jobs, force_reconfigure=force_reconfigure, force=force_flash,
+            board, serial_no, build_dir=resolved_build_dir, jobs=jobs,
+            force_reconfigure=force_reconfigure, force=force_flash, options=firmware_options,
+            repo_root=repo_root,
         )
+
+    generate_s = 0.0
+    if skip_generate:
+        echo("[hardware] --skip-generate set; reusing existing artifacts/generated_tests.")
+    else:
+        kernels = kernel_source_root(resolved_build_dir, firmware_options)
+        if not kernels.is_dir():
+            raise RuntimeError(
+                f"Generation needs the ns-cmsis-nn tree the firmware was built from, but "
+                f"{kernels} does not exist. Run `hardware build --board {board.id}` first "
+                f"(--skip-flash skipped it), or pass --skip-generate."
+            )
+        precision_note = f" float_precision={options.float_precision}" if options.float_precision else ""
+        echo(f"[hardware] Generating tests (cpu={board.cpu} suite={options.suite}{precision_note}) from {kernels}...")
+        generate_started = time.monotonic()
+        generate_tests_for_board(
+            repo_root, board, options.suite,
+            float_precision=options.float_precision, cmsis_nn_root=kernels,
+        )
+        generate_s = time.monotonic() - generate_started
 
     outcome = stream_generated_tests(
         repo_root, board, serial_no, build_dir=resolved_build_dir, options=options,

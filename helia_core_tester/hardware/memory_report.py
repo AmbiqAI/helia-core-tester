@@ -17,20 +17,19 @@ names of the flash and RAM regions in it -- comes from the board table.
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 from .boards import DEFAULT_BOARD_ID, BoardSpec, repo_root, resolve_board
+from .nsx_app import SERVER_TARGET, SIZE_PROBE_TARGET, KernelOptions, app_dir_for, read_render_state
 from .pathutil import display_path, write_text_lf
-from .toolchain import arm_tool, toolchain_bin_dir
-from ..scripts.setup_dependencies import nsx_ambiq_sdk_dir
+from .toolchain import arm_tool
 
-SERVER_TARGET = "hct_benchmark_server"
-SIZE_PROBE_TARGET = "hct_universal_size_probe"
+if TYPE_CHECKING:
+    from .firmware_build import FirmwareOptions
 
 # Catalog kernels whose symbols are checked for retention in the linked server image.
 _SELECTED_ADAPTERS = (
@@ -49,15 +48,42 @@ _MEMORY_RE = re.compile(
 _SYMBOL_RE = re.compile(r"^[0-9a-fA-F]+\s+[A-Za-z]\s+(arm_[A-Za-z0-9_]+)$")
 
 
-def linker_script_path(board: BoardSpec, project_root: Optional[Path] = None) -> Path:
-    """The NSX SDK linker script the firmware for `board` is linked with.
+_LINK_SCRIPT_RE = re.compile(r"-T\s*(\S+\.ld)")
 
-    The SDK's `cmake/socs/<soc>.cmake` selects it (`NSX_LINKER_SCRIPT`) but never
-    exports it to the CMake cache, so the same default path is rebuilt here from the
-    board's SoC directory.
+
+def linker_script_path(board: BoardSpec, build_dir: Path) -> Path:
+    """The NSX linker script the firmware in `build_dir` was actually linked with.
+
+    The board fragment selects it (`NSX_LINKER_SCRIPT`) and puts it on the board
+    flags target as a `-T` link option; it never reaches the CMake cache. So it
+    is read back out of the generated Ninja file -- the same string the linker
+    saw -- rather than reconstructed from a path convention that the SDK is free
+    to change under us. A build tree that has no Ninja file yet (or an NSX that
+    lays the flag out differently) falls back to the SoC's default script in the
+    synced SDK module.
     """
-    sdk = nsx_ambiq_sdk_dir(project_root or repo_root())
-    return sdk / "modules" / "nsx-core" / "src" / board.soc / "gcc" / "linker_script_sbl.ld"
+    from .firmware_build import output_dir
+
+    ninja = output_dir(build_dir, board) / "build.ninja"
+    if ninja.is_file():
+        for match in _LINK_SCRIPT_RE.finditer(ninja.read_text(encoding="utf-8", errors="ignore")):
+            candidate = Path(match.group(1))
+            if candidate.is_file():
+                return candidate
+    from .nsx_app import app_dir_for
+
+    fallback = (
+        app_dir_for(build_dir)
+        / "modules" / "nsx-ambiq-sdk" / "modules" / "nsx-core"
+        / "src" / board.soc / "gcc" / "linker_script_sbl.ld"
+    )
+    if not fallback.is_file():
+        raise FileNotFoundError(
+            f"Cannot determine the linker script for board {board.id!r}: neither "
+            f"{ninja} names one nor does {fallback} exist. Run `hardware build --board "
+            f"{board.id}` first."
+        )
+    return fallback
 
 
 def parse_memory_regions(linker_script: Path) -> list[dict[str, int | str]]:
@@ -155,7 +181,9 @@ class ElfAnalysis:
         write_text_lf(out_root / "objdump_h.txt", self.objdump_headers)
 
 
-def analyze_elf(elf: Path, board: BoardSpec, project_root: Optional[Path] = None) -> ElfAnalysis:
+def analyze_elf(
+    elf: Path, board: BoardSpec, build_dir: Path, project_root: Optional[Path] = None
+) -> ElfAnalysis:
     size_default = _probe_binary("arm-none-eabi-size", [str(elf)], project_root)
     size_sections = _probe_binary("arm-none-eabi-size", ["-A", str(elf)], project_root)
     nm_size_sort = _probe_binary("arm-none-eabi-nm", ["-S", "--size-sort", str(elf)], project_root)
@@ -163,7 +191,7 @@ def analyze_elf(elf: Path, board: BoardSpec, project_root: Optional[Path] = None
     objdump_headers = _probe_binary("arm-none-eabi-objdump", ["-h", str(elf)], project_root)
 
     sections = _parse_size_a(size_sections)
-    memory_regions = parse_memory_regions(linker_script_path(board, project_root))
+    memory_regions = parse_memory_regions(linker_script_path(board, build_dir))
     region_map = {str(row["name"]): int(row["capacity"]) for row in memory_regions}
     flash_image_bytes = sections.get(".text", 0) + sections.get(".itcm_text", 0) + sections.get(".data", 0)
     tcm_static_bytes = sections.get(".stack", 0) + sections.get(".data", 0) + sections.get(".bss", 0)
@@ -212,29 +240,40 @@ def generate_memory_report(
 ) -> Path:
     """Write `memory_report.json` (plus the raw size/nm/objdump outputs and the kernel
     catalog) for the board's linked benchmark-server firmware and return its path."""
+    from .firmware_build import bin_path, elf_path, map_path
+
     project_root = project_root or repo_root()
     build_root = build_dir or board.build_dir(project_root)
     out_root = output_root or project_root / "artifacts" / "hardware" / "benchmark_server"
     out_root.mkdir(parents=True, exist_ok=True)
 
-    elf = build_root / "hardware" / f"{SERVER_TARGET}.elf"
+    elf = elf_path(build_root, board)
     if not elf.is_file():
         raise FileNotFoundError(f"Built firmware ELF not found: {elf} -- run `hardware build` for this board/build dir first.")
-    analysis = analyze_elf(elf, board, project_root)
+    analysis = analyze_elf(elf, board, build_root, project_root)
     symbols = analysis.symbols
     retained = {name: name in symbols for name in _SELECTED_ADAPTERS}
     catalog = json.loads((project_root / "cmake" / "hardware" / "kernel_catalog.json").read_text(encoding="utf-8"))
+
+    # What this image was built from, taken from the build dir's own render state
+    # rather than re-resolved: the report has to describe the ELF in front of it,
+    # not what a fresh render would produce today.
+    provenance = read_render_state(app_dir_for(build_root)) or {}
 
     report = {
         "schema": "hct.memory_report",
         "schema_version": 1,
         "artifact": SERVER_TARGET,
         "target": {"board": board.id, "cpu": board.cpu},
+        "baseline_id": provenance.get("baseline_id"),
+        "baseline_fingerprint": provenance.get("baseline_fingerprint"),
+        "kernel_source": provenance.get("kernel_source"),
+        "kernel_options": provenance.get("kernel_options"),
         # Repo-relative for the default in-tree build dir, absolute for an external --build-dir.
         "artifacts": {
             "elf": display_path(elf, project_root),
-            "bin": display_path(build_root / "hardware" / f"{SERVER_TARGET}.bin", project_root),
-            "map": display_path(build_root / "hardware" / f"{SERVER_TARGET}.map", project_root),
+            "bin": display_path(bin_path(build_root, board), project_root),
+            "map": display_path(map_path(build_root, board), project_root),
         },
         "memory_regions": analysis.memory_regions,
         "sections": analysis.sections,
@@ -261,6 +300,13 @@ class SizeProbeVariant:
     enable_f32: bool
     enable_f16: bool
 
+    def kernel_options(self, *, requantize_inline_asm: bool = True) -> KernelOptions:
+        return KernelOptions(
+            requantize_inline_asm=requantize_inline_asm,
+            enable_f32=self.enable_f32,
+            enable_f16=self.enable_f16,
+        )
+
 
 SIZE_PROBE_VARIANTS: tuple[SizeProbeVariant, ...] = (
     SizeProbeVariant("int", False, False),
@@ -270,56 +316,68 @@ SIZE_PROBE_VARIANTS: tuple[SizeProbeVariant, ...] = (
 )
 
 
-def _toolchain_env(project_root: Path) -> dict[str, str]:
-    """The child environment for a size-probe configure/build: the checkout's downloaded
-    ARM GCC `bin/` first on PATH. The CMake build runs generate_kernel_symbol_refs.py,
-    whose `arm-none-eabi-nm` lookup is bare, so the toolchain must be reachable through
-    PATH and not only through the toolchain file (same rule as firmware_build.build())."""
-    env = os.environ.copy()
-    bin_dir = str(toolchain_bin_dir(project_root).resolve())
-    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
-    return env
+def size_probe_build_dir(build_dir: Path, variant: SizeProbeVariant) -> Path:
+    """The probe's own build dir, a sibling of the server's under the same board dir.
+
+    The float switches are ns-cmsis-nn cache options baked into the rendered app
+    (an `option()` default cannot be overridden after the module is added), so a
+    variant is a different render and needs its own app -- it cannot be a second
+    target in the server's. `nsx sync` copies each module out of the shared
+    content-addressed cache, so the extra apps cost disk, not network.
+    """
+    return build_dir / f"probe_{variant.name}"
 
 
-def _run(cmd: list[str], *, cwd: Path, env: Optional[dict[str, str]] = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True, env=env)
-
-
-def _configure_size_probe(project_root: Path, build_dir: Path, board: BoardSpec, variant: SizeProbeVariant) -> None:
-    toolchain = project_root / "cmake" / "nsx" / "toolchains" / "arm-none-eabi-gcc.cmake"
-    cmd = [
-        "cmake",
-        "-S",
-        str(project_root),
-        "-B",
-        str(build_dir),
-        f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",
-        "-DHELIA_HARDWARE_BUILD=ON",
-        "-DHELIA_BUILD_GENERATED_TESTS=OFF",
-        "-DHELIA_BUILD_UNIVERSAL_SIZE_PROBE=ON",
-        f"-DHELIA_HARDWARE_BOARD={board.nsx_board}",
-        f"-DTARGET_CPU={board.cpu}",
-        f"-DARM_NN_ENABLE_F32={'ON' if variant.enable_f32 else 'OFF'}",
-        f"-DARM_NN_ENABLE_F16={'ON' if variant.enable_f16 else 'OFF'}",
-    ]
-    _run(cmd, cwd=project_root, env=_toolchain_env(project_root))
-
-
-def build_size_probe(board: BoardSpec, variant: SizeProbeVariant, *, project_root: Optional[Path] = None) -> Path:
+def build_size_probe(
+    board: BoardSpec,
+    variant: SizeProbeVariant,
+    *,
+    project_root: Optional[Path] = None,
+    build_dir: Optional[Path] = None,
+    options: Optional["FirmwareOptions"] = None,
+) -> Path:
     """Configure, build and measure one size-probe variant for `board`; returns the
     directory holding its `memory_report.json` and raw tool outputs."""
+    from .firmware_build import (
+        FirmwareOptions,
+        build as nsx_build,
+        configure as nsx_configure,
+        load_baseline,
+        lock_and_sync,
+        prepare_app,
+    )
+    from .nsx_app import render_app
+
     project_root = project_root or repo_root()
-    # Board-keyed so two boards' probes in one checkout never share a CMake cache or
+    options = options or FirmwareOptions()
+    build_root = build_dir or board.build_dir(project_root)
+    probe_build_dir = size_probe_build_dir(build_root, variant)
+    # Board-keyed so two boards' probes in one checkout never share a build tree or
     # overwrite each other's report and raw tool outputs.
     probe_root = project_root / "artifacts" / "hardware" / "size_probe" / board.id / variant.name
-    build_dir = probe_root / "build"
-    build_dir.mkdir(parents=True, exist_ok=True)
-    _configure_size_probe(project_root, build_dir, board, variant)
-    _run(["cmake", "--build", str(build_dir), "--target", SIZE_PROBE_TARGET], cwd=project_root, env=_toolchain_env(project_root))
+    probe_root.mkdir(parents=True, exist_ok=True)
 
-    out_dir = build_dir / "probe"
-    elf = out_dir / f"{SIZE_PROBE_TARGET}.elf"
-    analysis = analyze_elf(elf, board, project_root)
+    # Same renderer as the firmware, with the probe's target and this variant's
+    # kernel switches -- so the probe measures the library the firmware would get,
+    # not a hand-mirrored approximation of it.
+    prepare_app(board, repo_root=project_root, build_dir=probe_build_dir, options=options)
+    render = render_app(
+        board,
+        repo_root=project_root,
+        build_dir=probe_build_dir,
+        baseline=load_baseline(project_root, options),
+        cmsis_nn_root=options.cmsis_nn_root,
+        kernel_options=variant.kernel_options(
+            requantize_inline_asm=options.requantize_inline_asm
+        ),
+        build_size_probe=True,
+    )
+    lock_and_sync(render, options)
+    nsx_configure(render, options)
+    nsx_build(render, options, SIZE_PROBE_TARGET, None)
+
+    elf = render.build_dir / f"{SIZE_PROBE_TARGET}.elf"
+    analysis = analyze_elf(elf, board, probe_build_dir, project_root)
 
     report = {
         "schema": "hct.memory_report",
@@ -331,10 +389,12 @@ def build_size_probe(board: BoardSpec, variant: SizeProbeVariant, *, project_roo
             "f32": variant.enable_f32,
             "f16": variant.enable_f16,
         },
+        "kernel_source": render.kernel_source.describe(),
+        "baseline_id": render.baseline.baseline_id,
         "artifacts": {
             "elf": display_path(elf, project_root),
-            "bin": display_path(out_dir / f"{SIZE_PROBE_TARGET}.bin", project_root),
-            "map": display_path(out_dir / f"{SIZE_PROBE_TARGET}.map", project_root),
+            "bin": display_path(render.build_dir / f"{SIZE_PROBE_TARGET}.bin", project_root),
+            "map": display_path(render.build_dir / f"{SIZE_PROBE_TARGET}.map", project_root),
         },
         "memory_regions": analysis.memory_regions,
         "sections": analysis.sections,
