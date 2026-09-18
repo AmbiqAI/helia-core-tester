@@ -677,7 +677,8 @@ def synced_kernel_dir(app_dir: Path) -> Path:
     NSX vendors a git-backed module as a whole-repository clone under
     `modules/<project>/`, so this is a complete ns-cmsis-nn tree -- including
     `Tests/`, which the generation step reads schemas and reference tables from.
-    A `source: {path: ...}` module is mirrored to the same place on every sync.
+    A `--cmsis-nn-root` checkout is a `local_path` override on that same project,
+    so it is mirrored to the same place on every sync.
     """
     return app_dir / "modules" / CMSIS_NN_PROJECT
 

@@ -120,8 +120,8 @@ in its `module_registry` block so `nsx lock` cannot resolve the packaged registr
 mutable tags instead. `--baseline FILE` swaps the file (heliaPROFILER's
 `compatibility-baseline-v1.json` is accepted, so a run can be built against hpx's
 qualified pins), and `--cmsis-nn-root PATH` builds the kernels from a local checkout
-instead — declared to NSX as a local module source, and read by the generate step
-too, so the cases and the kernels stay on one tree. **`$CMSIS_NN_ROOT` and the
+instead — declared to NSX as the `ns-cmsis-nn` project's `local_path`, and read by
+the generate step too, so the cases and the kernels stay on one tree. **`$CMSIS_NN_ROOT` and the
 nested `<ns-cmsis-nn>/Tests/helia-core-tester` layout are not consulted by any
 hardware command**; they remain the FVP path's mechanism.
 
