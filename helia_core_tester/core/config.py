@@ -156,10 +156,7 @@ class Config:
             return
 
         try:
-            try:
-                import tomllib  # Python 3.11+
-            except ModuleNotFoundError:  # pragma: no cover - py3.8 fallback
-                import tomli as tomllib
+            import tomllib
 
             data = tomllib.loads(self.config_file.read_text())
             table = data.get("helia_core_tester") or data.get("tool", {}).get("helia_core_tester", {})

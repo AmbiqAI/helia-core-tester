@@ -1,7 +1,8 @@
-"""Path helpers that stay within the Python >=3.8 floor of pyproject.toml.
+"""Shared path helpers for the hardware package.
 
-`Path.is_relative_to()` is 3.9+, so the containment check is spelled with
-`relative_to()` here and reused wherever the package needs it.
+`is_relative_to()` predates the 3.11 floor as a 3.8 compatibility shim; it stays
+because `display_path()` and the firmware build both want the same containment
+check in one place.
 """
 
 from __future__ import annotations
@@ -29,9 +30,5 @@ def display_path(path: Path, root: Path) -> str:
 
 
 def write_text_lf(path: Path, text: str) -> None:
-    """Write `text` as UTF-8 with LF newlines on every platform.
-
-    `Path.write_text(newline=...)` only exists from Python 3.10; the project supports
-    3.8, so route through `open()`, which has accepted `newline` since 3.0."""
-    with path.open("w", encoding="utf-8", newline="\n") as handle:
-        handle.write(text)
+    """Write `text` as UTF-8 with LF newlines on every platform."""
+    path.write_text(text, encoding="utf-8", newline="\n")
