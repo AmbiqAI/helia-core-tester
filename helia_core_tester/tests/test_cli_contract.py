@@ -59,7 +59,7 @@ def test_full_rejects_removed_include_float_flag() -> None:
 # --- hardware CLI surface ------------------------------------------------------------
 
 
-def test_perf_stream_group_removed() -> None:
+def test_hardware_group_removed() -> None:
     result = runner.invoke(app, ["perf-stream", "flash"])
     assert result.exit_code != 0
     assert "No such command" in _result_text(result)
@@ -104,7 +104,7 @@ def test_probes_match_uses_env_serial(monkeypatch) -> None:
 
 
 def test_probes_match_fails_without_probes(monkeypatch) -> None:
-    from helia_core_tester.perf_stream import cli as hardware_cli
+    from helia_core_tester.hardware import cli as hardware_cli
 
     monkeypatch.delenv("HPX_JLINK_SERIAL", raising=False)
     monkeypatch.setattr(hardware_cli, "resolve_serial", lambda explicit=None, **_: (_ for _ in ()).throw(
@@ -127,7 +127,7 @@ def test_stream_precision_rules_are_enforced_before_hardware(monkeypatch) -> Non
 def test_option_validation_runs_before_probe_resolution(monkeypatch) -> None:
     """With no --serial-no and no $HPX_JLINK_SERIAL, a bad option combination must
     still produce the option error -- never an enumeration/hardware error first."""
-    from helia_core_tester.perf_stream import cli as hardware_cli
+    from helia_core_tester.hardware import cli as hardware_cli
 
     monkeypatch.delenv("HPX_JLINK_SERIAL", raising=False)
     enumerated: list[str] = []
@@ -163,12 +163,12 @@ def test_option_validation_runs_before_probe_resolution(monkeypatch) -> None:
         (lambda: __import__("pylink").JLinkException("Could not connect to the target device."),
          "✗ J-Link error: Could not connect to the target device."),
         (lambda: TimeoutError("Timed out writing 64 RTT bytes."), "✗ Timed out writing 64 RTT bytes."),
-        (lambda: FileNotFoundError("Built firmware ELF not found: build/x/perf_stream/hct_benchmark_server.elf"),
+        (lambda: FileNotFoundError("Built firmware ELF not found: build/x/hardware/hct_benchmark_server.elf"),
          "✗ Built firmware ELF not found"),
     ],
 )
 def test_pipeline_failures_print_one_line_and_hide_the_traceback_unless_verbose(monkeypatch, raise_factory, expected_line) -> None:
-    from helia_core_tester.perf_stream import hardware_pipeline
+    from helia_core_tester.hardware import hardware_pipeline
 
     def _boom(*args, **kwargs):
         raise raise_factory()
@@ -193,7 +193,7 @@ def test_pipeline_failures_print_one_line_and_hide_the_traceback_unless_verbose(
 
 
 def test_unexpected_exceptions_keep_their_traceback(monkeypatch) -> None:
-    from helia_core_tester.perf_stream import hardware_pipeline
+    from helia_core_tester.hardware import hardware_pipeline
 
     def _bug(*args, **kwargs):
         raise KeyError("case_id")
@@ -205,7 +205,7 @@ def test_unexpected_exceptions_keep_their_traceback(monkeypatch) -> None:
 
 
 def test_run_precision_reaches_the_generate_step(monkeypatch) -> None:
-    from helia_core_tester.perf_stream import hardware_pipeline
+    from helia_core_tester.hardware import hardware_pipeline
 
     seen: dict = {}
 
@@ -222,7 +222,7 @@ def test_run_precision_reaches_the_generate_step(monkeypatch) -> None:
 
 
 def test_run_rejects_skip_flash_with_force_flash(monkeypatch) -> None:
-    from helia_core_tester.perf_stream import cli as hardware_cli
+    from helia_core_tester.hardware import cli as hardware_cli
 
     monkeypatch.setattr(hardware_cli, "resolve_serial", lambda explicit=None, **_: (_ for _ in ()).throw(
         AssertionError("probes must not be resolved before option validation")))
@@ -232,7 +232,7 @@ def test_run_rejects_skip_flash_with_force_flash(monkeypatch) -> None:
 
 
 def test_doctor_reports_hardware_section_without_failing_on_missing_tools(monkeypatch) -> None:
-    from helia_core_tester.perf_stream import doctor as hw_doctor
+    from helia_core_tester.hardware import doctor as hw_doctor
 
     monkeypatch.setattr(hw_doctor, "_jlink_dll_check", lambda: hw_doctor.HardwareCheck("J-Link library (pylink)", False, "missing"))
     monkeypatch.setattr(hw_doctor, "find_jlink_exe", lambda: None)
@@ -245,8 +245,8 @@ def test_doctor_reports_hardware_section_without_failing_on_missing_tools(monkey
 
 
 def test_doctor_reports_jlinkexe_path_and_source_and_missing_hpx_jlink_dll(monkeypatch, tmp_path) -> None:
-    from helia_core_tester.perf_stream import doctor as hw_doctor
-    from helia_core_tester.perf_stream.jlink_library import JLinkExecutable
+    from helia_core_tester.hardware import doctor as hw_doctor
+    from helia_core_tester.hardware.jlink_library import JLinkExecutable
 
     monkeypatch.setattr(hw_doctor, "find_jlink_exe", lambda: JLinkExecutable("/opt/SEGGER/JLink/JLinkExe", "$JLINK_PATH"))
     monkeypatch.setenv("HPX_JLINK_DLL", str(tmp_path / "gone.so"))
@@ -275,12 +275,12 @@ def test_memory_report_missing_elf_is_a_one_line_error(tmp_path) -> None:
 
 
 def test_stream_requires_the_build_id_stamp_unless_allowed(monkeypatch, tmp_path) -> None:
-    from helia_core_tester.perf_stream import hardware_pipeline
+    from helia_core_tester.hardware import hardware_pipeline
 
     monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
     unstamped = tmp_path / "legacy"
-    (unstamped / "perf_stream").mkdir(parents=True)
-    (unstamped / "perf_stream" / "hct_benchmark_server.elf").write_bytes(b"legacy")
+    (unstamped / "hardware").mkdir(parents=True)
+    (unstamped / "hardware" / "hct_benchmark_server.elf").write_bytes(b"legacy")
     result = runner.invoke(app, ["hardware", "stream", "--build-dir", str(unstamped)])
     text = _result_text(result)
     assert result.exit_code == 1 and "hct_build_id.txt not found" in text and "--allow-unverified-firmware" in text, text

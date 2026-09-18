@@ -21,8 +21,8 @@ This snapshot now includes both the hardware-independent proof path and a live A
   - p90
   - p99
   - unsupported/overflow propagation
-- Result-bundle writer under `artifacts/reports/performance_stream/<session_id>/`.
-- Board-keyed hardware runner: `helia_core_tester/perf_stream/session_runner.py`.
+- Result-bundle writer under `artifacts/reports/hardware/<session_id>/`.
+- Board-keyed hardware runner: `helia_core_tester/hardware/session_runner.py`.
 
 ### Firmware-side
 
@@ -74,7 +74,7 @@ This snapshot now includes both the hardware-independent proof path and a live A
 
 ## Final firmware size and margins
 
-Measured from `artifacts/perf_stream/benchmark_server/memory_report.json`:
+Measured from `artifacts/hardware/benchmark_server/memory_report.json`:
 
 - Flash image: **332,452 / 4,128,768 bytes** (**8.05%**)  
 - TCM static before heap: **56,212 / 507,904 bytes** (**11.07%**)  
@@ -83,25 +83,25 @@ Measured from `artifacts/perf_stream/benchmark_server/memory_report.json`:
 
 Primary artifacts:
 
-- `build/perf_stream/benchmark_server_gcc2/perf_stream/hct_benchmark_server.elf`
-- `build/perf_stream/benchmark_server_gcc2/perf_stream/hct_benchmark_server.bin`
-- `build/perf_stream/benchmark_server_gcc2/perf_stream/hct_benchmark_server.map`
-- `artifacts/perf_stream/benchmark_server/memory_report.json`
+- `build/hardware/benchmark_server_gcc2/hardware/hct_benchmark_server.elf`
+- `build/hardware/benchmark_server_gcc2/hardware/hct_benchmark_server.bin`
+- `build/hardware/benchmark_server_gcc2/hardware/hct_benchmark_server.map`
+- `artifacts/hardware/benchmark_server/memory_report.json`
 
 ## Commands run
 
-### Targeted perf-stream tests
+### Targeted hardware tests
 
 ```bash
 uv run pytest -q \
-  helia_core_tester/tests/test_perf_stream_hctp.py \
-  helia_core_tester/tests/test_perf_stream_wire.py \
-  helia_core_tester/tests/test_perf_stream_vertical_slice.py \
-  helia_core_tester/tests/test_perf_stream_transfer_measurement.py \
-  helia_core_tester/tests/test_perf_stream_c_wire_compat.py \
-  helia_core_tester/tests/test_perf_stream_firmware_messages.py \
-  helia_core_tester/tests/test_perf_stream_firmware_session.py \
-  helia_core_tester/tests/test_perf_stream_result_bundle.py
+  helia_core_tester/tests/test_hardware_hctp.py \
+  helia_core_tester/tests/test_hardware_wire.py \
+  helia_core_tester/tests/test_hardware_vertical_slice.py \
+  helia_core_tester/tests/test_hardware_transfer_measurement.py \
+  helia_core_tester/tests/test_hardware_c_wire_compat.py \
+  helia_core_tester/tests/test_hardware_firmware_messages.py \
+  helia_core_tester/tests/test_hardware_firmware_session.py \
+  helia_core_tester/tests/test_hardware_result_bundle.py
 ```
 
 Observed result:
@@ -127,13 +127,13 @@ uv run helia_core_tester hardware flash --board apollo510_evb
 ```
 
 (At the time of the original run this was a bare `cmake --build ... --target
-hct_benchmark_server_flash` against `build/perf_stream/benchmark_server_gcc2`; the
-board-keyed CLI now builds into `build/perf_stream/<board>` and flashes only when
+hct_benchmark_server_flash` against `build/hardware/benchmark_server_gcc2`; the
+board-keyed CLI now builds into `build/hardware/<board>` and flashes only when
 the ELF changed.)
 
 Real transcript captured at:
 
-- `artifacts/perf_stream/hardware_probe/hct_benchmark_server_flash.txt`
+- `artifacts/hardware/hardware_probe/hct_benchmark_server_flash.txt`
 
 ### Real Apollo510 streaming session
 
@@ -145,14 +145,14 @@ uv run helia_core_tester hardware stream --board apollo510_evb --serial-no 11600
 
 uv run python - <<'PY'
 from pathlib import Path
-from helia_core_tester.perf_stream.session_runner import run_demo_session
+from helia_core_tester.hardware.session_runner import run_demo_session
 run_demo_session(Path.cwd(), serial_no=1160002276, session_id='apollo510-live-session')
 PY
 ```
 
 Real transcript captured at:
 
-- the RTT transcript of the first live Apollo510 probe under `artifacts/perf_stream/hardware_probe/` (not committed)
+- the RTT transcript of the first live Apollo510 probe under `artifacts/hardware/hardware_probe/` (not committed)
 
 ## Real hardware evidence collected
 
@@ -193,7 +193,7 @@ Observed real protocol sequence for the live run included:
 
 ### Real correctness results
 
-From the first live Apollo510 probe transcript (`artifacts/perf_stream/hardware_probe/`) and `artifacts/reports/performance_stream/apollo510-live-session/`:
+From the first live Apollo510 probe transcript (`artifacts/hardware/hardware_probe/`) and `artifacts/reports/hardware/apollo510-live-session/`:
 
 - `abs_hw_live` (`arm_abs_s8`): correctness **passed**
 - `conv_hw_live` (`arm_convolve_s8`): correctness **passed**
@@ -226,7 +226,7 @@ Representative raw samples from the real run:
 
 Generated from the live Apollo510 run:
 
-- `artifacts/reports/performance_stream/apollo510-live-session/`
+- `artifacts/reports/hardware/apollo510-live-session/`
   - `session_manifest.json`
   - `session_summary.json`
   - `memory_report.json`
@@ -247,8 +247,8 @@ Two genuine hardware issues were hit and resolved during bring-up:
 
 1. **NSX flash target path bug**  
    The generated SEGGER flash target initially tried to load:
-   `build/perf_stream/benchmark_server_gcc2/hct_benchmark_server.bin`  
-   while the actual `.bin` lived under `.../perf_stream/hct_benchmark_server.bin`.  
+   `build/hardware/benchmark_server_gcc2/hct_benchmark_server.bin`  
+   while the actual `.bin` lived under `.../hardware/hct_benchmark_server.bin`.  
    Fix: copy the built `.bin`/`.elf` into the build root after link so the NSX-generated flash target can find them.
 
 2. **RTT auto-discovery failure from SEGGER CLI tools**  
@@ -318,7 +318,7 @@ uv run helia_core_tester hardware stream --board apollo510_evb --session-id apol
 ```bash
 uv run python - <<'PY'
 from pathlib import Path
-from helia_core_tester.perf_stream.session_runner import run_demo_session
+from helia_core_tester.hardware.session_runner import run_demo_session
 result, bundle = run_demo_session(Path.cwd(), serial_no=1160002276, session_id='apollo510-live-session')
 print(bundle)
 for case in result.cases:
@@ -329,7 +329,7 @@ PY
 3. Inspect artifacts:
 
 ```bash
-ls artifacts/reports/performance_stream/apollo510-live-session
-cat artifacts/reports/performance_stream/apollo510-live-session/case_summary.csv
-cat artifacts/reports/performance_stream/apollo510-live-session/raw_samples.csv
+ls artifacts/reports/hardware/apollo510-live-session
+cat artifacts/reports/hardware/apollo510-live-session/case_summary.csv
+cat artifacts/reports/hardware/apollo510-live-session/raw_samples.csv
 ```

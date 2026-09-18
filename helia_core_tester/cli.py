@@ -19,8 +19,8 @@ from helia_core_tester.core.path_layout import artifacts_root
 from helia_core_tester.core.pipeline import FullTestPipeline
 from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, RunStep
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
-from helia_core_tester.perf_stream.cli import boards as boards_command
-from helia_core_tester.perf_stream.cli import hardware_app, probes_app
+from helia_core_tester.hardware.cli import boards as boards_command
+from helia_core_tester.hardware.cli import hardware_app, probes_app
 
 # Once, for every subcommand (including the hardware group's) for the lifetime of
 # this process -- see ensure_arm_toolchain_on_path()'s own docstring for why this
@@ -411,7 +411,7 @@ def doctor(
 
     # Hardware (J-Link/RTT) checks are informational: the FVP path never needs
     # them, so a missing tool is reported as missing without failing doctor.
-    from .perf_stream.doctor import hardware_checks
+    from .hardware.doctor import hardware_checks
 
     typer.echo("\nHardware (helia_core_tester hardware ...):")
     for check in hardware_checks(repo_root):

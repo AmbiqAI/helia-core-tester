@@ -11,7 +11,7 @@ import yaml
 
 from helia_core_tester.generation.test_ops import generate_test
 from helia_core_tester.generation.io.dtypes import resolve_comparison
-from helia_core_tester.perf_stream.generated_test_bridge import (
+from helia_core_tester.hardware.generated_test_bridge import (
     GeneratedTestCase,
     UnsupportedGeneratedTestError,
     build_case_bundle_from_generated_test,

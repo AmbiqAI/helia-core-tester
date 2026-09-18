@@ -510,7 +510,7 @@ def setup_nsx_ambiq_sdk(project_root: Path, downloads_dir: Optional[Path] = None
 
 def setup_neuralspotx(downloads_dir: Path, force: bool = False) -> None:
     """Clone the neuralspotx (NSX workspace tooling) repo for its RTT sources
-    (examples/coremark/src/rtt/SEGGER_RTT.*), consumed by the perf-stream hardware
+    (examples/coremark/src/rtt/SEGGER_RTT.*), consumed by the hardware
     firmware build. NOT AmbiqAI/neuralSPOT (capital SPOT, the separate C SDK/example
     repo) -- that repo has a different layout and lacks this path entirely.
     """

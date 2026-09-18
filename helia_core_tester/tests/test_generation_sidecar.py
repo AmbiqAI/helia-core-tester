@@ -116,7 +116,7 @@ def test_sidecar_tolerance_matches_generated_validate_outputs_call(
 
 def test_sidecar_comparison_matches_hardware_bridge_resolve_comparison(tmp_path: Path) -> None:
     """The sidecar's `comparison` field is meant to be the same value the
-    hardware perf-stream bridge manifest would compute via resolve_comparison()
+    hardware bridge manifest would compute via resolve_comparison()
     -- confirm this by recomputing it directly from the case's descriptor.yaml.
     """
     import yaml

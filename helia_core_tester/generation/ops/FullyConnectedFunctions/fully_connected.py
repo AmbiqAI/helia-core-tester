@@ -922,7 +922,7 @@ class OpFullyConnected(OperationBase):
 
         # A bias folded into the kernel sum still has to appear as an array in
         # the header. The kernel keeps taking a NULL bias pointer, but the
-        # perf-stream bridge reads the bias back out of the header decl, and a
+        # hardware bridge reads the bias back out of the header decl, and a
         # NULL decl is indistinguishable there from a zero bias, so the bridge
         # would rebuild the kernel sum without the bias term.
         has_bias_array = has_biases

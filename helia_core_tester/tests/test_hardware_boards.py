@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream.boards import (
+from helia_core_tester.hardware.boards import (
     BoardSpec,
     UnknownBoardError,
     board_ids,
@@ -48,7 +48,7 @@ def test_unknown_board_error_lists_known_ids() -> None:
 
 def test_board_derived_values(tmp_path: Path) -> None:
     spec = resolve_board("apollo510_evb")
-    assert spec.build_dir(tmp_path) == tmp_path / "build" / "perf_stream" / "apollo510_evb"
+    assert spec.build_dir(tmp_path) == tmp_path / "build" / "hardware" / "apollo510_evb"
     assert spec.target_info()["board"] == "apollo510_evb"
     assert spec.target_info()["cpu"] == "cortex-m55"
     assert spec.target_info()["transport"] == "jlink-rtt"

@@ -7,7 +7,7 @@ after objcopy has produced the `.bin` (see CMakeLists.txt). It
 1. assembles the flash image from the ELF's PT_LOAD segments (LMA order, zero
    gap fill -- the same bytes `objcopy -O binary` emits, which is checked
    against the `.bin` when one is given),
-2. finds the build-id slot (cmake/perf_stream/hct_build_id.c: the marker
+2. finds the build-id slot (cmake/hardware/hct_build_id.c: the marker
    `HCT-BUILD-ID:` followed by a zeroed id area) exactly once in that image,
 3. hashes the *whole* image with the id area zeroed -> `hct-<sha256[:48]>`,
 4. writes the id into the slot of the ELF and the `.bin` in place (fixed-size
@@ -36,7 +36,7 @@ from typing import List, Optional, Tuple
 
 BUILD_ID_PREFIX = "hct-"
 BUILD_ID_HEX_CHARS = 48
-# Must match cmake/perf_stream/hct_build_id.c.
+# Must match cmake/hardware/hct_build_id.c.
 MARKER = b"HCT-BUILD-ID:"
 SLOT_BYTES = 80
 ID_AREA = SLOT_BYTES - len(MARKER)
@@ -95,7 +95,7 @@ def find_slot(image: bytes, what: str) -> int:
     """Offset of the build-id slot in `image`; exactly one marker must be present."""
     first = image.find(MARKER)
     if first < 0:
-        raise PatchError(f"build-id marker {MARKER!r} not found in {what} (is cmake/perf_stream/hct_build_id.c linked in?)")
+        raise PatchError(f"build-id marker {MARKER!r} not found in {what} (is cmake/hardware/hct_build_id.c linked in?)")
     if image.find(MARKER, first + 1) >= 0:
         raise PatchError(f"build-id marker {MARKER!r} occurs more than once in {what}")
     if first + SLOT_BYTES > len(image):

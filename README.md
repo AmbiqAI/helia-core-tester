@@ -44,7 +44,7 @@ uv run helia_core_tester hardware run --board apollo510_evb
 That generates the tests for the board's CPU, builds the firmware, flashes it only
 unless the board already confirms (via its TARGET_INFO build id) that it runs this exact
 build, streams every bridged case,
-writes the result bundle under `artifacts/reports/performance_stream/<session-id>/`,
+writes the result bundle under `artifacts/reports/hardware/<session-id>/`,
 and prints the pass/fail summary (`--json` prints one JSON document on stdout
 instead, with the human output on stderr; the exit code is non-zero on any
 correctness failure). Useful narrowing flags: `--suite int|float|both`,
@@ -79,7 +79,7 @@ counter (median per invocation) plus `overflow_detected` and `valid_for_regressi
 Identity resolution rules:
 
 - `--board` is the only identity flag. The CPU, NSX board name, SEGGER device name,
-  SWD speed, build dir (`build/perf_stream/<board>`), default session id
+  SWD speed, build dir (`build/hardware/<board>`), default session id
   (`<board>-<UTC timestamp>`) and the linker-script SoC and flash/RAM region names
   `hardware memory-report` measures against all come from the row in
   `assets/hardware_boards.yaml` (`helia_core_tester boards` lists it). Default:

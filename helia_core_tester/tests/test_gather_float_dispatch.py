@@ -14,11 +14,11 @@ import pytest
 
 from helia_core_tester.generation.ops.GatherFunctions.gather import OpGather
 from helia_core_tester.generation.ops.GatherFunctions.gather_nd import OpGatherND
-from helia_core_tester.perf_stream.generated_test_bridge import (
+from helia_core_tester.hardware.generated_test_bridge import (
     UnsupportedGeneratedTestError,
     _kernel_id,
 )
-from helia_core_tester.perf_stream.kernel_registry import lookup_kernel_id
+from helia_core_tester.hardware.kernel_registry import lookup_kernel_id
 
 
 def _repo_root() -> Path:

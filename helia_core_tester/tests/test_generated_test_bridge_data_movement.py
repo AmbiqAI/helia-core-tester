@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream.generated_test_bridge import (
+from helia_core_tester.hardware.generated_test_bridge import (
     UnsupportedGeneratedTestError,
     _find_header_file,
     build_case_bundle_from_generated_test,

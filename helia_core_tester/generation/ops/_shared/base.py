@@ -996,7 +996,7 @@ class OperationBase(ABC):
         is provably in sync with what actually got compiled/executed, instead
         of being re-derived independently (as the hardware bridge's 22
         hand-written regex extractors currently do). It is intended to
-        eventually let the hardware perf-stream bridge look up kernel name,
+        eventually let the hardware bridge look up kernel name,
         call args, and tensor roles/tolerance structurally rather than
         re-parsing generated C source.
         """

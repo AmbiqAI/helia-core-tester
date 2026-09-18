@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from helia_core_tester.perf_stream import generated_test_bridge as gtb
+from helia_core_tester.hardware import generated_test_bridge as gtb
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _GEN_ROOT = _PROJECT_ROOT / "artifacts/generated_tests/int/cortex-m55"

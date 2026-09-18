@@ -2,7 +2,7 @@
 """Generate the firmware kernel catalog C data and `kernel_catalog.json` from the single
 source of truth, `assets/kernel_registry.yaml` (F008).
 
-Prior to this generator, `cmake/perf_stream/benchmark_server_catalog.c` was a hand-maintained
+Prior to this generator, `cmake/hardware/benchmark_server_catalog.c` was a hand-maintained
 C array that had drifted from the registry: it only listed 7 kernels (instead of the
 registry's 126) and even had kernel_id 6/7 (Maximum/Minimum) reversed relative to both the
 registry and the session dispatcher's `HCT_KERNEL_ID_*` defines. This script makes the
@@ -26,8 +26,8 @@ import yaml
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _REGISTRY_PATH = _PROJECT_ROOT / "assets" / "kernel_registry.yaml"
-_CATALOG_C_PATH = _PROJECT_ROOT / "cmake" / "perf_stream" / "benchmark_server_catalog.c"
-_CATALOG_JSON_PATH = _PROJECT_ROOT / "cmake" / "perf_stream" / "kernel_catalog.json"
+_CATALOG_C_PATH = _PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_catalog.c"
+_CATALOG_JSON_PATH = _PROJECT_ROOT / "cmake" / "hardware" / "kernel_catalog.json"
 
 # kernel_id 6/7 are the pair the audit finding (F008) specifically called out as reversed in
 # the old hand-maintained catalog: id 6 must be the *maximum* kernel, id 7 the *minimum* one,

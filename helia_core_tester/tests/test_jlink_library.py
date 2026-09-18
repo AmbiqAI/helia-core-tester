@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream import jlink_library
-from helia_core_tester.perf_stream.jlink_library import (
+from helia_core_tester.hardware import jlink_library
+from helia_core_tester.hardware.jlink_library import (
     JLinkExecutable,
     JLinkLibrary,
     JLinkLibraryError,
