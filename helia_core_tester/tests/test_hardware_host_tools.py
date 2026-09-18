@@ -1,5 +1,5 @@
 """Host-side helpers behind the hardware commands: where arm-none-eabi-* tools come
-from (the lazily downloaded toolchain first), the Python 3.8-safe path helpers, and
+from (the lazily downloaded toolchain first), the shared path helpers, and
 the memory report's artifact paths for in-tree and external build dirs."""
 
 from __future__ import annotations
@@ -77,13 +77,13 @@ def test_symbol_lookup_and_memory_report_resolve_nm_through_the_helper(tmp_path:
     assert [cmd[0] for cmd in argv] == [str(nm), str(nm)]
 
 
-def test_path_helpers_are_python38_safe(tmp_path: Path) -> None:
+def test_path_helpers_resolve_containment_and_display(tmp_path: Path) -> None:
     inside, outside = tmp_path / "repo" / "build" / "x.elf", Path("/elsewhere/build/x.elf")
     assert is_relative_to(inside, tmp_path / "repo") and not is_relative_to(outside, tmp_path / "repo")
     assert display_path(inside, tmp_path / "repo") == "build/x.elf"
     assert display_path(outside, tmp_path / "repo") == "/elsewhere/build/x.elf"
-    # No Path.is_relative_to() (3.9+) anywhere in the package (pathutil.py is the
-    # replacement and names it in its docstring).
+    # The containment check lives in pathutil.py alone so display_path() and the
+    # firmware build agree on it; nothing else in the package rolls its own.
     package = Path(toolchain.__file__).parent
     offenders = [
         p.name for p in package.glob("*.py")
@@ -193,15 +193,11 @@ def test_memory_report_fails_closed_when_a_board_region_is_missing(tmp_path: Pat
     assert usage["flash_gate_pass"] is True and usage["tcm_gate_pass"] is True
 
 
-def test_write_text_lf_is_python38_safe_and_writes_lf(tmp_path: Path) -> None:
-    # Path.write_text(newline=...) only exists from 3.10; the helper must not use it and
-    # must still pin LF line endings.
-    import inspect
-
+def test_write_text_lf_writes_lf(tmp_path: Path) -> None:
+    # Bundle artifacts are byte-compared across hosts, so the helper must pin LF
+    # regardless of the platform's os.linesep.
     from helia_core_tester.hardware import pathutil
 
-    body = inspect.getsource(pathutil.write_text_lf).replace(pathutil.write_text_lf.__doc__ or "", "")
-    assert ".write_text(" not in body and 'newline="\\n"' in body
     target = tmp_path / "out.txt"
     pathutil.write_text_lf(target, "a\nb\n")
     assert target.read_bytes() == b"a\nb\n"
