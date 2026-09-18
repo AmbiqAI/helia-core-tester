@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+from typing import Sequence
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
 from .measurement import compute_counter_medians, counter_names_for_passes
@@ -68,7 +69,19 @@ def write_result_bundle(
     host_log_text: str = "session completed\n",
     target_log_text: str = "no physical target log captured\n",
     timing: dict | None = None,
+    dependencies: dict | None = None,
+    provenance_files: Sequence[Path] = (),
 ) -> Path:
+    """Write one result bundle.
+
+    `dependencies` is the build's lock-derived provenance block (see
+    `provenance.build_provenance`). It goes into `session_manifest.json` (the
+    bundle's identity document) and `session_summary.json` (what the hpx
+    dashboard reads), and is omitted -- never written as null -- when unknown.
+    `provenance_files` are the build-side originals it was derived from
+    (`hct_provenance.json` and the `nsx.lock` snapshot); each is copied into the
+    bundle so it stays readable after the build dir is rebuilt or deleted.
+    """
     for case in result.cases:
         if len(case.samples) != len(case.normalized_samples):
             raise ValueError("Sample and normalized sample counts must match")
@@ -93,6 +106,17 @@ def write_result_bundle(
             "junit": "junit.xml",
         },
     }
+    copied = []
+    for source in provenance_files:
+        source = Path(source)
+        if not source.is_file():
+            continue
+        (bundle_root / source.name).write_bytes(source.read_bytes())
+        copied.append(source.name)
+    if copied:
+        session_manifest["artifacts"]["provenance"] = copied
+    if dependencies is not None:
+        session_manifest["dependencies"] = dependencies
     write_text_lf(bundle_root / "session_manifest.json", json.dumps(session_manifest, indent=2))
 
     case_rows = []
@@ -199,6 +223,8 @@ def write_result_bundle(
     }
     if timing is not None:
         session_summary["timing"] = timing
+    if dependencies is not None:
+        session_summary["dependencies"] = dependencies
     write_text_lf(bundle_root / "session_summary.json", json.dumps(session_summary, indent=2))
     write_text_lf(bundle_root / "memory_report.json", json.dumps(memory_report, indent=2))
     write_text_lf(bundle_root / "kernel_catalog.json", json.dumps(kernel_catalog, indent=2))

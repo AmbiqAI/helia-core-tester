@@ -27,6 +27,7 @@ from .generated_test_bridge import (
 from .measurement import CounterPass, check_pass_count, counter_passes_for_selection
 from .memory_report import generate_memory_report
 from .pmu_catalog import default_selection
+from .provenance import provenance_path, summarize_kernels
 from .result_bundle import write_result_bundle
 from .session import CaseRunResult, HostSession, SessionResult, TargetLimits, check_case_id_length, check_case_ids_unique
 from .transport import JLinkRttTransport, Transport, symbol_address_from_elf
@@ -149,6 +150,7 @@ def run_case_bundles(
     build_dir: Path | None = None,
     on_case_complete: OnCaseComplete | None = None,
     expected_build_id: str | None = None,
+    dependencies: dict | None = None,
     echo: Callable[[str], None] = lambda _message: None,
 ) -> tuple[SessionResult, Path]:
     """Stream `case_bundles` to the board in as many sessions as the target's limits
@@ -163,6 +165,10 @@ def run_case_bundles(
     `expected_build_id` (the build dir's hct_build_id.txt), when given, is checked
     against every session's TARGET_INFO so a board running some other firmware fails
     the batch instead of producing a bundle that describes firmware that never ran.
+
+    `dependencies` is the build's lock-derived provenance block (see `provenance`);
+    it is written into the bundle, and the build-side files it came from are copied
+    in beside it.
 
     The pass count (measurement.MAX_PASSES_PER_PLAN) and every case id
     (session.MAX_CASE_ID_BYTES) are checked against the host's mirror of the firmware
@@ -226,6 +232,8 @@ def run_case_bundles(
         counter_passes=counter_passes,
     )
 
+    from .firmware_build import lock_snapshot_path
+
     memory_report = json.loads(generate_memory_report(board, project_root=project_root, build_dir=build_dir).read_text())
     kernel_catalog = json.loads((project_root / "cmake" / "hardware" / "kernel_catalog.json").read_text())
     host_log = (
@@ -233,6 +241,7 @@ def run_case_bundles(
         f"board={board.id} chip={board.jlink_device} serial={serial_no} speed_khz={board.swd_speed_khz}\n"
         f"rtt_address=0x{rtt_address:08x}\n"
         f"firmware_build_id={build_id}\n"
+        f"firmware_kernels={summarize_kernels(dependencies)}\n"
         f"counter_passes={[p.name for p in counter_passes]}\n"
         f"batch_count={batch_count} max_cases_per_session={limits.max_cases if limits else 0} "
         f"max_session_plan_bytes={limits.max_plan_bytes if limits else 0}\n"
@@ -249,6 +258,11 @@ def run_case_bundles(
         target_info=board.target_info(),
         host_log_text=host_log,
         target_log_text=target_log,
+        dependencies=dependencies,
+        provenance_files=(
+            provenance_path(build_dir, board),
+            lock_snapshot_path(build_dir, board),
+        ),
     )
     return merged_result, bundle_root
 

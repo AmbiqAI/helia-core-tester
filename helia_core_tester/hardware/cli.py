@@ -77,9 +77,11 @@ _BASELINE_HELP = (
 )
 _CMSIS_NN_ROOT_HELP = (
     "Build the kernels from this ns-cmsis-nn checkout instead of the baseline's pinned "
-    "commit. The tree is declared to NSX as a local module source and mirrored into the "
-    "app on every sync, and the generate step reads its schemas from the same tree. Use it "
-    "to test uncommitted kernel work; the result is not a qualified build."
+    "commit. The tree is declared to NSX as the ns-cmsis-nn project's local_path and "
+    "mirrored into the app on every sync, and the generate step reads its schemas from the "
+    "same tree. Use it to test uncommitted kernel work; the result is recorded as a "
+    "development-overrides (not qualified) build, with the checkout's git HEAD and dirty "
+    "flag in the bundle's provenance."
 )
 _REQUANTIZE_HELP = (
     "Compile the kernels' requantize routine as inline assembly "
@@ -369,7 +371,7 @@ def _report(outcome, spec: BoardSpec, *, as_json: bool) -> None:
     if as_json:
         typer.echo(json.dumps(build_json_summary(
             outcome.result, outcome.skipped, session_id=outcome.session_id, board_id=spec.id, bundle=outcome.bundle,
-            timing=outcome.timing,
+            timing=outcome.timing, dependencies=outcome.dependencies,
         ), indent=2))
     if failed:
         typer.echo(typer.style("✗ One or more generated-test cases failed correctness", fg=typer.colors.RED, bold=True), err=True)

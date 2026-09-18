@@ -221,8 +221,14 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
 
     written: dict[str, Any] = {}
 
-    def _fake_write_result_bundle(result, *, session_id, output_root, memory_report, kernel_catalog, target_info, host_log_text, target_log_text):
-        written.update(result=result, session_id=session_id, target_info=target_info, host_log=host_log_text)
+    def _fake_write_result_bundle(
+        result, *, session_id, output_root, memory_report, kernel_catalog, target_info,
+        host_log_text, target_log_text, dependencies=None, provenance_files=(),
+    ):
+        written.update(
+            result=result, session_id=session_id, target_info=target_info, host_log=host_log_text,
+            dependencies=dependencies, provenance_files=tuple(provenance_files),
+        )
         return output_root / "artifacts" / "reports" / "hardware" / session_id
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
@@ -269,6 +275,12 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
     assert written["target_info"]["transport"] == "jlink-rtt"
     assert "max_cases_per_session=32 max_session_plan_bytes=2016" in written["host_log"]
     assert "firmware_build_id=fake" in written["host_log"]
+    # No provenance was handed in, so the log says so rather than claiming a source,
+    # and the bundle gets no block. The build-side files are still offered to the
+    # writer, which skips the ones that are not there.
+    assert "firmware_kernels=unknown" in written["host_log"]
+    assert written["dependencies"] is None
+    assert [path.name for path in written["provenance_files"]] == ["hct_provenance.json", "nsx.lock"]
     assert written["result"] is merged
     assert bundle_root == tmp_path / "artifacts" / "reports" / "hardware" / "test-batching-session"
 

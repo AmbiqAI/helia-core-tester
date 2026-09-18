@@ -258,17 +258,24 @@ def generate_memory_report(
     # What this image was built from, taken from the build dir's own render state
     # rather than re-resolved: the report has to describe the ELF in front of it,
     # not what a fresh render would produce today.
-    provenance = read_render_state(app_dir_for(build_root)) or {}
+    render_state = read_render_state(app_dir_for(build_root)) or {}
+    # The same reasoning one level deeper: the lock-derived provenance the build
+    # wrote next to this ELF. `memory_report.json` is a bundle artifact of its
+    # own and is read on its own (`hardware memory-report`), so it carries the
+    # block rather than pointing at a sibling file.
+    from .provenance import read_provenance
+
+    dependencies = read_provenance(build_root, board)
 
     report = {
         "schema": "hct.memory_report",
         "schema_version": 1,
         "artifact": SERVER_TARGET,
         "target": {"board": board.id, "cpu": board.cpu},
-        "baseline_id": provenance.get("baseline_id"),
-        "baseline_fingerprint": provenance.get("baseline_fingerprint"),
-        "kernel_source": provenance.get("kernel_source"),
-        "kernel_options": provenance.get("kernel_options"),
+        "baseline_id": render_state.get("baseline_id"),
+        "baseline_fingerprint": render_state.get("baseline_fingerprint"),
+        "kernel_source": render_state.get("kernel_source"),
+        "kernel_options": render_state.get("kernel_options"),
         # Repo-relative for the default in-tree build dir, absolute for an external --build-dir.
         "artifacts": {
             "elf": display_path(elf, project_root),
@@ -284,6 +291,8 @@ def generate_memory_report(
         "largest_symbols": analysis.largest_symbols,
         "size_summary": analysis.size_summary,
     }
+    if dependencies is not None:
+        report["dependencies"] = dependencies
 
     write_text_lf(out_root / "memory_report.json", json.dumps(report, indent=2))
     analysis.write_tool_outputs(out_root)
