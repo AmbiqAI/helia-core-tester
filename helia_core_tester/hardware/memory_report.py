@@ -67,9 +67,17 @@ def linker_script_path(board: BoardSpec, build_dir: Path) -> Path:
     ninja = output_dir(build_dir, board) / "build.ninja"
     if ninja.is_file():
         for match in _LINK_SCRIPT_RE.finditer(ninja.read_text(encoding="utf-8", errors="ignore")):
+            # Ninja paths are relative to the build directory, not to wherever
+            # this process happens to be running. NSX emits an absolute `-T`
+            # today, so this only matters if that changes -- but testing a
+            # relative one against the CWD would silently miss it and fall
+            # through to the SoC default, which is the wrong script exactly when
+            # a board overrides it.
             candidate = Path(match.group(1))
+            if not candidate.is_absolute():
+                candidate = ninja.parent / candidate
             if candidate.is_file():
-                return candidate
+                return candidate.resolve()
     from .nsx_app import app_dir_for
 
     fallback = (
