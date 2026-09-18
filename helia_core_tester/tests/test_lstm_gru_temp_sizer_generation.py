@@ -149,6 +149,19 @@ def test_resolve_root_rejects_non_checkout_env(tmp_path: Path, monkeypatch) -> N
     assert probe.detect_temp_sizers(SIZER_SYMBOLS, "test") is False
 
 
+def test_require_root_holds_generators_to_include_and_source(tmp_path: Path, monkeypatch) -> None:
+    """Generators that read Source/ or Tests/ get one actionable error for a root that
+    only has Include/ (or none at all), not a raw FileNotFoundError later."""
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(tmp_path))
+    with pytest.raises(RuntimeError, match=r"No ns-cmsis-nn checkout found \(tables\): set CMSIS_NN_ROOT"):
+        probe.require_cmsis_nn_root("tables")
+    (tmp_path / "Include").mkdir()
+    with pytest.raises(RuntimeError, match=r"which has no Source/.*--cmsis-nn-root"):
+        probe.require_cmsis_nn_root("tables")
+    (tmp_path / "Source").mkdir()
+    assert probe.require_cmsis_nn_root("tables") == tmp_path.resolve()
+
+
 # ---------------------------------------------------------------------------
 # 2. Expected-constant derivation (mirrors the ns-cmsis-nn#381 sizers)
 # ---------------------------------------------------------------------------
