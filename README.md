@@ -134,6 +134,31 @@ Two host tools are still fetched into `artifacts/downloads/` and shared with the
 FVP path: ARM GCC (NSX's toolchain file resolves the cross compiler off `PATH`) and
 CMSIS_5 (the firmware takes `pmu_armv8.h` from it).
 
+### How the firmware is flashed and run
+
+`hardware flash` **never builds, renders or reconfigures**: it consumes the build
+output and refuses — naming `hardware build` — when the build dir is missing or
+when its recorded render inputs differ from the ones the current options imply. The
+flash itself runs the J-Link recipe the NSX build wrote next to the image
+(`<build>/jlink/hct_benchmark_server/flash_cmds.jlink`) verbatim through `JLinkExe`,
+after checking it arms `ExitOnError 1` before its first `LoadFile` and that the
+`LoadFile` names this build's `.bin` with an explicit address; afterwards the flash
+bank J-Link reports is checked against that address. This is heliaPROFILER's flash
+path. The tester keeps one thing hpx has no equivalent of: the flash is skipped when
+the ELF is unchanged since this build dir last flashed this probe *and* the board
+confirms in TARGET_INFO that it runs this build's id (`--force` / `--force-flash`
+overrides).
+
+Every RTT session — one per batch of cases — resets the board with a `JLinkExe`
+`r`/`g` script rather than `pylink.reset()`, because only the commander's exit
+releases the probe in time for the Apollo510 secure bootloader to start the
+application; it then settles briefly, retries the pylink attach while the board
+boots, and starts RTT at the control-block address linked into the firmware. If that
+address never comes alive, the host scans the board's SRAM window
+(`rtt_scan_ranges` in `assets/hardware_boards.yaml`) for the `SEGGER RTT` magic and
+picks the best-scoring block. `HCT_RTT_DISCOVERY=scan` forces that discovery path,
+which also blanks stale control blocks left in retained SRAM before the reset.
+
 `helia_core_tester doctor` reports the pinned neuralspotx version, the dependency
 baseline in force with its fingerprint, the resolved kernel source, the cross
 compiler NSX will find, and the J-Link library, as informational checks; missing

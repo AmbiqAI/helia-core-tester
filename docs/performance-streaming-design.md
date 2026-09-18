@@ -277,7 +277,7 @@ Default transport is bidirectional SEGGER RTT. In the current live Apollo510 imp
 
 - **Live-real on Apollo510:** the benchmark-server target now boots on real Apollo510 hardware, initializes the real `SEGGER_RTT` target sources from `neuralspotx/examples/coremark/src/rtt/`, emits TARGET_INFO over RTT, accepts host frames, requests blobs, and streams correctness/performance results back to the host.
 - **Host implementation:** the host now has a real J-Link RTT transport using `pylink-square`. It resolves `_SEGGER_RTT` from the linked ELF and starts RTT with an explicit control-block address.
-- **Observed limitation:** SEGGER CLI auto-discovery (`JLinkRTTLogger`) did not find the control block on this board/firmware, so the working hardware path currently uses explicit RTT block-address startup rather than auto-discovery.
+- **Observed limitation:** SEGGER CLI auto-discovery (`JLinkRTTLogger`) did not find the control block on this board/firmware, so the working hardware path uses explicit RTT block-address startup rather than auto-discovery, with a host-side scan for the `SEGGER RTT` magic as the fallback. See "Flash and run" for the full reset/attach sequence.
 
 ## PMU/DWT reuse
 
@@ -523,6 +523,159 @@ Current remaining boundary:
 
 Loopback/fake-target validation remains the hardware-independent proof path; Apollo510 live RTT now covers the first real-hardware proof path.
 
+## Flash and run
+
+Flashing and resetting are heliaPROFILER's, mechanism for mechanism; the one
+deliberate divergence is the build-id flash skip, which hpx has no equivalent of
+and which is kept because a repeat `hardware run` on an unchanged build is the
+common case here and a flash costs ~6 s of MRAM programming.
+
+### The flash runs NSX's own recipe
+
+`nsx_finalize_app()` writes a ready-made commander script per target at
+`<build>/jlink/<target>/flash_cmds.jlink`:
+
+```
+ExitOnError 1
+Reset
+LoadFile "<build>/hct_benchmark_server.bin", 0x00410000
+Reset
+Go
+Exit
+```
+
+`hardware flash` runs *that file*, verbatim, through `JLinkExe` with the resolved
+probe serial (`-SelectEmuBySN`). It does not hand-roll a `loadfile`: hpx tried that
+against the extension-less ELF and it **silently programmed nothing** on Apollo510 —
+the board kept running the previous firmware while the host reported a successful
+flash. It also does not go through the `<target>_flash` ninja target NSX generates,
+because reaching a ninja target means owning a configured build tree at flash time,
+which is what made the previous revision re-render the app on every flash (see
+"Flash never rebuilds" below). The recipe is the proven artifact; the target is just
+one way to run it.
+
+Running someone else's script verbatim means vetting it first, the same way NSX's
+`validate_flash_recipe` and hpx's `target/probe/flash.py` do
+(`helia_core_tester/hardware/flash_recipe.py`):
+
+- **`ExitOnError 1` must be armed before the first `LoadFile`.** Without it JLinkExe
+  can fail a command and still exit zero, so a failed flash looks like a success;
+  arming it afterwards protects nothing, because the commander runs a script top to
+  bottom. Presence alone is therefore not the check — position is.
+- **Some `LoadFile` must name this build's `.bin`, with an explicit address.**
+  Recipes bake absolute paths, so a recipe left behind by an earlier build resolves
+  happily and flashes a stale image while the run is attributed to the new build id.
+  An addressless `LoadFile` is refused: J-Link accepts it and it does program flash,
+  taking the destination from the image format — a destination the host cannot check,
+  which is the one thing this gate exists to refuse.
+- Quoted and unquoted paths, a `, reset|noreset` tail and a trailing `//` comment are
+  all accepted, because JLinkExe accepts them; the grammar is hpx's, which is wider
+  than NSX's own regex for exactly this reason.
+
+Every refusal says *"Nothing was programmed"*: "refused before JLinkExe ran" and
+"failed halfway through programming" call for opposite next steps.
+
+### Verification
+
+Two gates after the flash:
+
+1. **Exit status**, which is trustworthy precisely because `ExitOnError 1` was
+   verified, plus a text tripwire — one of `Flash download: Total` or `Skipped.
+   Contents already match` must appear. A bare connection `O.K.` is printed before
+   any programming and does not count.
+2. **The flash bank.** J-Link prints `Flash download: Bank 0 @ 0x00410000: …`, the
+   base of the bank it programmed (its format string carries one address for N
+   ranges, so it is not a per-range destination). The recipe's address must fall in
+   a bank J-Link named. That catches a build dir configured for another part —
+   every Ambiq part's app load address is its bank base — but *not* a wrong address
+   inside a bank J-Link did program; J-Link reports nothing finer. When no bank line
+   appears at all the flash is allowed to proceed with a loud `UNVERIFIED FLASH
+   DESTINATION` warning: the bank line corroborates the exit-status gate, and turning
+   a J-Link rewording into a hard stop would block correct flashes with no evidence
+   of a wrong one.
+
+### The skip rule (tester-only)
+
+A flash is skipped only when **both** halves agree: the host-side stamp
+`<build>/.flashed-<serial>.sha256` matches the ELF's sha256 (this build dir last
+flashed this probe with this image), *and* the board answers a short RTT session
+with this build dir's `hct_build_id.txt` in TARGET_INFO. The stamp alone cannot know
+what another build dir, clone or lab runner did to the same probe since. A missing
+stamp, a missing build id, a different id or no TARGET_INFO at all all mean flash.
+`--force` / `--force-flash` skips the question entirely.
+
+### Flash never rebuilds
+
+`hardware flash` renders nothing, configures nothing and compiles nothing. It
+computes the render its options *imply* in memory and compares the digest with the
+`.hct-nsx-app.json` state file the last `hardware build` wrote; a mismatch — an
+edited baseline, a different `--cmsis-nn-root`, a changed kernel switch — is an
+error naming `hardware build`, not an implicit rebuild. This is not hypothetical
+tidiness: the previous revision re-rendered from the working tree on every flash,
+and during the A/B that rebuilt one leg from the other leg's sources. `hardware run`
+therefore calls build and flash as two steps and owns the order.
+
+The probe serial is no longer passed to the build. It used to be, so NSX would bake
+it into the generated flash target — which forced a CMake reconfigure on every run
+with `--serial-no`. Nothing reads it now that the recipe is executed directly.
+
+### Reset and RTT attach
+
+Each batch of cases is one RTT session, and each session starts like an hpx capture:
+
+0. **(discovery path only) pre-clean.** Apollo5 retains SRAM across reset, so a
+   control block from a previously flashed firmware can outlive the reset and race
+   the live one. Attach, blank the `SEGGER RTT` magic of every structurally valid
+   block, release the probe; the reset that follows lets the current firmware
+   republish its own.
+1. **Reset through `JLinkExe`** with the script `r` / `g` / `exit` — *not*
+   `pylink.reset()`. The Apollo510 secure bootloader checks for an attached debugger
+   on the boot that follows a reset and will not start the application while one is
+   there; the commander's exit releases the probe, and pylink's reset does not. This
+   is the single most load-bearing detail in the run path.
+2. **Settle** 0.25 s: the SBL phase is unobservable, and a short floor costs less
+   than a failed attach.
+3. **Attach pylink, retrying** until the target answers or 30 s elapse — a connect
+   refused 200 ms after a reset means "still booting", not "board is gone". If the
+   attach finds the core halted (a bare `JLinkExe r` without `g`, a previous debug
+   session), it is resumed: a halted core publishes no RTT bytes, and the session
+   would otherwise fail as a protocol timeout rather than as the stopped target it is.
+4. **Start RTT at the control-block address linked into the firmware**, read from the
+   ELF's `_SEGGER_RTT` symbol. This is hpx's `known_block_address` path, and hpx
+   skips both the pre-clean and the scan on it for the reason that applies here too:
+   the firmware re-initialises that fixed address on every boot, so a stale block
+   elsewhere can never be selected. The host waits (up to 5 s) for a valid block to
+   appear there rather than reading once; `.bss` is legitimately still zero while the
+   SBL runs.
+5. **Fallback:** if that address never comes alive, sweep the board's SRAM window
+   (`rtt_scan_ranges` in `assets/hardware_boards.yaml`; DTCM `0x20000000+0x80000` for
+   apollo510_evb, the same window hpx uses) for the `SEGGER RTT` magic and score the
+   candidates — up-channel 0 named `HCTP_UP` dominates, then recent write activity,
+   then buffer size. Only if that finds nothing does J-Link's own auto-scan run. The
+   scan never wipes: the phase-0 wipe is safe only because a reset follows it.
+
+`HCT_RTT_DISCOVERY=scan|address|auto` forces a path, which is how the discovery and
+pre-clean code is exercised on hardware without deleting the ELF that address comes
+from.
+
+**No heartbeat hang detection.** hpx declares a run hung when the gap between
+firmware lines exceeds a heartbeat timeout; HCTP has no periodic target signal to
+time against — the firmware speaks when a case, sample or blob request is ready, and
+a long case is legitimately silent for its whole duration. The existing per-read
+timeouts stay the only liveness bound, and adding a "heartbeat" would mean adding a
+protocol message first.
+
+### One J-Link install
+
+Flash, reset, probe inspection and the RTT transport all resolve the SEGGER install
+the same way: `$HPX_JLINK_DLL` (the library), then `$JLINK_PATH` (the `JLinkExe`
+binary or its directory), then `JLinkExe` on `PATH`, then pylink's own search for the
+library. `JLinkExe` is looked for beside the resolved library as well, so
+`$HPX_JLINK_DLL` alone is enough on the lab runners, and the resolved path is
+exported to NSX as `$JLINK_PATH` at configure time. `helia_core_tester doctor`
+prints the library, the commander with its version banner, and whether each board's
+build dir carries a flash recipe.
+
 ## Hardware commands
 
 All hardware work goes through the board-keyed `hardware` CLI group (`--board`
@@ -540,7 +693,8 @@ resolves and vendors the SDK, board and kernel modules into that app:
 uv run helia_core_tester hardware build --board apollo510_evb -j
 ```
 
-Flash through the NSX-generated SEGGER target -- skipped automatically when the
+Flash through the NSX-generated J-Link recipe (see "Flash and run" above for the
+recipe, its validation and the bank check) -- skipped automatically when the
 ELF's sha256 matches the last flash to the same probe from this build dir *and*
 the board confirms it is running this build (every build carries a content-hash
 build id in `<build_dir>/hct_build_id.txt`, stamped into the linked image after
@@ -579,6 +733,12 @@ the fake-target tests; it is no longer a CLI command.
   the batching limits derived from `TARGET_INFO`.
 - `session_runner.py`: one RTT session per batch on a `BoardSpec`, case discovery
   from the generated-test tree, result-bundle writing.
+- `jlink_cli.py`: the only place this package shells out to `JLinkExe` (flash
+  script, `r`/`g` reset, probe inspection, version banner).
+- `flash_recipe.py`: locating, validating and running NSX's `flash_cmds.jlink`, and
+  checking the flash bank J-Link reports afterwards.
+- `rtt_control.py`: scanning, scoring and blanking `SEGGER RTT` control blocks over
+  SWD -- the fallback for when the linked control-block address cannot be used.
 - `hardware_pipeline.py`: generate -> build -> flash -> stream orchestration behind
   `hardware run` / `hardware stream`.
 - `memory_report.py`: the flash/RAM report and the universal size probe.
