@@ -48,7 +48,7 @@ from typing import Callable, Optional
 
 import typer
 
-from . import flash_recipe
+from . import flash_recipe, provenance
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .dependency_baseline import DependencyBaseline, resolve_baseline
@@ -288,11 +288,15 @@ def lock_reuse_reason(render: AppRender) -> Optional[str]:
     return None
 
 
-def lock_and_sync(render: AppRender, options: FirmwareOptions) -> None:
+def lock_and_sync(render: AppRender, options: FirmwareOptions) -> str:
     """Resolve `nsx.lock` when it cannot be reused, then materialise `modules/`.
 
     The sync is always frozen: it must reproduce exactly what the lock names and
     fail on drift rather than quietly re-vendoring something else.
+
+    Returns how the lock in force was obtained (`reused`, `resolved` or
+    `updated`, hpx's `DependencyLockMode` vocabulary), which the build's
+    provenance record carries.
     """
     from neuralspotx import api as nsx_api
 
@@ -302,11 +306,14 @@ def lock_and_sync(render: AppRender, options: FirmwareOptions) -> None:
     if options.update_dependencies:
         typer.echo("[hardware] Re-resolving NSX dependencies (--update-dependencies).")
         nsx_api.lock_app(app_dir, update=True, quiet=True, timeout_s=_LOCK_TIMEOUT_S, emit=emit)
+        mode = provenance.LOCK_UPDATED
     elif reason is None:
         typer.echo(f"[hardware] Reusing nsx.lock ({render.baseline.describe()}).")
+        mode = provenance.LOCK_REUSED
     else:
         typer.echo(f"[hardware] Resolving NSX dependencies: {reason}.")
         nsx_api.lock_app(app_dir, update=False, quiet=True, timeout_s=_LOCK_TIMEOUT_S, emit=emit)
+        mode = provenance.LOCK_RESOLVED
 
     remaining = lock_reuse_reason(render)
     if remaining is not None:
@@ -315,6 +322,7 @@ def lock_and_sync(render: AppRender, options: FirmwareOptions) -> None:
             f"Delete {app_dir} and retry, or re-run with --update-dependencies."
         )
     nsx_api.sync_app(app_dir, frozen=True, timeout_s=_SYNC_TIMEOUT_S, emit=emit)
+    return mode
 
 
 def _prepare_probe_env() -> None:
@@ -525,7 +533,7 @@ def build_firmware(
     render = prepare_app(board, repo_root=repo_root, build_dir=build_dir, options=options)
     return build_rendered_firmware(
         render, build_dir=build_dir, jobs=jobs, force_reconfigure=force_reconfigure,
-        serial_no=serial_no, options=options,
+        serial_no=serial_no, options=options, repo_root=repo_root,
     )
 
 
@@ -537,11 +545,12 @@ def build_rendered_firmware(
     force_reconfigure: bool = False,
     serial_no: Optional[int] = None,
     options: Optional[FirmwareOptions] = None,
+    repo_root: Optional[Path] = None,
 ) -> Path:
     """Lock, sync, configure and build an already-rendered app."""
     options = options or FirmwareOptions()
     board = render.board
-    lock_and_sync(render, options)
+    lock_mode = lock_and_sync(render, options)
     if force_reconfigure or _needs_configure(render) or serial_no is not None:
         # A probe serial is baked into the generated J-Link targets at configure
         # time, so switching --serial-no against a configured build dir has to
@@ -567,6 +576,20 @@ def build_rendered_firmware(
         snapshot = lock_snapshot_path(build_dir, board)
         snapshot.parent.mkdir(parents=True, exist_ok=True)
         snapshot.write_bytes(lock.read_bytes())
+    document = provenance.build_provenance(
+        render,
+        repo_root=repo_root or tester_repo_root(),
+        build_dir=build_dir,
+        lock_mode=lock_mode,
+        update_requested=options.update_dependencies,
+        binary=elf,
+        build_id=read_build_id(build_dir, board),
+    )
+    path = provenance.write_provenance(build_dir, board, document)
+    typer.echo(
+        f"[hardware] Dependency provenance: {document['qualification']} "
+        f"({provenance.summarize_kernels(document)}) -> {path}"
+    )
     return elf
 
 

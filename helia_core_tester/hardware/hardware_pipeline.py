@@ -222,10 +222,68 @@ class HardwareRunOutcome:
     # Wall-clock seconds per stage (generate/build/flash/stream/total) and per case;
     # also written into the bundle's session_summary.json. See stage_timing().
     timing: Dict[str, Any] = field(default_factory=dict)
+    #: The lock-derived provenance block recorded in the bundle (None when the run
+    #: streamed to firmware whose build dir carried none, under
+    #: --allow-unverified-firmware).
+    dependencies: Optional[Dict[str, Any]] = None
 
     @property
     def failed_case_ids(self) -> list[str]:
         return [c.case_bundle.case_id for c in self.result.cases if not c.comparison.passed]
+
+
+def _resolve_provenance(
+    build_dir: Path,
+    board: BoardSpec,
+    expected_build_id: Optional[str],
+    *,
+    allow_unverified_firmware: bool,
+    echo: Callable[[str], None],
+) -> Optional[Dict[str, Any]]:
+    """The build dir's provenance block, verified against the image being streamed.
+
+    Refuses rather than writing an unattributed bundle: a hardware number whose
+    dependency set is unknown cannot be compared against anything, and a stale
+    provenance file (one describing an earlier image in the same build dir) would
+    be worse -- it attributes real numbers to the wrong commits. The
+    `--allow-unverified-firmware` escape is the same one the build-id stamp uses,
+    and means the same thing here: stream anyway, record nothing.
+    """
+    from .provenance import (
+        PROVENANCE_FILENAME,
+        ProvenanceError,
+        provenance_path,
+        read_provenance,
+        recorded_build_id,
+        summarize_kernels,
+    )
+
+    def _refuse(message: str) -> None:
+        if allow_unverified_firmware:
+            echo(f"[hardware] WARNING: {message} Continuing with no provenance (--allow-unverified-firmware).")
+            return
+        raise RuntimeError(
+            f"{message} Rebuild with `hardware build --board {board.id}` (which writes it), or pass "
+            "--allow-unverified-firmware to stream without recording what the firmware was built from."
+        )
+
+    try:
+        document = read_provenance(build_dir, board)
+    except ProvenanceError as exc:
+        _refuse(f"{exc}")
+        return None
+    if document is None:
+        _refuse(f"{provenance_path(build_dir, board)} not found, so what the firmware was built from is unrecorded.")
+        return None
+    recorded = recorded_build_id(document)
+    if expected_build_id is not None and recorded is not None and recorded != expected_build_id:
+        _refuse(
+            f"{PROVENANCE_FILENAME} in {build_dir} describes build id {recorded}, but the firmware in that "
+            f"build dir is {expected_build_id}, so the recorded dependencies belong to another image."
+        )
+        return None
+    echo(f"[hardware] Firmware provenance: {summarize_kernels(document)}.")
+    return document
 
 
 def stream_generated_tests(
@@ -241,9 +299,19 @@ def stream_generated_tests(
 ) -> HardwareRunOutcome:
     """Stream the generated suite to already-flashed firmware and write the bundle.
 
-    Preflight: the build dir must carry `hct_build_id.txt` so every session's TARGET_INFO
-    can be checked against it; a missing stamp is an error unless
-    `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
+    Preflight, both halves of "this bundle describes the firmware that ran":
+
+    - the build dir must carry `hct_build_id.txt`, so every session's TARGET_INFO
+      can be checked against it;
+    - it must carry the lock-derived provenance document, and that document's
+      `build_images[].build_id` must be the same build id -- a provenance file
+      left behind by an earlier build would otherwise attribute these numbers to
+      the wrong dependency set, which is the whole failure mode the record exists
+      to prevent.
+
+    Both are errors unless `allow_unverified_firmware` says the caller knowingly
+    streams to firmware this build dir cannot vouch for; the bundle then carries
+    no `dependencies` block rather than a guessed one.
     """
     from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error, run_case_bundles
 
@@ -261,6 +329,11 @@ def stream_generated_tests(
                 "or pass --allow-unverified-firmware to stream to legacy firmware unchecked."
             )
         echo(f"[hardware] WARNING: {stamp_missing} Continuing unverified (--allow-unverified-firmware).")
+
+    dependencies = _resolve_provenance(
+        build_dir, board, expected_build_id,
+        allow_unverified_firmware=allow_unverified_firmware, echo=echo,
+    )
 
     # Bridge the cases once, before any hardware I/O: bridging loads every case's
     # arrays and runs the FVP gate, so the list is built here and handed to the
@@ -307,6 +380,7 @@ def stream_generated_tests(
         build_dir=build_dir,
         on_case_complete=on_case_complete,
         expected_build_id=expected_build_id,
+        dependencies=dependencies,
         echo=echo,
     )
     timing = {
@@ -314,7 +388,10 @@ def stream_generated_tests(
         "batch_count": int(getattr(result, "batch_count", 1)),
         "cases": case_seconds,
     }
-    return HardwareRunOutcome(session_id=session_id, result=result, bundle=bundle, skipped=skipped, timing=timing)
+    return HardwareRunOutcome(
+        session_id=session_id, result=result, bundle=bundle, skipped=skipped,
+        timing=timing, dependencies=dependencies,
+    )
 
 
 def finalize_timing(outcome: HardwareRunOutcome, *, generate_s: float = 0.0, echo: Callable[[str], None]) -> None:

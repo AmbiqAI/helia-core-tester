@@ -369,7 +369,7 @@ def _report(outcome, spec: BoardSpec, *, as_json: bool) -> None:
     if as_json:
         typer.echo(json.dumps(build_json_summary(
             outcome.result, outcome.skipped, session_id=outcome.session_id, board_id=spec.id, bundle=outcome.bundle,
-            timing=outcome.timing,
+            timing=outcome.timing, dependencies=outcome.dependencies,
         ), indent=2))
     if failed:
         typer.echo(typer.style("✗ One or more generated-test cases failed correctness", fg=typer.colors.RED, bold=True), err=True)

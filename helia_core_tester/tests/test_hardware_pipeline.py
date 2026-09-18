@@ -11,8 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.hardware import firmware_build, flash_recipe, nsx_app
+from helia_core_tester.hardware import firmware_build, flash_recipe, nsx_app, provenance
 from helia_core_tester.hardware.boards import resolve_board
+from helia_core_tester.hardware.dependency_baseline import resolve_baseline
 from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, load_case_bundle
 from helia_core_tester.hardware.fake_target import FakeTargetTransport
 from helia_core_tester.hardware.firmware_build import (
@@ -167,6 +168,21 @@ def _write_elf(build_dir: Path, payload: bytes, build_id: str | None = None) -> 
     if build_id is not None:
         build_id_path(build_dir, BOARD).write_text(build_id + "\n")
     return elf
+
+
+def _write_provenance(build_dir: Path, build_id: str | None = None, *, qualification: str = "qualified") -> Path:
+    """The minimal provenance record a build dir must carry for a stream to run.
+    Shape-checked in test_hardware_provenance; here it only has to be present and
+    to name the build id the ELF carries."""
+    from helia_core_tester.hardware.provenance import write_provenance
+
+    return write_provenance(build_dir, BOARD, {
+        "schema": "hct.hardware.dependencies",
+        "schema_version": 1,
+        "modules": [{"name": "nsx-cmsis-nn", "project": "ns-cmsis-nn", "kind": "git", "peeled_commit": "a" * 40}],
+        "qualification": qualification,
+        "build_images": [{"role": "benchmark-server", "build_id": build_id}],
+    })
 
 
 def _silent_board(*_args):
@@ -527,6 +543,46 @@ def test_read_target_info_returns_the_full_payload_without_acknowledging() -> No
 # --- NSX build driver ------------------------------------------------------------
 
 
+def _fake_lock_text() -> str:
+    """The lock `nsx lock` would leave behind, with the kernels on the repo's own pin.
+
+    A real lock and not a placeholder, because the build now derives the bundle's
+    dependency provenance from it: a build that produced no usable lock produces
+    no provenance, and that is the contract these tests exercise."""
+    from helia_core_tester.hardware.dependency_baseline import resolve_baseline
+
+    pin = resolve_baseline(PROJECT_ROOT).project("ns-cmsis-nn").ref
+    return f"""\
+schema_version: 4
+targets:
+  {BOARD.nsx_board}:
+    generated_at: '2026-09-18T00:00:00+00:00'
+    nsx_tool:
+      version: 0.2.0
+    manifest:
+      path: nsx.yml
+      hash: sha256:{'b' * 64}
+    target:
+      board: {BOARD.nsx_board}
+      soc: {BOARD.soc}
+      toolchain: arm-none-eabi-gcc
+    modules:
+      nsx-cmsis-nn:
+        project: ns-cmsis-nn
+        kind: git
+        constraint: {pin}
+        resolved:
+          url: https://github.com/AmbiqAI/ns-cmsis-nn.git
+          commit: {pin}
+          vendored_at: modules/ns-cmsis-nn
+          content_hash: sha256:{'e' * 64}
+          acquired_at: '2026-09-18T00:00:01+00:00'
+"""
+
+
+_FAKE_LOCK = _fake_lock_text()
+
+
 class _FakeNsxApi:
     """Stand-in for the four neuralspotx.api entry points the build driver calls.
 
@@ -541,7 +597,7 @@ class _FakeNsxApi:
 
     def lock_app(self, app_dir, **kwargs):
         self.calls.append(("lock", Path(app_dir), kwargs.get("update", False)))
-        (Path(app_dir) / "nsx.lock").write_text("fake-lock\n", encoding="utf-8")
+        (Path(app_dir) / "nsx.lock").write_text(_FAKE_LOCK, encoding="utf-8")
         # Resolving produces a lock the build can use -- the post-lock recheck
         # must see that, or every build would report NSX as having failed.
         self.reasons["value"] = None
@@ -599,8 +655,26 @@ def test_build_firmware_drives_nsx_in_order(nsx_driver, tmp_path: Path) -> None:
     assert api.calls[3][2] == "hct_benchmark_server"
     assert elf == firmware_build.elf_path(build_dir, BOARD) and elf.is_file()
     assert firmware_build.read_build_id(build_dir, BOARD) == "hct-fake"
-    # The lock that produced this image is kept next to it for the bundle.
-    assert firmware_build.lock_snapshot_path(build_dir, BOARD).read_text() == "fake-lock\n"
+    # The lock that produced this image is kept next to it for the bundle, and so
+    # is the provenance derived from it -- naming this image, not a fresh render.
+    assert firmware_build.lock_snapshot_path(build_dir, BOARD).read_text() == _FAKE_LOCK
+    document = provenance.read_provenance(build_dir, BOARD)
+    assert document["qualification"] == "qualified"
+    assert document["lock"]["mode"] == "resolved"
+    assert provenance.recorded_build_id(document) == "hct-fake"
+    assert document["build_images"][0]["sha256"]
+    kernel = next(m for m in document["modules"] if m["name"] == "nsx-cmsis-nn")
+    assert kernel["peeled_commit"] == resolve_baseline(PROJECT_ROOT).project("ns-cmsis-nn").ref
+
+
+def test_build_firmware_records_a_reused_lock_as_reused(nsx_driver, tmp_path: Path) -> None:
+    _, reasons = nsx_driver
+    build_dir = tmp_path / "bd"
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    reasons["value"] = None
+
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    assert provenance.read_provenance(build_dir, BOARD)["lock"]["mode"] == "reused"
 
 
 def test_build_firmware_reuses_a_compatible_lock(nsx_driver, tmp_path: Path) -> None:
@@ -656,14 +730,20 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
     skipped = [(_SkippedTest("conv_x"), "conv_x: operator='Foo' is not bridgeable (bridged today: ['Abs']).")]
 
     timing = {"generate_s": 0.0, "build_s": 2.5, "flash_s": 0.0, "stream_s": 1.25, "total_s": 3.75, "batch_count": 1, "cases": {"abs_json": 1.25}}
+    dependencies = {"schema": "hct.hardware.dependencies", "qualification": "qualified", "modules": []}
     summary = build_json_summary(
         result, skipped, session_id="apollo510_evb-20260912T000000Z", board_id="apollo510_evb",
         bundle=tmp_path / "artifacts" / "reports" / "hardware" / "apollo510_evb-20260912T000000Z",
-        timing=timing,
+        timing=timing, dependencies=dependencies,
     )
     encoded = json.loads(json.dumps(summary))  # must be JSON-serialisable as-is
 
-    assert set(encoded) == {"session_id", "board", "bundle", "totals", "timing", "cases"}
+    assert set(encoded) == {"session_id", "board", "bundle", "totals", "timing", "dependencies", "cases"}
+    assert encoded["dependencies"] == dependencies
+    # Null, not absent, when the run recorded none: the key set is the contract.
+    assert build_json_summary(
+        result, skipped, session_id="s", board_id="apollo510_evb", bundle=tmp_path,
+    )["dependencies"] is None
     assert encoded["session_id"] == "apollo510_evb-20260912T000000Z"
     assert encoded["board"] == "apollo510_evb"
     assert encoded["bundle"].endswith("apollo510_evb-20260912T000000Z")
@@ -775,9 +855,15 @@ def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeyp
 
     build_dir = tmp_path / "bd"
     _write_elf(build_dir, b"fw", "hct-stream")
+    _write_provenance(build_dir, "hct-stream")
     echoed: list[str] = []
     outcome = hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=build_dir, options=StreamOptions(), echo=echoed.append)
     assert seen["expected_build_id"] == "hct-stream"
+    # The block the build recorded reaches both the bundle and the run outcome
+    # (which is what --json prints), with no second derivation on the way.
+    assert seen["dependencies"]["qualification"] == "qualified"
+    assert outcome.dependencies is seen["dependencies"]
+    assert any("Firmware provenance: ns-cmsis-nn@" in line and "qualified" in line for line in echoed)
     assert any("firmware build id hct-stream" in line for line in echoed)
     # Bridged exactly once: the preview list is what the session runner gets.
     assert bridged == ["bridge"]
@@ -800,6 +886,7 @@ def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, 
 
     unstamped = tmp_path / "old"
     _write_elf(unstamped, b"fw")
+    _write_provenance(unstamped)
     echoed: list[str] = []
     with pytest.raises(RuntimeError, match="hct_build_id.txt not found") as info:
         hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=unstamped, options=StreamOptions(), echo=echoed.append)
@@ -812,6 +899,61 @@ def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, 
     assert seen["expected_build_id"] is None
     assert any("WARNING" in line and "hct_build_id.txt" in line and "unverified" in line for line in echoed)
     assert any("firmware build id unverified" in line for line in echoed)
+
+
+def test_stream_refuses_a_build_dir_with_no_provenance_unless_opted_out(tmp_path: Path, monkeypatch) -> None:
+    """A bundle whose dependencies are unknown cannot be compared against anything,
+    so it is not written at all -- unless the caller says so, and then it carries no
+    block rather than a guessed one."""
+    from helia_core_tester.hardware import hardware_pipeline
+
+    class _Bundle:
+        case_id = "abs_default_s8_hw_generated"
+
+    seen: dict = {}
+    monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([_Bundle()], []))
+    monkeypatch.setattr(
+        "helia_core_tester.hardware.session_runner.run_case_bundles",
+        lambda repo_root, bundles, **kwargs: (seen.update(kwargs), (object(), tmp_path / "bundle"))[1],
+    )
+
+    build_dir = tmp_path / "unrecorded"
+    _write_elf(build_dir, b"fw", "hct-unrecorded")
+    echoed: list[str] = []
+    with pytest.raises(RuntimeError, match="hct_provenance.json") as info:
+        hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=build_dir, options=StreamOptions(), echo=echoed.append)
+    assert "--allow-unverified-firmware" in str(info.value) and "hardware build --board apollo510_evb" in str(info.value)
+    assert not seen  # preflight: nothing streamed
+
+    hardware_pipeline.stream_generated_tests(
+        tmp_path, BOARD, 5, build_dir=build_dir, options=StreamOptions(), echo=echoed.append, allow_unverified_firmware=True,
+    )
+    assert seen["dependencies"] is None
+    assert any("WARNING" in line and "no provenance" in line for line in echoed)
+
+
+def test_stream_refuses_provenance_left_behind_by_another_image(tmp_path: Path, monkeypatch) -> None:
+    """The stale-record case: a provenance file describing an earlier build in the
+    same build dir would attribute real numbers to the wrong commits."""
+    from helia_core_tester.hardware import hardware_pipeline
+
+    class _Bundle:
+        case_id = "abs_default_s8_hw_generated"
+
+    monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([_Bundle()], []))
+    monkeypatch.setattr(
+        "helia_core_tester.hardware.session_runner.run_case_bundles",
+        lambda repo_root, bundles, **kwargs: (object(), tmp_path / "bundle"),
+    )
+
+    build_dir = tmp_path / "stale"
+    _write_elf(build_dir, b"fw", "hct-new")
+    _write_provenance(build_dir, "hct-old")
+    with pytest.raises(RuntimeError, match="describes build id hct-old") as info:
+        hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=build_dir, options=StreamOptions(), echo=lambda _m: None)
+    assert "hct-new" in str(info.value)
 
 
 # --- --json keeps stdout clean ----------------------------------------------------
