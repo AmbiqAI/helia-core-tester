@@ -489,6 +489,74 @@ Key files:
 - `logs/host.log`
 - `logs/target.log`
 - `junit.xml`
+- `hct_provenance.json` and `nsx.lock` — the build-side originals of the
+  `dependencies` block below, copied in verbatim (see Provenance).
+
+## Provenance
+
+Every bundle says what the firmware that produced its numbers was built from, in
+a `dependencies` block carried by `session_manifest.json`, `session_summary.json`,
+`memory_report.json` and the `--json` document. The block is written in
+heliaPROFILER's shape (`helia_profiler/results/dependencies.py`), so a tester
+bundle and an hpx run describe their dependencies with one vocabulary and the hpx
+dashboard's per-project lookup (`hpx_dashboard/dataset.py::_summary_dependency`,
+reading `dependencies.modules[].{project,requested_ref,peeled_commit,url}`) reads
+a tester bundle unchanged. Neither repo depends on the other; the contract is
+pinned by a test that re-implements that lookup in this repo.
+
+**Derived from the lock, not from the working tree.** The source is `nsx.lock` —
+NSX's receipt, one peeled commit and content hash per module — plus the render
+state the app was written with, the dependency baseline in force and the
+`compile_commands.json` CMake left behind. Nothing is re-resolved at bundle time:
+what a fresh `nsx lock` would produce today is a different question from what
+this image was built from, and only the second one is evidence.
+
+- `workspace`: `fingerprint` (the render digest — the same identity `hardware
+  flash` refuses on), `baseline_id`, `baseline_fingerprint`, `registry_hash`
+  (sha256 of the packaged NSX registry, computed the way hpx computes its own, so
+  the two are comparable) and `inputs` (board, toolchain, kernel source, kernel
+  options, module list) spelled out for a reader who no longer has the app tree.
+- `lock`: `mode` (`reused` | `resolved` | `updated`), `frozen_sync`, the lock's
+  `schema_version`, its `sha256` and NSX's `manifest_hash`.
+- `modules[]`: one entry per module the lock resolved, with `kind` (NSX's own
+  word: `git`, `packaged`, `local`, `vendored`, `unresolved`), `requested_ref`,
+  `requested_tag`, `peeled_commit`, `content_hash`, `url` and `vendored_at`.
+- `overrides[]`: `--cmsis-nn-root` (scope `module`, mode `path`, with the lock's
+  own content hash for the mirrored tree) and `--baseline FILE` (scope
+  `baseline`). A path override also carries `local_checkout` — the checkout's git
+  HEAD and dirty flag. hpx does not record that; the tester's optimise loop runs
+  against a tree being edited, and "which commit was I on, and was it dirty" is
+  the question every such run asks afterwards.
+- `toolchain`: compiler and its version, CMake, neuralspotx.
+- `build_images[]`: the linked image's sha256, size, its build id (the string the
+  board itself reports in TARGET_INFO), and the ISA flags the compiler actually
+  received, counted per translation unit over the kernel and benchmark-server
+  units. Counts rather than a set, for hpx's reason: one flag over every unit is
+  a uniform build, while two spellings of `-mcpu` state a genuinely mixed one.
+  Scope is kernel + server rather than the whole tree because those are the two
+  sources of the code that produces the numbers.
+
+**Qualification.** `qualified` only when every baseline-pinned project resolved in
+the lock to exactly its pin and nothing was overridden by path. A path override, a
+dirty override tree, or a lock that resolved a pinned project elsewhere is
+`development-overrides` — a real, runnable build whose numbers are not qualified
+evidence. `unqualified_reasons[]` names each one. The comparison is the point: the
+rendered `nsx.yml` *asserts* the pins, the lock is the *outcome*, and NSX gives a
+packaged registry's module-level revision precedence over an app's project-level
+override — so "qualified" is a claim only worth making after the two are compared.
+
+**Where it lives and how it is verified.** `hardware build` writes
+`hct_provenance.json` next to the image it describes (beside the ELF, the build id
+and the `nsx.lock` snapshot in `<build-dir>/nsx_app/build/<board>/`, rather than in
+the app tree, whose own `nsx.lock` moves on at the next re-lock). `hardware
+run`/`stream` reads it back and refuses to write a bundle when it is missing, or
+when its `build_images[].build_id` is not the build id of the firmware in that
+build dir — a stale record would attribute real numbers to the wrong commits.
+`--allow-unverified-firmware` (the same flag that waives the build-id stamp check)
+downgrades both to a warning, and the bundle then carries no block rather than a
+guessed one. `logs/host.log` names the kernel commit and the qualification on its
+`firmware_kernels=` line, and `doctor` reports the qualification of each board's
+build dir.
 
 ## Real vs simulated status by layer
 
@@ -746,6 +814,9 @@ the fake-target tests; it is no longer a CLI command.
   checking the flash bank J-Link reports afterwards.
 - `rtt_control.py`: scanning, scoring and blanking `SEGGER RTT` control blocks over
   SWD -- the fallback for when the linked control-block address cannot be used.
+- `provenance.py`: the bundle's `dependencies` block -- read out of `nsx.lock`, the
+  render state, the baseline and `compile_commands.json`, and the qualification rule
+  over them.
 - `hardware_pipeline.py`: generate -> build -> flash -> stream orchestration behind
   `hardware run` / `hardware stream`.
 - `memory_report.py`: the flash/RAM report and the universal size probe.

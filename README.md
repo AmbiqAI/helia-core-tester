@@ -159,10 +159,28 @@ address never comes alive, the host scans the board's SRAM window
 picks the best-scoring block. `HCT_RTT_DISCOVERY=scan` forces that discovery path,
 which also blanks stale control blocks left in retained SRAM before the reset.
 
+### What every bundle records about its dependencies
+
+Each `hardware build` derives a provenance record from the `nsx.lock` it built
+against — every module's peeled commit, content hash, requested ref and origin,
+plus the baseline, the toolchain versions, and the linked image's hash, build id
+and ISA flags — and writes it next to the image as `hct_provenance.json`. Every
+result bundle carries that block as `dependencies` in `session_manifest.json`,
+`session_summary.json`, `memory_report.json` and the `--json` output, with the
+`hct_provenance.json` and `nsx.lock` originals copied in beside it. The block is
+written in heliaPROFILER's shape, so the hpx dashboard reads a tester bundle the
+way it reads an hpx run. A build is recorded as `qualified` only when the lock
+resolved every baseline-pinned project to exactly its pin and nothing was
+overridden by path; `--cmsis-nn-root` (whose git HEAD and dirty flag are recorded
+too) makes it `development-overrides`. `hardware run`/`stream` refuses to write a
+bundle whose build dir has no provenance, or whose provenance describes a
+different image, unless `--allow-unverified-firmware` is given. See
+`docs/performance-streaming-design.md` for the field-by-field description.
+
 `helia_core_tester doctor` reports the pinned neuralspotx version, the dependency
-baseline in force with its fingerprint, the resolved kernel source, the cross
-compiler NSX will find, and the J-Link library, as informational checks; missing
-hardware tools do not fail doctor.
+baseline in force with its fingerprint, the resolved kernel source, the
+qualification of each board's build dir, the cross compiler NSX will find, and the
+J-Link library, as informational checks; missing hardware tools do not fail doctor.
 
 ## Suite-Based Runs
 
