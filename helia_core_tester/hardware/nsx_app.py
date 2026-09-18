@@ -251,8 +251,9 @@ def project_ref_overrides(
 ) -> Dict[str, str]:
     """Baseline pin per project the module list resolves to.
 
-    A module vendored from a local path has no project to pin, and a project the
-    baseline does not name is left to the packaged registry.
+    A module built from a local checkout pins its project by path instead (see
+    `render_module_registry`), so it takes no ref; a project the baseline does
+    not name is left to the packaged registry.
     """
     refs: Dict[str, str] = {}
     for spec in modules:
