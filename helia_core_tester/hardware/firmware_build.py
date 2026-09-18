@@ -174,8 +174,10 @@ def configure(
         # The kernel checkout is a cache entry too; a build dir configured against
         # another checkout (or against CMakeLists.txt's `../..` default) would keep
         # compiling that one, so say so instead of silently reusing it.
+        # A cache with no entry at all (configured before this define existed) is stale
+        # too: it was built against CMakeLists.txt's `../..` default, whatever that was.
         cached_root = _cached_var(cache_text, "CMSIS_NN_ROOT")
-        root_stale = cached_root is not None and Path(cached_root) != resolved.root
+        root_stale = cached_root is None or Path(cached_root) != resolved.root
         # Still re-run cmake below in every case (cheap, <1s) rather than skipping
         # outright when already-configured: relying on `cmake --build`'s own
         # internal cmake_check_build_system re-check to be the first
@@ -188,6 +190,11 @@ def configure(
             typer.echo(f"[hardware] Reusing existing configured build dir: {build_dir}")
         elif serial_stale:
             typer.echo(f"[hardware] Requested --serial-no {serial_no} differs from configured build dir -- reconfiguring.")
+        elif root_stale and cached_root is None:
+            typer.echo(
+                f"[hardware] Existing build dir at {build_dir} records no ns-cmsis-nn root -- "
+                f"reconfiguring against {resolved.root} ({resolved.selector})."
+            )
         elif root_stale:
             typer.echo(
                 f"[hardware] Configured ns-cmsis-nn root {cached_root} differs from {resolved.root} "

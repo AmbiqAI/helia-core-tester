@@ -483,6 +483,12 @@ def test_configure_passes_the_resolved_cmsis_nn_root_to_cmake(captured_cmake, mo
     capsys.readouterr()
     firmware_build.configure(tmp_path / "bd", BOARD, force=False)
     assert "Reusing existing configured build dir" in capsys.readouterr().out
+    # A cache from before the define existed records no root at all: stale, not reusable.
+    (tmp_path / "bd" / "CMakeCache.txt").write_text("ARM_NN_ENABLE_F16:BOOL=ON\n", encoding="utf-8")
+    capsys.readouterr()
+    firmware_build.configure(tmp_path / "bd", BOARD, force=False)
+    out = capsys.readouterr().out
+    assert "records no ns-cmsis-nn root -- reconfiguring against" in out and "Reusing" not in out
 
     # Nothing resolvable is one clear error before CMake runs.
     monkeypatch.delenv("CMSIS_NN_ROOT")
