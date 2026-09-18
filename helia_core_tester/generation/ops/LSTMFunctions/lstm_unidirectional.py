@@ -411,11 +411,13 @@ class OpLSTMUnidirectional(OperationBase):
 
         templates_dir = Path(find_tester_templates_dir()) / get_operator_spec("LSTMUnidirectional").template_relpath / "json"
         # The same checkout the firmware compiles (CMSIS_NN_ROOT / --cmsis-nn-root),
-        # else the nested <ns-cmsis-nn>/Tests/helia-core-tester layout (the old
-        # parents[4] guess pointed one level short of it). Not required up front:
-        # generate_lstm_data() falls back to the validated unit-test data when flatc
-        # or the schema is unavailable, which the pure-Python CI suite relies on.
-        cmsis_nn_root = resolve_cmsis_nn_root() or Path(__file__).resolve().parents[5]
+        # else the nested <ns-cmsis-nn>/Tests/helia-core-tester layout: from
+        # .../helia-core-tester/helia_core_tester/generation/ops/LSTMFunctions/ this
+        # file's parents[6] is ns-cmsis-nn (the old parents[4] guess was the tester
+        # repo itself). Deliberately not require_cmsis_nn_root(): generate_lstm_data()
+        # falls back to the validated unit-test data when flatc or the schema is
+        # unavailable, and the pure-Python CI suite (no checkout) relies on that.
+        cmsis_nn_root = resolve_cmsis_nn_root() or Path(__file__).resolve().parents[6]
         schema_path = cmsis_nn_root / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
         work_dir = Path(output_dir) / "_lstm_tmp"
         work_dir.mkdir(parents=True, exist_ok=True)
