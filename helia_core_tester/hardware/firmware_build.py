@@ -302,16 +302,20 @@ def prepare_app(
 
 
 def lock_reuse_reason(render: AppRender) -> Optional[str]:
-    """Why the on-disk `nsx.lock` cannot be reused, or None when it can.
+    """Why the on-disk `nsx.lock` cannot be *reused*, or None when it can.
 
-    A lock is reusable when it was produced from exactly this manifest (NSX's
-    own manifest hash), it resolves the board this app targets, and the render
-    it belongs to -- manifest text plus baseline fingerprint -- is the render
-    being built now. The last check is what stops a baseline edit that happens
-    not to change any pin this board resolves from leaving a stale claim behind.
+    Two different questions get asked of a lock and they must not be conflated.
+    This is the first: may the lock already on disk stand in for a resolution we
+    would otherwise perform? That is only true if the last build recorded this
+    exact render -- manifest text plus baseline fingerprint -- which is what
+    catches a baseline edit that leaves `nsx.yml` byte-identical and so slips
+    past NSX's own manifest hash.
+
+    The second question, "is the lock NSX just wrote usable", is
+    `lock_validity_reason`: it must not consult the render state, because the
+    state describes the *previous* build and is only committed once this one
+    succeeds.
     """
-    from neuralspotx.nsx_lock import LOCK_SCHEMA_VERSION, hash_manifest, read_lock
-
     app_dir = render.app_dir
     if not (app_dir / "nsx.lock").is_file():
         return "nsx.lock is missing"
@@ -320,6 +324,21 @@ def lock_reuse_reason(render: AppRender) -> Optional[str]:
         return "this app has no recorded render state"
     if state.get("render_digest") != render.digest:
         return "the rendered manifest or the dependency baseline changed"
+    return lock_validity_reason(render)
+
+
+def lock_validity_reason(render: AppRender) -> Optional[str]:
+    """Why the on-disk `nsx.lock` is not usable at all, or None when it is.
+
+    Structure only: the schema NSX requires, a section for this board, agreement
+    with the manifest it was resolved from, and an exact peeled commit for every
+    git module. Says nothing about which render it belongs to.
+    """
+    from neuralspotx.nsx_lock import LOCK_SCHEMA_VERSION, hash_manifest, read_lock
+
+    app_dir = render.app_dir
+    if not (app_dir / "nsx.lock").is_file():
+        return "nsx.lock is missing"
     try:
         lock = read_lock(app_dir, render.board.nsx_board)
     except Exception as exc:  # NSX raises for an incompatible on-disk schema
@@ -364,7 +383,11 @@ def lock_and_sync(render: AppRender, options: FirmwareOptions) -> None:
         typer.echo(f"[hardware] Resolving NSX dependencies: {reason}.")
         nsx_api.lock_app(app_dir, update=False, quiet=True, timeout_s=_LOCK_TIMEOUT_S, emit=emit)
 
-    remaining = lock_reuse_reason(render)
+    # The lock just written describes this render by construction, so the
+    # question here is only whether it is structurally usable -- asking
+    # lock_reuse_reason would compare against the previous build's state, which
+    # is exactly what a resolve was needed to move past.
+    remaining = lock_validity_reason(render)
     if remaining is not None:
         raise RuntimeError(
             f"NSX produced a dependency lock this build cannot use: {remaining}. "

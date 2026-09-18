@@ -497,6 +497,14 @@ def nsx_driver(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(firmware_build, "tester_repo_root", lambda: PROJECT_ROOT)
     monkeypatch.setattr(firmware_build, "_prepare_probe_env", lambda: None)
     monkeypatch.setattr(firmware_build, "lock_reuse_reason", lambda render: reasons["value"])
+    # The structural check reads a real nsx.lock, which only neuralspotx can
+    # write; the fake leaves a placeholder, so stand in for "this lock is usable"
+    # once one exists at all.
+    monkeypatch.setattr(
+        firmware_build,
+        "lock_validity_reason",
+        lambda render: None if (render.app_dir / "nsx.lock").is_file() else "nsx.lock is missing",
+    )
     return api, reasons
 
 
