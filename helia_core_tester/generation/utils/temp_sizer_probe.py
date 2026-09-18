@@ -65,9 +65,13 @@ def require_cmsis_nn_root(purpose: str) -> Path:
     """resolve_cmsis_nn_root() for generators that cannot run without the checkout
     (e.g. a table or schema read from it): raises with the fix spelled out."""
     root = resolve_cmsis_nn_root()
-    if root is None:
+    # resolve_cmsis_nn_root() only needs Include/ (the sizer probe reads headers);
+    # the callers here read Source/ and Tests/ too, so hold them to the full contract
+    # the error message promises instead of failing later on a raw FileNotFoundError.
+    if root is None or not (root / "Source").is_dir():
+        where = f" (resolved {root}, which has no Source/)" if root is not None else ""
         raise RuntimeError(
-            f"No ns-cmsis-nn checkout found ({purpose}): set CMSIS_NN_ROOT or pass "
+            f"No ns-cmsis-nn checkout found ({purpose}){where}: set CMSIS_NN_ROOT or pass "
             f"--cmsis-nn-root to an ns-cmsis-nn checkout (a directory with Include/ and Source/)."
         )
     return root
