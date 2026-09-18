@@ -221,7 +221,7 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
 
     written: dict[str, Any] = {}
 
-    def _fake_write_result_bundle(result, *, session_id, output_root, memory_report, kernel_catalog, target_info, host_log_text, target_log_text):
+    def _fake_write_result_bundle(result, *, session_id, output_root, memory_report, kernel_catalog, target_info, host_log_text, target_log_text, dependencies=None):
         written.update(result=result, session_id=session_id, target_info=target_info, host_log=host_log_text)
         return output_root / "artifacts" / "reports" / "hardware" / session_id
 

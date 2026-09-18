@@ -449,11 +449,74 @@ def captured_cmake(monkeypatch, tmp_path: Path):
     CMSIS_NN_ROOT points at a fake checkout under tmp_path so the bench's real value
     (or its absence) never leaks into the assertions."""
     calls: list[list[str]] = []
+    real_run = firmware_build.subprocess.run
+
+    def _run(cmd, **kwargs):
+        # Only CMake is stubbed: the provenance record configure() writes afterwards
+        # runs `git` for real against the fake checkouts.
+        if cmd and cmd[0] == "cmake":
+            calls.append(list(cmd))
+            return None
+        return real_run(cmd, **kwargs)
+
     monkeypatch.setattr(firmware_build, "ensure_hardware_dependencies", lambda repo_root: None)
     monkeypatch.setattr(firmware_build, "tester_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(firmware_build.subprocess, "run", lambda cmd, **kwargs: calls.append(list(cmd)))
+    monkeypatch.setattr(firmware_build.subprocess, "run", _run)
+    monkeypatch.setattr(firmware_build, "_toolchain_version", lambda repo_root: "arm-none-eabi-gcc (fake) 14.2.1")
     monkeypatch.setenv("CMSIS_NN_ROOT", str(_fake_checkout(tmp_path / "env-checkout")))
     return calls
+
+
+def test_configure_records_what_the_build_dir_was_configured_against(captured_cmake, monkeypatch, tmp_path: Path) -> None:
+    from helia_core_tester.hardware.dependency_sources import CmsisNnSelection, read_build_dependencies
+
+    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: None)
+    flag_checkout = _fake_checkout(tmp_path / "flag-checkout")
+    build_dir = tmp_path / "bd"
+    # A kernel flags.make as the Makefile generator would have written it.
+    flags = build_dir / "cmsis-nn" / "CMakeFiles" / "cmsis-nn.dir" / "flags.make"
+    flags.parent.mkdir(parents=True)
+    flags.write_text("C_DEFINES = -DARM_NN_ENABLE_F16=1\nC_INCLUDES = -I/x\nC_FLAGS = -mcpu=cortex-m55 -Ofast\n", encoding="utf-8")
+
+    firmware_build.configure(build_dir, BOARD, force=False, cmsis_nn=CmsisNnSelection(root=flag_checkout))
+
+    document = read_build_dependencies(build_dir)
+    assert document["schema"] == "hct.hardware.dependencies" and document["schema_version"] == 1
+    kernels = next(m for m in document["modules"] if m["project"] == "ns-cmsis-nn")
+    assert kernels["name"] == "nsx-cmsis-nn" and kernels["kind"] == "local" and kernels["state"] == "content"
+    # Inside the repo (tester_repo_root is tmp_path here) the path is recorded repo-relative.
+    assert kernels["content_hash"]["algorithm"] == "sha256" and kernels["vendored_at"] == "flag-checkout"
+    assert {m["project"] for m in document["modules"]} == {"ns-cmsis-nn", "nsx-ambiq-sdk", "neuralspotx", "CMSIS_5"}
+    assert all(m["state"] == "absent" for m in document["modules"] if m["project"] != "ns-cmsis-nn")
+    assert document["overrides"] == [
+        {"scope": "module", "name": "nsx-cmsis-nn", "mode": "path", "requested": str(flag_checkout), "selector": "cli.--cmsis-nn-root"}
+    ]
+    build = document["build"]
+    assert build["kernel_target"] == "cmsis-nn" and build["build_profile"] == "legacy-thin"
+    assert build["cmake_defines"]["CMSIS_NN_ROOT"] == str(flag_checkout) and build["cmake_defines"]["HELIA_HARDWARE_BOARD"] == "apollo510_evb"
+    assert build["kernel_compile_flags"] == {"C_DEFINES": "-DARM_NN_ENABLE_F16=1", "C_INCLUDES": "-I/x", "C_FLAGS": "-mcpu=cortex-m55 -Ofast"}
+    assert document["toolchain"] == {"arm_none_eabi_gcc": "arm-none-eabi-gcc (fake) 14.2.1"}
+    # Every configure rewrites it: a later configure without flags.make records None.
+    flags.unlink()
+    firmware_build.configure(build_dir, BOARD, force=False, cmsis_nn=CmsisNnSelection(root=flag_checkout))
+    assert read_build_dependencies(build_dir)["build"]["kernel_compile_flags"] is None
+
+
+def test_result_bundle_carries_the_dependencies_block(tmp_path: Path) -> None:
+    from helia_core_tester.hardware.result_bundle import write_result_bundle
+
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_dep").manifest_path)
+    result = HostSession(FakeTargetTransport()).run_many([bundle])
+    dependencies = {"schema": "hct.hardware.dependencies", "schema_version": 1, "modules": [{"project": "ns-cmsis-nn"}]}
+    root = write_result_bundle(
+        result, session_id="with-deps", output_root=tmp_path, memory_report={"schema": "fake"}, kernel_catalog=[],
+        dependencies=dependencies,
+    )
+    assert json.loads((root / "session_manifest.json").read_text())["dependencies"] == dependencies
+    assert json.loads((root / "session_summary.json").read_text())["dependencies"] == dependencies
+    root = write_result_bundle(result, session_id="no-deps", output_root=tmp_path, memory_report={"schema": "fake"}, kernel_catalog=[])
+    assert "dependencies" not in json.loads((root / "session_manifest.json").read_text())
+    assert "dependencies" not in json.loads((root / "session_summary.json").read_text())
 
 
 def test_configure_passes_the_resolved_cmsis_nn_root_to_cmake(captured_cmake, monkeypatch, tmp_path: Path, capsys) -> None:
@@ -585,19 +648,23 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
     skipped = [(_SkippedTest("conv_x"), "conv_x: operator='Foo' is not bridgeable (bridged today: ['Abs']).")]
 
     timing = {"generate_s": 0.0, "build_s": 2.5, "flash_s": 0.0, "stream_s": 1.25, "total_s": 3.75, "batch_count": 1, "cases": {"abs_json": 1.25}}
+    dependencies = {"schema": "hct.hardware.dependencies", "schema_version": 1, "modules": [], "overrides": []}
     summary = build_json_summary(
         result, skipped, session_id="apollo510_evb-20260912T000000Z", board_id="apollo510_evb",
         bundle=tmp_path / "artifacts" / "reports" / "hardware" / "apollo510_evb-20260912T000000Z",
-        timing=timing,
+        timing=timing, dependencies=dependencies,
     )
     encoded = json.loads(json.dumps(summary))  # must be JSON-serialisable as-is
 
-    assert set(encoded) == {"session_id", "board", "bundle", "totals", "timing", "cases"}
+    assert set(encoded) == {"session_id", "board", "bundle", "totals", "timing", "dependencies", "cases"}
     assert encoded["session_id"] == "apollo510_evb-20260912T000000Z"
     assert encoded["board"] == "apollo510_evb"
     assert encoded["bundle"].endswith("apollo510_evb-20260912T000000Z")
     assert encoded["totals"] == {"ran": 1, "passed": 1, "failed": 0, "skipped": 1}
     assert encoded["timing"] == timing
+    assert encoded["dependencies"] == dependencies
+    # A build dir without hct_dependencies.json yields an explicit null, not a missing key.
+    assert build_json_summary(result, [], session_id="s", board_id="b", bundle=tmp_path)["dependencies"] is None
     ran, skip = encoded["cases"]
     assert set(ran) == {"case_id", "passed", "median_cycles", "valid_for_regression", "skipped_reason"}
     assert ran == {"case_id": "abs_json", "passed": True, "median_cycles": ran["median_cycles"], "valid_for_regression": True, "skipped_reason": None}
@@ -694,6 +761,22 @@ def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeyp
     # Bridged exactly once: the preview list is what the session runner gets.
     assert bridged == ["bridge"]
     assert seen["bundles"] is preview[0] and outcome.skipped is preview[1]
+    # A build dir configured before hct_dependencies.json existed: warned about, bundle carries none.
+    assert seen["dependencies"] is None and outcome.dependencies is None
+    assert any("hct_dependencies.json not found" in line for line in echoed)
+
+    # With the document present it reaches the session runner and the outcome verbatim.
+    from helia_core_tester.hardware.dependency_sources import write_build_dependencies
+
+    document = {
+        "schema": "hct.hardware.dependencies", "schema_version": 1, "overrides": [],
+        "modules": [{"project": "ns-cmsis-nn", "peeled_commit": "abc123", "state": "git-clean"}],
+    }
+    write_build_dependencies(build_dir, document)
+    echoed.clear()
+    outcome = hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=build_dir, options=StreamOptions(), echo=echoed.append)
+    assert seen["dependencies"] == document and outcome.dependencies == document
+    assert any("Firmware kernels: ns-cmsis-nn abc123 (git-clean)" in line for line in echoed)
 
 
 def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, monkeypatch) -> None:

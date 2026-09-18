@@ -383,6 +383,32 @@ Key files:
 - `logs/target.log`
 - `junit.xml`
 
+### Dependency provenance
+
+`session_manifest.json` and `session_summary.json` both carry a `dependencies` block
+(omitted, never null, when the build dir predates it): a verbatim copy of the build
+dir's `hct_dependencies.json`, which `hardware build` writes on every configure. It
+says what the firmware was built from, in the shape hpx writes into its own
+`summary.json` so the hpx dashboard's per-project lookup reads it unchanged:
+
+- `modules[]`: one entry per checkout -- `nsx-cmsis-nn` (project `ns-cmsis-nn`, the
+  kernels), `nsx-ambiq-sdk`, `neuralspotx`, `CMSIS_5` -- with `kind` (`git`, `local`
+  or `absent`), `peeled_commit`, `content_hash` (sha256 of the generation-input
+  subtrees for a dirty or non-git kernel checkout), `url`, `vendored_at` and `state`
+  (`git-clean`, `git-dirty`, `content`, `absent`). `requested_ref` / `requested_tag`
+  are reserved for a pinned-commit selection.
+- `overrides[]`: the explicit kernel selection when one was made (`--cmsis-nn-root`
+  or `$CMSIS_NN_ROOT`, recorded as `selector`); empty for the nested-layout default.
+- `build`: `kernel_target` (the CMake target the kernels compile through),
+  `build_profile` (the flag contract in force, `legacy-thin` today), the configure
+  `cmake_defines`, and `kernel_compile_flags` (the kernel target's `C_FLAGS` /
+  `C_DEFINES` / `C_INCLUDES` exactly as CMake generated them -- the record that shows
+  whether the kernels were compiled like shipping firmware).
+- `toolchain`: the `arm-none-eabi-gcc --version` banner.
+
+`--json` prints the same block under `dependencies` (null when unknown), and
+`logs/host.log` names the kernel commit on its `firmware_kernels=` line.
+
 ## Real vs simulated status by layer
 
 - **Host HCTP framing/CRC/session validation:** real and unit-tested in Python.

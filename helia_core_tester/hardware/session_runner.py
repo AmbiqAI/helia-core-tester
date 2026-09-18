@@ -17,6 +17,7 @@ from typing import Callable, Sequence
 
 from .boards import DEFAULT_BOARD_ID, BoardSpec, default_session_id, resolve_board
 from .case_bundle import CaseBundle, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
+from .dependency_sources import summarize_kernels
 from .generated_test_bridge import (
     GeneratedTestCase,
     UnsupportedGeneratedTestError,
@@ -145,6 +146,7 @@ def run_case_bundles(
     build_dir: Path | None = None,
     on_case_complete: OnCaseComplete | None = None,
     expected_build_id: str | None = None,
+    dependencies: dict | None = None,
 ) -> tuple[SessionResult, Path]:
     """Stream `case_bundles` to the board in as many sessions as the target's limits
     require, merge every case into one SessionResult, and write its result bundle.
@@ -223,6 +225,7 @@ def run_case_bundles(
         f"board={board.id} chip={board.jlink_device} serial={serial_no} speed_khz={board.swd_speed_khz}\n"
         f"rtt_address=0x{rtt_address:08x}\n"
         f"firmware_build_id={build_id}\n"
+        f"firmware_kernels=ns-cmsis-nn {summarize_kernels(dependencies)}\n"
         f"counter_passes={[p.name for p in counter_passes]}\n"
         f"batch_count={batch_count} max_cases_per_session={limits.max_cases if limits else 0} "
         f"max_session_plan_bytes={limits.max_plan_bytes if limits else 0}\n"
@@ -239,6 +242,7 @@ def run_case_bundles(
         target_info=board.target_info(),
         host_log_text=host_log,
         target_log_text=target_log,
+        dependencies=dependencies,
     )
     return merged_result, bundle_root
 

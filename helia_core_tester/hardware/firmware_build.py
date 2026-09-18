@@ -30,12 +30,23 @@ import typer
 
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
-from .dependency_sources import CmsisNnSelection, ResolvedCmsisNn, describe, resolve_cmsis_nn
+from .dependency_sources import (
+    CmsisNnSelection,
+    ResolvedCmsisNn,
+    build_dependencies_document,
+    describe,
+    resolve_cmsis_nn,
+    write_build_dependencies,
+)
 from .jlink_library import JLinkLibraryError, find_jlink_exe
 from .pathutil import is_relative_to
 from .toolchain import DOWNLOADS_DIR, add_toolchain_to_path, toolchain_bin_dir
 
 TOOLCHAIN_FILE = "cmake/nsx/toolchains/arm-none-eabi-gcc.cmake"
+# The CMake target the kernels are compiled through, and the flag contract in force
+# (recorded in every bundle so pre- and post-flag-change numbers stay distinguishable).
+KERNEL_TARGET = "cmsis-nn"
+BUILD_PROFILE = "legacy-thin"
 SERVER_TARGET = "hct_benchmark_server"
 FLASH_TARGET = "hct_benchmark_server_flash"
 
@@ -244,7 +255,62 @@ def configure(
     typer.echo(f"[hardware] ns-cmsis-nn: {describe(resolved)}")
     typer.echo(f"[hardware] Configuring: {' '.join(cmd)}")
     subprocess.run(cmd, cwd=repo_root, check=True)
+    # What this build dir is now configured against; `hardware stream` copies it into
+    # the bundle, so the numbers always name the kernels/SDK/toolchain they came from.
+    write_build_dependencies(
+        build_dir,
+        build_dependencies_document(
+            repo_root,
+            resolved,
+            cmake_defines=_cmake_defines(cmd),
+            kernel_target=KERNEL_TARGET,
+            build_profile=BUILD_PROFILE,
+            kernel_compile_flags=_kernel_compile_flags(build_dir),
+            toolchain={"arm_none_eabi_gcc": _toolchain_version(repo_root)},
+        ),
+    )
     return resolved
+
+
+def _cmake_defines(cmd: list[str]) -> dict[str, str]:
+    """The `-DNAME=value` entries of a configure command line, as a dict."""
+    defines: dict[str, str] = {}
+    for arg in cmd:
+        if arg.startswith("-D") and "=" in arg:
+            name, value = arg[2:].split("=", 1)
+            defines[name] = value
+    return defines
+
+
+def _kernel_compile_flags(build_dir: Path) -> Optional[dict[str, str]]:
+    """C_FLAGS / C_DEFINES CMake generated for the kernel target, straight from its
+    flags.make (Makefile generator), or None when it isn't there. This is the record
+    that later shows whether the kernels were compiled like shipping firmware."""
+    path = build_dir / KERNEL_TARGET / "CMakeFiles" / f"{KERNEL_TARGET}.dir" / "flags.make"
+    if not path.is_file():
+        return None
+    flags: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        for key in ("C_FLAGS", "C_DEFINES", "C_INCLUDES"):
+            if line.startswith(f"{key} ="):
+                flags[key] = line.split("=", 1)[1].strip()
+    return flags or None
+
+
+def _toolchain_version(repo_root: Path) -> Optional[str]:
+    """First line of `arm-none-eabi-gcc --version` from the managed toolchain, or None."""
+    try:
+        from .toolchain import arm_tool
+
+        completed = subprocess.run(
+            [arm_tool("arm-none-eabi-gcc", repo_root), "--version"], capture_output=True, text=True, check=False, timeout=20
+        )
+    except Exception:  # noqa: BLE001 -- provenance must never fail the build
+        return None
+    if completed is None or completed.returncode != 0:
+        return None
+    first = completed.stdout.strip().splitlines()
+    return first[0] if first else None
 
 
 def _jlink_exe_for_cmake() -> Optional[str]:

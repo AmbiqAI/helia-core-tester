@@ -174,9 +174,17 @@ def print_run_report(result, skipped: list[tuple], bundle: Path, *, err: bool = 
 
 
 def build_json_summary(
-    result, skipped: list[tuple], *, session_id: str, board_id: str, bundle: Path, timing: Optional[dict] = None
+    result,
+    skipped: list[tuple],
+    *,
+    session_id: str,
+    board_id: str,
+    bundle: Path,
+    timing: Optional[dict] = None,
+    dependencies: Optional[dict] = None,
 ) -> dict[str, Any]:
-    """The single JSON document `--json` prints on stdout."""
+    """The single JSON document `--json` prints on stdout. `dependencies` is the
+    bundle's provenance block (kernels/SDK/toolchain), None when the build dir had none."""
     cases: list[dict[str, Any]] = []
     passed = 0
     for case in result.cases:
@@ -208,5 +216,6 @@ def build_json_summary(
         "bundle": str(bundle),
         "totals": {"ran": ran, "passed": passed, "failed": ran - passed, "skipped": len(skipped)},
         "timing": dict(timing or {}),
+        "dependencies": dependencies,
         "cases": cases,
     }

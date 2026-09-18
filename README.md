@@ -60,7 +60,11 @@ resolved once per run, in this order: `--cmsis-nn-root PATH` on `hardware
 build|flash|run`, then `$CMSIS_NN_ROOT`, then the nested layout where this repo is
 the `Tests/helia-core-tester` submodule of an ns-cmsis-nn checkout. A standalone
 clone with neither set fails with one error naming the flag; `helia_core_tester
-doctor` shows which checkout (and commit) would be used.
+doctor` shows which checkout (and commit) would be used. Every build records what it
+was configured against (kernel commit or content digest, SDK/neuralspotx/CMSIS_5
+commits, the kernel compile flags, the GCC version) in `<build-dir>/hct_dependencies.json`,
+and every bundle copies it into `session_manifest.json` / `session_summary.json` as
+`dependencies` (see the design doc).
 
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
 `hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or

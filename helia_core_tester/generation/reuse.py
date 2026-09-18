@@ -217,28 +217,30 @@ def cmsis_nn_checkout_identity() -> Dict[str, str]:
     if _checkout_identity_cache is not None:
         return _checkout_identity_cache
 
-    root = resolve_cmsis_nn_root()
+    _checkout_identity_cache = cmsis_nn_checkout_identity_for(resolve_cmsis_nn_root())
+    return _checkout_identity_cache
+
+
+def cmsis_nn_checkout_identity_for(root: Optional[Path]) -> Dict[str, str]:
+    """cmsis_nn_checkout_identity() for an explicit root, uncached (the hardware build
+    stamps the checkout it compiled into the result bundle, which need not be the one
+    the generator resolves from the environment)."""
     if root is None:
-        identity: Dict[str, str] = {"state": "absent"}
-    else:
-        head = _git_output(root, "rev-parse", "HEAD") if _is_git_toplevel(root) else None
-        if head is None:
-            identity = {
-                "state": "content",
-                "content": _subtree_digest(root, _CMSIS_NN_INPUT_SUBTREES),
-            }
-        else:
-            status = _git_output(root, "status", "--porcelain")
-            if status is None or status.strip():
-                identity = {
-                    "state": "git-dirty",
-                    "commit": head.strip(),
-                    "content": _subtree_digest(root, _CMSIS_NN_INPUT_SUBTREES),
-                }
-            else:
-                identity = {"state": "git-clean", "commit": head.strip()}
-    _checkout_identity_cache = identity
-    return identity
+        return {"state": "absent"}
+    head = _git_output(root, "rev-parse", "HEAD") if _is_git_toplevel(root) else None
+    if head is None:
+        return {
+            "state": "content",
+            "content": _subtree_digest(root, _CMSIS_NN_INPUT_SUBTREES),
+        }
+    status = _git_output(root, "status", "--porcelain")
+    if status is None or status.strip():
+        return {
+            "state": "git-dirty",
+            "commit": head.strip(),
+            "content": _subtree_digest(root, _CMSIS_NN_INPUT_SUBTREES),
+        }
+    return {"state": "git-clean", "commit": head.strip()}
 
 
 def case_stamp(

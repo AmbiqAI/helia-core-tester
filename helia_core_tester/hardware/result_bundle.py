@@ -68,7 +68,13 @@ def write_result_bundle(
     host_log_text: str = "session completed\n",
     target_log_text: str = "no physical target log captured\n",
     timing: dict | None = None,
+    dependencies: dict | None = None,
 ) -> Path:
+    """Write the bundle. `dependencies` is the build dir's hct_dependencies.json (the
+    kernels/SDK/toolchain the firmware was built from, see dependency_sources); when
+    given it is written verbatim into both session_manifest.json (the identity
+    document) and session_summary.json (what the hpx dashboard reads), and omitted
+    -- not written as null -- when unknown."""
     for case in result.cases:
         if len(case.samples) != len(case.normalized_samples):
             raise ValueError("Sample and normalized sample counts must match")
@@ -93,6 +99,8 @@ def write_result_bundle(
             "junit": "junit.xml",
         },
     }
+    if dependencies is not None:
+        session_manifest["dependencies"] = dependencies
     write_text_lf(bundle_root / "session_manifest.json", json.dumps(session_manifest, indent=2))
 
     case_rows = []
@@ -199,6 +207,8 @@ def write_result_bundle(
     }
     if timing is not None:
         session_summary["timing"] = timing
+    if dependencies is not None:
+        session_summary["dependencies"] = dependencies
     write_text_lf(bundle_root / "session_summary.json", json.dumps(session_summary, indent=2))
     write_text_lf(bundle_root / "memory_report.json", json.dumps(memory_report, indent=2))
     write_text_lf(bundle_root / "kernel_catalog.json", json.dumps(kernel_catalog, indent=2))

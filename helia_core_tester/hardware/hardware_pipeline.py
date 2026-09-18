@@ -14,7 +14,14 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 from .boards import BoardSpec, default_session_id
-from .dependency_sources import CmsisNnSelection, describe, resolve_cmsis_nn
+from .dependency_sources import (
+    CmsisNnSelection,
+    dependencies_path,
+    describe,
+    read_build_dependencies,
+    resolve_cmsis_nn,
+    summarize_kernels,
+)
 from .firmware_build import FlashDecision, build_id_path, flash_firmware, read_build_id, resolve_build_dir
 from .measurement import (
     TooManyPassesError,
@@ -211,6 +218,9 @@ class HardwareRunOutcome:
     # Wall-clock seconds per stage (generate/build/flash/stream/total) and per case;
     # also written into the bundle's session_summary.json. See stage_timing().
     timing: Dict[str, Any] = field(default_factory=dict)
+    # The build dir's hct_dependencies.json (kernels/SDK/toolchain the firmware was
+    # built from), also written into the bundle; None for a build dir without one.
+    dependencies: Optional[Dict[str, Any]] = None
 
     @property
     def failed_case_ids(self) -> list[str]:
@@ -250,6 +260,14 @@ def stream_generated_tests(
                 "or pass --allow-unverified-firmware to stream to legacy firmware unchecked."
             )
         echo(f"[hardware] WARNING: {stamp_missing} Continuing unverified (--allow-unverified-firmware).")
+    dependencies = read_build_dependencies(build_dir)
+    if dependencies is None:
+        echo(
+            f"[hardware] WARNING: {dependencies_path(build_dir)} not found; the bundle will carry no dependency "
+            f"provenance (rebuild with `hardware build --board {board.id}`)."
+        )
+    else:
+        echo(f"[hardware] Firmware kernels: ns-cmsis-nn {summarize_kernels(dependencies)}")
 
     # Bridge the cases once, before any hardware I/O: bridging loads every case's
     # arrays and runs the FVP gate, so the list is built here and handed to the
@@ -296,13 +314,16 @@ def stream_generated_tests(
         build_dir=build_dir,
         on_case_complete=on_case_complete,
         expected_build_id=expected_build_id,
+        dependencies=dependencies,
     )
     timing = {
         "stream_s": round(time.monotonic() - stream_started, 4),
         "batch_count": int(getattr(result, "batch_count", 1)),
         "cases": case_seconds,
     }
-    return HardwareRunOutcome(session_id=session_id, result=result, bundle=bundle, skipped=skipped, timing=timing)
+    return HardwareRunOutcome(
+        session_id=session_id, result=result, bundle=bundle, skipped=skipped, timing=timing, dependencies=dependencies,
+    )
 
 
 def finalize_timing(outcome: HardwareRunOutcome, *, generate_s: float = 0.0, echo: Callable[[str], None]) -> None:
