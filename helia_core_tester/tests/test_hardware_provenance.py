@@ -515,3 +515,17 @@ def test_the_hpx_dashboard_lookup_reads_a_tester_bundle(tmp_path: Path) -> None:
     assert _dashboard_summary_dependency(summary, "arm-cmsis-nn") is None
     # A bundle with no block at all falls through to the dashboard's legacy branch.
     assert _dashboard_summary_dependency({}, "ns-cmsis-nn") is None
+
+
+def test_the_kernels_are_found_even_when_locked_under_the_module_name() -> None:
+    """NSX names a module-level path source's project after the *module*, so the
+    project lookup (what the dashboard does) can miss it; the module name is the
+    fallback that keeps the log line and doctor legible."""
+    document = {
+        "modules": [{"name": "nsx-cmsis-nn", "project": "nsx-cmsis-nn", "kind": "local",
+                     "peeled_commit": None, "content_hash": {"algorithm": "sha256", "value": "a" * 64}}],
+        "qualification": "development-overrides",
+    }
+    assert provenance.module_for_project(document, "ns-cmsis-nn") is None
+    assert provenance.kernel_module(document)["name"] == "nsx-cmsis-nn"
+    assert provenance.summarize_kernels(document).startswith("nsx-cmsis-nn@content:")

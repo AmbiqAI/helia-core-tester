@@ -188,9 +188,21 @@ def test_cmsis_nn_root_declares_a_local_module_source(tmp_path: Path) -> None:
         baseline=resolve_baseline(PROJECT_ROOT),
         cmsis_nn_root=checkout,
     )
-    entry = next(e for e in yaml.safe_load(render.nsx_yml)["modules"] if e["name"] == "nsx-cmsis-nn")
-    assert entry["source"] == {"path": str(checkout)}
-    assert "project" not in entry and "revision" not in entry
+    manifest = yaml.safe_load(render.nsx_yml)
+    entry = next(e for e in manifest["modules"] if e["name"] == "nsx-cmsis-nn")
+    # Declared by project with a project-level local_path, not a module-level
+    # `source: {path:}`: the registry maps the module to its manifest *inside*
+    # the project tree (modules/ns-cmsis-nn/nsx/nsx-module.yaml), and only a
+    # project override keeps that mapping. A module-level path source vendors
+    # the checkout under the module's own name, where no module manifest is
+    # found and the nsx::cmsis_nn target is never defined.
+    assert entry == {"name": "nsx-cmsis-nn", "project": CMSIS_NN_PROJECT}
+    project = manifest["module_registry"]["projects"][CMSIS_NN_PROJECT]
+    assert project["local_path"] == str(checkout)
+    # The pin is gone with the URL it pinned -- from the project and from every
+    # module of it, since a module revision outranks its project's.
+    assert "revision" not in project
+    assert "revision" not in manifest["module_registry"]["modules"]["nsx-cmsis-nn"]
     assert render.kernel_source.describe() == f"path:{checkout}"
 
 

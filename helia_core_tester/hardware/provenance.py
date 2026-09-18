@@ -557,21 +557,41 @@ def module_for_project(document: Optional[Mapping[str, Any]], project: str) -> O
     return None
 
 
+def kernel_module(document: Optional[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+    """The kernels' lock entry, by project first and by module name second.
+
+    A `source: {path:}` module has no registry project, so NSX locks it under its
+    own name (`project: nsx-cmsis-nn`) rather than under `ns-cmsis-nn`. The
+    project lookup is what the hpx dashboard does and stays first; the name is
+    the fallback that keeps an override build legible.
+    """
+    from .dependency_baseline import CMSIS_NN_PROJECT
+
+    by_project = module_for_project(document, CMSIS_NN_PROJECT)
+    if by_project is not None:
+        return by_project
+    for module in (document or {}).get("modules") or []:
+        if isinstance(module, Mapping) and module.get("name") == CMSIS_NN_MODULE:
+            return module
+    return None
+
+
 def summarize_kernels(document: Optional[Mapping[str, Any]]) -> str:
     """One log line: which kernels the firmware was built from, and whether it is qualified."""
     from .dependency_baseline import CMSIS_NN_PROJECT
 
     if not document:
         return "unknown"
-    module = module_for_project(document, CMSIS_NN_PROJECT)
+    module = kernel_module(document)
     qualification = str(document.get("qualification") or "unknown")
     if module is None:
         return f"unknown ({qualification})"
+    name = module.get("project") or CMSIS_NN_PROJECT
     commit = module.get("peeled_commit")
     if commit:
-        return f"{CMSIS_NN_PROJECT}@{commit} ({module.get('kind')}, {qualification})"
+        return f"{name}@{commit} ({module.get('kind')}, {qualification})"
     content = (module.get("content_hash") or {}).get("value") or "unknown"
-    return f"{CMSIS_NN_PROJECT}@content:{content[:16]} ({module.get('kind')}, {qualification})"
+    return f"{name}@content:{content[:16]} ({module.get('kind')}, {qualification})"
 
 
 def describe_build(build_dir: Path, board) -> str:

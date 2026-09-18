@@ -265,7 +265,9 @@ def project_ref_overrides(
 
 
 def render_module_registry(
-    profile: Mapping[str, Any], ref_overrides: Mapping[str, str]
+    profile: Mapping[str, Any],
+    ref_overrides: Mapping[str, str],
+    local_projects: Optional[Mapping[str, Path]] = None,
 ) -> str:
     """The `module_registry:` block that holds every pin in force.
 
@@ -320,6 +322,34 @@ def render_module_registry(
         aligned["revision"] = ref
         modules[str(name)] = aligned
 
+    # A local checkout replaces its project's git URL, so the pin it would have
+    # carried is meaningless and is removed -- from the project and from every
+    # module of it, since a module revision outranks its project's. This is the
+    # project-level `local_path` NSX documents, not a module-level
+    # `source: {path:}`: the registry maps each module to its metadata inside the
+    # project tree (`modules/ns-cmsis-nn/nsx/nsx-module.yaml`), and only a
+    # project override keeps that mapping -- a module-level path source vendors
+    # the tree under the *module*'s name, where the module manifest, and so the
+    # `nsx::cmsis_nn` target, is not found.
+    for project, path in sorted((local_projects or {}).items()):
+        entry = projects.get(project) or dict(base_projects.get(project) or {"name": project})
+        entry.pop("revision", None)
+        entry["local_path"] = str(path)
+        projects[project] = entry
+        owned = {
+            str(name): dict(base)
+            for name, base in base_modules.items()
+            if isinstance(base, Mapping) and str(base.get("project", "")) == project
+        }
+        owned.update({
+            name: dict(module)
+            for name, module in modules.items()
+            if str(module.get("project", "")) == project
+        })
+        for name, module in owned.items():
+            module.pop("revision", None)
+            modules[name] = module
+
     if not projects and not modules:
         return ""
     block: Dict[str, Any] = {}
@@ -356,10 +386,10 @@ def render_nsx_yml(
     ]
     for spec in modules:
         lines.append(f"  - name: {spec.name}")
-        if spec.local_path is not None:
-            lines.append("    source:")
-            lines.append(f"      path: {spec.local_path}")
-            continue
+        # A locally-sourced module is still declared by project: the path is a
+        # `module_registry.projects.<project>.local_path` override (see
+        # render_module_registry), so the registry's module -> metadata mapping
+        # inside the project tree keeps working.
         lines.append(f"    project: {spec.project}")
         ref = ref_overrides.get(spec.project)
         if ref is not None:
@@ -707,6 +737,9 @@ def plan_app(
     modules = resolve_modules(board.nsx_board, kernel_source)
     profile = starter_profile(board.nsx_board)
     ref_overrides = project_ref_overrides(modules, baseline)
+    local_projects = {
+        spec.project: spec.local_path for spec in modules if spec.local_path is not None
+    }
 
     render = AppRender(
         app_dir=app_dir,
@@ -719,7 +752,7 @@ def plan_app(
             board,
             modules,
             ref_overrides,
-            render_module_registry(profile, ref_overrides),
+            render_module_registry(profile, ref_overrides, local_projects),
             toolchain=toolchain,
             channel=channel,
         ),
