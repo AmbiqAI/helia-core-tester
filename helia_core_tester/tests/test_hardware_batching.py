@@ -211,7 +211,7 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
     announced = {"info": _target_info()}
     sessions: list[_FakeSession] = []
 
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, echo=None):
         assert (board.id, serial_no, build_dir) == ("apollo510_evb", 1160002276, tmp_path)
         transport = _FakeTransport()
         transports.append(transport)
@@ -283,7 +283,7 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
 
 
 def test_run_case_bundles_names_the_batch_when_a_session_fails(tmp_path: Path, monkeypatch) -> None:
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, echo=None):
         return _FakeSession(_target_info(), [], fail=RuntimeError("Transport stalled")), _FakeTransport(), 0
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
@@ -302,7 +302,7 @@ def test_run_case_bundles_refuses_to_merge_sessions_from_different_firmware(tmp_
     calls: list[list[Any]] = []
     infos = iter([_target_info(build_id="hct-first"), _target_info(build_id="hct-second", max_passes=8)])
 
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, echo=None):
         return _FakeSession(next(infos), calls), _FakeTransport(), 0
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
@@ -320,7 +320,7 @@ def test_run_case_bundles_wraps_a_case_that_cannot_fit_the_advertised_plan_size(
     calls: list[list[Any]] = []
     tiny = _target_info(max_rx_payload=40)
 
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, echo=None):
         return _FakeSession(tiny, calls), _FakeTransport(), 0
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
@@ -340,7 +340,7 @@ def test_run_case_bundles_refuses_a_later_session_with_different_capabilities(tm
     first = _target_info()
     infos = iter([first, _target_info(capability_flags=first.capability_flags ^ 0x40)])
 
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, echo=None):
         return _FakeSession(next(infos), calls), _FakeTransport(), 0
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
@@ -372,7 +372,7 @@ def test_non_positive_target_limits_are_refused_before_batching() -> None:
 def test_duplicate_case_ids_are_refused_before_the_probe_opens(tmp_path: Path, monkeypatch) -> None:
     opened: list[int] = []
 
-    def _open(board, serial_no, *, build_dir, counter_passes):
+    def _open(board, serial_no, *, build_dir, counter_passes, echo=None):
         opened.append(1)
         raise AssertionError("must not open a session")
 

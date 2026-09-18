@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.hardware import firmware_build
+from helia_core_tester.hardware import firmware_build, flash_recipe, nsx_app
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, load_case_bundle
 from helia_core_tester.hardware.fake_target import FakeTargetTransport
@@ -218,65 +218,152 @@ def test_flash_decision_requires_built_elf(tmp_path: Path) -> None:
 
 
 @pytest.fixture
-def fake_toolchain(monkeypatch):
-    """Stub configure/build so flash_firmware runs without CMake; returns the list of built targets."""
-    built: list[str] = []
+def built_build_dir(tmp_path: Path, monkeypatch):
+    """Make a build dir that looks exactly like a finished `hardware build`.
+
+    The render is the real one (NSX's starter profile and the repo's own
+    baseline), because what `flash_firmware` checks is that the state file on
+    disk matches the render its options imply -- a hand-written state file would
+    test nothing. Only the compiler output is faked.
+    """
     monkeypatch.setattr(firmware_build, "ensure_host_tools", lambda repo_root: None)
-    monkeypatch.setattr(firmware_build, "lock_and_sync", lambda render, options: None)
-    monkeypatch.setattr(firmware_build, "configure", lambda *a, **k: None)
-    monkeypatch.setattr(firmware_build, "build", lambda render, options, target, jobs: built.append(target))
-    return built
+
+    def _build(build_dir: Path, payload: bytes = b"firmware", build_id: str = "hct-abc", **option_kwargs) -> Path:
+        options = firmware_build.FirmwareOptions(**option_kwargs)
+        firmware_build.prepare_app(BOARD, repo_root=PROJECT_ROOT, build_dir=build_dir, options=options)
+        elf = _write_elf(build_dir, payload, build_id)
+        binary = firmware_build.bin_path(build_dir, BOARD)
+        binary.write_bytes(payload)
+        recipe = flash_recipe.recipe_path(build_dir, BOARD)
+        recipe.parent.mkdir(parents=True, exist_ok=True)
+        recipe.write_text(
+            f'ExitOnError 1\nReset\nLoadFile "{binary}", 0x00410000\nReset\nGo\nExit\n', encoding="utf-8"
+        )
+        return elf
+
+    return _build
 
 
-def test_flash_firmware_skips_flash_target_when_unchanged_and_board_confirms(tmp_path: Path, fake_toolchain) -> None:
+@pytest.fixture
+def flashes(monkeypatch):
+    """Record what `flash_firmware` would have sent to JLinkExe."""
+    calls: list[dict] = []
+
+    def _flash_image(**kwargs):
+        calls.append(kwargs)
+        return 0x00410000
+
+    monkeypatch.setattr(firmware_build.flash_recipe, "flash_image", _flash_image)
+    return calls
+
+
+@pytest.fixture
+def no_build(monkeypatch):
+    """`arm()` makes any render/configure/compile from here on a test failure.
+
+    Armed explicitly rather than at fixture setup, because the fixture that
+    stands up a finished build dir legitimately renders.
+    """
+    def _forbidden(name):
+        def _raise(*args, **kwargs):
+            raise AssertionError(f"`hardware flash` must not call {name}()")
+        return _raise
+
+    def arm() -> None:
+        monkeypatch.setattr(nsx_app, "write_app", _forbidden("write_app"))
+        monkeypatch.setattr(firmware_build, "lock_and_sync", _forbidden("lock_and_sync"))
+        monkeypatch.setattr(firmware_build, "configure", _forbidden("configure"))
+        monkeypatch.setattr(firmware_build, "build", _forbidden("build"))
+
+    return arm
+
+
+def test_flash_firmware_runs_the_recipe_and_skips_when_the_board_confirms(
+    tmp_path: Path, built_build_dir, flashes, no_build
+) -> None:
     build_dir = tmp_path / "bd"
-    _write_elf(build_dir, b"firmware", "hct-abc")
-    board = _board_running("hct-abc")
+    built_build_dir(build_dir, b"firmware", "hct-abc")
+    no_build()
 
-    first = firmware_build.flash_firmware(BOARD, 7, build_dir=build_dir, board_build_id_reader=_silent_board)
+    first = firmware_build.flash_firmware(BOARD, 7, build_dir=build_dir, board_build_id_reader=_silent_board, echo=lambda _m: None)
     assert first.needed
-    assert fake_toolchain == [firmware_build.SERVER_TARGET, firmware_build.FLASH_TARGET]
+    assert len(flashes) == 1
+    assert flashes[0]["script_path"] == flash_recipe.recipe_path(build_dir, BOARD)
+    assert flashes[0]["bin_path"] == firmware_build.bin_path(build_dir, BOARD)
+    assert flashes[0]["serial_no"] == 7 and flashes[0]["device"] == BOARD.jlink_device
 
-    fake_toolchain.clear()
-    second = firmware_build.flash_firmware(BOARD, 7, build_dir=build_dir, board_build_id_reader=board)
-    assert not second.needed
-    assert fake_toolchain == [firmware_build.SERVER_TARGET]
+    flashes.clear()
+    board = _board_running("hct-abc")
+    second = firmware_build.flash_firmware(BOARD, 7, build_dir=build_dir, board_build_id_reader=board, echo=lambda _m: None)
+    assert not second.needed and flashes == []
     assert board.asked == [(7, build_dir)]
     assert "board confirmed build id hct-abc" in second.reason and str(flash_stamp_path(build_dir, BOARD, 7)) in second.reason
     assert second.build_id == second.board_build_id == "hct-abc"
 
-    fake_toolchain.clear()
-    forced = firmware_build.flash_firmware(BOARD, 7, build_dir=build_dir, force=True, board_build_id_reader=_silent_board)
-    assert forced.needed and "--force" in forced.reason
-    assert fake_toolchain == [firmware_build.SERVER_TARGET, firmware_build.FLASH_TARGET]
+    forced = firmware_build.flash_firmware(BOARD, 7, build_dir=build_dir, force=True, board_build_id_reader=_silent_board, echo=lambda _m: None)
+    assert forced.needed and "--force" in forced.reason and len(flashes) == 1
 
 
-def test_flash_skip_is_refused_when_another_build_dir_flashed_the_probe(tmp_path: Path, fake_toolchain) -> None:
+def test_flash_refuses_a_build_dir_that_is_missing_or_stale(tmp_path: Path, built_build_dir, flashes, no_build) -> None:
+    """The render inputs changed but nothing was rebuilt: refuse, never re-render.
+
+    An earlier revision re-rendered the app from the working tree on every flash,
+    which rebuilt one leg of an A/B from the other leg's sources.
+    """
+    build_dir = tmp_path / "bd"
+    with pytest.raises(FileNotFoundError, match="hardware build"):
+        firmware_build.flash_firmware(BOARD, SERIAL, build_dir=build_dir, board_build_id_reader=_silent_board)
+
+    built_build_dir(build_dir, b"firmware", "hct-abc")
+    no_build()
+    state_before = (firmware_build.app_dir_for(build_dir) / nsx_app.RENDER_STATE).read_text()
+
+    # Same build dir, different kernel options: the digest the state file records
+    # is no longer the one these options imply.
+    with pytest.raises(RuntimeError, match="hardware build"):
+        firmware_build.flash_firmware(
+            BOARD, SERIAL, build_dir=build_dir, board_build_id_reader=_silent_board,
+            options=firmware_build.FirmwareOptions(requantize_inline_asm=False),
+        )
+    assert flashes == []
+    assert (firmware_build.app_dir_for(build_dir) / nsx_app.RENDER_STATE).read_text() == state_before
+
+    # And a build dir whose app was never rendered at all.
+    orphan = tmp_path / "orphan"
+    _write_elf(orphan, b"firmware", "hct-abc")
+    with pytest.raises(RuntimeError, match="no render state"):
+        firmware_build.flash_firmware(BOARD, SERIAL, build_dir=orphan, board_build_id_reader=_silent_board)
+
+
+def test_flash_skip_is_refused_when_another_build_dir_flashed_the_probe(
+    tmp_path: Path, built_build_dir, flashes, no_build
+) -> None:
     """The reviewer's scenario: build dir A stamps the probe, build dir B flashes the same
     probe with a byte-identical ELF but its own build id, then A decides again. The host
     stamp still says "unchanged"; the board says otherwise, so A must flash."""
     build_a = tmp_path / "a"
     build_b = tmp_path / "b"
-    _write_elf(build_a, b"same-firmware", "hct-aaa")
-    _write_elf(build_b, b"same-firmware", "hct-bbb")
+    built_build_dir(build_a, b"same-firmware", "hct-aaa")
+    built_build_dir(build_b, b"same-firmware", "hct-bbb")
+    no_build()
+    echo = lambda _m: None  # noqa: E731
 
-    firmware_build.flash_firmware(BOARD, SERIAL, build_dir=build_a, board_build_id_reader=_silent_board)
-    firmware_build.flash_firmware(BOARD, SERIAL, build_dir=build_b, board_build_id_reader=_silent_board)
+    firmware_build.flash_firmware(BOARD, SERIAL, build_dir=build_a, board_build_id_reader=_silent_board, echo=echo)
+    firmware_build.flash_firmware(BOARD, SERIAL, build_dir=build_b, board_build_id_reader=_silent_board, echo=echo)
     assert flash_stamp_path(build_a, BOARD, SERIAL).read_text() == flash_stamp_path(build_b, BOARD, SERIAL).read_text()
     assert not decide_flash(build_a, BOARD, SERIAL).needed  # the stamp alone would skip
 
-    fake_toolchain.clear()
+    flashes.clear()
     board_runs_b = _board_running("hct-bbb")
-    decision = firmware_build.flash_firmware(BOARD, SERIAL, build_dir=build_a, board_build_id_reader=board_runs_b)
-    assert decision.needed
-    assert fake_toolchain == [firmware_build.SERVER_TARGET, firmware_build.FLASH_TARGET]
+    decision = firmware_build.flash_firmware(BOARD, SERIAL, build_dir=build_a, board_build_id_reader=board_runs_b, echo=echo)
+    assert decision.needed and len(flashes) == 1
     assert "board reports build id hct-bbb, expected hct-aaa" in decision.reason
     assert decision.build_id == "hct-aaa" and decision.board_build_id == "hct-bbb"
 
     # And the reverse: the board really does run A's build, so A skips.
-    fake_toolchain.clear()
-    again = firmware_build.flash_firmware(BOARD, SERIAL, build_dir=build_a, board_build_id_reader=_board_running("hct-aaa"))
-    assert not again.needed and fake_toolchain == [firmware_build.SERVER_TARGET]
+    flashes.clear()
+    again = firmware_build.flash_firmware(BOARD, SERIAL, build_dir=build_a, board_build_id_reader=_board_running("hct-aaa"), echo=echo)
+    assert not again.needed and flashes == []
 
 
 def test_confirm_board_build_id_flashes_when_board_is_silent_or_unstamped(tmp_path: Path) -> None:
@@ -603,7 +690,15 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None):
         order.append(f"generate:{spec.cpu}:{suite}:{float_precision}")
 
-    def _flash(spec, serial, *, build_dir, jobs, force_reconfigure, force, options=None, repo_root=None):
+    def _build(spec, *, build_dir, jobs=None, force_reconfigure=False, options=None, repo_root=None, **kwargs):
+        # The probe serial must not reach the build: baking it into the generated
+        # flash target would force a CMake reconfigure on every run, and nothing
+        # reads it now that the recipe is run directly.
+        assert "serial_no" not in kwargs, kwargs
+        order.append(f"build:{build_dir.relative_to(tmp_path)}")
+        return firmware_build.elf_path(build_dir, spec)
+
+    def _flash(spec, serial, *, build_dir, force, options=None, repo_root=None, echo=None):
         order.append(f"flash:{serial}:{build_dir.relative_to(tmp_path)}:force={force}")
         return firmware_build.FlashDecision(True, "abc", "test")
 
@@ -612,6 +707,7 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
         return hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[])
 
     monkeypatch.setattr(hardware_pipeline, "generate_tests_for_board", _generate)
+    monkeypatch.setattr(hardware_pipeline, "build_firmware", _build)
     monkeypatch.setattr(hardware_pipeline, "flash_firmware", _flash)
     monkeypatch.setattr(hardware_pipeline, "stream_generated_tests", _stream)
 
@@ -623,7 +719,12 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     outcome = run_hardware_pipeline(
         tmp_path, board, 42, options=StreamOptions(suite="float", test_name="_f16", float_precision="f16"), echo=lambda _msg: None,
     )
-    assert order == ["flash:42:build/hardware/apollo510_evb:force=False", "generate:cortex-m55:float:f16", "stream:float:_f16:unverified=False"]
+    assert order == [
+        "build:build/hardware/apollo510_evb",
+        "flash:42:build/hardware/apollo510_evb:force=False",
+        "generate:cortex-m55:float:f16",
+        "stream:float:_f16:unverified=False",
+    ]
     assert outcome.flash is not None and outcome.flash.needed
 
     order.clear()
@@ -637,7 +738,11 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     run_hardware_pipeline(
         tmp_path, board, 42, options=StreamOptions(), skip_generate=True, force_flash=True, echo=lambda _msg: None,
     )
-    assert order == ["flash:42:build/hardware/apollo510_evb:force=True", "stream:int:None:unverified=False"]
+    assert order == [
+        "build:build/hardware/apollo510_evb",
+        "flash:42:build/hardware/apollo510_evb:force=True",
+        "stream:int:None:unverified=False",
+    ]
 
     with pytest.raises(ValueError, match="--skip-flash and --force-flash"):
         run_hardware_pipeline(

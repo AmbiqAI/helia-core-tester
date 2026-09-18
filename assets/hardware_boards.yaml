@@ -21,3 +21,9 @@ boards:
     workspace_bytes: 114688
     flash_region: MCU_MRAM
     ram_region: MCU_TCM
+    # DTCM (512 KiB @ 0x20000000): where the M55 firmware's non-cached .bss --
+    # and with it the SEGGER RTT control block -- lives. Only swept when the
+    # linked control-block address cannot be used; same window heliaPROFILER
+    # uses for this SoC.
+    rtt_scan_ranges:
+      - [0x20000000, 0x80000]

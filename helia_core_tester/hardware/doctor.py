@@ -77,15 +77,42 @@ def _jlink_dll_check() -> HardwareCheck:
 
 
 def _jlink_exe_check() -> HardwareCheck:
-    """The `JLinkExe` binary the CMake flash target runs (`hardware flash` / `hardware run`)."""
-    label = "JLinkExe (flash target)"
+    """The `JLinkExe` binary that flashes the recipe and resets the target.
+
+    Reported with its version: `hardware flash` runs a commander script through
+    it and `hardware run` resets through it before every RTT session, so a
+    missing or mismatched commander is a hardware-run failure, not a nicety.
+    """
+    label = "JLinkExe (flash/reset)"
     try:
         found = find_jlink_exe()
     except JLinkLibraryError as exc:
         return HardwareCheck(label, False, str(exc))
     if found is None:
         return HardwareCheck(label, False, "not found: set $JLINK_PATH to JLinkExe (or its directory) or put JLinkExe on PATH")
-    return HardwareCheck(label, True, found.describe())
+    from .jlink_cli import version
+
+    banner = version(exe=found.path)
+    return HardwareCheck(label, True, f"{found.describe()}{f' -- {banner}' if banner else ''}")
+
+
+def _flash_recipe_check(repo_root: Path) -> HardwareCheck:
+    """Whether each board's build dir carries the NSX flash recipe `hardware flash` runs."""
+    from .boards import load_board_table
+    from .flash_recipe import describe_recipe
+
+    label = "NSX flash recipe (hardware flash)"
+    try:
+        boards = load_board_table()
+    except Exception as exc:
+        return HardwareCheck(label, False, f"board table unreadable: {exc}")
+    rows = []
+    ok = True
+    for board in boards:
+        detail = describe_recipe(board.build_dir(repo_root), board)
+        ok = ok and "missing" not in detail and "unreadable" not in detail
+        rows.append(f"{board.id}: {detail}")
+    return HardwareCheck(label, ok, "; ".join(rows))
 
 
 def _neuralspotx_check() -> HardwareCheck:
@@ -167,5 +194,6 @@ def hardware_checks(repo_root: Path) -> list[HardwareCheck]:
         _starter_profile_check(repo_root),
         _jlink_dll_check(),
         _jlink_exe_check(),
+        _flash_recipe_check(repo_root),
         _board_table_check(),
     ]

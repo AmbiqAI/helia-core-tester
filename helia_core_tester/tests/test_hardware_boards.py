@@ -34,7 +34,32 @@ def test_board_table_seeds_apollo510_evb() -> None:
         workspace_bytes=114688,
         flash_region="MCU_MRAM",
         ram_region="MCU_TCM",
+        # DTCM: the RTT control-block fallback scan window (transport.py).
+        rtt_scan_ranges=((0x20000000, 0x80000),),
     )
+
+
+def test_rtt_scan_ranges_are_optional_and_validated(tmp_path: Path) -> None:
+    """A board may omit the window (no fallback discovery); a malformed one is refused."""
+    header = "schema: hct.hardware_boards\nschema_version: 1\nboards:\n"
+    row = (
+        "  - id: b\n    nsx_board: b\n    soc: s\n    cpu: cortex-m55\n    pmu_tier: armv8m\n"
+        "    has_mve: true\n    jlink_device: D\n    swd_speed_khz: 4000\n    workspace_bytes: 1\n"
+        "    flash_region: F\n    ram_region: R\n"
+    )
+    missing = tmp_path / "missing.yaml"
+    missing.write_text(header + row, encoding="utf-8")
+    assert load_board_table(missing)[0].rtt_scan_ranges == ()
+
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(header + row + "    rtt_scan_ranges:\n      - [0x20000000]\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not a \\[base, length\\] pair"):
+        load_board_table(bad)
+
+    empty = tmp_path / "empty.yaml"
+    empty.write_text(header + row + "    rtt_scan_ranges:\n      - [0x20000000, 0]\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="positive length"):
+        load_board_table(empty)
 
 
 def test_unknown_board_error_lists_known_ids() -> None:

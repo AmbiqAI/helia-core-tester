@@ -241,7 +241,7 @@ def test_doctor_reports_hardware_section_without_failing_on_missing_tools(monkey
     text = _result_text(result)
     assert "Hardware (helia_core_tester hardware ...)" in text
     assert "J-Link library (pylink): missing" in text
-    assert "⚠ JLinkExe (flash target): not found: set $JLINK_PATH" in text
+    assert "⚠ JLinkExe (flash/reset): not found: set $JLINK_PATH" in text
     assert "Board table" in text and "1 board(s)" in text
 
 
@@ -253,7 +253,7 @@ def test_doctor_reports_jlinkexe_path_and_source_and_missing_hpx_jlink_dll(monke
     monkeypatch.setenv("HPX_JLINK_DLL", str(tmp_path / "gone.so"))
     result = runner.invoke(app, ["doctor"])
     text = _result_text(result)
-    assert "✓ JLinkExe (flash target): /opt/SEGGER/JLink/JLinkExe (via $JLINK_PATH)" in text
+    assert "✓ JLinkExe (flash/reset): /opt/SEGGER/JLink/JLinkExe (via $JLINK_PATH)" in text
     assert "⚠ J-Link library (pylink): $HPX_JLINK_DLL=" in text and "gone.so does not exist" in text
 
 
