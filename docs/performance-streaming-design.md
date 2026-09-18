@@ -389,23 +389,66 @@ with `-DCMSIS_NN_USE_REQUANTIZE_INLINE_ASSEMBLY`, `-DARM_NN_ENABLE_F32=1`,
 for the same board and toolchain, so a kernel number from this tool and one from hpx
 are measurements of the same binary shape.
 
-Two differences from the old line are worth naming:
+Three differences from the old line are worth naming:
 
 - **`-mfpu` is gone.** The old path applied a global
   `add_compile_options(-mfloat-abi=hard -mfpu=fpv5-sp-d16)` to everything, including
   the kernels. `-mfpu=fpv5-sp-d16` names a scalar single-precision FPU, which is not
   what a Cortex-M55 with MVE has; `-mcpu=cortex-m55` already selects the right
   FP/MVE feature set and adding `-mfpu` on top only narrows it. NSX's board flags
-  set `-mcpu` and `-mfloat-abi` and stop there.
+  set `-mcpu` and `-mfloat-abi` and stop there. This is a correctness-of-intent fix,
+  not a performance one — measured, it moves kernel time by single-digit percent and
+  in one case (`arm_abs_s8`, default rescale) the wrong way.
 - **Requantize inline assembly is ON.** `NSX_CMSIS_NN_USE_REQUANTIZE_INLINE_ASM`
   defaults to `OFF` in the module, and the old path never set it either way. The app
   forces it `ON`, matching hpx. `--no-requantize-inline-asm` is the A/B control; it
   changes the rendered `CMakeLists.txt`, hence the render digest, so a build
-  directory cannot silently carry the other setting.
+  directory cannot silently carry the other setting. Measured on this case set its
+  effect is within ±0.1 %, i.e. inside noise.
+- **`-O3 … -Ofast … -O3 -ffast-math` all appear on the kernel line.** `-O3 -DNDEBUG`
+  comes from `CMAKE_BUILD_TYPE=Release`, `-Ofast` from the module's own
+  `NSX_CMSIS_NN_OPTIMIZATION`, and the trailing `-O3 -ffast-math` from the board
+  flags target's interface options, which are emitted last and therefore win. It is
+  redundant but it is exactly what heliaPROFILER compiles with, byte for byte, so it
+  is recorded here rather than "fixed" — diverging from hpx to tidy a flag list would
+  cost the parity this section exists to establish.
 
 Both kernel switches are written into the app's `CMakeLists.txt` above
 `nsx_bootstrap_app()` rather than passed as `-D` at configure time: an `option()`
 default cannot be overridden once its module has been added.
+
+### The harness was compiled at -O0 (and the timed window includes it)
+
+The old hardware build gave the kernel archive `-Ofast` and gave **every other
+target no optimization flag at all**. `hct_benchmark_server`, `helia_test_runtime`
+and `retarget` compiled with
+`-mcpu=cortex-m55 -mthumb -mfloat-abi=hard -mfpu=fpv5-sp-d16` and nothing else, i.e.
+at GCC's `-O0` default. The benchmark server's per-case dispatch, adapter shims and
+session code sit *inside* the timed window, so every hardware number this repo has
+ever produced carried unoptimized tester code in its measurement.
+
+As an NSX app the tester sources pick up the board flags target's `-O3 -ffast-math`
+like everything else, so that overhead is gone. Measured on `apollo510_evb` by
+building this branch twice — once as it ships, once with only the tester-side sources
+forced back to `-O0` via `set_source_files_properties(... COMPILE_OPTIONS "-O0")`
+(source-file options are emitted after the board flags target's interface options,
+which is the only placement where `-O0` wins) — the split is:
+
+| contribution | median over 16 cases |
+|---|---:|
+| kernel flags + board/SoC defines (old → new, both with `-O0` harness) | −6.8 % |
+| harness `-O0` → `-O3` (same kernels) | **−45.3 %** |
+| total | −51.2 % |
+
+The harness share scales inversely with case size, as it must: it is −1.4 % on the
+186 k-cycle grouped depthwise convolution and −60 % on a 1.5 k-cycle fully-connected
+case. `ARM_PMU_MVE_INST_RETIRED` is unchanged across the whole comparison (e.g.
+17 290 in both legs for the depthwise case), confirming the kernel code paths
+themselves did not move.
+
+**Consequence: hardware numbers from before this change are not comparable with
+numbers after it.** The bundle baseline resets here. A regression comparison must
+start from a post-change run.
 
 ### A/B session ids
 
@@ -418,6 +461,12 @@ comparison if the two A repetitions disagree by more than ~0.1 % on a case; read
 kernel-level regression as >1 % slower with `ARM_PMU_INST_RETIRED` up and
 `ARM_PMU_MVE_INST_RETIRED` down, which is the signature of a lost vectorisation
 rather than of noise.
+
+When the change under test touches anything the timed window compiles — not just the
+kernels — add a third leg that isolates it, as the harness `-O0` measurement above
+does. A whole-firmware A/B tells you the number moved; it does not tell you which
+half of the firmware moved it, and the answer is not always the half you changed on
+purpose.
 
 ## Result bundle
 
