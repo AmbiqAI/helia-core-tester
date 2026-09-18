@@ -95,6 +95,7 @@ def open_rtt_session(
     *,
     build_dir: Path,
     counter_passes: Sequence[CounterPass],
+    echo: Callable[[str], None] = lambda _message: None,
 ) -> tuple[HostSession, Transport, int]:
     """Open a fresh reset-on-open RTT session to the board's flashed firmware. Returns
     the host session, its transport (the caller closes it) and the RTT control-block
@@ -109,6 +110,8 @@ def open_rtt_session(
         rtt_address=rtt_address,
         reset_on_open=True,
         read_timeout_s=10.0,
+        scan_ranges=board.rtt_scan_ranges,
+        echo=echo,
     )
     return HostSession(transport, counter_passes=counter_passes), transport, rtt_address
 
@@ -146,9 +149,13 @@ def run_case_bundles(
     build_dir: Path | None = None,
     on_case_complete: OnCaseComplete | None = None,
     expected_build_id: str | None = None,
+    echo: Callable[[str], None] = lambda _message: None,
 ) -> tuple[SessionResult, Path]:
     """Stream `case_bundles` to the board in as many sessions as the target's limits
     require, merge every case into one SessionResult, and write its result bundle.
+
+    `echo` receives the per-session J-Link/RTT diagnostics (reset, control-block
+    discovery); it defaults to silence so library callers stay quiet.
 
     Every session starts with the target's TARGET_INFO, so the next batch is cut from
     the remaining cases only once that session's limits are known.
@@ -182,7 +189,9 @@ def run_case_bundles(
     limits: TargetLimits | None = None
     batch_index = 0
     while remaining:
-        session, transport, rtt_address = open_rtt_session(board, serial_no, build_dir=build_dir, counter_passes=counter_passes)
+        session, transport, rtt_address = open_rtt_session(
+            board, serial_no, build_dir=build_dir, counter_passes=counter_passes, echo=echo
+        )
         batch: list[CaseBundle] = []
         try:
             info = session.handshake(expected_build_id=expected_build_id)

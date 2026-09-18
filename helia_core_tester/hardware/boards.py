@@ -45,6 +45,10 @@ class BoardSpec:
     # the firmware image (flash) and its static RAM footprint against.
     flash_region: str
     ram_region: str
+    # SRAM windows to sweep for the `SEGGER RTT` magic when the control-block
+    # address linked into the firmware cannot be used (see transport.py). Pairs of
+    # (base, length); empty means this board has no fallback discovery.
+    rtt_scan_ranges: tuple[tuple[int, int], ...] = ()
 
     def build_dir(self, repo_root: Path) -> Path:
         """Board-keyed benchmark-server CMake build directory."""
@@ -91,7 +95,29 @@ def _parse_row(row: dict, path: Path) -> BoardSpec:
         workspace_bytes=int(row["workspace_bytes"]),
         flash_region=str(row["flash_region"]),
         ram_region=str(row["ram_region"]),
+        rtt_scan_ranges=_parse_scan_ranges(row.get("rtt_scan_ranges"), row.get("id", "?"), path),
     )
+
+
+def _parse_scan_ranges(raw, board_id: str, path: Path) -> tuple[tuple[int, int], ...]:
+    """Parse `rtt_scan_ranges: [[base, length], ...]` (optional, YAML hex allowed)."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"{path}: board {board_id!r} rtt_scan_ranges must be a list of [base, length] pairs")
+    ranges: list[tuple[int, int]] = []
+    for entry in raw:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+            raise ValueError(
+                f"{path}: board {board_id!r} rtt_scan_ranges entry {entry!r} is not a [base, length] pair"
+            )
+        base, length = int(entry[0]), int(entry[1])
+        if base < 0 or length <= 0:
+            raise ValueError(
+                f"{path}: board {board_id!r} rtt_scan_ranges entry {entry!r} must have a positive length"
+            )
+        ranges.append((base, length))
+    return tuple(ranges)
 
 
 def load_board_table(path: Optional[Path] = None) -> tuple[BoardSpec, ...]:
