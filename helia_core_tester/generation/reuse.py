@@ -29,7 +29,7 @@ STAMP_FILENAME = ".stamp"
 
 # Version prefix of the stamp payload itself. Bump when the payload layout
 # changes so old stamps cannot accidentally validate against new semantics.
-_STAMP_SCHEMA = "helia-core-tester/generation-stamp/3"
+_STAMP_SCHEMA = "helia-core-tester/generation-stamp/4"
 
 # The lock file is the whole resolved dependency set, so it covers every package
 # that can move emitted bytes -- the converter and runtime, but equally numpy's
@@ -45,10 +45,17 @@ _EXTERNAL_GENERATOR_SOURCES = (
     Path("helia_core_tester") / "core" / "path_layout.py",
 )
 
-# Subtrees of the ns-cmsis-nn checkout that are generation inputs: the public
-# headers drive the temp-sizer probe's choice of template variant, and the
-# UnitTest data is read directly as LSTM/GRU goldens.
-_CMSIS_NN_INPUT_SUBTREES = ("Include", "Tests/UnitTest/TestCases/TestData")
+# Subtrees (or single files) of the ns-cmsis-nn checkout that are generation
+# inputs: the public headers drive the temp-sizer probe's choice of template
+# variant, the UnitTest data is read directly as LSTM/GRU goldens, the s16
+# activation generator reads sigmoid_table_uint16 from arm_nntables.c, and the
+# LSTM s16 reference path feeds schema.fbs to flatc.
+_CMSIS_NN_INPUT_SUBTREES = (
+    "Include",
+    "Tests/UnitTest/TestCases/TestData",
+    "Source/NNSupportFunctions/arm_nntables.c",
+    "Tests/UnitTest/RefactoredTestGen",
+)
 
 _version_hash_cache: Optional[str] = None
 _checkout_identity_cache: Optional[Dict[str, str]] = None
@@ -183,6 +190,9 @@ def _subtree_digest(root: Path, subtrees: Iterable[str]) -> str:
         digest.update(subtree.encode("utf-8"))
         digest.update(b"\0")
         base = root / subtree
+        if base.is_file():
+            digest.update(hashlib.sha256(base.read_bytes()).digest())
+            continue
         if not base.is_dir():
             digest.update(b"<absent>\0")
             continue
