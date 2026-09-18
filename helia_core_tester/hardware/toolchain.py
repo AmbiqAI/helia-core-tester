@@ -1,13 +1,17 @@
 """Where the ARM GCC binutils come from for host-side ELF inspection.
 
 The hardware commands fetch ARM GCC lazily into artifacts/downloads/ (see
-`firmware_build.ensure_hardware_dependencies`). CMake is pointed at it through
-the toolchain file, but the host also runs `arm-none-eabi-nm` (RTT block
-address, memory report) and `-size`/`-objdump` (memory report) itself. Those
-go through `arm_tool()` so a fresh clone that only just downloaded the
-toolchain resolves them without the user editing PATH, and
-`add_toolchain_to_path()` makes the same bin/ visible to anything that still
-shells out to a bare tool name (the build's generate_kernel_symbol_refs.py).
+`firmware_build.ensure_host_tools`). NSX's toolchain file resolves the cross
+compiler with `find_program(... REQUIRED)` -- off PATH -- so
+`add_toolchain_to_path()` is not a convenience there but the mechanism: without
+it a fresh clone's `nsx configure` fails to find a compiler at all. It also
+covers the build steps that shell out to a bare tool name
+(generate_kernel_symbol_refs.py's `arm-none-eabi-nm`).
+
+The host runs binutils itself too -- `arm-none-eabi-nm` for the RTT block
+address, plus `-size`/`-objdump` for the memory report. Those go through
+`arm_tool()` so a checkout picks its own downloaded copy rather than whatever
+happens to be on PATH.
 """
 
 from __future__ import annotations

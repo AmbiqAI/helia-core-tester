@@ -23,12 +23,13 @@ directory that holds `libjlinkarm.so`.
 exist the resolver raises `JLinkLibraryError` instead of quietly falling through
 to a different install.
 
-The CMake flash target (`nsx_add_segger_targets()` in cmake/nsx/nsx_helpers.cmake)
-runs the `JLinkExe` *binary*, not the library. `find_jlink_exe()` resolves it in
-the same spirit so `doctor`, probe enumeration, RTT and flashing all agree on
-one install: `JLINK_PATH` (the binary or its directory), then the directory of
-the resolved library, then `JLinkExe` on PATH. `firmware_build.configure()`
-forwards the result as `-DNSX_JLINK_EXE=`.
+The flash target NSX generates (`nsx_add_segger_targets()`, in the build glue
+that ships with neuralspotx) runs the `JLinkExe` *binary*, not the library.
+`find_jlink_exe()` resolves it in the same spirit so `doctor`, probe
+enumeration, RTT and flashing all agree on one install: `JLINK_PATH` (the binary
+or its directory), then the directory of the resolved library, then `JLinkExe`
+on PATH. `firmware_build.configure()` exports the result as `$JLINK_PATH` so
+NSX's own lookup lands on the same binary.
 
 The environment variable names are shared with hpx so one runner configuration
 serves both tools; do not rename them.

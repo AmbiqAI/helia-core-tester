@@ -41,9 +41,10 @@ per-case data streamed from the host). The whole pipeline is one command:
 uv run helia_core_tester hardware run --board apollo510_evb
 ```
 
-That generates the tests for the board's CPU, builds the firmware, flashes it only
-unless the board already confirms (via its TARGET_INFO build id) that it runs this exact
-build, streams every bridged case,
+That builds the firmware, flashes it unless the board already confirms (via its
+TARGET_INFO build id) that it runs this exact build, generates the tests for the
+board's CPU from the same kernel checkout the firmware links, streams every
+bridged case,
 writes the result bundle under `artifacts/reports/hardware/<session-id>/`,
 and prints the pass/fail summary (`--json` prints one JSON document on stdout
 instead, with the human output on stderr; the exit code is non-zero on any
@@ -79,7 +80,8 @@ counter (median per invocation) plus `overflow_detected` and `valid_for_regressi
 Identity resolution rules:
 
 - `--board` is the only identity flag. The CPU, NSX board name, SEGGER device name,
-  SWD speed, build dir (`build/hardware/<board>`), default session id
+  SWD speed, build dir (`build/hardware/<board>`, holding the generated NSX app
+  and its build tree), default session id
   (`<board>-<UTC timestamp>`) and the linker-script SoC and flash/RAM region names
   `hardware memory-report` measures against all come from the row in
   `assets/hardware_boards.yaml` (`helia_core_tester boards` lists it). Default:
@@ -99,9 +101,43 @@ Identity resolution rules:
   `/opt/SEGGER`). These are the same variables the lab runners export for hpx;
   `helia_core_tester doctor` prints which one resolved the library.
 
-`helia_core_tester doctor` reports the hardware toolchain (arm-none-eabi-gcc,
-cmake, the J-Link library, the fetched nsx-ambiq-sdk/neuralspotx checkouts) as
-informational checks; missing hardware tools do not fail doctor.
+### How the firmware is built
+
+The firmware is an **NSX app**, generated and driven through `neuralspotx.api` the
+same way heliaPROFILER builds its profiler firmware — not by pointing CMake at this
+repo's own `CMakeLists.txt`. `hardware build` renders
+`build/hardware/<board>/nsx_app/` (an `nsx.yml` manifest, a `CMakeLists.txt` that
+includes NSX's own bootstrap and compiles the benchmark-server sources out of
+`cmake/hardware/`) and then runs
+`nsx lock` → `nsx sync --frozen` → `nsx configure` → `nsx build` on it. NSX's build
+glue, the board bring-up, the AmbiqSuite HAL/BSP and the kernels are all modules it
+vendors into that app; this repo carries no copy of any of them.
+
+The kernels under test are the NSX module `nsx-cmsis-nn`. Which commit of it — and
+of every other NSX project the app resolves — is fixed by
+`assets/dependency_baseline.json`, whose 40-hex pins the rendered manifest asserts
+in its `module_registry` block so `nsx lock` cannot resolve the packaged registry's
+mutable tags instead. `--baseline FILE` swaps the file (heliaPROFILER's
+`compatibility-baseline-v1.json` is accepted, so a run can be built against hpx's
+qualified pins), and `--cmsis-nn-root PATH` builds the kernels from a local checkout
+instead — declared to NSX as a local module source, and read by the generate step
+too, so the cases and the kernels stay on one tree. **`$CMSIS_NN_ROOT` and the
+nested `<ns-cmsis-nn>/Tests/helia-core-tester` layout are not consulted by any
+hardware command**; they remain the FVP path's mechanism.
+
+The lock is reused when neither the rendered manifest nor the baseline changed, so
+a repeat build skips both dependency resolution and the CMake reconfigure. Every
+build still runs `nsx sync --frozen`, which is what proves the modules on disk are
+the commits `nsx.lock` names. `--update-dependencies` forces a re-resolve.
+
+Two host tools are still fetched into `artifacts/downloads/` and shared with the
+FVP path: ARM GCC (NSX's toolchain file resolves the cross compiler off `PATH`) and
+CMSIS_5 (the firmware takes `pmu_armv8.h` from it).
+
+`helia_core_tester doctor` reports the pinned neuralspotx version, the dependency
+baseline in force with its fingerprint, the resolved kernel source, the cross
+compiler NSX will find, and the J-Link library, as informational checks; missing
+hardware tools do not fail doctor.
 
 ## Suite-Based Runs
 

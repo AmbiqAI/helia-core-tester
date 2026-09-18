@@ -352,7 +352,9 @@ Both reports come from one analysis (`helia_core_tester/hardware/memory_report.p
 - `arm-none-eabi-size`
 - `arm-none-eabi-nm`
 - `arm-none-eabi-objdump -h`
-- the board's NSX linker script memory regions -- the SoC directory (`soc`) and the
+- the board's NSX linker script memory regions -- read back out of the `-T` flag in
+  the build tree's generated Ninja file, i.e. the script the linker actually used,
+  with the SoC's default script in the synced SDK module as the fallback. The
   flash/RAM region names (`flash_region`, `ram_region`) come from the board's row in
   `assets/hardware_boards.yaml`
 
@@ -360,6 +362,111 @@ Reported percentages are computed against:
 
 - `MCU_MRAM` for flash image bytes
 - `MCU_TCM` for static TCM usage before heap
+
+## Kernel build parity
+
+The point of running these cases on real silicon is to measure the kernels as they
+will actually ship, which means the firmware has to compile ns-cmsis-nn the way
+every other consumer does. It did not: the firmware used to be built by pointing
+CMake at this repo's root `CMakeLists.txt` with `HELIA_HARDWARE_BUILD=ON`, which
+`add_subdirectory()`-ed the kernel repo under a flag set assembled here rather than
+by the kernels' own NSX module.
+
+Building the firmware as an NSX app fixes that by construction: `nsx-cmsis-nn` is
+added as a module, so it brings its own `nsx/CMakeLists.txt`, its own
+`NSX_CMSIS_NN_OPTIMIZATION`, and the board's `nsx::board_flags`. The effective
+kernel compile line on `apollo510_evb`/arm-none-eabi-gcc is now:
+
+```
+-O3 -DNDEBUG -std=gnu11 -Ofast -mthumb -mcpu=cortex-m55 -mfloat-abi=hard
+-fshort-enums -ffunction-sections -fdata-sections -fomit-frame-pointer
+-fno-exceptions -MMD -MP -Wall -g -O3 -ffast-math
+```
+
+with `-DCMSIS_NN_USE_REQUANTIZE_INLINE_ASSEMBLY`, `-DARM_NN_ENABLE_F32=1`,
+`-DARM_NN_ENABLE_F16=1` and the board/SoC define set (`ARMCM55`, `AM_PART_APOLLO510`,
+`NSX_SOC_HAS_MVE=1`, ...). That flag list is **byte-identical to heliaPROFILER's**
+for the same board and toolchain, so a kernel number from this tool and one from hpx
+are measurements of the same binary shape.
+
+Three differences from the old line are worth naming:
+
+- **`-mfpu` is gone.** The old path applied a global
+  `add_compile_options(-mfloat-abi=hard -mfpu=fpv5-sp-d16)` to everything, including
+  the kernels. `-mfpu=fpv5-sp-d16` names a scalar single-precision FPU, which is not
+  what a Cortex-M55 with MVE has; `-mcpu=cortex-m55` already selects the right
+  FP/MVE feature set and adding `-mfpu` on top only narrows it. NSX's board flags
+  set `-mcpu` and `-mfloat-abi` and stop there. This is a correctness-of-intent fix,
+  not a performance one — measured, it moves kernel time by single-digit percent and
+  in one case (`arm_abs_s8`, default rescale) the wrong way.
+- **Requantize inline assembly is ON.** `NSX_CMSIS_NN_USE_REQUANTIZE_INLINE_ASM`
+  defaults to `OFF` in the module, and the old path never set it either way. The app
+  forces it `ON`, matching hpx. `--no-requantize-inline-asm` is the A/B control; it
+  changes the rendered `CMakeLists.txt`, hence the render digest, so a build
+  directory cannot silently carry the other setting. Measured on this case set its
+  effect is within ±0.1 %, i.e. inside noise.
+- **`-O3 … -Ofast … -O3 -ffast-math` all appear on the kernel line.** `-O3 -DNDEBUG`
+  comes from `CMAKE_BUILD_TYPE=Release`, `-Ofast` from the module's own
+  `NSX_CMSIS_NN_OPTIMIZATION`, and the trailing `-O3 -ffast-math` from the board
+  flags target's interface options, which are emitted last and therefore win. It is
+  redundant but it is exactly what heliaPROFILER compiles with, byte for byte, so it
+  is recorded here rather than "fixed" — diverging from hpx to tidy a flag list would
+  cost the parity this section exists to establish.
+
+Both kernel switches are written into the app's `CMakeLists.txt` above
+`nsx_bootstrap_app()` rather than passed as `-D` at configure time: an `option()`
+default cannot be overridden once its module has been added.
+
+### The harness was compiled at -O0 (and the timed window includes it)
+
+The old hardware build gave the kernel archive `-Ofast` and gave **every other
+target no optimization flag at all**. `hct_benchmark_server`, `helia_test_runtime`
+and `retarget` compiled with
+`-mcpu=cortex-m55 -mthumb -mfloat-abi=hard -mfpu=fpv5-sp-d16` and nothing else, i.e.
+at GCC's `-O0` default. The benchmark server's per-case dispatch, adapter shims and
+session code sit *inside* the timed window, so every hardware number this repo has
+ever produced carried unoptimized tester code in its measurement.
+
+As an NSX app the tester sources pick up the board flags target's `-O3 -ffast-math`
+like everything else, so that overhead is gone. Measured on `apollo510_evb` by
+building this branch twice — once as it ships, once with only the tester-side sources
+forced back to `-O0` via `set_source_files_properties(... COMPILE_OPTIONS "-O0")`
+(source-file options are emitted after the board flags target's interface options,
+which is the only placement where `-O0` wins) — the split is:
+
+| contribution | median over 16 cases |
+|---|---:|
+| kernel flags + board/SoC defines (old → new, both with `-O0` harness) | −6.8 % |
+| harness `-O0` → `-O3` (same kernels) | **−45.3 %** |
+| total | −51.2 % |
+
+The harness share scales inversely with case size, as it must: it is −1.4 % on the
+186 k-cycle grouped depthwise convolution and −60 % on a 1.5 k-cycle fully-connected
+case. `ARM_PMU_MVE_INST_RETIRED` is unchanged across the whole comparison (e.g.
+17 290 in both legs for the depthwise case), confirming the kernel code paths
+themselves did not move.
+
+**Consequence: hardware numbers from before this change are not comparable with
+numbers after it.** The bundle baseline resets here. A regression comparison must
+start from a post-change run.
+
+### A/B session ids
+
+A firmware change that moves the numbers is worth measuring against the mechanism it
+replaces, on the same board with the same generated cases. The convention is one
+session id per (leg, repetition, case group) -- `ab-<leg>-<rep>-<group>`, e.g.
+`ab-A-1-basicmath` -- with the legs interleaved rather than run in blocks, so probe
+or thermal drift shows up as A-vs-A disagreement instead of as a result. Reject the
+comparison if the two A repetitions disagree by more than ~0.1 % on a case; read a
+kernel-level regression as >1 % slower with `ARM_PMU_INST_RETIRED` up and
+`ARM_PMU_MVE_INST_RETIRED` down, which is the signature of a lost vectorisation
+rather than of noise.
+
+When the change under test touches anything the timed window compiles — not just the
+kernels — add a third leg that isolates it, as the harness `-O0` measurement above
+does. A whole-firmware A/B tells you the number moved; it does not tell you which
+half of the firmware moved it, and the answer is not always the half you changed on
+purpose.
 
 ## Result bundle
 
@@ -424,8 +531,10 @@ name, SEGGER device name, SWD speed and the `build/hardware/<board>` build dir;
 `--serial-no` is optional and falls back to `$HPX_JLINK_SERIAL`, then to the single
 connected J-Link probe enumerated through pylink).
 
-Cross-build the benchmark-server firmware for the board (fetches nsx-ambiq-sdk,
-neuralspotx and the toolchain file on first use):
+Build the benchmark-server firmware for the board. The firmware is an NSX app
+(rendered into `build/hardware/<board>/nsx_app/`, then locked/synced/configured/built
+through `neuralspotx.api` -- see "Kernel build parity" below), so the first build
+resolves and vendors the SDK, board and kernel modules into that app:
 
 ```bash
 uv run helia_core_tester hardware build --board apollo510_evb -j
@@ -434,7 +543,8 @@ uv run helia_core_tester hardware build --board apollo510_evb -j
 Flash through the NSX-generated SEGGER target -- skipped automatically when the
 ELF's sha256 matches the last flash to the same probe from this build dir *and*
 the board confirms it is running this build (every build carries a content-hash
-build id in `<build_dir>/hct_build_id.txt`, stamped into the linked image after
+build id in `<build_dir>/nsx_app/build/<board>/hct_build_id.txt` -- next to the
+image, see `firmware_build.build_id_path()` -- stamped into the linked image after
 the link by `scripts/patch_build_id.py` -- a sha256 over the whole flash image,
 so it covers every linked library and the linker layout, not only the server
 objects -- and advertised in TARGET_INFO; the skip path opens one short RTT session to

@@ -1,0 +1,37 @@
+{
+  "schema": "hct.dependency-baseline",
+  "schema_version": 1,
+  "baseline_id": "hct-neuralspotx-0.8.1-2026-09",
+  "neuralspotx": {
+    "package": "neuralspotx",
+    "version": "0.8.1"
+  },
+  "projects": {
+    "ns-cmsis-nn": {
+      "url": "https://github.com/AmbiqAI/ns-cmsis-nn.git",
+      "ref": "7c28064c047cde53cd87d8b9b61257ff43bdc549"
+    },
+    "nsx-ambiq-sdk": {
+      "url": "https://github.com/AmbiqAI/nsx-ambiq-sdk.git",
+      "ref": "a9f4ec25a162f6f3700623feb691423bb5a51132"
+    },
+    "neuralspotx": {
+      "url": "https://github.com/AmbiqAI/neuralspotx.git",
+      "ref": "2dbe12a2799fd8c3df85f1a103b0adca340c901f"
+    },
+    "nsx-pmu-armv8m": {
+      "url": "https://github.com/AmbiqAI/nsx-pmu-armv8m.git",
+      "ref": "5725c065a0c3603132f1064ee2684d1fa8587c88"
+    },
+    "CMSIS_5": {
+      "url": "https://github.com/ARM-software/CMSIS_5.git",
+      "ref": "55b19837f5703e418ca37894d5745b1dc05e4c91"
+    }
+  },
+  "modules": {
+    "nsx-cmsis-nn": {
+      "project": "ns-cmsis-nn",
+      "ref": "7c28064c047cde53cd87d8b9b61257ff43bdc549"
+    }
+  }
+}

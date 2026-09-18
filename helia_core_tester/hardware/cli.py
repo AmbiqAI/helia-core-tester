@@ -30,13 +30,16 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import TYPE_CHECKING, Iterator, Optional
 
 import typer
 
 from .boards import BoardSpec, UnknownBoardError, default_board_id, load_board_table, repo_root, resolve_board
 from .memory_report import generate_memory_report
 from .probes import ProbeResolutionError, list_probes, resolve_serial
+
+if TYPE_CHECKING:
+    from .firmware_build import FirmwareOptions
 
 hardware_app = typer.Typer(
     name="hardware",
@@ -53,7 +56,10 @@ probes_app = typer.Typer(
 
 _BOARD_HELP = "Board id from assets/hardware_boards.yaml (default: $HPX_BOARD, else apollo510_evb)."
 _SERIAL_HELP = "J-Link probe serial number (default: $HPX_JLINK_SERIAL, else the single connected probe)."
-_BUILD_DIR_HELP = "CMake build directory (default: build/hardware/<board>)."
+_BUILD_DIR_HELP = (
+    "Build directory: holds the generated NSX app (nsx_app/) and its build tree "
+    "(default: build/hardware/<board>)."
+)
 _VERBOSITY_HELP = "Verbosity level (0-3); 1 or higher prints the full traceback on failure (default: $HELIA_CORE_TESTER_VERBOSITY, else 0)."
 _VERBOSITY_ENV_VAR = "HELIA_CORE_TESTER_VERBOSITY"
 _FORCE_FLASH_HELP = (
@@ -64,6 +70,37 @@ _ALLOW_UNVERIFIED_HELP = (
     "Stream even when the build dir has no hct_build_id.txt (firmware built before build-id "
     "stamping), skipping the TARGET_INFO build-id check. Without it a missing stamp is an error."
 )
+_BASELINE_HELP = (
+    "Dependency baseline JSON pinning every NSX project the firmware resolves (default: "
+    "assets/dependency_baseline.json). heliaPROFILER's compatibility-baseline file is "
+    "accepted too, so a run can be built against hpx's qualified pins."
+)
+_CMSIS_NN_ROOT_HELP = (
+    "Build the kernels from this ns-cmsis-nn checkout instead of the baseline's pinned "
+    "commit. The tree is declared to NSX as a local module source and mirrored into the "
+    "app on every sync, and the generate step reads its schemas from the same tree. Use it "
+    "to test uncommitted kernel work; the result is not a qualified build."
+)
+_REQUANTIZE_HELP = (
+    "Compile the kernels' requantize routine as inline assembly "
+    "(NSX_CMSIS_NN_USE_REQUANTIZE_INLINE_ASM). On by default -- the same setting "
+    "heliaPROFILER builds with. --no-requantize-inline-asm is the A/B control."
+)
+_UPDATE_DEPS_HELP = (
+    "Re-resolve nsx.lock even when the manifest and the baseline are unchanged."
+)
+
+
+def _firmware_options(baseline, cmsis_nn_root, requantize_inline_asm, update_dependencies, verbosity) -> "FirmwareOptions":
+    from .firmware_build import FirmwareOptions
+
+    return FirmwareOptions(
+        baseline_path=baseline,
+        cmsis_nn_root=cmsis_nn_root,
+        requantize_inline_asm=requantize_inline_asm,
+        update_dependencies=update_dependencies,
+        verbose=verbosity,
+    )
 
 
 def _fail(message: str) -> None:
@@ -183,14 +220,23 @@ def build(
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
     jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel build jobs."),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
+    baseline: Optional[Path] = typer.Option(None, "--baseline", help=_BASELINE_HELP),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
+    requantize_inline_asm: bool = typer.Option(True, "--requantize-inline-asm/--no-requantize-inline-asm", help=_REQUANTIZE_HELP),
+    update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
-    """Cross-compile the hct_benchmark_server firmware for --board (no flashing)."""
+    """Build the hct_benchmark_server firmware for --board as an NSX app (no flashing)."""
     from .firmware_build import build_firmware, resolve_build_dir
 
     spec = _board(board)
-    with _pipeline_errors(_verbosity(verbosity)):
-        elf = build_firmware(spec, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs, force_reconfigure=force_reconfigure)
+    level = _verbosity(verbosity)
+    options = _firmware_options(baseline, cmsis_nn_root, requantize_inline_asm, update_dependencies, level)
+    with _pipeline_errors(level):
+        elf = build_firmware(
+            spec, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs,
+            force_reconfigure=force_reconfigure, options=options,
+        )
     typer.echo(f"✓ Firmware build completed successfully: {elf}")
 
 
@@ -202,6 +248,10 @@ def flash(
     jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel build jobs."),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
     force: bool = typer.Option(False, "--force", help=_FORCE_FLASH_HELP),
+    baseline: Optional[Path] = typer.Option(None, "--baseline", help=_BASELINE_HELP),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
+    requantize_inline_asm: bool = typer.Option(True, "--requantize-inline-asm/--no-requantize-inline-asm", help=_REQUANTIZE_HELP),
+    update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
     """Build (if needed) and flash the hct_benchmark_server firmware to --board via J-Link.
@@ -211,10 +261,12 @@ def flash(
 
     spec = _board(board)
     serial = _serial(serial_no)
-    with _pipeline_errors(_verbosity(verbosity)):
+    level = _verbosity(verbosity)
+    options = _firmware_options(baseline, cmsis_nn_root, requantize_inline_asm, update_dependencies, level)
+    with _pipeline_errors(level):
         decision = flash_firmware(
             spec, serial, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs,
-            force_reconfigure=force_reconfigure, force=force,
+            force_reconfigure=force_reconfigure, force=force, options=options,
         )
     if decision.needed:
         typer.echo("✓ Firmware flashed successfully")
@@ -388,11 +440,16 @@ def run(
     jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel firmware build jobs."),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure the CMake build dir even if it already exists."),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
+    baseline: Optional[Path] = typer.Option(None, "--baseline", help=_BASELINE_HELP),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
+    requantize_inline_asm: bool = typer.Option(True, "--requantize-inline-asm/--no-requantize-inline-asm", help=_REQUANTIZE_HELP),
+    update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
-    """The whole hardware pipeline: generate tests for the board's CPU, build the
-    firmware, flash it unless the board already runs this exact build, stream the
-    suite, write the result bundle, and print the summary."""
+    """The whole hardware pipeline: build the firmware as an NSX app, flash it unless
+    the board already runs this exact build, generate tests for the board's CPU from
+    the same kernel checkout the firmware links, stream the suite, write the result
+    bundle, and print the summary."""
     from .hardware_pipeline import run_hardware_pipeline
 
     if skip_flash and force_flash:
@@ -400,12 +457,14 @@ def run(
     spec = _board(board)
     options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
     serial = _serial(serial_no)
+    level = _verbosity(verbosity)
+    firmware_options = _firmware_options(baseline, cmsis_nn_root, requantize_inline_asm, update_dependencies, level)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
-    with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
+    with _pipeline_errors(level), _quiet_stdout(as_json):
         outcome = run_hardware_pipeline(
             repo_root(), spec, serial, options=options, build_dir=build_dir,
             skip_generate=skip_generate, skip_flash=skip_flash, force_flash=force_flash, jobs=jobs,
-            force_reconfigure=force_reconfigure, echo=echo, progress_to_stderr=as_json,
-            allow_unverified_firmware=allow_unverified_firmware,
+            force_reconfigure=force_reconfigure, firmware_options=firmware_options, echo=echo,
+            progress_to_stderr=as_json, allow_unverified_firmware=allow_unverified_firmware,
         )
     _report(outcome, spec, as_json=as_json)

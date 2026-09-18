@@ -943,8 +943,7 @@ def test_top_level_cmake_no_longer_uses_unity() -> None:
     assert "ThrowTheSwitch/Unity" not in text
     assert "FetchContent_Declare(unity" not in text
     assert "target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn retarget cmsis_startup helia_test_runtime)" in text
-    assert "target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn nsx::board nsx::core nsx::perf helia_test_runtime)" in text
-    assert "target_compile_definitions(helia_test_runtime PRIVATE $<IF:$<BOOL:${HELIA_HARDWARE_BUILD}>,HELIA_HARDWARE_BUILD,USING_FVP_CORSTONE_300>)" in text
+    assert "target_compile_definitions(helia_test_runtime PRIVATE USING_FVP_CORSTONE_300)" in text
     # helia_test_runtime no longer carries its own arm_nn_abs_f32/f16 compat
     # wrapper around arm_abs_f32/f16 -- that pre-rename CMSIS-NN pair no longer
     # exists in the checked-in ns-cmsis-nn revision, which now exports the

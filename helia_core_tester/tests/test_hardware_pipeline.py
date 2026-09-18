@@ -161,11 +161,11 @@ def test_pmu_counters_parsing_and_deprecated_groups_alias() -> None:
 
 
 def _write_elf(build_dir: Path, payload: bytes, build_id: str | None = None) -> Path:
-    elf = elf_path(build_dir)
+    elf = elf_path(build_dir, BOARD)
     elf.parent.mkdir(parents=True, exist_ok=True)
     elf.write_bytes(payload)
     if build_id is not None:
-        build_id_path(build_dir).write_text(build_id + "\n")
+        build_id_path(build_dir, BOARD).write_text(build_id + "\n")
     return elf
 
 
@@ -189,40 +189,42 @@ def test_flash_decision_follows_elf_hash(tmp_path: Path) -> None:
     _write_elf(build_dir, b"firmware-v1", "hct-v1")
     serial = 1160002276
 
-    first = decide_flash(build_dir, serial)
+    first = decide_flash(build_dir, BOARD, serial)
     assert first.needed and "no flash stamp" in first.reason
     assert first.build_id == "hct-v1"
 
-    stamp = record_flash(build_dir, serial, first.digest)
-    assert stamp == flash_stamp_path(build_dir, serial) == build_dir / f".flashed-{serial}.sha256"
+    stamp = record_flash(build_dir, BOARD, serial, first.digest)
+    assert stamp == flash_stamp_path(build_dir, BOARD, serial) == firmware_build.output_dir(build_dir, BOARD) / f".flashed-{serial}.sha256"
     assert stamp.read_text().strip() == first.digest
 
-    unchanged = decide_flash(build_dir, serial)
+    unchanged = decide_flash(build_dir, BOARD, serial)
     assert not unchanged.needed and "unchanged" in unchanged.reason
     # The skip message names the stamp file it trusted.
     assert str(stamp) in unchanged.reason
 
     # The stamp is keyed by serial: another probe still needs a flash.
-    assert decide_flash(build_dir, 1160001958).needed
+    assert decide_flash(build_dir, BOARD, 1160001958).needed
 
-    assert decide_flash(build_dir, serial, force=True).needed
+    assert decide_flash(build_dir, BOARD, serial, force=True).needed
 
     _write_elf(build_dir, b"firmware-v2")
-    changed = decide_flash(build_dir, serial)
+    changed = decide_flash(build_dir, BOARD, serial)
     assert changed.needed and "changed" in changed.reason and changed.digest != first.digest
 
 
 def test_flash_decision_requires_built_elf(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
-        decide_flash(tmp_path, 1)
+        decide_flash(tmp_path, BOARD, 1)
 
 
 @pytest.fixture
 def fake_toolchain(monkeypatch):
     """Stub configure/build so flash_firmware runs without CMake; returns the list of built targets."""
     built: list[str] = []
+    monkeypatch.setattr(firmware_build, "ensure_host_tools", lambda repo_root, baseline=None: None)
+    monkeypatch.setattr(firmware_build, "lock_and_sync", lambda render, options: None)
     monkeypatch.setattr(firmware_build, "configure", lambda *a, **k: None)
-    monkeypatch.setattr(firmware_build, "build", lambda build_dir, target, jobs: built.append(target))
+    monkeypatch.setattr(firmware_build, "build", lambda render, options, target, jobs: built.append(target))
     return built
 
 
@@ -240,7 +242,7 @@ def test_flash_firmware_skips_flash_target_when_unchanged_and_board_confirms(tmp
     assert not second.needed
     assert fake_toolchain == [firmware_build.SERVER_TARGET]
     assert board.asked == [(7, build_dir)]
-    assert "board confirmed build id hct-abc" in second.reason and str(flash_stamp_path(build_dir, 7)) in second.reason
+    assert "board confirmed build id hct-abc" in second.reason and str(flash_stamp_path(build_dir, BOARD, 7)) in second.reason
     assert second.build_id == second.board_build_id == "hct-abc"
 
     fake_toolchain.clear()
@@ -260,8 +262,8 @@ def test_flash_skip_is_refused_when_another_build_dir_flashed_the_probe(tmp_path
 
     firmware_build.flash_firmware(BOARD, SERIAL, build_dir=build_a, board_build_id_reader=_silent_board)
     firmware_build.flash_firmware(BOARD, SERIAL, build_dir=build_b, board_build_id_reader=_silent_board)
-    assert flash_stamp_path(build_a, SERIAL).read_text() == flash_stamp_path(build_b, SERIAL).read_text()
-    assert not decide_flash(build_a, SERIAL).needed  # the stamp alone would skip
+    assert flash_stamp_path(build_a, BOARD, SERIAL).read_text() == flash_stamp_path(build_b, BOARD, SERIAL).read_text()
+    assert not decide_flash(build_a, BOARD, SERIAL).needed  # the stamp alone would skip
 
     fake_toolchain.clear()
     board_runs_b = _board_running("hct-bbb")
@@ -297,11 +299,13 @@ def test_confirm_board_build_id_flashes_when_board_is_silent_or_unstamped(tmp_pa
 
 
 def test_read_build_id_handles_missing_and_blank_files(tmp_path: Path) -> None:
-    assert read_build_id(tmp_path) is None
-    build_id_path(tmp_path).write_text("  \n")
-    assert read_build_id(tmp_path) is None
-    build_id_path(tmp_path).write_text("hct-0123\n")
-    assert read_build_id(tmp_path) == "hct-0123"
+    assert read_build_id(tmp_path, BOARD) is None
+    stamp = build_id_path(tmp_path, BOARD)
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text("  \n")
+    assert read_build_id(tmp_path, BOARD) is None
+    build_id_path(tmp_path, BOARD).write_text("hct-0123\n")
+    assert read_build_id(tmp_path, BOARD) == "hct-0123"
 
 
 # --- post-link build id (scripts/patch_build_id.py) ------------------------------------
@@ -328,7 +332,7 @@ def _synthetic_firmware(build_dir: Path, *, server: bytes, library: bytes, gap: 
     script = _load_build_id_script()
     assert script.MARKER in server
     base = 0x00410000
-    elf, binary = elf_path(build_dir), build_dir / "hardware" / "hct_benchmark_server.bin"
+    elf, binary = elf_path(build_dir, BOARD), firmware_build.bin_path(build_dir, BOARD)
     elf.parent.mkdir(parents=True, exist_ok=True)
     elf.write_bytes(_synthetic_elf([(base, server), (base + len(server) + gap, library)]))
     binary.write_bytes(server + bytes(gap) + library)  # what objcopy -O binary emits
@@ -337,9 +341,9 @@ def _synthetic_firmware(build_dir: Path, *, server: bytes, library: bytes, gap: 
 
 def _stamp(build_dir: Path) -> str:
     script = _load_build_id_script()
-    elf, binary = elf_path(build_dir), build_dir / "hardware" / "hct_benchmark_server.bin"
-    assert script.main(["--elf", str(elf), "--bin", str(binary), "--output-txt", str(build_id_path(build_dir))]) == 0
-    return read_build_id(build_dir)
+    elf, binary = elf_path(build_dir, BOARD), firmware_build.bin_path(build_dir, BOARD)
+    assert script.main(["--elf", str(elf), "--bin", str(binary), "--output-txt", str(build_id_path(build_dir, BOARD))]) == 0
+    return read_build_id(build_dir, BOARD)
 
 
 def _embedded_id(path: Path) -> str:
@@ -364,8 +368,8 @@ def test_post_link_build_id_covers_the_whole_image(tmp_path: Path) -> None:
     id_a, id_b = _stamp(build_a), _stamp(build_b)
     assert id_a == id_b
     assert id_a.startswith("hct-") and len(id_a) == 4 + script.BUILD_ID_HEX_CHARS
-    assert _embedded_id(elf_path(build_a)) == _embedded_id(build_a / "hardware" / "hct_benchmark_server.bin") == id_a
-    assert elf_path(build_a).read_bytes() == elf_path(build_b).read_bytes()
+    assert _embedded_id(elf_path(build_a, BOARD)) == _embedded_id(firmware_build.bin_path(build_a, BOARD)) == id_a
+    assert elf_path(build_a, BOARD).read_bytes() == elf_path(build_b, BOARD).read_bytes()
 
     # A byte that only a linked library changes -> a different id (the old object hash missed this).
     build_c = tmp_path / "c"
@@ -378,8 +382,8 @@ def test_post_link_build_id_covers_the_whole_image(tmp_path: Path) -> None:
     assert _stamp(build_d) not in {id_a, id_c}
 
     # Re-running on an already patched image is a no-op with the same id.
-    before = elf_path(build_a).read_bytes()
-    assert _stamp(build_a) == id_a and elf_path(build_a).read_bytes() == before
+    before = elf_path(build_a, BOARD).read_bytes()
+    assert _stamp(build_a) == id_a and elf_path(build_a, BOARD).read_bytes() == before
 
 
 def test_post_link_build_id_rejects_unpatchable_images(tmp_path: Path, capsys) -> None:
@@ -387,12 +391,12 @@ def test_post_link_build_id_rejects_unpatchable_images(tmp_path: Path, capsys) -
     slot = script.MARKER + bytes(script.ID_AREA)
 
     def _run(build_dir: Path) -> int:
-        elf, binary = elf_path(build_dir), build_dir / "hardware" / "hct_benchmark_server.bin"
-        return script.main(["--elf", str(elf), "--bin", str(binary), "--output-txt", str(build_id_path(build_dir))])
+        elf, binary = elf_path(build_dir, BOARD), firmware_build.bin_path(build_dir, BOARD)
+        return script.main(["--elf", str(elf), "--bin", str(binary), "--output-txt", str(build_id_path(build_dir, BOARD))])
 
     no_marker = tmp_path / "no_marker"
     _synthetic_firmware(no_marker, server=b"code" + slot, library=b"lib")
-    elf_path(no_marker).write_bytes(_synthetic_elf([(0x410000, b"code-without-a-slot")]))
+    elf_path(no_marker, BOARD).write_bytes(_synthetic_elf([(0x410000, b"code-without-a-slot")]))
     assert _run(no_marker) == 1 and "marker" in capsys.readouterr().err
 
     twice = tmp_path / "twice"
@@ -402,9 +406,9 @@ def test_post_link_build_id_rejects_unpatchable_images(tmp_path: Path, capsys) -
     # The .bin must be the image assembled from the ELF, byte for byte.
     stale_bin = tmp_path / "stale_bin"
     _synthetic_firmware(stale_bin, server=b"code" + slot, library=b"lib")
-    (stale_bin / "hardware" / "hct_benchmark_server.bin").write_bytes(b"code" + slot + bytes(16) + b"lib-old")
+    firmware_build.bin_path(stale_bin, BOARD).write_bytes(b"code" + slot + bytes(16) + b"lib-old")
     assert _run(stale_bin) == 1 and "does not match" in capsys.readouterr().err
-    assert not build_id_path(stale_bin).exists()
+    assert not build_id_path(stale_bin, BOARD).exists()
 
     assert script.main(["--elf", str(tmp_path / "missing.elf"), "--output-txt", str(tmp_path / "x.txt")]) == 1
 
@@ -433,63 +437,130 @@ def test_read_target_info_returns_the_full_payload_without_acknowledging() -> No
     assert transport.read() == b""  # nothing else was sent: the fake is still waiting for TARGET_INFO_ACK
 
 
-# --- configure flags ---------------------------------------------------------------
+# --- NSX build driver ------------------------------------------------------------
+
+
+class _FakeNsxApi:
+    """Stand-in for the four neuralspotx.api entry points the build driver calls.
+
+    Only those four are replaced; the renderer keeps reading the real NSX starter
+    profile and registry, so these tests still fail if the module list or the
+    project ownership the pinned neuralspotx reports stops matching this board.
+    """
+
+    def __init__(self, reasons: dict) -> None:
+        self.calls: list[tuple] = []
+        self.reasons = reasons
+
+    def lock_app(self, app_dir, **kwargs):
+        self.calls.append(("lock", Path(app_dir), kwargs.get("update", False)))
+        (Path(app_dir) / "nsx.lock").write_text("fake-lock\n", encoding="utf-8")
+        # Resolving produces a lock the build can use -- the post-lock recheck
+        # must see that, or every build would report NSX as having failed.
+        self.reasons["value"] = None
+
+    def sync_app(self, app_dir, **kwargs):
+        self.calls.append(("sync", Path(app_dir), kwargs.get("frozen", False)))
+
+    def configure_app(self, app_dir, **kwargs):
+        self.calls.append(("configure", Path(app_dir), kwargs.get("probe_serial")))
+        build_dir = Path(kwargs["build_dir"])
+        build_dir.mkdir(parents=True, exist_ok=True)
+        (build_dir / "build.ninja").write_text("", encoding="utf-8")
+
+    def build_app(self, app_dir, **kwargs):
+        self.calls.append(("build", Path(app_dir), kwargs.get("target")))
+        build_dir = Path(kwargs["build_dir"])
+        build_dir.mkdir(parents=True, exist_ok=True)
+        (build_dir / "hct_benchmark_server.elf").write_bytes(b"\x7fELF fake")
+        (build_dir / "hct_build_id.txt").write_text("hct-fake\n", encoding="utf-8")
+
+    def kinds(self) -> list[str]:
+        return [call[0] for call in self.calls]
 
 
 @pytest.fixture
-def captured_cmake(monkeypatch, tmp_path: Path):
-    """Run `configure()` without CMake or the dependency fetch; returns the argv it would run."""
-    calls: list[list[str]] = []
-    monkeypatch.setattr(firmware_build, "ensure_hardware_dependencies", lambda repo_root: None)
-    monkeypatch.setattr(firmware_build, "tester_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(firmware_build.subprocess, "run", lambda cmd, **kwargs: calls.append(list(cmd)))
-    return calls
+def nsx_driver(monkeypatch, tmp_path: Path):
+    """`build_firmware` with NSX, the host-tool fetch and the probe lookup faked out.
+
+    `reasons["value"]` stands in for the lock-reuse verdict, which is otherwise
+    read out of an `nsx.lock` only the real neuralspotx can produce.
+    """
+    from neuralspotx import api as nsx_api
+
+    reasons = {"value": "nsx.lock is missing"}
+    api = _FakeNsxApi(reasons)
+    for name in ("lock_app", "sync_app", "configure_app", "build_app"):
+        monkeypatch.setattr(nsx_api, name, getattr(api, name))
+
+    monkeypatch.setattr(firmware_build, "ensure_host_tools", lambda repo_root, baseline=None: None)
+    monkeypatch.setattr(firmware_build, "tester_repo_root", lambda: PROJECT_ROOT)
+    monkeypatch.setattr(firmware_build, "_prepare_probe_env", lambda: None)
+    monkeypatch.setattr(firmware_build, "lock_reuse_reason", lambda render: reasons["value"])
+    # The structural check reads a real nsx.lock, which only neuralspotx can
+    # write; the fake leaves a placeholder, so stand in for "this lock is usable"
+    # once one exists at all.
+    monkeypatch.setattr(
+        firmware_build,
+        "lock_validity_reason",
+        lambda render: None if (render.app_dir / "nsx.lock").is_file() else "nsx.lock is missing",
+    )
+    return api, reasons
 
 
-def test_configure_passes_the_board_row_to_cmake(captured_cmake, monkeypatch, tmp_path: Path) -> None:
-    from dataclasses import replace
+def test_build_firmware_drives_nsx_in_order(nsx_driver, tmp_path: Path) -> None:
+    """lock -> sync (frozen) -> configure -> build, with no cmake subprocess of our own."""
+    api, _ = nsx_driver
+    build_dir = tmp_path / "bd"
 
-    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: None)
-    firmware_build.configure(tmp_path / "bd", BOARD, force=False)
-    [cmd] = captured_cmake
-    assert cmd[:4] == ["cmake", "-S", str(tmp_path), "-B", str(tmp_path / "bd")][:4]
-    assert "-DHELIA_HARDWARE_BOARD=apollo510_evb" in cmd and "-DTARGET_CPU=cortex-m55" in cmd
-    # apollo510_evb's workspace must stay at the historical 114688 so the memory report is unchanged.
-    assert BOARD.workspace_bytes == 114688 and "-DHCT_SERVER_WORKSPACE_BYTES=114688" in cmd
+    elf = firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
 
-    captured_cmake.clear()
-    other = replace(BOARD, id="other_evb", workspace_bytes=65536)
-    firmware_build.configure(tmp_path / "bd2", other, force=False)
-    assert "-DHCT_SERVER_WORKSPACE_BYTES=65536" in captured_cmake[0]
+    assert api.kinds() == ["lock", "sync", "configure", "build"]
+    assert api.calls[1][2] is True, "the sync must be frozen"
+    assert api.calls[3][2] == "hct_benchmark_server"
+    assert elf == firmware_build.elf_path(build_dir, BOARD) and elf.is_file()
+    assert firmware_build.read_build_id(build_dir, BOARD) == "hct-fake"
+    # The lock that produced this image is kept next to it for the bundle.
+    assert firmware_build.lock_snapshot_path(build_dir, BOARD).read_text() == "fake-lock\n"
 
 
-def test_configure_forwards_the_resolved_jlinkexe_to_the_flash_target(captured_cmake, monkeypatch, tmp_path: Path) -> None:
-    from helia_core_tester.hardware.jlink_library import JLinkExecutable, JLinkLibraryError
+def test_build_firmware_reuses_a_compatible_lock(nsx_driver, tmp_path: Path) -> None:
+    """An unchanged render and baseline skip both the resolve and the reconfigure."""
+    api, reasons = nsx_driver
+    build_dir = tmp_path / "bd"
 
-    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: JLinkExecutable("/opt/SEGGER/JLink/JLinkExe", "$JLINK_PATH"))
-    firmware_build.configure(tmp_path / "bd", BOARD, force=False, serial_no=SERIAL)
-    [cmd] = captured_cmake
-    assert "-DNSX_JLINK_EXE=/opt/SEGGER/JLink/JLinkExe" in cmd
-    assert f"-DNSX_JLINK_SERIAL={SERIAL}" in cmd
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    api.calls.clear()
+    reasons["value"] = None  # neither the rendered manifest nor the baseline changed
 
-    # Nothing resolved: unset any cached value so CMake's find_program(JLinkExe)
-    # searches PATH afresh instead of reusing a stale path from an earlier configure.
-    captured_cmake.clear()
-    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: None)
-    firmware_build.configure(tmp_path / "bd", BOARD, force=False)
-    assert not any(arg.startswith("-DNSX_JLINK_EXE") for arg in captured_cmake[0])
-    assert "-UNSX_JLINK_EXE" in captured_cmake[0]
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    assert api.kinds() == ["sync", "build"], (
+        "a reusable lock must skip `nsx lock` and the CMake reconfigure, but still sync"
+    )
 
-    # A broken $HPX_JLINK_DLL is doctor's problem, not a reason to refuse `hardware build`.
-    captured_cmake.clear()
 
-    def _broken():
-        raise JLinkLibraryError("$HPX_JLINK_DLL=/x/gone.so does not exist")
+def test_build_firmware_reconfigures_for_a_probe_serial(nsx_driver, tmp_path: Path) -> None:
+    """The probe serial is baked into the generated flash target, so it forces a configure."""
+    api, reasons = nsx_driver
+    build_dir = tmp_path / "bd"
 
-    monkeypatch.setattr(firmware_build, "find_jlink_exe", _broken)
-    firmware_build.configure(tmp_path / "bd", BOARD, force=False)
-    assert len(captured_cmake) == 1 and not any(arg.startswith("-DNSX_JLINK_EXE") for arg in captured_cmake[0])
-    assert "-UNSX_JLINK_EXE" in captured_cmake[0]
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    api.calls.clear()
+    reasons["value"] = None
+
+    firmware_build.build_firmware(
+        BOARD, build_dir=build_dir, serial_no=SERIAL, repo_root=PROJECT_ROOT
+    )
+    assert [call[2] for call in api.calls if call[0] == "configure"] == [str(SERIAL)]
+
+
+def test_build_dir_layout_is_board_keyed_under_the_app(tmp_path: Path) -> None:
+    """--build-dir keeps its meaning: the app and its build tree live inside it."""
+    build_dir = tmp_path / "bd"
+    assert firmware_build.app_dir_for(build_dir) == build_dir / "nsx_app"
+    assert firmware_build.output_dir(build_dir, BOARD) == build_dir / "nsx_app" / "build" / "apollo510_evb"
+    assert firmware_build.elf_path(build_dir, BOARD).name == "hct_benchmark_server.elf"
+    assert firmware_build.build_id_path(build_dir, BOARD).name == "hct_build_id.txt"
 
 
 # --- --json summary ----------------------------------------------------------------
@@ -537,10 +608,10 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     board = resolve_board("apollo510_evb")
     order: list[str] = []
 
-    def _generate(repo_root, spec, suite, float_precision=None):
+    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None):
         order.append(f"generate:{spec.cpu}:{suite}:{float_precision}")
 
-    def _flash(spec, serial, *, build_dir, jobs, force_reconfigure, force):
+    def _flash(spec, serial, *, build_dir, jobs, force_reconfigure, force, options=None, repo_root=None):
         order.append(f"flash:{serial}:{build_dir.relative_to(tmp_path)}:force={force}")
         return firmware_build.FlashDecision(True, "abc", "test")
 
@@ -552,10 +623,15 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     monkeypatch.setattr(hardware_pipeline, "flash_firmware", _flash)
     monkeypatch.setattr(hardware_pipeline, "stream_generated_tests", _stream)
 
+    # The generate step reads the ns-cmsis-nn tree NSX synced for this build, so
+    # the pipeline builds first and refuses to generate before that tree exists.
+    kernels = hardware_pipeline.kernel_source_root(board.build_dir(tmp_path))
+    kernels.mkdir(parents=True, exist_ok=True)
+
     outcome = run_hardware_pipeline(
         tmp_path, board, 42, options=StreamOptions(suite="float", test_name="_f16", float_precision="f16"), echo=lambda _msg: None,
     )
-    assert order == ["generate:cortex-m55:float:f16", "flash:42:build/hardware/apollo510_evb:force=False", "stream:float:_f16:unverified=False"]
+    assert order == ["flash:42:build/hardware/apollo510_evb:force=False", "generate:cortex-m55:float:f16", "stream:float:_f16:unverified=False"]
     assert outcome.flash is not None and outcome.flash.needed
 
     order.clear()
@@ -658,3 +734,99 @@ def test_stdout_to_stderr_covers_python_and_subprocess_output(capfd) -> None:
     assert "python-line" in err and "child-line" in err
     assert "python-line" not in out and "child-line" not in out
     assert "after-line" in out
+
+
+# --- review follow-ups -------------------------------------------------------------
+
+
+def test_stale_lock_is_rejected_when_only_the_baseline_changed(tmp_path: Path) -> None:
+    """A baseline edit that leaves nsx.yml identical must still re-resolve the lock.
+
+    `baseline_id` never reaches the manifest, so NSX's own manifest hash is
+    unchanged and every other reuse check passes. Only the render digest can tell,
+    and it can only tell if the previous build's state is still on disk when the
+    decision is made -- which is why the state is committed after a build rather
+    than written while rendering.
+    """
+    from helia_core_tester.hardware.dependency_baseline import parse_baseline, resolve_baseline
+    from helia_core_tester.hardware.nsx_app import commit_render_state, render_app
+
+    build_dir = tmp_path / "bd"
+    baseline = resolve_baseline(PROJECT_ROOT)
+    first = render_app(BOARD, repo_root=PROJECT_ROOT, build_dir=build_dir, baseline=baseline)
+    (first.app_dir / "nsx.lock").write_text("locked\n", encoding="utf-8")
+    commit_render_state(first)
+    # Same baseline: the digest matches, so the decision moves on to NSX's own
+    # lock checks rather than stopping here.
+    assert firmware_build.lock_reuse_reason(first) != (
+        "the rendered manifest or the dependency baseline changed"
+    )
+
+    renamed = parse_baseline({**baseline.to_dict(), "baseline_id": "renamed"})
+    second = render_app(BOARD, repo_root=PROJECT_ROOT, build_dir=build_dir, baseline=renamed)
+    assert second.nsx_yml == first.nsx_yml, "the manifest is unchanged, which is the point"
+    assert firmware_build.lock_reuse_reason(second) == (
+        "the rendered manifest or the dependency baseline changed"
+    )
+
+
+def test_reconfigure_tracks_the_configured_identity(nsx_driver, tmp_path: Path) -> None:
+    """An existing build.ninja is not on its own proof the tree is configured right.
+
+    CMake re-runs itself when a file it listed as a configure input changes, so the
+    app CMakeLists and cmake/nsx/modules.cmake are covered by that. The probe serial
+    and the resolved JLinkExe are configure *arguments*: they change the CMake cache
+    with no input file touched, so only a recorded identity catches them.
+    """
+    api, reasons = nsx_driver
+    build_dir = tmp_path / "bd"
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    reasons["value"] = None
+    api.calls.clear()
+
+    # Nothing changed -> no reconfigure.
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    assert "configure" not in api.kinds()
+
+    # A probe serial is a configure argument, so it must reconfigure...
+    api.calls.clear()
+    firmware_build.build_firmware(
+        BOARD, build_dir=build_dir, serial_no=SERIAL, repo_root=PROJECT_ROOT
+    )
+    assert [c[2] for c in api.calls if c[0] == "configure"] == [str(SERIAL)]
+
+    # ...and the same serial again must not.
+    api.calls.clear()
+    firmware_build.build_firmware(
+        BOARD, build_dir=build_dir, serial_no=SERIAL, repo_root=PROJECT_ROOT
+    )
+    assert "configure" not in api.kinds()
+
+
+def test_kernel_source_root_follows_the_build_not_the_flag(nsx_driver, tmp_path: Path) -> None:
+    """Generation reads the tree the flashed image was built from, or refuses.
+
+    With --skip-flash nothing is built or synced, so an explicit --cmsis-nn-root
+    would otherwise send generation to a checkout the image was never built from.
+    """
+    from helia_core_tester.hardware.nsx_app import app_dir_for, synced_kernel_dir
+
+    build_dir = tmp_path / "bd"
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    synced = synced_kernel_dir(app_dir_for(build_dir))
+    synced.mkdir(parents=True, exist_ok=True)
+
+    # The build recorded a registry-resolved kernel source, so that is the answer.
+    assert firmware_build.kernel_source_root(build_dir) == synced
+
+    other = tmp_path / "some-other-ns-cmsis-nn"
+    other.mkdir()
+    with pytest.raises(RuntimeError, match="does not match what the firmware"):
+        firmware_build.kernel_source_root(
+            build_dir, firmware_build.FirmwareOptions(cmsis_nn_root=other)
+        )
+
+    # With no build to speak of, an override is all there is to go on.
+    assert firmware_build.kernel_source_root(
+        tmp_path / "never-built", firmware_build.FirmwareOptions(cmsis_nn_root=other)
+    ) == other

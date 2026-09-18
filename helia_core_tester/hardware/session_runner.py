@@ -99,8 +99,9 @@ def open_rtt_session(
     """Open a fresh reset-on-open RTT session to the board's flashed firmware. Returns
     the host session, its transport (the caller closes it) and the RTT control-block
     address taken from the ELF in `build_dir`."""
-    elf_path = build_dir / "hardware" / "hct_benchmark_server.elf"
-    rtt_address = symbol_address_from_elf(str(elf_path), "_SEGGER_RTT")
+    from .firmware_build import elf_path
+
+    rtt_address = symbol_address_from_elf(str(elf_path(build_dir, board)), "_SEGGER_RTT")
     transport = JLinkRttTransport(
         serial_no=serial_no,
         chip_name=board.jlink_device,
