@@ -9,13 +9,10 @@ set(CMSIS_PATH "artifacts/downloads/CMSIS_5" CACHE PATH "Path to CMSIS (CMSIS_5 
 set(CMSIS_NN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH "ns-cmsis-nn repo root")
 set(FVP_CORSTONE_300_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Corstone-300" CACHE PATH "FVP startup/retarget files")
 set(GENERATED_TESTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/artifacts/generated_tests" CACHE PATH "Path to generated tests")
-set(NEURALSPOTX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../neuralspotx" CACHE PATH "Path to neuralspotx repo root")
 set(TARGET_CPU "" CACHE STRING "Target CPU override (e.g. cortex-m55)")
 option(ENABLE_COVERAGE "Enable GCC freestanding coverage for ns-cmsis-nn" OFF)
 option(ENABLE_COVERAGE_MVE_FLOAT "Enable float MVE paths during coverage builds" OFF)
 option(HELIA_BUILD_GENERATED_TESTS "Build descriptor-generated standalone test executables" ON)
-option(HELIA_BUILD_UNIVERSAL_SIZE_PROBE "Build the phase-0 universal firmware size probe" OFF)
-option(HELIA_BUILD_HARDWARE_BENCHMARK_SERVER "Build the streaming benchmark-server firmware skeleton" OFF)
 
 # --benchmark support: instruments generated standalone test harnesses (see
 # assets/templates/common/standalone/benchmark.j2) to split each op's
@@ -28,123 +25,6 @@ option(HELIA_BUILD_HARDWARE_BENCHMARK_SERVER "Build the streaming benchmark-serv
 option(HELIA_BENCHMARK_MODE "Enable DWT-based op-level cycle benchmarking in generated test harnesses" OFF)
 set(HELIA_BENCHMARK_WARMUP_RUNS "3" CACHE STRING "Untimed warmup iterations per op when HELIA_BENCHMARK_MODE is ON")
 set(HELIA_BENCHMARK_MEASURED_RUNS "10" CACHE STRING "Timed measured iterations per op when HELIA_BENCHMARK_MODE is ON")
-
-# --hardware support: build generated test executables against real Apollo510
-# hardware (the vendored NSX board bring-up under boards/apollo510_evb +
-# the fetched nsx-ambiq-sdk) instead of the FVP/ethos-u-core-platform toolchain.
-# See scripts/test_s4_conv_benchmark.sh --hardware for the driving script.
-#
-# UPDATE (2026-08-04): configure + cross-compile build verified end-to-end
-# in a sandbox (arm-none-eabi-gcc 14.3.1, no real board attached) for both
-# cortex-m55 and cortex-m55+nomve variants of convolve_generic_s4 -- produces
-# a linked .elf and .bin via nsx_finalize_app(). The NSX_MODULES list below
-# was derived from reading each vendored module's own nsx_require_target()/
-# FATAL_ERROR dependency checks (no existing nsx_bootstrap_app() caller was
-# found anywhere in this tree to use as a reference) and iteratively fixed
-# against real `cmake --build` errors (added nsx-interrupt, linked
-# nsx::core + nsx::perf). STILL UNVERIFIED: flashing via SEGGER J-Link and
-# SWO capture on real Apollo510 silicon -- please report back any errors
-# from those steps so they can be corrected.
-option(HELIA_HARDWARE_BUILD "Build generated tests for real Apollo510 hardware (NSX bring-up) instead of the FVP toolchain" OFF)
-set(HELIA_HARDWARE_BOARD "apollo510_evb" CACHE STRING "NSX board name for HELIA_HARDWARE_BUILD")
-set(HCT_SERVER_WORKSPACE_BYTES 114688 CACHE STRING "Unified per-case benchmark server workspace size in bytes")
-
-if((HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_HARDWARE_BENCHMARK_SERVER) AND NOT HELIA_HARDWARE_BUILD)
-  message(FATAL_ERROR "Hardware benchmark firmware targets require HELIA_HARDWARE_BUILD=ON")
-endif()
-
-if(HELIA_HARDWARE_BUILD)
-  set(NSX_APP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
-  # Repo-relative (nsx_bootstrap_app() resolves it as ${NSX_APP_ROOT}/${dir}),
-  # and fetched by helia_core_tester/scripts/setup_dependencies.py alongside
-  # CMSIS_5/Corstone-300/neuralspotx. Keep this default in sync with that
-  # script's nsx_ambiq_sdk_dir(). Override only to point at a hand-managed
-  # checkout; the default deliberately stays inside the tester repo so a build
-  # can't silently pick up an unrelated SDK tree from elsewhere on the machine.
-  # CACHE STRING, not CACHE PATH: CMake absolutizes -D values for PATH-typed
-  # cache entries against the invoking cwd, which would silently turn a
-  # relative override into an absolute path and corrupt every
-  # "${CMAKE_CURRENT_SOURCE_DIR}/${NSX_AMBIQ_SDK_DIR}" join below.
-  set(NSX_AMBIQ_SDK_DIR "artifacts/downloads/nsx-ambiq-sdk" CACHE STRING
-      "Repo-relative path to the nsx-ambiq-sdk checkout for HELIA_HARDWARE_BUILD")
-  # Accept an absolute override too, by folding it back to repo-relative --
-  # nsx_bootstrap_app() resolves module dirs as "${NSX_APP_ROOT}/${dir}", so a
-  # bare absolute value cannot be used as-is.
-  if(IS_ABSOLUTE "${NSX_AMBIQ_SDK_DIR}")
-    file(RELATIVE_PATH NSX_AMBIQ_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}" "${NSX_AMBIQ_SDK_DIR}")
-  endif()
-  if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${NSX_AMBIQ_SDK_DIR}/modules")
-    message(FATAL_ERROR
-      "HELIA_HARDWARE_BUILD=ON but ${NSX_AMBIQ_SDK_DIR}/modules is missing. "
-      "The consolidated SDK bundle is fetched, not tracked in git -- run "
-      "`uv run python -m helia_core_tester.scripts.setup_dependencies` "
-      "(or any `helia_core_tester hardware` command, which fetches "
-      "it lazily) before configuring.")
-  endif()
-
-  # "Consolidated SDK bundle" overlay (see nsx_app_bootstrap.cmake's
-  # nsx_module_dir_for_name() comment): every module below actually lives
-  # under ${NSX_AMBIQ_SDK_DIR}/modules/<name>, not the flat modules/<name>
-  # nsx_bootstrap_app() defaults to, so redirect each one explicitly.
-  set(NSX_APP_PROJECT_DIRS "${NSX_AMBIQ_SDK_DIR}")
-  file(GLOB _nsx_bundle_module_dirs RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/${NSX_AMBIQ_SDK_DIR}/modules"
-       "${CMAKE_CURRENT_SOURCE_DIR}/${NSX_AMBIQ_SDK_DIR}/modules/*")
-  foreach(_nsx_mod_name ${_nsx_bundle_module_dirs})
-    if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${NSX_AMBIQ_SDK_DIR}/modules/${_nsx_mod_name}")
-      string(REPLACE "-" "_" _nsx_mod_var "${_nsx_mod_name}")
-      set(NSX_APP_MODULE_DIR_${_nsx_mod_var} "${NSX_AMBIQ_SDK_DIR}/modules/${_nsx_mod_name}")
-    endif()
-  endforeach()
-
-  # Dependency order derived from each module's own nsx_require_target()/
-  # FATAL_ERROR checks (${NSX_AMBIQ_SDK_DIR}/modules/<name>/CMakeLists.txt):
-  #   nsx-cmsis-core  : no deps (INTERFACE target nsx::cmsis_core)
-  #   nsx-ambiqsuite  : no deps (defines nsx_sdk_ambiqsuite / NSX_SELECTED_SDK_TARGET)
-  #   nsx-ambiq-hal   : needs nsx::board_flags + NSX_AMBIQSUITE_ROOT + NSX_AMBIQ_* HAL paths (board.cmake)
-  #   nsx-ambiq-bsp   : needs nsx_ambiq_hal + nsx::board_flags + NSX_AMBIQ_BSP_* paths (board.cmake)
-  #   nsx-soc-hal     : needs nsx_ambiq_hal + nsx_ambiq_bsp
-  #   nsx-cmsis-startup: needs nsx::board_flags + nsx::cmsis_core + NSX_AMBIQSUITE_ROOT
-  #   nsx-core        : needs nsx::soc_hal
-  #   nsx-interrupt   : needs nsx::soc_hal (NSX_SOC_FAMILY); required before
-  #                     nsx-uart per configure-time check in
-  #                     nsx_toolchain_flags.cmake ("nsx::interrupt must be
-  #                     defined before nsx-uart is added") -- found via an
-  #                     actual `cmake -S . -B ... -DHELIA_HARDWARE_BUILD=ON`
-  #                     configure attempt, not just static reading.
-  #   nsx-uart        : needs nsx_core + nsx::interrupt (physical UART; not
-  #                     currently used by benchmark_hw.j2, which uses
-  #                     ITM/SWO via am_util_stdio, but kept available for
-  #                     future use)
-  #   nsx-perf        : needs nsx::soc_hal + nsx::core (not currently used by
-  #                     benchmark_hw.j2, which reads pmu_armv8.h directly;
-  #                     kept available for future use)
-  set(NSX_MODULES
-    nsx-cmsis-core
-    nsx-ambiqsuite
-    nsx-ambiq-hal
-    nsx-ambiq-bsp
-    nsx-soc-hal
-    nsx-cmsis-startup
-    nsx-core
-    nsx-interrupt
-    nsx-uart
-    nsx-perf
-  )
-
-  include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nsx/nsx_app_bootstrap.cmake")
-  nsx_bootstrap_app(APP_ROOT "${NSX_APP_ROOT}" BOARD "${HELIA_HARDWARE_BOARD}" MODULES ${NSX_MODULES})
-
-  # VERIFIED (2026-08-04, host arm-none-eabi-gcc 14.3.1 cross-build, no real
-  # hardware): configured + built both cortex-m55 (MVE) and cortex-m55+nomve
-  # (DSP-only) variants of convolve_generic_s4 end-to-end (compile, link,
-  # .bin generation via nsx_finalize_app()). Confirmed with
-  # `arm-none-eabi-objdump -d <elf> | grep -ciE "vldrw|vmulh|vaddva|vctp"`
-  # that the +nomve build has 0 MVE instructions vs. 70 in the MVE build --
-  # so NSX's toolchain flags do NOT clobber the global -mcpu. Still
-  # unverified: everything downstream of `.bin` generation -- flashing via
-  # SEGGER J-Link and SWO capture require a real Apollo510 board, which is
-  # not available in this sandbox.
-endif()
 
 function(_strip_all_optimizations)
   foreach(lang C CXX ASM)
@@ -294,164 +174,25 @@ else()
   set(ARM_FEATURES "")
 endif()
 
-if(NOT HELIA_HARDWARE_BUILD)
-  # FVP toolchain path: bare CMSIS device startup/system sources + the
-  # Corstone-300 linker script. Skipped for HELIA_HARDWARE_BUILD, which gets
-  # its startup/linker script from the NSX board bring-up instead (nsx-core /
-  # nsx-cmsis-startup modules, wired via nsx_bootstrap_app()/nsx_finalize_app()
-  # above/below).
-  add_library(cmsis_startup STATIC)
-  target_sources(cmsis_startup PRIVATE
-    ${CMSIS_PATH}/Device/ARM/${ARM_CPU}/Source/startup_${ARM_CPU}.c
-    ${CMSIS_PATH}/Device/ARM/${ARM_CPU}/Source/system_${ARM_CPU}.c)
-  target_include_directories(cmsis_startup PUBLIC
-    ${CMSIS_PATH}/Device/ARM/${ARM_CPU}/Include
-    ${CMSIS_PATH}/CMSIS/Core/Include)
-  target_compile_options(cmsis_startup INTERFACE -include${ARM_CPU}${ARM_FEATURES}.h)
-  target_compile_definitions(cmsis_startup PRIVATE ${ARM_CPU}${ARM_FEATURES})
+add_library(cmsis_startup STATIC)
+target_sources(cmsis_startup PRIVATE
+  ${CMSIS_PATH}/Device/ARM/${ARM_CPU}/Source/startup_${ARM_CPU}.c
+  ${CMSIS_PATH}/Device/ARM/${ARM_CPU}/Source/system_${ARM_CPU}.c)
+target_include_directories(cmsis_startup PUBLIC
+  ${CMSIS_PATH}/Device/ARM/${ARM_CPU}/Include
+  ${CMSIS_PATH}/CMSIS/Core/Include)
+target_compile_options(cmsis_startup INTERFACE -include${ARM_CPU}${ARM_FEATURES}.h)
+target_compile_definitions(cmsis_startup PRIVATE ${ARM_CPU}${ARM_FEATURES})
 
-  # Linker script (GNU)
-  set(LINK_FILE ${FVP_CORSTONE_300_PATH}/linker.ld)
-endif()
-
-if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE OR HELIA_BUILD_HARDWARE_BENCHMARK_SERVER)
-  find_package(Python3 COMPONENTS Interpreter REQUIRED)
-
-  set(HELIA_KERNEL_SYMBOL_REFS_DIR "${CMAKE_BINARY_DIR}/hardware")
-  set(HELIA_KERNEL_SYMBOL_REFS_INC "${HELIA_KERNEL_SYMBOL_REFS_DIR}/kernel_symbol_refs.inc")
-  set(HELIA_KERNEL_SYMBOL_REF_ARGS
-    --cmsis-nn-root "${CMSIS_NN_ROOT}"
-    --archive "$<TARGET_FILE:cmsis-nn>"
-    --output "${HELIA_KERNEL_SYMBOL_REFS_INC}")
-  if(ARM_NN_ENABLE_F32)
-    list(APPEND HELIA_KERNEL_SYMBOL_REF_ARGS --enable-f32)
-  endif()
-  if(ARM_NN_ENABLE_F16)
-    list(APPEND HELIA_KERNEL_SYMBOL_REF_ARGS --enable-f16)
-  endif()
-
-  add_custom_command(
-    OUTPUT "${HELIA_KERNEL_SYMBOL_REFS_INC}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${HELIA_KERNEL_SYMBOL_REFS_DIR}"
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_kernel_symbol_refs.py"
-            ${HELIA_KERNEL_SYMBOL_REF_ARGS}
-    DEPENDS
-      cmsis-nn
-      "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_kernel_symbol_refs.py"
-      "${CMSIS_NN_ROOT}/Include/arm_nnfunctions.h"
-      "${CMSIS_NN_ROOT}/Include/arm_nnfunctions_flt.h"
-    VERBATIM)
-
-  add_custom_target(hct_kernel_symbol_refs DEPENDS "${HELIA_KERNEL_SYMBOL_REFS_INC}")
-
-  # Compile-side setup shared by every hardware target (and by the
-  # benchmark server's OBJECT library below): generated symbol refs, include
-  # paths, the HELIA_HARDWARE_BUILD define and the warning tweaks.
-  function(_hct_configure_hardware_compile target_name)
-    add_dependencies(${target_name} hct_kernel_symbol_refs)
-    target_include_directories(${target_name} PRIVATE
-      "${HELIA_KERNEL_SYMBOL_REFS_DIR}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardware"
-      "${CMSIS_PATH}/CMSIS/Core/Include")
-    target_compile_definitions(${target_name} PUBLIC HELIA_HARDWARE_BUILD)
-    target_compile_options(${target_name} PRIVATE -Wno-cast-function-type)
-  endfunction()
-
-  function(_hct_link_hardware_target target_name)
-    _hct_configure_hardware_compile(${target_name})
-
-    if(HELIA_HARDWARE_BUILD)
-      # nsx::cmsis_startup provides Reset_Handler/startup + system source
-      # (NSX_STARTUP_SOURCE/NSX_SYSTEM_SOURCE, see nsx-cmsis-startup module);
-      # without it the link fails with missing Reset_Handler/__bss_start__.
-      target_link_libraries(${target_name} PRIVATE cmsis-nn nsx::board nsx::core nsx::perf nsx::cmsis_startup)
-      nsx_finalize_app(${target_name})
-    else()
-      target_link_options(${target_name} PRIVATE -T ${LINK_FILE})
-      target_link_libraries(${target_name} PRIVATE cmsis-nn retarget cmsis_startup)
-    endif()
-  endfunction()
-
-  if(HELIA_BUILD_UNIVERSAL_SIZE_PROBE)
-    add_executable(hct_universal_size_probe
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardware/universal_size_probe.c")
-    set_target_properties(hct_universal_size_probe PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/probe")
-    _hct_link_hardware_target(hct_universal_size_probe)
-  endif()
-
-  if(HELIA_BUILD_HARDWARE_BENCHMARK_SERVER)
-    set(HCT_RTT_BUILD_ROOT "${CMAKE_BINARY_DIR}/hardware/rtt")
-    file(MAKE_DIRECTORY "${HCT_RTT_BUILD_ROOT}/RTT" "${HCT_RTT_BUILD_ROOT}/Config")
-    configure_file("${NEURALSPOTX_ROOT}/examples/coremark/src/rtt/SEGGER_RTT.c" "${HCT_RTT_BUILD_ROOT}/RTT/SEGGER_RTT.c" COPYONLY)
-    configure_file("${NEURALSPOTX_ROOT}/examples/coremark/src/rtt/SEGGER_RTT.h" "${HCT_RTT_BUILD_ROOT}/RTT/SEGGER_RTT.h" COPYONLY)
-    configure_file("${NEURALSPOTX_ROOT}/examples/coremark/src/rtt/Config/SEGGER_RTT_Conf.h" "${HCT_RTT_BUILD_ROOT}/Config/SEGGER_RTT_Conf.h" COPYONLY)
-
-    # HCT_BENCHMARK_SERVER_BUILD_ID_PATCHED compiles out the constant build-id
-    # fallback in benchmark_server_catalog.c (kept for host-side unit builds);
-    # the firmware's id comes from the slot in hct_build_id.c, filled in after
-    # the link below.
-    add_executable(hct_benchmark_server
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardware/benchmark_server_main.c"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardware/hctp_protocol.c"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardware/benchmark_server_catalog.c"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardware/benchmark_server_messages.c"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardware/benchmark_server_adapter.c"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardware/benchmark_server_session.c"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardware/benchmark_server_adapters.gen.c"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardware/benchmark_server_transport_rtt.c"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hardware/hct_build_id.c"
-      "${HCT_RTT_BUILD_ROOT}/RTT/SEGGER_RTT.c")
-    set_target_properties(hct_benchmark_server PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/hardware")
-    target_include_directories(hct_benchmark_server PRIVATE
-      "${HCT_RTT_BUILD_ROOT}/RTT"
-      "${HCT_RTT_BUILD_ROOT}/Config")
-    target_compile_definitions(hct_benchmark_server PRIVATE
-      HCT_BENCHMARK_SERVER_BOARD_ID="${HELIA_HARDWARE_BOARD}"
-      HCT_BENCHMARK_SERVER_TARGET_CPU="${TARGET_CPU}"
-      HCT_SERVER_WORKSPACE_BYTES=${HCT_SERVER_WORKSPACE_BYTES}
-      HCT_BENCHMARK_SERVER_BUILD_ID_PATCHED)
-    _hct_link_hardware_target(hct_benchmark_server)
-
-    # Per-build firmware identity, stamped after the link: the whole flash image
-    # (server objects, cmsis-nn, the NSX board/core/perf/startup libraries, the
-    # linker script's layout) is hashed with the id slot zeroed and
-    # `hct-<sha256[:48]>` is written into that slot in the ELF and .bin in place
-    # (scripts/patch_build_id.py). The firmware advertises it in TARGET_INFO; the host
-    # reads the same string from hct_build_id.txt. Hashing the linked image rather
-    # than a subset of its inputs is what makes two builds that differ anywhere
-    # get different ids. POST_BUILD commands run in the order they are added, so
-    # this follows nsx_finalize_app()'s objcopy (the .bin exists) and precedes
-    # the copies below (they copy the patched files).
-    set(HCT_BUILD_ID_TXT "${CMAKE_BINARY_DIR}/hct_build_id.txt")
-    set(HCT_PATCH_BUILD_ID_BIN_ARGS)
-    if(HELIA_HARDWARE_BUILD)
-      set(HCT_PATCH_BUILD_ID_BIN_ARGS --bin "$<TARGET_FILE_DIR:hct_benchmark_server>/hct_benchmark_server.bin")
-    endif()
-    add_custom_command(TARGET hct_benchmark_server POST_BUILD
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/patch_build_id.py"
-              --elf "$<TARGET_FILE:hct_benchmark_server>"
-              ${HCT_PATCH_BUILD_ID_BIN_ARGS}
-              --output-txt "${HCT_BUILD_ID_TXT}"
-      COMMENT "Stamping hct_benchmark_server build id (post-link image hash)"
-      VERBATIM)
-    add_custom_command(TARGET hct_benchmark_server POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_FILE_DIR:hct_benchmark_server>/hct_benchmark_server.bin"
-        "${CMAKE_BINARY_DIR}/hct_benchmark_server.bin"
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_FILE:hct_benchmark_server>"
-        "${CMAKE_BINARY_DIR}/hct_benchmark_server.elf")
-  endif()
-endif()
+# Linker script (GNU)
+set(LINK_FILE ${FVP_CORSTONE_300_PATH}/linker.ld)
 
 # ---------- Shared generated-test runtime ----------
 # Runtime/validation logic common to every generated test .c file, compiled
 # once here instead of being re-emitted by Jinja into each generated file.
 add_library(helia_test_runtime STATIC src/test_runtime/helia_test_runtime.c)
 target_include_directories(helia_test_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_definitions(helia_test_runtime PRIVATE $<IF:$<BOOL:${HELIA_HARDWARE_BUILD}>,HELIA_HARDWARE_BUILD,USING_FVP_CORSTONE_300>)
+target_compile_definitions(helia_test_runtime PRIVATE USING_FVP_CORSTONE_300)
 target_link_libraries(helia_test_runtime PRIVATE cmsis-nn)
 
 # ---------- Helpers ----------
@@ -509,19 +250,12 @@ if(HELIA_BUILD_GENERATED_TESTS)
     add_executable(${TGT_NAME} ${SRCS})
     set_target_properties(${TGT_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests/${FAMILY_NAME}")
 
-    # Includes (generated API + local cmsis.h + neuralSPOT bits used by tests)
-    file(GLOB NEURALSPOT_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/neuralspot/ns-*/includes")
+    # Includes (generated API + the shared test runtime)
     target_include_directories(${TGT_NAME} PRIVATE
       "${TEST_DIR_ABS}/includes"
-      "${CMAKE_CURRENT_SOURCE_DIR}/src"
-      ${NEURALSPOT_INCLUDE_DIRS}
-      "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/AmbiqSuite/R5.1.0_rc27/utils"
-      "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/AmbiqSuite/R5.1.0_rc27/boards/apollo510_evb/bsp"
-      "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/AmbiqSuite/R5.1.0_rc27/CMSIS/ARM/Include"
-      "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/AmbiqSuite/R5.1.0_rc27/CMSIS/AmbiqMicro/Include"
-      "${CMAKE_CURRENT_SOURCE_DIR}/modules/neuralSPOT/extern/CMSIS/CMSIS-DSP-1.16.2/Include")
+      "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
-    target_compile_definitions(${TGT_NAME} PRIVATE $<IF:$<BOOL:${HELIA_HARDWARE_BUILD}>,HELIA_HARDWARE_BUILD,USING_FVP_CORSTONE_300>)
+    target_compile_definitions(${TGT_NAME} PRIVATE USING_FVP_CORSTONE_300)
     target_compile_options(${TGT_NAME} PRIVATE -Wno-switch-default -Wno-unused-parameter -Wno-cast-align)
 
     if(HELIA_BENCHMARK_MODE)
@@ -535,23 +269,12 @@ if(HELIA_BUILD_GENERATED_TESTS)
     endif()
 
     # Linker script + libs
-    if(HELIA_HARDWARE_BUILD)
-      # Real Apollo510 hardware: NSX board target supplies startup, system init,
-      # and linker script; nsx_finalize_app() (called below) generates the .bin
-      # and wires the <target>_flash/_reset/_view SEGGER J-Link CMake targets.
-      if(ENABLE_COVERAGE)
-        target_link_options(${TGT_NAME} PRIVATE --coverage)
-      endif()
-      target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn nsx::board nsx::core nsx::perf helia_test_runtime)
-      nsx_finalize_app(${TGT_NAME})
-    else()
-      target_link_options(${TGT_NAME} PRIVATE -T ${LINK_FILE})
-      if(ENABLE_COVERAGE)
-        # Pull in libgcov runtime symbols and emit gcov metadata in the final ELF.
-        target_link_options(${TGT_NAME} PRIVATE --coverage)
-      endif()
-      target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn retarget cmsis_startup helia_test_runtime)
+    target_link_options(${TGT_NAME} PRIVATE -T ${LINK_FILE})
+    if(ENABLE_COVERAGE)
+      # Pull in libgcov runtime symbols and emit gcov metadata in the final ELF.
+      target_link_options(${TGT_NAME} PRIVATE --coverage)
     endif()
+    target_link_libraries(${TGT_NAME} PRIVATE cmsis-nn retarget cmsis_startup helia_test_runtime)
 
     list(APPEND GENERATED_TEST_TARGETS ${TGT_NAME})
   endforeach()

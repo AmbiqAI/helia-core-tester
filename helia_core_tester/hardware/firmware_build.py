@@ -552,10 +552,14 @@ def build_rendered_firmware(
         elf = found
     # Keep the lock that produced this image next to it, so a result bundle can
     # record exactly what was built without re-reading a workspace that may have
-    # moved on.
-    snapshot = lock_snapshot_path(build_dir, board)
-    snapshot.parent.mkdir(parents=True, exist_ok=True)
-    snapshot.write_bytes((render.app_dir / "nsx.lock").read_bytes())
+    # moved on. Best effort: a missing lock means something upstream already
+    # decided not to resolve one, and losing the copy must not fail a build that
+    # otherwise produced a firmware image.
+    lock = render.app_dir / "nsx.lock"
+    if lock.is_file():
+        snapshot = lock_snapshot_path(build_dir, board)
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        snapshot.write_bytes(lock.read_bytes())
     return elf
 
 

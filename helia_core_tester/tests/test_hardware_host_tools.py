@@ -16,6 +16,7 @@ from helia_core_tester.hardware.boards import DEFAULT_BOARD_ID, resolve_board
 from helia_core_tester.hardware.pathutil import display_path, is_relative_to
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BOARD = resolve_board(DEFAULT_BOARD_ID)
 
 
@@ -98,8 +99,17 @@ def report_env(tmp_path: Path, monkeypatch):
     repo = tmp_path / "repo"
     (repo / "cmake" / "hardware").mkdir(parents=True)
     (repo / "cmake" / "hardware" / "kernel_catalog.json").write_text("[]")
+    # The size probe renders a real app, which resolves the repo's own baseline.
+    (repo / "assets").mkdir(parents=True)
+    (repo / "assets" / "dependency_baseline.json").write_text(
+        (PROJECT_ROOT / "assets" / "dependency_baseline.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(report, "repo_root", lambda: repo)
     monkeypatch.setattr(report, "_probe_binary", lambda tool, args, project_root=None: "")
+    # The real linker script comes out of the synced NSX SDK module, which only a
+    # real build produces; the regions it would yield are supplied directly.
+    monkeypatch.setattr(report, "linker_script_path", lambda board, build_dir: repo / "fake.ld")
     monkeypatch.setattr(
         report, "parse_memory_regions",
         lambda path: [{"name": "MCU_MRAM", "capacity": 4128768}, {"name": "MCU_TCM", "capacity": 507904}],
@@ -108,7 +118,10 @@ def report_env(tmp_path: Path, monkeypatch):
 
 
 def _fake_build(build_dir: Path) -> Path:
-    elf = build_dir / "hardware" / "hct_benchmark_server.elf"
+    """A build dir with just the linked image NSX would have produced in it."""
+    from helia_core_tester.hardware.firmware_build import elf_path
+
+    elf = elf_path(build_dir, BOARD)
     elf.parent.mkdir(parents=True)
     elf.write_bytes(b"elf")
     return elf
@@ -116,27 +129,55 @@ def _fake_build(build_dir: Path) -> Path:
 
 def test_memory_report_paths_are_repo_relative_inside_and_absolute_outside(tmp_path: Path, report_env) -> None:
     repo = report_env
-    inside = _fake_build(repo / "build" / "hardware" / "apollo510_evb")
-    data = json.loads(report.generate_memory_report(BOARD, 
-        build_dir=inside.parent.parent, output_root=tmp_path / "out_in").read_text())
+    inside_build_dir = repo / "build" / "hardware" / "apollo510_evb"
+    _fake_build(inside_build_dir)
+    data = json.loads(report.generate_memory_report(BOARD,
+        build_dir=inside_build_dir, output_root=tmp_path / "out_in").read_text())
+    nested = "build/hardware/apollo510_evb/nsx_app/build/apollo510_evb"
     assert data["artifacts"] == {
-        "elf": "build/hardware/apollo510_evb/hardware/hct_benchmark_server.elf",
-        "bin": "build/hardware/apollo510_evb/hardware/hct_benchmark_server.bin",
-        "map": "build/hardware/apollo510_evb/hardware/hct_benchmark_server.map",
+        "elf": f"{nested}/hct_benchmark_server.elf",
+        "bin": f"{nested}/hct_benchmark_server.bin",
+        "map": f"{nested}/hct_benchmark_server.map",
     }
 
     external = _fake_build(tmp_path / "extbuild")
-    data = json.loads(report.generate_memory_report(BOARD, 
-        build_dir=external.parent.parent, output_root=tmp_path / "out_ext").read_text())
+    data = json.loads(report.generate_memory_report(BOARD,
+        build_dir=tmp_path / "extbuild", output_root=tmp_path / "out_ext").read_text())
     assert data["artifacts"]["elf"] == str(external)
     assert data["artifacts"]["bin"] == str(external.with_suffix(".bin"))
     assert data["artifacts"]["map"] == str(external.with_suffix(".map"))
 
 
+def test_memory_report_records_the_builds_own_provenance(tmp_path: Path, report_env) -> None:
+    """The report must describe the ELF in front of it, so its baseline and kernel
+    source come from the build dir's render state, not from a fresh resolve."""
+    from helia_core_tester.hardware.nsx_app import RENDER_STATE, app_dir_for
+
+    build_dir = report_env / "build" / "hardware" / "apollo510_evb"
+    _fake_build(build_dir)
+    state = {
+        "baseline_id": "recorded-baseline",
+        "baseline_fingerprint": "f" * 64,
+        "kernel_source": "ns-cmsis-nn@" + "a" * 40,
+        "kernel_options": {"NSX_CMSIS_NN_USE_REQUANTIZE_INLINE_ASM": "ON"},
+    }
+    app_dir = app_dir_for(build_dir)
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / RENDER_STATE).write_text(json.dumps(state), encoding="utf-8")
+
+    data = json.loads(report.generate_memory_report(
+        BOARD, build_dir=build_dir, output_root=tmp_path / "out").read_text())
+    assert data["baseline_id"] == "recorded-baseline"
+    assert data["kernel_source"] == state["kernel_source"]
+    assert data["kernel_options"] == state["kernel_options"]
+
+
 def test_memory_report_names_the_missing_elf(tmp_path: Path, report_env) -> None:
     with pytest.raises(FileNotFoundError, match="Built firmware ELF not found") as info:
         report.generate_memory_report(BOARD, build_dir=tmp_path / "never-built", output_root=tmp_path / "out")
-    assert str(tmp_path / "never-built" / "hardware" / "hct_benchmark_server.elf") in str(info.value)
+    from helia_core_tester.hardware.firmware_build import elf_path
+
+    assert str(elf_path(tmp_path / "never-built", BOARD)) in str(info.value)
 
 
 def test_memory_report_probes_use_the_requested_checkouts_toolchain(tmp_path: Path, monkeypatch) -> None:
@@ -156,26 +197,44 @@ def test_memory_report_probes_use_the_requested_checkouts_toolchain(tmp_path: Pa
     assert source.count("_probe_binary(") == 5 and source.count("], project_root)") == 5
 
 
-def test_size_probe_is_board_keyed_and_builds_with_the_toolchain_on_path(report_env: Path, monkeypatch) -> None:
-    # Two boards' probes in one checkout must not share a CMake cache, and the probe's
-    # configure/build must see the downloaded ARM GCC on PATH (the build runs
-    # generate_kernel_symbol_refs.py, whose arm-none-eabi-nm lookup is bare).
-    runs: list[tuple[list[str], str]] = []
+def test_size_probe_is_board_keyed_and_reuses_the_app_render(report_env: Path, monkeypatch) -> None:
+    # Two boards' probes in one checkout must not share a build tree, and the probe
+    # must be built by the same renderer as the firmware -- with the variant's float
+    # switches -- rather than a hand-mirrored -D list that can drift from it.
+    from helia_core_tester.hardware import firmware_build, nsx_app
 
-    def _fake_run(cmd, *, cwd, env=None):
-        runs.append((cmd, (env or {}).get("PATH", "")))
-        if cmd[:2] == ["cmake", "--build"]:
-            out = Path(cmd[2]) / "probe"
-            out.mkdir(parents=True, exist_ok=True)
-            (out / f"{report.SIZE_PROBE_TARGET}.elf").write_bytes(b"elf")
+    built: list[tuple[Path, str]] = []
+    monkeypatch.setattr(firmware_build, "ensure_host_tools", lambda repo_root: None)
+    monkeypatch.setattr(firmware_build, "lock_and_sync", lambda render, options: None)
+    monkeypatch.setattr(firmware_build, "configure", lambda render, options, **kw: None)
 
-    monkeypatch.setattr(report, "_run", _fake_run)
+    def _fake_build(render, options, target, jobs):
+        built.append((render.app_dir, target))
+        render.build_dir.mkdir(parents=True, exist_ok=True)
+        (render.build_dir / f"{target}.elf").write_bytes(b"elf")
+
+    monkeypatch.setattr(firmware_build, "build", _fake_build)
+
     variant = report.SIZE_PROBE_VARIANTS[0]
-    out_dir = report.build_size_probe(resolve_board(DEFAULT_BOARD_ID), variant, project_root=report_env)
+    board = resolve_board(DEFAULT_BOARD_ID)
+    out_dir = report.build_size_probe(board, variant, project_root=report_env)
+
     board_keyed = report_env / "artifacts" / "hardware" / "size_probe" / DEFAULT_BOARD_ID / variant.name
     assert out_dir == board_keyed or board_keyed in out_dir.parents
-    expected_bin = str(toolchain.toolchain_bin_dir(report_env).resolve())
-    assert len(runs) == 2 and all(path.split(os.pathsep)[0] == expected_bin for _, path in runs)
+    [(app_dir, target)] = built
+    assert target == report.SIZE_PROBE_TARGET
+    # Its own app, a sibling of the firmware's under the same board build dir.
+    probe_build_dir = report.size_probe_build_dir(board.build_dir(report_env), variant)
+    assert app_dir == nsx_app.app_dir_for(probe_build_dir)
+    assert app_dir != nsx_app.app_dir_for(board.build_dir(report_env))
+
+    cmakelists = (app_dir / "CMakeLists.txt").read_text()
+    assert f"add_executable({report.SIZE_PROBE_TARGET}" in cmakelists
+    assert 'set(ARM_NN_ENABLE_F32 "OFF" CACHE STRING' in cmakelists
+
+    data = json.loads((board_keyed / "memory_report.json").read_text())
+    assert data["variant"] == variant.name
+    assert data["feature_set"] == {"integer": True, "f32": False, "f16": False}
 
 
 def test_memory_report_fails_closed_when_a_board_region_is_missing(tmp_path: Path, report_env: Path, monkeypatch) -> None:
@@ -186,9 +245,9 @@ def test_memory_report_fails_closed_when_a_board_region_is_missing(tmp_path: Pat
     elf = tmp_path / "fw.elf"
     elf.write_bytes(b"elf")
     with pytest.raises(ValueError, match=r"defines no memory region\(s\) \['MCU_TCM_TYPO'\]; available regions: \['MCU_MRAM', 'MCU_TCM'\]"):
-        report.analyze_elf(elf, board, report_env)
+        report.analyze_elf(elf, board, report_env / "bd", report_env)
     # With both regions present the gates are computed against real capacities.
-    usage = report.analyze_elf(elf, resolve_board(DEFAULT_BOARD_ID), report_env).usage
+    usage = report.analyze_elf(elf, resolve_board(DEFAULT_BOARD_ID), report_env / "bd", report_env).usage
     assert usage["flash_capacity_bytes"] == 4128768 and usage["tcm_capacity_bytes"] == 507904
     assert usage["flash_gate_pass"] is True and usage["tcm_gate_pass"] is True
 
