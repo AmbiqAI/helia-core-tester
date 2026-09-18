@@ -5,13 +5,18 @@ Resolution order for every command that needs a probe:
 1. the explicit `--serial-no` flag,
 2. the `HPX_JLINK_SERIAL` environment variable,
 3. enumeration of connected probes through pylink (the same J-Link DLL the RTT
-   transport uses) -- exactly one connected probe is used as-is; zero or several
-   is an error that lists what was found and asks for `--serial-no`. An empty
-   first enumeration is retried once after a short pause: a probe that was just
+   transport uses) -- exactly one connected probe is used as-is. An empty first
+   enumeration is retried once after a short pause: a probe that was just
    plugged in (or a J-Link OB whose board was just powered) can be missing from
    the first USB scan and present on the next.
+4. with several probes connected *and* a board to match against, each probe is
+   asked which core it reaches (hpx's rule: auto-select only when exactly one
+   probe reports the board's core). Anything else -- no match, or two probes
+   behind the same core -- is an error listing what was found and asking for
+   `--serial-no`.
 
-Enumeration never shells out to JLinkExe.
+Enumeration itself never shells out to JLinkExe; only the disambiguation in
+step 4 does, and only on the path that would otherwise have been a hard error.
 """
 
 from __future__ import annotations
@@ -85,18 +90,52 @@ def _parse_serial(raw: str, source: str) -> int:
     return int(text)
 
 
+def expected_core(cpu: str) -> Optional[int]:
+    """The Cortex-M number a board's `cpu` field names (`cortex-m55` -> 55)."""
+    text = str(cpu).strip().lower()
+    prefix = "cortex-m"
+    if not text.startswith(prefix):
+        return None
+    digits = text[len(prefix):].split("+")[0].strip()
+    return int(digits) if digits.isdigit() else None
+
+
+def probe_core(probe: ProbeInfo, *, device: str) -> Optional[int]:
+    """The Cortex-M core `probe` reaches for `device`, or None when it reaches none.
+
+    One `JLinkExe` connect per probe (`exit` straight away); the commander names
+    what it found as `Found Cortex-M55`.
+    """
+    from . import jlink_cli
+
+    try:
+        result = jlink_cli.run_script(
+            "exit\n", device=device, serial_no=probe.serial,
+            op_label=f"JLinkExe probe inspection ({probe.serial})", check=False,
+        )
+    except jlink_cli.JLinkCliError:
+        return None
+    cores = jlink_cli.detected_cores((result.stdout or "") + "\n" + (result.stderr or ""))
+    return cores[0] if cores else None
+
+
 def resolve_serial(
     explicit: Optional[int] = None,
     *,
+    board=None,
     env: Optional[dict] = None,
     enumerate_probes: Callable[[], list[ProbeInfo]] = list_probes,
     retry_delay_s: float = ENUMERATION_RETRY_DELAY_S,
     sleep: Callable[[float], None] = time.sleep,
+    inspect_probe: Callable[..., Optional[int]] = probe_core,
 ) -> int:
     """Apply the flag > $HPX_JLINK_SERIAL > enumeration resolution order.
 
     Enumeration is re-run once, after `retry_delay_s`, when the first pass finds
-    no probe at all (see the module docstring)."""
+    no probe at all (see the module docstring). When it finds several and `board`
+    is given, the probes are asked which core they reach and a unique match for
+    the board's CPU wins; without a board, or without a unique match, the
+    ambiguity is reported."""
     if explicit is not None:
         return int(explicit)
     env = os.environ if env is None else env
@@ -116,7 +155,26 @@ def resolve_serial(
             f"(or set ${SERIAL_ENV_VAR}) explicitly."
         )
     listing = ", ".join(p.describe() for p in probes)
+    wanted = expected_core(board.cpu) if board is not None else None
+    if wanted is None:
+        raise ProbeResolutionError(
+            f"Multiple J-Link probes detected: {listing}. Pass --serial-no (or set "
+            f"${SERIAL_ENV_VAR}) to select one."
+        )
+    cores = {probe.serial: inspect_probe(probe, device=board.jlink_device) for probe in probes}
+    matches = [probe for probe in probes if cores[probe.serial] == wanted]
+    if len(matches) == 1:
+        return matches[0].serial
+    seen = ", ".join(
+        f"{p.describe()} -> {'Cortex-M%d' % cores[p.serial] if cores[p.serial] else 'no target'}"
+        for p in probes
+    )
+    what = (
+        f"{len(matches)} of them reach a Cortex-M{wanted}"
+        if matches
+        else f"none of them reaches a Cortex-M{wanted} ({board.id})"
+    )
     raise ProbeResolutionError(
-        f"Multiple J-Link probes detected: {listing}. Pass --serial-no (or set "
+        f"Multiple J-Link probes detected and {what}: {seen}. Pass --serial-no (or set "
         f"${SERIAL_ENV_VAR}) to select one."
     )

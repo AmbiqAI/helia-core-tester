@@ -160,9 +160,11 @@ def _board(board_id: Optional[str]) -> BoardSpec:
         raise AssertionError("unreachable")
 
 
-def _serial(explicit: Optional[int]) -> int:
+def _serial(explicit: Optional[int], board: Optional[BoardSpec] = None) -> int:
+    """Resolve the probe: flag > $HPX_JLINK_SERIAL > enumeration, with the board
+    (when known) used to break a multi-probe tie by the core each probe reaches."""
     try:
-        return resolve_serial(explicit)
+        return resolve_serial(explicit, board=board)
     except ProbeResolutionError as exc:
         _fail(str(exc))
         raise AssertionError("unreachable")
@@ -206,7 +208,7 @@ def probes_match(
     """Print the J-Link serial the hardware commands would use for --board
     ($HPX_JLINK_SERIAL, else the single connected probe). Exits 1 on 0 or >1 candidates."""
     spec = _board(board)
-    serial = _serial(None)
+    serial = _serial(None, spec)
     typer.echo(f"[probes] {spec.id} ({spec.jlink_device}) -> J-Link serial {serial}", err=True)
     typer.echo(str(serial))
 
@@ -245,8 +247,6 @@ def flash(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     serial_no: Optional[int] = typer.Option(None, "--serial-no", help=_SERIAL_HELP),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
-    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel build jobs."),
-    force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
     force: bool = typer.Option(False, "--force", help=_FORCE_FLASH_HELP),
     baseline: Optional[Path] = typer.Option(None, "--baseline", help=_BASELINE_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
@@ -254,19 +254,27 @@ def flash(
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
-    """Build (if needed) and flash the hct_benchmark_server firmware to --board via J-Link.
-    Skipped only when the ELF is unchanged since this build dir last flashed the same
-    probe *and* the board confirms (in TARGET_INFO) that it runs this build's id."""
+    """Flash the already-built hct_benchmark_server firmware to --board through the
+    J-Link recipe NSX generated for it.
+
+    This never builds, renders or reconfigures: a build dir that is missing, or whose
+    recorded render inputs differ from the ones in force now (a changed baseline,
+    kernel source or build option), is an error naming `hardware build`. The flash
+    itself is skipped only when the ELF is unchanged since this build dir last flashed
+    the same probe *and* the board confirms (in TARGET_INFO) that it runs this build's
+    id; `--force` flashes regardless. The build options below are accepted because
+    they select *which* render must be on disk, not to build one.
+    """
     from .firmware_build import flash_firmware, resolve_build_dir
 
     spec = _board(board)
-    serial = _serial(serial_no)
+    serial = _serial(serial_no, spec)
     level = _verbosity(verbosity)
     options = _firmware_options(baseline, cmsis_nn_root, requantize_inline_asm, update_dependencies, level)
     with _pipeline_errors(level):
         decision = flash_firmware(
-            spec, serial, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs,
-            force_reconfigure=force_reconfigure, force=force, options=options,
+            spec, serial, build_dir=resolve_build_dir(repo_root(), spec, build_dir),
+            force=force, options=options,
         )
     if decision.needed:
         typer.echo("✓ Firmware flashed successfully")
@@ -408,7 +416,7 @@ def stream(
     # message, not with whatever probe enumeration happens to hit.
     spec = _board(board)
     options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
-    serial = _serial(serial_no)
+    serial = _serial(serial_no, spec)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
         outcome = stream_generated_tests(
@@ -456,7 +464,7 @@ def run(
         _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
     options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
-    serial = _serial(serial_no)
+    serial = _serial(serial_no, spec)
     level = _verbosity(verbosity)
     firmware_options = _firmware_options(baseline, cmsis_nn_root, requantize_inline_asm, update_dependencies, level)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731

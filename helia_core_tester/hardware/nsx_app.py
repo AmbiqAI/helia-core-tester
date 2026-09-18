@@ -665,7 +665,42 @@ def render_app(
     toolchain: str = "arm-none-eabi-gcc",
     channel: str = "stable",
 ) -> AppRender:
-    """Render (and write) the NSX app for `board` under `build_dir`."""
+    """Render the NSX app for `board` under `build_dir` and write it to disk."""
+    render = plan_app(
+        board,
+        repo_root=repo_root,
+        build_dir=build_dir,
+        baseline=baseline,
+        cmsis_nn_root=cmsis_nn_root,
+        kernel_options=kernel_options,
+        cmsis_core_include=cmsis_core_include,
+        build_size_probe=build_size_probe,
+        toolchain=toolchain,
+        channel=channel,
+    )
+    write_app(render)
+    return render
+
+
+def plan_app(
+    board: BoardSpec,
+    *,
+    repo_root: Path,
+    build_dir: Path,
+    baseline: DependencyBaseline,
+    cmsis_nn_root: Optional[Path] = None,
+    kernel_options: Optional[KernelOptions] = None,
+    cmsis_core_include: Optional[Path] = None,
+    build_size_probe: bool = False,
+    toolchain: str = "arm-none-eabi-gcc",
+    channel: str = "stable",
+) -> AppRender:
+    """The app this render *would* write, computed without touching the app tree.
+
+    `hardware flash` uses this to compare the inputs in force now against the
+    render state the last `hardware build` recorded, without becoming a build
+    step itself (see `firmware_build.check_build_current`).
+    """
     options = kernel_options or KernelOptions()
     app_dir = app_dir_for(build_dir)
     kernel_source = kernel_source_for(baseline, cmsis_nn_root)
@@ -701,7 +736,6 @@ def render_app(
             build_size_probe=build_size_probe,
         ),
     )
-    write_app(render)
     return render
 
 

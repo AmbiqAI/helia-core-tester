@@ -17,9 +17,15 @@ reconfigure. `nsx sync --frozen` still runs every time: it is cheap when the
 tree already matches, and it is what proves the modules on disk are the commits
 `nsx.lock` names.
 
-Flashing is unchanged from the CMake era: `nsx_finalize_app()` generates the
-same `<target>_flash` J-Link target, and the "flash only if the ELF changed"
-decision still has two halves. The host-side stamp
+Flashing does not go through the `<target>_flash` ninja target: that target is a
+build-system entry point, so reaching it means owning a configured build tree at
+flash time, and the previous revision of this module did exactly that -- it
+re-rendered and rebuilt the app on every `hardware flash`. Instead `flash_firmware`
+runs the recipe that target would have run, `<build>/jlink/<target>/flash_cmds.jlink`,
+directly through JLinkExe (see `flash_recipe`), which is what heliaPROFILER does and
+what lets flashing be a read-only consumer of the build output.
+
+The "flash only if the ELF changed" decision has two halves. The host-side stamp
 (`<build_dir>/.flashed-<serial>.sha256`) says whether *this build dir* last
 flashed *this probe* with the current ELF. It cannot know what another build dir
 (a second clone, `--build-dir`, a lab runner sharing the board) did since, so a
@@ -42,6 +48,7 @@ from typing import Callable, Optional
 
 import typer
 
+from . import flash_recipe
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .dependency_baseline import DependencyBaseline, resolve_baseline
@@ -52,13 +59,12 @@ from .nsx_app import (
     KernelOptions,
     app_dir_for,
     nsx_build_dir,
+    plan_app,
     read_render_state,
     render_app,
     synced_kernel_dir,
 )
 from .toolchain import DOWNLOADS_DIR, add_toolchain_to_path
-
-FLASH_TARGET = f"{SERVER_TARGET}_flash"
 
 # NSX timeouts. Resolution reaches the network; a cold build compiles the whole
 # kernel library plus the SDK.
@@ -451,6 +457,7 @@ def board_build_id(board: BoardSpec, serial_no: int, build_dir: Path) -> str:
         rtt_address=rtt_address,
         reset_on_open=True,
         read_timeout_s=5.0,
+        scan_ranges=board.rtt_scan_ranges,
     )
     try:
         return read_target_info(transport).build_id
@@ -579,39 +586,100 @@ def kernel_source_root(build_dir: Path, options: Optional[FirmwareOptions] = Non
     return synced_kernel_dir(app_dir_for(build_dir))
 
 
+def check_build_current(
+    board: BoardSpec,
+    *,
+    build_dir: Path,
+    options: Optional[FirmwareOptions] = None,
+    repo_root: Optional[Path] = None,
+) -> None:
+    """Refuse to flash a build dir that is missing or older than its render inputs.
+
+    Flashing must never re-render or reconfigure the app. An earlier revision of
+    this command re-rendered from the working tree on every flash, which silently
+    rebuilt one leg of an A/B comparison from the other leg's sources: the flash
+    step is exactly where a divergence between "what was measured" and "what was
+    built" becomes invisible.
+
+    So the render is computed in memory only (nothing is written) and compared
+    against the state file the last `hardware build` left in the app tree. A
+    mismatch -- an edited baseline, a different `--cmsis-nn-root`, a changed
+    kernel option, an edited benchmark-server source list -- is an error naming
+    `hardware build`, not an implicit rebuild.
+    """
+    options = options or FirmwareOptions()
+    repo_root = repo_root or tester_repo_root()
+    app_dir = app_dir_for(build_dir)
+    elf = elf_path(build_dir, board)
+    if not elf.is_file():
+        raise FileNotFoundError(
+            f"No firmware to flash: {elf} does not exist. Run `hardware build --board {board.id}` first."
+        )
+    state = read_render_state(app_dir)
+    if state is None:
+        raise RuntimeError(
+            f"{app_dir} has no render state, so what {elf} was built from cannot be established. "
+            f"Run `hardware build --board {board.id}` first."
+        )
+    planned = plan_app(
+        board,
+        repo_root=repo_root,
+        build_dir=build_dir,
+        baseline=load_baseline(repo_root, options),
+        cmsis_nn_root=options.cmsis_nn_root,
+        kernel_options=options.kernel_options(),
+    )
+    if state.get("render_digest") != planned.digest:
+        raise RuntimeError(
+            f"The NSX app in {app_dir} was rendered from different inputs than the ones in force "
+            f"now (rendered {str(state.get('render_digest'))[:12]}, current {planned.digest[:12]}): "
+            "the dependency baseline, the kernel source or a build option changed since the last "
+            f"build. `hardware flash` never re-renders or rebuilds -- run "
+            f"`hardware build --board {board.id}` (with the same options) and flash again."
+        )
+
+
 def flash_firmware(
     board: BoardSpec,
     serial_no: int,
     *,
     build_dir: Path,
-    jobs: Optional[int] = None,
-    force_reconfigure: bool = False,
     force: bool = False,
     options: Optional[FirmwareOptions] = None,
     repo_root: Optional[Path] = None,
     board_build_id_reader: BoardBuildIdReader = board_build_id,
+    echo: Callable[[str], None] = typer.echo,
 ) -> FlashDecision:
-    """Build, then flash through the NSX-generated J-Link target unless the ELF is
-    unchanged since this build dir last flashed this probe *and* the board confirms
-    it is running this build's id (or `force` is set)."""
+    """Flash the firmware already built in `build_dir` through the NSX J-Link recipe.
+
+    Nothing is rendered, configured or compiled here (see `check_build_current`):
+    this runs `<build>/jlink/<target>/flash_cmds.jlink` verbatim through JLinkExe
+    after vetting it, then verifies the flash bank J-Link reports.
+
+    The flash is skipped when the ELF is unchanged since this build dir last
+    flashed this probe *and* the board confirms it runs this build's id -- the
+    tester's own optimisation, which hpx has no equivalent of. `force` (i.e.
+    `--force` / `--force-flash`) always flashes.
+    """
     options = options or FirmwareOptions()
     repo_root = repo_root or tester_repo_root()
-    build_started = time.monotonic()
-    render = prepare_app(board, repo_root=repo_root, build_dir=build_dir, options=options)
-    build_rendered_firmware(
-        render, build_dir=build_dir, jobs=jobs, force_reconfigure=force_reconfigure,
-        serial_no=serial_no, options=options,
-    )
-    build_seconds = time.monotonic() - build_started
+    check_build_current(board, build_dir=build_dir, options=options, repo_root=repo_root)
     decision = decide_flash(build_dir, board, serial_no, force=force)
     if not decision.needed:
-        typer.echo(f"[hardware] Stamp says {decision.reason}; asking the board which build it runs...")
+        echo(f"[hardware] Stamp says {decision.reason}; asking the board which build it runs...")
         decision = confirm_board_build_id(board, serial_no, build_dir, decision, reader=board_build_id_reader)
     if not decision.needed:
-        typer.echo(f"[hardware] Skipping flash: {decision.reason}.")
-        return replace(decision, build_seconds=build_seconds)
-    typer.echo(f"[hardware] Flashing {board.id} via J-Link serial {serial_no} ({decision.reason}).")
+        echo(f"[hardware] Skipping flash: {decision.reason}.")
+        return decision
+    echo(f"[hardware] Flashing {board.id} via J-Link serial {serial_no} ({decision.reason}).")
     flash_started = time.monotonic()
-    build(render, options, FLASH_TARGET, jobs)
+    flash_recipe.flash_image(
+        script_path=flash_recipe.recipe_path(build_dir, board),
+        bin_path=bin_path(build_dir, board),
+        device=board.jlink_device,
+        serial_no=serial_no,
+        speed_khz=board.swd_speed_khz,
+        echo=echo,
+    )
     record_flash(build_dir, board, serial_no, decision.digest)
-    return replace(decision, build_seconds=build_seconds, flash_seconds=time.monotonic() - flash_started)
+    return replace(decision, flash_seconds=time.monotonic() - flash_started)

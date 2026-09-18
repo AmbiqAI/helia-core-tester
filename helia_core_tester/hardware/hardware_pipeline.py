@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
@@ -17,6 +17,7 @@ from .boards import BoardSpec, default_session_id
 from .firmware_build import (
     FirmwareOptions,
     FlashDecision,
+    build_firmware,
     build_id_path,
     flash_firmware,
     kernel_source_root,
@@ -306,6 +307,7 @@ def stream_generated_tests(
         build_dir=build_dir,
         on_case_complete=on_case_complete,
         expected_build_id=expected_build_id,
+        echo=echo,
     )
     timing = {
         "stream_s": round(time.monotonic() - stream_started, 4),
@@ -360,14 +362,29 @@ def run_hardware_pipeline(
     # reference tables out of the ns-cmsis-nn tree NSX synced for this build, so
     # that tree has to exist before the generate step runs. (It also means a
     # firmware build failure costs nothing in generation time.)
+    #
+    # Build and flash are two steps here, not one: `flash_firmware` never builds
+    # (see `firmware_build.check_build_current`), so the pipeline owns the order
+    # and the build's wall clock. The probe serial is deliberately *not* passed
+    # to the build -- it would force a CMake reconfigure on every run to bake the
+    # serial into the generated flash target, which nothing uses now that the
+    # recipe is run directly with `-SelectEmuBySN`.
     flash: Optional[FlashDecision] = None
     if skip_flash:
         echo("[hardware] --skip-flash set; reusing firmware already running on the board.")
     else:
-        flash = flash_firmware(
-            board, serial_no, build_dir=resolved_build_dir, jobs=jobs,
-            force_reconfigure=force_reconfigure, force=force_flash, options=firmware_options,
-            repo_root=repo_root,
+        build_started = time.monotonic()
+        build_firmware(
+            board, build_dir=resolved_build_dir, jobs=jobs,
+            force_reconfigure=force_reconfigure, options=firmware_options, repo_root=repo_root,
+        )
+        build_seconds = time.monotonic() - build_started
+        flash = replace(
+            flash_firmware(
+                board, serial_no, build_dir=resolved_build_dir, force=force_flash,
+                options=firmware_options, repo_root=repo_root, echo=echo,
+            ),
+            build_seconds=build_seconds,
         )
 
     generate_s = 0.0
