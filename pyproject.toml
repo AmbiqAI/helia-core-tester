@@ -32,6 +32,12 @@ dependencies = [
     "ai_edge_litert>=2.1.1",
     "typer>=0.9.0,<1.0.0",
     "pylink-square>=1.2.0,<3.0.0",
+    # The hardware benchmark firmware is an NSX app: nsx.yml is rendered here and
+    # locked/synced/configured/built through neuralspotx.api. Pinned exactly (not a
+    # range) because assets/dependency_baseline.json qualifies one packaged registry
+    # -- the module/project revisions a different neuralspotx ships would resolve
+    # different firmware from the same baseline. Same pin heliaPROFILER carries.
+    "neuralspotx==0.8.1",
 ]
 
 [project.scripts]
