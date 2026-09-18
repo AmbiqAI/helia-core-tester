@@ -59,7 +59,8 @@ def test_full_rejects_removed_include_float_flag() -> None:
 # --- hardware CLI surface ------------------------------------------------------------
 
 
-def test_hardware_group_removed() -> None:
+def test_perf_stream_group_removed() -> None:
+    """The pre-cli-surface `perf-stream` group stays gone; `hardware` replaced it."""
     result = runner.invoke(app, ["perf-stream", "flash"])
     assert result.exit_code != 0
     assert "No such command" in _result_text(result)
