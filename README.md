@@ -182,6 +182,17 @@ baseline in force with its fingerprint, the resolved kernel source, the
 qualification of each board's build dir, the cross compiler NSX will find, and the
 J-Link library, as informational checks; missing hardware tools do not fail doctor.
 
+### On CI
+
+The **Hardware Nightly** workflow (`.github/workflows/hardware-nightly.yml`)
+runs the same `hardware run` command every night on the lab's self-hosted
+per-board runners — one job per board in `assets/hardware_boards.yaml` — and
+uploads each board's bundles as `hardware-kernels-<run_id>-<board>`. Dispatch a
+narrowed smoke with `gh workflow run hardware-nightly.yml -f boards=... -f
+suite=int -f family=... -f limit=...`. `docs/hardware-ci.md` has the runner
+contract (labels, environment, packages), the dispatch inputs, and what the hpx
+dashboard would need to ingest these bundles.
+
 ## Suite-Based Runs
 
 Run integer-only (default):
