@@ -242,6 +242,53 @@ def test_guard_appends_a_session_suffix_and_refuses_a_path_unsafe_one(
     assert "session_suffix" in bad.stderr
 
 
+def test_guard_points_python_at_the_hosts_ca_bundle(
+    benchmark_job: dict[str, Any], tmp_path: Path
+) -> None:
+    """`hardware run` fetches ARM GCC over HTTPS from Python on a cold
+    checkout, and the uv-managed interpreter's compiled-in certificate
+    directory does not exist on the NixOS benches."""
+    script = _step(benchmark_job, "Resolve board and probe from the runner")["run"]
+    bundle = tmp_path / "ca-certificates.crt"
+    bundle.write_text("")
+    patched = script.replace("/etc/ssl/certs/ca-certificates.crt", str(bundle), 1)
+    assert patched != script
+
+    result = _run_bash(patched, _guard_env(tmp_path), tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert _exported(tmp_path)["SSL_CERT_FILE"] == str(bundle)
+
+    # A runner that already declares one keeps it.
+    (tmp_path / "env").write_text("")
+    result = _run_bash(patched, _guard_env(tmp_path, SSL_CERT_FILE="/runner/own.pem"), tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "SSL_CERT_FILE" not in _exported(tmp_path)
+
+
+def test_the_download_cache_survives_the_checkouts_clean(
+    benchmark_job: dict[str, Any], tmp_path: Path
+) -> None:
+    """ARM GCC and CMSIS_5 land in artifacts/downloads, which
+    actions/checkout removes with every other ignored file."""
+    from helia_core_tester.hardware.toolchain import DOWNLOADS_DIR
+
+    step = _step(benchmark_job, "Link the download cache into the workspace")
+    assert DOWNLOADS_DIR == "artifacts/downloads"
+    assert DOWNLOADS_DIR in step["run"]
+    # It must come after the checkout that would otherwise delete the link.
+    names = [entry.get("name") for entry in benchmark_job["steps"]]
+    assert names.index(step["name"]) > names.index("Checkout")
+
+    env = {"HCT_CACHE_DIR": str(tmp_path / "cache")}
+    stale = tmp_path / DOWNLOADS_DIR
+    stale.mkdir(parents=True)
+    (stale / "left-over").write_text("")
+    result = _run_bash(step["run"], env, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert stale.is_symlink()
+    assert stale.resolve() == (tmp_path / "cache" / "downloads").resolve()
+
+
 def test_missing_flatc_is_reported_but_never_fails_the_job(
     benchmark_job: dict[str, Any], tmp_path: Path
 ) -> None:

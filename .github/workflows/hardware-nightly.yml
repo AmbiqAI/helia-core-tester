@@ -179,6 +179,22 @@ jobs:
             echo "::notice::flatc is not on the runner PATH; LSTM generation falls back to the ns-cmsis-nn UnitTest reference vectors"
           fi
 
+          # `hardware run` fetches ARM GCC and CMSIS_5 into artifacts/downloads
+          # on a cold checkout (the checkout uses its own binutils rather than
+          # whatever is on PATH), over HTTPS from Python. The uv-managed
+          # interpreter carries no CA bundle and its compiled-in default
+          # directory does not exist on these NixOS benches, so the download
+          # dies with CERTIFICATE_VERIFY_FAILED unless it is pointed at the
+          # host's bundle. Only set what the runner has not set already.
+          if [[ -z "${SSL_CERT_FILE:-}" ]]; then
+            for candidate in /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-bundle.crt /etc/pki/tls/certs/ca-bundle.crt; do
+              if [[ -f "${candidate}" ]]; then
+                echo "SSL_CERT_FILE=${candidate}" >> "${GITHUB_ENV}"
+                break
+              fi
+            done
+          fi
+
           session_id="nightly-${GITHUB_RUN_ID}-${HPX_BOARD}"
           if [[ -n "${HCT_NIGHTLY_SESSION_SUFFIX}" ]]; then
             # The session id is also the result-bundle directory name.
@@ -210,7 +226,21 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
-          enable-cache: true
+          # The bench already has a persistent UV_CACHE_DIR beside the
+          # workspace; the action's cache would upload it to GitHub every
+          # night and then restore it over a warm one.
+          enable-cache: false
+
+      - name: Link the download cache into the workspace
+        run: |
+          # `hardware run` fetches ARM GCC (~150 MB) and CMSIS_5 into
+          # artifacts/downloads, which actions/checkout's clean removes along
+          # with every other ignored file. Point it at the same directory
+          # `HCT_CACHE_DIR` keeps the NSX app tree in, so it is fetched once
+          # per bench rather than once per night.
+          mkdir -p "${HCT_CACHE_DIR}/downloads" artifacts
+          rm -rf artifacts/downloads
+          ln -s "${HCT_CACHE_DIR}/downloads" artifacts/downloads
 
       - name: Install Python
         run: uv python install 3.11

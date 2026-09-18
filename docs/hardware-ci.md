@@ -90,12 +90,24 @@ workflow points uv and the NSX app tree at directories beside the workspace
   SDK among them) are not re-cloned nightly. `hardware build` re-renders and
   rebuilds whenever the manifest, baseline or build options change, so a warm
   tree is an optimisation and never a stale-firmware risk. Deleting that
-  directory on the bench is the escape hatch.
+  directory on the bench is the escape hatch. `artifacts/downloads` is
+  symlinked into the same directory after the checkout, for the same reason:
+  the hardware path fetches its own ARM GCC (~150 MB) and CMSIS_5 there, and a
+  checkout's clean takes them with every other ignored file.
+
+`SSL_CERT_FILE` matters more than it looks. That ARM GCC fetch is a plain
+Python HTTPS download, and the uv-managed interpreter carries no CA bundle: its
+compiled-in certificate directory does not exist on a NixOS bench, so the
+download dies with `CERTIFICATE_VERIFY_FAILED` before anything is built. The
+guard step points it at the host's bundle (`/etc/ssl/certs/ca-certificates.crt`
+and two fallbacks) when the runner has not set one itself.
 
 Generated tests are *not* cached: `actions/checkout` cleans the workspace, so
 every nightly regenerates `artifacts/generated_tests/` from the descriptors
 against the same kernel checkout the firmware links. That is the intended
-behaviour — there are no committed generated tests in this repo.
+behaviour — there are no committed generated tests in this repo, and a warm
+tree of them would make the nightly evidence about a tree nobody produced
+tonight.
 
 ## What the nightly runs
 
