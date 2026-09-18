@@ -470,7 +470,7 @@ def test_sigmoid_table_names_the_fix_without_a_checkout(tmp_path: Path, monkeypa
     from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_s16 import OpNNActivationS16
 
     monkeypatch.setenv("CMSIS_NN_ROOT", str(tmp_path / "not-a-checkout"))
-    with pytest.raises(RuntimeError, match="CMSIS_NN_ROOT or pass --cmsis-nn-root"):
+    with pytest.raises(RuntimeError, match="set CMSIS_NN_ROOT to an ns-cmsis-nn checkout"):
         OpNNActivationS16.__new__(OpNNActivationS16)._load_sigmoid_table()
 
 
@@ -480,3 +480,15 @@ def test_lstm_schema_path_follows_the_resolved_checkout(tmp_path: Path, monkeypa
     root = _fake_checkout(tmp_path / "ns-cmsis-nn")
     monkeypatch.setenv("CMSIS_NN_ROOT", str(root))
     assert lstm_schema_path() == root / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
+
+
+def test_lstm_schema_path_nested_fallback_is_the_tester_repo_grandparent(monkeypatch) -> None:
+    """Without a resolvable checkout the schema comes from the nested layout,
+    <ns-cmsis-nn>/Tests/helia-core-tester: two levels above the tester repo root."""
+    import helia_core_tester
+    from helia_core_tester.generation.ops.LSTMFunctions import lstm_unidirectional
+
+    monkeypatch.setattr(lstm_unidirectional, "resolve_cmsis_nn_root", lambda: None)
+    tester_root = Path(helia_core_tester.__file__).resolve().parents[1]
+    expected = tester_root.parents[1] / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
+    assert lstm_unidirectional.lstm_schema_path() == expected

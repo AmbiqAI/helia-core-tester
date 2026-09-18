@@ -71,8 +71,9 @@ def require_cmsis_nn_root(purpose: str) -> Path:
     if root is None or not (root / "Source").is_dir():
         where = f" (resolved {root}, which has no Source/)" if root is not None else ""
         raise RuntimeError(
-            f"No ns-cmsis-nn checkout found ({purpose}){where}: set CMSIS_NN_ROOT or pass "
-            f"--cmsis-nn-root to an ns-cmsis-nn checkout (a directory with Include/ and Source/)."
+            f"No ns-cmsis-nn checkout found ({purpose}){where}: set CMSIS_NN_ROOT to an "
+            f"ns-cmsis-nn checkout (a directory with Include/ and Source/); the `full` "
+            f"command also accepts --cmsis-nn-root."
         )
     return root
 
