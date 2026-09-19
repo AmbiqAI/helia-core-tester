@@ -280,6 +280,14 @@ one lane masked" and "passed with every lane but one masked" are different claim
 reporting `k > n` cannot have come from the harness, so it is recorded as a failed case with a
 corrupted-capture reason rather than raising.
 
+Hardware streaming carries the exact generated mask as host-only comparison metadata;
+masked lanes are skipped before float classification and finite tolerance checks. Rebridge
+previously saved masked case bundles from their generated test sources before replaying
+them: older manifests lack the bitmap, and zeroed goldens cannot reconstruct it. Existing
+strict bundles need no migration. Matching NaNs and same-sign infinities pass strict float
+comparison; other non-finite pairings fail. This does not impose NaN-payload or signed-zero
+bit equality.
+
 `nonfinite_policy` is required by `OperationBase.nonfinite_policy()`, not by the schema: the
 `if`/`then` gate in `schema.json` is documentation until the descriptor loader validates the whole
 schema (#100).
