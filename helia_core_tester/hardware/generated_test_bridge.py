@@ -605,6 +605,54 @@ def discover_generated_tests(
     return results
 
 
+def _persist_nonfinite_mask(generated_test: GeneratedTestCase, bundle: CaseBundle) -> None:
+    """Carry the emitted don't-care bitmap; zeroed golden values cannot recover it."""
+    if generated_test.descriptor.get("nonfinite_policy") != "mask":
+        return
+    try:
+        source = _find_source_file(generated_test.directory).read_text(encoding="utf-8")
+        header = _find_header_file(generated_test.directory).read_text(encoding="utf-8")
+        calls = _extract_all_call_args(source, "HELIA_VALIDATE_FLOATS_MASKED", expected_count=8)
+        if len(calls) != 1:
+            raise ValueError("ambiguous masked validation calls")
+        output, expected, mask_name, count, *_ = calls[0]
+        prefix = generated_test.name
+        if output != f"{prefix}_output" or expected != f"{prefix}_expected_output":
+            raise ValueError("masked validation does not identify the bridged output")
+        if not re.fullmatch(r"[A-Za-z_]\w*", mask_name):
+            raise ValueError("masked validation must name an emitted bitmap")
+        definitions = re.findall(rf"\b{re.escape(mask_name)}\s*\[[^\]]*\]\s*=", source)
+        if len(definitions) != 1:
+            raise ValueError("missing or ambiguous mask definition")
+        mask = _extract_array(source, mask_name)
+        if count.isdecimal():
+            size = int(count)
+        else:
+            # Admitted templates emit OUTPUT_SIZE as a product of literal dimensions.
+            if count != f"{prefix.upper()}_OUTPUT_SIZE":
+                raise ValueError("masked validation has an unknown output count")
+            counts = re.findall(rf"^\s*#define\s+{re.escape(count)}[ \t]+([^\n]+)", source, re.MULTILINE)
+            if len(counts) != 1 or not re.fullmatch(r"\(\s*\d+(?:\s*\*\s*\d+)*\s*\)", counts[0]):
+                raise ValueError("masked output count must be one literal dimension product")
+            size = 1
+            for dimension in re.findall(r"\d+", counts[0]):
+                size *= int(dimension)
+        blob = bundle.expected_output
+        expected_values = np.asarray(_extract_typed_array(header, expected, blob.dtype),
+                                     dtype=np.float16 if blob.dtype == "FP16" else np.float32)
+        if (bundle.comparison["mode"] != "float" or blob.dtype not in {"FP16", "FP32"}
+                or expected_values.tobytes() != blob.path.read_bytes()
+                or size != int(np.prod(blob.dimensions)) or len(mask) != size):
+            raise ValueError("mask/output count or golden data does not match the bridged output")
+        if any(value not in (0, 1) for value in mask) or all(mask):
+            raise ValueError("generated mask must be binary and retain at least one checked lane")
+    except (UnsupportedGeneratedTestError, ValueError) as exc:
+        # Artifact corruption must not become an optional unsupported-case skip.
+        raise ValueError(f"{generated_test.name}: invalid nonfinite mask: {exc}") from exc
+    bundle.manifest["correctness_comparison"]["nonfinite_mask"] = mask
+    _write_manifest(bundle.root_dir, bundle.manifest)
+
+
 def build_case_bundle_from_generated_test(
     project_root: Path,
     generated_test: GeneratedTestCase,
@@ -680,6 +728,7 @@ def build_case_bundle_from_generated_test(
         )
     bundle = builder(project_root, generated_test, output_root=output_root)
     _check_case_arena_capacity(generated_test, bundle.manifest, bundle.blobs)
+    _persist_nonfinite_mask(generated_test, bundle)
     # Stamped centrally rather than in each of the ~12 per-family builders.
     bundle.manifest["fvp_status"] = outcome.status
     return bundle

@@ -40,10 +40,25 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
     elif mode == "float":
         atol = float(comparison.get("atol", 0.0))
         rtol = float(comparison.get("rtol", 0.0))
-        abs_diff = np.abs(actual_np.astype(np.float64) - expected_np.astype(np.float64))
-        tol = atol + (rtol * np.abs(expected_np.astype(np.float64)))
-        diffs = abs_diff > tol
-        max_abs_diff = float(np.max(abs_diff)) if actual_np.size else 0.0
+        actual_float = actual_np.astype(np.float64).reshape(-1)
+        expected_float = expected_np.astype(np.float64).reshape(-1)
+        if "nonfinite_mask" in comparison:
+            mask = np.asarray(comparison["nonfinite_mask"])
+            if (mask.ndim != 1 or mask.size != actual_float.size
+                    or (mask.size and mask.dtype.kind not in "biu") or not np.all((mask == 0) | (mask == 1))):
+                raise ValueError("nonfinite_mask must be a flat binary mask with one entry per output element")
+            actual_float = actual_float[mask == 0]
+            expected_float = expected_float[mask == 0]
+        finite = np.isfinite(actual_float) & np.isfinite(expected_float)
+        matching_nonfinite = (np.isnan(actual_float) & np.isnan(expected_float)) | (
+            np.isinf(actual_float) & (actual_float == expected_float)
+        )
+        diffs = ~(finite | matching_nonfinite)
+        # Subtract only finite pairs: NaN > tolerance and Inf > Inf are both false.
+        abs_diff = np.abs(actual_float[finite] - expected_float[finite])
+        tol = atol + rtol * np.abs(expected_float[finite])
+        max_abs_diff = float("inf") if np.any(diffs) else (float(np.max(abs_diff)) if abs_diff.size else 0.0)
+        diffs[finite] = abs_diff > tol
     elif mode == "bool":
         diffs = actual_np.astype(bool) != expected_np.astype(bool)
         max_abs_diff = float(np.max(diffs.astype(np.int32))) if actual_np.size else 0.0
