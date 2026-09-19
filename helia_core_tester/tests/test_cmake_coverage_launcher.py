@@ -5,8 +5,8 @@ from pathlib import Path
 import re
 import shlex
 import shutil
-import socket
 import subprocess
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -107,41 +107,47 @@ def test_coverage_profiles_and_ordinary_cache_hit(project, tmp_path):
     # embedded profile paths; it does not execute Arm code or merge gcov streams.
     if not cache or not shutil.which("gcc-12"):
         pytest.skip("requires sccache and gcc-12 for real cache/profile checks")
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-    env = dict(
-        os.environ,
-        SCCACHE_DIR=str(tmp_path / "cache"),
-        SCCACHE_SERVER_PORT=str(port),
-        SCCACHE_IDLE_TIMEOUT="60",
-    )
-    env.pop("SCCACHE_SERVER_UDS", None)
-    run(cache, "--start-server", env=env)
-    try:
-        for coverage in (True, False):
-            run(cache, "--zero-stats", env=env)
-            for label in ("a", "b"):
-                build = tmp_path / f"{coverage}-{label}"
-                command, _ = project(build, coverage, cache, compiler="gcc-12", env=env)
-                output = build / command[command.index("-o") + 1]
-                output.parent.mkdir(parents=True, exist_ok=True)
-                run(*command, cwd=build, env=env)
-                data = output.read_bytes()
-                if coverage:
-                    assert str(output.with_suffix(".gcda")).encode() in data
-                    assert (
-                        str(tmp_path / f"True-{'b' if label == 'a' else 'a'}").encode()
-                        not in data
+    # A long pytest basetemp can exceed Unix socket path limits. Only the private
+    # endpoint lives in this short, automatically removed directory, not builds.
+    with TemporaryDirectory(prefix="hct-cache-", dir="/tmp") as socket_dir:
+        env = dict(
+            os.environ,
+            SCCACHE_DIR=str(tmp_path / "cache"),
+            SCCACHE_SERVER_UDS=str(Path(socket_dir) / "s"),
+            SCCACHE_IDLE_TIMEOUT="60",
+        )
+        env.pop("SCCACHE_SERVER_PORT", None)
+        run(cache, "--start-server", env=env)
+        try:
+            for coverage in (True, False):
+                run(cache, "--zero-stats", env=env)
+                for label in ("a", "b"):
+                    build = tmp_path / f"{coverage}-{label}"
+                    command, _ = project(
+                        build, coverage, cache, compiler="gcc-12", env=env
                     )
-                else:
-                    assert b".gcda" not in data
-                    executable = build / "probe"
-                    run("gcc-12", str(output), "-o", str(executable), env=env)
-                    run(str(executable), env=env)
-            stats = run(cache, "--show-stats", env=env)
-            # A real hit proves the positive control actually exercised caching.
-            hits = int(re.search(r"^Cache hits\s+(\d+)$", stats, re.MULTILINE).group(1))
-            assert hits == (0 if coverage else 1), stats
-    finally:
-        run(cache, "--stop-server", env=env)
+                    output = build / command[command.index("-o") + 1]
+                    output.parent.mkdir(parents=True, exist_ok=True)
+                    run(*command, cwd=build, env=env)
+                    data = output.read_bytes()
+                    if coverage:
+                        assert str(output.with_suffix(".gcda")).encode() in data
+                        assert (
+                            str(
+                                tmp_path / f"True-{'b' if label == 'a' else 'a'}"
+                            ).encode()
+                            not in data
+                        )
+                    else:
+                        assert b".gcda" not in data
+                        executable = build / "probe"
+                        run("gcc-12", str(output), "-o", str(executable), env=env)
+                        run(str(executable), env=env)
+                stats = run(cache, "--show-stats", env=env)
+                # A real hit proves the positive control actually exercised caching.
+                hits = int(
+                    re.search(r"^Cache hits\s+(\d+)$", stats, re.MULTILINE).group(1)
+                )
+                assert hits == (0 if coverage else 1), stats
+        finally:
+            run(cache, "--stop-server", env=env)
