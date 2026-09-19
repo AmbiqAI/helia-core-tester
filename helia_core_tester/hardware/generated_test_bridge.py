@@ -607,7 +607,7 @@ def discover_generated_tests(
 
 def _persist_nonfinite_mask(generated_test: GeneratedTestCase, bundle: CaseBundle) -> None:
     """Carry the emitted don't-care bitmap; zeroed golden values cannot recover it."""
-    if generated_test.descriptor.get("nonfinite_policy") != "mask":
+    if str(generated_test.descriptor.get("nonfinite_policy", "strict")).strip().lower() != "mask":
         return
     try:
         source = _find_source_file(generated_test.directory).read_text(encoding="utf-8")
