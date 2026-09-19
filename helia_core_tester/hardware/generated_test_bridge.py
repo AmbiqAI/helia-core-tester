@@ -611,7 +611,10 @@ def _persist_nonfinite_mask(generated_test: GeneratedTestCase, bundle: CaseBundl
         return
     try:
         source = _find_source_file(generated_test.directory).read_text(encoding="utf-8")
+        source = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.DOTALL)
         header = _find_header_file(generated_test.directory).read_text(encoding="utf-8")
+        if len(re.findall(r"\bHELIA_VALIDATE_FLOATS_MASKED\s*\(", source)) != 1:
+            raise ValueError("missing or ambiguous masked validation calls")
         calls = _extract_all_call_args(source, "HELIA_VALIDATE_FLOATS_MASKED", expected_count=8)
         if len(calls) != 1:
             raise ValueError("ambiguous masked validation calls")

@@ -244,6 +244,7 @@ def _check_session_reports(bundle, actual, tmp_path, passed):
         "wrong_output",
         "wrong_count",
         "ambiguous",
+        "malformed_extra_call",
     ],
 )
 def test_invalid_generated_mask_fails_admission(generated_abs, tmp_path, damage):
@@ -265,7 +266,10 @@ def test_invalid_generated_mask_fails_admission(generated_abs, tmp_path, damage)
     else:
         start = text.index("HELIA_VALIDATE_FLOATS_MASKED(")
         end = text.index(");", start) + 2
-        text += "\n" + text[start:end]
+        extra = text[start:end]
+        if damage == "malformed_extra_call":
+            extra = extra.replace("failures", "failures, 0")
+        text += "\n" + extra
     source.write_text(text)
     with pytest.raises(ValueError, match="mask"):
         _bridge(generated_abs, tmp_path)
