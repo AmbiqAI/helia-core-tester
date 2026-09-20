@@ -160,12 +160,12 @@ def _fixture_path() -> Path:
     return _repo_root() / "helia_core_tester" / "tests" / "fixtures" / f"{GOLDEN_CASE}_nn_activation_float.h"
 
 
-def _descriptor() -> dict:
+def _descriptor(name: str = GOLDEN_CASE) -> dict:
     path = _repo_root() / "assets" / "descriptors" / "ActivationFunctions" / "nn_activation_float.yaml"
     for doc in yaml.safe_load_all(path.read_text()):
-        if isinstance(doc, dict) and doc.get("name") == GOLDEN_CASE:
+        if isinstance(doc, dict) and doc.get("name") == name:
             return doc
-    raise AssertionError(f"descriptor {GOLDEN_CASE} not found")
+    raise AssertionError(f"descriptor {name} not found")
 
 
 def _emit_header(output_dir: Path) -> str:
@@ -183,6 +183,37 @@ def test_finite_case_header_matches_the_checked_in_fixture(tmp_path: Path) -> No
     _assert_header_matches(
         _emit_header(tmp_path), fixture.read_text(), f"{GOLDEN_CASE}_nn_activation_float.h", fixture
     )
+
+
+@pytest.mark.parametrize("seed", [0, 500])
+@pytest.mark.parametrize("kind,input_bits,output_bits", [
+    ("cutoff", 0x4280, 0x3BFA),
+    ("index", 0xBE00, 0xBB3E),
+])
+def test_tanh_lut_grid_cases_emit_exact_discriminators(
+    tmp_path: Path, seed: int, kind: str, input_bits: int, output_bits: int,
+) -> None:
+    name = f"nn_activation_float_tanh_lut_{kind}_f16"
+    op = OpNNActivationFloat(_descriptor(name), seed, target_cpu=GOLDEN_CPU)
+    # Header emission does not read the model; full generation is qualified separately.
+    (tmp_path / f"{name}.tflite").touch()
+    op.generate_c_files(tmp_path)
+    header = (tmp_path / "includes" / f"{name}_nn_activation_float.h").read_text()
+    for suffix, bits in (("input", input_bits), ("expected_output", output_bits)):
+        match = re.search(rf"{name}_{suffix}\[\]\s*=\s*\{{([^}}]*)\}}", header)
+        assert match is not None
+        values = _parse_c_literals(match[1])
+        # Fixed half encodings, not the generator's oracle; also pin the active tail.
+        assert [struct.pack("<e", value) for value in values] == [struct.pack("<H", bits)] * 9
+    source = (tmp_path / f"{name}_nn_activation_float.c").read_text()
+    validation = re.search(r"HELIA_VALIDATE_OUTPUTS\((.*?)\);", source, re.DOTALL)
+    assert validation is not None
+    args = [arg.strip() for arg in validation[1].split(",")]
+    assert args[:4] == ["FLOAT", f"{name}_output", f"{name}_expected_output", f"{name.upper()}_OUTPUT_SIZE"]
+    assert [float(arg.rstrip("f")) for arg in args[5:7]] == [0.0, 0.0]
+    assert f"#define {name.upper()}_OUTPUT_SIZE 9" in source
+    assert "arm_nn_activation_f16(" in source
+    assert "ARM_NN_FLT_ACT_TANH" in source
 
 
 # The second stage of #74 routes more operators through the shared sampler and moves their
