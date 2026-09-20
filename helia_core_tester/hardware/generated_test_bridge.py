@@ -3,8 +3,9 @@ produced by `helia_core_tester generate`) into hardware CaseBundles so they can
 be streamed to and executed on real hardware over HCTP/RTT, instead of only the
 hand-authored synthetic demo cases in case_bundle.py.
 
-Bridged (family, operator) pairs are registered in `_BUILDERS` below; each builder is
-responsible for extracting its own header/source format and producing a CaseBundle. The
+Bridged (family, operator) pairs are registered in `_BUILDERS` below. Builders own
+header/source extraction, admission and per-operator policy; shared assembly stages
+write blobs and the ordered manifest without inferring those policies. The
 kernel_id sent to firmware for each is looked up from the shared registry in
 `assets/kernel_registry.yaml` via `kernel_registry.py` -- see that file's header comment
 for the full list of currently-bridged kernels and how to add new ones.
@@ -732,9 +733,88 @@ def build_case_bundle_from_generated_test(
     bundle = builder(project_root, generated_test, output_root=output_root)
     _check_case_arena_capacity(generated_test, bundle.manifest, bundle.blobs)
     _persist_nonfinite_mask(generated_test, bundle)
-    # Stamped centrally rather than in each of the ~12 per-family builders.
+    # Gate provenance is attached after assembly and mask persistence.
     bundle.manifest["fvp_status"] = outcome.status
     return bundle
+
+
+def _write_generated_blobs(blobs_dir: Path, arrays: list, *, numpy_dtype=None) -> list[BlobInfo]:
+    """Emit the caller's ordered blobs, preserving its optional storage cast."""
+    blobs: list[BlobInfo] = []
+    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
+        path = blobs_dir / f"{role}.bin"
+        data = np.asarray(array) if numpy_dtype is None else np.asarray(array, dtype=numpy_dtype)
+        _write_blob(path, data)
+        blobs.append(_blob_info(
+            path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims,
+            mutable_data=mutable_data, host_only=host_only,
+        ))
+    return blobs
+
+
+def _generated_manifest_header(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    case_id: str,
+    descriptor_path: Path,
+    descriptor_text: str,
+) -> dict:
+    """Build identity before the caller evaluates kernel lookup and policy fields."""
+    return {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": case_id,
+        "descriptor_name": generated_test.name,
+        "descriptor_path": display_path(descriptor_path, project_root),
+        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
+    }
+
+
+def _finish_generated_bundle(
+    case_root: Path,
+    blobs: list[BlobInfo],
+    manifest_header: dict,
+    *,
+    operator: str,
+    family: str,
+    target_cpu: str,
+    kernel_id: int,
+    scalar_parameters: dict,
+    tensor_dtypes: dict,
+    blob_roles: list[dict],
+    expected_output: dict,
+    comparison: dict,
+    scratch_bytes: int,
+    capabilities: list[str],
+) -> CaseBundle:
+    """Write common schema in wire-visible order, keeping caller policy explicit.
+
+    Identity, blob writes and policy evaluation stay separate to retain failure
+    ordering. Blob metadata is evaluated by the caller before expected-output and
+    scratch expressions, just as it was in each inline manifest.
+    """
+    manifest = {
+        **manifest_header,
+        "operator": operator,
+        "family": family,
+        "target_cpu": target_cpu,
+        "kernel_id": kernel_id,
+        "adapter_metadata_schema": 1,
+        "source": "generated_test_bridge",
+        "serialized_scalar_parameters": scalar_parameters,
+        "tensor_dtypes": tensor_dtypes,
+        "blob_roles": blob_roles,
+        "expected_output": expected_output,
+        "correctness_comparison": comparison,
+        "scratch_buffer": {"bytes": scratch_bytes},
+        "required_target_capabilities": capabilities,
+        "repeated_invocation_safe": True,
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
+    }
+    return CaseBundle(
+        root_dir=case_root, manifest_path=_write_manifest(case_root, manifest),
+        manifest=manifest, blobs=tuple(blobs),
+    )
 
 
 def _build_convolve_case(
@@ -926,11 +1006,7 @@ def _build_convolve_case(
         arrays.append((next_blob_id + 1, "shift", "S32", (output_channels,), shift, False, False))
         next_blob_id += 2
     arrays.append((next_blob_id, "expected_output", activation_dtype, tuple(int(v) for v in expected_output.shape), expected_output, False, True))
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
@@ -940,26 +1016,22 @@ def _build_convolve_case(
     comparison = dict(
         descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else {"mode": "float", "atol": 0.001, "rtol": 0.001})
     )
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": "ConvolutionFunctions",
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family="ConvolutionFunctions",
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(
             project_root,
             family="ConvolutionFunctions",
             operator="Convolve",
             dtype=activation_dtype,
             weight_dtype=weight_dtype,
         ),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+        scalar_parameters={
             "stride_h": strides[0],
             "stride_w": strides[1],
             "padding": padding,
@@ -985,12 +1057,12 @@ def _build_convolve_case(
                 }
             ),
         },
-        "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, **({"bias": bias_wire_dtype} if has_bias else {}), "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": comparison,
-        "scratch_buffer": {"bytes": int(scratch_bytes)},
-        "required_target_capabilities": [
+        tensor_dtypes={"input": activation_dtype, "weights": weight_dtype, **({"bias": bias_wire_dtype} if has_bias else {}), "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=comparison,
+        scratch_bytes=int(scratch_bytes),
+        capabilities=[
             "convolve_s4"
             if weight_dtype == "S4"
             else (
@@ -999,10 +1071,7 @@ def _build_convolve_case(
                 else ("convolve_s16" if activation_dtype == "S16" else ("convolve_f32" if activation_dtype == "FP32" else "convolve_f16"))
             )
         ],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+    )
 
 
 def _build_nn_activation_float_case(
@@ -1085,42 +1154,31 @@ def _build_nn_activation_float_case(
         (1, "input_0", input_dtype, input_shape, input_data, False, False),
         (2, "expected_output", input_dtype, expected_shape, expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array, dtype=numpy_dtype))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays, numpy_dtype=numpy_dtype)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": generated_test.family,
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family=generated_test.family,
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
+        scalar_parameters={
             "block_size": block_size,
             "activation_kind": activation_kind_map[activation_symbol],
             "scale_bits": _quant_scale_to_bits(act_param),
         },
-        "tensor_dtypes": {"input": input_dtype, "output": input_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": input_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "float"})),
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+        tensor_dtypes={"input": input_dtype, "output": input_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": input_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(descriptor.get("resolved_comparison", {"mode": "float"})),
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 
 def _build_reduce_sum_case(
@@ -1165,29 +1223,21 @@ def _build_reduce_sum_case(
         (1, "input_0", input_dtype, input_shape, input_data, False, False),
         (2, "expected_output", input_dtype, output_shape, expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array, dtype=numpy_dtype))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays, numpy_dtype=numpy_dtype)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
     cmsis_function = "arm_reduce_sum_f16" if input_dtype == "FP16" else "arm_reduce_sum_f32"
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": generated_test.family,
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family=generated_test.family,
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
+        scalar_parameters={
             "output_n": output_dims["n"],
             "output_h": output_dims["h"],
             "output_w": output_dims["w"],
@@ -1197,16 +1247,13 @@ def _build_reduce_sum_case(
             "axis_w": axis_dims["w"],
             "axis_c": axis_dims["c"],
         },
-        "tensor_dtypes": {"input": input_dtype, "output": input_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": input_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "float"})),
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+        tensor_dtypes={"input": input_dtype, "output": input_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": input_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(descriptor.get("resolved_comparison", {"mode": "float"})),
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 
 def _build_batch_norm_case(
@@ -1264,38 +1311,27 @@ def _build_batch_norm_case(
         (4, "multiplier", input_dtype, (input_dims["c"],), scale, False, False),
         (5, "expected_output", input_dtype, input_shape, expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array, dtype=numpy_dtype))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays, numpy_dtype=numpy_dtype)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": generated_test.family,
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {"activation_kind": layout_map[layout_symbol]},
-        "tensor_dtypes": {"input": input_dtype, "bias": input_dtype, "multiplier": input_dtype, "output": input_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": input_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "float"})),
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family=generated_test.family,
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=input_dtype),
+        scalar_parameters={"activation_kind": layout_map[layout_symbol]},
+        tensor_dtypes={"input": input_dtype, "bias": input_dtype, "multiplier": input_dtype, "output": input_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": input_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(descriptor.get("resolved_comparison", {"mode": "float"})),
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 
 def _build_depthwise_conv_case(
@@ -1493,11 +1529,7 @@ def _build_depthwise_conv_case(
         ])
         next_blob_id += 2
     arrays.append((next_blob_id, "expected_output", activation_dtype, tuple(int(v) for v in expected_output.shape), expected_output, False, True))
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
@@ -1513,26 +1545,22 @@ def _build_depthwise_conv_case(
         if activation_dtype in ("FP32", "FP16")
         else {"mode": "exact_int"}
     )
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": "ConvolutionFunctions",
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family="ConvolutionFunctions",
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(
             project_root,
             family="ConvolutionFunctions",
             operator="DepthwiseConv",
             dtype=activation_dtype,
             weight_dtype=weight_dtype,
         ),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+        scalar_parameters={
             "stride_h": stride_h,
             "stride_w": stride_w,
             "pad_h": pad_h,
@@ -1553,12 +1581,12 @@ def _build_depthwise_conv_case(
             }),
             "ch_mult": ch_mult,
         },
-        "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, "bias": bias_wire_dtype, "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": comparison,
-        "scratch_buffer": {"bytes": int(scratch_bytes)},
-        "required_target_capabilities": [
+        tensor_dtypes={"input": activation_dtype, "weights": weight_dtype, "bias": bias_wire_dtype, "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=comparison,
+        scratch_bytes=int(scratch_bytes),
+        capabilities=[
             "depthwise_conv_s4"
             if weight_dtype == "S4"
             else (
@@ -1571,10 +1599,7 @@ def _build_depthwise_conv_case(
                 )
             )
         ],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+    )
 
 
 def _build_transpose_conv_case(
@@ -1716,28 +1741,20 @@ def _build_transpose_conv_case(
         expected_blob_id = next_blob_id
     arrays.append((expected_blob_id, "expected_output", activation_dtype, output_shape, expected_output, False, True))
 
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": generated_test.family,
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype, weight_dtype=weight_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family=generated_test.family,
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype, weight_dtype=weight_dtype),
+        scalar_parameters={
             "stride_h": stride_h,
             "stride_w": stride_w,
             "pad_h": pad_h,
@@ -1764,18 +1781,15 @@ def _build_transpose_conv_case(
                 }
             ),
         },
-        "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, **({"bias": ("S32" if activation_dtype == "S8" else activation_dtype)} if has_bias else {}), "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor["resolved_comparison"]),
-        "scratch_buffer": {"bytes": scratch_bytes},
-        "required_target_capabilities": [
+        tensor_dtypes={"input": activation_dtype, "weights": weight_dtype, **({"bias": ("S32" if activation_dtype == "S8" else activation_dtype)} if has_bias else {}), "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(descriptor["resolved_comparison"]),
+        scratch_bytes=scratch_bytes,
+        capabilities=[
             "arm_transpose_conv_wrapper_s8" if activation_dtype == "S8" else ("arm_transpose_conv_f32" if activation_dtype == "FP32" else "arm_transpose_conv_f16")
         ],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+    )
 
 
 def _build_pooling_case(
@@ -1872,29 +1886,21 @@ def _build_pooling_case(
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
         (6, "expected_output", activation_dtype, tuple(int(v) for v in expected_output.shape), expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
     comparison = dict(descriptor.get("resolved_comparison", {"mode": "exact_int"}))
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": "PoolingFunctions",
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family="PoolingFunctions", operator=operator, dtype=activation_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family="PoolingFunctions",
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family="PoolingFunctions", operator=operator, dtype=activation_dtype),
+        scalar_parameters={
             "stride_h": stride_h,
             "stride_w": stride_w,
             "pad_h": pad_h,
@@ -1907,16 +1913,13 @@ def _build_pooling_case(
             "pool_h": filter_dims["h"],
             "pool_w": filter_dims["w"],
         },
-        "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": comparison,
-        "scratch_buffer": {"bytes": int(scratch_bytes)},
-        "required_target_capabilities": [f"{operator.lower()}_{activation_dtype.lower()}"],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+        tensor_dtypes={"input": activation_dtype, "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=comparison,
+        scratch_bytes=int(scratch_bytes),
+        capabilities=[f"{operator.lower()}_{activation_dtype.lower()}"],
+    )
 
 
 def _build_pooling_float_case(
@@ -2017,29 +2020,21 @@ def _build_pooling_float_case(
         (1, "input_0", input_dtype, input_shape, input_data, False, False),
         (6, "expected_output", input_dtype, tuple(int(v) for v in expected_output.shape), expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array, dtype=numpy_dtype))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays, numpy_dtype=numpy_dtype)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
     comparison = dict(descriptor.get("resolved_comparison", {"mode": "float"}))
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": "PoolingFunctions",
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family="PoolingFunctions", operator=operator, dtype=input_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family="PoolingFunctions",
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family="PoolingFunctions", operator=operator, dtype=input_dtype),
+        scalar_parameters={
             "stride_h": stride_h,
             "stride_w": stride_w,
             "pad_h": pad_h,
@@ -2052,16 +2047,13 @@ def _build_pooling_float_case(
             "pool_h": filter_dims["h"],
             "pool_w": filter_dims["w"],
         },
-        "tensor_dtypes": {"input": input_dtype, "output": input_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": input_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": comparison,
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [plain_fn.rstrip("(")],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+        tensor_dtypes={"input": input_dtype, "output": input_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": input_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=comparison,
+        scratch_bytes=0,
+        capabilities=[plain_fn.rstrip("(")],
+    )
 
 
 def _build_pooling_case_dispatch(
@@ -2225,11 +2217,7 @@ def _build_activation_case(
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
         (6, "expected_output", activation_dtype, tuple(int(v) for v in expected_output.shape), expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
@@ -2241,35 +2229,28 @@ def _build_activation_case(
         comparison = {"mode": "tolerant_int", "tolerance": 1}
     else:
         comparison = dict(descriptor.get("resolved_comparison", {"mode": "exact_int"}))
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": "ActivationFunctions",
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family="ActivationFunctions", operator=operator, dtype=activation_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family="ActivationFunctions",
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family="ActivationFunctions", operator=operator, dtype=activation_dtype),
+        scalar_parameters={
             **scalar_parameters,
             "output_h": output_dims["h"],
             "output_w": output_dims["w"],
             "output_c": output_dims["c"],
         },
-        "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": comparison,
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+        tensor_dtypes={"input": activation_dtype, "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=comparison,
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 
 # arm_prelu_s8/s16(&input_dims, input, &alpha_dims, alpha, input_offset, alpha_offset,
@@ -2367,44 +2348,33 @@ def _build_quantize_case(
         (1, "input_0", "FP32", (1, 1, 1, size), input_flat.reshape(1, 1, 1, size), False, False),
         (2, "expected_output", activation_dtype, (1, 1, 1, size), expected_flat.reshape(1, 1, 1, size), False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": "QuantizationFunctions",
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family="QuantizationFunctions", operator=operator, dtype=activation_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family="QuantizationFunctions",
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family="QuantizationFunctions", operator=operator, dtype=activation_dtype),
+        scalar_parameters={
             "output_offset": zero_point,
             "scale_bits": _quant_scale_to_bits(scale),
             "output_h": 1,
             "output_w": 1,
             "output_c": size,
         },
-        "tensor_dtypes": {"input": "FP32", "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor["resolved_comparison"]),
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+        tensor_dtypes={"input": "FP32", "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(descriptor["resolved_comparison"]),
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 
 # arm_dequantize_{s8,s16}_f32(input, output, size, zero_point, scale) -- quantized input,
@@ -2498,28 +2468,20 @@ def _build_dequantize_case(
         (1, "input_0", activation_dtype, (1, 1, 1, size), input_flat.reshape(1, 1, 1, size), False, False),
         (2, "expected_output", "FP32", (1, 1, 1, size), expected_flat.reshape(1, 1, 1, size), False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": "QuantizationFunctions",
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family="QuantizationFunctions", operator=operator, dtype=activation_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family="QuantizationFunctions",
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family="QuantizationFunctions", operator=operator, dtype=activation_dtype),
+        scalar_parameters={
             "input_offset": zero_point,
             "scale_bits": _quant_scale_to_bits(scale),
             "activation_kind": _ACTIVATION_KIND[activation],
@@ -2527,16 +2489,13 @@ def _build_dequantize_case(
             "output_w": 1,
             "output_c": size,
         },
-        "tensor_dtypes": {"input": activation_dtype, "output": "FP32"},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": "FP32", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "float"})),
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+        tensor_dtypes={"input": activation_dtype, "output": "FP32"},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": "FP32", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(descriptor.get("resolved_comparison", {"mode": "float"})),
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 
 def _build_requantize_case(
@@ -2590,43 +2549,32 @@ def _build_requantize_case(
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
         (2, "expected_output", activation_dtype, input_shape, expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": generated_test.family,
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family=generated_test.family,
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
+        scalar_parameters={
             "out_mult": int(args[3]),
             "out_shift": int(args[4]),
             "input_offset": int(args[5]),
             "output_offset": int(args[6]),
         },
-        "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+        tensor_dtypes={"input": activation_dtype, "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 
 def _build_comparison_case(
@@ -2703,38 +2651,27 @@ def _build_comparison_case(
         (2, "input_1", activation_dtype, input_2_shape, input_2_data, False, False),
         (3, "expected_output", "BOOL", output_shape, expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": registry_operator,
-        "family": generated_test.family,
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=registry_operator, dtype=activation_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": scalar_parameters,
-        "tensor_dtypes": {"input": activation_dtype, "output": "BOOL"},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": "BOOL", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": {"mode": "bool"},
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=registry_operator,
+        family=generated_test.family,
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=registry_operator, dtype=activation_dtype),
+        scalar_parameters=scalar_parameters,
+        tensor_dtypes={"input": activation_dtype, "output": "BOOL"},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": "BOOL", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison={"mode": "bool"},
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 
 def _build_prelu_case(
@@ -2849,38 +2786,27 @@ def _build_prelu_case(
         (2, "input_1", activation_dtype, alpha_shape, alpha_data, False, False),
         (3, "expected_output", activation_dtype, expected_output_shape, expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": "ActivationFunctions",
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family="ActivationFunctions", operator=operator, dtype=activation_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": scalar_parameters,
-        "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": comparison,
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family="ActivationFunctions",
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family="ActivationFunctions", operator=operator, dtype=activation_dtype),
+        scalar_parameters=scalar_parameters,
+        tensor_dtypes={"input": activation_dtype, "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=comparison,
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 
 # arm_prelu_scalar_s8/s16(scalar_vect, non_scalar_vect, scalar_is_input, input_offset,
@@ -2972,28 +2898,20 @@ def _build_prelu_scalar_case(
         (2, "input_1", activation_dtype, (1, 1, num_pixels, block_size), alpha_flat.reshape(1, 1, num_pixels, block_size), False, False),
         (3, "expected_output", activation_dtype, (1, 1, num_pixels, block_size), expected_flat.reshape(1, 1, num_pixels, block_size), False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": "ActivationFunctions",
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family="ActivationFunctions", operator=operator, dtype=activation_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family="ActivationFunctions",
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family="ActivationFunctions", operator=operator, dtype=activation_dtype),
+        scalar_parameters={
             "input_offset": input_offset,
             "alpha_offset": alpha_offset,
             "output_offset": output_offset,
@@ -3006,16 +2924,13 @@ def _build_prelu_scalar_case(
             "output_w": 1,
             "output_c": block_size,
         },
-        "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+        tensor_dtypes={"input": activation_dtype, "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 
 # arm_softmax_s8/arm_softmax_s16/arm_softmax_s8_s16 all take a fixed
@@ -3114,44 +3029,33 @@ def _build_softmax_case(
         (1, "input_0", input_dtype, (1, 1, 1, size), input_flat.reshape(1, 1, 1, size), False, False),
         (2, "expected_output", output_dtype, (1, 1, 1, size), expected_flat.reshape(1, 1, 1, size), False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": lookup_operator,
-        "family": "SoftmaxFunctions",
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family="SoftmaxFunctions", operator=lookup_operator, dtype=lookup_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=lookup_operator,
+        family="SoftmaxFunctions",
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family="SoftmaxFunctions", operator=lookup_operator, dtype=lookup_dtype),
+        scalar_parameters={
             "num_rows": num_rows,
             "row_size": row_size,
             "out_mult": mult,
             "out_shift": shift,
             "diff_min": diff_min,
         },
-        "tensor_dtypes": {"input": input_dtype, "output": output_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": output_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor["resolved_comparison"]),
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+        tensor_dtypes={"input": input_dtype, "output": output_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": output_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(descriptor["resolved_comparison"]),
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 # arm_abs_{s8,s16}(input, input_offset, output, out_offset, out_mult, out_shift,
 #    needs_rescale, out_activation_min, out_activation_max, block_size)
@@ -3244,43 +3148,29 @@ def _build_abs_case(
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
         (2, "expected_output", activation_dtype, output_shape, expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": generated_test.family,
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": scalar_parameters,
-        "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        # Falls back to bit-exact only for integer activations; FP16/FP32 Abs
-        # legitimately diverges between MVE and scalar accumulation and must use a float
-        # atol/rtol default instead (matches the Convolve/DepthwiseConv builders' policy).
-        "correctness_comparison": dict(
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family=generated_test.family,
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
+        scalar_parameters=scalar_parameters,
+        tensor_dtypes={"input": activation_dtype, "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(
             descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else {"mode": "float", "atol": 0.001, "rtol": 0.001})
         ),
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 
 _ARG_REDUCTION_FUNCTIONS = {
@@ -3409,41 +3299,30 @@ def _build_basic_math_reduction_case(
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
         (2, "expected_output", output_dtype, output_shape, expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
     comparison = {"mode": "tolerant_int", "tolerance": 1} if operator == "Mean" else dict(
         descriptor.get("resolved_comparison", {"mode": "exact_int"})
     )
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": generated_test.family,
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": scalar_parameters,
-        "tensor_dtypes": {"input": activation_dtype, "output": output_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": output_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": comparison,
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family=generated_test.family,
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
+        scalar_parameters=scalar_parameters,
+        tensor_dtypes={"input": activation_dtype, "output": output_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": output_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=comparison,
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 
 _RSQRT_ARG_COUNTS = {"arm_rsqrt_s16_per_op": 8, "arm_rsqrt_s16_universal": 11}
@@ -3534,38 +3413,27 @@ def _build_basic_math_lut_case(
         (2, "weights", lut_dtype, lut_shape, lut_flat, False, False),
         (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": generated_test.family,
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=registry_operator, dtype=activation_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": scalar_parameters,
-        "tensor_dtypes": {"input": activation_dtype, "weights": lut_dtype, "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family=generated_test.family,
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=registry_operator, dtype=activation_dtype),
+        scalar_parameters=scalar_parameters,
+        tensor_dtypes={"input": activation_dtype, "weights": lut_dtype, "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(descriptor.get("resolved_comparison", {"mode": "exact_int"})),
+        scratch_bytes=0,
+        capabilities=[cmsis_function],
+    )
 
 
 # arm_add_s8/arm_sub_s8 share an identical CMSIS-NN signature and argument order:
@@ -3694,50 +3562,35 @@ def _write_elementwise_binary_bundle(
         (2, "input_1", activation_dtype, input2_shape, input2_data, False, False),
         (3, "expected_output", activation_dtype, tuple(int(v) for v in expected_output.shape), expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": generated_test.family,
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family=generated_test.family,
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=operator, dtype=activation_dtype),
+        scalar_parameters={
             **scalar_parameters,
             **({"output_n": output_dims["n"]} if include_output_n else {}),
             "output_h": output_dims["h"],
             "output_w": output_dims["w"],
             "output_c": output_dims["c"],
         },
-        "tensor_dtypes": {"input": activation_dtype, "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        # Falls back to bit-exact only for integer activations; FP16/FP32 Add/Sub/Mul/
-        # Maximum/Minimum legitimately diverge between MVE and scalar accumulation and must
-        # use a float atol/rtol default instead (matches the Convolve/DepthwiseConv/Abs
-        # builders' policy).
-        "correctness_comparison": dict(
+        tensor_dtypes={"input": activation_dtype, "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(
             descriptor.get("resolved_comparison", {"mode": "exact_int"} if activation_dtype not in ("FP32", "FP16") else {"mode": "float", "atol": 0.001, "rtol": 0.001})
         ),
-        "scratch_buffer": {"bytes": 0},
-        "required_target_capabilities": [f"{cmsis_function}"],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+        scratch_bytes=0,
+        capabilities=[f"{cmsis_function}"],
+    )
 
 
 
@@ -4244,34 +4097,26 @@ def _build_fully_connected_case(
         arrays.append((next_blob_id + 1, "shift", "S32", shift.shape, shift, False, False))
         next_blob_id += 2
     arrays.append((next_blob_id, "expected_output", activation_dtype, output_shape, expected_output, False, True))
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": "FullyConnectedFunctions",
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family="FullyConnectedFunctions",
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(
             project_root,
             family="FullyConnectedFunctions",
             operator="FullyConnected",
             dtype=activation_dtype,
             weight_dtype=weight_dtype,
         ),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+        scalar_parameters={
             **(
                 {
                     "input_offset": input_offset,
@@ -4287,16 +4132,12 @@ def _build_fully_connected_case(
                 }
             ),
         },
-        "tensor_dtypes": {"input": activation_dtype, "weights": weight_dtype, **({"bias": bias_wire_dtype} if has_bias else {}), "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor["resolved_comparison"]),
-        # ctx->buf sized output_units * sizeof(int32_t) for both S8 (kernel_sum, computed
-        # at runtime via arm_vector_sum_s8) and S16 (scratch the kernel fills itself) --
-        # see run_fully_connected_once()'s header comment and
-        # arm_fully_connected_{s8,per_channel_s16}_get_buffer_size{,_mve}().
-        "scratch_buffer": {"bytes": 0 if weight_dtype == "S4" else (int(_extract_define_int(_find_source_file(generated_test.directory).read_text(encoding="utf-8"), f"{prefix.upper()}_BUFFER_SIZE_MAX")) if is_float else output_units * 4)},
-        "required_target_capabilities": [
+        tensor_dtypes={"input": activation_dtype, "weights": weight_dtype, **({"bias": bias_wire_dtype} if has_bias else {}), "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(descriptor["resolved_comparison"]),
+        scratch_bytes=0 if weight_dtype == "S4" else (int(_extract_define_int(_find_source_file(generated_test.directory).read_text(encoding="utf-8"), f"{prefix.upper()}_BUFFER_SIZE_MAX")) if is_float else output_units * 4),
+        capabilities=[
             "fully_connected_s4"
             if weight_dtype == "S4"
             else (
@@ -4305,10 +4146,7 @@ def _build_fully_connected_case(
                 else ("fully_connected_s16" if activation_dtype == "S16" else ("arm_fully_connected_f32" if activation_dtype == "FP32" else "arm_fully_connected_f16"))
             )
         ],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+    )
 
 
 def _build_batch_matmul_case(
@@ -4419,28 +4257,20 @@ def _build_batch_matmul_case(
         (2, "input_1", activation_dtype, input_rhs_shape, input_rhs, False, False),
         (3, "expected_output", activation_dtype, output_shape, expected_output, False, True),
     ]
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": operator,
-        "family": "FullyConnectedFunctions",
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family="FullyConnectedFunctions", operator="BatchMatMul", dtype=activation_dtype, weight_dtype=(activation_dtype if activation_dtype in ("FP32", "FP16") else None)),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": {
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=operator,
+        family="FullyConnectedFunctions",
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family="FullyConnectedFunctions", operator="BatchMatMul", dtype=activation_dtype, weight_dtype=(activation_dtype if activation_dtype in ("FP32", "FP16") else None)),
+        scalar_parameters={
             **({
                 "input_offset": input_offset,
                 "filter_offset": filter_offset,
@@ -4460,24 +4290,18 @@ def _build_batch_matmul_case(
             "output_w": output_dims["w"],
             "output_c": output_dims["c"],
         },
-        "tensor_dtypes": {"input_lhs": activation_dtype, "input_rhs": activation_dtype, "output": activation_dtype},
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": dict(descriptor["resolved_comparison"]),
-        # ctx->buf sized rhs_cols * sizeof(int32_t) for S8 only (kernel-sum scratch the
-        # kernel fills itself at runtime); S16 needs none. See run_batch_matmul_once().
-        "scratch_buffer": {
-            "bytes": (
-                input_rhs_dims["w"] * 4
+        tensor_dtypes={"input_lhs": activation_dtype, "input_rhs": activation_dtype, "output": activation_dtype},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(descriptor["resolved_comparison"]),
+        scratch_bytes=input_rhs_dims["w"] * 4
                 if activation_dtype == "S8"
                 else (
                     int(_extract_define_int(_find_source_file(generated_test.directory).read_text(encoding="utf-8"), f"{prefix.upper()}_BUFFER_SIZE_MAX"))
                     if activation_dtype in ("FP32", "FP16")
                     else 0
-                )
-            )
-        },
-        "required_target_capabilities": [
+                ),
+        capabilities=[
             "batch_matmul_s8"
             if activation_dtype == "S8"
             else (
@@ -4486,10 +4310,7 @@ def _build_batch_matmul_case(
                 else ("batch_matmul_f32" if activation_dtype == "FP32" else "batch_matmul_f16")
             )
         ],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+    )
 
 
 def _build_data_movement_bundle(
@@ -4511,38 +4332,27 @@ def _build_data_movement_bundle(
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
-    blobs: list[BlobInfo] = []
-    for blob_id, role, dtype, dims, array, mutable_data, host_only in arrays:
-        path = blobs_dir / f"{role}.bin"
-        _write_blob(path, np.asarray(array))
-        blobs.append(_blob_info(path, blob_id=blob_id, role=role, dtype=dtype, dimensions=dims, mutable_data=mutable_data, host_only=host_only))
+    blobs = _write_generated_blobs(blobs_dir, arrays)
 
     descriptor_path = generated_test.directory / "descriptor.yaml"
     descriptor_text = descriptor_path.read_text(encoding="utf-8")
-    manifest = {
-        "schema_name": "hct.case_manifest",
-        "schema_version": 1,
-        "case_id": case_id,
-        "descriptor_name": generated_test.name,
-        "descriptor_path": display_path(descriptor_path, project_root),
-        "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
-        "operator": str(generated_test.descriptor.get("operator", "")),
-        "family": generated_test.family,
-        "target_cpu": generated_test.cpu,
-        "kernel_id": _kernel_id(project_root, family=generated_test.family, operator=str(generated_test.descriptor.get("operator", "")), dtype=lookup_dtype),
-        "adapter_metadata_schema": 1,
-        "source": "generated_test_bridge",
-        "serialized_scalar_parameters": scalar_parameters,
-        "tensor_dtypes": tensor_dtypes,
-        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
-        "expected_output": {"dtype": blobs[-1].dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        "correctness_comparison": comparison,
-        "scratch_buffer": {"bytes": int(scratch_bytes)},
-        "required_target_capabilities": [cmsis_function],
-        "repeated_invocation_safe": True,
-        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
-    }
-    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=tuple(blobs))
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_text
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=str(generated_test.descriptor.get("operator", "")),
+        family=generated_test.family,
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=str(generated_test.descriptor.get("operator", "")), dtype=lookup_dtype),
+        scalar_parameters=scalar_parameters,
+        tensor_dtypes=tensor_dtypes,
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": blobs[-1].dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=comparison,
+        scratch_bytes=int(scratch_bytes),
+        capabilities=[cmsis_function],
+    )
 
 
 def _build_data_movement_case(
