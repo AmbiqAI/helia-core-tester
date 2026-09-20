@@ -21,21 +21,31 @@ def _fp16(value) -> np.ndarray:
 
 
 # float16 tanh LUT sampled over x in [0, 4] with 256 intervals, matching
-# arm_nn_tanh_lut256_f16 in Source/NNSupportFunctions/arm_nntables_flt.c:
-#   arm_nn_tanh_lut256_f16[i] = float16(tanh(4 * i / 256))
+# arm_nn_tanh_lut_f16 in Source/NNSupportFunctions/arm_nntables_flt.c:
+#   arm_nn_tanh_lut_f16[i] = float16(tanh(4 * i / 256))
 _TANH_LUT256_F16 = np.tanh(4.0 * np.arange(257, dtype=np.float64) / 256.0).astype(np.float16)
 
 
 def _tanh_reference_f16(input_data: np.ndarray) -> np.ndarray:
-    """Mirror the scalar FP16 tanh fallback used when MVE intrinsics are disabled."""
-    data = _fp16(input_data)
-    x2 = _fp16(_fp16(data) * _fp16(data))
-    num = _fp16(_fp16(data) * _fp16(_fp16(27.0) + x2))
-    den = _fp16(_fp16(27.0) + _fp16(_fp16(9.0) * x2))
-    approx = _fp16(num / den)
+    """Scalar LUT reference with separately rounded half-precision operations.
 
-    saturated = np.where(data < _fp16(0.0), _fp16(-1.0), _fp16(1.0))
-    return np.where(np.abs(data) > _fp16(3.0), saturated, approx).astype(np.float16)
+    Models round-to-nearest without flushing subnormals. Optimized scalar code
+    may contract interpolation, so off-grid bitwise parity is not promised.
+    The table is independently sampled from tanh, not read from the kernel.
+    """
+    x = _fp16(input_data)
+    is_nan = (x.view(np.uint16) & 0x7fff) > 0x7c00
+    # Classify before indexing: NaNs must never undergo an integer conversion.
+    ax = _fp16(np.abs(np.where(is_nan, _fp16(0.0), x)))
+    saturate = ax > _fp16(4.0)
+    t = _fp16(np.minimum(ax, _fp16(4.0)) * _fp16(64.0))
+    idx = np.minimum(t.astype(np.uint16), np.uint16(255))
+    frac = _fp16(t - idx.astype(np.float16))
+    y0 = _TANH_LUT256_F16[idx]
+    diff = _fp16(_TANH_LUT256_F16[idx + 1] - y0)
+    interp = _fp16(y0 + _fp16(diff * frac))
+    magnitude = np.where(saturate, _fp16(1.0), interp)
+    return _fp16(np.where(is_nan, x, np.copysign(magnitude, x)))
 
 
 def _tanh_reference_f16_mve(input_data: np.ndarray) -> np.ndarray:
@@ -148,9 +158,9 @@ class OpNNActivationFloat(OperationBase):
             dtype=float_dtype,
         )
         activation_type = self._activation_symbol()
-        # On MVE targets the float16 tanh kernel takes the LUT-based Helium path
-        # (arm_nn_vtanh_lut_direct_mve_f16), which differs from the scalar rational
-        # fallback used on non-MVE targets; mirror the path the device will execute.
+        # Select the reference by generation profile, not compiled kernel route.
+        # M55-generated cases also run on the scalar fallback; off-grid rounding
+        # can differ there, so existing comparison budgets remain necessary.
         use_mve_tanh = get_cpu_profile(self.target_cpu).has_mve
         output_data = _activation_reference(
             input_data,
