@@ -32,7 +32,8 @@ import yaml
 from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_float import (
     OpNNActivationFloat,
 )
-from helia_core_tester.generation.test_ops import default_seed_for_case
+from helia_core_tester.core.cpu_targets import missing_required_capabilities
+from helia_core_tester.generation.test_ops import _required_capabilities, default_seed_for_case
 
 GOLDEN_CASE = "nn_activation_float_tanh_f16"
 GOLDEN_CPU = "cortex-m55"
@@ -183,6 +184,18 @@ def test_finite_case_header_matches_the_checked_in_fixture(tmp_path: Path) -> No
     _assert_header_matches(
         _emit_header(tmp_path), fixture.read_text(), f"{GOLDEN_CASE}_nn_activation_float.h", fixture
     )
+
+
+@pytest.mark.parametrize("cpu,missing", [
+    ("cortex-m55", []),
+    ("cortex-m55-dsp", ["mve"]),
+    ("cortex-m4", ["mve", "fp16_execution"]),
+    ("cortex-m0", ["mve", "fp16_execution"]),
+])
+@pytest.mark.parametrize("kind", ["cutoff", "index"])
+def test_tanh_lut_grid_cases_require_mve_generation_profile(cpu: str, missing: list[str], kind: str) -> None:
+    desc = _descriptor(f"nn_activation_float_tanh_lut_{kind}_f16")
+    assert missing_required_capabilities(cpu, _required_capabilities(desc)) == missing
 
 
 @pytest.mark.parametrize("seed", [0, 500])

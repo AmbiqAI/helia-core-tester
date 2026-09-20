@@ -610,6 +610,9 @@ comparison:
 operator: NNActivationFloat
 name: nn_activation_float_tanh_lut_cutoff_f16
 suite: float
+# Generation-profile gate: the non-MVE oracle is still rational. M55-generated
+# data also runs on the scalar fallback; this capability does not select code.
+required_capabilities: [mve]
 tensor_dtypes:
   input: FP16
   output: FP16
@@ -630,6 +633,8 @@ comparison:
 operator: NNActivationFloat
 name: nn_activation_float_tanh_lut_index_f16
 suite: float
+# Same generation-profile restriction as the cutoff case; Refs #134.
+required_capabilities: [mve]
 tensor_dtypes:
   input: FP16
   output: FP16
