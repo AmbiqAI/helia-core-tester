@@ -2196,11 +2196,8 @@ def _build_activation_case(
     input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
 
-    dtype_map = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}
-    numpy_dtype = dtype_map[activation_dtype]
-    extract_array = _extract_typed_array if activation_dtype in {"FP32", "FP16"} else _extract_array
-    input_flat = np.array(extract_array(header_text, f"{prefix}_input", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
-    expected_flat = np.array(extract_array(header_text, f"{prefix}_expected_output", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
+    input_flat = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype)
+    expected_flat = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype)
     if input_flat.size != int(np.prod(input_shape)):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: generated input array size ({input_flat.size}) doesn't match header "
@@ -2569,11 +2566,8 @@ def _build_requantize_case(
     source_text = source_path.read_text(encoding="utf-8")
     prefix = generated_test.name
 
-    dtype_map = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}
-    numpy_dtype = dtype_map[activation_dtype]
-    extract_array = _extract_typed_array if activation_dtype in {"FP32", "FP16"} else _extract_array
-    input_flat = np.array(extract_array(header_text, f"{prefix}_input", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
-    expected_flat = np.array(extract_array(header_text, f"{prefix}_expected_output", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
+    input_flat = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype)
+    expected_flat = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype)
     size = int(np.prod(input_shape))
     if input_flat.size != size or expected_flat.size != size:
         raise UnsupportedGeneratedTestError(
@@ -3196,11 +3190,8 @@ def _build_abs_case(
     input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
     output_shape = (output_dims["n"], output_dims["h"], output_dims["w"], output_dims["c"])
 
-    dtype_map = {"S8": np.int8, "S16": np.int16, "FP32": np.float32, "FP16": np.float16}
-    numpy_dtype = dtype_map[activation_dtype]
-    extract_array = _extract_typed_array if activation_dtype in {"FP32", "FP16"} else _extract_array
-    input_flat = np.array(extract_array(header_text, f"{prefix}_input", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_input"), dtype=numpy_dtype)
-    expected_flat = np.array(extract_array(header_text, f"{prefix}_expected_output", activation_dtype) if activation_dtype in {"FP32", "FP16"} else extract_array(header_text, f"{prefix}_expected_output"), dtype=numpy_dtype)
+    input_flat = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype)
+    expected_flat = _extract_typed_array(header_text, f"{prefix}_expected_output", activation_dtype)
     if input_flat.size != int(np.prod(input_shape)) or expected_flat.size != int(np.prod(output_shape)):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: generated array sizes (input={input_flat.size}, expected_output={expected_flat.size}) "
