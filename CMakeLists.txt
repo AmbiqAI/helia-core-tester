@@ -228,6 +228,8 @@ if(ENABLE_COVERAGE)
     message(FATAL_ERROR "ENABLE_COVERAGE_MVE_FLOAT is only supported for cortex-m55")
   endif()
   # Instrument ns-cmsis-nn only; keep harness sources uninstrumented.
+  # Cached coverage objects can embed another build directory's gcda paths.
+  set_property(TARGET cmsis-nn PROPERTY C_COMPILER_LAUNCHER "")
   target_compile_options(cmsis-nn PRIVATE --coverage -fprofile-info-section -O0 -g)
   if(NOT ENABLE_COVERAGE_MVE_FLOAT)
     # Avoid inline MVE asm paths that can fail register allocation under gcov instrumentation.

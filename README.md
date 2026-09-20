@@ -448,6 +448,7 @@ Compiler cache (opt-in):
 - when `ccache` or `sccache` is on `PATH`, the CMake configure adds `CMAKE_C_COMPILER_LAUNCHER` and, at verbosity 1 or higher, logs which launcher it picked.
 - `HELIA_CORE_TESTER_COMPILER_LAUNCHER` names a specific tool; a name that is not on `PATH` fails the configure rather than building uncached. Set it to `none` (or empty) to build without a launcher even where one is installed, which is what a reproducibility build wants.
 - no image ships either tool; a host without one builds exactly as before.
+- With `ENABLE_COVERAGE=ON` (including `--coverage`), the instrumented `cmsis-nn` target bypasses `CMAKE_C_COMPILER_LAUNCHER`: cached objects can contain another build's profile-output paths. Uninstrumented harness targets and non-coverage builds retain their launcher. This does not bypass caches hidden inside compiler wrappers or custom compile rules.
 
 ## Coverage Merge
 
