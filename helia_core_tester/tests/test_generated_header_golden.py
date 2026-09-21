@@ -199,15 +199,17 @@ def test_tanh_lut_grid_cases_require_mve_generation_profile(cpu: str, missing: l
 
 
 @pytest.mark.parametrize("seed", [0, 500])
+@pytest.mark.parametrize("cpu", ["cortex-m55", "cortex-m55-dsp"])
 @pytest.mark.parametrize("kind,input_bits,output_bits", [
     ("cutoff", 0x4280, 0x3BFA),
     ("index", 0xBE00, 0xBB3E),
 ])
 def test_tanh_lut_grid_cases_emit_exact_discriminators(
-    tmp_path: Path, seed: int, kind: str, input_bits: int, output_bits: int,
+    tmp_path: Path, seed: int, cpu: str, kind: str, input_bits: int, output_bits: int,
 ) -> None:
     name = f"nn_activation_float_tanh_lut_{kind}_f16"
-    op = OpNNActivationFloat(_descriptor(name), seed, target_cpu=GOLDEN_CPU)
+    op = OpNNActivationFloat(_descriptor(name), seed, target_cpu=cpu)
+    # Emitter-only check, deliberately bypassing admission (DSP remains gated).
     # Header emission does not read the model; full generation is qualified separately.
     (tmp_path / f"{name}.tflite").touch()
     op.generate_c_files(tmp_path)

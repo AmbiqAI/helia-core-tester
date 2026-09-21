@@ -196,24 +196,55 @@ def test_nn_activation_float_fp16_tanh_reference_matches_scalar_fallback(monkeyp
     )
     expected = np.array(
         [
-            0.617676,
-            0.573242,
-            -0.360107,
-            0.521973,
-            -0.469482,
-            0.670898,
-            -0.423096,
-            0.644043,
-            -0.450928,
-            1.000000,
-            -1.000000,
+            0x38e0, 0x3889, 0xb5bc, 0x3823, 0xb775, 0x3949,
+            0xb6ba, 0x3914, 0xb729, 0x3bfc, 0xbbff,
         ],
-        dtype=np.float16,
-    )
+        dtype=np.uint16,
+    ).view(np.float16)
 
     actual = module._activation_reference(inputs, "ARM_NN_FLT_ACT_TANH", 0.0, "FP16")
 
     np.testing.assert_array_equal(actual, expected)
+
+
+def test_nn_activation_float_scalar_tanh_grid_and_saturation(monkeypatch) -> None:
+    import math
+    import struct
+
+    module = _load_nn_activation_float_module(monkeypatch)
+    # At exact grid points interpolation vanishes. Derive half bits from the
+    # mathematical function with stdlib libm/packing, not the production table.
+    grid = np.arange(257, dtype=np.float16) / np.float16(64)
+    inputs = np.concatenate((grid, -grid, np.array([4.00390625, -4.00390625], dtype=np.float16)))
+    expected = [struct.unpack('<H', struct.pack('<e', math.tanh(float(x))))[0] for x in inputs[:-2]]
+    # Beyond 4 the specified approximation saturates, unlike rounded math.tanh.
+    expected.extend([0x3c00, 0xbc00])
+    actual = module._activation_reference(inputs, "ARM_NN_FLT_ACT_TANH", 0.0, "FP16")
+    np.testing.assert_array_equal(actual.view(np.uint16), expected)
+
+
+def test_nn_activation_float_scalar_tanh_separate_interpolation_rounding(monkeypatch) -> None:
+    module = _load_nn_activation_float_module(monkeypatch)
+    # x=0x2581: y0=1/64, half table difference=1023/65536,
+    # fraction=385/1024. Rounding the product first yields 0x2580;
+    # single-rounded fused interpolation yields 0x2581. Both signs matter.
+    inputs = np.array([0x2581, 0xa581], dtype=np.uint16).view(np.float16)
+    scalar = module._activation_reference(inputs, "ARM_NN_FLT_ACT_TANH", 0.0, "FP16")
+    mve = module._activation_reference(inputs, "ARM_NN_FLT_ACT_TANH", 0.0, "FP16", use_mve_tanh=True)
+    np.testing.assert_array_equal(scalar.view(np.uint16), [0x2580, 0xa580])
+    np.testing.assert_array_equal(mve.view(np.uint16), [0x2581, 0xa581])
+
+
+def test_nn_activation_float_scalar_tanh_special_classes(monkeypatch) -> None:
+    module = _load_nn_activation_float_module(monkeypatch)
+    # Every NaN encoding, without imposing any output payload/sign policy.
+    nan_bits = np.concatenate((np.arange(0x7c01, 0x8000), np.arange(0xfc01, 0x10000))).astype(np.uint16)
+    bits = np.concatenate((np.array([0, 0x8000, 0x7c00, 0xfc00], dtype=np.uint16), nan_bits))
+    with np.errstate(all="raise"):
+        actual = module._activation_reference(bits.view(np.float16), "ARM_NN_FLT_ACT_TANH", 0.0, "FP16")
+    actual_bits = actual.view(np.uint16)
+    np.testing.assert_array_equal(actual_bits[:4], [0, 0x8000, 0x3c00, 0xbc00])
+    assert np.all((actual_bits[4:] & 0x7fff) > 0x7c00)
 
 
 def test_nn_activation_float_fp16_tanh_reference_mve_matches_helium_lut(monkeypatch) -> None:

@@ -610,8 +610,8 @@ comparison:
 operator: NNActivationFloat
 name: nn_activation_float_tanh_lut_cutoff_f16
 suite: float
-# Generation-profile gate: the non-MVE oracle is still rational. M55-generated
-# data also runs on the scalar fallback; this capability does not select code.
+# Retained generation-profile gate pending DSP qualification of the scalar oracle.
+# M55-generated data also runs on scalar fallback; this does not select code.
 required_capabilities: [mve]
 tensor_dtypes:
   input: FP16
