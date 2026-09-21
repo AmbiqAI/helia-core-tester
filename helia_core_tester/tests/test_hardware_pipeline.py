@@ -875,6 +875,46 @@ def _render_for(baseline, tmp_path: Path):
     return plan_app(BOARD, repo_root=PROJECT_ROOT, build_dir=tmp_path / "bd", baseline=baseline)
 
 
+def _lock_with(render, name: str, module) -> "_FakeLock":
+    """Complete lock for `render`, with `name` replaced."""
+    modules = {
+        spec.name: _FakeLockModule("packaged", spec.project, None, None)
+        for spec in render.modules
+    }
+    modules[name] = module
+    return _FakeLock(modules)
+
+
+def test_lock_must_carry_every_declared_module(tmp_path: Path) -> None:
+    """The manifest hash authenticates nsx.yml, not the lock's module set.
+
+    Deleting an entry from a hand-edited lock left every remaining entry valid,
+    and the frozen sync then faithfully materialised the smaller set.
+    """
+    from helia_core_tester.hardware.dependency_baseline import resolve_baseline
+
+    baseline = resolve_baseline(PROJECT_ROOT)
+    render = _render_for(baseline, tmp_path)
+    pinned = baseline.project("ns-cmsis-nn")
+
+    complete = _FakeLock({
+        spec.name: _FakeLockModule("packaged", spec.project, None, None)
+        for spec in render.modules
+    })
+    assert firmware_build.baseline_resolution_reason(render, complete) is None
+
+    short = _FakeLock({k: v for k, v in complete.modules.items() if k != "nsx-cmsis-nn"})
+    assert firmware_build.baseline_resolution_reason(render, short) == (
+        "nsx.lock omits declared module 'nsx-cmsis-nn'"
+    )
+
+    # Extra entries are fine: NSX resolves a closure, which may exceed what the
+    # manifest declares.
+    wider = _FakeLock({**complete.modules, "nsx-extra": _FakeLockModule("packaged", "x", None, None)})
+    assert firmware_build.baseline_resolution_reason(render, wider) is None
+    assert pinned.ref  # the fixture's baseline really does pin the kernels
+
+
 def test_lock_must_resolve_the_commits_the_baseline_pins(tmp_path: Path) -> None:
     """Frozen sync verifies modules against the lock, never the lock against the
     baseline -- so a lock resolved off the pin materialises the wrong tree while the
@@ -886,41 +926,55 @@ def test_lock_must_resolve_the_commits_the_baseline_pins(tmp_path: Path) -> None
     render = _render_for(baseline, tmp_path)
     pinned = baseline.project("ns-cmsis-nn")
 
-    agreeing = _FakeLock({
-        "nsx-cmsis-nn": _FakeLockModule("git", "ns-cmsis-nn", pinned.ref, pinned.url),
-    })
+    agreeing = _lock_with(
+        render, "nsx-cmsis-nn", _FakeLockModule("git", "ns-cmsis-nn", pinned.ref, pinned.url)
+    )
     assert firmware_build.baseline_resolution_reason(render, agreeing) is None
 
-    drifted = _FakeLock({
-        "nsx-cmsis-nn": _FakeLockModule("git", "ns-cmsis-nn", "0" * 40, pinned.url),
-    })
+    drifted = _lock_with(
+        render, "nsx-cmsis-nn", _FakeLockModule("git", "ns-cmsis-nn", "0" * 40, pinned.url)
+    )
     assert "but the baseline pins project 'ns-cmsis-nn'" in (
         firmware_build.baseline_resolution_reason(render, drifted)
     )
 
     # A commit is only identified by the repository it is in.
-    wrong_repo = _FakeLock({
-        "nsx-cmsis-nn": _FakeLockModule("git", "ns-cmsis-nn", pinned.ref, "https://example.invalid/x.git"),
-    })
+    wrong_repo = _lock_with(
+        render,
+        "nsx-cmsis-nn",
+        _FakeLockModule("git", "ns-cmsis-nn", pinned.ref, "https://example.invalid/x.git"),
+    )
     assert "fetched module 'nsx-cmsis-nn' from" in (
         firmware_build.baseline_resolution_reason(render, wrong_repo)
     )
 
+    # A blank project evades the pin checks entirely, so it is rejected rather
+    # than skipped. `from_yaml_dict` defaults the field to "", which is what a
+    # hand-edited lock with the key deleted actually yields.
+    for blank in (None, "", "   "):
+        anonymous = _lock_with(
+            render, "nsx-cmsis-nn", _FakeLockModule("git", blank, pinned.ref, pinned.url)
+        )
+        assert firmware_build.baseline_resolution_reason(render, anonymous) == (
+            "nsx.lock module 'nsx-cmsis-nn' names no project"
+        ), blank
+
     # A stripped url is unattributable, not "unspecified, therefore fine": it is
     # the easiest edit to make to a lock and the one that hides provenance.
     for missing in (None, "", "   "):
-        stripped = _FakeLock({
-            "nsx-cmsis-nn": _FakeLockModule("git", "ns-cmsis-nn", pinned.ref, missing),
-        })
+        stripped = _lock_with(
+            render, "nsx-cmsis-nn", _FakeLockModule("git", "ns-cmsis-nn", pinned.ref, missing)
+        )
         assert "records no repository for module 'nsx-cmsis-nn'" in (
             firmware_build.baseline_resolution_reason(render, stripped)
         ), missing
 
     # Nothing to contradict: packaged modules and projects the baseline never names.
-    ignorable = _FakeLock({
-        "nsx-tooling": _FakeLockModule("packaged", "neuralspotx", None, None),
-        "nsx-other": _FakeLockModule("git", "not-in-the-baseline", "1" * 40, "https://example.invalid/y.git"),
-    })
+    ignorable = _lock_with(
+        render,
+        "nsx-tooling",
+        _FakeLockModule("git", "not-in-the-baseline", "1" * 40, "https://example.invalid/y.git"),
+    )
     assert firmware_build.baseline_resolution_reason(render, ignorable) is None
 
 

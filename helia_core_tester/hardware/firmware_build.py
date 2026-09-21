@@ -433,15 +433,26 @@ def baseline_resolution_reason(render: AppRender, lock: Any) -> Optional[str]:
     it: a commit is only identified by the repository it is in. Modules that are
     not git-backed (`packaged`, or a `--cmsis-nn-root` local source) have no pin
     to contradict and are skipped.
+
+    Every declared module must also appear. The manifest hash authenticates
+    nsx.yml, not the lock's module set, so deleting an entry left the rest
+    valid and the frozen sync then materialised a smaller set. A git entry
+    with a blank project is rejected rather than skipped, because a missing
+    project is the cheapest way to slip past the pin checks below.
     """
     baseline = render.baseline
+    missing = sorted({spec.name for spec in render.modules} - set(lock.modules))
+    if missing:
+        # Manifest hash covers nsx.yml, not the lock's set.
+        return f"nsx.lock omits declared module '{missing[0]}'"
     for name, module in sorted(lock.modules.items()):
         if str(module.kind) != "git":
             continue
-        project = getattr(module, "project", None)
-        if project is None:
-            continue
-        pinned = baseline.projects.get(str(project))
+        # Blank project evades every check below.
+        project = str(getattr(module, "project", "") or "").strip()
+        if not project:
+            return f"nsx.lock module '{name}' names no project"
+        pinned = baseline.projects.get(project)
         if pinned is None:
             continue
         commit = (module.commit or "").lower()
