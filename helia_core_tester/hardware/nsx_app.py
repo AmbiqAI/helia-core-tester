@@ -773,7 +773,8 @@ def reject_app_dir_inside_kernel_source(app_dir: Path, kernel_source: KernelSour
     if kernel_source.path is None:
         return
     source = kernel_source.path.resolve()
-    resolved_app = app_dir.resolve() if app_dir.exists() else app_dir.absolute()
+    # resolve() follows symlinked parents of new paths too.
+    resolved_app = app_dir.resolve()
     if not is_relative_to(resolved_app, source):
         return
     raise AppRenderError(

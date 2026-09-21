@@ -268,6 +268,18 @@ def test_an_app_dir_inside_the_checkout_is_refused(tmp_path: Path) -> None:
             cmsis_nn_root=checkout,
         )
 
+    # A symlink into the checkout is still inside it.
+    link = tmp_path / "build-link"
+    link.symlink_to(checkout / "Tests" / "helia-core-tester" / "build", target_is_directory=True)
+    with pytest.raises(nsx_app.AppRenderError, match="is inside --cmsis-nn-root"):
+        nsx_app.plan_app(
+            BOARD,
+            repo_root=PROJECT_ROOT,
+            build_dir=link / "hardware" / "apollo510_evb",
+            baseline=resolve_baseline(PROJECT_ROOT),
+            cmsis_nn_root=checkout,
+        )
+
     # ...and the same checkout with a build dir outside it renders fine.
     assert nsx_app.plan_app(
         BOARD,
