@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import jinja2
+import pytest
 
 from helia_core_tester.generation.ops.BroadcastFunctions.broadcast_to import OpBroadcastTo
 from helia_core_tester.generation.ops.DynamicUpdateSliceFunctions.dynamic_update_slice import OpDynamicUpdateSlice
@@ -953,3 +954,44 @@ def test_top_level_cmake_no_longer_uses_unity() -> None:
     runtime = (_repo_root() / "src" / "test_runtime" / "helia_test_runtime.c").read_text()
     assert "arm_abs_f32" not in runtime
     assert "arm_abs_f16" not in runtime
+
+
+def test_benchmark_dispatcher_has_no_unbuildable_hardware_backend() -> None:
+    """`HELIA_BENCH_TARGET=hardware` used to select benchmark_hw.j2, whose harness
+    included am_mcu_apollo.h / pmu_armv8.h. Generated standalone harnesses build
+    only as FVP executables (retarget + cmsis_startup + the Corstone-300 linker
+    script) and get neither header on their include path, so that mode could not
+    compile once the HELIA_HARDWARE_BUILD branch went away."""
+    from helia_core_tester.generation.ops.ConvolutionFunctions.convolve import (
+        BENCHMARK_TARGETS,
+        _resolve_benchmark_target,
+    )
+
+    templates = _repo_root() / "assets" / "templates" / "common" / "standalone"
+    assert not (templates / "benchmark_hw.j2").exists()
+    dispatcher = (templates / "benchmark.j2").read_text()
+    assert 'include "common/standalone/benchmark_fvp.j2"' in dispatcher
+    assert "benchmark_hw.j2" not in dispatcher.split("#}")[-1], (
+        "the dispatcher must not still include the removed backend"
+    )
+
+    assert BENCHMARK_TARGETS == ("fvp",)
+    assert _resolve_benchmark_target() == "fvp"
+
+
+def test_removed_benchmark_target_is_refused_by_name(monkeypatch) -> None:
+    """...and it fails at generation, naming the replacement, rather than emitting
+    cases that die at the first #include."""
+    from helia_core_tester.generation.ops.ConvolutionFunctions.convolve import (
+        BENCHMARK_TARGET_ENV_VAR,
+        _resolve_benchmark_target,
+    )
+
+    monkeypatch.setenv(BENCHMARK_TARGET_ENV_VAR, "hardware")
+    with pytest.raises(ValueError, match="hardware run"):
+        _resolve_benchmark_target()
+
+    monkeypatch.setenv(BENCHMARK_TARGET_ENV_VAR, "")
+    assert _resolve_benchmark_target() == "fvp"
+    monkeypatch.delenv(BENCHMARK_TARGET_ENV_VAR)
+    assert _resolve_benchmark_target() == "fvp"

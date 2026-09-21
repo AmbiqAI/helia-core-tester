@@ -410,8 +410,18 @@ def baseline_resolution_reason(render: AppRender, lock: Any) -> Optional[str]:
                 f"nsx.lock resolved module '{name}' to {commit or '<none>'}, but the baseline "
                 f"pins project '{project}' at {pinned.ref}"
             )
+        # Required, not merely checked when present: a truthiness guard would let
+        # a lock with the url stripped out pass, which is the easiest edit to
+        # make and the one that hides which repository a commit came from. A
+        # baseline-pinned git module with no recorded url is unattributable, so
+        # it is rejected like a mismatched one.
         url = (getattr(module, "url", None) or "").strip()
-        if url and url != pinned.url:
+        if not url:
+            return (
+                f"nsx.lock records no repository for module '{name}', so the commit it pins "
+                f"cannot be attributed to the baseline's '{project}' at {pinned.url}"
+            )
+        if url != pinned.url:
             return (
                 f"nsx.lock fetched module '{name}' from {url}, but the baseline pins project "
                 f"'{project}' in {pinned.url}"

@@ -882,6 +882,16 @@ def test_lock_must_resolve_the_commits_the_baseline_pins(tmp_path: Path) -> None
         firmware_build.baseline_resolution_reason(render, wrong_repo)
     )
 
+    # A stripped url is unattributable, not "unspecified, therefore fine": it is
+    # the easiest edit to make to a lock and the one that hides provenance.
+    for missing in (None, "", "   "):
+        stripped = _FakeLock({
+            "nsx-cmsis-nn": _FakeLockModule("git", "ns-cmsis-nn", pinned.ref, missing),
+        })
+        assert "records no repository for module 'nsx-cmsis-nn'" in (
+            firmware_build.baseline_resolution_reason(render, stripped)
+        ), missing
+
     # Nothing to contradict: packaged modules and projects the baseline never names.
     ignorable = _FakeLock({
         "nsx-tooling": _FakeLockModule("packaged", "neuralspotx", None, None),

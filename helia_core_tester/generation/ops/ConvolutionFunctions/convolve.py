@@ -16,6 +16,40 @@ from helia_core_tester.generation.ops._shared.bias_init import (
 from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel
 
 
+BENCHMARK_TARGET_ENV_VAR = "HELIA_BENCH_TARGET"
+BENCHMARK_TARGETS = ("fvp",)
+
+
+def _resolve_benchmark_target() -> str:
+    """The benchmark backend common/standalone/benchmark.j2 renders.
+
+    Only "fvp" survives. The "hardware" backend (benchmark_hw.j2) emitted a
+    harness that included am_mcu_apollo.h and pmu_armv8.h, and it was buildable
+    only through the root CMakeLists' HELIA_HARDWARE_BUILD branch, which is
+    gone: generated standalone harnesses are now built exclusively as FVP
+    executables, linked against retarget/cmsis_startup and the Corstone-300
+    linker script, where those headers have no include path to resolve against.
+    Left alone, `HELIA_BENCH_TARGET=hardware` would generate cases that fail at
+    the first #include, a long way from the switch that caused it.
+
+    So it is refused here, naming what replaced it: `helia_core_tester hardware
+    run` measures these same kernels on real silicon through the
+    benchmark-server firmware, and reads far more of the PMU than this backend
+    ever did (see docs/performance-streaming-design.md).
+    """
+    requested = os.environ.get(BENCHMARK_TARGET_ENV_VAR, "fvp").strip() or "fvp"
+    if requested not in BENCHMARK_TARGETS:
+        raise ValueError(
+            f"{BENCHMARK_TARGET_ENV_VAR}={requested!r} is not a benchmark target "
+            f"(supported: {', '.join(BENCHMARK_TARGETS)}). The 'hardware' backend was "
+            f"removed with the CMake-driven hardware build; run kernels on real "
+            f"silicon with `helia_core_tester hardware run` instead, which streams "
+            f"them to the benchmark-server firmware and captures the full PMU counter "
+            f"set."
+        )
+    return requested
+
+
 class OpConvolve(OperationBase):
     """Convolve operation."""
 
@@ -761,11 +795,9 @@ class OpConvolve(OperationBase):
                 else ('cmsis_nn_conv_params_f32' if float_kernel else 'cmsis_nn_conv_params')
             ),
             'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
-            # Selects common/standalone/benchmark.j2's backend: "fvp" (default,
-            # DWT-only) or "hardware" (DWT + PMU, Apollo510/Cortex-M55 real
-            # silicon). No CLI flag exists yet for this -- set via env var so
-            # benchmarking scripts can select it without deeper Config/CLI plumbing.
-            'benchmark_target': os.environ.get("HELIA_BENCH_TARGET", "fvp"),
+            # Selects common/standalone/benchmark.j2's backend. "fvp" is the
+            # only one left; see _resolve_benchmark_target().
+            'benchmark_target': _resolve_benchmark_target(),
         }
         if float_kernel:
             context['conv_activation_min_literal'] = builder.format_float_literal(conv_params['activation_min'])

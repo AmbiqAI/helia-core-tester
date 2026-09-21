@@ -1,12 +1,11 @@
 {#
   FVP-target DWT-based op-level benchmarking harness (benchmark_target == "fvp").
 
-  This is one of two interchangeable benchmark backends selected by
-  common/standalone/benchmark.j2 (the dispatcher) based on the
-  `benchmark_target` context variable ("fvp" [default] or "hardware" -- see
-  benchmark_hw.j2 for the Apollo510/PMU backend). Op templates never include
-  this file directly -- they always include benchmark.j2 and stay agnostic to
-  which physical/simulated target is active.
+  The only benchmark backend, reached through common/standalone/benchmark.j2
+  (the dispatcher) -- see there for the Apollo510/PMU backend that used to sit
+  alongside it and what replaced it. Op templates never include this file
+  directly: they always include benchmark.j2 and stay agnostic to which target
+  is active.
 
   Included by op templates that have split their kernel invocation into
   `{{name}}_bench_init()` (one-time buffer/context/weight-sum setup, untimed)
@@ -22,7 +21,7 @@
   Uses the DWT cycle counter only -- not cycle-accurate on FVP, intended for
   quick relative before/after comparisons during development. For
   cycle-accurate/PMU-based measurement on real Apollo510 hardware, see
-  benchmark_hw.j2.
+  benchmark.j2.
 
   Output format is consumed by helia_core_tester.reporting.parser.TestResultParser:
     [BENCH] <name> warmup_runs=<W> measured_runs=<M>
