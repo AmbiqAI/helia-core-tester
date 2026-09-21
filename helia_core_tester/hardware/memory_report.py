@@ -350,9 +350,9 @@ def build_size_probe(
         FirmwareOptions,
         build as nsx_build,
         configure as nsx_configure,
+        ensure_host_tools,
         load_baseline,
         lock_and_sync,
-        prepare_app,
     )
     from .nsx_app import commit_render_state, render_app
 
@@ -367,8 +367,10 @@ def build_size_probe(
 
     # Same renderer as the firmware, with the probe's target and this variant's
     # kernel switches -- so the probe measures the library the firmware would get,
-    # not a hand-mirrored approximation of it.
-    prepare_app(board, repo_root=project_root, build_dir=probe_build_dir, options=options)
+    # not a hand-mirrored approximation of it. ensure_host_tools() rather than
+    # prepare_app(): the latter would render the *server* app into this directory
+    # first, only for the probe render below to overwrite it.
+    ensure_host_tools(project_root, load_baseline(project_root, options))
     render = render_app(
         board,
         repo_root=project_root,

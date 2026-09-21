@@ -120,8 +120,14 @@ in its `module_registry` block so `nsx lock` cannot resolve the packaged registr
 mutable tags instead. `--baseline FILE` swaps the file (heliaPROFILER's
 `compatibility-baseline-v1.json` is accepted, so a run can be built against hpx's
 qualified pins), and `--cmsis-nn-root PATH` builds the kernels from a local checkout
-instead — declared to NSX as a local module source, and read by the generate step
-too, so the cases and the kernels stay on one tree. **`$CMSIS_NN_ROOT` and the
+instead — declared to NSX as the `ns-cmsis-nn` project's `local_path`, mirrored into
+the app at `modules/ns-cmsis-nn/` on every sync, and read by the generate step from
+that mirror, so the cases and the kernels stay on one tree. Editing the checkout and
+rebuilding works without `--update-dependencies`: the checkout's content hash is part
+of the render identity, so an edit re-locks and re-mirrors by itself. The build
+directory must lie outside the checkout (use `--build-dir` in the nested
+`<ns-cmsis-nn>/Tests/helia-core-tester` layout), and such a build is not qualified
+against the baseline. **`$CMSIS_NN_ROOT` and the
 nested `<ns-cmsis-nn>/Tests/helia-core-tester` layout are not consulted by any
 hardware command**; they remain the FVP path's mechanism.
 
@@ -133,6 +139,21 @@ the commits `nsx.lock` names. `--update-dependencies` forces a re-resolve.
 Two host tools are still fetched into `artifacts/downloads/` and shared with the
 FVP path: ARM GCC (NSX's toolchain file resolves the cross compiler off `PATH`) and
 CMSIS_5 (the firmware takes `pmu_armv8.h` from it).
+
+CMSIS_5 is the one baseline project that is not an NSX module, so `nsx lock` cannot
+enforce its pin. Hardware commands do it instead: a **clean** CMSIS_5 checkout is
+fetched and checked out at the baseline's commit, leaving it on a detached HEAD.
+Two consequences worth knowing:
+
+- The FVP path shares that checkout, so after a hardware command it sits on the
+  pinned commit rather than on whatever `setup_cmsis5()`'s `--depth=1` clone of the
+  default branch produced. That is strictly more reproducible — the old behaviour
+  was "whatever upstream's default branch pointed at the day you cloned" — but it
+  is a change, and it is why the FVP build can become deterministic without anyone
+  asking for it.
+- A checkout with local changes, **including untracked files**, is treated as dirty:
+  it is left exactly as it is, never repointed, and the build is reported as
+  `development-overrides` rather than matching the baseline.
 
 `helia_core_tester doctor` reports the pinned neuralspotx version, the dependency
 baseline in force with its fingerprint, the resolved kernel source, the cross

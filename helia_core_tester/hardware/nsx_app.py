@@ -37,6 +37,7 @@ import yaml
 
 from .boards import BoardSpec
 from .dependency_baseline import CMSIS_NN_PROJECT, DependencyBaseline
+from .pathutil import is_relative_to
 
 APP_NAME = "hct_benchmark_server"
 SERVER_TARGET = "hct_benchmark_server"
@@ -75,11 +76,44 @@ class KernelSource:
 
     ref: Optional[str] = None
     path: Optional[Path] = None
+    #: Content hash of a local checkout, `sha256:<hex>`. A git ref names its own
+    #: content, so this is set only for the `path` form -- see
+    #: `local_tree_hash`.
+    content_hash: Optional[str] = None
 
     def describe(self) -> str:
+        """Stable identity of the *source*, not of its current content.
+
+        Deliberately excludes `content_hash`: this string is what a build
+        records and what `firmware_build.kernel_source_root` compares a later
+        `--cmsis-nn-root` against, and that comparison asks "is this the same
+        checkout", not "has it changed since". Change detection is the render
+        digest's job.
+        """
         if self.path is not None:
             return f"path:{self.path}"
         return f"{CMSIS_NN_PROJECT}@{self.ref}"
+
+
+def local_tree_hash(path: Path) -> str:
+    """Content hash of a local kernel checkout, in NSX's own terms.
+
+    `nsx lock` records a `content_hash` for a local module and `nsx sync
+    --frozen` refuses a tree that no longer matches it, so an edited checkout
+    makes the next frozen sync fail -- unless the lock is re-resolved first.
+    Nothing in the manifest changes when a source file is edited, so without
+    this the render digest would be identical, `lock_reuse_reason` would reuse
+    the stale lock, and the user would be told to pass `--update-dependencies`
+    to do something they never asked to opt into. Editing kernels and
+    rebuilding is the entire point of the flag.
+
+    Uses NSX's `hash_tree` so the tester's notion of "changed" is byte-for-byte
+    the one the frozen sync will apply, rather than a second opinion that can
+    disagree with it.
+    """
+    from neuralspotx.nsx_lock import hash_tree
+
+    return hash_tree(path)
 
 
 @dataclass(frozen=True)
@@ -142,6 +176,12 @@ class AppRender:
             digest.update(text.encode("utf-8"))
             digest.update(b"\0")
         digest.update(self.baseline.fingerprint.encode("utf-8"))
+        # A local kernel checkout's *contents* are an input to the build that no
+        # rendered file mentions, so they have to be folded in explicitly or an
+        # edit would leave the digest -- and therefore the lock-reuse decision --
+        # unchanged. None for a registry-resolved ref, which names its own
+        # content already.
+        digest.update((self.kernel_source.content_hash or "").encode("utf-8"))
         return digest.hexdigest()
 
     def state(self) -> Dict[str, Any]:
@@ -154,6 +194,7 @@ class AppRender:
             "board": self.board.id,
             "nsx_board": self.board.nsx_board,
             "kernel_source": self.kernel_source.describe(),
+            "kernel_source_content_hash": self.kernel_source.content_hash,
             "kernel_options": self.kernel_options.cache_vars(),
             "modules": [m.name for m in self.modules],
         }
@@ -251,8 +292,9 @@ def project_ref_overrides(
 ) -> Dict[str, str]:
     """Baseline pin per project the module list resolves to.
 
-    A module vendored from a local path has no project to pin, and a project the
-    baseline does not name is left to the packaged registry.
+    A module built from a local checkout pins its project by path instead (see
+    `render_module_registry`), so it takes no ref; a project the baseline does
+    not name is left to the packaged registry.
     """
     refs: Dict[str, str] = {}
     for spec in modules:
@@ -290,6 +332,7 @@ def render_module_registry(
     profile: Mapping[str, Any],
     ref_overrides: Mapping[str, str],
     url_overrides: Optional[Mapping[str, str]] = None,
+    local_projects: Optional[Mapping[str, Path]] = None,
 ) -> str:
     """The `module_registry:` block that holds every pin in force.
 
@@ -351,6 +394,44 @@ def render_module_registry(
         aligned["revision"] = ref
         modules[str(name)] = aligned
 
+    # A local checkout replaces its project's git URL, so the pin it would have
+    # carried is meaningless and is removed -- from the project and from every
+    # module of it, since a module revision outranks its project's. This is the
+    # project-level `local_path` NSX documents, not a module-level
+    # `source: {path:}`: the registry maps each module to its metadata inside the
+    # project tree (`modules/ns-cmsis-nn/nsx/nsx-module.yaml`), and only a
+    # project override keeps that mapping -- a module-level path source vendors
+    # the tree under the *module*'s name, where the module manifest, and so the
+    # `nsx::cmsis_nn` target, is not found.
+    for project, path in sorted((local_projects or {}).items()):
+        entry = projects.get(project) or dict(base_projects.get(project) or {"name": project})
+        # `local_path` and the git coordinates are mutually exclusive, not
+        # merely ranked: NSX consults `local_path` first and returns before it
+        # ever reads `url` (module_registry/_vendoring.py, both the clone and
+        # the sync paths), and `nsx module add` refuses them together outright
+        # ("Use either --project-local-path OR (--project-url --project-revision
+        # --project-path), not both"). So a `url`/`revision` left on a local
+        # project is inert *and* contradicts the manifest's own claim about
+        # where the code came from -- which is the claim every bundle records.
+        # Drop both; `local_path` is the whole answer.
+        entry.pop("revision", None)
+        entry.pop("url", None)
+        entry["local_path"] = str(path)
+        projects[project] = entry
+        owned = {
+            str(name): dict(base)
+            for name, base in base_modules.items()
+            if isinstance(base, Mapping) and str(base.get("project", "")) == project
+        }
+        owned.update({
+            name: dict(module)
+            for name, module in modules.items()
+            if str(module.get("project", "")) == project
+        })
+        for name, module in owned.items():
+            module.pop("revision", None)
+            modules[name] = module
+
     if not projects and not modules:
         return ""
     block: Dict[str, Any] = {}
@@ -387,10 +468,10 @@ def render_nsx_yml(
     ]
     for spec in modules:
         lines.append(f"  - name: {spec.name}")
-        if spec.local_path is not None:
-            lines.append("    source:")
-            lines.append(f"      path: {spec.local_path}")
-            continue
+        # A locally-sourced module is still declared by project: the path is a
+        # `module_registry.projects.<project>.local_path` override (see
+        # render_module_registry), so the registry's module -> metadata mapping
+        # inside the project tree keeps working.
         lines.append(f"    project: {spec.project}")
         ref = ref_overrides.get(spec.project)
         if ref is not None:
@@ -669,7 +750,39 @@ def kernel_source_for(
             f"--cmsis-nn-root {path} has no nsx/nsx-module.yaml, so NSX cannot use it "
             f"as a module. Use ns-cmsis-nn >= v7.23.0."
         )
-    return KernelSource(path=path)
+    return KernelSource(path=path, content_hash=local_tree_hash(path))
+
+
+def reject_app_dir_inside_kernel_source(app_dir: Path, kernel_source: KernelSource) -> None:
+    """Refuse to build a local-kernel app that sits inside the checkout it builds.
+
+    The nested layout (`<ns-cmsis-nn>/Tests/helia-core-tester`) plus the default
+    build dir puts the generated app under `--cmsis-nn-root`, and two things
+    then go wrong quietly rather than loudly:
+
+    * NSX's `_vendor_local_module_into_app` returns without copying when the
+      destination is inside the source, so the mirror is never written and the
+      frozen sync refuses a tree that was never made.
+    * `hash_tree(source)` walks the build tree, so the content hash covers the
+      app's own output. Every build would change it, re-lock, re-mirror and
+      change it again -- the digest could never settle.
+
+    Neither has a fix that is only a matter of care, so this is rejected with
+    the one thing that does work: a build dir outside the checkout.
+    """
+    if kernel_source.path is None:
+        return
+    source = kernel_source.path.resolve()
+    resolved_app = app_dir.resolve() if app_dir.exists() else app_dir.absolute()
+    if not is_relative_to(resolved_app, source):
+        return
+    raise AppRenderError(
+        f"The NSX app directory {resolved_app} is inside --cmsis-nn-root {source}. NSX will not "
+        f"mirror a local module into a destination under its own source, and hashing the checkout "
+        f"to detect kernel edits would then hash the build output too, so the build could never "
+        f"settle. Pass --build-dir pointing somewhere outside {source} (for example "
+        f"--build-dir ~/.cache/helia-core-tester/hardware/<board>)."
+    )
 
 
 def synced_kernel_dir(app_dir: Path) -> Path:
@@ -678,7 +791,8 @@ def synced_kernel_dir(app_dir: Path) -> Path:
     NSX vendors a git-backed module as a whole-repository clone under
     `modules/<project>/`, so this is a complete ns-cmsis-nn tree -- including
     `Tests/`, which the generation step reads schemas and reference tables from.
-    A `source: {path: ...}` module is mirrored to the same place on every sync.
+    A `--cmsis-nn-root` checkout is a `local_path` override on that same project,
+    so it is mirrored to the same place on every sync.
     """
     return app_dir / "modules" / CMSIS_NN_PROJECT
 
@@ -728,17 +842,22 @@ def plan_app(
 ) -> AppRender:
     """The app this render *would* write, computed without touching the app tree.
 
-    `hardware flash` uses this to compare the inputs in force now against the
-    render state the last `hardware build` recorded, without becoming a build
-    step itself (see `firmware_build.check_build_current`).
+    Used to answer "what would this render be" without touching the app tree --
+    by the nested-app-dir check below, and by tests that need a digest without
+    writing one. (The flash-side comparison this was written for arrives with
+    the flash-run-parity change, which adds the caller.)
     """
     options = kernel_options or KernelOptions()
     app_dir = app_dir_for(build_dir)
     kernel_source = kernel_source_for(baseline, cmsis_nn_root)
+    reject_app_dir_inside_kernel_source(app_dir, kernel_source)
     modules = resolve_modules(board.nsx_board, kernel_source)
     profile = starter_profile(board.nsx_board)
     ref_overrides = project_ref_overrides(modules, baseline)
     url_overrides = project_url_overrides(modules, baseline)
+    local_projects = {
+        spec.project: spec.local_path for spec in modules if spec.local_path is not None
+    }
 
     render = AppRender(
         app_dir=app_dir,
@@ -751,7 +870,7 @@ def plan_app(
             board,
             modules,
             ref_overrides,
-            render_module_registry(profile, ref_overrides, url_overrides),
+            render_module_registry(profile, ref_overrides, url_overrides, local_projects),
             toolchain=toolchain,
             channel=channel,
         ),

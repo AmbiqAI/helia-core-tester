@@ -77,9 +77,13 @@ _BASELINE_HELP = (
 )
 _CMSIS_NN_ROOT_HELP = (
     "Build the kernels from this ns-cmsis-nn checkout instead of the baseline's pinned "
-    "commit. The tree is declared to NSX as a local module source and mirrored into the "
-    "app on every sync, and the generate step reads its schemas from the same tree. Use it "
-    "to test uncommitted kernel work; the result is not a qualified build."
+    "commit. The tree is declared to NSX as the ns-cmsis-nn project's local_path and "
+    "mirrored into the app at modules/ns-cmsis-nn/ on every sync; the generate step reads "
+    "its schemas from that mirror, so cases and kernels stay on one tree. Editing the "
+    "checkout and rebuilding needs no --update-dependencies: its content hash is part of "
+    "the render identity, so an edit re-locks and re-mirrors. The build directory must be "
+    "outside the checkout (pass --build-dir in the nested layout). Use it to test "
+    "uncommitted kernel work; the result is not a qualified build."
 )
 _REQUANTIZE_HELP = (
     "Compile the kernels' requantize routine as inline assembly "
