@@ -875,14 +875,23 @@ def _render_for(baseline, tmp_path: Path):
     return plan_app(BOARD, repo_root=PROJECT_ROOT, build_dir=tmp_path / "bd", baseline=baseline)
 
 
-def _lock_with(render, name: str, module) -> "_FakeLock":
-    """Complete lock for `render`, with `name` replaced."""
-    modules = {
-        spec.name: _FakeLockModule("packaged", spec.project, None, None)
-        for spec in render.modules
-    }
-    modules[name] = module
+def _matching_lock(render) -> "_FakeLock":
+    """Lock that agrees with `render` on every declared module."""
+    baseline = render.baseline
+    modules = {}
+    for name, (project, kind) in firmware_build.expected_lock_entries(render).items():
+        pinned = baseline.projects.get(project) if kind == "git" else None
+        modules[name] = _FakeLockModule(
+            kind, project, pinned.ref if pinned else None, pinned.url if pinned else None
+        )
     return _FakeLock(modules)
+
+
+def _lock_with(render, name: str, module) -> "_FakeLock":
+    """Matching lock with one entry replaced."""
+    lock = _matching_lock(render)
+    lock.modules[name] = module
+    return lock
 
 
 def test_lock_must_carry_every_declared_module(tmp_path: Path) -> None:
@@ -897,22 +906,96 @@ def test_lock_must_carry_every_declared_module(tmp_path: Path) -> None:
     render = _render_for(baseline, tmp_path)
     pinned = baseline.project("ns-cmsis-nn")
 
-    complete = _FakeLock({
-        spec.name: _FakeLockModule("packaged", spec.project, None, None)
-        for spec in render.modules
-    })
+    complete = _matching_lock(render)
     assert firmware_build.baseline_resolution_reason(render, complete) is None
 
-    short = _FakeLock({k: v for k, v in complete.modules.items() if k != "nsx-cmsis-nn"})
+    short = _FakeLock({k: v for k, v in _matching_lock(render).modules.items() if k != "nsx-cmsis-nn"})
     assert firmware_build.baseline_resolution_reason(render, short) == (
         "nsx.lock omits declared module 'nsx-cmsis-nn'"
     )
 
     # Extra entries are fine: NSX resolves a closure, which may exceed what the
     # manifest declares.
-    wider = _FakeLock({**complete.modules, "nsx-extra": _FakeLockModule("packaged", "x", None, None)})
+    wider = _matching_lock(render)
+    wider.modules["nsx-extra"] = _FakeLockModule("packaged", "x", None, None)
     assert firmware_build.baseline_resolution_reason(render, wider) is None
     assert pinned.ref  # the fixture's baseline really does pin the kernels
+
+
+def test_lock_must_keep_each_module_kind_and_project(tmp_path: Path) -> None:
+    """Skipping non-git entries let a relabel swap the source silently.
+
+    Marking a baseline-backed module `packaged`, or moving it to a project the
+    baseline does not name, walked past every commit and URL check while frozen
+    sync happily materialised the other source.
+    """
+    from helia_core_tester.hardware.dependency_baseline import resolve_baseline
+
+    baseline = resolve_baseline(PROJECT_ROOT)
+    render = _render_for(baseline, tmp_path)
+    pinned = baseline.project("ns-cmsis-nn")
+
+    relabelled = _lock_with(
+        render, "nsx-cmsis-nn", _FakeLockModule("packaged", "ns-cmsis-nn", None, None)
+    )
+    assert firmware_build.baseline_resolution_reason(render, relabelled) == (
+        "nsx.lock resolves 'nsx-cmsis-nn' as packaged, expected git"
+    )
+
+    moved = _lock_with(
+        render, "nsx-cmsis-nn", _FakeLockModule("git", "somewhere-else", pinned.ref, pinned.url)
+    )
+    assert firmware_build.baseline_resolution_reason(render, moved) == (
+        "nsx.lock moves 'nsx-cmsis-nn' to project 'somewhere-else'"
+    )
+
+    # The packaged modules must stay packaged too, or a git entry could smuggle
+    # in a tree the wheel never shipped.
+    smuggled = _lock_with(
+        render, "nsx-tooling", _FakeLockModule("git", "neuralspotx", "2" * 40, "https://example.invalid/z.git")
+    )
+    assert firmware_build.baseline_resolution_reason(render, smuggled) == (
+        "nsx.lock resolves 'nsx-tooling' as git, expected packaged"
+    )
+
+
+def test_local_kernels_must_lock_as_local(tmp_path: Path) -> None:
+    """A --cmsis-nn-root module locks local; git would mean another source."""
+    from helia_core_tester.hardware.dependency_baseline import resolve_baseline
+
+    checkout = tmp_path / "ns-cmsis-nn"
+    for sub in ("Include", "Source", "nsx"):
+        (checkout / sub).mkdir(parents=True)
+    (checkout / "nsx" / "nsx-module.yaml").write_text("module: {}\n", encoding="utf-8")
+
+    baseline = resolve_baseline(PROJECT_ROOT)
+    render = nsx_app_plan(baseline, tmp_path / "bd", checkout)
+    assert firmware_build.expected_lock_entries(render)["nsx-cmsis-nn"] == (
+        "ns-cmsis-nn",
+        "local",
+    )
+    assert firmware_build.baseline_resolution_reason(render, _matching_lock(render)) is None
+
+    swapped = _lock_with(
+        render,
+        "nsx-cmsis-nn",
+        _FakeLockModule("git", "ns-cmsis-nn", baseline.project("ns-cmsis-nn").ref, baseline.project("ns-cmsis-nn").url),
+    )
+    assert firmware_build.baseline_resolution_reason(render, swapped) == (
+        "nsx.lock resolves 'nsx-cmsis-nn' as git, expected local"
+    )
+
+
+def nsx_app_plan(baseline, build_dir: Path, cmsis_nn_root: Path):
+    from helia_core_tester.hardware.nsx_app import plan_app
+
+    return plan_app(
+        BOARD,
+        repo_root=PROJECT_ROOT,
+        build_dir=build_dir,
+        baseline=baseline,
+        cmsis_nn_root=cmsis_nn_root,
+    )
 
 
 def test_lock_must_resolve_the_commits_the_baseline_pins(tmp_path: Path) -> None:
@@ -948,15 +1031,22 @@ def test_lock_must_resolve_the_commits_the_baseline_pins(tmp_path: Path) -> None
         firmware_build.baseline_resolution_reason(render, wrong_repo)
     )
 
-    # A blank project evades the pin checks entirely, so it is rejected rather
-    # than skipped. `from_yaml_dict` defaults the field to "", which is what a
+    # A blank project on a declared module is caught by the expected-project
+    # check; on an extra closure entry, by the blank-project check. Neither is
+    # skipped. `from_yaml_dict` defaults the field to "", which is what a
     # hand-edited lock with the key deleted actually yields.
     for blank in (None, "", "   "):
         anonymous = _lock_with(
             render, "nsx-cmsis-nn", _FakeLockModule("git", blank, pinned.ref, pinned.url)
         )
         assert firmware_build.baseline_resolution_reason(render, anonymous) == (
-            "nsx.lock module 'nsx-cmsis-nn' names no project"
+            "nsx.lock moves 'nsx-cmsis-nn' to project '<none>'"
+        ), blank
+
+        extra = _matching_lock(render)
+        extra.modules["nsx-extra"] = _FakeLockModule("git", blank, pinned.ref, pinned.url)
+        assert firmware_build.baseline_resolution_reason(render, extra) == (
+            "nsx.lock module 'nsx-extra' names no project"
         ), blank
 
     # A stripped url is unattributable, not "unspecified, therefore fine": it is
@@ -969,11 +1059,11 @@ def test_lock_must_resolve_the_commits_the_baseline_pins(tmp_path: Path) -> None
             firmware_build.baseline_resolution_reason(render, stripped)
         ), missing
 
-    # Nothing to contradict: packaged modules and projects the baseline never names.
-    ignorable = _lock_with(
-        render,
-        "nsx-tooling",
-        _FakeLockModule("git", "not-in-the-baseline", "1" * 40, "https://example.invalid/y.git"),
+    # Nothing to contradict: an extra closure entry whose project the baseline
+    # never names.
+    ignorable = _matching_lock(render)
+    ignorable.modules["nsx-other"] = _FakeLockModule(
+        "git", "not-in-the-baseline", "1" * 40, "https://example.invalid/y.git"
     )
     assert firmware_build.baseline_resolution_reason(render, ignorable) is None
 

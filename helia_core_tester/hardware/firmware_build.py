@@ -413,6 +413,28 @@ def lock_validity_reason(render: AppRender) -> Optional[str]:
     return baseline_resolution_reason(render, lock)
 
 
+def expected_lock_entries(render: AppRender) -> Dict[str, tuple]:
+    """Project and kind each declared module must lock as.
+
+    The renderer decides all three: a module of the packaged project resolves
+    from the wheel, a `--cmsis-nn-root` override resolves local, everything
+    else is a git clone. Checking them turns "skip what is not git" from a
+    loophole into a statement about entries the manifest never declared.
+    """
+    from neuralspotx.constants import PACKAGED_PROJECT_NAME
+
+    entries: Dict[str, tuple] = {}
+    for spec in render.modules:
+        if spec.local_path is not None:
+            kind = "local"
+        elif spec.project == PACKAGED_PROJECT_NAME:
+            kind = "packaged"
+        else:
+            kind = "git"
+        entries[spec.name] = (spec.project, kind)
+    return entries
+
+
 def baseline_resolution_reason(render: AppRender, lock: Any) -> Optional[str]:
     """Why the lock's resolved commits contradict the baseline, or None when they agree.
 
@@ -441,10 +463,20 @@ def baseline_resolution_reason(render: AppRender, lock: Any) -> Optional[str]:
     project is the cheapest way to slip past the pin checks below.
     """
     baseline = render.baseline
-    missing = sorted({spec.name for spec in render.modules} - set(lock.modules))
+    expected = expected_lock_entries(render)
+    missing = sorted(set(expected) - set(lock.modules))
     if missing:
         # Manifest hash covers nsx.yml, not the lock's set.
         return f"nsx.lock omits declared module '{missing[0]}'"
+    for name, (want_project, want_kind) in sorted(expected.items()):
+        module = lock.modules[name]
+        kind = str(module.kind)
+        project = str(getattr(module, "project", "") or "").strip()
+        # Relabelling swaps the source past every pin check.
+        if kind != want_kind:
+            return f"nsx.lock resolves '{name}' as {kind}, expected {want_kind}"
+        if project != want_project:
+            return f"nsx.lock moves '{name}' to project '{project or '<none>'}'"
     for name, module in sorted(lock.modules.items()):
         if str(module.kind) != "git":
             continue
