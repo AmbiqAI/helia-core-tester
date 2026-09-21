@@ -40,7 +40,7 @@ import os
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import typer
 
@@ -56,6 +56,7 @@ from .nsx_app import (
     app_dir_for,
     commit_render_state,
     nsx_build_dir,
+    plan_app,
     read_render_state,
     render_app,
     synced_kernel_dir,
@@ -894,21 +895,28 @@ def build_rendered_firmware(
     return elf
 
 
-def recorded_kernel_hash(app_dir: Path) -> Optional[str]:
-    """Content hash the last build left for the kernels.
+def recorded_kernel_hash(build_dir: Path) -> Optional[str]:
+    """Kernel content hash the image in `build_dir` was built from.
 
-    The lock is the authority and covers both source kinds -- measured, its
-    `nsx-cmsis-nn` entry equals `hash_tree` of the mirror for a registry ref
-    and for a `--cmsis-nn-root` checkout alike. The render state is the
-    fallback for a local source when the lock cannot be read.
+    Read from the lock snapshot written beside the image, never the app's live
+    nsx.lock. A rebuild that re-locks and re-syncs but dies before recording
+    its render leaves the old state and the old firmware in place next to a new
+    lock and a new mirror; checking the live lock would then agree with itself
+    and pass. The snapshot cannot move without the image moving with it.
+
+    The lock covers both source kinds -- measured, its `nsx-cmsis-nn` entry
+    equals `hash_tree` of the mirror for a registry ref and for a
+    `--cmsis-nn-root` checkout alike. The render state is the fallback for a
+    local source when no snapshot can be read.
     """
+    app_dir = app_dir_for(build_dir)
     state = read_render_state(app_dir) or {}
     board = str(state.get("nsx_board") or "")
     if board:
         try:
             from neuralspotx.nsx_lock import read_lock
 
-            lock = read_lock(app_dir, board)
+            lock = read_lock(output_dir(build_dir, _board_for(board)), board)
         except Exception:
             lock = None
         module = getattr(lock, "modules", {}).get(CMSIS_NN_MODULE) if lock else None
@@ -917,7 +925,17 @@ def recorded_kernel_hash(app_dir: Path) -> Optional[str]:
     return state.get("kernel_source_content_hash")
 
 
-def synced_kernel_reason(app_dir: Path, synced: Path) -> Optional[str]:
+def _board_for(nsx_board: str):
+    """Board row matching a recorded NSX board name."""
+    from .boards import load_board_table
+
+    for spec in load_board_table():
+        if spec.nsx_board == nsx_board:
+            return spec
+    raise RuntimeError(f"No board row for NSX board '{nsx_board}'")
+
+
+def synced_kernel_reason(build_dir: Path, synced: Path) -> Optional[str]:
     """Why the mirror no longer matches the build.
 
     Frozen sync verifies the mirror on every build, but `--skip-flash` reuses
@@ -927,12 +945,56 @@ def synced_kernel_reason(app_dir: Path, synced: Path) -> Optional[str]:
     """
     from neuralspotx.nsx_lock import hash_tree
 
-    expected = recorded_kernel_hash(app_dir)
+    expected = recorded_kernel_hash(build_dir)
     if expected is None:
         return "the build recorded no kernel content hash"
     if hash_tree(synced) != expected:
         return "the synced kernel tree changed since the build"
     return None
+
+
+def skip_flash_conflicts(
+    board: BoardSpec,
+    *,
+    build_dir: Path,
+    options: FirmwareOptions,
+    repo_root: Optional[Path] = None,
+) -> List[str]:
+    """Options that disagree with the firmware being reused.
+
+    `--skip-flash` builds nothing, so a firmware-shaping option given with it
+    describes an image that was never made. Silently ignoring one attributes
+    the run's numbers to a build that did not produce them. Compared rather
+    than refused outright, so a plain reuse against a matching build still
+    works, which is the whole point of the flag in an optimise loop.
+    """
+    repo_root = repo_root or tester_repo_root()
+    state = read_render_state(app_dir_for(build_dir))
+    if state is None:
+        return []
+    conflicts: List[str] = []
+    if options.update_dependencies:
+        conflicts.append("--update-dependencies does nothing with --skip-flash")
+    planned = plan_app(
+        board,
+        repo_root=repo_root,
+        build_dir=build_dir,
+        baseline=load_baseline(repo_root, options),
+        cmsis_nn_root=options.cmsis_nn_root,
+        kernel_options=options.kernel_options(),
+    )
+    if planned.baseline.fingerprint != state.get("baseline_fingerprint"):
+        conflicts.append("--baseline differs from the flashed build")
+    # Only when asked for: a new baseline moves the pinned ref too, and
+    # blaming a flag the user never passed helps nobody.
+    if (
+        options.cmsis_nn_root is not None
+        and planned.kernel_source.describe() != state.get("kernel_source")
+    ):
+        conflicts.append("--cmsis-nn-root differs from the flashed build")
+    if planned.kernel_options.cache_vars() != state.get("kernel_options"):
+        conflicts.append("kernel options differ from the flashed build")
+    return conflicts
 
 
 def kernel_source_root(build_dir: Path, options: Optional[FirmwareOptions] = None) -> Path:
@@ -984,7 +1046,7 @@ def kernel_source_root(build_dir: Path, options: Optional[FirmwareOptions] = Non
                 f"generating."
             )
         # Present is not unchanged; --skip-flash never re-syncs.
-        drift = synced_kernel_reason(app_dir, synced)
+        drift = synced_kernel_reason(build_dir, synced)
         if drift is not None:
             raise RuntimeError(
                 f"{synced}: {drift}. Generation would read kernels the firmware in {build_dir} "

@@ -21,6 +21,7 @@ from .firmware_build import (
     flash_firmware,
     kernel_source_root,
     read_build_id,
+    skip_flash_conflicts,
     resolve_build_dir,
 )
 from .measurement import (
@@ -362,6 +363,16 @@ def run_hardware_pipeline(
     # firmware build failure costs nothing in generation time.)
     flash: Optional[FlashDecision] = None
     if skip_flash:
+        # Nothing is built, so a firmware option cannot take effect.
+        conflicts = skip_flash_conflicts(
+            board, build_dir=resolved_build_dir, options=firmware_options, repo_root=repo_root
+        )
+        if conflicts:
+            raise RuntimeError(
+                "--skip-flash reuses the built firmware, so these do not apply: "
+                + "; ".join(conflicts)
+                + ". Drop them, or rebuild without --skip-flash."
+            )
         echo("[hardware] --skip-flash set; reusing firmware already running on the board.")
     else:
         flash = flash_firmware(

@@ -1253,3 +1253,103 @@ def test_kernel_source_root_refuses_a_vanished_synced_tree(nsx_driver, tmp_path:
     shutil.rmtree(synced)
     with pytest.raises(RuntimeError, match="the synced kernel tree .* is gone"):
         firmware_build.kernel_source_root(build_dir)
+
+
+# --- review follow-ups, round 10 ---------------------------------------------------
+
+
+def test_mirror_is_checked_against_the_builds_own_lock(nsx_driver, tmp_path: Path, monkeypatch) -> None:
+    """A re-lock that never finished must not vouch for the old firmware.
+
+    A rebuild that re-locks and re-syncs but dies before recording its render
+    leaves the old state and the old image beside a new lock and a new mirror.
+    Checking the app's live lock would agree with itself and pass; the snapshot
+    written beside the image cannot move without the image moving too.
+    """
+    from neuralspotx.nsx_lock import hash_tree
+
+    from helia_core_tester.hardware.nsx_app import app_dir_for, synced_kernel_dir
+
+    build_dir = tmp_path / "bd"
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    app_dir = app_dir_for(build_dir)
+    synced = synced_kernel_dir(app_dir)
+    (synced / "Source").mkdir(parents=True, exist_ok=True)
+    (synced / "Source" / "k.c").write_text("void k(void) {}\n", encoding="utf-8")
+
+    snapshot = firmware_build.lock_snapshot_path(build_dir, BOARD)
+    assert snapshot.is_file(), "the build must leave a lock beside the image"
+
+    at_build = hash_tree(synced)
+    reads: list[Path] = []
+
+    def _fake_read_lock(app, board=None):
+        reads.append(Path(app))
+        return _FakeLock({"nsx-cmsis-nn": _hashed_module(at_build)})
+
+    monkeypatch.setattr("neuralspotx.nsx_lock.read_lock", _fake_read_lock)
+    assert firmware_build.recorded_kernel_hash(build_dir) == at_build
+    assert reads and reads[-1] == firmware_build.output_dir(build_dir, BOARD), (
+        "the snapshot beside the image is the authority, not the app's live lock"
+    )
+
+    # An interrupted re-lock: new mirror, new app lock, old snapshot and state.
+    (synced / "Source" / "k.c").write_text("void k(void) { /* relocked */ }\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="changed since the build"):
+        firmware_build.kernel_source_root(build_dir)
+
+
+def _hashed_module(digest: str):
+    module = _FakeLockModule("git", "ns-cmsis-nn", "a" * 40, "u")
+    module.content_hash = digest
+    return module
+
+
+def test_skip_flash_refuses_options_it_cannot_honour(tmp_path: Path, monkeypatch) -> None:
+    """--skip-flash builds nothing, so a firmware option describes no image.
+
+    Compared rather than refused outright: a plain reuse against a matching
+    build still works, which is the point of the flag in an optimise loop.
+    """
+    from helia_core_tester.hardware.nsx_app import app_dir_for, commit_render_state, render_app
+    from helia_core_tester.hardware.dependency_baseline import resolve_baseline
+
+    monkeypatch.setattr(firmware_build, "ensure_host_tools", lambda repo_root, baseline=None: None)
+    build_dir = tmp_path / "bd"
+    render = render_app(
+        BOARD, repo_root=PROJECT_ROOT, build_dir=build_dir, baseline=resolve_baseline(PROJECT_ROOT)
+    )
+    commit_render_state(render)
+
+    def _conflicts(**kwargs):
+        return firmware_build.skip_flash_conflicts(
+            BOARD,
+            build_dir=build_dir,
+            options=firmware_build.FirmwareOptions(**kwargs),
+            repo_root=PROJECT_ROOT,
+        )
+
+    assert _conflicts() == []
+    assert _conflicts(requantize_inline_asm=False) == ["kernel options differ from the flashed build"]
+    assert _conflicts(update_dependencies=True) == [
+        "--update-dependencies does nothing with --skip-flash"
+    ]
+
+    checkout = tmp_path / "ns-cmsis-nn"
+    for sub in ("Include", "Source", "nsx"):
+        (checkout / sub).mkdir(parents=True)
+    (checkout / "nsx" / "nsx-module.yaml").write_text("module: {}\n", encoding="utf-8")
+    assert _conflicts(cmsis_nn_root=checkout) == ["--cmsis-nn-root differs from the flashed build"]
+
+    hpx = Path("/home/nmysore/helia-profiler/src/helia_profiler/data/compatibility-baseline-v1.json")
+    if hpx.is_file():
+        # A new baseline moves the pinned ref too; only the flag actually
+        # passed is named.
+        assert _conflicts(baseline_path=hpx) == ["--baseline differs from the flashed build"]
+
+    # No recorded build: nothing to disagree with.
+    assert firmware_build.skip_flash_conflicts(
+        BOARD, build_dir=tmp_path / "never-built",
+        options=firmware_build.FirmwareOptions(update_dependencies=True),
+        repo_root=PROJECT_ROOT,
+    ) == []
