@@ -354,7 +354,7 @@ def build_size_probe(
         lock_and_sync,
         prepare_app,
     )
-    from .nsx_app import render_app
+    from .nsx_app import commit_render_state, render_app
 
     project_root = project_root or repo_root()
     options = options or FirmwareOptions()
@@ -383,6 +383,11 @@ def build_size_probe(
     lock_and_sync(render, options)
     nsx_configure(render, options)
     nsx_build(render, options, SIZE_PROBE_TARGET, None)
+    # Same contract as the firmware build: the state file claims a lock and a
+    # module tree matching this render exist and produced an image, so it is
+    # written once that is true. Without it every probe run reports "no recorded
+    # render state" and re-resolves nsx.lock from scratch.
+    commit_render_state(render)
 
     elf = render.build_dir / f"{SIZE_PROBE_TARGET}.elf"
     analysis = analyze_elf(elf, board, probe_build_dir, project_root)
@@ -397,8 +402,13 @@ def build_size_probe(
             "f32": variant.enable_f32,
             "f16": variant.enable_f16,
         },
-        "kernel_source": render.kernel_source.describe(),
+        # The same provenance fields the firmware report carries, so a probe
+        # result can be compared with one -- or dismissed as measuring a
+        # different kernel build -- without going back to the build tree.
         "baseline_id": render.baseline.baseline_id,
+        "baseline_fingerprint": render.baseline.fingerprint,
+        "kernel_source": render.kernel_source.describe(),
+        "kernel_options": render.kernel_options.cache_vars(),
         "artifacts": {
             "elf": display_path(elf, project_root),
             "bin": display_path(render.build_dir / f"{SIZE_PROBE_TARGET}.bin", project_root),

@@ -150,9 +150,10 @@ def pin_optional_checkouts(repo_root: Path, baseline: DependencyBaseline) -> Non
     import subprocess
 
     for project, dirname in NON_NSX_CHECKOUTS.items():
-        pin = baseline.pin(project)
-        if pin is None:
+        entry = baseline.projects.get(project)
+        if entry is None:
             continue
+        pin, url = entry.ref, entry.url
         path = repo_root / DOWNLOADS_DIR / dirname
         if not (path / ".git").exists():
             typer.echo(
@@ -161,6 +162,7 @@ def pin_optional_checkouts(repo_root: Path, baseline: DependencyBaseline) -> Non
                 err=True,
             )
             continue
+
         def _git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
             return subprocess.run(
                 ["git", "-C", str(path), *args], capture_output=True, text=True, check=check
@@ -175,8 +177,16 @@ def pin_optional_checkouts(repo_root: Path, baseline: DependencyBaseline) -> Non
                     err=True,
                 )
                 continue
-            typer.echo(f"[hardware] Repointing {dirname} to the baseline pin {pin[:12]}...")
-            _git("fetch", "--quiet", "--depth=1", "origin", pin)
+            typer.echo(f"[hardware] Repointing {dirname} to the baseline pin {pin[:12]} from {url}...")
+            # Fetched from the baseline's own URL rather than from whatever the
+            # checkout's `origin` happens to be: a `--baseline` naming a fork
+            # would otherwise ask upstream for a commit only the fork has (an
+            # unhelpful failure) or, on a checkout someone had repointed, take
+            # the pin from a repository the baseline never named while the log
+            # line claimed the fork. Once fetched, checking the SHA out is
+            # unambiguous -- a commit id is a content hash, so the tree it
+            # names is the same whichever remote served it.
+            _git("fetch", "--quiet", "--depth=1", url, pin)
             _git("checkout", "--quiet", "--detach", pin)
         except (OSError, subprocess.CalledProcessError) as exc:
             typer.echo(
@@ -360,6 +370,52 @@ def lock_validity_reason(render: AppRender) -> Optional[str]:
         commit = (module.commit or "").lower()
         if len(commit) != 40 or any(ch not in "0123456789abcdef" for ch in commit):
             return f"nsx.lock module '{name}' has no exact peeled commit"
+    return baseline_resolution_reason(render, lock)
+
+
+def baseline_resolution_reason(render: AppRender, lock: Any) -> Optional[str]:
+    """Why the lock's resolved commits contradict the baseline, or None when they agree.
+
+    The rendered manifest *asserts* the qualified pins; the lock is the
+    *outcome*, and the claim "this firmware is built from the baseline" only
+    means anything if the two agree. They can disagree without anything looking
+    wrong: NSX gives a packaged registry's module-level revision precedence over
+    an app's project-level override, so an alignment bug in the emitted
+    `module_registry` resolves a different commit while every artifact still
+    quotes the baseline -- heliaPROFILER found exactly that after eight hardware
+    runs had silently built the wrong nsx-sensors, which is why it added
+    `deps/dependencies.py::_verify_baseline_resolution`. A hand-edited or stale
+    `nsx.lock` gets there too, and `sync_app(frozen=True)` would then faithfully
+    materialise the wrong tree, because frozen verifies the modules against the
+    lock, not the lock against the baseline.
+
+    The URL is checked with the commit for the same reason it is emitted with
+    it: a commit is only identified by the repository it is in. Modules that are
+    not git-backed (`packaged`, or a `--cmsis-nn-root` local source) have no pin
+    to contradict and are skipped.
+    """
+    baseline = render.baseline
+    for name, module in sorted(lock.modules.items()):
+        if str(module.kind) != "git":
+            continue
+        project = getattr(module, "project", None)
+        if project is None:
+            continue
+        pinned = baseline.projects.get(str(project))
+        if pinned is None:
+            continue
+        commit = (module.commit or "").lower()
+        if commit != pinned.ref.lower():
+            return (
+                f"nsx.lock resolved module '{name}' to {commit or '<none>'}, but the baseline "
+                f"pins project '{project}' at {pinned.ref}"
+            )
+        url = (getattr(module, "url", None) or "").strip()
+        if url and url != pinned.url:
+            return (
+                f"nsx.lock fetched module '{name}' from {url}, but the baseline pins project "
+                f"'{project}' in {pinned.url}"
+            )
     return None
 
 
@@ -751,9 +807,21 @@ def kernel_source_root(build_dir: Path, options: Optional[FirmwareOptions] = Non
                 f"image under test. Re-run `hardware build --board {board_name(app_dir)}` with this "
                 f"--cmsis-nn-root, or drop the flag to use the tree the image was built from."
             )
-        if synced.is_dir():
-            return synced
+        if not synced.is_dir():
+            # Falling back to the live --cmsis-nn-root here would be the exact
+            # substitution this function exists to prevent, just reached by a
+            # different route: the recorded build used the mirror NSX synced,
+            # and the working tree has been free to change since. There is no
+            # honest answer without a rebuild, so say so.
+            raise RuntimeError(
+                f"The firmware in {build_dir} was built from {recorded}, but the synced kernel tree "
+                f"{synced} is gone, so generation has nothing to read that matches the image. "
+                f"Re-run `hardware build --board {board_name(app_dir)}` (which re-syncs it) before "
+                f"generating."
+            )
+        return synced
 
+    # No build to speak of: an override, or the place a build would put it.
     if requested is not None:
         return Path(requested)
     return synced

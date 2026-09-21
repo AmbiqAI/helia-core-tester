@@ -260,3 +260,37 @@ def test_write_text_lf_writes_lf(tmp_path: Path) -> None:
     target = tmp_path / "out.txt"
     pathutil.write_text_lf(target, "a\nb\n")
     assert target.read_bytes() == b"a\nb\n"
+
+
+def test_size_probe_report_carries_the_same_provenance_as_the_firmware_report(
+    report_env: Path, monkeypatch
+) -> None:
+    """A probe number is only comparable with a firmware number if both say which
+    baseline and which kernel switches produced them."""
+    from helia_core_tester.hardware import firmware_build, nsx_app
+
+    monkeypatch.setattr(firmware_build, "ensure_host_tools", lambda repo_root, baseline=None: None)
+    monkeypatch.setattr(firmware_build, "lock_and_sync", lambda render, options: None)
+    monkeypatch.setattr(firmware_build, "configure", lambda render, options, **kw: None)
+
+    def _fake_build(render, options, target, jobs):
+        render.build_dir.mkdir(parents=True, exist_ok=True)
+        (render.build_dir / f"{target}.elf").write_bytes(b"elf")
+
+    monkeypatch.setattr(firmware_build, "build", _fake_build)
+
+    variant = report.SIZE_PROBE_VARIANTS[0]
+    board = resolve_board(DEFAULT_BOARD_ID)
+    out_dir = report.build_size_probe(board, variant, project_root=report_env)
+    data = json.loads((out_dir / "memory_report.json").read_text())
+
+    for key in ("baseline_id", "baseline_fingerprint", "kernel_source", "kernel_options"):
+        assert data.get(key), f"{key} missing from the size-probe report"
+    assert data["kernel_options"]["ARM_NN_ENABLE_F32"] == "OFF"
+    assert len(data["baseline_fingerprint"]) == 64
+
+    # And the probe records its render, so the next run reuses the lock instead of
+    # re-resolving it every time.
+    probe_build_dir = report.size_probe_build_dir(board.build_dir(report_env), variant)
+    state = nsx_app.read_render_state(nsx_app.app_dir_for(probe_build_dir))
+    assert state is not None and state["kernel_options"]["ARM_NN_ENABLE_F32"] == "OFF"

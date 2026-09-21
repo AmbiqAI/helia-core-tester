@@ -830,3 +830,149 @@ def test_kernel_source_root_follows_the_build_not_the_flag(nsx_driver, tmp_path:
     assert firmware_build.kernel_source_root(
         tmp_path / "never-built", firmware_build.FirmwareOptions(cmsis_nn_root=other)
     ) == other
+
+
+# --- review follow-ups, round 3 ----------------------------------------------------
+
+
+class _FakeLockModule:
+    def __init__(self, kind, project, commit, url):
+        self.kind, self.project, self.commit, self.url = kind, project, commit, url
+
+
+class _FakeLock:
+    def __init__(self, modules):
+        self.modules = modules
+
+
+def _render_for(baseline, tmp_path: Path):
+    from helia_core_tester.hardware.nsx_app import plan_app
+
+    return plan_app(BOARD, repo_root=PROJECT_ROOT, build_dir=tmp_path / "bd", baseline=baseline)
+
+
+def test_lock_must_resolve_the_commits_the_baseline_pins(tmp_path: Path) -> None:
+    """Frozen sync verifies modules against the lock, never the lock against the
+    baseline -- so a lock resolved off the pin materialises the wrong tree while the
+    build is still recorded as qualified. hpx added the same check after eight
+    hardware runs silently built the wrong nsx-sensors."""
+    from helia_core_tester.hardware.dependency_baseline import resolve_baseline
+
+    baseline = resolve_baseline(PROJECT_ROOT)
+    render = _render_for(baseline, tmp_path)
+    pinned = baseline.project("ns-cmsis-nn")
+
+    agreeing = _FakeLock({
+        "nsx-cmsis-nn": _FakeLockModule("git", "ns-cmsis-nn", pinned.ref, pinned.url),
+    })
+    assert firmware_build.baseline_resolution_reason(render, agreeing) is None
+
+    drifted = _FakeLock({
+        "nsx-cmsis-nn": _FakeLockModule("git", "ns-cmsis-nn", "0" * 40, pinned.url),
+    })
+    assert "but the baseline pins project 'ns-cmsis-nn'" in (
+        firmware_build.baseline_resolution_reason(render, drifted)
+    )
+
+    # A commit is only identified by the repository it is in.
+    wrong_repo = _FakeLock({
+        "nsx-cmsis-nn": _FakeLockModule("git", "ns-cmsis-nn", pinned.ref, "https://example.invalid/x.git"),
+    })
+    assert "fetched module 'nsx-cmsis-nn' from" in (
+        firmware_build.baseline_resolution_reason(render, wrong_repo)
+    )
+
+    # Nothing to contradict: packaged modules and projects the baseline never names.
+    ignorable = _FakeLock({
+        "nsx-tooling": _FakeLockModule("packaged", "neuralspotx", None, None),
+        "nsx-other": _FakeLockModule("git", "not-in-the-baseline", "1" * 40, "https://example.invalid/y.git"),
+    })
+    assert firmware_build.baseline_resolution_reason(render, ignorable) is None
+
+
+def test_cmsis5_pin_is_fetched_from_the_baselines_own_url(tmp_path: Path, monkeypatch) -> None:
+    """A --baseline naming a fork must not have its pin fetched from whatever the
+    checkout's `origin` points at: upstream may not have the commit at all, and a
+    repointed checkout would serve it from a repository the baseline never named."""
+    import subprocess
+
+    from helia_core_tester.hardware.dependency_baseline import parse_baseline
+
+    checkout = tmp_path / "artifacts" / "downloads" / "CMSIS_5"
+    (checkout / ".git").mkdir(parents=True)
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        verb = cmd[3]
+        out = {"rev-parse": "f" * 40, "status": ""}.get(verb, "")
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    document = {
+        "schema": "hct.dependency-baseline",
+        "schema_version": 1,
+        "baseline_id": "fork-baseline",
+        "projects": {
+            "ns-cmsis-nn": {"url": "https://example.invalid/a.git", "ref": "a" * 40},
+            "nsx-ambiq-sdk": {"url": "https://example.invalid/b.git", "ref": "b" * 40},
+            "neuralspotx": {"url": "https://example.invalid/c.git", "ref": "c" * 40},
+            "nsx-pmu-armv8m": {"url": "https://example.invalid/d.git", "ref": "d" * 40},
+            "CMSIS_5": {"url": "https://example.invalid/cmsis-fork.git", "ref": "e" * 40},
+        },
+    }
+    firmware_build.pin_optional_checkouts(tmp_path, parse_baseline(document))
+
+    fetch = next(c for c in calls if c[3] == "fetch")
+    assert "https://example.invalid/cmsis-fork.git" in fetch, fetch
+    assert "origin" not in fetch
+    assert next(c for c in calls if c[3] == "checkout")[-1] == "e" * 40
+
+
+def test_a_dirty_or_foreign_cmsis5_checkout_is_reported_not_rewritten(tmp_path: Path, monkeypatch) -> None:
+    import subprocess
+
+    from helia_core_tester.hardware.dependency_baseline import resolve_baseline
+
+    baseline = resolve_baseline(PROJECT_ROOT)
+    warned: list[str] = []
+    monkeypatch.setattr(firmware_build.typer, "echo", lambda msg, **kw: warned.append(str(msg)))
+
+    # Not a git checkout at all.
+    (tmp_path / "artifacts" / "downloads" / "CMSIS_5").mkdir(parents=True)
+    firmware_build.pin_optional_checkouts(tmp_path, baseline)
+    assert any("is not a git checkout" in w for w in warned)
+
+    # A git checkout with local changes is left alone.
+    warned.clear()
+    (tmp_path / "artifacts" / "downloads" / "CMSIS_5" / ".git").mkdir()
+    changed: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        changed.append(list(cmd))
+        out = {"rev-parse": "f" * 40, "status": " M CMSIS/Core/Include/core_cm55.h"}.get(cmd[3], "")
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    firmware_build.pin_optional_checkouts(tmp_path, baseline)
+    assert any("has local changes" in w for w in warned)
+    assert not any(c[3] in ("fetch", "checkout") for c in changed)
+
+
+def test_kernel_source_root_refuses_a_vanished_synced_tree(nsx_driver, tmp_path: Path) -> None:
+    """Falling back to the live --cmsis-nn-root here is the same substitution the
+    recorded-source check exists to prevent, reached by another route."""
+    import shutil
+
+    from helia_core_tester.hardware.nsx_app import app_dir_for, synced_kernel_dir
+
+    build_dir = tmp_path / "bd"
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    synced = synced_kernel_dir(app_dir_for(build_dir))
+    synced.mkdir(parents=True, exist_ok=True)
+    assert firmware_build.kernel_source_root(build_dir) == synced
+
+    shutil.rmtree(synced)
+    with pytest.raises(RuntimeError, match="the synced kernel tree .* is gone"):
+        firmware_build.kernel_source_root(build_dir)
