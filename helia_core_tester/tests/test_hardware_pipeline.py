@@ -940,6 +940,52 @@ def test_cmsis5_pin_is_fetched_from_the_baselines_own_url(tmp_path: Path, monkey
     assert next(c for c in calls if c[3] == "checkout")[-1] == "e" * 40
 
 
+def test_a_dirty_checkout_on_the_pin_is_still_unqualified(tmp_path: Path, monkeypatch) -> None:
+    """Sitting on the pinned commit with uncommitted edits is not the pinned content.
+
+    This is the one case that used to pass silently: `HEAD == pin` was checked
+    first and short-circuited, so the working tree was never inspected and the
+    build was recorded against a baseline it did not actually match. A repointed
+    checkout at least gets repointed; a foreign directory is obviously foreign.
+    """
+    import subprocess
+
+    from helia_core_tester.hardware.dependency_baseline import resolve_baseline
+
+    baseline = resolve_baseline(PROJECT_ROOT)
+    pin = baseline.project("CMSIS_5").ref
+    (tmp_path / "artifacts" / "downloads" / "CMSIS_5" / ".git").mkdir(parents=True)
+    said: list[str] = []
+    monkeypatch.setattr(firmware_build.typer, "echo", lambda msg, **kw: said.append(str(msg)))
+    ran: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        ran.append(list(cmd))
+        out = {"rev-parse": pin, "status": " M CMSIS/Core/Include/pmu_armv8.h"}.get(cmd[3], "")
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    statuses = firmware_build.pin_optional_checkouts(tmp_path, baseline)
+
+    assert statuses["CMSIS_5"] == firmware_build.PIN_DEVELOPMENT_OVERRIDES
+    assert any("at the pinned commit, but with uncommitted changes" in s for s in said)
+    # Still never rewrites the tree.
+    assert not any(c[3] in ("fetch", "checkout") for c in ran)
+
+    # The clean checkout on the pin is the one that qualifies, and touches nothing.
+    said.clear(); ran.clear()
+
+    def _clean_run(cmd, **kwargs):
+        ran.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout={"rev-parse": pin}.get(cmd[3], ""), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _clean_run)
+    assert firmware_build.pin_optional_checkouts(tmp_path, baseline) == {
+        "CMSIS_5": firmware_build.PIN_MATCHED
+    }
+    assert not any(c[3] in ("fetch", "checkout") for c in ran)
+
+
 def test_a_dirty_or_foreign_cmsis5_checkout_is_reported_not_rewritten(tmp_path: Path, monkeypatch) -> None:
     import subprocess
 
@@ -951,7 +997,9 @@ def test_a_dirty_or_foreign_cmsis5_checkout_is_reported_not_rewritten(tmp_path: 
 
     # Not a git checkout at all.
     (tmp_path / "artifacts" / "downloads" / "CMSIS_5").mkdir(parents=True)
-    firmware_build.pin_optional_checkouts(tmp_path, baseline)
+    assert firmware_build.pin_optional_checkouts(tmp_path, baseline) == {
+        "CMSIS_5": firmware_build.PIN_UNVERIFIED
+    }
     assert any("is not a git checkout" in w for w in warned)
 
     # A git checkout with local changes is left alone.
@@ -965,7 +1013,8 @@ def test_a_dirty_or_foreign_cmsis5_checkout_is_reported_not_rewritten(tmp_path: 
         return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
-    firmware_build.pin_optional_checkouts(tmp_path, baseline)
+    statuses = firmware_build.pin_optional_checkouts(tmp_path, baseline)
+    assert statuses["CMSIS_5"] == firmware_build.PIN_DEVELOPMENT_OVERRIDES
     assert any("has local changes" in w for w in warned)
     assert not any(c[3] in ("fetch", "checkout") for c in changed)
 

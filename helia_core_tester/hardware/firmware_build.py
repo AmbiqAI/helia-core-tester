@@ -130,7 +130,17 @@ def ensure_host_tools(repo_root: Path, baseline: Optional[DependencyBaseline] = 
         pin_optional_checkouts(repo_root, baseline)
 
 
-def pin_optional_checkouts(repo_root: Path, baseline: DependencyBaseline) -> None:
+#: How a non-NSX checkout stands relative to the baseline. The two non-clean
+#: values use heliaPROFILER's qualification vocabulary, which the provenance
+#: record this feeds into is built on.
+PIN_MATCHED = "pinned"
+PIN_DEVELOPMENT_OVERRIDES = "development-overrides"
+PIN_UNVERIFIED = "unverified"
+
+
+def pin_optional_checkouts(
+    repo_root: Path, baseline: DependencyBaseline
+) -> Dict[str, str]:
     """Put the non-NSX checkouts the firmware consumes on the baseline's commit.
 
     Everything else the firmware is built from is an NSX module, so `nsx lock`
@@ -140,15 +150,25 @@ def pin_optional_checkouts(repo_root: Path, baseline: DependencyBaseline) -> Non
     checked -- worse than not listing it, because the claim is recorded in every
     bundle.
 
-    Repointing only ever happens on a clean checkout, and the pin is fetched
-    first because the clone is shallow and will not have it as a local object. A
-    dirty tree is left alone with a warning rather than having someone's edits
-    discarded, and so is a directory that is not a git checkout at all (a
-    vendored copy, a distro package); both are reported as unverified rather
-    than silently accepted.
+    The working tree is inspected before `HEAD`, which is the whole point: a
+    checkout sitting on the pinned commit *with uncommitted edits* is not the
+    pinned content, and checking `HEAD` first would accept it as though it were.
+    That is the one case where the build is silently unqualified and nothing
+    says so -- a repointed checkout at least gets repointed, and a foreign
+    directory is obviously foreign.
+
+    Repointing therefore only ever happens on a clean checkout, and the pin is
+    fetched first because the clone is shallow and will not have it as a local
+    object. A dirty tree is left alone -- discarding someone's edits to enforce
+    a pin would be worse than building unqualified -- and so is a directory that
+    is not a git checkout at all (a vendored copy, a distro package).
+
+    Returns the status per project so callers can record it rather than relying
+    on having read stderr.
     """
     import subprocess
 
+    statuses: Dict[str, str] = {}
     for project, dirname in NON_NSX_CHECKOUTS.items():
         entry = baseline.projects.get(project)
         if entry is None:
@@ -156,6 +176,7 @@ def pin_optional_checkouts(repo_root: Path, baseline: DependencyBaseline) -> Non
         pin, url = entry.ref, entry.url
         path = repo_root / DOWNLOADS_DIR / dirname
         if not (path / ".git").exists():
+            statuses[project] = PIN_UNVERIFIED
             typer.echo(
                 f"[hardware] WARNING: {path} is not a git checkout, so the baseline's {project} pin "
                 f"{pin[:12]} cannot be verified; building against whatever is there.",
@@ -168,14 +189,18 @@ def pin_optional_checkouts(repo_root: Path, baseline: DependencyBaseline) -> Non
                 ["git", "-C", str(path), *args], capture_output=True, text=True, check=check
             )
         try:
-            if _git("rev-parse", "HEAD").stdout.strip() == pin:
-                continue
+            head = _git("rev-parse", "HEAD").stdout.strip()
             if _git("status", "--porcelain").stdout.strip():
+                statuses[project] = PIN_DEVELOPMENT_OVERRIDES
+                at_pin = " (at the pinned commit, but with uncommitted changes)" if head == pin else ""
                 typer.echo(
-                    f"[hardware] WARNING: {path} has local changes; leaving it alone instead of "
-                    f"repointing it to the baseline's {project} pin {pin[:12]}.",
+                    f"[hardware] WARNING: {path} has local changes{at_pin}, so this build does not "
+                    f"match the baseline's {project} pin {pin[:12]}; leaving the checkout alone.",
                     err=True,
                 )
+                continue
+            if head == pin:
+                statuses[project] = PIN_MATCHED
                 continue
             typer.echo(f"[hardware] Repointing {dirname} to the baseline pin {pin[:12]} from {url}...")
             # Fetched from the baseline's own URL rather than from whatever the
@@ -188,12 +213,15 @@ def pin_optional_checkouts(repo_root: Path, baseline: DependencyBaseline) -> Non
             # names is the same whichever remote served it.
             _git("fetch", "--quiet", "--depth=1", url, pin)
             _git("checkout", "--quiet", "--detach", pin)
+            statuses[project] = PIN_MATCHED
         except (OSError, subprocess.CalledProcessError) as exc:
+            statuses[project] = PIN_UNVERIFIED
             typer.echo(
                 f"[hardware] WARNING: could not put {path} on the baseline's {project} pin "
                 f"{pin[:12]} ({exc}); building against whatever is there.",
                 err=True,
             )
+    return statuses
 
 
 def resolve_build_dir(repo_root: Path, board: BoardSpec, override: Optional[Path] = None) -> Path:

@@ -29,7 +29,7 @@ This snapshot now includes both the hardware-independent proof path and a live A
 - Apollo510/Cortex-M55 benchmark-server target: `hct_benchmark_server`.
 - Real C HCTP encoder/decoder.
 - Real firmware TARGET_INFO + kernel-catalog frame emission.
-- Real firmware SEGGER RTT transport binding using neuralspotx RTT target sources.
+- Real firmware SEGGER RTT transport binding using the SEGGER RTT target sources vendored at `cmake/hardware/rtt/`.
 - Real firmware session loop for:
   - `TARGET_INFO_ACK`
   - `KERNEL_CATALOG`

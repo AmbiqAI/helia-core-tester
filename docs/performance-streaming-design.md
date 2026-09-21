@@ -275,7 +275,7 @@ Default transport is bidirectional SEGGER RTT. In the current live Apollo510 imp
 
 ### Current RTT implementation status
 
-- **Live-real on Apollo510:** the benchmark-server target now boots on real Apollo510 hardware, initializes the real `SEGGER_RTT` target sources from `neuralspotx/examples/coremark/src/rtt/`, emits TARGET_INFO over RTT, accepts host frames, requests blobs, and streams correctness/performance results back to the host.
+- **Live-real on Apollo510:** the benchmark-server target now boots on real Apollo510 hardware, initializes the real `SEGGER_RTT` target sources vendored at `cmake/hardware/rtt/`, emits TARGET_INFO over RTT, accepts host frames, requests blobs, and streams correctness/performance results back to the host.
 - **Host implementation:** the host now has a real J-Link RTT transport using `pylink-square`. It resolves `_SEGGER_RTT` from the linked ELF and starts RTT with an explicit control-block address.
 - **Observed limitation:** SEGGER CLI auto-discovery (`JLinkRTTLogger`) did not find the control block on this board/firmware, so the working hardware path currently uses explicit RTT block-address startup rather than auto-discovery.
 
@@ -498,7 +498,7 @@ Key files:
 - **Firmware build/profile sizing:** real cross-compiled Cortex-M55 Apollo510 artifacts.
 - **Firmware TARGET_INFO/catalog frame construction:** real C implementation, byte-for-byte decoded by the Python HCTP decoder on the host.
 - **Firmware session state machine:** real C implementation for `TARGET_INFO_ACK -> KERNEL_CATALOG -> SESSION_PLAN -> REQUEST_CASE -> CASE_META -> REQUEST_BLOB* -> CASE_READY -> RUN_CORRECTNESS -> CORRECTNESS_RESULT/OUTPUT_* -> RUN_PERFORMANCE -> SAMPLE_RESULT -> CASE_COMPLETE -> SESSION_COMPLETE`; executed both in a host-compiled C harness (`arm_abs_s8`) and on real Apollo510 hardware (`arm_abs_s8` + `arm_convolve_s8`).
-- **Firmware RTT transport binding:** real compile-time integration against neuralspotx's SEGGER RTT target sources; exercised on real Apollo510 hardware.
+- **Firmware RTT transport binding:** real compile-time integration against the SEGGER RTT target sources vendored at `cmake/hardware/rtt/`; exercised on real Apollo510 hardware.
 - **Firmware kernel adapter dispatch:** real C adapters compiled and linked against the real CMSIS-NN APIs. `arm_abs_s8` and `arm_convolve_s8` are now session-executed on real Apollo510 hardware.
 - **Real flash/run/RTT/PMU data capture:** verified on Apollo510 for the current two-operator vertical slice.
 
