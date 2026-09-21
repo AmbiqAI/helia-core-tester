@@ -252,6 +252,25 @@ def test_a_kernel_edit_relocks_without_update_dependencies(local_kernel_app) -> 
     assert "edited" in mirrored.read_text()
 
 
+def test_an_edited_mirror_is_refused_for_a_local_source(local_kernel_app) -> None:
+    """The real lock's content hash catches a mirror edited after the build.
+
+    Frozen sync verified this mirror at build time; `--skip-flash` never syncs
+    again, so nothing else would notice.
+    """
+    checkout, build_dir, options, render = local_kernel_app
+
+    firmware_build.lock_and_sync(render, options)
+    nsx_app.commit_render_state(render)
+    synced = nsx_app.synced_kernel_dir(render.app_dir)
+    assert firmware_build.kernel_source_root(build_dir, options) == synced
+
+    target = synced / "Source" / "BasicMathFunctions" / "arm_abs_s8.c"
+    target.write_text("void arm_abs_s8(void) { /* tampered */ }\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="changed since the build"):
+        firmware_build.kernel_source_root(build_dir, options)
+
+
 def test_an_app_dir_inside_the_checkout_is_refused(tmp_path: Path) -> None:
     """The nested layout puts the app under --cmsis-nn-root, where NSX's local
     vendoring silently does nothing and the content hash would cover the build

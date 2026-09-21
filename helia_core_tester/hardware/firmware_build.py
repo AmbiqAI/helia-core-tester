@@ -49,6 +49,7 @@ from .boards import repo_root as tester_repo_root
 from .dependency_baseline import NON_NSX_CHECKOUTS, DependencyBaseline, resolve_baseline
 from .jlink_library import JLinkLibraryError, find_jlink_exe
 from .nsx_app import (
+    CMSIS_NN_MODULE,
     SERVER_TARGET,
     AppRender,
     KernelOptions,
@@ -893,6 +894,47 @@ def build_rendered_firmware(
     return elf
 
 
+def recorded_kernel_hash(app_dir: Path) -> Optional[str]:
+    """Content hash the last build left for the kernels.
+
+    The lock is the authority and covers both source kinds -- measured, its
+    `nsx-cmsis-nn` entry equals `hash_tree` of the mirror for a registry ref
+    and for a `--cmsis-nn-root` checkout alike. The render state is the
+    fallback for a local source when the lock cannot be read.
+    """
+    state = read_render_state(app_dir) or {}
+    board = str(state.get("nsx_board") or "")
+    if board:
+        try:
+            from neuralspotx.nsx_lock import read_lock
+
+            lock = read_lock(app_dir, board)
+        except Exception:
+            lock = None
+        module = getattr(lock, "modules", {}).get(CMSIS_NN_MODULE) if lock else None
+        if module is not None and module.content_hash:
+            return str(module.content_hash)
+    return state.get("kernel_source_content_hash")
+
+
+def synced_kernel_reason(app_dir: Path, synced: Path) -> Optional[str]:
+    """Why the mirror no longer matches the build.
+
+    Frozen sync verifies the mirror on every build, but `--skip-flash` reuses
+    firmware without syncing, so nothing else notices an edit made afterwards.
+    Same hash function NSX locks with, so "same" means what frozen sync means.
+    Costs ~0.08 s over the 5.5k-file tree, too little to gate.
+    """
+    from neuralspotx.nsx_lock import hash_tree
+
+    expected = recorded_kernel_hash(app_dir)
+    if expected is None:
+        return "the build recorded no kernel content hash"
+    if hash_tree(synced) != expected:
+        return "the synced kernel tree changed since the build"
+    return None
+
+
 def kernel_source_root(build_dir: Path, options: Optional[FirmwareOptions] = None) -> Path:
     """The ns-cmsis-nn tree the firmware in `build_dir` was built from.
 
@@ -940,6 +982,13 @@ def kernel_source_root(build_dir: Path, options: Optional[FirmwareOptions] = Non
                 f"{synced} is gone, so generation has nothing to read that matches the image. "
                 f"Re-run `hardware build --board {board_name(app_dir)}` (which re-syncs it) before "
                 f"generating."
+            )
+        # Present is not unchanged; --skip-flash never re-syncs.
+        drift = synced_kernel_reason(app_dir, synced)
+        if drift is not None:
+            raise RuntimeError(
+                f"{synced}: {drift}. Generation would read kernels the firmware in {build_dir} "
+                f"was not built from. Re-run `hardware build --board {board_name(app_dir)}`."
             )
         return synced
 

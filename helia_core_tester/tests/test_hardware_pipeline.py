@@ -827,7 +827,14 @@ def test_reconfigure_tracks_the_configured_identity(nsx_driver, tmp_path: Path) 
     assert "configure" not in api.kinds()
 
 
-def test_kernel_source_root_follows_the_build_not_the_flag(nsx_driver, tmp_path: Path) -> None:
+def _accept_mirror(monkeypatch, synced: Path) -> None:
+    """Make the mirror-drift check pass for this tree."""
+    from neuralspotx.nsx_lock import hash_tree
+
+    monkeypatch.setattr(firmware_build, "recorded_kernel_hash", lambda app: hash_tree(synced))
+
+
+def test_kernel_source_root_follows_the_build_not_the_flag(nsx_driver, tmp_path: Path, monkeypatch) -> None:
     """Generation reads the tree the flashed image was built from, or refuses.
 
     With --skip-flash nothing is built or synced, so an explicit --cmsis-nn-root
@@ -839,6 +846,7 @@ def test_kernel_source_root_follows_the_build_not_the_flag(nsx_driver, tmp_path:
     firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
     synced = synced_kernel_dir(app_dir_for(build_dir))
     synced.mkdir(parents=True, exist_ok=True)
+    _accept_mirror(monkeypatch, synced)
 
     # The build recorded a registry-resolved kernel source, so that is the answer.
     assert firmware_build.kernel_source_root(build_dir) == synced
@@ -1187,7 +1195,48 @@ def test_a_dirty_or_foreign_cmsis5_checkout_is_reported_not_rewritten(tmp_path: 
     assert not any(c[3] in ("fetch", "checkout") for c in changed)
 
 
-def test_kernel_source_root_refuses_a_vanished_synced_tree(nsx_driver, tmp_path: Path) -> None:
+def test_kernel_source_root_refuses_an_edited_mirror(nsx_driver, tmp_path: Path, monkeypatch) -> None:
+    """Present is not unchanged: --skip-flash reuses firmware without syncing.
+
+    Frozen sync checks the mirror on every build, so an edit made afterwards is
+    seen by nobody -- generation would read kernels the running image never had.
+    Covers both source kinds, since the expected hash comes from the lock's
+    nsx-cmsis-nn entry either way.
+    """
+    from neuralspotx.nsx_lock import hash_tree
+
+    from helia_core_tester.hardware.nsx_app import app_dir_for, synced_kernel_dir
+
+    build_dir = tmp_path / "bd"
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
+    synced = synced_kernel_dir(app_dir_for(build_dir))
+    (synced / "Source").mkdir(parents=True, exist_ok=True)
+    source = synced / "Source" / "arm_abs_s8.c"
+    source.write_text("void arm_abs_s8(void) {}\n", encoding="utf-8")
+
+    at_build = hash_tree(synced)
+    monkeypatch.setattr(firmware_build, "recorded_kernel_hash", lambda app: at_build)
+    assert firmware_build.kernel_source_root(build_dir) == synced
+
+    source.write_text("void arm_abs_s8(void) { /* tampered */ }\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="changed since the build"):
+        firmware_build.kernel_source_root(build_dir)
+
+    # A --cmsis-nn-root build reaches the same check by the same route.
+    options = firmware_build.FirmwareOptions(cmsis_nn_root=tmp_path / "checkout")
+    monkeypatch.setattr(
+        firmware_build, "read_render_state", lambda app: {"kernel_source": f"path:{tmp_path / 'checkout'}"}
+    )
+    with pytest.raises(RuntimeError, match="changed since the build"):
+        firmware_build.kernel_source_root(build_dir, options)
+
+    # No recorded hash at all is refused too, rather than assumed fine.
+    monkeypatch.setattr(firmware_build, "recorded_kernel_hash", lambda app: None)
+    with pytest.raises(RuntimeError, match="recorded no kernel content hash"):
+        firmware_build.kernel_source_root(build_dir, options)
+
+
+def test_kernel_source_root_refuses_a_vanished_synced_tree(nsx_driver, tmp_path: Path, monkeypatch) -> None:
     """Falling back to the live --cmsis-nn-root here is the same substitution the
     recorded-source check exists to prevent, reached by another route."""
     import shutil
@@ -1198,6 +1247,7 @@ def test_kernel_source_root_refuses_a_vanished_synced_tree(nsx_driver, tmp_path:
     firmware_build.build_firmware(BOARD, build_dir=build_dir, repo_root=PROJECT_ROOT)
     synced = synced_kernel_dir(app_dir_for(build_dir))
     synced.mkdir(parents=True, exist_ok=True)
+    _accept_mirror(monkeypatch, synced)
     assert firmware_build.kernel_source_root(build_dir) == synced
 
     shutil.rmtree(synced)
