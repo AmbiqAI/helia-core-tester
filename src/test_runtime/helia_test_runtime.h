@@ -213,6 +213,10 @@ void helia_guard_check(const char *label, const uint8_t *head, const uint8_t *ta
  * body; a no-op when there is no slack). */
 void helia_guard_stamp_at(void *body, size_t body_bytes, size_t used_bytes);
 void helia_guard_check_at(const char *label, const void *body, size_t body_bytes, size_t used_bytes, int *failures);
+/* Untouched check: a call the kernel rejects (ARM_CMSIS_NN_ARG_ERROR) must
+ * not write its output. Arm the guard with poison_body=true and verify every
+ * body byte still carries HELIA_GUARD_POISON_BYTE afterwards. */
+void helia_guard_check_untouched(const char *label, const void *body, size_t body_bytes, int *failures);
 
 #ifdef __cplusplus
 }
@@ -251,6 +255,9 @@ void helia_guard_check_at(const char *label, const void *body, size_t body_bytes
 
 #define HELIA_GUARD_CHECK_SLACK(ident, label, used_bytes, failures) \
     helia_guard_check_at((label), (ident##_guard.body), sizeof(ident##_guard.body), (size_t)(used_bytes), &(failures))
+
+#define HELIA_GUARD_CHECK_UNTOUCHED(ident, label, failures) \
+    helia_guard_check_untouched((label), (ident##_guard.body), sizeof(ident##_guard.body), &(failures))
 
 #define HELIA_VALIDATE_EXPECTED_STATUS(label, status, expected_status) \
     do { \

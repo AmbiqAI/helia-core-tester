@@ -3,11 +3,14 @@
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.binary_basic_math_base import BinaryBasicMathBase
 from helia_core_tester.generation.utils.litert_builder import build_binary_broadcast_op
-from typing import Dict
+from typing import Any, Dict, Sequence, Tuple
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers
 
+
+# Storage dtype -> kernel suffix of the flat float entry point.
+FLOAT_KERNEL_SUFFIX = {"FP16": "f16", "FP32": "f32"}
 
 # The s8 inputs carry a moderate asymmetric zero point rather than the -128 the
 # output legitimately uses (squared difference being non-negative). -128 would
@@ -100,6 +103,11 @@ class OpSquaredDifference(BinaryBasicMathBase):
     """SquaredDifference operation."""
 
     SIGN_SPAN_OPERANDS = ("input_1", "input_2")
+    # Argument faults the flat float kernel diagnoses with ARM_CMSIS_NN_ARG_ERROR
+    # (ns-cmsis-nn#490): each NULL pointer on its own, so every operand of the
+    # guard's short-circuit chain is the one that trips it, plus the two sides of
+    # `block_size < 1`.
+    FAULT_KINDS = ("null_input_1", "null_input_2", "null_output", "zero_block", "negative_block")
 
     def needs_keras_model(self) -> bool:
         return self._use_s16_fake_quant_keras_path()
@@ -138,11 +146,22 @@ class OpSquaredDifference(BinaryBasicMathBase):
         return float(min_val), float(max_val)
 
     def _convert_with_litert_builder(self, out_path: str) -> None:
-        activation_dtype = self.desc.get("activation_dtype", "S8")
+        activation_dtype = self.tensor_dtype("input", default=str(self.desc.get("activation_dtype", "S8")))
         if activation_dtype == "S8":
             dtype = "int8"
         elif activation_dtype == "S16":
             dtype = "int16"
+        elif activation_dtype in FLOAT_KERNEL_SUFFIX:
+            # Float tensors carry no quantization; the builder's default quant is
+            # None for float tensor types.
+            model_bytes = build_binary_broadcast_op(
+                op_name="SQUARED_DIFFERENCE",
+                input_1_shape=tuple(self.desc["input_1_shape"]),
+                input_2_shape=tuple(self.desc["input_2_shape"]),
+                dtype="float16" if activation_dtype == "FP16" else "float32",
+            )
+            self._write_tflite_bytes(out_path, model_bytes)
+            return
         else:
             raise NotImplementedError(f"Unsupported SquaredDifference dtype: {activation_dtype}")
 
@@ -161,13 +180,14 @@ class OpSquaredDifference(BinaryBasicMathBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        activation_dtype = self.desc.get('activation_dtype', 'S8')
+        activation_dtype = self.tensor_dtype("input", default=str(self.desc.get('activation_dtype', 'S8')))
         
         if activation_dtype == 'S8':
             return {
                 'kernel_fn': 'arm_squared_difference_s8',
                 'input_c_type': 'int8_t',
-                'output_c_type': 'int8_t'
+                'output_c_type': 'int8_t',
+                'float_kernel': False,
             }
         elif activation_dtype == 'S16':
             call_style = self.desc.get("hint", {}).get("call_style", "")
@@ -175,15 +195,190 @@ class OpSquaredDifference(BinaryBasicMathBase):
                 return {
                     'kernel_fn': 'arm_elementwise_squared_difference_s16',
                     'input_c_type': 'int16_t',
-                    'output_c_type': 'int16_t'
+                    'output_c_type': 'int16_t',
+                    'float_kernel': False,
                 }
             return {
                 'kernel_fn': 'arm_squared_difference_s16',
                 'input_c_type': 'int16_t',
-                'output_c_type': 'int16_t'
+                'output_c_type': 'int16_t',
+                'float_kernel': False,
+            }
+        elif activation_dtype in FLOAT_KERNEL_SUFFIX:
+            # The float entry point is flat (no dims, no broadcast, no clamp):
+            # arm_elementwise_squared_difference_f16 (ns-cmsis-nn#490).
+            suffix = FLOAT_KERNEL_SUFFIX[activation_dtype]
+            c_type = 'float16_t' if activation_dtype == 'FP16' else 'float'
+            return {
+                'kernel_fn': f"arm_elementwise_squared_difference_{suffix}",
+                'input_c_type': c_type,
+                'output_c_type': c_type,
+                'float_kernel': True,
             }
         else:
             raise NotImplementedError(f"Unsupported SquaredDifference dtype: {activation_dtype}")
+
+    def _check_fault_reachable(self, kind: str, kernel_info: Dict[str, Any]) -> None:
+        """Reject fault kinds the selected kernel does not diagnose.
+
+        The fault template drives the flat float entry point, whose guard is the
+        one `if` in the kernel: any NULL pointer or a block_size below 1 returns
+        ARM_CMSIS_NN_ARG_ERROR. The int dims-taking kernels have their own guard
+        shape (dims pointers and broadcast validity) and no block_size, and the
+        int elementwise kernels have no guard at all, so neither is wired here.
+        """
+        if not kernel_info["float_kernel"]:
+            raise self.fault_unreachable(
+                kind, f"{kernel_info['kernel_fn']} is not covered by the float fault template"
+            )
+
+    @staticmethod
+    def _float_reference(float_dtype) -> Any:
+        """Return the IEEE-754 model of the flat float kernel for `float_dtype`.
+
+        Both kernel legs compute `(a - b)` and then `d * d` in the storage
+        format with one rounding per operation (MVE vsubq/vmulq on halves; the
+        scalar leg on `_Float16`). For binary16 the exact difference of two
+        halves fits in 40 bits and the exact square of a half in 22, so float64
+        intermediates with one narrowing per operation reproduce that bit for
+        bit. NumPy's own half arithmetic widens to float32 per operation and
+        would double-round. binary32 is computed in float32 directly, which is
+        already one rounding per operation.
+        """
+        if float_dtype == np.float16:
+
+            def reference(operands: Sequence[np.ndarray]) -> np.ndarray:
+                a = np.asarray(operands[0], dtype=np.float64)
+                b = np.asarray(operands[1], dtype=np.float64)
+                # Overflow to Inf on narrowing is the IEEE result being modelled.
+                with np.errstate(over="ignore"):
+                    diff = (a - b).astype(np.float16).astype(np.float64)
+                    return (diff * diff).astype(np.float16)
+
+            return reference
+
+        def reference32(operands: Sequence[np.ndarray]) -> np.ndarray:
+            a = np.asarray(operands[0], dtype=np.float32)
+            b = np.asarray(operands[1], dtype=np.float32)
+            with np.errstate(over="ignore"):
+                diff = (a - b).astype(np.float32)
+                return (diff * diff).astype(np.float32)
+
+        return reference32
+
+    def _float_operands(
+        self, input1_shape: Tuple[int, ...], input2_shape: Tuple[int, ...], float_dtype
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Draw the two float operands, or take them verbatim from the descriptor.
+
+        `hint.extras.input_1_values` / `input_2_values` pin an operand element for
+        element (flat, NHWC order). A pinned operand is the case -- overflow to
+        +Inf, the largest finite square, subnormal squares, identical operands --
+        so it is emitted exactly as written and never steered or swept. Either
+        operand may be pinned on its own; the other is drawn as usual.
+        """
+        extras = (self.desc.get("hint", {}) or {}).get("extras", {}) or {}
+        drawn_1, drawn_2 = self._sample_dual_uniform_inputs(input1_shape, input2_shape)
+        pinned = {"input_1_values": input1_shape, "input_2_values": input2_shape}
+        if self.input_mode() == "nonfinite_sweep" and "input_1_values" in extras:
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} pins input_1_values and requests "
+                "input_mode 'nonfinite_sweep'; the sweep overwrites the left operand, so "
+                "pin the tokens in the values instead of combining the two"
+            )
+        operands = [drawn_1, drawn_2]
+        for index, (key, shape) in enumerate(pinned.items()):
+            if key not in extras:
+                continue
+            values = np.asarray(extras[key], dtype=np.float64).flatten()
+            expected = int(np.prod(shape))
+            if values.size != expected:
+                raise ValueError(
+                    f"Descriptor {self.desc.get('name')!r}: {key} has {values.size} entries, "
+                    f"expected {expected} to match shape {list(shape)}"
+                )
+            with np.errstate(over="ignore"):
+                pinned_values = values.astype(float_dtype)
+            widened = pinned_values.astype(np.float64)
+            finite = np.isfinite(values)
+            if not np.array_equal(widened[finite], values[finite]):
+                raise ValueError(
+                    f"Descriptor {self.desc.get('name')!r}: {key} holds values that are not "
+                    f"exactly representable in {np.dtype(float_dtype).name}; write the "
+                    "rounded value so the emitted operand is the one the golden was computed from"
+                )
+            operands[index] = pinned_values.reshape(shape)
+        return operands[0].astype(float_dtype), operands[1].astype(float_dtype)
+
+    def _generate_float_c_files(
+        self,
+        output_dir: Path,
+        *,
+        name: str,
+        kernel_info: Dict[str, Any],
+        input1_shape: Tuple[int, ...],
+        input2_shape: Tuple[int, ...],
+        output_shape: Tuple[int, ...],
+    ) -> None:
+        from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+
+        if input1_shape != input2_shape:
+            raise NotImplementedError(
+                f"Descriptor {self.desc.get('name')!r}: {kernel_info['kernel_fn']} is a flat "
+                f"kernel with no broadcast entry point; input_1_shape {list(input1_shape)} and "
+                f"input_2_shape {list(input2_shape)} must match"
+            )
+        builder = TemplateContextBuilder()
+        input1_dims = builder.nhwc_to_cmsis_dims(input1_shape)
+        input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
+        output_dims = builder.nhwc_to_cmsis_dims(output_shape)
+        float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
+
+        input1_q, input2_q = self._float_operands(input1_shape, input2_shape, float_dtype)
+        reference = self._float_reference(float_dtype)
+        output_data = reference([input1_q, input2_q])
+        output_data, nonfinite_context = self.apply_nonfinite_policy(
+            output_data, reference=reference, inputs=[input1_q, input2_q]
+        )
+
+        context: Dict[str, Any] = {
+            'name': name,
+            'input1_dims': input1_dims,
+            'input2_dims': input2_dims,
+            'output_dims': output_dims,
+            'block_size': int(np.prod(output_shape)),
+            'call_style': str(self.desc.get("hint", {}).get("call_style", "")),
+            'input1_data_array': builder.format_array_as_c_literal(input1_q),
+            'input2_data_array': builder.format_array_as_c_literal(input2_q),
+            'expected_output_array': builder.format_array_as_c_literal(output_data),
+            'input_dtype': kernel_info["input_c_type"],
+            'output_dtype': kernel_info["output_c_type"],
+            'kernel_fn': kernel_info["kernel_fn"],
+            'float_kernel': True,
+            'validation_mode': 'float',
+        }
+        context.update(nonfinite_context)
+
+        c_template = "BasicMathFunctions/squared_difference/squared_difference.c.j2"
+        fault = self.fault_kind()
+        if fault:
+            self._check_fault_reachable(fault, kernel_info)
+            context.update(self.fault_context())
+            c_template = "BasicMathFunctions/squared_difference/squared_difference_fault.c.j2"
+
+        cmake_context = {
+            'name': name,
+            'operator': self.desc.get('operator', 'SquaredDifference'),
+            'operator_name': 'squared_difference'
+        }
+        self._write_op_outputs(
+            output_dir,
+            "squared_difference",
+            "BasicMathFunctions/squared_difference/squared_difference.h.j2",
+            c_template,
+            context,
+            cmake_context,
+        )
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         if self._use_s16_fake_quant_keras_path():
@@ -260,6 +455,19 @@ class OpSquaredDifference(BinaryBasicMathBase):
             input2_shape = tuple(input2_shape)
         if output_shape is not None:
             output_shape = tuple(output_shape)
+
+        if kernel_info["float_kernel"]:
+            self._generate_float_c_files(
+                output_dir,
+                name=name,
+                kernel_info=kernel_info,
+                input1_shape=input1_shape,
+                input2_shape=input2_shape,
+                output_shape=output_shape,
+            )
+            return
+        if self.fault_kind():
+            self._check_fault_reachable(self.fault_kind(), kernel_info)
         
         # Extract quantization from LiteRT
         input1_quant = op_tensors['inputs'][0]['quantization']
@@ -386,6 +594,7 @@ class OpSquaredDifference(BinaryBasicMathBase):
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
+            'float_kernel': False,
         }
         
         cmake_context = {

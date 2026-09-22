@@ -267,7 +267,9 @@ non-finite output may be pinned is a per-kernel question.
   `-Ofast` and declines to promise NaN propagation end to end, the `arm_avg_pool_f16` note
   has NaN propagating at every optimization level on non-MVE while the MVE clamp resolves it to
   a bound, and the `arm_svdf_f16` note has NaN propagating through the input-activation clamp on
-  every build while the MVE output-activation clamp resolves it to a bound. It asserts robustness and non-corruption of the neighbouring lanes without encoding an
+  every build while the MVE output-activation clamp resolves it to a bound, or that are
+  simply undocumented (the `arm_elementwise_squared_difference_f16` block of
+  ns-cmsis-nn#490 says nothing about non-finite input). It asserts robustness and non-corruption of the neighbouring lanes without encoding an
   uncontracted value as a golden. Two generation-time guards keep the measurement honest: a case
   that ends up masking every lane fails, since it would assert nothing beyond `SUCCESS`, and so
   does a case where no lane moves between the probes, since a two-sided activation clamp that
@@ -382,7 +384,8 @@ wired to the rule.
 Two kinds of operand are check-only: the generator never steers them, so a failing one must be
 waived. An operand baked into the TFLite model (a PReLU alpha) cannot move, because the
 reference interpreter would keep using the model's copy and the golden would stop matching the
-emitted array. An operand the descriptor pins explicitly (`hint.extras.input_values`) must not
+emitted array. An operand the descriptor pins explicitly (`hint.extras.input_values`, or
+`input_1_values` / `input_2_values` for the float squared difference) must not
 move, because the pinned values are the case.
 
 An operand that is intentionally one-signed opts out in its descriptor under
