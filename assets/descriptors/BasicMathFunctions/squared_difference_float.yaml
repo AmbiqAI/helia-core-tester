@@ -17,7 +17,8 @@
 # rounding, overflow and underflow boundaries of the two IEEE operations the
 # kernel performs; their golden is the same IEEE model the generator uses for
 # every case (one correctly rounded binary16 result per operation), so they
-# compare at zero tolerance. Random-draw cases keep the FP16 default
+# compare bit for bit (`bit_exact`), which also pins the sign of zero that a
+# tolerance comparison cannot see. Random-draw cases keep the FP16 default
 # tolerance the rest of the float suite uses.
 operator: SquaredDifference
 name: squared_difference_float_default_f16
@@ -137,11 +138,9 @@ tensor_dtypes:
   output: FP16
 input_1_shape: [1, 1, 1, 9]
 input_2_shape: [1, 1, 1, 9]
-comparison:
-  atol: 0.0
-  rtol: 0.0
 hint:
   extras:
+    bit_exact: true
     input_1_values: [256.0, 0.0, 255.875, -255.875, 300.0, 300.0, 65504.0, -65504.0, 181.0]
     input_2_values: [0.0, 256.0, 0.0, 0.0, 44.0625, 44.1875, -65504.0, 0.0, 0.0]
 required_kernel_symbols: [arm_elementwise_squared_difference_f16]
@@ -153,9 +152,9 @@ required_kernel_symbols: [arm_elementwise_squared_difference_f16]
 # subnormal, which rounds to zero. The remaining pairs take the difference
 # exactly at the ulp of 1.0 (2^-11 -> 2^-22), across zero (2^-10 -> 2^-20),
 # from the smallest subnormal itself (squares to zero), and from -0 - 0,
-# whose square is +0. Zero tolerance: a leg that flushes subnormals to zero,
-# or flushes the subnormal *inputs* before subtracting, is caught here and
-# nowhere else in the suite.
+# whose square is +0 (asserted on the sign bit). Bit-exact: a leg that flushes
+# subnormals to zero, or flushes the subnormal *inputs* before subtracting, is
+# caught here and nowhere else in the suite.
 operator: SquaredDifference
 name: squared_difference_float_underflow_f16
 suite: float
@@ -164,11 +163,9 @@ tensor_dtypes:
   output: FP16
 input_1_shape: [1, 1, 1, 9]
 input_2_shape: [1, 1, 1, 9]
-comparison:
-  atol: 0.0
-  rtol: 0.0
 hint:
   extras:
+    bit_exact: true
     input_1_values: [0.00390625, 0.0078125, 0.000244140625, 0.0001220703125, 0.000244140625, 1.0, 0.00048828125, 5.960464477539063e-08, -0.0]
     input_2_values: [0.0, 0.0, 0.0, 0.0, 0.0001220703125, 0.99951171875, -0.00048828125, 0.0, 0.0]
 required_kernel_symbols: [arm_elementwise_squared_difference_f16]
@@ -184,11 +181,9 @@ tensor_dtypes:
   output: FP16
 input_1_shape: [1, 1, 1, 9]
 input_2_shape: [1, 1, 1, 9]
-comparison:
-  atol: 0.0
-  rtol: 0.0
 hint:
   extras:
+    bit_exact: true
     input_1_values: [-65504.0, -1.0, -0.0, 0.0, 5.960464477539063e-08, 0.00048828125, 1.0, 255.875, 65504.0]
     input_2_values: [-65504.0, -1.0, -0.0, 0.0, 5.960464477539063e-08, 0.00048828125, 1.0, 255.875, 65504.0]
 required_kernel_symbols: [arm_elementwise_squared_difference_f16]

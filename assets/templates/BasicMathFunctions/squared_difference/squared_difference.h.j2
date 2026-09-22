@@ -40,5 +40,12 @@ static const {{ input_dtype }} {{ name }}_input2[] = {
 static const {{ output_dtype }} {{ name }}_expected_output[] = {
 {{ expected_output_array }}
 };
+{% if bit_exact %}
+
+// Expected output storage bits (bit-exact case: signed zero is asserted)
+static const uint16_t {{ name }}_expected_bits[] = {
+{{ expected_bits_array }}
+};
+{% endif %}
 
 #endif

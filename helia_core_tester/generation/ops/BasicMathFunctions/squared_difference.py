@@ -9,8 +9,10 @@ import tensorflow as tf
 from tensorflow.keras import layers
 
 
-# Storage dtype -> kernel suffix of the flat float entry point.
-FLOAT_KERNEL_SUFFIX = {"FP16": "f16", "FP32": "f32"}
+# Storage dtype -> kernel suffix of the flat float entry point. ns-cmsis-nn#490
+# provides the f16 kernel only; FP32 is rejected rather than advertised as a
+# symbol nothing declares.
+FLOAT_KERNEL_SUFFIX = {"FP16": "f16"}
 
 # The s8 inputs carry a moderate asymmetric zero point rather than the -128 the
 # output legitimately uses (squared difference being non-negative). -128 would
@@ -158,7 +160,7 @@ class OpSquaredDifference(BinaryBasicMathBase):
                 op_name="SQUARED_DIFFERENCE",
                 input_1_shape=tuple(self.desc["input_1_shape"]),
                 input_2_shape=tuple(self.desc["input_2_shape"]),
-                dtype="float16" if activation_dtype == "FP16" else "float32",
+                dtype="float16",
             )
             self._write_tflite_bytes(out_path, model_bytes)
             return
@@ -207,14 +209,17 @@ class OpSquaredDifference(BinaryBasicMathBase):
         elif activation_dtype in FLOAT_KERNEL_SUFFIX:
             # The float entry point is flat (no dims, no broadcast, no clamp):
             # arm_elementwise_squared_difference_f16 (ns-cmsis-nn#490).
-            suffix = FLOAT_KERNEL_SUFFIX[activation_dtype]
-            c_type = 'float16_t' if activation_dtype == 'FP16' else 'float'
             return {
-                'kernel_fn': f"arm_elementwise_squared_difference_{suffix}",
-                'input_c_type': c_type,
-                'output_c_type': c_type,
+                'kernel_fn': f"arm_elementwise_squared_difference_{FLOAT_KERNEL_SUFFIX[activation_dtype]}",
+                'input_c_type': 'float16_t',
+                'output_c_type': 'float16_t',
                 'float_kernel': True,
             }
+        elif activation_dtype == 'FP32':
+            raise NotImplementedError(
+                "SquaredDifference FP32: ns-cmsis-nn declares no arm_elementwise_squared_difference_f32 "
+                "(ns-cmsis-nn#490 adds the f16 kernel only)"
+            )
         else:
             raise NotImplementedError(f"Unsupported SquaredDifference dtype: {activation_dtype}")
 
@@ -233,41 +238,29 @@ class OpSquaredDifference(BinaryBasicMathBase):
             )
 
     @staticmethod
-    def _float_reference(float_dtype) -> Any:
-        """Return the IEEE-754 model of the flat float kernel for `float_dtype`.
+    def _float_reference() -> Any:
+        """Return the IEEE-754 binary16 model of the flat float kernel.
 
-        Both kernel legs compute `(a - b)` and then `d * d` in the storage
-        format with one rounding per operation (MVE vsubq/vmulq on halves; the
-        scalar leg on `_Float16`). For binary16 the exact difference of two
-        halves fits in 40 bits and the exact square of a half in 22, so float64
-        intermediates with one narrowing per operation reproduce that bit for
-        bit. NumPy's own half arithmetic widens to float32 per operation and
-        would double-round. binary32 is computed in float32 directly, which is
-        already one rounding per operation.
+        Both kernel legs compute `(a - b)` and then `d * d` on halves with one
+        rounding per operation (MVE vsubq/vmulq; the scalar leg on `_Float16`).
+        The exact difference of two halves fits in 40 bits and the exact square
+        of a half in 22, so float64 intermediates with one narrowing per
+        operation reproduce that bit for bit. NumPy's own half arithmetic widens
+        to float32 per operation and would double-round.
         """
-        if float_dtype == np.float16:
 
-            def reference(operands: Sequence[np.ndarray]) -> np.ndarray:
-                a = np.asarray(operands[0], dtype=np.float64)
-                b = np.asarray(operands[1], dtype=np.float64)
-                # Overflow to Inf on narrowing is the IEEE result being modelled.
-                with np.errstate(over="ignore"):
-                    diff = (a - b).astype(np.float16).astype(np.float64)
-                    return (diff * diff).astype(np.float16)
-
-            return reference
-
-        def reference32(operands: Sequence[np.ndarray]) -> np.ndarray:
-            a = np.asarray(operands[0], dtype=np.float32)
-            b = np.asarray(operands[1], dtype=np.float32)
+        def reference(operands: Sequence[np.ndarray]) -> np.ndarray:
+            a = np.asarray(operands[0], dtype=np.float64)
+            b = np.asarray(operands[1], dtype=np.float64)
+            # Overflow to Inf on narrowing is the IEEE result being modelled.
             with np.errstate(over="ignore"):
-                diff = (a - b).astype(np.float32)
-                return (diff * diff).astype(np.float32)
+                diff = (a - b).astype(np.float16).astype(np.float64)
+                return (diff * diff).astype(np.float16)
 
-        return reference32
+        return reference
 
     def _float_operands(
-        self, input1_shape: Tuple[int, ...], input2_shape: Tuple[int, ...], float_dtype
+        self, input1_shape: Tuple[int, ...], input2_shape: Tuple[int, ...]
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Draw the two float operands, or take them verbatim from the descriptor.
 
@@ -298,17 +291,27 @@ class OpSquaredDifference(BinaryBasicMathBase):
                     f"expected {expected} to match shape {list(shape)}"
                 )
             with np.errstate(over="ignore"):
-                pinned_values = values.astype(float_dtype)
+                pinned_values = values.astype(np.float16)
             widened = pinned_values.astype(np.float64)
             finite = np.isfinite(values)
             if not np.array_equal(widened[finite], values[finite]):
                 raise ValueError(
                     f"Descriptor {self.desc.get('name')!r}: {key} holds values that are not "
-                    f"exactly representable in {np.dtype(float_dtype).name}; write the "
-                    "rounded value so the emitted operand is the one the golden was computed from"
+                    "exactly representable in float16; write the rounded value so the emitted "
+                    "operand is the one the golden was computed from"
                 )
             operands[index] = pinned_values.reshape(shape)
-        return operands[0].astype(float_dtype), operands[1].astype(float_dtype)
+        return operands[0].astype(np.float16), operands[1].astype(np.float16)
+
+    def _bit_exact(self) -> bool:
+        """`hint.extras.bit_exact: true` validates the output bit for bit.
+
+        The tolerance validator compares `fabs(actual - expected)`, which cannot
+        tell -0 from +0. The pinned boundary cases assert the sign of zero, so
+        they compare storage bits through HELIA_VALIDATE_FLOAT_BITS instead.
+        """
+        extras = (self.desc.get("hint", {}) or {}).get("extras", {}) or {}
+        return bool(extras.get("bit_exact", False))
 
     def _generate_float_c_files(
         self,
@@ -332,11 +335,17 @@ class OpSquaredDifference(BinaryBasicMathBase):
         input1_dims = builder.nhwc_to_cmsis_dims(input1_shape)
         input2_dims = builder.nhwc_to_cmsis_dims(input2_shape)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
-        float_dtype = np.float16 if kernel_info["input_c_type"] == "float16_t" else np.float32
 
-        input1_q, input2_q = self._float_operands(input1_shape, input2_shape, float_dtype)
-        reference = self._float_reference(float_dtype)
+        input1_q, input2_q = self._float_operands(input1_shape, input2_shape)
+        reference = self._float_reference()
         output_data = reference([input1_q, input2_q])
+        bit_exact = self._bit_exact()
+        if bit_exact and self.input_mode() == "nonfinite_sweep":
+            raise ValueError(
+                f"Descriptor {self.desc.get('name')!r} combines bit_exact with a non-finite "
+                "sweep; the sweep's golden is policy-compared, not bit-compared"
+            )
+        expected_bits = output_data.reshape(-1).view(np.uint16)
         output_data, nonfinite_context = self.apply_nonfinite_policy(
             output_data, reference=reference, inputs=[input1_q, input2_q]
         )
@@ -356,7 +365,10 @@ class OpSquaredDifference(BinaryBasicMathBase):
             'kernel_fn': kernel_info["kernel_fn"],
             'float_kernel': True,
             'validation_mode': 'float',
+            'bit_exact': bit_exact,
         }
+        if bit_exact:
+            context['expected_bits_array'] = builder.format_array_as_c_literal(expected_bits)
         context.update(nonfinite_context)
 
         c_template = "BasicMathFunctions/squared_difference/squared_difference.c.j2"

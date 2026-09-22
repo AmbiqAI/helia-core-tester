@@ -1,5 +1,6 @@
 #include "{{ name }}_squared_difference.h"
 #include "arm_nnfunctions.h"
+#include <string.h>
 {% include "common/standalone/runtime_common.j2" %}
 {% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 {% from "common/standalone/validation.j2" import validation_outputs with context %}
@@ -73,7 +74,18 @@ int32_t {{ name }}_test_case_run(void)
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("SquaredDifference") }} output", failures);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("SquaredDifference") }}", status);
 
+{% if bit_exact %}
+    /* Pinned boundary case: the golden is exact, so compare storage bits. The
+       tolerance validator cannot tell -0 from +0; this can. */
+    for (int i = 0; i < {{ name|upper }}_OUTPUT_SIZE; ++i) {
+        uint16_t actual;
+        memcpy(&actual, &{{ name }}_output[i], sizeof(actual));
+        HELIA_VALIDATE_FLOAT_BITS(actual, {{ name }}_expected_bits[i], 0x7c00u, 0, i,
+                                  {{ validation_report_limit | default(20) }}, failures);
+    }
+{% else %}
 {{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
+{% endif %}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 

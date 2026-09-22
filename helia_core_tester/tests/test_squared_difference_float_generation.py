@@ -102,6 +102,11 @@ def _golden(h_text: str, name: str) -> list[str]:
     return [token.strip() for token in body.replace("\n", " ").split(",") if token.strip()]
 
 
+def _bits(h_text: str, name: str) -> list[int]:
+    body = h_text.split(f"{name}_expected_bits[] = {{", 1)[1].split("};", 1)[0]
+    return [int(token) for token in body.replace("\n", " ").split(",") if token.strip()]
+
+
 def _f16(value: float) -> np.ndarray:
     return np.asarray([value], dtype=np.float16)
 
@@ -150,25 +155,30 @@ def test_pinned_and_fault_cases_share_the_nine_element_shape() -> None:
     for name in PINNED_CASES + tuple(name for name, _, _ in FAULT_CASES):
         assert descriptors[name]["input_1_shape"] == [1, 1, 1, 9], name
     for name in PINNED_CASES:
-        assert descriptors[name]["comparison"] == {"atol": 0.0, "rtol": 0.0}, name
         extras = descriptors[name]["hint"]["extras"]
+        assert extras["bit_exact"] is True, name
         assert len(extras["input_1_values"]) == 9 and len(extras["input_2_values"]) == 9
 
 
 # --- kernel selection ----------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("dtype", "kernel_fn", "c_type"),
-    [
-        ("FP16", "arm_elementwise_squared_difference_f16", "float16_t"),
-        ("FP32", "arm_elementwise_squared_difference_f32", "float"),
-    ],
-)
-def test_float_dtypes_select_the_flat_float_kernel(dtype: str, kernel_fn: str, c_type: str) -> None:
-    op = OpSquaredDifference(_float_desc("k", dtype=dtype), seed=1, target_cpu=CPU)
-    info = op._select_cmsis_squared_difference_kernel()
-    assert info == {"kernel_fn": kernel_fn, "input_c_type": c_type, "output_c_type": c_type, "float_kernel": True}
+def test_fp16_selects_the_flat_float_kernel() -> None:
+    op = OpSquaredDifference(_float_desc("k", dtype="FP16"), seed=1, target_cpu=CPU)
+    assert op._select_cmsis_squared_difference_kernel() == {
+        "kernel_fn": KERNEL,
+        "input_c_type": "float16_t",
+        "output_c_type": "float16_t",
+        "float_kernel": True,
+    }
+
+
+def test_fp32_is_rejected_because_no_f32_kernel_exists() -> None:
+    # ns-cmsis-nn#490 declares the f16 kernel only; advertising an f32 symbol
+    # would emit a call that cannot link.
+    op = OpSquaredDifference(_float_desc("k32", dtype="FP32"), seed=1, target_cpu=CPU)
+    with pytest.raises(NotImplementedError, match="no arm_elementwise_squared_difference_f32"):
+        op._select_cmsis_squared_difference_kernel()
 
 
 def test_int_kernel_selection_is_unchanged() -> None:
@@ -202,7 +212,7 @@ def test_int_kernel_selection_is_unchanged() -> None:
     ],
 )
 def test_binary16_reference_rounds_once_per_operation(a: float, b: float, expected: float) -> None:
-    reference = OpSquaredDifference._float_reference(np.float16)
+    reference = OpSquaredDifference._float_reference()
     result = reference([_f16(a), _f16(b)])
     assert result.dtype == np.float16
     if np.isinf(expected):
@@ -219,18 +229,10 @@ def test_binary16_reference_is_exact_across_the_full_exponent_span() -> None:
     # float32, a second rounding the kernel never performs.
     a = _f16(65504.0)
     b = _f16(2.0 ** -24)
-    single = OpSquaredDifference._float_reference(np.float16)([a, b])
+    single = OpSquaredDifference._float_reference()([a, b])
     assert np.isposinf(single[0])
-    small = OpSquaredDifference._float_reference(np.float16)([_f16(2.0 ** -24), _f16(-(2.0 ** -24))])
+    small = OpSquaredDifference._float_reference()([_f16(2.0 ** -24), _f16(-(2.0 ** -24))])
     assert float(small[0]) == 0.0  # (2^-23)^2 = 2^-46 underflows to +0
-
-
-def test_binary32_reference_computes_in_float32() -> None:
-    reference = OpSquaredDifference._float_reference(np.float32)
-    result = reference([np.asarray([3.0], dtype=np.float32), np.asarray([1.0], dtype=np.float32)])
-    assert result.dtype == np.float32 and float(result[0]) == 4.0
-    big = reference([np.asarray([3.0e19], dtype=np.float32), np.asarray([-3.0e19], dtype=np.float32)])
-    assert np.isposinf(big[0])
 
 
 # --- generated harness ---------------------------------------------------------
@@ -247,6 +249,8 @@ def test_float_case_renders_flat_call_and_float_validation(tmp_path: Path, monke
     assert "input1_offset" not in c_text
     assert "HELIA_VALIDATE_OUTPUTS(\n        FLOAT," in c_text
     assert "0.001f,\n        0.001f," in c_text  # FP16 suite default tolerance
+    assert "HELIA_VALIDATE_FLOAT_BITS(" not in c_text and "_expected_bits" not in h_text
+    assert sidecar["scalars"]["bit_exact"] is False
     assert "HELIA_GUARD_CHECK(" in c_text
     assert "#include <math.h>" in h_text
     assert "static const float16_t squared_difference_float_tail_f16_input1[]" in h_text
@@ -262,13 +266,13 @@ def test_random_golden_matches_the_binary16_model(tmp_path: Path, monkeypatch: p
     if not LITERT_AVAILABLE:
         pytest.skip("ai_edge_litert is required")
     op = OpSquaredDifference(desc, seed=1, target_cpu=CPU)
-    a, b = op._float_operands((1, 3, 5, 3), (1, 3, 5, 3), np.float16)
+    a, b = op._float_operands((1, 3, 5, 3), (1, 3, 5, 3))
     assert a.dtype == np.float16 and b.dtype == np.float16 and a.shape == (1, 3, 5, 3)
     # Both operands come from one RNG stream: a == b would make the golden zero.
     assert not np.array_equal(a, b)
-    golden = op._float_reference(np.float16)([a, b])
+    golden = op._float_reference()([a, b])
     assert np.all(golden >= 0) and np.all(np.isfinite(golden))
-    assert np.array_equal(golden, op._float_reference(np.float16)([b, a]))  # symmetric
+    assert np.array_equal(golden, op._float_reference()([b, a]))  # symmetric
 
 
 def test_pinned_operands_are_emitted_verbatim_with_exact_goldens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -282,8 +286,11 @@ def test_pinned_operands_are_emitted_verbatim_with_exact_goldens(tmp_path: Path,
         "(float16_t)INFINITY", "(float16_t)65408.0f", "(float16_t)INFINITY", "(float16_t)INFINITY",
         "(float16_t)32768.0f",
     ]
-    assert "0.0f,\n        0.0f," in c_text  # zero tolerance
-    assert sidecar["comparison"] == {"mode": "float", "atol": 0.0, "rtol": 0.0}
+    # Bit-exact: storage bits are compared, not a tolerance.
+    assert _bits(h_text, desc["name"]) == [0x7C00, 0x7C00, 0x7BFE, 0x7BFE, 0x7C00, 0x7BFC, 0x7C00, 0x7C00, 0x7800]
+    assert "HELIA_VALIDATE_FLOAT_BITS(actual," in c_text and "0x7c00u, 0, i," in c_text
+    assert "HELIA_VALIDATE_OUTPUTS(" not in c_text
+    assert sidecar["scalars"]["bit_exact"] is True
 
 
 def test_underflow_case_pins_subnormal_squares(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -298,12 +305,35 @@ def test_underflow_case_pins_subnormal_squares(tmp_path: Path, monkeypatch: pyte
     ]
     assert values == [2.0 ** -16, 2.0 ** -14, 2.0 ** -24, 0.0, 0.0, 2.0 ** -22, 2.0 ** -20, 0.0, 0.0]
     assert "(float16_t)-0.0f" in h_text  # the -0 - 0 pair is emitted as written
+    # Subnormal encodings, and +0 (0x0000, not 0x8000) for the -0 - 0 lane: the
+    # sign bit is what the tolerance validator could not assert.
+    assert _bits(h_text, desc["name"]) == [0x0100, 0x0400, 0x0001, 0x0000, 0x0000, 0x0004, 0x0010, 0x0000, 0x0000]
 
 
 def test_equal_operands_case_is_all_positive_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     desc = _descriptors()["squared_difference_float_equal_operands_f16"]
     _, h_text, _ = _generate(desc, tmp_path, monkeypatch)
     assert _golden(h_text, desc["name"]) == ["(float16_t)0.0f"] * 9
+    assert _bits(h_text, desc["name"]) == [0] * 9
+
+
+def test_negative_zero_result_would_fail_the_bit_comparison() -> None:
+    # The model gives +0 for (-0) - 0 squared; a kernel returning -0 differs in
+    # the sign bit only, which is exactly what the bit comparison sees.
+    result = OpSquaredDifference._float_reference()([_f16(-0.0), _f16(0.0)])
+    assert int(result.view(np.uint16)[0]) == 0x0000
+    assert int(np.float16(-0.0).view(np.uint16)) == 0x8000
+
+
+def test_bit_exact_cannot_be_combined_with_a_sweep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    desc = _float_desc(
+        "bits_sweep",
+        hint={"extras": {"bit_exact": True}},
+        input_mode="nonfinite_sweep",
+        nonfinite_policy="mask",
+    )
+    with pytest.raises(ValueError, match="combines bit_exact with a non-finite sweep"):
+        _generate(desc, tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize(

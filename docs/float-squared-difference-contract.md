@@ -1,7 +1,8 @@
 # Float squared difference: what the tester asserts
 
 Kernel: `arm_elementwise_squared_difference_f16` (AmbiqAI/ns-cmsis-nn#490),
-declared in `Include/arm_nnfunctions_flt.h`. Descriptors:
+declared in `Include/arm_nnfunctions_flt.h`. There is no f32 kernel; an FP32
+descriptor is rejected at kernel selection. Descriptors:
 `assets/descriptors/BasicMathFunctions/squared_difference_float.yaml`.
 
 ## The kernel
@@ -21,7 +22,7 @@ non-finite inputs.
 
 ## Golden model
 
-`OpSquaredDifference._float_reference(np.float16)` computes the difference in
+`OpSquaredDifference._float_reference()` computes the difference in
 float64 (exact for two halves, which need at most 40 significand bits),
 narrows it once to binary16, squares in float64 (exact, 22 bits) and narrows
 once more. That is bit for bit the result of the two rounded operations both
@@ -29,8 +30,11 @@ legs perform. NumPy's own half arithmetic widens to float32 per operation and
 can double-round, which is why the model does not use it.
 
 Random-draw cases compare at the float suite's FP16 default (`atol` and
-`rtol` of 1e-3). The pinned cases below compare at zero tolerance: their
-golden is exact by construction, so any difference is a real defect.
+`rtol` of 1e-3). The pinned cases below set `hint.extras.bit_exact: true` and
+compare storage bits through `HELIA_VALIDATE_FLOAT_BITS`: their golden is
+exact by construction, so any difference is a real defect, and the bit
+comparison also asserts the sign of zero, which a `fabs(actual - expected)`
+tolerance cannot see.
 
 ## Cases
 
