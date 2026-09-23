@@ -32,12 +32,11 @@ def _capture(monkeypatch: pytest.MonkeyPatch, name: str, result: Any = None) -> 
     return seen
 
 
-def test_lock_app_forwards_timeout_and_quiet(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lock_app_forwards_update_and_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _capture(monkeypatch, "lock_app", result="LOCK")
     assert nsx_cli.lock_app(APP, update=True, timeout_s=42) == "LOCK"
     assert seen["app_dir"] == APP
     assert seen["update"] is True
-    assert seen["quiet"] is True
     assert seen["timeout_s"] == 42
 
 
@@ -48,18 +47,19 @@ def test_lock_app_default_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     assert seen["update"] is False
 
 
-def test_sync_app_is_frozen_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sync_app_is_unfrozen_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A frozen sync cannot populate a fresh modules/ tree.
     seen = _capture(monkeypatch, "sync_app")
     nsx_cli.sync_app(APP)
-    assert seen["frozen"] is True
+    assert seen["frozen"] is False
     assert seen["force"] is False
     assert seen["timeout_s"] == nsx_cli.SYNC_TIMEOUT_S
 
 
 def test_sync_app_forwards_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _capture(monkeypatch, "sync_app")
-    nsx_cli.sync_app(APP, frozen=False, force=True, timeout_s=7)
-    assert seen["frozen"] is False
+    nsx_cli.sync_app(APP, frozen=True, force=True, timeout_s=7)
+    assert seen["frozen"] is True
     assert seen["force"] is True
     assert seen["timeout_s"] == 7
 
@@ -128,21 +128,17 @@ def test_nsx_error_becomes_hardware_build_error(monkeypatch: pytest.MonkeyPatch,
 
 
 def test_called_process_error_becomes_hardware_build_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # NSX's build runner raises this unwrapped, with no stderr.
     def fake(*args: Any, **kwargs: Any) -> None:
-        raise subprocess.CalledProcessError(2, ["ninja", "-C", "build"], stderr="ld: no memory")
+        raise subprocess.CalledProcessError(2, ["ninja", "-C", "build"])
 
     monkeypatch.setattr(nsx_cli.nsx_api, "build_app", fake)
-    with pytest.raises(HardwareBuildError) as info:
+    with pytest.raises(HardwareBuildError, match=r"^nsx build failed: Command .*ninja.*exit status 2") as info:
         nsx_cli.build_app(APP)
-    assert str(info.value) == "nsx build failed: exit status 2: ninja -C build\nld: no memory"
+    assert isinstance(info.value.__cause__, subprocess.CalledProcessError)
 
 
-def test_hardware_build_error_is_runtime_error() -> None:
-    # cli._pipeline_errors reports RuntimeError one-line.
-    assert issubclass(HardwareBuildError, RuntimeError)
-
-
-def test_verbosity_zero_swallows_nsx_output(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_verbosity_zero_swallows_nsx_notes(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     seen = _capture(monkeypatch, "sync_app")
     nsx_cli.sync_app(APP, verbosity=0)
     emit = seen["emit"]
@@ -158,4 +154,4 @@ def test_verbosity_one_uses_nsx_default_emitter(monkeypatch: pytest.MonkeyPatch)
     seen = _capture(monkeypatch, "lock_app")
     nsx_cli.lock_app(APP, verbosity=1)
     assert seen["emit"] is None
-    assert seen["quiet"] is False
+    assert "quiet" not in seen

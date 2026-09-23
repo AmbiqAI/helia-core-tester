@@ -2,16 +2,17 @@
 
 Not wired into any command yet. Callers go through here instead of
 ``neuralspotx.api`` so that every lock/sync/configure/build call carries a
-wall-clock timeout, stays quiet at verbosity 0, and fails as
-:class:`HardwareBuildError` -- a RuntimeError, which ``cli._pipeline_errors``
-already reports as a one-line error.
+wall-clock timeout, drops NSX's own notes at verbosity 0, and fails as
+:class:`HardwareBuildError` naming the step. Subprocess output (cmake,
+ninja, git) still inherits the caller's stdio.
 """
 
 from __future__ import annotations
 
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Iterator, Optional
 
 from neuralspotx import api as nsx_api
 from neuralspotx._io import Emitter, Event
@@ -24,15 +25,13 @@ SYNC_TIMEOUT_S = 300
 CONFIGURE_TIMEOUT_S = 120
 BUILD_TIMEOUT_S = 300
 
-T = TypeVar("T")
-
 
 class HardwareBuildError(RuntimeError):
     """An NSX lock, sync, configure or build step failed."""
 
 
 def _quiet_emitter(event: Event) -> None:
-    """Drop NSX output at verbosity 0."""
+    """Drop NSX notes at verbosity 0."""
 
 
 def emitter_for_verbosity(verbosity: int) -> Optional[Emitter]:
@@ -40,19 +39,13 @@ def emitter_for_verbosity(verbosity: int) -> Optional[Emitter]:
     return None if verbosity >= 1 else _quiet_emitter
 
 
-def _translate(label: str, func: Callable[[], T]) -> T:
+@contextmanager
+def _nsx_errors(label: str) -> Iterator[None]:
     """Re-raise NSX failures as HardwareBuildError."""
     try:
-        return func()
-    except NSXError as exc:
+        yield
+    except (NSXError, subprocess.CalledProcessError) as exc:
         raise HardwareBuildError(f"{label} failed: {exc}") from exc
-    except subprocess.CalledProcessError as exc:
-        # NSX's build runner raises this unwrapped.
-        cmd = " ".join(str(a) for a in exc.cmd) if isinstance(exc.cmd, (list, tuple)) else str(exc.cmd)
-        details = f"exit status {exc.returncode}: {cmd}"
-        if exc.stderr:
-            details += f"\n{exc.stderr}"
-        raise HardwareBuildError(f"{label} failed: {details}") from exc
 
 
 def lock_app(
@@ -63,37 +56,37 @@ def lock_app(
     verbosity: int = 0,
 ) -> NsxLock:
     """Resolve module constraints and write nsx.lock."""
-    return _translate(
-        "nsx lock",
-        lambda: nsx_api.lock_app(
+    with _nsx_errors("nsx lock"):
+        return nsx_api.lock_app(
             app_dir,
             update=update,
-            quiet=verbosity == 0,
             timeout_s=timeout_s,
             emit=emitter_for_verbosity(verbosity),
-        ),
-    )
+        )
 
 
 def sync_app(
     app_dir: Path,
     *,
-    frozen: bool = True,
+    frozen: bool = False,
     force: bool = False,
     timeout_s: float = SYNC_TIMEOUT_S,
     verbosity: int = 0,
 ) -> None:
-    """Materialise modules/ to match nsx.lock; frozen refuses drift."""
-    _translate(
-        "nsx sync",
-        lambda: nsx_api.sync_app(
+    """Materialise modules/ to match nsx.lock.
+
+    ``frozen`` verifies an existing modules/ tree and refuses to
+    modify it; it cannot populate a fresh checkout. Sync once
+    unfrozen before syncing frozen.
+    """
+    with _nsx_errors("nsx sync"):
+        nsx_api.sync_app(
             app_dir,
             frozen=frozen,
             force=force,
             timeout_s=timeout_s,
             emit=emitter_for_verbosity(verbosity),
-        ),
-    )
+        )
 
 
 def configure_app(
@@ -106,17 +99,15 @@ def configure_app(
     verbosity: int = 0,
 ) -> None:
     """Run the CMake configure for one board."""
-    _translate(
-        "nsx configure",
-        lambda: nsx_api.configure_app(
+    with _nsx_errors("nsx configure"):
+        nsx_api.configure_app(
             app_dir,
             board=board,
             build_dir=build_dir,
             toolchain=toolchain,
             timeout_s=timeout_s,
             emit=emitter_for_verbosity(verbosity),
-        ),
-    )
+        )
 
 
 def build_app(
@@ -132,9 +123,8 @@ def build_app(
 ) -> None:
     """Build the app; jobs=None keeps NSX's default."""
     kwargs: dict[str, Any] = {} if jobs is None else {"jobs": jobs}
-    _translate(
-        "nsx build",
-        lambda: nsx_api.build_app(
+    with _nsx_errors("nsx build"):
+        nsx_api.build_app(
             app_dir,
             board=board,
             build_dir=build_dir,
@@ -143,10 +133,9 @@ def build_app(
             timeout_s=timeout_s,
             emit=emitter_for_verbosity(verbosity),
             **kwargs,
-        ),
-    )
+        )
 
 
 def starter_profile(board: str) -> Optional[dict[str, Any]]:
     """The board's minimal starter profile, or None."""
-    return _translate("nsx starter profile", lambda: nsx_api.starter_profile(board))
+    return nsx_api.starter_profile(board)
