@@ -66,11 +66,12 @@ def test_sync_app_forwards_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_configure_app_forwards_board_and_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _capture(monkeypatch, "configure_app")
-    nsx_cli.configure_app(APP, "apollo510_evb", build_dir=Path("/tmp/b"), toolchain="gcc", timeout_s=9)
+    nsx_cli.configure_app(APP, "apollo510_evb", build_dir=Path("/tmp/b"), toolchain="gcc", frozen=True, timeout_s=9)
     assert seen["app_dir"] == APP
     assert seen["board"] == "apollo510_evb"
     assert seen["build_dir"] == Path("/tmp/b")
     assert seen["toolchain"] == "gcc"
+    assert seen["frozen"] is True
     assert seen["timeout_s"] == 9
 
 
@@ -78,14 +79,16 @@ def test_configure_app_default_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _capture(monkeypatch, "configure_app")
     nsx_cli.configure_app(APP, "apollo510_evb")
     assert seen["timeout_s"] == nsx_cli.CONFIGURE_TIMEOUT_S
+    assert seen["frozen"] is False
 
 
 def test_build_app_forwards_jobs_and_target(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _capture(monkeypatch, "build_app")
-    nsx_cli.build_app(APP, board="apollo510_evb", target="hct_benchmark_server", jobs=4, timeout_s=11)
+    nsx_cli.build_app(APP, board="apollo510_evb", target="hct_benchmark_server", jobs=4, frozen=True, timeout_s=11)
     assert seen["board"] == "apollo510_evb"
     assert seen["target"] == "hct_benchmark_server"
     assert seen["jobs"] == 4
+    assert seen["frozen"] is True
     assert seen["timeout_s"] == 11
 
 
@@ -93,6 +96,7 @@ def test_build_app_jobs_none_keeps_nsx_default(monkeypatch: pytest.MonkeyPatch) 
     seen = _capture(monkeypatch, "build_app")
     nsx_cli.build_app(APP)
     assert "jobs" not in seen
+    assert seen["frozen"] is False
     assert seen["timeout_s"] == nsx_cli.BUILD_TIMEOUT_S
 
 

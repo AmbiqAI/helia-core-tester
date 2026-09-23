@@ -95,16 +95,21 @@ def configure_app(
     *,
     build_dir: Optional[Path] = None,
     toolchain: Optional[str] = None,
+    frozen: bool = False,
     timeout_s: float = CONFIGURE_TIMEOUT_S,
     verbosity: int = 0,
 ) -> None:
-    """Run the CMake configure for one board."""
+    """Run the CMake configure for one board.
+
+    ``frozen`` refuses to re-vendor modules/ if it drifts from nsx.lock.
+    """
     with _nsx_errors("nsx configure"):
         nsx_api.configure_app(
             app_dir,
             board=board,
             build_dir=build_dir,
             toolchain=toolchain,
+            frozen=frozen,
             timeout_s=timeout_s,
             emit=emitter_for_verbosity(verbosity),
         )
@@ -118,10 +123,14 @@ def build_app(
     toolchain: Optional[str] = None,
     target: Optional[str] = None,
     jobs: Optional[int] = None,
+    frozen: bool = False,
     timeout_s: float = BUILD_TIMEOUT_S,
     verbosity: int = 0,
 ) -> None:
-    """Build the app; jobs=None keeps NSX's default."""
+    """Build the app; jobs=None keeps NSX's default.
+
+    ``frozen`` applies when the build triggers a reconfigure.
+    """
     kwargs: dict[str, Any] = {} if jobs is None else {"jobs": jobs}
     with _nsx_errors("nsx build"):
         nsx_api.build_app(
@@ -130,6 +139,7 @@ def build_app(
             build_dir=build_dir,
             toolchain=toolchain,
             target=target,
+            frozen=frozen,
             timeout_s=timeout_s,
             emit=emitter_for_verbosity(verbosity),
             **kwargs,
