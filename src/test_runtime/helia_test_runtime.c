@@ -197,6 +197,26 @@ void helia_guard_check(const char *label, const uint8_t *head, const uint8_t *ta
     }
 }
 
+void helia_guard_check_untouched(const char *label, const void *body, size_t body_bytes, int *failures)
+{
+    const uint8_t *bytes = (const uint8_t *)body;
+    size_t i;
+    if (body == NULL) {
+        return;
+    }
+    for (i = 0; i < body_bytes; ++i) {
+        if (bytes[i] != HELIA_GUARD_POISON_BYTE) {
+            ++(*failures);
+            /* Reported as a guard breach: the kernel returned an error status
+             * for this call, so any byte it wrote is an out-of-contract write
+             * rather than a value mismatch. */
+            printf("GuardBreach[%s]: body write detected at byte %u despite rejected call (poison overwritten)\r\n",
+                   label, (unsigned int)i);
+            return;
+        }
+    }
+}
+
 static size_t helia_guard_slack_bytes(size_t body_bytes, size_t used_bytes)
 {
     size_t slack;

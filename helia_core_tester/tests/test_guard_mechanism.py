@@ -48,6 +48,18 @@ EXPECTED = {
     "slack_no_room": (0, []),
     "slack_short": (0, []),
     "slack_short_overrun": (1, ["GuardBreach[sanity scratch slack]: overrun detected (canary corrupted)"]),
+    # Rejected-call contract: a poisoned body must survive untouched. One
+    # failure per buffer, reported at the first written byte; the canaries
+    # around it are intact so the plain check stays silent.
+    "untouched_clean": (0, []),
+    "untouched_written": (
+        1,
+        ["GuardBreach[sanity output]: body write detected at byte 3 despite rejected call (poison overwritten)"],
+    ),
+    "untouched_written_run": (
+        1,
+        ["GuardBreach[sanity output]: body write detected at byte 3 despite rejected call (poison overwritten)"],
+    ),
 }
 
 

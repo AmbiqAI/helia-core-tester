@@ -66,6 +66,20 @@ static void run_scratch_case(const char *case_id, int overrun_bytes)
     printf("RESULT %s failures=%d\r\n", case_id, failures);
 }
 
+/* A call the kernel rejects must leave a poisoned output byte-for-byte intact. */
+static void run_untouched_case(const char *case_id, int written_bytes)
+{
+    int failures = 0;
+    printf("CASE %s\r\n", case_id);
+    HELIA_GUARD_ARM(sanity_output, true);
+    if (written_bytes > 0) {
+        memset((uint8_t *)sanity_output + 3, 0x11, (size_t)written_bytes);
+    }
+    HELIA_GUARD_CHECK(sanity_output, "sanity output", failures);
+    HELIA_GUARD_CHECK_UNTOUCHED(sanity_output, "sanity output", failures);
+    printf("RESULT %s failures=%d\r\n", case_id, failures);
+}
+
 static void run_slack_edge_cases(void)
 {
     int failures = 0;
@@ -104,6 +118,9 @@ int main(void)
     run_scratch_case("scratch_slack_overrun", 1);
     run_scratch_case("scratch_slack_deep_overrun", SCRATCH_BYTES - SCRATCH_USED + 1);
     run_slack_edge_cases();
+    run_untouched_case("untouched_clean", 0);
+    run_untouched_case("untouched_written", 1);
+    run_untouched_case("untouched_written_run", 5);
     printf("HOST_SANITY_DONE\r\n");
     return 0;
 }

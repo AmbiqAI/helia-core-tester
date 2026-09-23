@@ -398,7 +398,17 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "ReshapeFunctions/resize_nearest_neighbor.yaml",
         "ReshapeFunctions/resize_nearest_neighbor",
     ),
-    "SquaredDifference": _spec("SquaredDifference", "BasicMathFunctions", "squared_difference", "OpSquaredDifference", "BasicMathFunctions/squared_difference.yaml", "BasicMathFunctions/squared_difference"),
+    "SquaredDifference": _spec(
+        "SquaredDifference",
+        "BasicMathFunctions",
+        "squared_difference",
+        "OpSquaredDifference",
+        descriptor_relpaths=(
+            "BasicMathFunctions/squared_difference.yaml",
+            "BasicMathFunctions/squared_difference_float.yaml",
+        ),
+        template_relpath="BasicMathFunctions/squared_difference",
+    ),
     "SpaceToDepth": _spec("SpaceToDepth", "ReshapeFunctions", "space_to_depth", "OpSpaceToDepth", "ReshapeFunctions/space_to_depth.yaml", "ReshapeFunctions/space_to_depth"),
     "DepthToSpace": _spec("DepthToSpace", "ReshapeFunctions", "depth_to_space", "OpDepthToSpace", "ReshapeFunctions/depth_to_space.yaml", "ReshapeFunctions/depth_to_space"),
     "SpaceToBatchND": _spec("SpaceToBatchND", "ReshapeFunctions", "space_to_batch_nd", "OpSpaceToBatchND", "ReshapeFunctions/space_to_batch_nd.yaml", "ReshapeFunctions/space_to_batch_nd"),

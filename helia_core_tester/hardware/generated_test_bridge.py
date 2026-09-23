@@ -3857,7 +3857,11 @@ def _build_squared_difference_case(
     descriptor = generated_test.descriptor
     operator = str(descriptor.get("operator", ""))
     activation_dtype = str(descriptor.get("activation_dtype", ""))
-    if operator != "SquaredDifference" or activation_dtype not in _ELEMENTWISE_BINARY_SUPPORTED_DTYPES:
+    # Int only: the firmware has no adapter for the flat float kernel
+    # (arm_elementwise_squared_difference_f16, ns-cmsis-nn#490), and its
+    # generated harness carries no activation bounds or quantization scalars,
+    # so an FP16/FP32 case must skip here rather than reach the extraction below.
+    if operator != "SquaredDifference" or activation_dtype not in ("S8", "S16"):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: operator={operator!r} activation_dtype={activation_dtype!r} is not "
             f"bridgeable -- hardware benchmark firmware only dispatches arm_squared_difference_s8/s16."
