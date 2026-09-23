@@ -18,13 +18,17 @@ def _run(capsys: pytest.CaptureFixture[str], *extra: str, a: str = A, b: str = B
     return status, capsys.readouterr().out
 
 
-def _copy_b(tmp_path: Path, replace: tuple[str, str]) -> str:
-    """Copy fixture B with one line edited."""
-    root = tmp_path / "b"
-    shutil.copytree(FIXTURES / "b", root)
+def _copy(tmp_path: Path, side: str, replace: tuple[str, str]) -> str:
+    """Copy a fixture with one edit applied."""
+    root = tmp_path / side
+    shutil.copytree(FIXTURES / side, root)
     csv_path = root / "case_summary.csv"
     csv_path.write_text(csv_path.read_text().replace(*replace))
     return str(root)
+
+
+def _copy_b(tmp_path: Path, replace: tuple[str, str]) -> str:
+    return _copy(tmp_path, "b", replace)
 
 
 def test_load_bundle_counters_and_session_id() -> None:
@@ -102,10 +106,39 @@ def test_one_sided_empty_cell_violates(capsys: pytest.CaptureFixture[str]) -> No
     assert "50.000              -          -" in out
     assert "  partial_case ARM_PMU_MVE_INST_RETIRED missing on one side" in out
     # Ungated counters skip the missing check.
-    status, out = _run(capsys, "--counter", "ARM_PMU_MVE_INST_RETIRED", "--max-delta-pct", "inf")
+    status, out = _run(capsys, "--counter", "ARM_PMU_MVE_INST_RETIRED", "--max-delta-pct", "1000")
     assert "partial_case ARM_PMU_MVE_INST_RETIRED missing" in out
     status, out = _run(capsys, "--counter", "ARM_PMU_STALL_FRONTEND")
     assert status == 0
+
+
+def test_nan_cell_violates_gate(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # identical_case: MVE_INST_RETIRED 0.0 -> nan on both sides.
+    a = _copy(tmp_path, "a", ("1010.0,800.0,0.0,5.0", "1010.0,800.0,nan,5.0"))
+    b = _copy(tmp_path, "b", ("1010.0,800.0,0.0,5.0", "1010.0,800.0,nan,5.0"))
+    status, out = _run(capsys, "--counter", "ARM_PMU_MVE_INST_RETIRED", a=a, b=b)
+    assert status == 1
+    assert "nan            nan          -" in out
+    assert "  identical_case ARM_PMU_MVE_INST_RETIRED non-finite value" in out
+    # One-sided nan and inf fail the same way.
+    status, out = _run(capsys, "--counter", "ARM_PMU_MVE_INST_RETIRED", a=A, b=b)
+    assert status == 1 and "identical_case ARM_PMU_MVE_INST_RETIRED non-finite value" in out
+    b = _copy_b(tmp_path / "inf", ("1010.0,800.0,0.0,5.0", "1010.0,800.0,inf,5.0"))
+    status, out = _run(capsys, "--counter", "ARM_PMU_MVE_INST_RETIRED", b=b)
+    assert status == 1 and "identical_case ARM_PMU_MVE_INST_RETIRED non-finite value" in out
+    # Ungated counters report nan without failing.
+    b = _copy_b(tmp_path / "stall", ("1010.0,800.0,0.0,5.0", "1010.0,800.0,0.0,nan"))
+    status, out = _run(capsys, "--counter", "ARM_PMU_STALL_FRONTEND", b=b)
+    assert status == 0 and "5.000            nan          -" in out
+
+
+@pytest.mark.parametrize("flag", ["--max-delta-pct", "--max-cycle-delta-pct"])
+@pytest.mark.parametrize("value", ["-1", "nan", "inf", "-inf", "abc"])
+def test_invalid_limits_rejected(flag: str, value: str, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main([A, B, f"{flag}={value}"])
+    assert exc.value.code == 2
+    assert f"{flag}: {value!r}" in capsys.readouterr().err
 
 
 def test_counter_only_on_one_side_listed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

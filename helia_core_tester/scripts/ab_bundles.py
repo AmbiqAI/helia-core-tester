@@ -8,7 +8,7 @@ Every other counter, median_cycles included, gates at
 --max-cycle-delta-pct, which is off by default. Cases flagged with
 overflow, valid_for_regression=false or a correctness mismatch are
 reported but excluded from gating. A gated counter that is empty on
-one side only counts as a violation.
+one side only, or non-finite on either side, counts as a violation.
 """
 
 from __future__ import annotations
@@ -37,10 +37,7 @@ class Bundle:
 
     def value(self, case_id: str, counter: str) -> float | None:
         cell = self.rows[case_id].get(counter, "")
-        if cell in ("", None):
-            return None
-        value = float(cell)
-        return None if math.isnan(value) else value
+        return None if cell in ("", None) else float(cell)
 
     def flags(self, case_id: str) -> list[str]:
         row = self.rows[case_id]
@@ -99,14 +96,17 @@ def compare(a: Bundle, b: Bundle, counters: list[str], *, retired_limit: float, 
         lines.append(f"{'counter':<{width}} {'A':>14} {'B':>14} {'delta':>10}")
         for counter in counters:
             value_a, value_b = a.value(case_id, counter), b.value(case_id, counter)
-            delta = delta_pct(value_a, value_b) if value_a is not None and value_b is not None else None
+            missing = value_a is None or value_b is None
+            finite = not missing and math.isfinite(value_a) and math.isfinite(value_b)
+            delta = delta_pct(value_a, value_b) if finite else None
             lines.append(f"{counter:<{width}} {_format_value(value_a):>14} {_format_value(value_b):>14} {_format_delta(delta):>10}")
             if case_flags or (value_a is None and value_b is None):
                 continue
             limit = retired_limit if is_retired_counter(counter) else cycle_limit
             if delta is None:
                 if limit is not None:
-                    violations.append(f"{case_id} {counter} missing on one side")
+                    reason = "missing on one side" if missing else "non-finite value"
+                    violations.append(f"{case_id} {counter} {reason}")
                 continue
             deltas[counter].append(delta)
             if limit is not None and abs(delta) > limit:
@@ -147,13 +147,24 @@ def select_counters(a: Bundle, b: Bundle, requested: list[str] | None) -> list[s
     return requested
 
 
+def parse_limit(text: str) -> float:
+    """Finite, non-negative percentage."""
+    try:
+        limit = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number")
+    if not math.isfinite(limit) or limit < 0:
+        raise argparse.ArgumentTypeError(f"{text!r} must be finite and >= 0")
+    return limit
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Compare two hardware result bundles.")
     parser.add_argument("bundle_a", type=Path, help="Baseline bundle directory")
     parser.add_argument("bundle_b", type=Path, help="Candidate bundle directory")
     parser.add_argument("--counter", action="append", dest="counters", metavar="NAME", help="Counter to compare (repeatable); default: all shared.")
-    parser.add_argument("--max-delta-pct", type=float, default=0.0, help="Limit for *_RETIRED counters (default 0).")
-    parser.add_argument("--max-cycle-delta-pct", type=float, default=None, help="Limit for every other counter (default none).")
+    parser.add_argument("--max-delta-pct", type=parse_limit, default=0.0, help="Limit for *_RETIRED counters (default 0).")
+    parser.add_argument("--max-cycle-delta-pct", type=parse_limit, default=None, help="Limit for every other counter (default none).")
     return parser
 
 
