@@ -11,7 +11,7 @@ from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
 from .pathutil import write_text_lf
 
-_CASE_SUMMARY_BASE_FIELDS = [
+CASE_SUMMARY_BASE_FIELDS = [
     "case_id",
     "kernel_id",
     "comparison_passed",
@@ -23,7 +23,7 @@ _CASE_SUMMARY_BASE_FIELDS = [
     "p99_cycles",
     "fvp_status",
 ]
-_CASE_SUMMARY_FLAG_FIELDS = ["overflow_detected", "valid_for_regression"]
+CASE_SUMMARY_FLAG_FIELDS = ["overflow_detected", "valid_for_regression"]
 
 
 def _split_protocol_trace_entry(entry: str) -> tuple[int | None, str, str]:
@@ -206,7 +206,7 @@ def write_result_bundle(
     with (bundle_root / "case_summary.csv").open("w", encoding="utf-8", newline="") as handle:
         # One column per selected/reported counter name (a case with no supported
         # value for a counter leaves that cell empty), then the overflow/validity flags.
-        case_summary_fieldnames = _CASE_SUMMARY_BASE_FIELDS + counter_names + _CASE_SUMMARY_FLAG_FIELDS
+        case_summary_fieldnames = CASE_SUMMARY_BASE_FIELDS + counter_names + CASE_SUMMARY_FLAG_FIELDS
         writer = csv.DictWriter(handle, fieldnames=case_summary_fieldnames, restval="")
         writer.writeheader()
         writer.writerows(case_summary_rows)
