@@ -10,10 +10,10 @@
 # ns-cmsis-nn#490 skips this file cleanly instead of failing the build.
 #
 # Block sizes are chosen against the 8-lane MVE loop: 1 and 7 run only a
-# predicated partial vector, 8 and 16 run only full vectors with no
-# predication, 9 and 15 run one full vector and a tail, 45 and 128 are the
-# odd-block and default shapes the sibling sub_float cases use, and 512 is a
-# longer run. Pinned-operand cases carry exact binary16 values chosen for the
+# predicated partial vector; 8, 16, 128 and 512 run only full vectors with no
+# predication (128 and 512 being the default and a longer run); 9, 15 and 45
+# run full vectors and a tail of 1, 7 and 5 lanes (45 is the odd-block shape
+# the sibling sub_float cases use). Pinned-operand cases carry exact binary16 values chosen for the
 # rounding, overflow and underflow boundaries of the two IEEE operations the
 # kernel performs; their golden is the same IEEE model the generator uses for
 # every case (one correctly rounded binary16 result per operation), so they

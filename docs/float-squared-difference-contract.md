@@ -39,8 +39,8 @@ tolerance cannot see.
 ## Cases
 
 Block sizes are chosen against the 8-lane MVE loop: 1 and 7 run only a
-predicated partial vector; 8 and 16 run only full vectors; 9, 15, 45, 128 and
-512 run full vectors plus a tail. The two non-finite sweeps put the tokens in
+predicated partial vector; 8, 16, 128 and 512 run only full vectors; 9, 15
+and 45 run full vectors plus a tail (of 1, 7 and 5 lanes). The two non-finite sweeps put the tokens in
 the first vector and in the final partial vector respectively.
 
 Pinned operands (`hint.extras.input_1_values` / `input_2_values`, flat NHWC,

@@ -143,11 +143,11 @@ def test_random_cases_cover_every_predication_shape_of_the_8_lane_loop() -> None
     descriptors = _descriptors()
     sizes = {name: int(np.prod(descriptors[name]["input_1_shape"])) for name, _ in RANDOM_CASES}
     assert sizes == dict(RANDOM_CASES)
-    remainders = {size % 8 for size in sizes.values()}
-    # a lone partial vector (1, 7), full vectors only (8, 16), full + tail (9, 15, 45, 128, 512)
-    assert {1, 7} <= {size for size in sizes.values() if size < 8}
-    assert {8, 16} <= {size for size in sizes.values() if size % 8 == 0}
-    assert {1, 7, 5, 0} <= remainders
+    # a lone partial vector (1, 7); full vectors only (8, 16, 128, 512);
+    # full vectors plus a tail of 1, 7 and 5 lanes (9, 15, 45)
+    assert {size for size in sizes.values() if size < 8} == {1, 7}
+    assert {size for size in sizes.values() if size % 8 == 0} == {8, 16, 128, 512}
+    assert {size: size % 8 for size in sizes.values() if size > 8 and size % 8} == {9: 1, 15: 7, 45: 5}
 
 
 def test_pinned_and_fault_cases_share_the_nine_element_shape() -> None:
@@ -171,6 +171,16 @@ def test_fp16_selects_the_flat_float_kernel() -> None:
         "output_c_type": "float16_t",
         "float_kernel": True,
     }
+
+
+def test_mixed_input_output_dtypes_are_rejected() -> None:
+    # The kernel reads and writes halves; a descriptor whose output dtype
+    # differs would otherwise be accepted on the input dtype alone.
+    desc = _float_desc("mixed")
+    desc["tensor_dtypes"] = {"input": "FP16", "output": "FP32"}
+    op = OpSquaredDifference(desc, seed=1, target_cpu=CPU)
+    with pytest.raises(ValueError, match="input FP16 and output FP32"):
+        op._select_cmsis_squared_difference_kernel()
 
 
 def test_fp32_is_rejected_because_no_f32_kernel_exists() -> None:

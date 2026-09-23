@@ -208,7 +208,14 @@ class OpSquaredDifference(BinaryBasicMathBase):
             }
         elif activation_dtype in FLOAT_KERNEL_SUFFIX:
             # The float entry point is flat (no dims, no broadcast, no clamp):
-            # arm_elementwise_squared_difference_f16 (ns-cmsis-nn#490).
+            # arm_elementwise_squared_difference_f16 (ns-cmsis-nn#490). It reads
+            # and writes the same storage format, so the output dtype must agree.
+            output_dtype = self.tensor_dtype("output", default=activation_dtype)
+            if output_dtype != activation_dtype:
+                raise ValueError(
+                    f"Descriptor {self.desc.get('name')!r}: SquaredDifference float kernels take "
+                    f"one storage dtype, got input {activation_dtype} and output {output_dtype}"
+                )
             return {
                 'kernel_fn': f"arm_elementwise_squared_difference_{FLOAT_KERNEL_SUFFIX[activation_dtype]}",
                 'input_c_type': 'float16_t',
