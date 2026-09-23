@@ -7,7 +7,8 @@ across a harness-only change, so they gate at --max-delta-pct (default 0).
 Every other counter, median_cycles included, gates at
 --max-cycle-delta-pct, which is off by default. Cases flagged with
 overflow, valid_for_regression=false or a correctness mismatch are
-reported but excluded from gating. A gated counter that is empty on
+reported but excluded from gating; a pair with no unflagged shared
+case fails outright. A gated counter that is empty on
 one side only, or non-finite on either side, counts as a violation.
 """
 
@@ -87,11 +88,14 @@ def compare(a: Bundle, b: Bundle, counters: list[str], *, retired_limit: float, 
     deltas: dict[str, list[float]] = {counter: [] for counter in counters}
     violations: list[str] = []
     flagged: list[str] = []
+    eligible = 0
     width = max(len("counter"), *(len(counter) for counter in counters))
     for case_id in shared:
         case_flags = sorted(set(a.flags(case_id)) | set(b.flags(case_id)))
         if case_flags:
             flagged.append(f"{case_id} ({', '.join(case_flags)})")
+        else:
+            eligible += 1
         lines.append(f"== {case_id}" + (f" [{', '.join(case_flags)}]" if case_flags else ""))
         lines.append(f"{'counter':<{width}} {'A':>14} {'B':>14} {'delta':>10}")
         for counter in counters:
@@ -128,11 +132,14 @@ def compare(a: Bundle, b: Bundle, counters: list[str], *, retired_limit: float, 
     if not shared:
         lines.append("== FAIL: no shared cases")
         return lines, 1
+    if not eligible:
+        lines.append("== FAIL: every shared case is flagged")
+        return lines, 1
     if violations:
         lines.append(f"== FAIL: {len(violations)} counter deltas over limit")
         lines.extend(f"  {entry}" for entry in violations)
         return lines, 1
-    lines.append(f"== PASS: {len(shared)} shared cases within limits")
+    lines.append(f"== PASS: {eligible} eligible cases within limits")
     return lines, 0
 
 

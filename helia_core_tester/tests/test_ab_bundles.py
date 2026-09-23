@@ -55,7 +55,7 @@ def test_delta_pct_handles_zero_baseline() -> None:
 def test_identical_counter_passes(capsys: pytest.CaptureFixture[str]) -> None:
     status, out = _run(capsys, "--counter", "median_cycles", "--counter", "ARM_PMU_STALL_FRONTEND")
     assert status == 0
-    assert "== PASS: 4 shared cases within limits" in out
+    assert "== PASS: 3 eligible cases within limits" in out
     assert "1000.000       1000.000    +0.000%" in out
 
 
@@ -146,6 +146,15 @@ def test_counter_only_on_one_side_listed(tmp_path: Path, capsys: pytest.CaptureF
     _, out = _run(capsys, "--counter", "median_cycles", b=b)
     assert "== counters only in A (1)\n  ARM_PMU_INST_RETIRED" in out
     assert "== counters only in B (1)\n  ARM_PMU_OTHER" in out
+
+
+def test_all_flagged_cases_fail(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # Every shared case in B mismatches.
+    b = _copy_b(tmp_path, (",true,0,50,", ",false,1,50,"))
+    status, out = _run(capsys, "--counter", "median_cycles", b=b)
+    assert status == 1
+    assert "== flagged, not gated (4)" in out
+    assert "== FAIL: every shared case is flagged" in out
 
 
 def test_no_shared_cases_fails(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
