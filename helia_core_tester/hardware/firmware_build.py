@@ -118,8 +118,21 @@ def resolve_build_dir(repo_root: Path, board: BoardSpec, override: Optional[Path
     return override if override.is_absolute() else repo_root / override
 
 
+def _artifact_path(build_dir: Path, suffix: str) -> Path:
+    """The linked server image lives under `<build_dir>/hardware/`."""
+    return build_dir / "hardware" / f"{SERVER_TARGET}{suffix}"
+
+
 def elf_path(build_dir: Path) -> Path:
-    return build_dir / "hardware" / f"{SERVER_TARGET}.elf"
+    return _artifact_path(build_dir, ".elf")
+
+
+def bin_path(build_dir: Path) -> Path:
+    return _artifact_path(build_dir, ".bin")
+
+
+def map_path(build_dir: Path) -> Path:
+    return _artifact_path(build_dir, ".map")
 
 
 def build_id_path(build_dir: Path) -> Path:

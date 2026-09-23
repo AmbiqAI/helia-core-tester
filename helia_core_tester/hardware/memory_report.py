@@ -25,11 +25,11 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from .boards import DEFAULT_BOARD_ID, BoardSpec, repo_root, resolve_board
+from .firmware_build import SERVER_TARGET, bin_path, elf_path, map_path
 from .pathutil import display_path, write_text_lf
 from .toolchain import arm_tool, toolchain_bin_dir
 from ..scripts.setup_dependencies import nsx_ambiq_sdk_dir
 
-SERVER_TARGET = "hct_benchmark_server"
 SIZE_PROBE_TARGET = "hct_universal_size_probe"
 
 # Catalog kernels whose symbols are checked for retention in the linked server image.
@@ -217,7 +217,7 @@ def generate_memory_report(
     out_root = output_root or project_root / "artifacts" / "hardware" / "benchmark_server"
     out_root.mkdir(parents=True, exist_ok=True)
 
-    elf = build_root / "hardware" / f"{SERVER_TARGET}.elf"
+    elf = elf_path(build_root)
     if not elf.is_file():
         raise FileNotFoundError(f"Built firmware ELF not found: {elf} -- run `hardware build` for this board/build dir first.")
     analysis = analyze_elf(elf, board, project_root)
@@ -233,8 +233,8 @@ def generate_memory_report(
         # Repo-relative for the default in-tree build dir, absolute for an external --build-dir.
         "artifacts": {
             "elf": display_path(elf, project_root),
-            "bin": display_path(build_root / "hardware" / f"{SERVER_TARGET}.bin", project_root),
-            "map": display_path(build_root / "hardware" / f"{SERVER_TARGET}.map", project_root),
+            "bin": display_path(bin_path(build_root), project_root),
+            "map": display_path(map_path(build_root), project_root),
         },
         "memory_regions": analysis.memory_regions,
         "sections": analysis.sections,
