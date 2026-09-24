@@ -17,6 +17,7 @@ from typing import Callable, Sequence
 
 from .boards import DEFAULT_BOARD_ID, BoardSpec, default_session_id, resolve_board
 from .case_bundle import CaseBundle, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
+from .firmware_build import elf_path
 from .generated_test_bridge import (
     GeneratedTestCase,
     UnsupportedGeneratedTestError,
@@ -99,8 +100,7 @@ def open_rtt_session(
     """Open a fresh reset-on-open RTT session to the board's flashed firmware. Returns
     the host session, its transport (the caller closes it) and the RTT control-block
     address taken from the ELF in `build_dir`."""
-    elf_path = build_dir / "hardware" / "hct_benchmark_server.elf"
-    rtt_address = symbol_address_from_elf(str(elf_path), "_SEGGER_RTT")
+    rtt_address = symbol_address_from_elf(str(elf_path(build_dir)), "_SEGGER_RTT")
     transport = JLinkRttTransport(
         serial_no=serial_no,
         chip_name=board.jlink_device,
