@@ -67,6 +67,33 @@ strides:
 padding: VALID
 use_bias: true
 ---
+# Single batch keeps n*h*w = 35 odd, so the non-MVE DSP build reaches the
+# odd-row tail of arm_nn_mat_mult_nt_t_s8 through arm_convolve_1x1_s8_fast;
+# the batched case above now yields 70 rows (#162). 19 input channels (>= 16,
+# not a multiple of 4) also drive the 16-wide column loop and its leftover.
+operator: Convolve
+name: convolve_kernel1x1_odd_rows_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 5
+- 7
+- 19
+filter_shape:
+- 1
+- 1
+- 19
+- 7
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+---
 operator: Convolve
 name: convolve_kernel1x1_stride_x_s8
 activation_dtype: S8
