@@ -154,3 +154,21 @@ def test_render_is_idempotent_and_keeps_mtimes(tmp_path: Path) -> None:
     second = _render(tmp_path)
     assert (second.nsx_yml, second.modules_cmake, second.cmakelists) == texts
     assert [path.stat().st_mtime for path in paths] == [1_000_000_000.0] * 3
+
+
+def test_relative_cmsis_nn_root_is_resolved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # NSX resolves local_path against the app dir, not the cwd.
+    checkout = tmp_path / "ns-cmsis-nn"
+    checkout.mkdir()
+    monkeypatch.chdir(tmp_path)
+    registry = yaml.safe_load(_render(tmp_path, cmsis_nn_root=Path("ns-cmsis-nn")).nsx_yml)["module_registry"]
+    assert registry["projects"]["ns-cmsis-nn"]["local_path"] == str(checkout.resolve())
+
+
+def test_synced_modules_cmake_is_left_alone(tmp_path: Path) -> None:
+    # NSX owns cmake/nsx/modules.cmake after sync.
+    first = _render(tmp_path)
+    synced = first.app_dir / "cmake" / "nsx" / "modules.cmake"
+    synced.write_text("# written by nsx sync\n", encoding="utf-8")
+    _render(tmp_path)
+    assert synced.read_text(encoding="utf-8") == "# written by nsx sync\n"

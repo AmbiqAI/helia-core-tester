@@ -66,6 +66,7 @@ class AppOptions:
 
     cmsis_nn_ref: str = CMSIS_NN_REF
     cmsis_nn_root: Optional[Path] = None
+    # ON matches hpx and shipping builds.
     requantize_inline_asm: bool = True
     enable_f32: bool = True
     enable_f16: bool = True
@@ -107,7 +108,8 @@ def module_registry(options: AppOptions) -> dict[str, Any]:
     # local_path replaces url and every revision.
     root = options.cmsis_nn_root
     pin = {} if root else {"revision": options.cmsis_nn_ref}
-    kernels_project = {"local_path": str(root)} if root else pin
+    # NSX resolves relative paths against the app dir.
+    kernels_project = {"local_path": str(root.expanduser().resolve())} if root else pin
     kernels_module = {"project": CMSIS_NN_PROJECT, **pin, "metadata": CMSIS_NN_METADATA}
     return {
         "projects": {
@@ -123,6 +125,14 @@ def module_registry(options: AppOptions) -> dict[str, Any]:
             },
         },
     }
+
+
+def _write_if_absent(path: Path, text: str) -> None:
+    """NSX rewrites this file on sync; seed it once."""
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 def _write_if_changed(path: Path, text: str) -> None:
@@ -190,6 +200,6 @@ def render_app(
     )
 
     _write_if_changed(app_dir / "nsx.yml", nsx_yml)
-    _write_if_changed(app_dir / "cmake" / "nsx" / "modules.cmake", modules_cmake)
+    _write_if_absent(app_dir / "cmake" / "nsx" / "modules.cmake", modules_cmake)
     _write_if_changed(app_dir / "CMakeLists.txt", cmakelists)
     return AppRender(app_dir, tuple(modules), nsx_yml, modules_cmake, cmakelists)
