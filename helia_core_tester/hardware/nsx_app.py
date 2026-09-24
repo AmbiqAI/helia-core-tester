@@ -10,7 +10,7 @@ on every lock and sync, so the app never ships them.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,6 +22,7 @@ from . import nsx_cli
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .firmware_build import BUILD_ID_TXT, IMAGE_SUBDIR, SERVER_TARGET
+from .pathutil import is_relative_to
 from .toolchain import DOWNLOADS_DIR
 
 APP_NAME = "hct_benchmark_server"
@@ -110,8 +111,7 @@ def module_registry(options: AppOptions) -> dict[str, Any]:
     # local_path replaces url and every revision.
     root = options.cmsis_nn_root
     pin = {} if root else {"revision": options.cmsis_nn_ref}
-    # NSX resolves relative paths against the app dir.
-    kernels_project = {"local_path": str(root.expanduser().resolve())} if root else pin
+    kernels_project = {"local_path": str(root)} if root else pin
     kernels_module = {"project": CMSIS_NN_PROJECT, **pin, "metadata": CMSIS_NN_METADATA}
     return {
         "projects": {
@@ -148,6 +148,16 @@ def _write_if_changed(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _checked_kernel_root(root: Path, app_dir: Path) -> Path:
+    """Resolve root; refuse overlap with the app."""
+    # NSX hashes and vendors local_path whole.
+    root = root.expanduser().resolve()
+    app = app_dir.expanduser().resolve()
+    if is_relative_to(app, root) or is_relative_to(root, app):
+        raise AppRenderError(f"App dir {app} overlaps cmsis_nn_root {root}")
+    return root
+
+
 def render_app(
     board: BoardSpec,
     options: AppOptions,
@@ -157,6 +167,8 @@ def render_app(
 ) -> AppRender:
     """Write nsx.yml, modules.cmake and CMakeLists.txt."""
     repo_root = (repo_root or tester_repo_root()).resolve()
+    if options.cmsis_nn_root is not None:
+        options = replace(options, cmsis_nn_root=_checked_kernel_root(options.cmsis_nn_root, app_dir))
     profile = nsx_cli.starter_profile(board.nsx_board)
     if profile is None:
         raise AppRenderError(f"No NSX starter profile for {board.nsx_board}")

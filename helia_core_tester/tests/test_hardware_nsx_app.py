@@ -172,3 +172,18 @@ def test_synced_modules_cmake_is_left_alone(tmp_path: Path) -> None:
     synced.write_text("# written by nsx sync\n", encoding="utf-8")
     _render(tmp_path)
     assert synced.read_text(encoding="utf-8") == "# written by nsx sync\n"
+
+
+@pytest.mark.parametrize("app_rel", ["Tests/helia-core-tester/build/hardware/x", "."])
+def test_app_dir_inside_cmsis_nn_root_is_rejected(tmp_path: Path, app_rel: str) -> None:
+    # NSX skips vendoring and the lock never settles.
+    checkout = tmp_path / "ns-cmsis-nn"
+    with pytest.raises(nsx_app.AppRenderError, match="overlaps cmsis_nn_root"):
+        nsx_app.render_app(BOARD, nsx_app.AppOptions(cmsis_nn_root=checkout), checkout / app_rel)
+    assert not (checkout / app_rel / "nsx.yml").exists()
+
+
+def test_cmsis_nn_root_inside_app_dir_is_rejected(tmp_path: Path) -> None:
+    app = tmp_path / "app"
+    with pytest.raises(nsx_app.AppRenderError, match="overlaps cmsis_nn_root"):
+        nsx_app.render_app(BOARD, nsx_app.AppOptions(cmsis_nn_root=app / "kernels"), app)
