@@ -3,7 +3,9 @@
 Pure renderer, not wired into any command yet: writes ``nsx.yml``, a
 placeholder ``cmake/nsx/modules.cmake`` and ``CMakeLists.txt`` into an app
 directory. ``nsx lock``/``nsx sync`` own ``cmake/nsx/`` and ``modules/``
-from there; the firmware sources stay in this checkout.
+from there; the firmware sources stay in this checkout. NSX copies the rest
+of ``cmake/nsx/`` (bootstrap, helpers, toolchain flags) out of its own wheel
+on every lock and sync, so the app never ships them.
 """
 
 from __future__ import annotations
