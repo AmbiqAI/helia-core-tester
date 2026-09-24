@@ -15,10 +15,11 @@ from typing import Any, Optional
 import jinja2
 import yaml
 
+from ..core.discovery import find_tester_templates_dir
 from . import nsx_cli
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
-from .firmware_build import SERVER_TARGET, build_id_path, elf_path
+from .firmware_build import BUILD_ID_TXT, IMAGE_SUBDIR, SERVER_TARGET
 from .toolchain import DOWNLOADS_DIR
 
 APP_NAME = "hct_benchmark_server"
@@ -41,8 +42,6 @@ PMU_MODULE = "nsx-pmu-armv8m"
 
 RTT_BUFFER_SIZE_UP = 8192
 RTT_BUFFER_SIZE_DOWN = 512
-
-TEMPLATE_DIR = Path("assets/templates/hardware/nsx")
 
 _SERVER_SOURCES = (
     "benchmark_server_main.c",
@@ -106,12 +105,10 @@ def module_names(board: BoardSpec, profile: dict[str, Any]) -> list[str]:
 def module_registry(options: AppOptions) -> dict[str, Any]:
     """Overrides for the modules the profile lacks."""
     # local_path replaces url and every revision.
-    kernels_project: dict[str, Any] = {"revision": options.cmsis_nn_ref}
-    kernels_module: dict[str, Any] = {"project": CMSIS_NN_PROJECT, "revision": options.cmsis_nn_ref}
-    if options.cmsis_nn_root is not None:
-        kernels_project = {"local_path": str(options.cmsis_nn_root)}
-        kernels_module = {"project": CMSIS_NN_PROJECT}
-    kernels_module["metadata"] = CMSIS_NN_METADATA
+    root = options.cmsis_nn_root
+    pin = {} if root else {"revision": options.cmsis_nn_ref}
+    kernels_project = {"local_path": str(root)} if root else pin
+    kernels_module = {"project": CMSIS_NN_PROJECT, **pin, "metadata": CMSIS_NN_METADATA}
     return {
         "projects": {
             CMSIS_NN_PROJECT: kernels_project,
@@ -153,7 +150,7 @@ def render_app(
         raise AppRenderError(f"No NSX starter profile for {board.nsx_board}")
     modules = module_names(board, profile)
     env = jinja2.Environment(
-        loader=jinja2.FileSystemLoader(str(repo_root / TEMPLATE_DIR)),
+        loader=jinja2.FileSystemLoader(str(find_tester_templates_dir(repo_root) / "hardware" / "nsx")),
         trim_blocks=True,
         lstrip_blocks=True,
         keep_trailing_newline=True,
@@ -172,7 +169,6 @@ def render_app(
     modules_cmake = env.get_template("modules.cmake.j2").render(modules=modules)
 
     probe = options.build_size_probe
-    # Output layout has one home: firmware_build.
     cmakelists = env.get_template("CMakeLists.txt.j2").render(
         app_name=APP_NAME,
         board=board,
@@ -186,8 +182,8 @@ def render_app(
         scripts_dir=repo_root / "scripts",
         cmsis_core_include=repo_root / DOWNLOADS_DIR / "CMSIS_5" / "CMSIS" / "Core" / "Include",
         kernel_project=CMSIS_NN_PROJECT,
-        image_dir="probe" if probe else str(elf_path(Path()).parent),
-        build_id_txt=build_id_path(Path()).name,
+        image_dir="probe" if probe else IMAGE_SUBDIR,
+        build_id_txt=BUILD_ID_TXT,
         link_pmu=PMU_MODULE in modules,
         rtt_buffer_size_up=RTT_BUFFER_SIZE_UP,
         rtt_buffer_size_down=RTT_BUFFER_SIZE_DOWN,

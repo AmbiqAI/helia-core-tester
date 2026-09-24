@@ -118,9 +118,14 @@ def resolve_build_dir(repo_root: Path, board: BoardSpec, override: Optional[Path
     return override if override.is_absolute() else repo_root / override
 
 
+# Image subdir and build-id file under the build dir.
+IMAGE_SUBDIR = "hardware"
+BUILD_ID_TXT = "hct_build_id.txt"
+
+
 def _artifact_path(build_dir: Path, suffix: str) -> Path:
     """The linked server image lives under `<build_dir>/hardware/`."""
-    return build_dir / "hardware" / f"{SERVER_TARGET}{suffix}"
+    return build_dir / IMAGE_SUBDIR / f"{SERVER_TARGET}{suffix}"
 
 
 def elf_path(build_dir: Path) -> Path:
@@ -138,7 +143,7 @@ def map_path(build_dir: Path) -> Path:
 def build_id_path(build_dir: Path) -> Path:
     """`hct_build_id.txt`, written next to the cache by the post-link stamp step (see
     scripts/patch_build_id.py); the same string the firmware advertises in TARGET_INFO."""
-    return build_dir / "hct_build_id.txt"
+    return build_dir / BUILD_ID_TXT
 
 
 def read_build_id(build_dir: Path) -> Optional[str]:
