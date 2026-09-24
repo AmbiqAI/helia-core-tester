@@ -32,6 +32,8 @@ dependencies = [
     "ai_edge_litert>=2.1.1",
     "typer>=0.9.0,<1.0.0",
     "pylink-square>=1.2.0,<3.0.0",
+    # Same pin helia-profiler carries.
+    "neuralspotx==0.8.1",
 ]
 
 [project.scripts]
