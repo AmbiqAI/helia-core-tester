@@ -77,6 +77,10 @@ static inline int32_t helia_benchmark_run(const char *name, helia_bench_op_fn op
 
 #endif // HELIA_BENCHMARK_MODE
 
+// The kernel this harness links must have the prototype the ns-cmsis-nn export records.
+_Static_assert(__builtin_types_compatible_p(__typeof__(arm_convolve_f16), arm_cmsis_nn_status (const cmsis_nn_context *, const cmsis_nn_conv_params_f16 *, const cmsis_nn_dims *, const float16_t *, const cmsis_nn_dims *, const float16_t *, const cmsis_nn_dims *, const float16_t *, const cmsis_nn_dims *, float16_t *, arm_nn_tensor_layout)),
+               "arm_convolve_f16: prototype differs from the kernel contract export; rerun `python3 scripts/check_kernel_contract.py export` in ns-cmsis-nn and regenerate");
+
 // Context for buffer allocation
 static cmsis_nn_context convolve_float_default_f16_ctx;
 
@@ -139,19 +143,18 @@ int32_t convolve_float_default_f16_run(
     HELIA_GUARD_STAMP_SLACK(convolve_float_default_f16_buffer, convolve_float_default_f16_ctx.buf == convolve_float_default_f16_buffer ? (size_t)convolve_float_default_f16_ctx.size : 0u);
 
 
-        // Run convolution - different signatures for s8 vs s16
-    return arm_convolve_f16(
-        &convolve_float_default_f16_ctx,
-        &convolve_float_default_f16_conv_params,
-        &convolve_float_default_f16_input_dims,
-        input,
-        &convolve_float_default_f16_filter_dims,
-        convolve_float_default_f16_weights,
-        &convolve_float_default_f16_bias_dims,
-        convolve_float_default_f16_biases,
-        &convolve_float_default_f16_output_dims,
-        output,
-        ARM_NN_LAYOUT_NHWC
+        return arm_convolve_f16(
+        &convolve_float_default_f16_ctx, /* ctx */
+        &convolve_float_default_f16_conv_params, /* conv_params */
+        &convolve_float_default_f16_input_dims, /* input_dims */
+        input, /* input_data */
+        &convolve_float_default_f16_filter_dims, /* filter_dims */
+        convolve_float_default_f16_weights, /* filter_data */
+        &convolve_float_default_f16_bias_dims, /* bias_dims */
+        convolve_float_default_f16_biases, /* bias_data */
+        &convolve_float_default_f16_output_dims, /* output_dims */
+        output, /* output_data */
+        ARM_NN_LAYOUT_NHWC /* layout */
     );
 
 }
@@ -198,19 +201,18 @@ static int32_t convolve_float_default_f16_bench_init(void)
 
 static int32_t convolve_float_default_f16_bench_op(void)
 {
-        // Run convolution - different signatures for s8 vs s16
-    return arm_convolve_f16(
-        &convolve_float_default_f16_ctx,
-        &convolve_float_default_f16_conv_params,
-        &convolve_float_default_f16_input_dims,
-        convolve_float_default_f16_input,
-        &convolve_float_default_f16_filter_dims,
-        convolve_float_default_f16_weights,
-        &convolve_float_default_f16_bias_dims,
-        convolve_float_default_f16_biases,
-        &convolve_float_default_f16_output_dims,
-        convolve_float_default_f16_output,
-        ARM_NN_LAYOUT_NHWC
+        return arm_convolve_f16(
+        &convolve_float_default_f16_ctx, /* ctx */
+        &convolve_float_default_f16_conv_params, /* conv_params */
+        &convolve_float_default_f16_input_dims, /* input_dims */
+        convolve_float_default_f16_input, /* input_data */
+        &convolve_float_default_f16_filter_dims, /* filter_dims */
+        convolve_float_default_f16_weights, /* filter_data */
+        &convolve_float_default_f16_bias_dims, /* bias_dims */
+        convolve_float_default_f16_biases, /* bias_data */
+        &convolve_float_default_f16_output_dims, /* output_dims */
+        convolve_float_default_f16_output, /* output_data */
+        ARM_NN_LAYOUT_NHWC /* layout */
     );
 
 }

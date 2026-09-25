@@ -8,6 +8,9 @@
 
 {% set supports_benchmark = true %}
 
+// The kernel this harness links must have the prototype the ns-cmsis-nn export records.
+{{ contract_parity_assert(kernel_fn) }}
+
 // Context for buffer allocation
 static cmsis_nn_context {{ name }}_ctx;
 
@@ -122,92 +125,34 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
     {% endif %}
 {% endmacro %}
 {% macro conv_kernel_call(input_expr, output_expr) %}
-    // Run convolution - different signatures for s8 vs s16
-    {% if float_kernel %}
-    return {{ kernel_fn }}(
-        &{{ name }}_ctx,
-        &{{ name }}_conv_params,
-        &{{ name }}_input_dims,
-        {{ input_expr }},
-        &{{ name }}_filter_dims,
-        {{ name }}_weights,
-        {% if has_biases %}
-        &{{ name }}_bias_dims,
-        {{ name }}_biases,
-        {% else %}
-        NULL,
-        NULL,
-        {% endif %}
-        &{{ name }}_output_dims,
-        {{ output_expr }}{% if kernel_needs_layout %},
-        {{ kernel_layout }}
-        {% endif %}
-    );
-    {% elif kernel_fn == 'arm_convolve_wrapper_s8' %}
-    // s8 signature: (ctx, weight_sum_ctx, conv_params, quant_params, input_dims, input_data, filter_dims, filter_data, bias_dims, bias_data, output_dims, output_data)
-    return arm_convolve_wrapper_s8(
-        &{{ name }}_ctx,
-        &{{ name }}_weight_sum_ctx,
-        &{{ name }}_conv_params,
-        &{{ name }}_quant_params,
-        &{{ name }}_input_dims,
-        {{ input_expr }},
-        &{{ name }}_filter_dims,
-        {{ name }}_weights,
-        {% if has_biases %}
-        &{{ name }}_bias_dims,
-        {{ name }}_biases,
-        {% else %}
-        NULL,  // bias_dims
-        NULL,  // bias_data
-        {% endif %}
-        &{{ name }}_output_dims,
-        {{ output_expr }}
-    );
-    {% elif kernel_fn == 'arm_convolve_wrapper_s4' %}
-    // s4 signature: (ctx, conv_params, quant_params, input_dims, input_data, filter_dims, filter_data, bias_dims, bias_data, output_dims, output_data)
-    return arm_convolve_wrapper_s4(
-        &{{ name }}_ctx,
-        &{{ name }}_conv_params,
-        &{{ name }}_quant_params,
-        &{{ name }}_input_dims,
-        {{ input_expr }},
-        &{{ name }}_filter_dims,
-        {{ name }}_weights,
-        {% if has_biases %}
-        &{{ name }}_bias_dims,
-        {{ name }}_biases,
-        {% else %}
-        NULL,  // bias_dims
-        NULL,  // bias_data
-        {% endif %}
-        &{{ name }}_output_dims,
-        {{ output_expr }}
-    );
-    {% elif kernel_fn == 'arm_convolve_wrapper_s16' %}
-    // s16 signature: (ctx, conv_params, quant_params, input_dims, input_data, filter_dims, filter_data, bias_dims, bias_data, output_dims, output_data)
-    // Note: s16 uses cmsis_nn_bias_data struct, not raw pointer (defined at file scope above)
-    return arm_convolve_wrapper_s16(
-        &{{ name }}_ctx,
-        &{{ name }}_conv_params,
-        &{{ name }}_quant_params,
-        &{{ name }}_input_dims,
-        {{ input_expr }},
-        &{{ name }}_filter_dims,
-        {{ name }}_weights,
-        {% if has_biases %}
-        &{{ name }}_bias_dims,
-        &{{ name }}_bias_data,
-        {% else %}
-        NULL,  // bias_dims
-        NULL,  // bias_data
-        {% endif %}
-        &{{ name }}_output_dims,
-        {{ output_expr }}
-    );
-    {% else %}
-    #error "Unsupported kernel function: {{ kernel_fn }}"
+    {#
+      The argument list is rendered from the kernel contract export in prototype order
+      (contract_call): the template names what it passes, the contract decides the order
+      and refuses a missing or unknown argument, and the file-scope parity assert above
+      makes a header that drifts from the export a compile error rather than a wrong call.
+    #}
+    {% set conv_args = {
+        'ctx': '&' ~ name ~ '_ctx',
+        'conv_params': '&' ~ name ~ '_conv_params',
+        'input_dims': '&' ~ name ~ '_input_dims',
+        'input_data': input_expr,
+        'filter_dims': '&' ~ name ~ '_filter_dims',
+        'filter_data': name ~ '_weights',
+        'bias_dims': ('&' ~ name ~ '_bias_dims') if has_biases else 'NULL',
+        'bias_data': (('&' ~ name ~ '_bias_data') if kernel_fn == 'arm_convolve_wrapper_s16' else (name ~ '_biases')) if has_biases else 'NULL',
+        'output_dims': '&' ~ name ~ '_output_dims',
+        'output_data': output_expr,
+    } %}
+    {% if kernel_fn == 'arm_convolve_wrapper_s8' %}
+    {% set _ = conv_args.update({'weight_sum_ctx': '&' ~ name ~ '_weight_sum_ctx'}) %}
     {% endif %}
+    {% if not float_kernel %}
+    {% set _ = conv_args.update({'quant_params': '&' ~ name ~ '_quant_params'}) %}
+    {% endif %}
+    {% if kernel_needs_layout %}
+    {% set _ = conv_args.update({'layout': kernel_layout}) %}
+    {% endif %}
+    return {{ contract_call(kernel_fn, conv_args) }};
 {% endmacro %}
 int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input,
