@@ -16,6 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from helia_core_tester.contract.ir import load_contract_set
 from helia_core_tester.hardware.adapter_specs import (
     FIRMWARE_ADAPTERS,
     GENERATED_BLOCK_BEGIN,
@@ -52,6 +53,10 @@ ADAPTERS_C_PATH = PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_adapte
 ADAPTERS_H_PATH = PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_adapters.h"
 SESSION_C_PATH = PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_session.c"
 GENERATOR_SCRIPT = PROJECT_ROOT / "scripts" / "generate_hardware_adapters.py"
+# The committed pilot contract (see test_hardware_adapter_contract.py): the templated
+# bodies render without an ns-cmsis-nn checkout on the machine.
+PILOT_CONTRACT_ROOT = Path(__file__).parent / "fixtures" / "contract" / "hardware_pilot"
+PILOT_CONTRACTS = load_contract_set(PILOT_CONTRACT_ROOT)
 
 
 def test_generated_file_is_marked_and_session_c_holds_no_generated_code() -> None:
@@ -71,7 +76,7 @@ def test_committed_adapters_c_matches_fresh_render() -> None:
     test catches it (mirrors `--check` mode of the generator script).
     """
     committed = ADAPTERS_C_PATH.read_text(encoding="utf-8")
-    assert committed == render_generated_adapters_source(), (
+    assert committed == render_generated_adapters_source(PILOT_CONTRACTS), (
         "benchmark_server_adapters.gen.c is out of date -- run "
         "`python scripts/generate_hardware_adapters.py` after editing adapter_specs.py."
     )
@@ -90,7 +95,7 @@ def test_every_kernel_id_is_dispatched_exactly_once() -> None:
     routed += [kernel_id for _function, kernel_ids in HAND_WRITTEN_DISPATCH for kernel_id in kernel_ids]
     assert len(routed) == len(set(routed)), "a kernel id is dispatched by more than one adapter"
     assert set(routed) == defined
-    rendered = render_generated_adapters_source()
+    rendered = render_generated_adapters_source(PILOT_CONTRACTS)
     for kernel_id in routed:
         assert f"        case {kernel_id}:" in rendered
     assert "arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)" in rendered
@@ -99,7 +104,7 @@ def test_every_kernel_id_is_dispatched_exactly_once() -> None:
 
 def test_generator_script_check_mode_passes_on_committed_file() -> None:
     result = subprocess.run(
-        [sys.executable, str(GENERATOR_SCRIPT), "--check"],
+        [sys.executable, str(GENERATOR_SCRIPT), "--check", "--cmsis-nn-root", str(PILOT_CONTRACT_ROOT)],
         cwd=PROJECT_ROOT,
         capture_output=True,
         text=True,
@@ -108,7 +113,7 @@ def test_generator_script_check_mode_passes_on_committed_file() -> None:
 
 
 def test_data_movement_adapters_validate_all_meta_and_output_shapes() -> None:
-    block = render_generated_adapters_source()
+    block = render_generated_adapters_source(PILOT_CONTRACTS)
     assert "meta == NULL" not in block
     assert "meta_blob->dtype != HCT_DTYPE_S32" in block
     assert "meta_blob->alignment < sizeof(int32_t)" in block

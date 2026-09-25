@@ -1,0 +1,72 @@
+{
+  "schema": "ns-cmsis-nn/kernel-contracts/1",
+  "functions": [
+    {
+      "name": "arm_elementwise_add_s8",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 12,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {"direction": "in", "name": "input_1_vect", "type": "const int8_t *"},
+        {"direction": "in", "name": "input_2_vect", "type": "const int8_t *"},
+        {"direction": "in,out", "name": "output", "type": "int8_t *"},
+        {"direction": "in", "name": "block_size", "type": "const int32_t"}
+      ]
+    },
+    {
+      "name": "arm_fx_pool_s8",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 20,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {"direction": "in,out", "name": "ctx", "type": "const cmsis_nn_context *"},
+        {"direction": "in", "name": "input_dims", "type": "const cmsis_nn_dims *"},
+        {"direction": "in", "name": "input_data", "type": "const int8_t *"},
+        {"direction": "out", "name": "output_data", "type": "int8_t *"}
+      ]
+    },
+    {
+      "name": "arm_fx_pool_s8_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 30,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {"direction": "in", "name": "input_dims", "type": "const cmsis_nn_dims *"}
+      ]
+    },
+    {
+      "name": "arm_fx_pool_s8_get_buffer_size_mve",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 34,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {"direction": "in", "name": "input_dims", "type": "const cmsis_nn_dims *"}
+      ]
+    },
+    {
+      "name": "arm_fx_pool_f16",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 8,
+      "guards": ["ARM_NN_ENABLE_F16"],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {"direction": "in", "extent": "[4]", "name": "dims", "type": "const int32_t"},
+        {"direction": "in", "name": "layout", "type": "arm_nn_tensor_layout"},
+        {"direction": "in", "name": "hook", "type": "void (*hook)(int32_t)"},
+        {"direction": "out", "name": "output", "type": "float16_t *"}
+      ]
+    },
+    {
+      "name": "arm_nn_fx_helper",
+      "header": "Include/arm_nnsupportfunctions.h",
+      "line": 5,
+      "guards": [],
+      "returns": "void",
+      "params": []
+    }
+  ]
+}

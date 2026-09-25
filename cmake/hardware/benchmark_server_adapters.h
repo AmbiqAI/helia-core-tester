@@ -58,8 +58,10 @@ extern "C" {
 #define HCT_NULL_ARG_PARAMS_BIT (1 << 3)
 #define HCT_NULL_ARG_OUTPUT_BIT (1 << 4)
 
-/* Kernel IDs sent by the host in CASE_META -- must match assets/kernel_registry.yaml
- * (the Python-side single source of truth) and helia_core_tester/hardware/kernel_registry.py. */
+/* BEGIN GENERATED kernel ids -- python3 scripts/generate_kernel_catalog.py */
+/* Kernel IDs sent by the host in CASE_META. Source of truth: the c_define column of
+ * assets/kernel_registry.yaml (helia_core_tester/hardware/kernel_registry.py on the
+ * host side); do not edit by hand. */
 #define HCT_KERNEL_ID_ABS_S8 1u
 #define HCT_KERNEL_ID_CONVOLVE_S8 2u
 #define HCT_KERNEL_ID_ADD_S8 3u
@@ -233,6 +235,7 @@ extern "C" {
 #define HCT_KERNEL_ID_BATCH_MATMUL_F16 171u
 #define HCT_KERNEL_ID_CONVOLVE_F32 172u
 #define HCT_KERNEL_ID_CONVOLVE_F16 173u
+/* END GENERATED kernel ids */
 
 static inline hct_server_blob_t *find_blob_by_role(hct_server_session_t *session, uint8_t role)
 {
