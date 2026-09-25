@@ -22,6 +22,23 @@ from helia_core_tester.generation.utils.template_context import TemplateContextB
 
 _JINJA2_ENV_CACHE: Dict[str, jinja2.Environment] = {}
 
+
+def template_environment(template_dir: str) -> jinja2.Environment:
+    """The one Jinja environment for a template directory (cached), with the
+    contract-rendering globals installed so every template, and every test that
+    renders one, sees the same `contract_call` / `contract_parity_assert`."""
+    if template_dir not in _JINJA2_ENV_CACHE:
+        from helia_core_tester.contract.render import contract_globals
+
+        env = jinja2.Environment(
+            loader=jinja2.FileSystemLoader(template_dir),
+            trim_blocks=True,
+            lstrip_blocks=True,
+        )
+        env.globals.update(contract_globals())
+        _JINJA2_ENV_CACHE[template_dir] = env
+    return _JINJA2_ENV_CACHE[template_dir]
+
 try:
     import tensorflow as tf
 except Exception:
@@ -1071,14 +1088,7 @@ class OperationBase(ABC):
         what the generation sidecar is built from, so the sidecar is guaranteed
         to reflect what was actually rendered rather than a re-derived copy.
         """
-        template_dir = str(find_tester_templates_dir())
-        if template_dir not in _JINJA2_ENV_CACHE:
-            _JINJA2_ENV_CACHE[template_dir] = jinja2.Environment(
-                loader=jinja2.FileSystemLoader(template_dir),
-                trim_blocks=True,
-                lstrip_blocks=True,
-            )
-        env = _JINJA2_ENV_CACHE[template_dir]
+        env = template_environment(str(find_tester_templates_dir()))
         operator = str(self.desc.get("operator", ""))
         render_context = dict(context)
         if template_path.endswith(".c.j2"):
