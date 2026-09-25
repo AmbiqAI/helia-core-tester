@@ -214,7 +214,18 @@ def test_rendered_fault_case_asserts_status_and_never_validates_output(
 
     assert "HELIA_VALIDATE_EXPECTED_STATUS(" in body
     assert "ARM_CMSIS_NN_ARG_ERROR" in body
-    assert "HELIA_VALIDATE_RETURN_FAILURES(0)" in body
+    # Guard breaches on the buffers the call was handed are the verdict, not a literal 0.
+    # A fault mode that hands the kernel no writable buffer has nothing to guard.
+    assert body.count("HELIA_GUARD_ARM(") == body.count("HELIA_GUARD_CHECK(")
+    if "HELIA_GUARD_CHECK(" in body:
+        assert body.rindex("HELIA_GUARD_CHECK(") < body.index("HELIA_VALIDATE_EXPECTED_STATUS(")
+    assert "HELIA_VALIDATE_RETURN_FAILURES(failures)" in body
+    # A rejected call must not write the output it was handed.
+    if descriptors[case_name]["fault"] == "null_output":
+        assert f"{case_name}_output" not in body
+    else:
+        assert f"HELIA_GUARD_ARM({case_name}_output, true" in body
+        assert f"HELIA_GUARD_CHECK_UNTOUCHED({case_name}_output," in body
     assert "HELIA_VALIDATE_OUTPUTS" not in source
     assert "HELIA_VALIDATE_STATUS(" not in source
     assert marker in source, f"{case_name}: fault substitution {marker!r} missing"
@@ -241,6 +252,7 @@ def test_null_substituted_buffers_are_not_declared(
         rendered[case_name] = out_dir / desc["_family"] / case_name
     source = (rendered[case_name] / f"{case_name}_{op_suffix}.c").read_text()
     assert f"{case_name}{absent_static}" not in source
+    assert f"{case_name}{absent_static[:-1]}_guard" not in source
 
 
 def test_hardware_bridge_skips_fault_cases_with_a_clear_reason(tmp_path: Path) -> None:

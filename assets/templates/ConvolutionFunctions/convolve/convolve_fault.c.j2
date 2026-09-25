@@ -1,12 +1,13 @@
 #include "{{ name }}_convolve.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 {# Declare only the buffers this fault mode actually passes to the kernel so a
    NULL-substituted buffer never becomes an unused static (-Wunused-variable). #}
-{% if fault != "null_output" %}static {{ output_dtype }} {{ name }}_output[{{ output_dims.n * output_dims.h * output_dims.w * output_dims.c }}];
-{% endif %}{% if fault != "null_ctx_buf" %}static uint8_t {{ name }}_buffer[{{ [buffer_size_max, 4] | max }}];
-{% endif %}{% if kernel_fn == 'arm_convolve_wrapper_s8' and fault != "null_weight_sum_ctx" %}static int32_t {{ name }}_weight_sum_buffer[{{ output_dims.c }}];
+{% if fault != "null_output" %}{{ helia_guard_declare(output_dtype, name ~ "_output", output_dims.n * output_dims.h * output_dims.w * output_dims.c) }}
+{% endif %}{% if fault != "null_ctx_buf" %}{{ helia_guard_declare("uint8_t", name ~ "_buffer", [buffer_size_max, 4] | max) }}
+{% endif %}{% if kernel_fn == 'arm_convolve_wrapper_s8' and fault != "null_weight_sum_ctx" %}{{ helia_guard_declare("int32_t", name ~ "_weight_sum_buffer", output_dims.c) }}
 {% endif %}
 {% if has_biases %}
 static const cmsis_nn_dims {{ name }}_bias_dims = {
@@ -134,13 +135,21 @@ static int32_t run_convolve(void)
 
 int32_t {{ name }}_test_case_run(void)
 {
-    int32_t status = run_convolve();
-    HELIA_VALIDATE_EXPECTED_STATUS(
+{% if fault != "null_output" %}    HELIA_GUARD_ARM({{ name }}_output, true /* rejected call must not write it: poison */);
+{% endif %}{% if fault != "null_ctx_buf" %}    HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison-safe */);
+{% endif %}{% if kernel_fn == 'arm_convolve_wrapper_s8' and fault != "null_weight_sum_ctx" %}    HELIA_GUARD_ARM({{ name }}_weight_sum_buffer, true /* pure scratch: poison-safe */);
+{% endif %}    int32_t status = run_convolve();
+    int failures = 0;
+{% if fault != "null_output" %}    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Convolution") }} output", failures);
+{% if expected_status != "ARM_CMSIS_NN_SUCCESS" %}    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("Convolution") }} output", failures);
+{% endif %}{% endif %}{% if fault != "null_ctx_buf" %}    HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Convolution") }} buffer", failures);
+{% endif %}{% if kernel_fn == 'arm_convolve_wrapper_s8' and fault != "null_weight_sum_ctx" %}    HELIA_GUARD_CHECK({{ name }}_weight_sum_buffer, "{{ validation_label | default("Convolution") }} weight sum buffer", failures);
+{% endif %}    HELIA_VALIDATE_EXPECTED_STATUS(
         "{{ validation_label | default("Convolution") }}",
         status,
         {{ expected_status }}
     );
-    HELIA_VALIDATE_RETURN_FAILURES(0);
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 
 {% include "common/standalone/main.j2" %}

@@ -49,7 +49,17 @@ COPY_CLASS_SYMBOLS = {
 REPRESENTATIVE_CASES = [
     ("pack_float_rank0_n8_f16", "pack", ["arm_pack_f16(", "NULL,", "0,   // input_dims"], True),
     ("unpack_float_rank5_axis4_f32", "unpack", ["arm_unpack_f32(", "5,   // input_dims", "_out_1_output,"], True),
-    ("split_float_zero_slice_v_f32", "split", ["arm_split_f32(", "_out_1_output[1];", "OUT_1_OUTPUT_SIZE (0)"], False),
+    (
+        "split_float_zero_slice_v_f32",
+        "split",
+        [
+            "arm_split_f32(",
+            "_out_1_output_guard;",
+            "OUT_1_OUTPUT_SIZE (0)",
+            "HELIA_GUARD_CHECK_UNTOUCHED(split_float_zero_slice_v_f32_out_1_output,",
+        ],
+        False,
+    ),
     ("concatenation_any_rank_rank1_f16", "concatenation", ["arm_concatenation_f16(", "1,                    // output_dims"], False),
     ("fill_float_nan_block17_f16", "fill", ["arm_nn_fill_f16(", "_fill_value[0],"], True),
     ("dequantize_float_f16_widen_nonfinite_f32", "dequantize", ["arm_dequantize_f16_f32(", "40         // block_size"], True),
