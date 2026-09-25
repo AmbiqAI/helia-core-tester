@@ -39,7 +39,7 @@ CMSIS_NN_REF = "v7.35.1"
 SEGGER_RTT_MODULE = "nsx-segger-rtt"
 SEGGER_RTT_URL = "https://github.com/AmbiqAI/nsx-segger-rtt.git"
 SEGGER_RTT_METADATA = "nsx-module.yaml"
-SEGGER_RTT_REF = "v0.1.1"
+SEGGER_RTT_REF = "v0.1.2"
 
 PMU_MODULE = "nsx-pmu-armv8m"
 

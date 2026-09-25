@@ -55,11 +55,11 @@ def test_nsx_yml_declares_profile_modules_plus_extras(tmp_path: Path) -> None:
     # Not in the registry yet: declared inline.
     assert registry["projects"]["nsx-segger-rtt"] == {
         "url": "https://github.com/AmbiqAI/nsx-segger-rtt.git",
-        "revision": "v0.1.1",
+        "revision": nsx_app.SEGGER_RTT_REF,
     }
     assert registry["modules"]["nsx-segger-rtt"] == {
         "project": "nsx-segger-rtt",
-        "revision": "v0.1.1",
+        "revision": nsx_app.SEGGER_RTT_REF,
         "metadata": "nsx-module.yaml",
     }
 
