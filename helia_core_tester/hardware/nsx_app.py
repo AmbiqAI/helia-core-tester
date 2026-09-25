@@ -46,6 +46,8 @@ PMU_MODULE = "nsx-pmu-armv8m"
 
 # Copied from a local checkout, like hpx.
 KERNEL_TREES = ("Include", "Source", "cmake")
+# What makes a dir a checkout.
+CHECKOUT_FILES = ("Include", "Source", "nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
 KERNEL_SHIM = "# Shim: delegates to the native ns-cmsis-nn NSX build.\nadd_subdirectory(nsx)\n"
 
 RTT_BUFFER_SIZE_UP = 8192
@@ -135,10 +137,7 @@ def nested_kernel_root(repo_root: Path) -> Optional[Path]:
     """The enclosing ns-cmsis-nn checkout, if any."""
     # Layout: ns-cmsis-nn/Tests/helia-core-tester.
     root = repo_root.resolve().parent.parent
-    markers = (root / "Include", root / "Source")
-    if all(path.is_dir() for path in markers) and (root / "nsx" / "nsx-module.yaml").is_file():
-        return root
-    return None
+    return root if all((root / name).exists() for name in CHECKOUT_FILES) else None
 
 
 def kernel_dir(app_dir: Path, options: AppOptions) -> Path:
@@ -171,8 +170,7 @@ def _write_if_changed(path: Path, text: str) -> bool:
 
 def write_kernels(root: Path, module_dir: Path) -> None:
     """Vendor a local checkout, as hpx does."""
-    needed = ("Include", "Source", "nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
-    missing = [name for name in needed if not (root / name).exists()]
+    missing = [name for name in CHECKOUT_FILES if not (root / name).exists()]
     if missing:
         raise AppRenderError(f"Not an ns-cmsis-nn checkout: {root} lacks {missing[0]}")
     (module_dir / "nsx").mkdir(parents=True, exist_ok=True)

@@ -195,6 +195,14 @@ def test_root_switch_recompiles_kernels(tmp_path: Path, nsx: list[tuple], monkey
     firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=second))
     assert vendored.stat().st_mtime == 1
 
+    # Failed switch, then back: B's objects linger.
+    monkeypatch.setattr(nsx_cli, "build_app", _fail)
+    with pytest.raises(nsx_cli.HardwareBuildError):
+        firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=first))
+    monkeypatch.setattr(nsx_cli, "build_app", real_build)
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=second))
+    assert vendored.stat().st_mtime > 1
+
 
 def test_ref_switch_freshens_synced_kernels(tmp_path: Path, nsx: list[tuple]) -> None:
     """NSX's module cache keeps old mtimes."""
@@ -384,13 +392,8 @@ def test_run_flags_reach_the_pipeline(monkeypatch) -> None:
 
 def _nested_layout(tmp_path: Path) -> tuple[Path, Path]:
     """ns-cmsis-nn/Tests/helia-core-tester on disk."""
-    kernels = tmp_path / "ns-cmsis-nn"
-    for sub in ("Include", "Source", "nsx"):
-        (kernels / sub).mkdir(parents=True)
-    (kernels / "nsx" / "nsx-module.yaml").write_text("", encoding="utf-8")
-    tester = kernels / "Tests" / "helia-core-tester"
-    tester.mkdir(parents=True)
-    return kernels, tester
+    kernels = make_checkout(tmp_path / "ns-cmsis-nn")
+    return kernels, kernels / "Tests" / "helia-core-tester"
 
 
 @pytest.mark.parametrize("nested", [True, False])

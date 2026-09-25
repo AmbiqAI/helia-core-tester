@@ -344,16 +344,14 @@ def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
 # --- high-level entry points ------------------------------------------------------
 
 
-def _echo_kernels(options: "AppOptions", repo_root: Path) -> str:
+def _echo_kernels(options: "AppOptions", repo_root: Path) -> None:
     """Print the kernel source and inline asm."""
     from .nsx_app import nested_kernel_root
 
-    source = options.kernel_source()
     root = options.cmsis_nn_root
-    where = " (enclosing checkout)" if root and root.resolve() == nested_kernel_root(repo_root) else ""
+    where = " (enclosing checkout)" if root and root == nested_kernel_root(repo_root) else ""
     asm = "on" if options.requantize_inline_asm else "off"
-    typer.echo(f"[hardware] Kernels: {source}{where}, inline asm {asm}")
-    return source
+    typer.echo(f"[hardware] Kernels: {options.kernel_source()}{where}, inline asm {asm}")
 
 
 # Written after a sync that finished.
@@ -404,7 +402,7 @@ def build_firmware(
     ensure_build_tools(repo_root)
     options = options or AppOptions()
     app_dir = nsx_app_dir(build_dir)
-    source = _echo_kernels(options, repo_root)
+    _echo_kernels(options, repo_root)
     rendered = render_app(board, options, app_dir, repo_root=repo_root)
     if rendered.changed:
         names = ", ".join(rendered.changed)
@@ -422,8 +420,11 @@ def build_firmware(
     else:
         typer.echo("[hardware] NSX modules unchanged; skipping lock and sync.")
     # Copies keep old mtimes; recompile all.
+    source = options.kernel_source()
     built = app_dir / BUILT_KERNELS
     if not built.is_file() or built.read_text(encoding="utf-8") != source:
+        # Unfinished builds must touch again.
+        built.unlink(missing_ok=True)
         _touch_tree(kernel_dir(app_dir, options))
     jlink_exe = _export_jlink_exe()
     if force_reconfigure or not _configured_for(build_dir, app_dir, board, serial_no, jlink_exe):

@@ -135,7 +135,7 @@ _CMSIS_NN_REF_HELP = "ns-cmsis-nn tag or commit to build (default: see --cmsis-n
 _CMSIS_NN_ROOT_HELP = (
     "Local ns-cmsis-nn checkout to build. Default: the enclosing checkout when the "
     "tester sits at ns-cmsis-nn/Tests/helia-core-tester, else the pinned release. "
-    "Its Include/, Source/, cmake/ and nsx/ are copied into the app, as helia-profiler does."
+    "Copies its Include/, Source/, cmake/ and nsx/ into the app."
 )
 _UPDATE_DEPS_HELP = "Re-resolve NSX modules and rewrite nsx.lock before building."
 _NO_INLINE_ASM_HELP = "Build requantize without inline assembly (the old path's kernels)."
