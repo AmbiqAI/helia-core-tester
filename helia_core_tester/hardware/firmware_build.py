@@ -346,15 +346,18 @@ def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
 
 def _stage_kernels(
     options: "AppOptions", build_dir: Path, repo_root: Path,
-) -> tuple["AppOptions", Optional[str], Optional[str]]:
+) -> tuple["AppOptions", str, Optional[str]]:
     """Echo kernels; mirror a local root."""
-    from .kernel_mirror import mirror_kernels, nested_kernel_root
+    from .kernel_mirror import drop_mirror, mirror_kernels, nested_kernel_root
 
     asm = "on" if options.requantize_inline_asm else "off"
     root = options.cmsis_nn_root
     if root is None:
-        typer.echo(f"[hardware] Kernels: ns-cmsis-nn {options.cmsis_nn_ref}, inline asm {asm}")
-        return options, None, None
+        label = f"ns-cmsis-nn {options.cmsis_nn_ref}"
+        typer.echo(f"[hardware] Kernels: {label}, inline asm {asm}")
+        # A later mirror must copy fresh.
+        drop_mirror(build_dir)
+        return options, label, None
     root = root.expanduser().resolve()
     where = " (enclosing checkout)" if root == nested_kernel_root(repo_root) else ""
     typer.echo(f"[hardware] Kernels: {root}{where}, inline asm {asm}")
@@ -369,14 +372,22 @@ def _stage_kernels(
 SYNC_STATE = ".hct-sync.json"
 
 
-def _sync_state(app_dir: Path, kernel_stamp: Optional[str]) -> dict[str, Optional[str]]:
+def _sync_state(app_dir: Path, source: str, kernel_stamp: Optional[str]) -> dict[str, Optional[str]]:
     """What the last finished sync used."""
     lock = app_dir / "nsx.lock"
     return {
         "lock": hashlib.sha256(lock.read_bytes()).hexdigest() if lock.is_file() else None,
+        "source": source,
         "kernels": kernel_stamp,
         "neuralspotx": metadata.version("neuralspotx"),
     }
+
+
+def _touch_tree(root: Path) -> None:
+    """Give every file a fresh mtime."""
+    for path in root.rglob("*"):
+        if path.is_file() and not path.is_symlink():
+            os.utime(path)
 
 
 def _last_sync(app_dir: Path) -> dict:
@@ -399,7 +410,7 @@ def build_firmware(
 ) -> Path:
     """Build hct_benchmark_server through NSX; returns the ELF path."""
     from . import nsx_cli
-    from .nsx_app import AppOptions, render_app
+    from .nsx_app import CMSIS_NN_PROJECT, AppOptions, render_app
 
     repo_root = tester_repo_root()
     ensure_build_tools(repo_root)
@@ -420,9 +431,13 @@ def build_firmware(
     if relock:
         typer.echo(f"[hardware] Locking NSX modules for {app_dir}")
         nsx_cli.lock_app(app_dir, update=update_dependencies)
-    if relock or last != _sync_state(app_dir, kernel_stamp) or not (app_dir / "modules").is_dir():
+    synced = last == _sync_state(app_dir, source, kernel_stamp) and (app_dir / "modules").is_dir()
+    if relock or force_reconfigure or not synced:
         _sync_modules(app_dir, relock)
-        state = _sync_state(app_dir, kernel_stamp)
+        # Vendored copies keep old mtimes.
+        if last.get("source") != source:
+            _touch_tree(app_dir / "modules" / CMSIS_NN_PROJECT)
+        state = _sync_state(app_dir, source, kernel_stamp)
         (app_dir / SYNC_STATE).write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
     else:
         typer.echo("[hardware] NSX modules unchanged; skipping lock and sync.")

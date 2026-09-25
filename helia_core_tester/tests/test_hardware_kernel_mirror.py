@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.hardware.kernel_mirror import KernelMirrorError, mirror_kernels, nested_kernel_root
+from helia_core_tester.hardware.kernel_mirror import KernelMirrorError, drop_mirror, mirror_kernels, nested_kernel_root
 
 
-def _git(root: Path, *args: str) -> None:
+def git(root: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
 
 
@@ -20,21 +20,26 @@ def _write(path: Path, text: str) -> Path:
     return path
 
 
-@pytest.fixture
-def checkout(tmp_path: Path) -> Path:
-    """Kernel checkout holding a nested tester."""
-    root = tmp_path / "ns-cmsis-nn"
+def make_checkout(root: Path) -> Path:
+    """Committed ns-cmsis-nn stand-in."""
     _write(root / "Source" / "arm_add.c", "int add;\n")
     _write(root / "Source" / "arm_sub.c", "int sub;\n")
     _write(root / "Include" / "arm_nn.h", "#pragma once\n")
     _write(root / ".gitignore", "*.log\n")
-    _git(root, "init", "-q")
-    _git(root, "add", "-A")
-    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    return root
+
+
+@pytest.fixture
+def checkout(tmp_path: Path) -> Path:
+    """Kernel checkout holding a nested tester."""
+    root = make_checkout(tmp_path / "ns-cmsis-nn")
     # Nested tester: its own repo, untracked here.
     tester = root / "Tests" / "helia-core-tester"
     _write(tester / "artifacts" / "big.bin", "x" * 1000)
-    _git(tester, "init", "-q")
+    git(tester, "init", "-q")
     return root
 
 
@@ -56,10 +61,11 @@ def test_mirror_tracks_the_working_tree(checkout: Path, tmp_path: Path) -> None:
     }
     assert first.changed == first.files == 5
     source = checkout / "Source" / "arm_add.c"
-    assert (mirror / "Source" / "arm_add.c").stat().st_mtime_ns == source.stat().st_mtime_ns
+    copied_at = (mirror / "Source" / "arm_add.c").stat().st_mtime_ns
 
     again = mirror_kernels(checkout, build, exclude=[tester])
     assert again.changed == 0 and again.stamp == first.stamp
+    assert (mirror / "Source" / "arm_add.c").stat().st_mtime_ns == copied_at
 
     # Modify one, delete one.
     source.write_text("int add; // edit\n", encoding="utf-8")
@@ -67,6 +73,8 @@ def test_mirror_tracks_the_working_tree(checkout: Path, tmp_path: Path) -> None:
     edited = mirror_kernels(checkout, build, exclude=[tester])
     assert edited.changed == 2 and edited.stamp != first.stamp
     assert (mirror / "Source" / "arm_add.c").read_text(encoding="utf-8") == "int add; // edit\n"
+    # Old source mtime would hide it from ninja.
+    assert (mirror / "Source" / "arm_add.c").stat().st_mtime_ns >= copied_at
     assert not (mirror / "Source" / "arm_sub.c").exists()
 
     # Tester and build churn: no change.
@@ -78,7 +86,7 @@ def test_gitlink_tester_is_skipped(checkout: Path, tmp_path: Path) -> None:
     """A submodule entry is not a file."""
     tester = checkout / "Tests" / "helia-core-tester"
     sha = "0123456789abcdef0123456789abcdef01234567"
-    _git(checkout, "update-index", "--add", "--cacheinfo", f"160000,{sha},Tests/helia-core-tester")
+    git(checkout, "update-index", "--add", "--cacheinfo", f"160000,{sha},Tests/helia-core-tester")
     result = mirror_kernels(checkout, tmp_path / "build")
     assert "Tests/helia-core-tester/artifacts/big.bin" not in _listing(result.path)
     assert result.files == 4
@@ -94,11 +102,28 @@ def test_file_turned_dir_mirrors(checkout: Path, tmp_path: Path) -> None:
     assert "Include/arm_nn.h/inner.h" in _listing(result.path)
 
 
+def test_new_root_or_drop_recopies(checkout: Path, tmp_path: Path) -> None:
+    """Another source must not reuse copies."""
+    build = tmp_path / "build"
+    mirror_kernels(checkout, build)
+    other = make_checkout(tmp_path / "other")
+    assert mirror_kernels(other, build).changed == 4
+    drop_mirror(build)
+    assert not (build / "kernel_src").exists()
+    assert mirror_kernels(other, build).changed == 4
+
+
 def test_root_must_be_git_and_outside_build(tmp_path: Path) -> None:
     plain = tmp_path / "plain"
     plain.mkdir()
-    with pytest.raises(KernelMirrorError, match="not a git checkout"):
+    with pytest.raises(KernelMirrorError, match="not a git repository"):
         mirror_kernels(plain, tmp_path / "build")
+    # A plain copy inside an outer repo.
+    outer = make_checkout(tmp_path / "outer")
+    _write(outer / ".gitignore", "vendor/\n")
+    _write(outer / "vendor" / "k" / "Source" / "arm_add.c", "int add;\n")
+    with pytest.raises(KernelMirrorError, match="not a git checkout"):
+        mirror_kernels(outer / "vendor" / "k", tmp_path / "build")
     with pytest.raises(KernelMirrorError, match="inside build dir"):
         mirror_kernels(tmp_path / "build" / "k", tmp_path / "build")
 

@@ -6,7 +6,6 @@ Every nsx_cli step is monkeypatched; nothing here runs NSX or CMake.
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,6 +18,7 @@ from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_ap
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.jlink_library import JLinkExecutable, JLinkLibraryError
 from helia_core_tester.hardware.nsx_app import AppOptions
+from helia_core_tester.tests.test_hardware_kernel_mirror import make_checkout
 
 BOARD = resolve_board("apollo510_evb")
 SERIAL = 1160003180
@@ -123,23 +123,9 @@ def test_update_dependencies_forces_lock_update(tmp_path: Path, nsx: list[tuple]
     assert nsx[1:3] == [("lock", True), ("sync", False)]
 
 
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
-
-
-def _kernel_checkout(root: Path) -> Path:
-    """Committed ns-cmsis-nn stand-in."""
-    (root / "Source").mkdir(parents=True)
-    (root / "Source" / "arm_add.c").write_text("int add;\n", encoding="utf-8")
-    _git(root, "init", "-q")
-    _git(root, "add", "-A")
-    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
-    return root
-
-
 def test_local_kernel_root_relocks_only_on_edits(tmp_path: Path, nsx: list[tuple]) -> None:
     """Mirror stamp, not NSX hashing, drives relock."""
-    kernels = _kernel_checkout(tmp_path / "kernels")
+    kernels = make_checkout(tmp_path / "kernels")
     options = AppOptions(cmsis_nn_root=kernels)
     build_dir = tmp_path / "build"
     firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
@@ -159,7 +145,7 @@ def test_local_kernel_root_relocks_only_on_edits(tmp_path: Path, nsx: list[tuple
 
 def test_build_dir_inside_kernel_root_builds(tmp_path: Path, nsx: list[tuple]) -> None:
     """The nested default build dir is fine."""
-    kernels = _kernel_checkout(tmp_path / "kernels")
+    kernels = make_checkout(tmp_path / "kernels")
     build_dir = kernels / "Tests" / "hct" / "build" / "hardware" / BOARD.id
     options = AppOptions(cmsis_nn_root=kernels)
     firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
@@ -167,6 +153,38 @@ def test_build_dir_inside_kernel_root_builds(tmp_path: Path, nsx: list[tuple]) -
     firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
     assert _steps(nsx) == ["render", "build"]
     assert not (build_dir / "kernel_src" / "Tests").exists()
+
+
+def test_pinned_build_drops_the_mirror(tmp_path: Path, nsx: list[tuple]) -> None:
+    """Switching back must recopy fresh mtimes."""
+    options = AppOptions(cmsis_nn_root=make_checkout(tmp_path / "kernels"))
+    build_dir = tmp_path / "build"
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
+    firmware_build.build_firmware(BOARD, build_dir=build_dir)
+    assert not (build_dir / "kernel_src").exists()
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
+    assert _steps(nsx) == ["render", "lock", "sync", "build"]
+
+
+def test_source_switch_freshens_vendored_kernels(tmp_path: Path, nsx: list[tuple]) -> None:
+    """Old cached mtimes would skip recompiles."""
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    vendored = firmware_build.nsx_app_dir(tmp_path) / "modules" / nsx_app.CMSIS_NN_PROJECT / "arm_add.c"
+    vendored.parent.mkdir(parents=True)
+    vendored.write_text("int add;\n", encoding="utf-8")
+    os.utime(vendored, (1, 1))
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path, update_dependencies=True)
+    assert vendored.stat().st_mtime == 1
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path, options=AppOptions(cmsis_nn_ref="v1.2.3"))
+    assert vendored.stat().st_mtime > 1
+
+
+def test_force_reconfigure_resyncs(tmp_path: Path, nsx: list[tuple]) -> None:
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path, force_reconfigure=True)
+    assert _steps(nsx) == ["render", "sync", "configure", "build"]
 
 
 def test_changed_options_warn(tmp_path: Path, nsx: list[tuple], capsys) -> None:

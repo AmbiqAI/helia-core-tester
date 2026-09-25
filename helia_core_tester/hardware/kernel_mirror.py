@@ -7,6 +7,7 @@ artifacts included. Mirror only what git would commit instead.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -15,9 +16,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
+from ..generation.reuse import _is_git_toplevel
 from .pathutil import is_relative_to
 
 KERNEL_SRC_SUBDIR = "kernel_src"
+# Source stats of the last mirror.
+MIRROR_INDEX = "kernel_src.json"
 
 
 class KernelMirrorError(RuntimeError):
@@ -49,11 +53,17 @@ def _git_files(root: Path) -> list[str]:
     """Paths git would commit under root."""
     cmd = ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"]
     try:
-        out = subprocess.run(cmd, check=True, capture_output=True).stdout
-    except (OSError, subprocess.CalledProcessError) as exc:
-        raise KernelMirrorError(f"Kernel root is not a git checkout: {root}") from exc
+        done = subprocess.run(cmd, capture_output=True)
+    except OSError as exc:
+        raise KernelMirrorError(f"Cannot run git: {exc}") from exc
+    if done.returncode != 0:
+        detail = os.fsdecode(done.stderr).strip()
+        raise KernelMirrorError(f"git ls-files failed in {root}: {detail}")
+    # git -C walks up to outer repos.
+    if not _is_git_toplevel(root):
+        raise KernelMirrorError(f"Kernel root is not a git checkout: {root}")
     # A nested repo lists as "dir/".
-    return sorted({name.rstrip("/") for name in os.fsdecode(out).split("\0") if name})
+    return sorted({name.rstrip("/") for name in os.fsdecode(done.stdout).split("\0") if name})
 
 
 def _source_files(root: Path, excluded: Iterable[Path]) -> dict[str, os.stat_result]:
@@ -90,12 +100,27 @@ def _prune(dest: Path, keep: set[str]) -> int:
     return removed
 
 
-def _stamp(files: dict[str, os.stat_result]) -> str:
-    """Hash of paths, sizes and mtimes."""
-    digest = hashlib.sha256()
-    for rel, info in sorted(files.items()):
-        digest.update(f"{rel}\0{info.st_size}\0{info.st_mtime_ns}\n".encode("utf-8", "surrogateescape"))
+def _stamp(root: Path, index: dict[str, list[int]]) -> str:
+    """Hash of root, paths, sizes, mtimes."""
+    digest = hashlib.sha256(f"{root}\n".encode("utf-8", "surrogateescape"))
+    for rel, (size, mtime) in sorted(index.items()):
+        digest.update(f"{rel}\0{size}\0{mtime}\n".encode("utf-8", "surrogateescape"))
     return "sha256:" + digest.hexdigest()
+
+
+def _read_index(path: Path, root: Path) -> dict[str, list[int]]:
+    """Last mirror's source stats, same root only."""
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return saved.get("files", {}) if saved.get("root") == str(root) else {}
+
+
+def drop_mirror(build_dir: Path) -> None:
+    """Remove the mirror and its index."""
+    shutil.rmtree(build_dir / KERNEL_SRC_SUBDIR, ignore_errors=True)
+    (build_dir / MIRROR_INDEX).unlink(missing_ok=True)
 
 
 def mirror_kernels(root: Path, build_dir: Path, *, exclude: Iterable[Path] = ()) -> KernelMirror:
@@ -106,19 +131,18 @@ def mirror_kernels(root: Path, build_dir: Path, *, exclude: Iterable[Path] = ())
         raise KernelMirrorError(f"Kernel root {root} is inside build dir {build_dir}")
     dest = build_dir / KERNEL_SRC_SUBDIR
     files = _source_files(root, [build_dir, *(path.resolve() for path in exclude)])
+    index = {rel: [info.st_size, info.st_mtime_ns] for rel, info in files.items()}
+    last = _read_index(build_dir / MIRROR_INDEX, root) if dest.is_dir() else {}
     # Prune first: a file may become a dir.
     changed = _prune(dest, set(files)) if dest.is_dir() else 0
-    for rel, info in files.items():
+    for rel, stats in index.items():
         target = dest / rel
-        try:
-            have = target.stat()
-        except OSError:
-            have = None
-        if have is not None and (have.st_size, have.st_mtime_ns) == (info.st_size, info.st_mtime_ns):
+        if last.get(rel) == stats and target.is_file():
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        # copy2 keeps mtimes, so ninja stays incremental.
-        shutil.copy2(root / rel, target)
+        # Fresh mtime, so ninja recompiles it.
+        shutil.copy(root / rel, target)
         changed += 1
+    (build_dir / MIRROR_INDEX).write_text(json.dumps({"root": str(root), "files": index}), encoding="utf-8")
     size = sum(info.st_size for info in files.values())
-    return KernelMirror(dest, len(files), size, changed, _stamp(files))
+    return KernelMirror(dest, len(files), size, changed, _stamp(root, index))
