@@ -265,10 +265,13 @@ arm_cmsis_nn_status arm_convolve_f32(const cmsis_nn_context *ctx,
 """
 
 
-@pytest.fixture(scope="module")
-def convolve_benchmark(tmp_path_factory: pytest.TempPathFactory) -> Path:
+@pytest.fixture(scope="module", params=["fvp", "hardware"])
+def convolve_benchmark(request, tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, str]:
     """The generated convolution harness (entry point and main included) in benchmark mode,
-    built for the host against the real ns-cmsis-nn headers and a scripted kernel."""
+    built for the host against the real ns-cmsis-nn headers and a scripted kernel. The
+    hardware variant is rendered for that backend and built as a hardware build, so its
+    console output is tagged by the am_util_stdio_printf stub."""
+    target = request.param
     cmsis_nn_root = os.environ.get("CMSIS_NN_ROOT")
     if not cmsis_nn_root or not (Path(cmsis_nn_root) / "Include" / "arm_nnfunctions.h").exists():
         pytest.skip("CMSIS_NN_ROOT with ns-cmsis-nn headers required to build the generated harness")
@@ -279,10 +282,15 @@ def convolve_benchmark(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     case = "convolve_float_default_f32"
     desc = next(d for d in load_all_descriptors(str(find_descriptors_dir())) if d["name"] == case)
-    out_dir = tmp_path_factory.mktemp("convolve_benchmark")
-    generation_module.generate_test(desc, str(out_dir), cpu="cortex-m55")
+    out_dir = tmp_path_factory.mktemp(f"convolve_benchmark_{target}")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("HELIA_BENCH_TARGET", target)
+        generation_module.generate_test(desc, str(out_dir), cpu="cortex-m55")
     case_dir = out_dir / desc["_family"] / case
     (out_dir / "host_stubs.h").write_text(HOST_STUBS)
+    (out_dir / "pmu_armv8.h").write_text(PMU_STUBS)
+    (out_dir / "am_mcu_apollo.h").write_text("#pragma once\n")
+    (out_dir / "am_util_stdio.h").write_text(AMBIQ_STUBS)
     (out_dir / "kernel.c").write_text(CONVOLVE_KERNEL_STUB)
     binary = out_dir / "convolve_benchmark"
     subprocess.run(
@@ -294,8 +302,11 @@ def convolve_benchmark(tmp_path_factory: pytest.TempPathFactory) -> Path:
             "-DHELIA_BENCHMARK_MODE",
             f"-DHELIA_BENCHMARK_WARMUP_RUNS={WARMUP}",
             f"-DHELIA_BENCHMARK_MEASURED_RUNS={MEASURED}",
+            *(["-DHELIA_HARDWARE_BUILD"] if target == "hardware" else []),
             "-include",
             str(out_dir / "host_stubs.h"),
+            "-I",
+            str(out_dir),
             "-I",
             str(case_dir / "includes"),
             "-I",
@@ -312,33 +323,38 @@ def convolve_benchmark(tmp_path_factory: pytest.TempPathFactory) -> Path:
         check=True,
         capture_output=True,
     )
-    return binary
+    return binary, target
 
 
-def _run_convolve(binary: Path, sizer: int, fail_at: int) -> tuple[int, str]:
+def _run_convolve(harness: tuple[Path, str], sizer: int, fail_at: int) -> tuple[int, str, str]:
+    binary, target = harness
     env = dict(os.environ, STUB_SIZER=str(sizer), STUB_FAIL_AT=str(fail_at))
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30, env=env)
-    return result.returncode, result.stdout
+    # Lines the board console would show carry the stub's tag on a hardware build.
+    console = "[am] " if target == "hardware" else ""
+    return result.returncode, result.stdout, console
 
 
-def test_generated_harness_succeeds_with_every_measured_run(convolve_benchmark: Path) -> None:
-    code, out = _run_convolve(convolve_benchmark, sizer=0, fail_at=0)
+def test_generated_harness_succeeds_with_every_measured_run(convolve_benchmark: tuple[Path, str]) -> None:
+    code, out, console = _run_convolve(convolve_benchmark, sizer=0, fail_at=0)
     assert code == 0, out
-    assert len(re.findall(r"^\[PERF\] convolve_float_default_f32: \d+ cycles\r?$", out, re.MULTILINE)) == MEASURED
+    perf = rf"^{re.escape(console)}\[PERF\] convolve_float_default_f32: \d+ cycles\r?$"
+    assert len(re.findall(perf, out, re.MULTILINE)) == MEASURED
     assert "Failures" not in out
 
 
-def test_generated_harness_fails_when_init_fails(convolve_benchmark: Path) -> None:
-    code, out = _run_convolve(convolve_benchmark, sizer=-1, fail_at=0)
+def test_generated_harness_fails_when_init_fails(convolve_benchmark: tuple[Path, str]) -> None:
+    code, out, console = _run_convolve(convolve_benchmark, sizer=-1, fail_at=0)
     assert code == 1, out
     assert "HELIA_SIZER_INVALID[arm_convolve_f32_get_buffer_size]" in out
-    assert "convolve_float_default_f32 benchmark init failed with status -1" in out
-    assert re.search(r"^1 Failures\r?$", out, re.MULTILINE)
+    assert f"{console}[BENCH] convolve_float_default_f32 skipped" in out
+    assert f"{console}convolve_float_default_f32 benchmark init failed with status -1" in out
+    assert re.search(rf"^{re.escape(console)}1 Failures\r?$", out, re.MULTILINE)
     assert "[PERF]" not in out
 
 
-def test_generated_harness_fails_when_a_measured_call_fails(convolve_benchmark: Path) -> None:
-    code, out = _run_convolve(convolve_benchmark, sizer=0, fail_at=WARMUP + 2)
+def test_generated_harness_fails_when_a_measured_call_fails(convolve_benchmark: tuple[Path, str]) -> None:
+    code, out, console = _run_convolve(convolve_benchmark, sizer=0, fail_at=WARMUP + 2)
     assert code == 1, out
-    assert len(re.findall(r"^\[PERF\] convolve_float_default_f32:", out, re.MULTILINE)) == 1
-    assert "convolve_float_default_f32 failed with status -1" in out
+    assert len(re.findall(r"\[PERF\] convolve_float_default_f32:", out)) == 1
+    assert f"{console}convolve_float_default_f32 failed with status -1" in out
