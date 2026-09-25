@@ -20,6 +20,15 @@ def generated_family_dir(project_root: Path, *, suite: str, cpu: str, family: st
     return project_root / "artifacts" / "generated_tests" / suite / cpu / family
 
 
+def _first_unreadable_descriptor(root: Path) -> Path | str:
+    for descriptor in sorted(root.glob("*/descriptor.yaml")):
+        try:
+            yaml.safe_load(descriptor.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            return descriptor
+    return f"under {root}"
+
+
 def discover_or_skip(
     project_root: Path,
     *,
@@ -36,7 +45,7 @@ def discover_or_skip(
             project_root, cpu=cpu, family=family, name_filter=name_filter, limit=limit, suite=suite
         )
     except yaml.YAMLError as exc:
-        pytest.fail(f"a generated case descriptor.yaml under {root} is unreadable: {exc}")
+        pytest.fail(f"generated case descriptor {_first_unreadable_descriptor(root)} is unreadable: {exc}")
     if cases:
         return cases
     present = sorted(
