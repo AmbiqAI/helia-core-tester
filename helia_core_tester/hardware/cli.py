@@ -131,18 +131,27 @@ def _serial(explicit: Optional[int]) -> int:
         raise AssertionError("unreachable")
 
 
-_CMSIS_NN_REF_HELP = "ns-cmsis-nn tag or commit to build (default: the pinned release)."
-_CMSIS_NN_ROOT_HELP = "Local ns-cmsis-nn checkout to build instead of a pinned ref."
+_CMSIS_NN_REF_HELP = "ns-cmsis-nn tag or commit to build (default: see --cmsis-nn-root)."
+_CMSIS_NN_ROOT_HELP = (
+    "Local ns-cmsis-nn checkout to build. Default: the enclosing checkout when the "
+    "tester sits at ns-cmsis-nn/Tests/helia-core-tester, else the pinned release. "
+    "Its git-visible files are mirrored into <build-dir>/kernel_src, so the build "
+    "dir may live inside it."
+)
 _UPDATE_DEPS_HELP = "Re-resolve NSX modules and rewrite nsx.lock before building."
 _NO_INLINE_ASM_HELP = "Build requantize without inline assembly (the old path's kernels)."
 
 
 def _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm):
     """Firmware build flags as NSX app options."""
+    from .kernel_mirror import nested_kernel_root
     from .nsx_app import CMSIS_NN_REF, AppOptions
 
     if cmsis_nn_ref and cmsis_nn_root:
         _fail("Pass --cmsis-nn-ref or --cmsis-nn-root, not both.")
+    # Nested layout builds the enclosing checkout.
+    if not cmsis_nn_ref and not cmsis_nn_root:
+        cmsis_nn_root = nested_kernel_root(repo_root())
     return AppOptions(
         cmsis_nn_ref=cmsis_nn_ref or CMSIS_NN_REF, cmsis_nn_root=cmsis_nn_root,
         requantize_inline_asm=not no_inline_asm,

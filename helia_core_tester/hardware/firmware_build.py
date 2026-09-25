@@ -19,12 +19,14 @@ RTT session to read it.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
 import time
 from dataclasses import dataclass, replace
+from importlib import metadata
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
 
@@ -342,6 +344,49 @@ def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
 # --- high-level entry points ------------------------------------------------------
 
 
+def _stage_kernels(
+    options: "AppOptions", build_dir: Path, repo_root: Path,
+) -> tuple["AppOptions", Optional[str], Optional[str]]:
+    """Echo kernels; mirror a local root."""
+    from .kernel_mirror import mirror_kernels, nested_kernel_root
+
+    asm = "on" if options.requantize_inline_asm else "off"
+    root = options.cmsis_nn_root
+    if root is None:
+        typer.echo(f"[hardware] Kernels: ns-cmsis-nn {options.cmsis_nn_ref}, inline asm {asm}")
+        return options, None, None
+    root = root.expanduser().resolve()
+    where = " (enclosing checkout)" if root == nested_kernel_root(repo_root) else ""
+    typer.echo(f"[hardware] Kernels: {root}{where}, inline asm {asm}")
+    mirror = mirror_kernels(root, build_dir, exclude=[repo_root])
+    typer.echo(
+        f"[hardware] Mirrored {mirror.files} files ({mirror.size / 1e6:.1f} MB), {mirror.changed} changed"
+    )
+    return replace(options, cmsis_nn_root=mirror.path), str(root), mirror.stamp
+
+
+# Written after a sync that finished.
+SYNC_STATE = ".hct-sync.json"
+
+
+def _sync_state(app_dir: Path, kernel_stamp: Optional[str]) -> dict[str, Optional[str]]:
+    """What the last finished sync used."""
+    lock = app_dir / "nsx.lock"
+    return {
+        "lock": hashlib.sha256(lock.read_bytes()).hexdigest() if lock.is_file() else None,
+        "kernels": kernel_stamp,
+        "neuralspotx": metadata.version("neuralspotx"),
+    }
+
+
+def _last_sync(app_dir: Path) -> dict:
+    """Read the saved sync state."""
+    try:
+        return json.loads((app_dir / SYNC_STATE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 def build_firmware(
     board: BoardSpec,
     *,
@@ -360,17 +405,27 @@ def build_firmware(
     ensure_build_tools(repo_root)
     options = options or AppOptions()
     app_dir = nsx_app_dir(build_dir)
-    render_app(board, options, app_dir, repo_root=repo_root)
-    # Local kernel edits skip nsx.yml.
+    staged, source, kernel_stamp = _stage_kernels(options, build_dir, repo_root)
+    rendered = render_app(board, staged, app_dir, repo_root=repo_root, kernel_source=source)
+    if rendered.changed:
+        names = ", ".join(rendered.changed)
+        typer.echo(f"[hardware] WARNING: build options changed since the last build ({names}).", err=True)
+    last = _last_sync(app_dir)
+    # Mirror edits skip nsx.yml.
     relock = (
         update_dependencies
-        or options.cmsis_nn_root is not None
+        or last.get("kernels") != kernel_stamp
         or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
     )
     if relock:
         typer.echo(f"[hardware] Locking NSX modules for {app_dir}")
         nsx_cli.lock_app(app_dir, update=update_dependencies)
-    _sync_modules(app_dir, relock)
+    if relock or last != _sync_state(app_dir, kernel_stamp) or not (app_dir / "modules").is_dir():
+        _sync_modules(app_dir, relock)
+        state = _sync_state(app_dir, kernel_stamp)
+        (app_dir / SYNC_STATE).write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    else:
+        typer.echo("[hardware] NSX modules unchanged; skipping lock and sync.")
     jlink_exe = _export_jlink_exe()
     if force_reconfigure or not _configured_for(build_dir, app_dir, board, serial_no, jlink_exe):
         _drop_foreign_cache(build_dir, app_dir)

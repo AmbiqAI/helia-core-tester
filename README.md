@@ -55,10 +55,25 @@ not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|s
 `hardware memory-report`.
 
 The firmware builds as a neuralspotx (NSX) app rendered into
-`build/hardware/<board>/nsx_app`. `--cmsis-nn-root PATH` builds a local
-ns-cmsis-nn checkout, `--cmsis-nn-ref REF` another kernel tag;
-`--no-inline-asm` builds requantize without inline assembly;
-`--update-dependencies` re-resolves the NSX modules into `nsx.lock`.
+`build/hardware/<board>/nsx_app`. Which kernels it builds:
+
+- Nested layout (the tester at `ns-cmsis-nn/Tests/helia-core-tester`): the
+  enclosing ns-cmsis-nn checkout, working-tree edits included, as the old CMake
+  path did.
+- Standalone clone: the pinned ns-cmsis-nn release (`v7.35.1`).
+- `--cmsis-nn-ref REF` builds another tag or commit; `--cmsis-nn-root PATH`
+  builds another local checkout.
+
+A local checkout is not handed to NSX whole. The files git would commit
+(tracked, or untracked but not ignored) are mirrored into
+`build/hardware/<board>/kernel_src`, without the nested tester and the build dir,
+and only changed files are copied. So the build dir may live inside the checkout,
+and NSX relocks only when a kernel file changes. Every build prints the kernel
+source and the inline-asm setting, and warns when the build options differ from
+the last build in that build dir. `--no-inline-asm` builds requantize without
+inline assembly; `--update-dependencies` re-resolves the NSX modules into
+`nsx.lock`. `hardware flash` and `hardware run` rebuild with their own flags, so
+pass the same kernel flags you built with.
 
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
 `hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or

@@ -94,6 +94,8 @@ class AppRender:
     nsx_yml: str
     modules_cmake: str
     cmakelists: str
+    # Existing files this render rewrote.
+    changed: tuple[str, ...] = ()
 
 
 def module_names(board: BoardSpec, profile: dict[str, Any]) -> list[str]:
@@ -137,15 +139,17 @@ def _write_if_absent(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _write_if_changed(path: Path, text: str) -> None:
-    """Skip unchanged files so mtimes stay stable."""
+def _write_if_changed(path: Path, text: str) -> bool:
+    """Skip unchanged files; True if rewritten."""
+    existed = path.exists()
     try:
         if path.read_text(encoding="utf-8") == text:
-            return
+            return False
     except (OSError, UnicodeDecodeError):
         pass
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+    return existed
 
 
 def _checked_kernel_root(root: Path, app_dir: Path) -> Path:
@@ -164,9 +168,12 @@ def render_app(
     app_dir: Path,
     *,
     repo_root: Optional[Path] = None,
+    kernel_source: Optional[str] = None,
 ) -> AppRender:
     """Write nsx.yml, modules.cmake and CMakeLists.txt."""
     repo_root = (repo_root or tester_repo_root()).resolve()
+    if kernel_source is None:
+        kernel_source = str(options.cmsis_nn_root or f"ns-cmsis-nn {options.cmsis_nn_ref}")
     if options.cmsis_nn_root is not None:
         options = replace(options, cmsis_nn_root=_checked_kernel_root(options.cmsis_nn_root, app_dir))
     profile = nsx_cli.starter_profile(board.nsx_board)
@@ -189,6 +196,7 @@ def render_app(
         channel=profile.get("channel"),
         modules=modules,
         module_registry_yaml=registry_yaml,
+        kernel_source=kernel_source,
     )
     modules_cmake = env.get_template("modules.cmake.j2").render(modules=modules)
 
@@ -213,7 +221,9 @@ def render_app(
         rtt_buffer_size_down=RTT_BUFFER_SIZE_DOWN,
     )
 
-    _write_if_changed(app_dir / "nsx.yml", nsx_yml)
+    changed = tuple(
+        name for name, text in (("nsx.yml", nsx_yml), ("CMakeLists.txt", cmakelists))
+        if _write_if_changed(app_dir / name, text)
+    )
     _write_if_absent(app_dir / "cmake" / "nsx" / "modules.cmake", modules_cmake)
-    _write_if_changed(app_dir / "CMakeLists.txt", cmakelists)
-    return AppRender(app_dir, tuple(modules), nsx_yml, modules_cmake, cmakelists)
+    return AppRender(app_dir, tuple(modules), nsx_yml, modules_cmake, cmakelists, changed)

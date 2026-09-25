@@ -6,6 +6,7 @@ Every nsx_cli step is monkeypatched; nothing here runs NSX or CMake.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from neuralspotx.nsx_lock import NsxLock, hash_manifest, write_lock
 from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
+from helia_core_tester.hardware import cli as hardware_cli
 from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app, nsx_cli
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.jlink_library import JLinkExecutable, JLinkLibraryError
@@ -91,8 +93,16 @@ def test_first_build_runs_every_step_in_order(tmp_path: Path, nsx: list[tuple]) 
     assert (firmware_build.nsx_app_dir(tmp_path) / "nsx.yml").is_file()
 
 
-def test_unchanged_rebuild_skips_lock_and_configure(tmp_path: Path, nsx: list[tuple]) -> None:
+def test_unchanged_rebuild_skips_lock_sync_configure(tmp_path: Path, nsx: list[tuple]) -> None:
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert _steps(nsx) == ["render", "build"]
+
+
+def test_neuralspotx_upgrade_resyncs(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    monkeypatch.setattr(firmware_build.metadata, "version", lambda name: "99.0.0")
     nsx.clear()
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
     assert _steps(nsx) == ["render", "sync", "build"]
@@ -113,21 +123,70 @@ def test_update_dependencies_forces_lock_update(tmp_path: Path, nsx: list[tuple]
     assert nsx[1:3] == [("lock", True), ("sync", False)]
 
 
-def test_local_kernel_root_relocks_every_build(tmp_path: Path, nsx: list[tuple]) -> None:
-    """Edits to a local checkout leave nsx.yml unchanged."""
-    options = AppOptions(cmsis_nn_root=tmp_path / "kernels")
+def _git(root: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+
+def _kernel_checkout(root: Path) -> Path:
+    """Committed ns-cmsis-nn stand-in."""
+    (root / "Source").mkdir(parents=True)
+    (root / "Source" / "arm_add.c").write_text("int add;\n", encoding="utf-8")
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    return root
+
+
+def test_local_kernel_root_relocks_only_on_edits(tmp_path: Path, nsx: list[tuple]) -> None:
+    """Mirror stamp, not NSX hashing, drives relock."""
+    kernels = _kernel_checkout(tmp_path / "kernels")
+    options = AppOptions(cmsis_nn_root=kernels)
     build_dir = tmp_path / "build"
     firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
+    assert nsx[0] == ("render", AppOptions(cmsis_nn_root=build_dir.resolve() / "kernel_src"))
+    assert (build_dir / "kernel_src" / "Source" / "arm_add.c").is_file()
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
+    assert _steps(nsx) == ["render", "build"]
+
+    edited = kernels / "Source" / "arm_add.c"
+    edited.write_text("int add; // edit\n", encoding="utf-8")
     nsx.clear()
     firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
     assert _steps(nsx) == ["render", "lock", "sync", "build"]
     assert ("sync", False) in nsx
 
 
+def test_build_dir_inside_kernel_root_builds(tmp_path: Path, nsx: list[tuple]) -> None:
+    """The nested default build dir is fine."""
+    kernels = _kernel_checkout(tmp_path / "kernels")
+    build_dir = kernels / "Tests" / "hct" / "build" / "hardware" / BOARD.id
+    options = AppOptions(cmsis_nn_root=kernels)
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
+    assert _steps(nsx) == ["render", "build"]
+    assert not (build_dir / "kernel_src" / "Tests").exists()
+
+
+def test_changed_options_warn(tmp_path: Path, nsx: list[tuple], capsys) -> None:
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert "WARNING" not in capsys.readouterr().err
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert "WARNING" not in capsys.readouterr().err
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path, options=AppOptions(requantize_inline_asm=False))
+    out = capsys.readouterr()
+    assert "build options changed since the last build (CMakeLists.txt)" in out.err
+    assert "inline asm off" in out.out
+
+
 def test_failed_frozen_sync_relocks(tmp_path: Path, nsx: list[tuple]) -> None:
     """An interrupted sync or NSX upgrade self-heals."""
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    (firmware_build.nsx_app_dir(tmp_path) / "drifted").touch()
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    (app_dir / "drifted").touch()
+    # No state: the last sync never finished.
+    (app_dir / firmware_build.SYNC_STATE).unlink()
     nsx.clear()
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
     assert nsx[1:4] == [("sync", True), ("lock", False), ("sync", False)]
@@ -274,6 +333,33 @@ def test_run_flags_reach_the_pipeline(monkeypatch) -> None:
     assert result.exit_code == 1
     assert seen["app_options"] == AppOptions(cmsis_nn_ref="v1.0.0")
     assert seen["update_dependencies"] is False
+
+
+def _nested_layout(tmp_path: Path) -> tuple[Path, Path]:
+    """ns-cmsis-nn/Tests/helia-core-tester on disk."""
+    kernels = tmp_path / "ns-cmsis-nn"
+    for sub in ("Include", "Source", "nsx"):
+        (kernels / sub).mkdir(parents=True)
+    (kernels / "nsx" / "nsx-module.yaml").write_text("", encoding="utf-8")
+    tester = kernels / "Tests" / "helia-core-tester"
+    tester.mkdir(parents=True)
+    return kernels, tester
+
+
+@pytest.mark.parametrize("nested", [True, False])
+def test_default_kernels_follow_layout(tmp_path: Path, monkeypatch, nested: bool) -> None:
+    kernels, tester = _nested_layout(tmp_path)
+    if not nested:
+        (kernels / "nsx" / "nsx-module.yaml").unlink()
+    seen: dict = {}
+    monkeypatch.setattr(firmware_build, "build_firmware", lambda board, **kwargs: seen.update(kwargs) or tmp_path)
+    monkeypatch.setattr(hardware_cli, "repo_root", lambda: tester)
+    result = runner.invoke(app, ["hardware", "build", "--build-dir", str(tmp_path / "b")])
+    assert result.exit_code == 0, result.output
+    assert seen["options"] == AppOptions(cmsis_nn_root=kernels.resolve() if nested else None)
+    # An explicit ref still wins.
+    runner.invoke(app, ["hardware", "build", "--build-dir", str(tmp_path / "b"), "--cmsis-nn-ref", "v1"])
+    assert seen["options"] == AppOptions(cmsis_nn_ref="v1")
 
 
 def test_kernel_ref_and_root_are_exclusive(tmp_path: Path) -> None:
