@@ -11,7 +11,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Union
 
 from .boards import BoardSpec, default_session_id
 from .firmware_build import FlashDecision, build_id_path, flash_firmware, read_build_id, resolve_build_dir
@@ -25,6 +25,9 @@ from .measurement import (
 from .pmu_catalog import GROUPS, default_selection
 from .result_bundle import write_timing
 from .run_summary import make_live_progress_printer
+
+if TYPE_CHECKING:
+    from .nsx_app import AppOptions
 
 PRECISION_SUFFIX = {"fp16": "_f16", "fp32": "_f32"}
 # `--precision` value -> Config.float_precision value for the generate step.
@@ -325,6 +328,8 @@ def run_hardware_pipeline(
     echo: Callable[[str], None],
     progress_to_stderr: bool = False,
     allow_unverified_firmware: bool = False,
+    app_options: Optional["AppOptions"] = None,
+    update_dependencies: bool = False,
 ) -> HardwareRunOutcome:
     """generate (board cpu) -> build -> flash unless the board already runs this build -> stream -> bundle."""
     if skip_flash and force_flash:
@@ -347,6 +352,7 @@ def run_hardware_pipeline(
     else:
         flash = flash_firmware(
             board, serial_no, build_dir=resolved_build_dir, jobs=jobs, force_reconfigure=force_reconfigure, force=force_flash,
+            options=app_options, update_dependencies=update_dependencies,
         )
 
     outcome = stream_generated_tests(

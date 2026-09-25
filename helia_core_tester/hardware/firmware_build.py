@@ -1,8 +1,9 @@
 """Build and flash the real `hct_benchmark_server` firmware for a board.
 
-Host-side glue only: the firmware under cmake/hardware/ and the NSX CMake
-targets are untouched. This module owns the lazy dependency fetch, the CMake
-configure/build invocations, and the "flash only if the ELF changed" decision.
+Host-side glue only: the firmware sources stay under cmake/hardware/. This
+module renders them as an NSX app inside the build dir (nsx_app.py), drives
+NSX lock/sync/configure/build through nsx_cli.py, and owns the "flash only if
+the ELF changed" decision.
 
 That decision has two halves. The host-side stamp
 (`<build_dir>/.flashed-<serial>.sha256`) says whether *this build dir* last
@@ -20,95 +21,40 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import typer
 
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .jlink_library import JLinkLibraryError, find_jlink_exe
-from .pathutil import is_relative_to
 from .toolchain import DOWNLOADS_DIR, add_toolchain_to_path, toolchain_bin_dir
 
-TOOLCHAIN_FILE = "cmake/nsx/toolchains/arm-none-eabi-gcc.cmake"
+if TYPE_CHECKING:
+    from .nsx_app import AppOptions
+
 SERVER_TARGET = "hct_benchmark_server"
 FLASH_TARGET = "hct_benchmark_server_flash"
 
 
-def ensure_hardware_dependencies(repo_root: Path) -> None:
-    """Lazily fetch the real hardware-build dependencies (nsx-ambiq-sdk, neuralspotx,
-    the generated NSX toolchain file) the first time any hardware command needs them,
-    instead of requiring a separate manual bootstrap step.
-    `helia_core_tester scripts.setup_dependencies --with-hardware` does the same
-    thing ahead of time if you'd rather pre-fetch.
-    """
-    from ..scripts.setup_dependencies import (
-        nsx_ambiq_sdk_dir,
-        setup_arm_gcc,
-        setup_cmsis5,
-        setup_neuralspotx,
-        setup_nsx_ambiq_sdk,
-        setup_nsx_toolchain,
-    )
+def ensure_build_tools(repo_root: Path) -> None:
+    """Fetch GCC and CMSIS_5; put GCC on PATH."""
+    from ..scripts.setup_dependencies import setup_arm_gcc, setup_cmsis5
 
-    downloads_dir = repo_root / DOWNLOADS_DIR
-    downloads_dir.mkdir(parents=True, exist_ok=True)
-
-    sdk_modules_dir = nsx_ambiq_sdk_dir(repo_root, downloads_dir) / "modules"
-    # Not just the SDK checkout: also the local symlinks that redirect
-    # boards/apollo510_evb + cmake/socs + cmake/nsx_soc_facts.cmake into it (see
-    # setup_nsx_ambiq_sdk()'s _ensure_nsx_sdk_symlinks() call) -- an SDK checkout
-    # that predates those symlinks, or one whose symlinks got removed, needs
-    # setup_nsx_ambiq_sdk() re-run too, not just skipped as "already installed".
-    # Resolved, not just `.exists()`: a link left over from an earlier setup can
-    # point at an SDK checkout outside the tester repo and would otherwise pass
-    # as healthy, quietly building against that tree instead of the managed one.
-    board_symlink = repo_root / "boards" / "apollo510_evb"
-    board_link_ok = (
-        board_symlink.exists()
-        and is_relative_to(board_symlink.resolve(), nsx_ambiq_sdk_dir(repo_root, downloads_dir).resolve())
-    )
-    neuralspotx_examples_dir = downloads_dir / "neuralspotx" / "examples"
-    arm_gcc_dir = downloads_dir / "arm_gcc_download"
-    # CMakeLists.txt's CMSIS_PATH default; the Cortex-M startup/system sources
-    # and CMSIS core headers come from here for the hardware build too.
-    cmsis5_core_dir = downloads_dir / "CMSIS_5" / "CMSIS" / "Core"
-    toolchain_file = repo_root / TOOLCHAIN_FILE
-
-    if (
-        sdk_modules_dir.is_dir()
-        and board_link_ok
-        and neuralspotx_examples_dir.is_dir()
-        and arm_gcc_dir.is_dir()
-        and cmsis5_core_dir.is_dir()
-        and toolchain_file.exists()
-    ):
-        add_toolchain_to_path(repo_root)
-        return
-
-    typer.echo("[hardware] Hardware-build dependencies not found -- fetching them now (first run only)...")
-    if not sdk_modules_dir.is_dir() or not board_link_ok:
-        setup_nsx_ambiq_sdk(repo_root, downloads_dir)
-    if not neuralspotx_examples_dir.is_dir():
-        setup_neuralspotx(downloads_dir)
-    # The toolchain file bakes in the downloaded GCC's absolute path, so the GCC
-    # download has to exist before the file can be generated -- a fresh clone
-    # that never ran setup_dependencies.py has neither.
-    if not arm_gcc_dir.is_dir():
-        setup_arm_gcc(downloads_dir)
-    if not cmsis5_core_dir.is_dir():
-        setup_cmsis5(downloads_dir)
-    if not toolchain_file.exists():
-        setup_nsx_toolchain(repo_root, downloads_dir)
-    # This process resolves arm-none-eabi-nm itself later (RTT block address,
-    # memory report); a toolchain that was downloaded just now is not on the
-    # PATH the CLI started with.
+    downloads = repo_root / DOWNLOADS_DIR
+    downloads.mkdir(parents=True, exist_ok=True)
+    if not (downloads / "arm_gcc_download").is_dir():
+        setup_arm_gcc(downloads)
+    # Firmware still includes CMSIS_5's pmu_armv8.h.
+    if not (downloads / "CMSIS_5" / "CMSIS" / "Core").is_dir():
+        setup_cmsis5(downloads)
+    # NSX's toolchain file finds GCC on PATH.
     add_toolchain_to_path(repo_root)
-    typer.echo("[hardware] Hardware-build dependencies ready.")
 
 
 def resolve_build_dir(repo_root: Path, board: BoardSpec, override: Optional[Path] = None) -> Path:
@@ -121,6 +67,12 @@ def resolve_build_dir(repo_root: Path, board: BoardSpec, override: Optional[Path
 # Image subdir and build-id file under the build dir.
 IMAGE_SUBDIR = "hardware"
 BUILD_ID_TXT = "hct_build_id.txt"
+NSX_APP_SUBDIR = "nsx_app"
+
+
+def nsx_app_dir(build_dir: Path) -> Path:
+    """The rendered NSX app lives inside the build dir."""
+    return build_dir / NSX_APP_SUBDIR
 
 
 def _artifact_path(build_dir: Path, suffix: str) -> Path:
@@ -163,86 +115,42 @@ def _cached_var(cache_text: str, name: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def configure(build_dir: Path, board: BoardSpec, force: bool, serial_no: Optional[int] = None) -> None:
-    repo_root = tester_repo_root()
-    ensure_hardware_dependencies(repo_root)
+def _configured_for(build_dir: Path, app_dir: Path, board: BoardSpec, serial_no: Optional[int]) -> bool:
+    """The cache belongs to this app, board, probe."""
     cache = build_dir / "CMakeCache.txt"
-    if cache.exists() and not force:
-        # A build dir configured before ARM_NN_ENABLE_F16 was added here would
-        # otherwise silently keep compiling without FP16 kernel support.
-        cache_text = cache.read_text(encoding="utf-8", errors="ignore")
-        # NSX_JLINK_SERIAL is baked into the generated *_flash/_reset/_view
-        # custom-target commands at configure time (see nsx_add_segger_targets()
-        # in cmake/nsx/nsx_helpers.cmake), so switching --serial-no against an
-        # already-configured build dir requires a reconfigure to take effect.
-        serial_stale = serial_no is not None and _cached_var(cache_text, "NSX_JLINK_SERIAL") != str(serial_no)
-        # Still re-run cmake below in every case (cheap, <1s) rather than skipping
-        # outright when already-configured: relying on `cmake --build`'s own
-        # internal cmake_check_build_system re-check to be the first
-        # post-cache-write reconfigure has been observed to intermittently fail
-        # on a relative-path EXISTS() check (CMakeLists.txt's CMSIS_PATH
-        # validation) that a direct `cmake -S -B` invocation here never
-        # reproduces -- doing that direct invocation unconditionally sidesteps
-        # it instead of chasing the underlying CMake behavior.
-        if "ARM_NN_ENABLE_F16:BOOL=ON" in cache_text and not serial_stale:
-            typer.echo(f"[hardware] Reusing existing configured build dir: {build_dir}")
-        elif serial_stale:
-            typer.echo(f"[hardware] Requested --serial-no {serial_no} differs from configured build dir -- reconfiguring.")
-        else:
-            typer.echo(f"[hardware] Existing build dir at {build_dir} predates ARM_NN_ENABLE_F16 -- reconfiguring.")
-    build_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "cmake",
-        "-S", str(repo_root),
-        "-B", str(build_dir),
-        f"-DCMAKE_TOOLCHAIN_FILE={TOOLCHAIN_FILE}",
-        "-DHELIA_BUILD_GENERATED_TESTS=OFF",
-        "-DHELIA_BUILD_HARDWARE_BENCHMARK_SERVER=ON",
-        "-DHELIA_HARDWARE_BUILD=ON",
-        f"-DHELIA_HARDWARE_BOARD={board.nsx_board}",
-        f"-DTARGET_CPU={board.cpu}",
-        # The board row owns the per-case workspace size; without this every
-        # board silently compiled with the CMakeLists.txt default (114688).
-        f"-DHCT_SERVER_WORKSPACE_BYTES={board.workspace_bytes}",
-        "-DARM_NN_ENABLE_F32=ON",
-        "-DARM_NN_ENABLE_F16=ON",
-        # Overrides CMakeLists.txt's fragile "3 levels up, outside the repo" default
-        # (${CMAKE_CURRENT_SOURCE_DIR}/../../../neuralspotx) with the copy
-        # ensure_hardware_dependencies() fetches into artifacts/downloads/.
-        f"-DNEURALSPOTX_ROOT={repo_root / DOWNLOADS_DIR / 'neuralspotx'}",
-    ]
+    if not cache.is_file() or not (build_dir / "build.ninja").is_file():
+        return False
+    text = cache.read_text(encoding="utf-8", errors="ignore")
+    wanted = {"CMAKE_HOME_DIRECTORY": str(app_dir.resolve()), "NSX_BOARD": board.nsx_board}
+    # The serial is baked into the flash target.
     if serial_no is not None:
-        cmd.append(f"-DNSX_JLINK_SERIAL={serial_no}")
-    # nsx_add_segger_targets() otherwise find_program()s JLinkExe on PATH only,
-    # which diverges from the $HPX_JLINK_DLL / $JLINK_PATH resolution the probe
-    # enumeration, RTT transport and doctor use: on a host that sets those
-    # without JLinkExe on PATH the build would succeed and the flash target
-    # would fail minutes later with NSX_JLINK_EXE-NOTFOUND.
-    jlink_exe = _jlink_exe_for_cmake()
-    if jlink_exe is not None:
-        cmd.append(f"-DNSX_JLINK_EXE={jlink_exe}")
-    else:
-        # Drop any value a previous configure cached, so find_program() searches
-        # PATH afresh instead of flashing through a JLinkExe that has since been
-        # moved or un-configured.
-        cmd.append("-UNSX_JLINK_EXE")
-    typer.echo(f"[hardware] Configuring: {' '.join(cmd)}")
-    subprocess.run(cmd, cwd=repo_root, check=True)
+        wanted["NSX_JLINK_SERIAL"] = str(serial_no)
+    return all(_cached_var(text, name) == value for name, value in wanted.items())
 
 
-def _jlink_exe_for_cmake() -> Optional[str]:
-    """JLinkExe path to bake into the flash target, or None to leave CMake's PATH search.
-    A misconfigured $HPX_JLINK_DLL is reported (doctor says the same) but must not
-    stop a plain `hardware build`, which never touches J-Link."""
+def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
+    """Remove a cache another source tree wrote."""
+    cache = build_dir / "CMakeCache.txt"
+    if not cache.is_file():
+        return
+    home = _cached_var(cache.read_text(encoding="utf-8", errors="ignore"), "CMAKE_HOME_DIRECTORY")
+    if home == str(app_dir.resolve()):
+        return
+    typer.echo(f"[hardware] Dropping CMake cache from {home}.")
+    cache.unlink()
+    shutil.rmtree(build_dir / "CMakeFiles", ignore_errors=True)
+
+
+def _export_jlink_exe() -> None:
+    """Hand NSX the JLinkExe doctor reports."""
+    # NSX reads $JLINK_PATH, then PATH.
     try:
         found = find_jlink_exe()
     except JLinkLibraryError as exc:
-        typer.echo(f"[hardware] WARNING: {exc} -- flash target falls back to JLinkExe on PATH.", err=True)
-        return None
-    if found is None:
-        typer.echo("[hardware] WARNING: JLinkExe not found ($JLINK_PATH, next to the J-Link library, PATH); the flash target will need it.", err=True)
-        return None
-    return found.path
+        typer.echo(f"[hardware] WARNING: {exc}", err=True)
+        return
+    if found is not None:
+        os.environ["JLINK_PATH"] = found.path
 
 
 def build(build_dir: Path, target: str, jobs: Optional[int]) -> None:
@@ -393,10 +301,38 @@ def build_firmware(
     jobs: Optional[int] = None,
     force_reconfigure: bool = False,
     serial_no: Optional[int] = None,
+    options: Optional["AppOptions"] = None,
+    update_dependencies: bool = False,
 ) -> Path:
-    """Cross-compile hct_benchmark_server for `board`; returns the ELF path."""
-    configure(build_dir, board, force_reconfigure, serial_no=serial_no)
-    build(build_dir, SERVER_TARGET, jobs)
+    """Build hct_benchmark_server through NSX; returns the ELF path."""
+    from . import nsx_cli
+    from .nsx_app import AppOptions, render_app
+
+    repo_root = tester_repo_root()
+    ensure_build_tools(repo_root)
+    options = options or AppOptions()
+    app_dir = nsx_app_dir(build_dir)
+    render_app(board, options, app_dir, repo_root=repo_root)
+    # A local kernel checkout drifts without nsx.yml changing.
+    relock = (
+        update_dependencies
+        or options.cmsis_nn_root is not None
+        or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
+    )
+    if relock:
+        typer.echo(f"[hardware] Locking NSX modules for {app_dir}")
+        nsx_cli.lock_app(app_dir, update=update_dependencies)
+    # Frozen sync cannot populate or follow a relock.
+    nsx_cli.sync_app(app_dir, frozen=not relock and (app_dir / "modules").is_dir())
+    if force_reconfigure or not _configured_for(build_dir, app_dir, board, serial_no):
+        _drop_foreign_cache(build_dir, app_dir)
+        _export_jlink_exe()
+        nsx_cli.configure_app(
+            app_dir, board.nsx_board, build_dir=build_dir, probe_serial=serial_no, frozen=True,
+        )
+    else:
+        typer.echo(f"[hardware] Reusing configured build dir: {build_dir}")
+    nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=jobs, frozen=True)
     return elf_path(build_dir)
 
 
@@ -409,12 +345,17 @@ def flash_firmware(
     force_reconfigure: bool = False,
     force: bool = False,
     board_build_id_reader: BoardBuildIdReader = board_build_id,
+    options: Optional["AppOptions"] = None,
+    update_dependencies: bool = False,
 ) -> FlashDecision:
     """Build, then flash through the NSX-generated J-Link target unless the ELF is
     unchanged since this build dir last flashed this probe *and* the board confirms
     it is running this build's id (or `force` is set)."""
     build_started = time.monotonic()
-    build_firmware(board, build_dir=build_dir, jobs=jobs, force_reconfigure=force_reconfigure, serial_no=serial_no)
+    build_firmware(
+        board, build_dir=build_dir, jobs=jobs, force_reconfigure=force_reconfigure, serial_no=serial_no,
+        options=options, update_dependencies=update_dependencies,
+    )
     build_seconds = time.monotonic() - build_started
     decision = decide_flash(build_dir, serial_no, force=force)
     if not decision.needed:

@@ -131,6 +131,13 @@ def test_server_sources_compile_out_of_this_checkout(tmp_path: Path) -> None:
     assert '"$<TARGET_FILE_DIR:hct_benchmark_server>/hct_benchmark_server.elf"' in text
 
 
+def test_flash_recipe_loads_the_stamped_bin(tmp_path: Path) -> None:
+    """NSX's flash recipe reads <build>/<target>.bin."""
+    text = _render(tmp_path).cmakelists
+    copy = text.index('"${CMAKE_BINARY_DIR}/hct_benchmark_server.bin"')
+    assert text.index("patch_build_id.py") < copy
+
+
 def test_size_probe_replaces_the_server(tmp_path: Path) -> None:
     text = _render(tmp_path, build_size_probe=True).cmakelists
     assert "add_executable(hct_universal_size_probe" in text

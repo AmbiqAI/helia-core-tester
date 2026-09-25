@@ -1,6 +1,6 @@
 """Thin facade over the neuralspotx Python API.
 
-Not wired into any command yet. Callers go through here instead of
+`hardware build` goes through here instead of
 ``neuralspotx.api`` so that every lock/sync/configure/build call carries a
 wall-clock timeout, drops NSX's own notes at verbosity 0, and fails as
 :class:`HardwareBuildError` naming the step. Subprocess output (cmake,
@@ -17,7 +17,7 @@ from typing import Any, Iterator, Optional
 from neuralspotx import api as nsx_api
 from neuralspotx._io import Emitter, Event
 from neuralspotx.api import NSXError
-from neuralspotx.nsx_lock import NsxLock
+from neuralspotx.nsx_lock import NsxLock, hash_manifest, read_lock
 
 # Per-subprocess budgets, in seconds.
 LOCK_TIMEOUT_S = 180
@@ -65,6 +65,15 @@ def lock_app(
         )
 
 
+def lock_is_current(app_dir: Path, board: str) -> bool:
+    """nsx.lock matches the current nsx.yml."""
+    try:
+        lock = read_lock(app_dir, board)
+    except NSXError:
+        return False
+    return lock is not None and lock.manifest_hash == hash_manifest(app_dir / "nsx.yml")
+
+
 def sync_app(
     app_dir: Path,
     *,
@@ -95,12 +104,14 @@ def configure_app(
     *,
     build_dir: Optional[Path] = None,
     toolchain: Optional[str] = None,
+    probe_serial: Optional[int] = None,
     frozen: bool = False,
     timeout_s: float = CONFIGURE_TIMEOUT_S,
     verbosity: int = 0,
 ) -> None:
     """Run the CMake configure for one board.
 
+    ``probe_serial`` lands in the generated flash target.
     ``frozen`` refuses to re-vendor modules/ if it drifts from nsx.lock.
     """
     with _nsx_errors("nsx configure"):
@@ -109,6 +120,7 @@ def configure_app(
             board=board,
             build_dir=build_dir,
             toolchain=toolchain,
+            probe_serial=None if probe_serial is None else str(probe_serial),
             frozen=frozen,
             timeout_s=timeout_s,
             emit=emitter_for_verbosity(verbosity),

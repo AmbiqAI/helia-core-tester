@@ -54,6 +54,12 @@ not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|s
 `hardware build`, `hardware flash [--force]`, `hardware stream` and
 `hardware memory-report`.
 
+The firmware builds as a neuralspotx (NSX) app rendered into
+`build/hardware/<board>/nsx_app`. `--cmsis-nn-root PATH` builds a local
+ns-cmsis-nn checkout, `--cmsis-nn-ref REF` another kernel tag;
+`--no-f16`, `--no-f32` and `--no-inline-asm` switch kernel features off;
+`--update-dependencies` re-resolves the NSX modules into `nsx.lock`.
+
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
 `hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or
 `mve`; `SELECTION` is `all`, `default`, or a comma-separated list of `ARM_PMU_*`
@@ -100,7 +106,7 @@ Identity resolution rules:
   `helia_core_tester doctor` prints which one resolved the library.
 
 `helia_core_tester doctor` reports the hardware toolchain (arm-none-eabi-gcc,
-cmake, the J-Link library, the fetched nsx-ambiq-sdk/neuralspotx checkouts) as
+cmake, ninja, the neuralspotx version, the J-Link library) as
 informational checks; missing hardware tools do not fail doctor.
 
 ## Suite-Based Runs

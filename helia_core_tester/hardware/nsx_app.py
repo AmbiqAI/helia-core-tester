@@ -1,6 +1,6 @@
 """Render the hardware firmware as an NSX app.
 
-Pure renderer, not wired into any command yet: writes ``nsx.yml``, a
+Pure renderer behind `hardware build`: writes ``nsx.yml``, a
 placeholder ``cmake/nsx/modules.cmake`` and ``CMakeLists.txt`` into an app
 directory. ``nsx lock``/``nsx sync`` own ``cmake/nsx/`` and ``modules/``
 from there; the firmware sources stay in this checkout. NSX copies the rest

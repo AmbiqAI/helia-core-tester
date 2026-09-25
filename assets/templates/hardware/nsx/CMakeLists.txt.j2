@@ -106,6 +106,12 @@ add_custom_command(TARGET {{ target }} POST_BUILD
             --output-txt "${CMAKE_BINARY_DIR}/{{ build_id_txt }}"
     COMMENT "Stamping {{ target }} build id"
     VERBATIM)
+# NSX's flash recipe loads <build>/<target>.bin.
+add_custom_command(TARGET {{ target }} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE_DIR:{{ target }}>/{{ target }}.bin"
+        "${CMAKE_BINARY_DIR}/{{ target }}.bin"
+    VERBATIM)
 {% endif %}
 # NSX links .axf; host tooling reads .elf.
 add_custom_command(TARGET {{ target }} POST_BUILD
