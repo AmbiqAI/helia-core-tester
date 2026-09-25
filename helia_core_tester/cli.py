@@ -418,6 +418,29 @@ def doctor(
         marker = "✓" if check.ok else "⚠"
         typer.echo(f"{marker} {check.label}: {check.detail}")
 
+    # The kernel contract export is optional for a checkout (older ns-cmsis-nn have
+    # none) but never allowed to be present and wrong.
+    from .contract.ir import ContractError, load_contract_set
+    from .generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
+
+    typer.echo("\nKernel contract (ns-cmsis-nn Tests/KernelContracts):")
+    cmsis_root = resolve_cmsis_nn_root()
+    try:
+        contracts = load_contract_set(cmsis_root)
+    except ContractError as error:
+        typer.echo(f"✗ kernel contract: {error}", err=True)
+        all_ok = False
+    else:
+        if contracts.present:
+            kinds = {}
+            for decl in contracts.functions.values():
+                kinds[decl.kind] = kinds.get(decl.kind, 0) + 1
+            typer.echo(f"✓ {contracts.path}: {len(contracts.functions)} public functions "
+                       f"({', '.join(f'{v} {k}' for k, v in sorted(kinds.items()))})")
+        else:
+            typer.echo(f"⚠ kernel contract: absent ({cmsis_root or 'no ns-cmsis-nn checkout resolved'}; "
+                       "contract-driven commands are unavailable)")
+
     if all_ok:
         typer.echo("\n✓ All preflight checks passed")
         sys.exit(0)
