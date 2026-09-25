@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.hardware import generated_test_bridge as gtb
+from helia_core_tester.tests.generated_inputs import discover_or_skip
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -25,9 +26,7 @@ def _all_families():
 
 @pytest.mark.parametrize("family", _all_families())
 def test_bridge_dry_run_over_all_generated_cases_in_family(tmp_path, family):
-    cases = gtb.discover_generated_tests(_PROJECT_ROOT, cpu="cortex-m55", family=family)
-    if not cases:
-        pytest.skip(f"No generated cases found for family {family}")
+    cases = discover_or_skip(_PROJECT_ROOT, cpu="cortex-m55", family=family)
     bridged = 0
     skipped = 0
     for case in cases:

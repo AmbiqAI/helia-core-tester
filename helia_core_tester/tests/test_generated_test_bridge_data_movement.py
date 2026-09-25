@@ -9,16 +9,11 @@ from helia_core_tester.hardware.generated_test_bridge import (
     UnsupportedGeneratedTestError,
     _find_header_file,
     build_case_bundle_from_generated_test,
-    discover_generated_tests,
 )
+from helia_core_tester.tests.generated_inputs import discover_or_skip
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-pytestmark = pytest.mark.skipif(
-    not (PROJECT_ROOT / "artifacts" / "generated_tests").is_dir(),
-    reason="no generated-test artifacts under artifacts/generated_tests/ "
-    "(artifacts/ is gitignored -- run `helia_core_tester generate` first)",
-)
 _STATUS_CASES = [
     ("BroadcastFunctions", "broadcast_to_null_input_s16"),
     ("BroadcastFunctions", "broadcast_to_null_input_s8"),
@@ -54,7 +49,7 @@ _STATUS_CASES = [
 
 
 def _bridge(tmp_path: Path, family: str, test_name: str) -> dict:
-    cases = discover_generated_tests(PROJECT_ROOT, family=family, name_filter=test_name)
+    cases = discover_or_skip(PROJECT_ROOT, family=family, name_filter=test_name)
     assert cases, f"expected discoverable generated test {test_name}"
     bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False)
     return bundle.manifest
@@ -127,7 +122,7 @@ def test_strided_slice_batch_collapse_bug_is_fixed(tmp_path: Path) -> None:
     # strided_slice.py now detects that batch-collapse and computes golden data
     # directly via numpy against the descriptor's true full-size input instead,
     # so this case is bridgeable again.
-    cases = discover_generated_tests(PROJECT_ROOT, family="StridedSliceFunctions", name_filter="strided_slice_case1_whole_slab_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="StridedSliceFunctions", name_filter="strided_slice_case1_whole_slab_s8")
     assert cases
     bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False)
     assert bundle is not None
@@ -140,7 +135,7 @@ def test_inconsistent_artifacts_stay_skipped(tmp_path: Path) -> None:
     # exercise it directly against a synthetic malformed header rather than
     # relying on strided_slice_case1_whole_slab_s8, which is no longer such a
     # case (see test_strided_slice_batch_collapse_bug_is_fixed above).
-    cases = discover_generated_tests(PROJECT_ROOT, family="StridedSliceFunctions", name_filter="strided_slice_case1_whole_slab_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="StridedSliceFunctions", name_filter="strided_slice_case1_whole_slab_s8")
     assert cases
     case = cases[0]
     header_path = _find_header_file(case.directory)
