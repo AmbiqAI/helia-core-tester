@@ -186,9 +186,9 @@ def test_memory_report_fails_closed_when_a_board_region_is_missing(tmp_path: Pat
     elf = tmp_path / "fw.elf"
     elf.write_bytes(b"elf")
     with pytest.raises(ValueError, match=r"defines no memory region\(s\) \['MCU_TCM_TYPO'\]; available regions: \['MCU_MRAM', 'MCU_TCM'\]"):
-        report.analyze_elf(elf, board, report_env)
+        report.analyze_elf(elf, board, tmp_path / "fw.ld", report_env)
     # With both regions present the gates are computed against real capacities.
-    usage = report.analyze_elf(elf, resolve_board(DEFAULT_BOARD_ID), report_env).usage
+    usage = report.analyze_elf(elf, resolve_board(DEFAULT_BOARD_ID), tmp_path / "fw.ld", report_env).usage
     assert usage["flash_capacity_bytes"] == 4128768 and usage["tcm_capacity_bytes"] == 507904
     assert usage["flash_gate_pass"] is True and usage["tcm_gate_pass"] is True
 

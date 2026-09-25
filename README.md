@@ -57,7 +57,7 @@ not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|s
 The firmware builds as a neuralspotx (NSX) app rendered into
 `build/hardware/<board>/nsx_app`. `--cmsis-nn-root PATH` builds a local
 ns-cmsis-nn checkout, `--cmsis-nn-ref REF` another kernel tag;
-`--no-f16`, `--no-f32` and `--no-inline-asm` switch kernel features off;
+`--no-inline-asm` builds requantize without inline assembly;
 `--update-dependencies` re-resolves the NSX modules into `nsx.lock`.
 
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on

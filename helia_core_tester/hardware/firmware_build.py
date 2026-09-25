@@ -115,16 +115,20 @@ def _cached_var(cache_text: str, name: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def _configured_for(build_dir: Path, app_dir: Path, board: BoardSpec, serial_no: Optional[int]) -> bool:
+def _configured_for(
+    build_dir: Path, app_dir: Path, board: BoardSpec, serial_no: Optional[int], jlink_exe: Optional[str],
+) -> bool:
     """The cache belongs to this app, board, probe."""
     cache = build_dir / "CMakeCache.txt"
     if not cache.is_file() or not (build_dir / "build.ninja").is_file():
         return False
     text = cache.read_text(encoding="utf-8", errors="ignore")
     wanted = {"CMAKE_HOME_DIRECTORY": str(app_dir.resolve()), "NSX_BOARD": board.nsx_board}
-    # The serial is baked into the flash target.
+    # Flash target bakes in serial, JLinkExe.
     if serial_no is not None:
         wanted["NSX_JLINK_SERIAL"] = str(serial_no)
+        if jlink_exe is not None:
+            wanted["NSX_JLINK_EXE"] = jlink_exe
     return all(_cached_var(text, name) == value for name, value in wanted.items())
 
 
@@ -141,16 +145,35 @@ def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
     shutil.rmtree(build_dir / "CMakeFiles", ignore_errors=True)
 
 
-def _export_jlink_exe() -> None:
+def _export_jlink_exe() -> Optional[str]:
     """Hand NSX the JLinkExe doctor reports."""
     # NSX reads $JLINK_PATH, then PATH.
     try:
         found = find_jlink_exe()
     except JLinkLibraryError as exc:
         typer.echo(f"[hardware] WARNING: {exc}", err=True)
-        return
-    if found is not None:
-        os.environ["JLINK_PATH"] = found.path
+        return None
+    if found is None:
+        return None
+    os.environ["JLINK_PATH"] = found.path
+    return found.path
+
+
+def _sync_modules(app_dir: Path, relock: bool) -> None:
+    """Sync modules/; relock if frozen sync fails."""
+    from . import nsx_cli
+
+    # Frozen sync cannot populate a tree.
+    frozen = not relock and (app_dir / "modules").is_dir()
+    try:
+        nsx_cli.sync_app(app_dir, frozen=frozen)
+    except nsx_cli.HardwareBuildError as exc:
+        if not frozen:
+            raise
+        # Interrupted sync or NSX upgrade.
+        typer.echo(f"[hardware] modules/ drifted from nsx.lock; relocking. ({exc})")
+        nsx_cli.lock_app(app_dir)
+        nsx_cli.sync_app(app_dir)
 
 
 def build(build_dir: Path, target: str, jobs: Optional[int]) -> None:
@@ -313,7 +336,7 @@ def build_firmware(
     options = options or AppOptions()
     app_dir = nsx_app_dir(build_dir)
     render_app(board, options, app_dir, repo_root=repo_root)
-    # A local kernel checkout drifts without nsx.yml changing.
+    # Local kernel edits skip nsx.yml.
     relock = (
         update_dependencies
         or options.cmsis_nn_root is not None
@@ -322,11 +345,10 @@ def build_firmware(
     if relock:
         typer.echo(f"[hardware] Locking NSX modules for {app_dir}")
         nsx_cli.lock_app(app_dir, update=update_dependencies)
-    # Frozen sync cannot populate or follow a relock.
-    nsx_cli.sync_app(app_dir, frozen=not relock and (app_dir / "modules").is_dir())
-    if force_reconfigure or not _configured_for(build_dir, app_dir, board, serial_no):
+    _sync_modules(app_dir, relock)
+    jlink_exe = _export_jlink_exe()
+    if force_reconfigure or not _configured_for(build_dir, app_dir, board, serial_no, jlink_exe):
         _drop_foreign_cache(build_dir, app_dir)
-        _export_jlink_exe()
         nsx_cli.configure_app(
             app_dir, board.nsx_board, build_dir=build_dir, probe_serial=serial_no, frozen=True,
         )

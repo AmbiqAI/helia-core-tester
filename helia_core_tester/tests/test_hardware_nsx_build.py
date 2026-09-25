@@ -9,8 +9,7 @@ import os
 from pathlib import Path
 
 import pytest
-import yaml
-from neuralspotx.nsx_lock import hash_manifest
+from neuralspotx.nsx_lock import NsxLock, hash_manifest, write_lock
 from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
@@ -25,9 +24,7 @@ SERIAL = 1160003180
 
 def _write_lock(app_dir: Path) -> None:
     """Minimal nsx.lock for the current nsx.yml."""
-    manifest = {"path": "nsx.yml", "hash": hash_manifest(app_dir / "nsx.yml")}
-    lock = {"schema_version": 4, "targets": {BOARD.nsx_board: {"manifest": manifest, "modules": {}}}}
-    (app_dir / "nsx.lock").write_text(yaml.safe_dump(lock), encoding="utf-8")
+    write_lock(app_dir, NsxLock(manifest_hash=hash_manifest(app_dir / "nsx.yml")), board=BOARD.nsx_board)
 
 
 @pytest.fixture
@@ -46,6 +43,8 @@ def nsx(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
 
     def sync_app(app_dir, *, frozen=False):
         calls.append(("sync", frozen))
+        if frozen and (app_dir / "drifted").exists():
+            raise nsx_cli.HardwareBuildError("nsx sync failed: drift")
         (app_dir / "modules").mkdir(exist_ok=True)
 
     def configure_app(app_dir, board, *, build_dir, probe_serial=None, frozen=False):
@@ -54,7 +53,8 @@ def nsx(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
         (build_dir / "CMakeCache.txt").write_text(
             f"CMAKE_HOME_DIRECTORY:INTERNAL={app_dir.resolve()}\n"
             f"NSX_BOARD:STRING={board}\n"
-            f"NSX_JLINK_SERIAL:UNINITIALIZED={probe_serial or ''}\n",
+            f"NSX_JLINK_SERIAL:UNINITIALIZED={probe_serial or ''}\n"
+            f"NSX_JLINK_EXE:FILEPATH={os.environ.get('JLINK_PATH', 'NSX_JLINK_EXE-NOTFOUND')}\n",
             encoding="utf-8",
         )
 
@@ -120,6 +120,15 @@ def test_local_kernel_root_relocks_every_build(tmp_path: Path, nsx: list[tuple])
     assert ("sync", False) in nsx
 
 
+def test_failed_frozen_sync_relocks(tmp_path: Path, nsx: list[tuple]) -> None:
+    """An interrupted sync or NSX upgrade self-heals."""
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    (firmware_build.nsx_app_dir(tmp_path) / "drifted").touch()
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert nsx[1:4] == [("sync", True), ("lock", False), ("sync", False)]
+
+
 def test_serial_change_or_force_reconfigures(tmp_path: Path, nsx: list[tuple]) -> None:
     firmware_build.build_firmware(BOARD, build_dir=tmp_path, serial_no=SERIAL)
     assert ("configure", SERIAL, True) in nsx
@@ -147,11 +156,18 @@ def test_old_path_cache_is_dropped(tmp_path: Path, nsx: list[tuple]) -> None:
 
 
 def test_configure_hands_nsx_the_resolved_jlinkexe(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
-    monkeypatch.delenv("JLINK_PATH", raising=False)
+    monkeypatch.setenv("JLINK_PATH", "")
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path, serial_no=SERIAL)
+    # JLinkExe appears later: the flash target must follow.
     found = JLinkExecutable("/opt/SEGGER/JLink/JLinkExe", "next to $HPX_JLINK_DLL")
     monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: found)
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path, serial_no=SERIAL)
     assert os.environ["JLINK_PATH"] == "/opt/SEGGER/JLink/JLinkExe"
+    assert ("configure", SERIAL, True) in nsx
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path, serial_no=SERIAL)
+    assert "configure" not in _steps(nsx)
 
     # A broken $HPX_JLINK_DLL must not stop a build.
     def _broken():
@@ -182,11 +198,11 @@ def test_build_flags_reach_app_options(tmp_path: Path, monkeypatch) -> None:
     seen: dict = {}
     monkeypatch.setattr(firmware_build, "build_firmware", lambda board, **kwargs: seen.update(kwargs) or tmp_path)
     result = runner.invoke(app, [
-        "hardware", "build", "--cmsis-nn-root", str(tmp_path), "--no-f16", "--no-inline-asm",
+        "hardware", "build", "--cmsis-nn-root", str(tmp_path), "--no-inline-asm",
         "--update-dependencies", "--force-reconfigure", "-j", "3",
     ])
     assert result.exit_code == 0, result.output
-    assert seen["options"] == AppOptions(cmsis_nn_root=tmp_path, enable_f16=False, requantize_inline_asm=False)
+    assert seen["options"] == AppOptions(cmsis_nn_root=tmp_path, requantize_inline_asm=False)
     assert seen["update_dependencies"] is True and seen["force_reconfigure"] is True and seen["jobs"] == 3
 
 
@@ -199,9 +215,9 @@ def test_run_flags_reach_the_pipeline(monkeypatch) -> None:
 
     monkeypatch.setenv("HPX_JLINK_SERIAL", str(SERIAL))
     monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _pipeline)
-    result = runner.invoke(app, ["hardware", "run", "--skip-generate", "--cmsis-nn-ref", "v1.0.0", "--no-f32"])
+    result = runner.invoke(app, ["hardware", "run", "--skip-generate", "--cmsis-nn-ref", "v1.0.0"])
     assert result.exit_code == 1
-    assert seen["app_options"] == AppOptions(cmsis_nn_ref="v1.0.0", enable_f32=False)
+    assert seen["app_options"] == AppOptions(cmsis_nn_ref="v1.0.0")
     assert seen["update_dependencies"] is False
 
 

@@ -49,7 +49,7 @@ _MEMORY_RE = re.compile(
 _SYMBOL_RE = re.compile(r"^[0-9a-fA-F]+\s+[A-Za-z]\s+(arm_[A-Za-z0-9_]+)$")
 
 
-# Profile module that vendors nsx-core.
+# Project that vendors the nsx-core module.
 NSX_SDK_MODULE = "nsx-ambiq-sdk"
 
 
@@ -327,7 +327,7 @@ def build_size_probe(board: BoardSpec, variant: SizeProbeVariant, *, project_roo
 
     out_dir = build_dir / "probe"
     elf = out_dir / f"{SIZE_PROBE_TARGET}.elf"
-    # The probe still builds on the old SDK checkout.
+    # Probe still uses the old SDK.
     analysis = analyze_elf(elf, board, linker_script_path(board, nsx_ambiq_sdk_dir(project_root)), project_root)
 
     report = {

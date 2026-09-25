@@ -134,18 +134,18 @@ def _serial(explicit: Optional[int]) -> int:
 _CMSIS_NN_REF_HELP = "ns-cmsis-nn tag or commit to build (default: the pinned release)."
 _CMSIS_NN_ROOT_HELP = "Local ns-cmsis-nn checkout to build instead of a pinned ref."
 _UPDATE_DEPS_HELP = "Re-resolve NSX modules and rewrite nsx.lock before building."
+_NO_INLINE_ASM_HELP = "Build requantize without inline assembly (the old path's kernels)."
 
 
-def _app_options(cmsis_nn_ref, cmsis_nn_root, no_f16, no_f32, no_inline_asm):
+def _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm):
     """Firmware build flags as NSX app options."""
-    from .nsx_app import AppOptions
+    from .nsx_app import CMSIS_NN_REF, AppOptions
 
     if cmsis_nn_ref and cmsis_nn_root:
         _fail("Pass --cmsis-nn-ref or --cmsis-nn-root, not both.")
-    ref = {} if cmsis_nn_ref is None else {"cmsis_nn_ref": cmsis_nn_ref}
     return AppOptions(
-        cmsis_nn_root=cmsis_nn_root, enable_f16=not no_f16, enable_f32=not no_f32,
-        requantize_inline_asm=not no_inline_asm, **ref,
+        cmsis_nn_ref=cmsis_nn_ref or CMSIS_NN_REF, cmsis_nn_root=cmsis_nn_root,
+        requantize_inline_asm=not no_inline_asm,
     )
 
 
@@ -203,9 +203,7 @@ def build(
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
-    no_f16: bool = typer.Option(False, "--no-f16", help="Build without FP16 kernels."),
-    no_f32: bool = typer.Option(False, "--no-f32", help="Build without FP32 kernels."),
-    no_inline_asm: bool = typer.Option(False, "--no-inline-asm", help="Build requantize without inline assembly."),
+    no_inline_asm: bool = typer.Option(False, "--no-inline-asm", help=_NO_INLINE_ASM_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -213,7 +211,7 @@ def build(
     from .firmware_build import build_firmware, resolve_build_dir
 
     spec = _board(board)
-    app_options = _app_options(cmsis_nn_ref, cmsis_nn_root, no_f16, no_f32, no_inline_asm)
+    app_options = _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm)
     with _pipeline_errors(_verbosity(verbosity)):
         elf = build_firmware(
             spec, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs,
@@ -232,9 +230,7 @@ def flash(
     force: bool = typer.Option(False, "--force", help=_FORCE_FLASH_HELP),
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
-    no_f16: bool = typer.Option(False, "--no-f16", help="Build without FP16 kernels."),
-    no_f32: bool = typer.Option(False, "--no-f32", help="Build without FP32 kernels."),
-    no_inline_asm: bool = typer.Option(False, "--no-inline-asm", help="Build requantize without inline assembly."),
+    no_inline_asm: bool = typer.Option(False, "--no-inline-asm", help=_NO_INLINE_ASM_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -244,7 +240,7 @@ def flash(
     from .firmware_build import flash_firmware, resolve_build_dir
 
     spec = _board(board)
-    app_options = _app_options(cmsis_nn_ref, cmsis_nn_root, no_f16, no_f32, no_inline_asm)
+    app_options = _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm)
     serial = _serial(serial_no)
     with _pipeline_errors(_verbosity(verbosity)):
         decision = flash_firmware(
@@ -426,9 +422,7 @@ def run(
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
-    no_f16: bool = typer.Option(False, "--no-f16", help="Build without FP16 kernels."),
-    no_f32: bool = typer.Option(False, "--no-f32", help="Build without FP32 kernels."),
-    no_inline_asm: bool = typer.Option(False, "--no-inline-asm", help="Build requantize without inline assembly."),
+    no_inline_asm: bool = typer.Option(False, "--no-inline-asm", help=_NO_INLINE_ASM_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -441,7 +435,7 @@ def run(
         _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
     options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
-    app_options = _app_options(cmsis_nn_ref, cmsis_nn_root, no_f16, no_f32, no_inline_asm)
+    app_options = _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm)
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
