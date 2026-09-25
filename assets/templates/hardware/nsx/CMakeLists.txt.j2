@@ -24,6 +24,8 @@ nsx_bootstrap_app(
     BOARD "${NSX_BOARD}"
     MODULES ${NSX_APP_MODULES}
 )
+# Source switch changes commands; ninja recompiles.
+target_compile_definitions(nsx_cmsis_nn PRIVATE HCT_KERNEL_SOURCE="{{ kernel_id }}")
 
 # Sources live in the rendering checkout.
 set(HCT_HARDWARE_DIR "{{ hardware_dir }}")

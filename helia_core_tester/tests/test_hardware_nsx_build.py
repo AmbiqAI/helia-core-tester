@@ -160,60 +160,6 @@ def test_build_dir_inside_kernel_root_builds(tmp_path: Path, nsx: list[tuple]) -
     assert not (firmware_build.nsx_app_dir(build_dir) / "modules" / "nsx-cmsis-nn" / "Tests").exists()
 
 
-def _age(root: Path) -> None:
-    """Old mtimes, as copy2 carries over."""
-    for path in root.rglob("*"):
-        os.utime(path, (1, 1))
-
-
-def test_root_switch_recompiles_kernels(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
-    """copy2 keeps mtimes; ninja needs new ones."""
-    first, second = make_checkout(tmp_path / "a"), make_checkout(tmp_path / "b")
-    _age(first)
-    _age(second)
-    build_dir = tmp_path / "build"
-    vendored = firmware_build.nsx_app_dir(build_dir) / "modules" / "nsx-cmsis-nn" / "Source" / "arm_add.c"
-    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=first))
-    assert vendored.stat().st_mtime > 1
-    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=first))
-    assert vendored.stat().st_mtime == 1
-
-    # An interrupted build touches again.
-    def _fail(*args, **kwargs):
-        raise nsx_cli.HardwareBuildError("nsx build failed")
-
-    real_build = nsx_cli.build_app
-    monkeypatch.setattr(nsx_cli, "build_app", _fail)
-    with pytest.raises(nsx_cli.HardwareBuildError):
-        firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=second))
-    monkeypatch.setattr(nsx_cli, "build_app", real_build)
-    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=second))
-    assert vendored.stat().st_mtime > 1
-    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=second))
-    assert vendored.stat().st_mtime == 1
-
-    # Failed switch, then back: B's objects linger.
-    monkeypatch.setattr(nsx_cli, "build_app", _fail)
-    with pytest.raises(nsx_cli.HardwareBuildError):
-        firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=first))
-    monkeypatch.setattr(nsx_cli, "build_app", real_build)
-    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=second))
-    assert vendored.stat().st_mtime > 1
-
-
-def test_ref_switch_freshens_synced_kernels(tmp_path: Path, nsx: list[tuple]) -> None:
-    """NSX's module cache keeps old mtimes."""
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    vendored = firmware_build.nsx_app_dir(tmp_path) / "modules" / nsx_app.CMSIS_NN_PROJECT / "arm_add.c"
-    vendored.parent.mkdir(parents=True)
-    vendored.write_text("int add;\n", encoding="utf-8")
-    os.utime(vendored, (1, 1))
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path, update_dependencies=True)
-    assert vendored.stat().st_mtime == 1
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path, options=AppOptions(cmsis_nn_ref="v1.2.3"))
-    assert vendored.stat().st_mtime > 1
-
-
 def test_force_reconfigure_resyncs(tmp_path: Path, nsx: list[tuple]) -> None:
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
     nsx.clear()

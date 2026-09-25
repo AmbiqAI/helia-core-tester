@@ -231,6 +231,24 @@ def test_flash_recipe_loads_the_stamped_bin(tmp_path: Path) -> None:
     assert text.index("patch_build_id.py") < copy
 
 
+def test_kernel_source_is_a_define(tmp_path: Path) -> None:
+    """A source switch recompiles every kernel."""
+    define = 'target_compile_definitions(nsx_cmsis_nn PRIVATE HCT_KERNEL_SOURCE="{}")'
+    texts = {
+        options.kernel_id(): _render(tmp_path / options.kernel_id(), **vars(options)).cmakelists
+        for options in (
+            nsx_app.AppOptions(),
+            nsx_app.AppOptions(cmsis_nn_ref="v1.2.3"),
+            nsx_app.AppOptions(cmsis_nn_root=make_checkout(tmp_path / "a")),
+            nsx_app.AppOptions(cmsis_nn_root=make_checkout(tmp_path / "b")),
+        )
+    }
+    assert len(texts) == 4
+    for kernel_id, text in texts.items():
+        assert define.format(kernel_id) in text
+        assert text.index("nsx_bootstrap_app(") < text.index(define.format(kernel_id))
+
+
 def test_size_probe_replaces_the_server(tmp_path: Path) -> None:
     text = _render(tmp_path, build_size_probe=True).cmakelists
     assert "add_executable(hct_universal_size_probe" in text

@@ -11,6 +11,7 @@ out of its own wheel on every lock and sync, so the app never ships them.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -86,6 +87,10 @@ class AppOptions:
     def kernel_source(self) -> str:
         """Kernel source, as printed."""
         return str(self.cmsis_nn_root or f"ns-cmsis-nn {self.cmsis_nn_ref}")
+
+    def kernel_id(self) -> str:
+        """Short hash of the kernel source."""
+        return hashlib.sha256(self.kernel_source().encode("utf-8")).hexdigest()[:12]
 
     def cache_vars(self) -> dict[str, str]:
         """Switches forced before the NSX bootstrap."""
@@ -227,7 +232,6 @@ def render_app(
         modules=modules,
         vendored=[CMSIS_NN_MODULE] if options.cmsis_nn_root else [],
         module_registry_yaml=registry_yaml,
-        kernel_source=options.kernel_source(),
     )
     modules_cmake = env.get_template("modules.cmake.j2").render(modules=modules)
 
@@ -245,6 +249,7 @@ def render_app(
         scripts_dir=repo_root / "scripts",
         cmsis_core_include=repo_root / DOWNLOADS_DIR / "CMSIS_5" / "CMSIS" / "Core" / "Include",
         kernel_dir=kernel_dir(app_dir, options).name,
+        kernel_id=options.kernel_id(),
         image_dir="probe" if probe else IMAGE_SUBDIR,
         build_id_txt=BUILD_ID_TXT,
         link_pmu=PMU_MODULE in modules,

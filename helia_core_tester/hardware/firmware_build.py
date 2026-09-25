@@ -315,8 +315,6 @@ def _echo_kernels(options: "AppOptions", repo_root: Path) -> None:
 
 # Written after a sync that finished.
 SYNC_STATE = ".hct-sync.json"
-# Kernel source of the last finished build.
-BUILT_KERNELS = ".hct-kernels"
 
 
 def _sync_state(app_dir: Path) -> dict[str, Optional[str]]:
@@ -326,13 +324,6 @@ def _sync_state(app_dir: Path) -> dict[str, Optional[str]]:
         "lock": hashlib.sha256(lock.read_bytes()).hexdigest() if lock.is_file() else None,
         "neuralspotx": metadata.version("neuralspotx"),
     }
-
-
-def _touch_tree(root: Path) -> None:
-    """Give every file a fresh mtime."""
-    for path in root.rglob("*"):
-        if path.is_file() and not path.is_symlink():
-            os.utime(path)
 
 
 def _last_sync(app_dir: Path) -> dict:
@@ -354,7 +345,7 @@ def build_firmware(
 ) -> Path:
     """Build hct_benchmark_server through NSX; returns the ELF path."""
     from . import nsx_cli
-    from .nsx_app import AppOptions, kernel_dir, render_app
+    from .nsx_app import AppOptions, render_app
 
     repo_root = tester_repo_root()
     ensure_build_tools(repo_root)
@@ -377,13 +368,6 @@ def build_firmware(
         (app_dir / SYNC_STATE).write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
     else:
         typer.echo("[hardware] NSX modules unchanged; skipping lock and sync.")
-    # Copies keep old mtimes; recompile all.
-    source = options.kernel_source()
-    built = app_dir / BUILT_KERNELS
-    if not built.is_file() or built.read_text(encoding="utf-8") != source:
-        # Unfinished builds must touch again.
-        built.unlink(missing_ok=True)
-        _touch_tree(kernel_dir(app_dir, options))
     if force_reconfigure or not _configured_for(build_dir, app_dir, board):
         _drop_foreign_cache(build_dir, app_dir)
         with _jlink_path():
@@ -391,7 +375,6 @@ def build_firmware(
     else:
         typer.echo(f"[hardware] Reusing configured build dir: {build_dir}")
     nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=jobs, frozen=True)
-    (app_dir / BUILT_KERNELS).write_text(source, encoding="utf-8")
     return elf_path(build_dir)
 
 
