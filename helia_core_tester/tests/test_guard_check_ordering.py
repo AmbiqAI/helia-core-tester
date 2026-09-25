@@ -44,7 +44,8 @@ STATIC_ARRAY_RE = re.compile(
     re.MULTILINE,
 )
 GUARD_DECLARE_RE = re.compile(r"helia_guard_declare\(\s*[^,]+,\s*(?P<ident>[^,]+?)\s*,")
-GUARD_CHECK_ANY_RE = r"HELIA_GUARD_CHECK(?:_SLACK|_UNTOUCHED)?\(\s*"
+# A canary check. HELIA_GUARD_CHECK_UNTOUCHED verifies only the body, not the canaries.
+GUARD_CANARY_CHECK_RE = r"HELIA_GUARD_CHECK(?:_SLACK)?\(\s*"
 LITERAL_FOR_RE = re.compile(r"\{%-?\s*for\s+(?P<var>\w+)\s+in\s+\[(?P<items>[^\]]*)\]\s*-?%\}")
 
 RENDERED_CASES = [
@@ -168,8 +169,8 @@ def test_template_arms_and_checks_every_declared_guard(template: Path) -> None:
         assert re.search(r"HELIA_GUARD_ARM\(\s*" + names + r"\s*,", text), (
             f"{_template_id(template)}: {ident} is declared guarded but never armed"
         )
-        assert re.search(GUARD_CHECK_ANY_RE + names + r"\s*,", text), (
-            f"{_template_id(template)}: {ident} is declared guarded but never checked"
+        assert re.search(GUARD_CANARY_CHECK_RE + names + r"\s*,", text), (
+            f"{_template_id(template)}: {ident} is declared guarded but its canaries are never checked"
         )
 
 

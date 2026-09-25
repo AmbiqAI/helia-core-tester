@@ -173,14 +173,15 @@ def test_generated_validator_detects_planted_faults(
     (tmp_path / "arm_nnfunctions_flt.h").write_text(
         f'#include "arm_nnfunctions.h"\nint {kernel}(const {ctype} *, {ctype} *, int32_t);\n'
     )
+    # The real runtime (guard helpers included), except that finishing exits with the
+    # verdict instead of signalling the FVP and spinning.
     runtime = tmp_path / "runtime.c"
     runtime.write_text(
-        '#include <stdlib.h>\n#include "test_runtime/helia_test_runtime.h"\n'
-        "void helia_test_platform_init(void) {}\n"
-        "int helia_test_status_failure(const char *s, int a) { return 1; }\n"
+        "#define helia_test_finish helia_test_finish_on_target\n"
+        f'#include "{ROOT / "src" / "test_runtime" / "helia_test_runtime.c"}"\n'
+        "#undef helia_test_finish\n"
+        "#include <stdlib.h>\n"
         "void helia_test_finish(int32_t n) { exit(n != 0); }\n"
-        "int helia_test_expected_status_failure(const char *s, int a, int b) { return 1; }\n"
-        "int helia_test_finish_validation(int n) { return n; }\n"
     )
     mutations = {
         "baseline": (expected, "", False),
