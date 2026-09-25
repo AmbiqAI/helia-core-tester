@@ -607,15 +607,5 @@ def run_coverage_merge(
     _write_markdown(report, report.summary_md_path)
     report.summary_json_path.write_text(json.dumps(report.to_dict(), indent=2))
 
-    if not coverage_inputs:
-        exit_code = 1
-    elif len(suite_list) == 1:
-        exit_code = 0 if not missing_inputs else 1
-    else:
-        covered_cpus = {
-            key.split(":", 1)[1]
-            for key in coverage_inputs.keys()
-            if ":" in key
-        }
-        exit_code = 0 if all(cpu in covered_cpus for cpu in cpu_list) else 1
+    exit_code = 1 if not coverage_inputs or missing_inputs else 0
     return exit_code, report

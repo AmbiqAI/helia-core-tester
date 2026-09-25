@@ -582,7 +582,8 @@ act_param: 0.0
 # even 2.0, or perturbing the index scale from 64 to 63 (the f16 analogue of
 # the bug class ns-cmsis-nn#303 addressed), produces zero failures here. The
 # case is kept because 1 < |x| < 2.1 is genuinely new coverage and it still
-# catches gross breakage -- but the f16 window itself is currently unguarded.
+# catches gross breakage. The exact LUT-grid cases below separately guard the
+# cutoff and index scale without inheriting this historical fallback allowance.
 comparison:
   atol: 0.001
   rtol: 0.035
@@ -605,6 +606,50 @@ act_param: 0.0
 comparison:
   atol: 0.001
   rtol: 0.035
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_lut_cutoff_f16
+suite: float
+# Retained generation-profile gate pending DSP qualification of the scalar oracle.
+# M55-generated data also runs on scalar fallback; this does not select code.
+required_capabilities: [mve]
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 9]
+input_min: 3.25
+input_max: 3.25
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+# Fixed LUT grid point: input 0x4280, output 0x3bfa (0.9970703125).
+# ns-cmsis-nn 377baeb9 scalar and MVE both select entry 208 with zero interpolation
+# fraction. Cutoffs of 3 or 2 instead return 1, which must fail. Nine identical
+# lanes exercise a full MVE vector and a discriminating active tail lane.
+# Equal bounds make this independent of the generation seed. Refs #134.
+comparison:
+  atol: 0.0
+  rtol: 0.0
+---
+operator: NNActivationFloat
+name: nn_activation_float_tanh_lut_index_f16
+suite: float
+# Same generation-profile restriction as the cutoff case; Refs #134.
+required_capabilities: [mve]
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 9]
+input_min: -1.5
+input_max: -1.5
+activation_type: ARM_NN_FLT_ACT_TANH
+act_param: 0.0
+# Fixed negative LUT grid point: input 0xbe00, output 0xbb3e (-0.9052734375).
+# The magnitude selects entry 96 exactly; an index scale of 63 instead of 64
+# interpolates at 94.5 and must fail, including the active ninth lane. These
+# two exact cases do not claim exhaustive FP16 window or endpoint coverage.
+comparison:
+  atol: 0.0
+  rtol: 0.0
 ---
 operator: NNActivationFloat
 name: nn_activation_float_sigmoid_wide_f16

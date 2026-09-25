@@ -3,9 +3,25 @@
 #include <stdint.h>
 #include "test_runtime/helia_test_runtime.h"
 
-static float32_t gru_unidirectional_float_stream_f32_output[16];
-static float32_t gru_unidirectional_float_stream_f32_temp1[4];
-static float32_t gru_unidirectional_float_stream_f32_hidden_state[4];
+
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float32_t body[16];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} gru_unidirectional_float_stream_f32_output_guard;
+#define gru_unidirectional_float_stream_f32_output (gru_unidirectional_float_stream_f32_output_guard.body)
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float32_t body[4];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} gru_unidirectional_float_stream_f32_temp1_guard;
+#define gru_unidirectional_float_stream_f32_temp1 (gru_unidirectional_float_stream_f32_temp1_guard.body)
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float32_t body[4];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} gru_unidirectional_float_stream_f32_hidden_state_guard;
+#define gru_unidirectional_float_stream_f32_hidden_state (gru_unidirectional_float_stream_f32_hidden_state_guard.body)
 
 /*
  * Streaming/stateful test case: replays the full sequence across
@@ -15,6 +31,8 @@ static float32_t gru_unidirectional_float_stream_f32_hidden_state[4];
  */
 static int32_t run_gru_chunk(int32_t chunk_time_steps, int32_t input_offset, int32_t output_offset)
 {
+    HELIA_GUARD_ARM(gru_unidirectional_float_stream_f32_temp1, true /* pure scratch: poison to catch read-before-write */);
+
     const cmsis_nn_gru_params_f32 params = {
         .time_major = 0,
         .batch_size = 1,
@@ -62,12 +80,32 @@ int32_t gru_unidirectional_float_stream_f32_test_case_run(void)
     }
 
     int32_t status;
+    int failures = 0;
+    /* Canaries only, no poison: output and hidden_state carry real data
+     * across chunks. Re-stamped per chunk so a breach is attributed to the
+     * chunk that caused it and reported once. */
+    HELIA_GUARD_ARM(gru_unidirectional_float_stream_f32_output, false);
+    HELIA_GUARD_ARM(gru_unidirectional_float_stream_f32_hidden_state, false);
     status = run_gru_chunk(2, 0, 0);
+    // Checked before the status validator can return, and before the next
+    // chunk's run_gru_chunk() re-arms (re-poisons) temp1 and erases a breach.
+    HELIA_GUARD_CHECK(gru_unidirectional_float_stream_f32_temp1, "Gruunidirectional temp1 (chunk 0)", failures);
+    HELIA_GUARD_CHECK(gru_unidirectional_float_stream_f32_output, "Gruunidirectional output (chunk 0)", failures);
+    HELIA_GUARD_CHECK(gru_unidirectional_float_stream_f32_hidden_state, "Gruunidirectional hidden_state (chunk 0)", failures);
     HELIA_VALIDATE_STATUS("Gruunidirectional (chunk 0)", status);
+    /* Canaries only, no poison: output and hidden_state carry real data
+     * across chunks. Re-stamped per chunk so a breach is attributed to the
+     * chunk that caused it and reported once. */
+    HELIA_GUARD_ARM(gru_unidirectional_float_stream_f32_output, false);
+    HELIA_GUARD_ARM(gru_unidirectional_float_stream_f32_hidden_state, false);
     status = run_gru_chunk(2, 6, 8);
+    // Checked before the status validator can return, and before the next
+    // chunk's run_gru_chunk() re-arms (re-poisons) temp1 and erases a breach.
+    HELIA_GUARD_CHECK(gru_unidirectional_float_stream_f32_temp1, "Gruunidirectional temp1 (chunk 1)", failures);
+    HELIA_GUARD_CHECK(gru_unidirectional_float_stream_f32_output, "Gruunidirectional output (chunk 1)", failures);
+    HELIA_GUARD_CHECK(gru_unidirectional_float_stream_f32_hidden_state, "Gruunidirectional hidden_state (chunk 1)", failures);
     HELIA_VALIDATE_STATUS("Gruunidirectional (chunk 1)", status);
 
-    int failures = 0;
     HELIA_VALIDATE_OUTPUTS(
         FLOAT,
         gru_unidirectional_float_stream_f32_output,

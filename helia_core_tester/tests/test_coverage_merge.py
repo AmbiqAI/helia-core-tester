@@ -1,7 +1,19 @@
 from pathlib import Path
 import json
 
+import pytest
+
+from helia_core_tester.reporting import coverage_merge
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
+
+
+@pytest.fixture(autouse=True)
+def builtin_html(monkeypatch):
+    monkeypatch.setattr(
+        coverage_merge,
+        "_try_write_gcovr_html",
+        lambda *args, **kwargs: (False, "test builtin renderer"),
+    )
 
 
 def _write_lcov(path: Path, records: list[tuple[str, list[tuple[int, int]]]]) -> None:
@@ -50,6 +62,16 @@ def test_coverage_merge_merges_and_classifies(tmp_path: Path) -> None:
         ],
     )
 
+    for suite, cpu in (
+        ("int", "cortex-m55"),
+        ("float", "cortex-m0"),
+        ("float", "cortex-m4"),
+    ):
+        _write_lcov(
+            project_root / "artifacts/reports/coverage" / suite / cpu / "coverage.info",
+            [(str(file_a), [(10, 1), (11, 0)])],
+        )
+
     expected_zero_config = project_root / "assets" / "coverage_expected_zero.json"
     expected_zero_config.parent.mkdir(parents=True, exist_ok=True)
     expected_zero_config.write_text(
@@ -73,6 +95,7 @@ def test_coverage_merge_merges_and_classifies(tmp_path: Path) -> None:
     )
 
     assert exit_code == 0
+    assert report.missing_coverage_inputs == {}
     assert "Source/ConvolutionFunctions/a.c" in report.covered_files
     assert "Source/ConvolutionFunctions/b.c" in report.covered_files
     assert "Source/NNSupportFunctions/c.c" in report.expected_zero_files
@@ -135,10 +158,11 @@ def test_coverage_merge_includes_optional_float_mve_for_m55(tmp_path: Path) -> N
             project_root / "artifacts" / "reports" / "coverage" / "int" / cpu / "coverage.info",
             [(str(file_a), [(10, 1)])],
         )
-    _write_lcov(
-        project_root / "artifacts" / "reports" / "coverage" / "float" / "cortex-m55" / "coverage.info",
-        [(str(file_a), [(10, 0)])],
-    )
+    for cpu in ("cortex-m0", "cortex-m4", "cortex-m55"):
+        _write_lcov(
+            project_root / "artifacts/reports/coverage/float" / cpu / "coverage.info",
+            [(str(file_a), [(10, 0)])],
+        )
     _write_lcov(
         project_root / "artifacts" / "reports" / "coverage" / "float-mve" / "cortex-m55" / "coverage.info",
         [(str(file_mve), [(7, 2)])],
@@ -159,6 +183,7 @@ def test_coverage_merge_includes_optional_float_mve_for_m55(tmp_path: Path) -> N
     # float-mve is only probed for cortex-m55; other CPUs are never treated as missing.
     assert "float-mve:cortex-m0" not in report.missing_coverage_inputs
     assert "float-mve:cortex-m4" not in report.missing_coverage_inputs
+    assert report.missing_coverage_inputs == {}
 
 
 def test_coverage_merge_optional_float_mve_absent_does_not_fail(tmp_path: Path) -> None:
@@ -182,3 +207,98 @@ def test_coverage_merge_optional_float_mve_absent_does_not_fail(tmp_path: Path) 
 
     assert exit_code == 0
     assert "float-mve:cortex-m55" not in report.missing_coverage_inputs
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        (),
+        ("float:cortex-m4", "float:cortex-m55"),
+        ("float:cortex-m55",),
+        ("int:cortex-m55",),
+    ],
+)
+def test_required_pairs_cannot_be_replaced_by_other_coverage(tmp_path, missing):
+    source = tmp_path / "Source/a.c"
+    source.parent.mkdir()
+    source.write_text("// a\n")
+    inputs = {
+        f"{suite}:{cpu}"
+        for suite in ("int", "float")
+        for cpu in ("cortex-m4", "cortex-m55")
+    }
+    inputs.add("float-mve:cortex-m55")
+    paths = {
+        key: tmp_path
+        / "artifacts/reports/coverage"
+        / key.split(":")[0]
+        / key.split(":")[1]
+        / "coverage.info"
+        for key in inputs
+    }
+    for key in inputs - set(missing):
+        _write_lcov(paths[key], [(str(source), [(1, 1), (2, 0)])])
+    code, report = run_coverage_merge(
+        tmp_path, "cortex-m4,cortex-m55", ["int", "float", "float-mve"]
+    )
+    expected_missing = {key: str(paths[key]) for key in missing}
+    assert report.missing_coverage_inputs == expected_missing
+    assert (
+        json.loads(report.summary_json_path.read_text())["missing_coverage_inputs"]
+        == expected_missing
+    )
+    assert set(report.coverage_inputs) == inputs - set(missing)
+    assert report.overall_line_rate == 50.0
+    assert f"DA:1,{len(inputs) - len(missing)}\n" in report.merged_lcov_path.read_text()
+    assert report.summary_html_path.exists()
+    for key, path in expected_missing.items():
+        assert key in report.summary_md_path.read_text()
+        assert path in report.summary_md_path.read_text()
+    assert code == (1 if missing else 0)
+
+
+@pytest.mark.parametrize(
+    "suite,present", [("int", True), ("float-mve", True), ("float-mve", False)]
+)
+def test_single_suite_acceptance(tmp_path, suite, present):
+    if present:
+        source = tmp_path / "a.c"
+        source.write_text("// a\n")
+        _write_lcov(
+            tmp_path
+            / "artifacts/reports/coverage"
+            / suite
+            / "cortex-m55/coverage.info",
+            [(str(source), [(1, 1)])],
+        )
+    code, report = run_coverage_merge(tmp_path, "cortex-m55", [suite])
+    assert report.missing_coverage_inputs == {}
+    assert code == (0 if present else 1)
+
+
+def test_cli_names_missing_required_pairs(tmp_path):
+    from typer.testing import CliRunner
+    from helia_core_tester.cli import app
+
+    for directory in (
+        "helia_core_tester/generation",
+        "assets/templates",
+        "assets/descriptors",
+    ):
+        (tmp_path / directory).mkdir(parents=True)
+    result = CliRunner().invoke(
+        app,
+        [
+            "coverage-merge",
+            "--repo-root",
+            str(tmp_path),
+            "--cpu",
+            "cortex-m4,cortex-m55",
+            "--suite",
+            "both",
+        ],
+    )
+    assert result.exit_code == 1
+    for suite in ("int", "float"):
+        for cpu in ("cortex-m4", "cortex-m55"):
+            assert f"{suite}:{cpu}" in result.stderr

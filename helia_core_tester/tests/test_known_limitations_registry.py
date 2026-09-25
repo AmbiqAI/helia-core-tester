@@ -1,5 +1,4 @@
-"""Phase 4 of the generation/bridge unification plan: verify the declarative
-known-limitations registry (helia_core_tester.perf_stream.known_limitations)
+"""Verify the declarative known-limitations registry (helia_core_tester.hardware.known_limitations)
 correctly gates case bridging centrally in
 build_case_bundle_from_generated_test(), rather than via ad hoc
 `if generated_test.name == "...":` checks buried in individual per-operator
@@ -14,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream import generated_test_bridge as gtb
-from helia_core_tester.perf_stream import known_limitations
-from helia_core_tester.perf_stream.known_limitations import KnownLimitation, lookup_known_limitation
+from helia_core_tester.hardware import generated_test_bridge as gtb
+from helia_core_tester.hardware import known_limitations
+from helia_core_tester.hardware.known_limitations import KnownLimitation, lookup_known_limitation
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

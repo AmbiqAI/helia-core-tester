@@ -1,0 +1,82 @@
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "benchmark_server_messages.h"
+#include "benchmark_server_session.h"
+
+static int write_file(const char *path, const uint8_t *data, size_t length)
+{
+    FILE *file = fopen(path, "wb");
+    if (file == NULL)
+    {
+        return 1;
+    }
+    if (fwrite(data, 1u, length, file) != length)
+    {
+        fclose(file);
+        return 2;
+    }
+    fclose(file);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    uint8_t target_info[512];
+    uint8_t catalog[16384];
+    size_t target_info_len = 0u;
+    size_t catalog_len = 0u;
+
+    if (argc != 3)
+    {
+        fprintf(stderr, "usage: %s <target_info.bin> <catalog.bin>\n", argv[0]);
+        return 64;
+    }
+    if (hct_build_target_info_frame(0xC0DE1234u, 0u, 256u, 32768u, HCT_SERVER_MAX_RX_PAYLOAD_BYTES,
+                                    HCT_SERVER_MAX_CASES, HCT_SERVER_MAX_PASSES,
+                                    target_info, sizeof(target_info), &target_info_len) != HCTP_STATUS_OK)
+    {
+        return 65;
+    }
+    if (write_file(argv[1], target_info, target_info_len) != 0)
+    {
+        return 67;
+    }
+
+    /* Write every paginated KERNEL_CATALOG chunk concatenated into one file so the
+     * test harness can decode the full multi-frame catalog with a single FrameDecoder. */
+    {
+        size_t start_index = 0u;
+        bool is_final = false;
+        /* Sequence ids must be monotonic across the paginated chunks (TARGET_INFO took 0),
+         * exactly as benchmark_server_session.c numbers them; the host validator rejects
+         * a repeated id. */
+        uint32_t sequence_id = 1u;
+        do
+        {
+            uint8_t chunk[1024];
+            size_t chunk_len = 0u;
+            size_t next_index = 0u;
+            if (hct_build_catalog_frame_chunk(0xC0DE1234u, sequence_id++, start_index, chunk, sizeof(chunk), &chunk_len, &next_index, &is_final) != HCTP_STATUS_OK)
+            {
+                return 66;
+            }
+            if (catalog_len + chunk_len > sizeof(catalog))
+            {
+                return 69;
+            }
+            memcpy(catalog + catalog_len, chunk, chunk_len);
+            catalog_len += chunk_len;
+            start_index = next_index;
+        } while (!is_final);
+    }
+    if (write_file(argv[2], catalog, catalog_len) != 0)
+    {
+        return 68;
+    }
+    printf("target_info=%zu catalog=%zu\n", target_info_len, catalog_len);
+    return 0;
+}

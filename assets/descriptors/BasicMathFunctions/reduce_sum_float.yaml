@@ -34,27 +34,24 @@ tensor_dtypes:
 input_shape: [1, 3, 4, 5]
 axes: [1]
 ---
-# Bounded spatial reduction that keeps the non-reduced spatial extent (#131). The reduced axes
-# are not a contiguous suffix once the kernel's size-one dimensions are folded in, so the
-# flatten-suffix helper in Include/arm_nnsupportfunctions.h returns no suffix and the kernel
-# takes its generic nested-loop route rather than the vectorised flatten helper. The existing
-# axis_h and axis_hw cases reach that route too, but on tensors small enough that neither the
-# loop's size behaviour nor a retained extent past one vector is visible.
+# Bounded spatial reduction that keeps the non-reduced spatial extent (#131). These are the
+# shapes ns-cmsis-nn#484 is about, and since that work landed they take its channel-preserving
+# spatial path: the kernel selects it when the batch and channel axes are retained, a spatial
+# axis is reduced, and the output dims agree. They were written before that path existed, when
+# the same shapes fell to the generic nested loop, so read them as shape cover for the spatial
+# route rather than for the generic one. Generic-route cover is the mixed-axis pair further
+# down, which reduces a spatial axis together with the channel axis and so fails that guard.
 #
-# The first case below is the shape the runtime actually hands the kernel for the reported
-# workload: heliaRT pads a rank-3 model shape at the end, so a sequence reduction arrives as
+# The first case is the shape the runtime actually hands the kernel for the reported workload:
+# heliaRT pads a rank-3 model shape at the end, so a sequence reduction arrives as
 # [1, 64, 128, 1] reducing h, not as a width reduction. The width cases that follow are the
 # same arithmetic in the other memory layout, kept as controls, because a route guard written
 # for one axis will not fire for the other. That distinction is why this family records the
 # model shape alongside the kernel arguments rather than the model shape alone.
 #
-# The generic route holds no vector code of its own, so what a larger retained extent covers
-# here is the compiler's auto-vectorisation of that loop, and whatever hand-written path
-# replaces it. Goldens come from the family's numpy reference, an independent implementation
-# but not an independent accumulation order: reducing a non-innermost axis, numpy sums in the
-# same sequential order a scalar loop does.
-#
-# When ns-cmsis-nn#484's spatial path lands, these cases move onto it.
+# Goldens come from the family's numpy reference, an independent implementation but not an
+# independent accumulation order: reducing a non-innermost axis, numpy sums in the same
+# sequential order a scalar loop does.
 #
 # Model [1, 64, 128] reducing the sequence axis, as the runtime pads and passes it:
 # kernel input [1, 64, 128, 1], axes [0, 1, 0, 0], output [1, 1, 128, 1].
@@ -81,7 +78,7 @@ input_shape: [1, 8, 127, 1]
 axes: [1]
 ---
 # Equivalent-layout control: the same arithmetic with the retained extent in channels instead
-# of width. Not the route the runtime takes for the reported workload.
+# of width. Not the memory layout the runtime hands the kernel for the reported workload.
 operator: ReduceSum
 name: reduce_sum_float_axis_w_c128_f32
 suite: float
@@ -94,9 +91,9 @@ axes: [2]
 # the same either way; only the emitted model's output rank changes.
 keepdims: false
 ---
-# Three retained rows, so the generic loop's index arithmetic runs with a varying row index for
-# the first time in this family: every other generic-route case reduces height. Thirty-three
-# retained channels is eight whole float32 vectors and a remainder.
+# Three retained rows, so the reduction runs with a varying row index rather than the degenerate
+# single-row case the reported shape happens to be. Thirty-three retained channels is eight whole
+# float32 vectors and a remainder. This also takes the spatial path since #484.
 operator: ReduceSum
 name: reduce_sum_float_axis_w_rows_tail_f32
 suite: float
@@ -106,10 +103,10 @@ tensor_dtypes:
 input_shape: [1, 3, 8, 33]
 axes: [2]
 ---
-# The float16 twin of the case above rather than of the reported shape: arm_reduce_sum_f16's
-# generic route is the float32 one with a widening load, so the dtype coverage is the same at a
-# ninth of the payload the reported shape would have cost in half precision. It accumulates in
-# float32 and rounds once, which is what the reference does.
+# The float16 twin of the case above rather than of the reported shape: the half-precision
+# kernel is a separate translation unit taking the same route, so the dtype coverage is the same
+# at a ninth of the payload the reported shape would have cost in half precision. It accumulates
+# in float32 and rounds once, which is what the reference does.
 operator: ReduceSum
 name: reduce_sum_float_axis_w_rows_tail_f16
 suite: float
@@ -118,6 +115,30 @@ tensor_dtypes:
   output: FP16
 input_shape: [1, 3, 8, 33]
 axes: [2]
+---
+# Mixed spatial-and-channel reduction (ns-cmsis-nn#488). Reducing h together with c fails the
+# kernel's spatial guard, which requires the channel axis to be retained, and the union of the
+# axis mask with the size-one dimensions leaves no contiguous suffix, so neither the spatial
+# path nor the flatten helper claims it and the generic traversal runs. Every other case in
+# this family now reaches one of the two faster routes, so without these the generic body is
+# never executed.
+operator: ReduceSum
+name: reduce_sum_float_axis_hc_f32
+suite: float
+tensor_dtypes:
+  input: FP32
+  output: FP32
+input_shape: [1, 3, 4, 5]
+axes: [1, 3]
+---
+operator: ReduceSum
+name: reduce_sum_float_axis_hc_f16
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP16
+input_shape: [1, 3, 4, 5]
+axes: [1, 3]
 ---
 operator: ReduceSum
 name: reduce_sum_float_axis_c_f16
@@ -319,6 +340,15 @@ nonfinite_positions: [1, 3]
 # reduced axis is not the innermost one and the kernel does not take its flatten
 # path. Shape, axis and both token positions match that case; NaN reaches output
 # lane 0 and +Inf lane 3, and the two clean lanes stay asserted.
+#
+# The name mirrors #429's own case and is kept for that reason, but it no longer
+# describes the route: since the channel-preserving spatial reduction landed
+# (ns-cmsis-nn#488), a height-only reduction that retains channels is claimed by
+# that path rather than by the generic traversal. What this case covers is the
+# non-finite token placement, not the dispatch. Generic-route coverage comes from
+# the mixed-axis cases above. The mean_float cases of the same name are not affected: those
+# kernels have no spatial branch, so they still take the generic route and their names
+# still describe it.
 operator: ReduceSum
 name: reduce_sum_float_nonfinite_issue429_generic_f32
 suite: float

@@ -23,6 +23,14 @@ static const cmsis_nn_dims {{ name }}_axis_dims = {
     .w = {{ axis_dims.w }}, .c = {{ axis_dims.c }}
 };
 
+{% if float_kernel %}
+static const {{ word_type }} {{ name }}_input_bits[] = {
+    {{ input_bits | join(', ') }}
+};
+static const {{ word_type }} {{ name }}_expected_bits[] = {
+    {{ expected_bits | join(', ') }}
+};
+{% else %}
 // Input data (for testing)
 static const {{ input_dtype }} {{ name }}_input[] = {
 {{ input_data_array }}
@@ -32,5 +40,6 @@ static const {{ input_dtype }} {{ name }}_input[] = {
 static const {{ output_dtype }} {{ name }}_expected_output[] = {
 {{ expected_output_array }}
 };
+{% endif %}
 
 #endif

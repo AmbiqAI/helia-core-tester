@@ -149,6 +149,19 @@ def test_resolve_root_rejects_non_checkout_env(tmp_path: Path, monkeypatch) -> N
     assert probe.detect_temp_sizers(SIZER_SYMBOLS, "test") is False
 
 
+def test_require_root_holds_generators_to_include_and_source(tmp_path: Path, monkeypatch) -> None:
+    """Generators that read Source/ or Tests/ get one actionable error for a root that
+    only has Include/ (or none at all), not a raw FileNotFoundError later."""
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(tmp_path))
+    with pytest.raises(RuntimeError, match=r"No ns-cmsis-nn checkout found \(tables\): set CMSIS_NN_ROOT"):
+        probe.require_cmsis_nn_root("tables")
+    (tmp_path / "Include").mkdir()
+    with pytest.raises(RuntimeError, match=r"which has no Source/.*--cmsis-nn-root"):
+        probe.require_cmsis_nn_root("tables")
+    (tmp_path / "Source").mkdir()
+    assert probe.require_cmsis_nn_root("tables") == tmp_path.resolve()
+
+
 # ---------------------------------------------------------------------------
 # 2. Expected-constant derivation (mirrors the ns-cmsis-nn#381 sizers)
 # ---------------------------------------------------------------------------
@@ -297,21 +310,24 @@ _CASES = [
             "lstm_temp_expected_bytes_flipped": 32,
         },
         "arm_lstm_unidirectional_s8_temp1_get_buffer_size",
-        "static int8_t buffer1[LSTM_BUFFER_SIZE];",
+        # Buffers are guard-wrapped (issue #68); the array itself is the
+        # struct's "body" field, so a legacy-sized buffer1 is pinned by its
+        # element type/count rather than a plain "static T name[N];" line.
+        "int8_t body[LSTM_BUFFER_SIZE];",
     ),
     (
         "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.c.j2",
         _float_lstm_context,
         {},
         "arm_lstm_unidirectional_f32_temp1_get_buffer_size",
-        "static float case_x_temp1[5];",
+        "float body[5];",
     ),
     (
         "LSTMFunctions/gru_unidirectional/gru_unidirectional.c.j2",
         _gru_context,
         {},
         "arm_gru_unidirectional_f32_temp1_get_buffer_size",
-        "static float32_t case_x_temp1[8];",
+        "float32_t body[8];",
     ),
 ]
 
@@ -362,10 +378,27 @@ def test_detected_int_lstm_sizes_buffers_from_expected_constant() -> None:
     )
     assert "#define LSTM_TEMP_EXPECTED_BYTES 16" in rendered
     assert "#define LSTM_TEMP_FLIPPED_EXPECTED_BYTES 32" in rendered
-    assert "static int16_t buffer1[LSTM_TEMP_EXPECTED_BYTES / 2];" in rendered
-    assert "static int8_t buffer1[LSTM_BUFFER_SIZE];" not in rendered
+    # Buffers are guard-wrapped (issue #68): buffer1 is `buffer1_guard.body`,
+    # sized by the block immediately preceding its `#define buffer1 (...)`.
+    assert (
+        "int16_t body[LSTM_TEMP_EXPECTED_BYTES / 2];\n"
+        "    uint8_t tail[HELIA_GUARD_BYTES];\n"
+        "} buffer1_guard;\n"
+        "#define buffer1 (buffer1_guard.body)"
+    ) in rendered
+    assert (
+        "int8_t body[LSTM_BUFFER_SIZE];\n"
+        "    uint8_t tail[HELIA_GUARD_BYTES];\n"
+        "} buffer1_guard;\n"
+        "#define buffer1 (buffer1_guard.body)"
+    ) not in rendered
     # cell_state (buffer3) stays on the legacy allocation: out of the sizers' scope.
-    assert "static int8_t buffer3[LSTM_BUFFER_SIZE];" in rendered
+    assert (
+        "int8_t body[LSTM_BUFFER_SIZE];\n"
+        "    uint8_t tail[HELIA_GUARD_BYTES];\n"
+        "} buffer3_guard;\n"
+        "#define buffer3 (buffer3_guard.body)"
+    ) in rendered
     assert "temp1_bytes_flipped_time_major" in rendered
     assert "temp1_capacity_bytes" in rendered
 
@@ -403,7 +436,59 @@ def test_detected_gru_pre_reset_sizes_temp1_from_sizer_contract() -> None:
             gru_temp1_expected_bytes_flipped=0,
         ),
     )
-    # hidden_size elements, not the legacy batch*hidden heuristic.
-    assert "static float32_t case_x_temp1[4];" in rendered
+    # hidden_size elements, not the legacy batch*hidden heuristic. Guard-wrapped
+    # (issue #68): temp1 is case_x_temp1_guard.body.
+    assert (
+        "float32_t body[4];\n"
+        "    uint8_t tail[HELIA_GUARD_BYTES];\n"
+        "} case_x_temp1_guard;\n"
+        "#define case_x_temp1 (case_x_temp1_guard.body)"
+    ) in rendered
     assert ".temp1 = case_x_temp1," in rendered
     assert "temp1_capacity_bytes" in rendered
+
+
+def _fake_checkout(root: Path, table_entries: int = 256) -> Path:
+    (root / "Include").mkdir(parents=True)
+    (root / "Source" / "NNSupportFunctions").mkdir(parents=True)
+    body = ", ".join(str(i) for i in range(table_entries))
+    (root / "Source" / "NNSupportFunctions" / "arm_nntables.c").write_text(
+        "const uint16_t sigmoid_table_uint16[256] = {\n" + body + "\n};\n"
+    )
+    return root
+
+
+def test_sigmoid_table_is_read_from_the_resolved_checkout(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_s16 import OpNNActivationS16
+
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(_fake_checkout(tmp_path / "ns-cmsis-nn")))
+    table = OpNNActivationS16.__new__(OpNNActivationS16)._load_sigmoid_table()
+    assert table == list(range(256))
+
+
+def test_sigmoid_table_names_the_fix_without_a_checkout(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.generation.ops.ActivationFunctions.nn_activation_s16 import OpNNActivationS16
+
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(tmp_path / "not-a-checkout"))
+    with pytest.raises(RuntimeError, match="set CMSIS_NN_ROOT to an ns-cmsis-nn checkout"):
+        OpNNActivationS16.__new__(OpNNActivationS16)._load_sigmoid_table()
+
+
+def test_lstm_schema_path_follows_the_resolved_checkout(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.generation.ops.LSTMFunctions.lstm_unidirectional import lstm_schema_path
+
+    root = _fake_checkout(tmp_path / "ns-cmsis-nn")
+    monkeypatch.setenv("CMSIS_NN_ROOT", str(root))
+    assert lstm_schema_path() == root / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
+
+
+def test_lstm_schema_path_nested_fallback_is_the_tester_repo_grandparent(monkeypatch) -> None:
+    """Without a resolvable checkout the schema comes from the nested layout,
+    <ns-cmsis-nn>/Tests/helia-core-tester: two levels above the tester repo root."""
+    import helia_core_tester
+    from helia_core_tester.generation.ops.LSTMFunctions import lstm_unidirectional
+
+    monkeypatch.setattr(lstm_unidirectional, "resolve_cmsis_nn_root", lambda: None)
+    tester_root = Path(helia_core_tester.__file__).resolve().parents[1]
+    expected = tester_root.parents[1] / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
+    assert lstm_unidirectional.lstm_schema_path() == expected

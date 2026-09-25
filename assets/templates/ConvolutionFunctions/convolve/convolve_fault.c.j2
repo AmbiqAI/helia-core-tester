@@ -1,0 +1,146 @@
+#include "{{ name }}_convolve.h"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+{# Declare only the buffers this fault mode actually passes to the kernel so a
+   NULL-substituted buffer never becomes an unused static (-Wunused-variable). #}
+{% if fault != "null_output" %}static {{ output_dtype }} {{ name }}_output[{{ output_dims.n * output_dims.h * output_dims.w * output_dims.c }}];
+{% endif %}{% if fault != "null_ctx_buf" %}static uint8_t {{ name }}_buffer[{{ [buffer_size_max, 4] | max }}];
+{% endif %}{% if kernel_fn == 'arm_convolve_wrapper_s8' and fault != "null_weight_sum_ctx" %}static int32_t {{ name }}_weight_sum_buffer[{{ output_dims.c }}];
+{% endif %}
+{% if has_biases %}
+static const cmsis_nn_dims {{ name }}_bias_dims = {
+    .n = 0, .h = 0, .w = 0, .c = {{ filter_dims.n }}
+};
+{% if kernel_fn == 'arm_convolve_wrapper_s16' %}
+static const cmsis_nn_bias_data {{ name }}_bias_data = {
+    .data = {{ name }}_biases,
+    .is_int32_bias = {% if bias_dtype == 'int32_t' %}true{% else %}false{% endif %}
+};
+{% endif %}
+{% endif %}
+
+/*
+ * Fault-injection test case: exercises an {{ kernel_fn }}
+ * argument-validation branch. Fault mode: {{ fault }}.
+ */
+static int32_t run_convolve(void)
+{
+    const cmsis_nn_context ctx = {
+        .buf = {% if fault == "null_ctx_buf" %}NULL{% else %}{{ name }}_buffer{% endif %},
+        .size = {% if fault == "null_ctx_buf" %}0{% else %}sizeof({{ name }}_buffer){% endif %},
+    };
+{% if kernel_fn == 'arm_convolve_wrapper_s8' %}
+    const cmsis_nn_context weight_sum_ctx = {
+        .buf = {% if fault == "null_weight_sum_ctx" %}NULL{% else %}{{ name }}_weight_sum_buffer{% endif %},
+        .size = {% if fault == "null_weight_sum_ctx" %}0{% else %}sizeof({{ name }}_weight_sum_buffer){% endif %},
+    };
+{% endif %}
+    {{ conv_params_type }} conv_params = {{ name }}_conv_params;
+{% if fault == "zero_stride" %}
+    conv_params.stride.w = 0;
+{% endif %}
+    cmsis_nn_dims input_dims = {{ name }}_input_dims;
+{% if fault == "channel_group_mismatch" %}
+    /* groups = input_ch / filter_ch = 2 does not divide the odd input_ch */
+    input_dims.c = {{ 2 * filter_dims.c + 1 }};
+{% endif %}
+    const {{ input_dtype }} *input_arg = {% if fault == "null_input" %}NULL{% else %}{{ name }}_input{% endif %};
+    {{ output_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};
+
+{% if float_kernel %}
+{% set layout_arg = "(arm_nn_tensor_layout)(" ~ kernel_layout ~ " + 1)" if fault == "invalid_layout" else kernel_layout %}
+    return {{ kernel_fn }}(
+        &ctx,
+        &conv_params,
+        &input_dims,
+        input_arg,
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        {% if has_biases %}
+        &{{ name }}_bias_dims,
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        output_arg{% if kernel_needs_layout %},
+        {{ layout_arg }}
+{% endif %}
+    );
+{% elif kernel_fn == 'arm_convolve_wrapper_s8' %}
+    return arm_convolve_wrapper_s8(
+        &ctx,
+        &weight_sum_ctx,
+        &conv_params,
+        &{{ name }}_quant_params,
+        &input_dims,
+        input_arg,
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        {% if has_biases %}
+        &{{ name }}_bias_dims,
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        output_arg
+    );
+{% elif kernel_fn == 'arm_convolve_wrapper_s4' %}
+    return arm_convolve_wrapper_s4(
+        &ctx,
+        &conv_params,
+        &{{ name }}_quant_params,
+        &input_dims,
+        input_arg,
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        {% if has_biases %}
+        &{{ name }}_bias_dims,
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        output_arg
+    );
+{% elif kernel_fn == 'arm_convolve_wrapper_s16' %}
+    return arm_convolve_wrapper_s16(
+        &ctx,
+        &conv_params,
+        &{{ name }}_quant_params,
+        &input_dims,
+        input_arg,
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        {% if has_biases %}
+        &{{ name }}_bias_dims,
+        &{{ name }}_bias_data,
+        {% else %}
+        NULL,
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        output_arg
+    );
+{% else %}
+    #error "Unsupported kernel function: {{ kernel_fn }}"
+{% endif %}
+}
+
+int32_t {{ name }}_test_case_run(void)
+{
+    int32_t status = run_convolve();
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ validation_label | default("Convolution") }}",
+        status,
+        {{ expected_status }}
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(0);
+}
+
+{% include "common/standalone/main.j2" %}

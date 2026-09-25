@@ -1,10 +1,13 @@
 #include "{{ name }}_gru_unidirectional.h"
 {% from "common/standalone/validation.j2" import validation_outputs with context %}
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
-static {{ data_dtype }} {{ name }}_output[{{ dst_size }}];
-static {{ data_dtype }} {{ name }}_temp1[{{ hidden_state_size }}];
-static {{ data_dtype }} {{ name }}_hidden_state[{{ hidden_state_size }}];
+{{ helia_guard_declare(data_dtype, name ~ "_output", dst_size) }}
+{{ helia_guard_declare(data_dtype, name ~ "_temp1", hidden_state_size) }}
+{# hidden_state is explicitly zero-seeded once below and carried across
+   chunk calls: guarded but never poisoned. #}
+{{ helia_guard_declare(data_dtype, name ~ "_hidden_state", hidden_state_size) }}
 
 /*
  * Streaming/stateful test case: replays the full sequence across
@@ -14,6 +17,8 @@ static {{ data_dtype }} {{ name }}_hidden_state[{{ hidden_state_size }}];
  */
 static int32_t run_gru_chunk(int32_t chunk_time_steps, int32_t input_offset, int32_t output_offset)
 {
+    HELIA_GUARD_ARM({{ name }}_temp1, true /* pure scratch: poison to catch read-before-write */);
+
     const {{ gru_params_type }} params = {
         .time_major = {{ time_major_literal }},
         .batch_size = {{ batch_size }},
@@ -61,12 +66,22 @@ int32_t {{ name }}_test_case_run(void)
     }
 
     int32_t status;
+    int failures = 0;
 {% for length in chunk_lengths %}
+    /* Canaries only, no poison: output and hidden_state carry real data
+     * across chunks. Re-stamped per chunk so a breach is attributed to the
+     * chunk that caused it and reported once. */
+    HELIA_GUARD_ARM({{ name }}_output, false);
+    HELIA_GUARD_ARM({{ name }}_hidden_state, false);
     status = run_gru_chunk({{ length }}, {{ chunk_input_offsets[loop.index0] }}, {{ chunk_output_offsets[loop.index0] }});
+    // Checked before the status validator can return, and before the next
+    // chunk's run_gru_chunk() re-arms (re-poisons) temp1 and erases a breach.
+    HELIA_GUARD_CHECK({{ name }}_temp1, "{{ validation_label | default("GRU") }} temp1 (chunk {{ loop.index0 }})", failures);
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("GRU") }} output (chunk {{ loop.index0 }})", failures);
+    HELIA_GUARD_CHECK({{ name }}_hidden_state, "{{ validation_label | default("GRU") }} hidden_state (chunk {{ loop.index0 }})", failures);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("GRU") }} (chunk {{ loop.index0 }})", status);
 {% endfor %}
 
-    int failures = 0;
 {{ validation_outputs(validation_mode_token | default("FLOAT"), validation_tolerance | default(1), dst_size, validation_report_limit | default(8)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

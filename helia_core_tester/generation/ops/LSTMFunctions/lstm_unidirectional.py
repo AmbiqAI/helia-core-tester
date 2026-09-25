@@ -6,11 +6,29 @@ import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops.catalog import get_operator_spec
+from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
+
+
+def lstm_schema_path() -> Path:
+    """The TFLite schema the LSTM reference path feeds to flatc.
+
+    The same checkout the firmware compiles (CMSIS_NN_ROOT / --cmsis-nn-root),
+    else the nested <ns-cmsis-nn>/Tests/helia-core-tester layout: from
+    .../helia-core-tester/helia_core_tester/generation/ops/LSTMFunctions/ this
+    file's parents[6] is ns-cmsis-nn (the old parents[4] guess was the tester
+    repo itself). Deliberately not require_cmsis_nn_root(): generate_lstm_data()
+    falls back to the validated unit-test data when flatc or the schema is
+    unavailable, and the pure-Python CI suite (no checkout) relies on that.
+    """
+    cmsis_nn_root = resolve_cmsis_nn_root() or Path(__file__).resolve().parents[6]
+    return cmsis_nn_root / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
 
 
 class OpLSTMUnidirectional(OperationBase):
     """LSTMUnidirectional operation."""
-    
+
+    FAULT_KINDS = ("null_input", "null_output", "null_params", "null_buffers")
+
     def build_keras_model(self) -> tf.keras.Model:
         """
         Build Keras model for LSTMUnidirectional.
@@ -334,8 +352,7 @@ class OpLSTMUnidirectional(OperationBase):
             # Issue #56: port of the GRU fault: mechanism
             # (gru_unidirectional.py) -- LSTM previously had no
             # argument-validation coverage at all.
-            fault = self.desc.get("fault")
-            expected_status = str(self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
+            fault = self.fault_kind()
             # Follow-up to #56: port of the GRU stream: mechanism -- LSTM
             # previously had zero hidden_state/cell_state streaming coverage.
             # See arm_lstm_unidirectional_f32.c: cell_state is caller-owned
@@ -344,8 +361,7 @@ class OpLSTMUnidirectional(OperationBase):
             stream = bool(self.desc.get("hint", {}).get("stream", False))
             h_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_f32.h.j2"
             if fault:
-                context["fault"] = fault
-                context["expected_status"] = expected_status
+                context.update(self.fault_context())
                 c_tpl = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional_fault.c.j2"
             elif stream:
                 if batch_size != 1:
@@ -409,7 +425,7 @@ class OpLSTMUnidirectional(OperationBase):
             output_zero_point_override = int(output_zero_point_override)
 
         templates_dir = Path(find_tester_templates_dir()) / get_operator_spec("LSTMUnidirectional").template_relpath / "json"
-        schema_path = Path(__file__).resolve().parents[4] / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
+        schema_path = lstm_schema_path()
         work_dir = Path(output_dir) / "_lstm_tmp"
         work_dir.mkdir(parents=True, exist_ok=True)
 

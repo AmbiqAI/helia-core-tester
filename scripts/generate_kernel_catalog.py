@@ -2,7 +2,7 @@
 """Generate the firmware kernel catalog C data and `kernel_catalog.json` from the single
 source of truth, `assets/kernel_registry.yaml` (F008).
 
-Prior to this generator, `cmake/perf_stream/benchmark_server_catalog.c` was a hand-maintained
+Prior to this generator, `cmake/hardware/benchmark_server_catalog.c` was a hand-maintained
 C array that had drifted from the registry: it only listed 7 kernels (instead of the
 registry's 126) and even had kernel_id 6/7 (Maximum/Minimum) reversed relative to both the
 registry and the session dispatcher's `HCT_KERNEL_ID_*` defines. This script makes the
@@ -26,8 +26,8 @@ import yaml
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _REGISTRY_PATH = _PROJECT_ROOT / "assets" / "kernel_registry.yaml"
-_CATALOG_C_PATH = _PROJECT_ROOT / "cmake" / "perf_stream" / "benchmark_server_catalog.c"
-_CATALOG_JSON_PATH = _PROJECT_ROOT / "cmake" / "perf_stream" / "kernel_catalog.json"
+_CATALOG_C_PATH = _PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_catalog.c"
+_CATALOG_JSON_PATH = _PROJECT_ROOT / "cmake" / "hardware" / "kernel_catalog.json"
 
 # kernel_id 6/7 are the pair the audit finding (F008) specifically called out as reversed in
 # the old hand-maintained catalog: id 6 must be the *maximum* kernel, id 7 the *minimum* one,
@@ -100,7 +100,7 @@ def _canonical_json_bytes(entries: list[dict]) -> bytes:
 
 
 def _catalog_hash(entries: list[dict]) -> bytes:
-    """Canonical *compact* JSON encoding used only for the HELLO hash -- must match the
+    """Canonical *compact* JSON encoding used only for the TARGET_INFO hash -- must match the
     host's re-serialization of kernel_catalog.json (`sort_keys=True,
     separators=(",", ":")`), independent of the pretty file format above."""
     canonical = json.dumps(entries, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -113,6 +113,20 @@ def _format_c_bool(value: bool) -> str:
 
 def _render_catalog_c(entries: list[dict]) -> str:
     lines = [_HEADER]
+    lines.append("")
+    lines.append("/* The PMU capability is decided by the device header of the hardware build")
+    lines.append(" * (__PMU_PRESENT / __PMU_NUM_EVENTCNT from apollo*.h via am_mcu_apollo.h); a host")
+    lines.append(" * compile or a DWT-only core advertises no PMU and zero slots. */")
+    lines.append("#ifdef HELIA_HARDWARE_BUILD")
+    lines.append('#include "am_mcu_apollo.h"')
+    lines.append("#endif")
+    lines.append("#if defined(__PMU_PRESENT) && (__PMU_PRESENT == 1)")
+    lines.append("#define HCT_PMU_CAPABILITY_FLAGS HCT_CAP_PMU_ARMV8M")
+    lines.append("#define HCT_PMU_COUNTER_SLOTS ((uint8_t)__PMU_NUM_EVENTCNT)")
+    lines.append("#else")
+    lines.append("#define HCT_PMU_CAPABILITY_FLAGS 0u")
+    lines.append("#define HCT_PMU_COUNTER_SLOTS 0u")
+    lines.append("#endif")
     lines.append("")
     lines.append("#ifndef HCT_BENCHMARK_SERVER_BOARD_ID")
     lines.append('#define HCT_BENCHMARK_SERVER_BOARD_ID "apollo510_evb"')
@@ -181,10 +195,15 @@ def _render_catalog_c(entries: list[dict]) -> str:
     lines.append("    return HCT_BENCHMARK_SERVER_TARGET_CPU;")
     lines.append("}")
     lines.append("")
+    lines.append("/* The firmware build defines HCT_BENCHMARK_SERVER_BUILD_ID_PATCHED and links")
+    lines.append(" * hct_build_id.c, whose slot scripts/patch_build_id.py fills in after the link;")
+    lines.append(" * this constant only serves host-side unit builds of the protocol code. */")
+    lines.append("#ifndef HCT_BENCHMARK_SERVER_BUILD_ID_PATCHED")
     lines.append("const char *hct_benchmark_server_build_id(void)")
     lines.append("{")
     lines.append('    return "hct-benchmark-server-v0";')
     lines.append("}")
+    lines.append("#endif")
     lines.append("")
     lines.append("uint32_t hct_benchmark_server_capability_flags(void)")
     lines.append("{")
@@ -193,7 +212,13 @@ def _render_catalog_c(entries: list[dict]) -> str:
     lines.append("         | HCT_CAP_PERFORMANCE")
     lines.append("         | HCT_CAP_RTT_TRANSPORT")
     lines.append("         | HCT_CAP_KERNEL_CATALOG")
-    lines.append("         | HCT_CAP_ABS_S8;")
+    lines.append("         | HCT_CAP_ABS_S8")
+    lines.append("         | HCT_PMU_CAPABILITY_FLAGS;")
+    lines.append("}")
+    lines.append("")
+    lines.append("uint8_t hct_benchmark_server_pmu_counter_slots(void)")
+    lines.append("{")
+    lines.append("    return HCT_PMU_COUNTER_SLOTS;")
     lines.append("}")
     lines.append("")
     return "\n".join(lines)

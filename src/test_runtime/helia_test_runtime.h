@@ -22,6 +22,7 @@
 
 #include <math.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -37,6 +38,8 @@ extern "C" {
 /* ---------------------------------------------------------------------- */
 
 void helia_test_platform_init(void);
+void helia_test_sizer_invalid(const char *label, long long value);
+void helia_test_sizer_over_capacity(const char *label, long long value, long long capacity);
 void helia_test_finish(int32_t failures);
 
 /* ---------------------------------------------------------------------- */
@@ -178,6 +181,43 @@ static inline int helia_test_float_class_binary64(const void *storage)
                                                 : HELIA_FLOAT_CLASS_POS_INF;
 }
 
+/* ---------------------------------------------------------------------- */
+/* Buffer overrun guards (issue #68)                                      */
+/*                                                                        */
+/* Generated harnesses give the kernel exact-sized statics with nothing   */
+/* read back afterward, so an out-of-bounds write is invisible unless it  */
+/* happens to land in the compared output. helia_guard_declare (a Jinja   */
+/* macro in common/standalone/runtime_common.j2, not a C one -- it must   */
+/* emit a #define, which a C macro cannot do) wraps a buffer in a fixed   */
+/* canary region on both sides and #defines the buffer's own name to read */
+/* through to the guarded body, so every existing reference to it keeps   */
+/* compiling unchanged. HELIA_GUARD_ARM stamps both canaries (and, for    */
+/* pure scratch, poisons the body so a read-before-write produces a       */
+/* deterministic wrong answer instead of an incidentally correct one);    */
+/* HELIA_GUARD_CHECK verifies the canaries survived the kernel call and   */
+/* reports a breach as its own failure kind, distinct from a value        */
+/* mismatch.                                                              */
+/* ---------------------------------------------------------------------- */
+
+#define HELIA_GUARD_BYTES 16u
+#define HELIA_GUARD_CANARY_BYTE 0xA5u
+#define HELIA_GUARD_POISON_BYTE 0x5Au
+
+void helia_guard_arm(uint8_t *head, uint8_t *tail, void *body, size_t body_bytes, bool poison_body);
+void helia_guard_check(const char *label, const uint8_t *head, const uint8_t *tail, int *failures);
+/* Slack canary: a scratch buffer sized by a compile-time upper bound is
+ * only partly used by the kernel (arm_*_get_buffer_size decides how much).
+ * The tail guard sits at the declared end, so a kernel that overruns its
+ * *queried* size lands in the unused slack and goes unnoticed. These stamp
+ * and verify up to HELIA_GUARD_BYTES at body + used_bytes (clamped to the
+ * body; a no-op when there is no slack). */
+void helia_guard_stamp_at(void *body, size_t body_bytes, size_t used_bytes);
+void helia_guard_check_at(const char *label, const void *body, size_t body_bytes, size_t used_bytes, int *failures);
+/* Untouched check: a call the kernel rejects (ARM_CMSIS_NN_ARG_ERROR) must
+ * not write its output. Arm the guard with poison_body=true and verify every
+ * body byte still carries HELIA_GUARD_POISON_BYTE afterwards. */
+void helia_guard_check_untouched(const char *label, const void *body, size_t body_bytes, int *failures);
+
 #ifdef __cplusplus
 }
 #endif
@@ -195,6 +235,30 @@ static inline int helia_test_float_class_binary64(const void *storage)
         double: helia_test_float_class_binary64 \
     )(&(element))
 
+/*
+ * ident must name a buffer declared via helia_guard_declare, the Jinja
+ * macro in common/standalone/runtime_common.j2 that every template shares
+ * (see that file for why the declaration itself has to be a Jinja macro,
+ * not a C one). HELIA_GUARD_ARM/HELIA_GUARD_CHECK are plain C macros --
+ * they just keep the generated call sites free of repeated
+ * `ident##_guard.head[0]` plumbing.
+ */
+#define HELIA_GUARD_ARM(ident, poison_body) \
+    helia_guard_arm(&(ident##_guard.head[0]), &(ident##_guard.tail[0]), \
+                     (ident##_guard.body), sizeof(ident##_guard.body), (poison_body))
+
+#define HELIA_GUARD_CHECK(ident, label, failures) \
+    helia_guard_check((label), &(ident##_guard.head[0]), &(ident##_guard.tail[0]), &(failures))
+
+#define HELIA_GUARD_STAMP_SLACK(ident, used_bytes) \
+    helia_guard_stamp_at((ident##_guard.body), sizeof(ident##_guard.body), (size_t)(used_bytes))
+
+#define HELIA_GUARD_CHECK_SLACK(ident, label, used_bytes, failures) \
+    helia_guard_check_at((label), (ident##_guard.body), sizeof(ident##_guard.body), (size_t)(used_bytes), &(failures))
+
+#define HELIA_GUARD_CHECK_UNTOUCHED(ident, label, failures) \
+    helia_guard_check_untouched((label), (ident##_guard.body), sizeof(ident##_guard.body), &(failures))
+
 #define HELIA_VALIDATE_EXPECTED_STATUS(label, status, expected_status) \
     do { \
         int helia_status = (int)(status); \
@@ -204,6 +268,38 @@ static inline int helia_test_float_class_binary64(const void *storage)
                 return helia_test_status_failure((label), helia_status); \
             } \
             return helia_test_expected_status_failure((label), helia_status, helia_expected_status); \
+        } \
+    } while (0)
+
+/*
+ * Scratch-sizer answers (#133). Every *_get_buffer_size() documents a negative
+ * return as the out-of-range sentinel and tells the caller to test for it. The
+ * harness only ever compared the answer against the static it had allocated,
+ * and a negative number is not larger than anything, so the sentinel passed
+ * that check and became the context size. Most kernels never read that field,
+ * so the case then passed while reporting nothing at all.
+ *
+ * Two distinct failures, deliberately not sharing a marker. A negative answer
+ * is the kernel's defect. An answer larger than the static is our defect: the
+ * generation-time bound that sized the buffer disagrees with the shipped
+ * kernel. Reporting both as one error type is what made them indistinguishable.
+ */
+#define HELIA_VALIDATE_SIZER(label, value) \
+    do { \
+        long long helia_sizer_value = (long long)(value); \
+        if (helia_sizer_value < 0) { \
+            helia_test_sizer_invalid((label), helia_sizer_value); \
+            return ARM_CMSIS_NN_ARG_ERROR; \
+        } \
+    } while (0)
+
+#define HELIA_VALIDATE_SIZER_FITS(label, value, capacity) \
+    do { \
+        long long helia_sizer_fits_value = (long long)(value); \
+        long long helia_sizer_fits_capacity = (long long)(capacity); \
+        if (helia_sizer_fits_value > helia_sizer_fits_capacity) { \
+            helia_test_sizer_over_capacity((label), helia_sizer_fits_value, helia_sizer_fits_capacity); \
+            return ARM_CMSIS_NN_ARG_ERROR; \
         } \
     } while (0)
 

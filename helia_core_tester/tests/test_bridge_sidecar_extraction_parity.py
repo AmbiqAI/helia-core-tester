@@ -1,5 +1,4 @@
-"""Phase 3 of the generation/bridge unification plan: verify that the
-BasicMathFunctions bridge builders' sidecar-based scalar extraction path
+"""Verify that the BasicMathFunctions bridge builders' sidecar-based scalar extraction path
 (reading structured JSON emitted by `_write_op_outputs()`) produces
 byte-identical `serialized_scalar_parameters` to the legacy regex-based
 extraction path that parses generated `.c` source directly.
@@ -18,7 +17,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from helia_core_tester.perf_stream import generated_test_bridge as gtb
+from helia_core_tester.hardware import generated_test_bridge as gtb
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _GEN_ROOT = _PROJECT_ROOT / "artifacts/generated_tests/int/cortex-m55"

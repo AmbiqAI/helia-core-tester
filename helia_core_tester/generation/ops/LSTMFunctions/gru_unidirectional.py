@@ -19,6 +19,19 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 class OpGRUUnidirectional(OperationBase):
     """GRUUnidirectional operation (FP32/FP16, CMSIS-only)."""
 
+    FAULT_KINDS = (
+        "null_input",
+        "null_output",
+        "null_params",
+        "null_buffers",
+        "missing_temp1_prereset",
+        "stateful_batch_gt1",
+        "negative_input_size",
+        "negative_hidden_size",
+        "zero_batch_size",
+        "negative_time_steps",
+    )
+
     def build_keras_model(self) -> tf.keras.Model:
         raise RuntimeError("GRUUnidirectional is CMSIS-only; no Keras model is built.")
 
@@ -205,9 +218,8 @@ class OpGRUUnidirectional(OperationBase):
             output_ref, reference=float_reference, inputs=[input_tensor]
         )
 
-        fault = self.desc.get("fault")
+        fault = self.fault_kind()
         stream = bool(self.desc.get("hint", {}).get("stream", False))
-        expected_status = str(self.desc.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
 
         builder = TemplateContextBuilder()
         context = {
@@ -239,7 +251,7 @@ class OpGRUUnidirectional(OperationBase):
             "candidate_gate_hidden_bias_array": builder.format_array_as_c_literal(cand_b_hidden),
             "hidden_state_size": batch_size * hidden_size,
             "dst_size": batch_size * time_steps * hidden_size,
-            "expected_status": expected_status,
+            "expected_status": self.expected_status(),
             "use_bias": use_bias,
         }
         context.update(nonfinite_context)
@@ -267,7 +279,7 @@ class OpGRUUnidirectional(OperationBase):
         )
 
         if fault:
-            context["fault"] = fault
+            context.update(self.fault_context())
             h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.h.j2"
             c_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional_fault.c.j2"
         elif stream:

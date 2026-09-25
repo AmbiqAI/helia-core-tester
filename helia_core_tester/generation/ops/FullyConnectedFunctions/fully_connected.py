@@ -5,6 +5,7 @@ FullyConnected operation implementation with dtype-aware quantization.
 from typing import Dict, Any, Optional
 import numpy as np
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
 from helia_core_tester.generation.kernel_dispatch import resolve_fully_connected_kernel
 from helia_core_tester.core.cpu_targets import get_cpu_profile
@@ -16,6 +17,36 @@ class OpFullyConnected(OperationBase):
     """
     FullyConnected operation.
     """
+
+    FAULT_KINDS = (
+        "null_ctx_buf",
+        "small_ctx_size",
+        "filter_n_mismatch",
+        "invalid_layout",
+    )
+
+    def _check_fault_reachable(self, kind: str, context: Dict[str, Any]) -> None:
+        """Reject fault kinds the selected fully-connected kernel route does not diagnose."""
+        kernel_fn = context["kernel_fn"]
+        if context.get("float_kernel"):
+            if kind not in ("filter_n_mismatch", "invalid_layout"):
+                raise self.fault_unreachable(kind, f"{kernel_fn} has no such guard")
+            return
+        if kind in ("filter_n_mismatch", "invalid_layout"):
+            raise self.fault_unreachable(kind, f"{kernel_fn} does not check {kind}")
+        if kernel_fn == "arm_fully_connected_s4":
+            raise self.fault_unreachable(kind, "arm_fully_connected_s4 validates no arguments")
+        per_channel = bool(context["quant_params"].get("per_channel"))
+        if kernel_fn == "arm_fully_connected_wrapper_s16":
+            if not per_channel:
+                raise self.fault_unreachable(kind, "arm_fully_connected_s16 validates no arguments")
+            return
+        if kind == "small_ctx_size":
+            raise self.fault_unreachable(kind, f"{kernel_fn} does not check ctx->size")
+        if "mve" not in self.required_capabilities():
+            raise self.fault_unreachable(
+                kind, f"{kernel_fn} only checks ctx->buf under ARM_MATH_MVEI; add required_capabilities: [mve]"
+            )
 
     def needs_keras_model(self) -> bool:
         return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
@@ -152,7 +183,7 @@ class OpFullyConnected(OperationBase):
         import tensorflow as tf
         
         # Create converter
-        converter = tf.lite.TFLiteConverter.from_keras_model(model)
+        converter = converter_for_batched_model(model, [self.desc['input_shape']])
         
         # Apply quantization based on activation_dtype
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
@@ -681,6 +712,12 @@ class OpFullyConnected(OperationBase):
                 'validation_mode': 'float',
             }
             context.update(nonfinite_context)
+            fault = self.fault_kind()
+            c_template = "FullyConnectedFunctions/fully_connected/fully_connected.c.j2"
+            if fault:
+                self._check_fault_reachable(fault, context)
+                context.update(self.fault_context())
+                c_template = "FullyConnectedFunctions/fully_connected/fully_connected_fault.c.j2"
 
             includes_api_dir = output_dir / "includes"
             includes_api_dir.mkdir(parents=True, exist_ok=True)
@@ -690,7 +727,7 @@ class OpFullyConnected(OperationBase):
             with open(h_path, 'w') as f:
                 f.write(h_content)
             
-            c_content = self.render_template("FullyConnectedFunctions/fully_connected/fully_connected.c.j2", context)
+            c_content = self.render_template(c_template, context)
             c_path = output_dir / f"{name}_fully_connected.c"
             with open(c_path, 'w') as f:
                 f.write(c_content)
@@ -885,7 +922,7 @@ class OpFullyConnected(OperationBase):
 
         # A bias folded into the kernel sum still has to appear as an array in
         # the header. The kernel keeps taking a NULL bias pointer, but the
-        # perf-stream bridge reads the bias back out of the header decl, and a
+        # hardware bridge reads the bias back out of the header decl, and a
         # NULL decl is indistinguishable there from a zero bias, so the bridge
         # would rebuild the kernel sum without the bias term.
         has_bias_array = has_biases
@@ -1013,7 +1050,13 @@ class OpFullyConnected(OperationBase):
             'weight_sum_array': weight_sum_array_str,
             'has_weight_sum': has_weight_sum,
         }
-        
+        fault = self.fault_kind()
+        c_template = "FullyConnectedFunctions/fully_connected/fully_connected.c.j2"
+        if fault:
+            self._check_fault_reachable(fault, context)
+            context.update(self.fault_context())
+            c_template = "FullyConnectedFunctions/fully_connected/fully_connected_fault.c.j2"
+
         # Render templates
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)
@@ -1023,7 +1066,7 @@ class OpFullyConnected(OperationBase):
         with open(h_path, 'w') as f:
             f.write(h_content)
         
-        c_content = self.render_template("FullyConnectedFunctions/fully_connected/fully_connected.c.j2", context)
+        c_content = self.render_template(c_template, context)
         c_path = output_dir / f"{name}_fully_connected.c"
         with open(c_path, 'w') as f:
             f.write(c_content)

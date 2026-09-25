@@ -49,6 +49,144 @@ def test_parser_parses_generic_api_error_before_summary() -> None:
     assert result.error_type == "api_error"
 
 
+def test_parser_classifies_guard_breach_overrun_distinctly() -> None:
+    # issue #68: a corrupted tail canary must be reported as its own failure
+    # kind, not folded into an ordinary output mismatch, even though
+    # HELIA_GUARD_CHECK also bumps the printed failure count.
+    parser = reporting_parser.TestResultParser()
+    result = parser.parse_fvp_output(
+        output="GuardBreach[conv1_scratch]: overrun detected (canary corrupted)\n1 Failures\n",
+        elf_path=Path("convolve.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "guard_breach"
+    assert result.failure_reason == "Guard breach in conv1_scratch: overrun detected"
+
+
+def test_parser_classifies_guard_breach_underrun_and_combined() -> None:
+    parser = reporting_parser.TestResultParser()
+    underrun = parser.parse_fvp_output(
+        output="GuardBreach[conv1_output]: underrun detected (canary corrupted)\n1 Failures\n",
+        elf_path=Path("convolve.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert underrun.error_type == "guard_breach"
+    assert underrun.failure_reason == "Guard breach in conv1_output: underrun detected"
+
+    both = parser.parse_fvp_output(
+        output="GuardBreach[conv1_output]: underrun and overrun detected (canary corrupted)\n2 Failures\n",
+        elf_path=Path("convolve.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert both.error_type == "guard_breach"
+    assert both.failure_reason == "Guard breach in conv1_output: underrun and overrun detected"
+
+
+def _parse(parser: reporting_parser.TestResultParser, output: str) -> reporting_models.TestResult:
+    return parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("convolve.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+
+
+def test_parser_guard_breach_outranks_value_mismatch_with_emitted_label() -> None:
+    # The label form the runtime actually prints carries spaces; a breach must
+    # win over the value mismatch that a corrupted buffer usually also causes.
+    parser = reporting_parser.TestResultParser()
+    result = _parse(
+        parser,
+        "Convolution output mismatch: expected 4 got 7\n"
+        "GuardBreach[Convolution scratch]: overrun detected (canary corrupted)\n"
+        "Mismatch[3]: exp=7 got=9\n"
+        "2 Failures\n",
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "guard_breach"
+    assert result.failure_reason == "Guard breach in Convolution scratch: overrun detected"
+
+
+def test_parser_guard_breach_outranks_api_error_and_keeps_the_line() -> None:
+    # Guard checks run before the returning status validator, so a kernel that
+    # overruns and then returns non-success prints both; the memory-safety
+    # finding is the one to keep.
+    parser = reporting_parser.TestResultParser()
+    result = _parse(
+        parser,
+        "GuardBreach[Convolution output]: underrun detected (canary corrupted)\n"
+        "Convolution failed with status -1\n"
+        "1 Failures\n",
+    )
+    assert result.error_type == "guard_breach"
+    assert result.failure_reason == "Guard breach in Convolution output: underrun detected"
+    assert "GuardBreach[Convolution output]: underrun detected (canary corrupted)" in result.output_lines
+
+
+def test_parser_reports_every_breached_buffer() -> None:
+    parser = reporting_parser.TestResultParser()
+    result = _parse(
+        parser,
+        "GuardBreach[Convolution scratch]: overrun detected (canary corrupted)\n"
+        "GuardBreach[Convolution weight_sum]: underrun detected (canary corrupted)\n"
+        "GuardBreach[Convolution output]: underrun and overrun detected (canary corrupted)\n"
+        "3 Failures\n",
+    )
+    assert result.error_type == "guard_breach"
+    assert result.failure_reason == (
+        "Guard breach in Convolution scratch: overrun detected; "
+        "Convolution weight_sum: underrun detected; "
+        "Convolution output: underrun and overrun detected"
+    )
+    assert sum(line.startswith("GuardBreach[") for line in result.output_lines) == 3
+
+
+def test_parser_guard_breach_outranks_nonfinite_mismatch() -> None:
+    parser = reporting_parser.TestResultParser()
+    result = _parse(
+        parser,
+        "GuardBreach[Convolution output]: overrun detected (canary corrupted)\n"
+        "HELIA_NONFINITE_MISMATCH[0]: exp=1.5 got=nan\n"
+        "HELIA_NONFINITE_MISMATCHES n=1\n"
+        "HELIA_FLOAT_MAXDIFF maxdiff=-1.00000000e+00 maxfrac=-2.000000 n=8\n"
+        "2 Failures\n",
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "guard_breach"
+
+
+def test_parser_corrupted_capture_outranks_guard_breach() -> None:
+    parser = reporting_parser.TestResultParser()
+    result = _parse(
+        parser,
+        "GuardBreach[Convolution output]: overrun detected (canary corrupted)\n"
+        "HELIA_MASKED_LANES: 9 of 8\n"
+        "1 Failures\n",
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "corrupted_capture"
+
+
+def test_parser_guard_breach_survives_truncated_capture() -> None:
+    parser = reporting_parser.TestResultParser()
+    body = "".join(f"Mismatch[{i}]: exp=1 got=2\n" for i in range(80))
+    result = _parse(
+        parser,
+        body + "GuardBreach[Convolution output]: overrun detected (canary corrupted)\n81 Failures\n",
+    )
+    assert result.error_type == "guard_breach"
+    assert "GuardBreach[Convolution output]: overrun detected (canary corrupted)" in result.output_lines
+    assert "81 Failures" in result.output_lines
+
+
 def test_parser_keeps_legacy_unity_fallback() -> None:
     parser = reporting_parser.TestResultParser()
     result = parser.parse_fvp_output(
@@ -546,3 +684,105 @@ def test_parser_keeps_the_verdict_lines_past_the_truncation_cap() -> None:
             f"HELIA_FLOAT_MAXDIFF maxdiff=1.0000000{tensor}e-03 maxfrac=1.62074{tensor} n=1024"
             in result.output_lines
         )
+
+
+def _parse_sizer_case(output: str):
+    parser = reporting_parser.TestResultParser()
+    return parser.parse_fvp_output(
+        output=output,
+        elf_path=Path("convolve.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+
+
+def test_parser_classifies_a_negative_sizer_answer_as_a_kernel_contract_failure() -> None:
+    # The macro emits its marker and then returns ARM_CMSIS_NN_ARG_ERROR, so the generic API
+    # error line follows it. Without the ordering this rule would be unreachable (#133).
+    result = _parse_sizer_case(
+        "HELIA_SIZER_INVALID[arm_convolve_s8_get_buffer_size]: -1\r\n"
+        "Convolution failed with status -3\r\n"
+        "1 Failures\r\n"
+    )
+    assert result.status == reporting_models.TestStatus.FAIL
+    assert result.error_type == "sizer_contract"
+    assert "arm_convolve_s8_get_buffer_size" in result.failure_reason
+    assert "-1" in result.failure_reason
+
+
+def test_parser_keeps_an_oversized_answer_separate_from_a_kernel_defect() -> None:
+    # Different owner: an answer above the static means our generation-time bound disagrees
+    # with the shipped kernel, not that the kernel misbehaved.
+    result = _parse_sizer_case(
+        "HELIA_SIZER_OVER_CAPACITY[arm_convolve_s8_get_buffer_size]: 4096 > 512\r\n"
+        "Convolution failed with status -3\r\n"
+        "1 Failures\r\n"
+    )
+    assert result.error_type == "sizer_capacity"
+    assert "4096" in result.failure_reason and "512" in result.failure_reason
+
+
+def test_parser_classifies_a_wrong_sizer_size_apart_from_wrong_values() -> None:
+    # The existing scalar-equality assertions arrive on the generic mismatch line; the subject
+    # naming a buffer size is what separates them from a values failure.
+    result = _parse_sizer_case("SVDF input ctx size mismatch: expected 32 got 48\r\n1 Failures\r\n")
+    assert result.error_type == "sizer_contract"
+    assert "48" in result.failure_reason and "32" in result.failure_reason
+
+
+def test_parser_still_calls_an_ordinary_value_mismatch_an_output_mismatch() -> None:
+    result = _parse_sizer_case("Mismatch[3]: exp=1.000000 got=2.000000\r\n1 Failures\r\n")
+    assert result.error_type == "output_mismatch"
+
+
+def test_parser_still_classifies_a_plain_kernel_rejection_as_an_api_error() -> None:
+    result = _parse_sizer_case("Convolution failed with status -3\r\n1 Failures\r\n")
+    assert result.error_type == "api_error"
+
+
+def test_sizer_markers_survive_output_truncation() -> None:
+    # The markers are once-per-case verdict lines, so a capture cut down to its summary lines
+    # must keep them or the classification is lost exactly when the output is longest. This
+    # drives a real capture past the truncation cap rather than asserting membership of the
+    # prefix tuple, which would still pass if the retention loop stopped consulting it.
+    parser = reporting_parser.TestResultParser()
+    body = [f"Mismatch[{i}]: exp=1 got=2" for i in range(200)]
+    body.append("HELIA_SIZER_INVALID[arm_convolve_s8_get_buffer_size]: -1")
+    body.append("HELIA_SIZER_OVER_CAPACITY[arm_avgpool_s8_get_buffer_size]: 4096 > 512")
+    body.append("1 Failures")
+    result = parser.parse_fvp_output(
+        output="\n".join(body) + "\n",
+        elf_path=Path("convolve.elf"),
+        cpu="cortex-m55",
+        duration=0.1,
+        exit_code=0,
+    )
+    assert "... (truncated)" in result.output_lines
+    assert "HELIA_SIZER_INVALID[arm_convolve_s8_get_buffer_size]: -1" in result.output_lines
+    assert (
+        "HELIA_SIZER_OVER_CAPACITY[arm_avgpool_s8_get_buffer_size]: 4096 > 512"
+        in result.output_lines
+    )
+
+
+def test_parser_does_not_read_a_sizer_subject_backwards_across_lines() -> None:
+    # The subject class must be line-bounded. A colon-free line ahead of a scalar mismatch
+    # would otherwise be swallowed into the reported subject, and could carry the words that
+    # decide the classification from a line that has nothing to do with a sizer.
+    result = _parse_sizer_case(
+        "gathered buffer size\r\n"
+        "Mismatch[3]: exp=1.000000 got=2.000000\r\n"
+        "1 Failures\r\n"
+    )
+    assert result.error_type == "output_mismatch"
+    assert "\n" not in (result.failure_reason or "")
+
+
+def test_parser_leaves_a_capacity_assertion_that_names_no_size_alone() -> None:
+    # The nearest real line to the rule's edge: it says "bytes", not "buffer size" or
+    # "ctx size", so it is a values failure and must stay one.
+    result = _parse_sizer_case(
+        "LSTM_TEMP_SIZERS temp1_capacity_bytes mismatch: expected 4 got 7\r\n1 Failures\r\n"
+    )
+    assert result.error_type == "output_mismatch"

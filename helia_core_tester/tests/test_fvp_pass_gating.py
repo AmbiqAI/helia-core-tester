@@ -1,6 +1,6 @@
-"""Phase 2 of the generation/bridge unification plan: FVP-pass gating.
+"""FVP-pass gating of the hardware bridge.
 
-Verifies helia_core_tester.perf_stream.fvp_gate correctly consults the most
+Verifies helia_core_tester.hardware.fvp_gate correctly consults the most
 recently recorded FVP test_report_<cpu>_*.json before the hardware bridge
 converts a generated test case into a CaseBundle -- refusing to bridge any
 case FVP itself did not record as PASS, while remaining a no-op when no FVP
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream.fvp_gate import (
+from helia_core_tester.hardware.fvp_gate import (
     FvpCaseFailedGateError,
     FvpCaseStaleGateError,
     find_latest_fvp_report,
@@ -23,7 +23,7 @@ from helia_core_tester.perf_stream.fvp_gate import (
     require_fvp_pass,
 )
 from helia_core_tester.generation.artifact_identity import generated_case_artifact_sha256
-from helia_core_tester.perf_stream.generated_test_bridge import (
+from helia_core_tester.hardware.generated_test_bridge import (
     GeneratedTestCase,
     UnsupportedGeneratedTestError,
     build_case_bundle_from_generated_test,
@@ -58,7 +58,7 @@ def test_no_report_available_is_a_no_op(tmp_path: Path) -> None:
 
 
 def test_missing_report_raises_when_required_explicitly(tmp_path: Path) -> None:
-    from helia_core_tester.perf_stream.fvp_gate import FvpReportUnavailableError
+    from helia_core_tester.hardware.fvp_gate import FvpReportUnavailableError
 
     with pytest.raises(FvpReportUnavailableError):
         require_fvp_pass(
@@ -161,7 +161,7 @@ def test_bridge_skips_case_with_recorded_fvp_failure(tmp_path: Path, monkeypatch
     fake_report_path = _write_fake_report(
         tmp_path, case.cpu, "int", {case.name: {"test_result": {"status": "FAIL"}}}
     )
-    import helia_core_tester.perf_stream.fvp_gate as fvp_gate_module
+    import helia_core_tester.hardware.fvp_gate as fvp_gate_module
 
     monkeypatch.setattr(
         fvp_gate_module, "find_latest_fvp_report", lambda *a, **k: fake_report_path
@@ -185,7 +185,7 @@ def test_bridge_ignores_gate_when_require_fvp_pass_false(tmp_path: Path, monkeyp
     fake_report_path = _write_fake_report(
         tmp_path, case.cpu, "int", {case.name: {"test_result": {"status": "FAIL"}}}
     )
-    import helia_core_tester.perf_stream.fvp_gate as fvp_gate_module
+    import helia_core_tester.hardware.fvp_gate as fvp_gate_module
 
     monkeypatch.setattr(
         fvp_gate_module, "find_latest_fvp_report", lambda *a, **k: fake_report_path
@@ -240,13 +240,13 @@ def _abs_default_s8_case():
 
 
 def _pin_report(monkeypatch: pytest.MonkeyPatch, report_path: Path) -> None:
-    import helia_core_tester.perf_stream.fvp_gate as fvp_gate_module
+    import helia_core_tester.hardware.fvp_gate as fvp_gate_module
 
     monkeypatch.setattr(fvp_gate_module, "find_latest_fvp_report", lambda *a, **k: report_path)
 
 
 def test_evaluate_classifies_stale_absent_failed_and_pass(tmp_path: Path) -> None:
-    from helia_core_tester.perf_stream.fvp_gate import evaluate_fvp_gate
+    from helia_core_tester.hardware.fvp_gate import evaluate_fvp_gate
 
     assert evaluate_fvp_gate(tmp_path, "nope").status == "absent"
 

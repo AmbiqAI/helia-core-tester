@@ -1,0 +1,69 @@
+#include "{{ name }}_batch_matmul.h"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+{# Declare only the buffers this fault mode actually passes to the kernel so a
+   NULL-substituted buffer never becomes an unused static (-Wunused-variable). #}
+{% if fault != "null_output" %}static {{ output_dtype }} {{ name }}_output[{{ output_dims.n * output_dims.h * output_dims.w * output_dims.c }}];
+{% endif %}{% if fault != "null_ctx_buf" %}static uint8_t {{ name }}_buffer[{{ [buffer_size_max, 4] | max }}];
+{% endif %}
+
+/*
+ * Fault-injection test case: exercises an {{ kernel_fn }}
+ * argument-validation branch. Fault mode: {{ fault }}.
+ */
+static int32_t run_batch_matmul(void)
+{
+    const cmsis_nn_context ctx = {
+        .buf = {% if fault == "null_ctx_buf" %}NULL{% else %}{{ name }}_buffer{% endif %},
+        .size = {% if fault == "null_ctx_buf" %}0{% elif fault == "small_ctx_size" %}1{% else %}sizeof({{ name }}_buffer){% endif %},
+    };
+    {{ bmm_params_type | default("cmsis_nn_bmm_params") }} bmm_params = {{ name }}_bmm_params;
+{% if fault == "packed_rhs_adjoint" %}
+    bmm_params.rhs_format = ARM_NN_WEIGHT_FORMAT_NT_N_PACKED;
+{% endif %}
+    cmsis_nn_dims input_rhs_dims = {{ name }}_input_rhs_dims;
+{% if fault == "negative_dim" %}
+    input_rhs_dims.w = -1;
+{% endif %}
+    const {{ input_dtype }} *input_lhs_arg = {% if fault == "null_input" %}NULL{% else %}{{ name }}_input_lhs{% endif %};
+    {{ output_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};
+
+{% if float_kernel %}
+    return {{ kernel_fn }}(
+        &ctx,
+        &bmm_params,
+        &{{ name }}_input_lhs_dims,
+        input_lhs_arg,
+        &input_rhs_dims,
+        {{ name }}_input_rhs,
+        &{{ name }}_output_dims,
+        output_arg
+    );
+{% else %}
+    return {{ kernel_fn }}(
+        &ctx,
+        &bmm_params,
+        &{{ name }}_quant_params,
+        &{{ name }}_input_lhs_dims,
+        input_lhs_arg,
+        &input_rhs_dims,
+        {{ name }}_input_rhs,
+        &{{ name }}_output_dims,
+        output_arg
+    );
+{% endif %}
+}
+
+int32_t {{ name }}_test_case_run(void)
+{
+    int32_t status = run_batch_matmul();
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ validation_label | default("Batch matmul") }}",
+        status,
+        {{ expected_status }}
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(0);
+}
+
+{% include "common/standalone/main.j2" %}

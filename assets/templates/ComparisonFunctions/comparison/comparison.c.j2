@@ -1,15 +1,17 @@
 #include "{{ name }}_comparison.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 #define {{ name|upper }}_OUTPUT_SIZE ({{ output_size }})
-static bool {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+{{ helia_guard_declare("bool", name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
 
 int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input_1,
     const {{ input_dtype }}* __restrict input_2,
     bool* __restrict output
 ) {
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
         NULL,
         input_1,
@@ -33,9 +35,10 @@ int32_t {{ name }}_run(
 int32_t {{ name }}_test_case_run(void)
 {
     int32_t status = {{ name }}_run({{ name }}_input_1, {{ name }}_input_2, {{ name }}_output);
+    int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Comparison") }} output", failures);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("Comparison") }}", status);
 
-    int failures = 0;
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("BOOL") }},
         {{ name }}_output,

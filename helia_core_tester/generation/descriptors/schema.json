@@ -199,6 +199,16 @@
       "type": "string",
       "enum": ["strict", "mask"]
     },
+    "fault": {
+      "description": "Argument fault to inject before the kernel call, selecting the operator's <op>_fault.c.j2 template. Each operator validates the kind against its FAULT_KINDS; shared kinds are null_ctx_buf, null_input, null_output, zero_dim and negative_dim. A fault case asserts the returned status against expected_status and never validates outputs.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"
+    },
+    "expected_status": {
+      "description": "arm_cmsis_nn_status token the kernel call must return. Defaults to ARM_CMSIS_NN_SUCCESS; a fault case normally sets ARM_CMSIS_NN_ARG_ERROR.",
+      "type": "string",
+      "enum": ["ARM_CMSIS_NN_SUCCESS", "ARM_CMSIS_NN_ARG_ERROR", "ARM_CMSIS_NN_NO_IMPL_ERROR", "ARM_CMSIS_NN_FAILURE"]
+    },
     "filter_shape": {
       "$ref": "#/$defs/intArray"
     },
@@ -368,6 +378,20 @@
       "minProperties": 1,
       "additionalProperties": { "type": "string", "minLength": 1 },
       "description": "Int elementwise cases: operand name -> reason the operand is intentionally one-signed after its zero point is applied. Waives the generation-time operand sign-span check for that operand only. This schema is not enforced at load time (#100); the same rule is enforced in code by OperationBase._enforce_int_operand_sign_span."
+    },
+    "expected_input_ctx_size": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "SVDF: the byte count the published input-context sizer must return for this shape, asserted in the generated harness. Measured from the shipped kernel rather than re-derived, so a sizer and a tester that share a formula error cannot agree with each other (#71). Absent means no assertion is emitted."
+    },
+    "expected_output_ctx_size": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "SVDF: the byte count the published output-context sizer must return for this shape, asserted in the generated harness. Same provenance and same absent-means-no-assertion rule as expected_input_ctx_size (#71)."
+    },
+    "ctx_sizer_sentinels": {
+      "type": "boolean",
+      "description": "SVDF: emit the context sizers' documented failure-mode probes for this case, covering the zero return for a degenerate batch and the negative sentinel for a rank or dimension the sizer rejects. The probes call the sizers only; the structs they build never reach the kernel (#71)."
     }
   },
   "$defs": {

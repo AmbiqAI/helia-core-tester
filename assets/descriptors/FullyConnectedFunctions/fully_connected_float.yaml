@@ -365,3 +365,67 @@ comparison:
 # row, so the batch2 case covers the K 64 row groups of the NT_T matmul and not a
 # batch dimension -- and the batch cannot be reached from a descriptor alone. No
 # case in this file exercises a batch. See AmbiqAI/helia-core-tester#106.
+---
+operator: FullyConnected
+name: fully_connected_fault_filter_n_mismatch_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 8]
+filter_shape: [4, 8]
+use_bias: true
+fault: filter_n_mismatch
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: FullyConnected
+name: fully_connected_fault_filter_n_mismatch_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 8]
+filter_shape: [4, 8]
+use_bias: true
+fault: filter_n_mismatch
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: FullyConnected
+name: fully_connected_fault_invalid_layout_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes:
+  input: FP32
+  output: FP32
+  weights: FP32
+  bias: FP32
+input_shape: [1, 8]
+filter_shape: [4, 8]
+use_bias: true
+fault: invalid_layout
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: FullyConnected
+name: fully_connected_fault_invalid_layout_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 8]
+filter_shape: [4, 8]
+use_bias: true
+fault: invalid_layout
+expected_status: ARM_CMSIS_NN_ARG_ERROR

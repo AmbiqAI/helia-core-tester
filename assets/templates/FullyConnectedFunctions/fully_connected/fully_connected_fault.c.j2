@@ -1,0 +1,107 @@
+#include "{{ name }}_fully_connected.h"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+
+{# Declare only the buffers this fault mode actually passes to the kernel so a
+   NULL-substituted buffer never becomes an unused static (-Wunused-variable). #}
+{% if fault != "null_output" %}static {{ output_dtype }} {{ name }}_output[{{ output_dims.n * output_dims.h * output_dims.w * output_dims.c }}];
+{% endif %}{% if fault != "null_ctx_buf" %}static uint8_t {{ name }}_buffer[{{ [buffer_size_max, 4] | max }}];
+{% endif %}
+
+/*
+ * Fault-injection test case: exercises an {{ kernel_fn }}
+ * argument-validation branch. Fault mode: {{ fault }}.
+ */
+static int32_t run_fully_connected(void)
+{
+    const cmsis_nn_context ctx = {
+        .buf = {% if fault == "null_ctx_buf" %}NULL{% else %}{{ name }}_buffer{% endif %},
+        .size = {% if fault == "null_ctx_buf" %}0{% elif fault == "small_ctx_size" %}1{% else %}sizeof({{ name }}_buffer){% endif %},
+    };
+    cmsis_nn_dims filter_dims = {{ name }}_filter_dims;
+{% if fault == "filter_n_mismatch" %}
+    filter_dims.n = {{ input_dims.h * input_dims.w * input_dims.c + 1 }};
+{% endif %}
+    const {{ input_dtype }} *input_arg = {% if fault == "null_input" %}NULL{% else %}{{ name }}_input{% endif %};
+    {{ output_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};
+
+{% if float_kernel %}
+    return {{ kernel_fn }}(
+        &ctx,
+        &{{ name }}_fc_params,
+        &{{ name }}_input_dims,
+        input_arg,
+        &filter_dims,
+        {{ name }}_weights,
+        &{{ name }}_bias_dims,
+        {% if has_biases %}
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        output_arg,
+        {{ "(arm_nn_tensor_layout)(" ~ kernel_layout ~ " + 1)" if fault == "invalid_layout" else kernel_layout }}
+    );
+{% elif kernel_fn == 'arm_fully_connected_s4' %}
+    return arm_fully_connected_s4(
+        &ctx,
+        &{{ name }}_fc_params,
+        &{{ name }}_quant_params,
+        &{{ name }}_input_dims,
+        input_arg,
+        &filter_dims,
+        {{ name }}_weights,
+        &{{ name }}_bias_dims,
+        {% if has_biases %}
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        output_arg
+    );
+{% else %}
+    const cmsis_nn_quant_params quant_params = {
+        {% if quant_params.per_channel %}
+        .multiplier = (int32_t*){{ name }}_multiplier,
+        .shift = (int32_t*){{ name }}_shift,
+        .is_per_channel = 1
+        {% else %}
+        .multiplier = (int32_t*)&{{ name }}_multiplier_val,
+        .shift = (int32_t*)&{{ name }}_shift_val,
+        .is_per_channel = 0
+        {% endif %}
+    };
+    return {{ kernel_fn }}(
+        &ctx,
+        &{{ name }}_fc_params,
+        &quant_params,
+        &{{ name }}_input_dims,
+        input_arg,
+        &filter_dims,
+        {{ name }}_weights,
+        &{{ name }}_bias_dims,
+        {% if has_biases %}
+        {{ name }}_biases,
+        {% else %}
+        NULL,
+        {% endif %}
+        &{{ name }}_output_dims,
+        output_arg
+    );
+{% endif %}
+}
+
+int32_t {{ name }}_test_case_run(void)
+{
+    int32_t status = run_fully_connected();
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ validation_label | default("Fully connected") }}",
+        status,
+        {{ expected_status }}
+    );
+    HELIA_VALIDATE_RETURN_FAILURES(0);
+}
+
+{% include "common/standalone/main.j2" %}

@@ -5,11 +5,42 @@ import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 
 
 class OpBatchMatMul(OperationBase):
     """BatchMatMul operation."""
-    
+
+    FAULT_KINDS = (
+        "null_ctx_buf",
+        "small_ctx_size",
+        "negative_dim",
+        "null_input",
+        "null_output",
+        "packed_rhs_adjoint",
+    )
+
+    def _check_fault_reachable(self, kind: str, context: Dict[str, Any]) -> None:
+        """Reject fault kinds the selected batch-matmul kernel does not diagnose."""
+        kernel_fn = context["kernel_fn"]
+        if context.get("float_kernel"):
+            if kind not in ("null_input", "null_output", "packed_rhs_adjoint"):
+                raise self.fault_unreachable(kind, f"{kernel_fn} has no such guard")
+            params = context["bmm_params"]
+            if kind == "packed_rhs_adjoint" and not (params["adj_x"] or params["adj_y"]):
+                raise self.fault_unreachable(
+                    kind, f"{kernel_fn} only rejects a packed RHS when adj_x or adj_y is set"
+                )
+            return
+        if kind not in ("null_ctx_buf", "small_ctx_size", "negative_dim"):
+            raise self.fault_unreachable(kind, f"{kernel_fn} does not check {kind}")
+        if kernel_fn != "arm_batch_matmul_s8":
+            raise self.fault_unreachable(kind, f"{kernel_fn} validates no arguments")
+        if "mve" not in self.required_capabilities():
+            raise self.fault_unreachable(
+                kind, f"{kernel_fn} only validates arguments under ARM_MATH_MVEI; add required_capabilities: [mve]"
+            )
+
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for BatchMatMul."""
         input_1_shape = self.desc['input_1_shape']
@@ -44,7 +75,12 @@ class OpBatchMatMul(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
-        super().convert_to_tflite(model, out_path, rep_seed)
+        converter = converter_for_batched_model(
+            model, [self.desc['input_1_shape'], self.desc['input_2_shape']]
+        )
+        self._apply_activation_quantization(converter)
+        converter.representative_dataset = self._representative_dataset_gen
+        self._write_tflite_bytes(out_path, converter.convert())
     
     def _numpy_dtype_to_c_type(self, np_dtype: np.dtype) -> str:
         """Map numpy dtype to C type string."""
@@ -351,6 +387,12 @@ class OpBatchMatMul(OperationBase):
                 'validation_mode': 'float',
             }
             context.update(nonfinite_context)
+            fault = self.fault_kind()
+            c_template = "FullyConnectedFunctions/batch_matmul/batch_matmul.c.j2"
+            if fault:
+                self._check_fault_reachable(fault, context)
+                context.update(self.fault_context())
+                c_template = "FullyConnectedFunctions/batch_matmul/batch_matmul_fault.c.j2"
             includes_api_dir = output_dir / "includes"
             includes_api_dir.mkdir(parents=True, exist_ok=True)
             
@@ -359,7 +401,7 @@ class OpBatchMatMul(OperationBase):
             with open(h_path, 'w') as f:
                 f.write(h_content)
             
-            c_content = self.render_template("FullyConnectedFunctions/batch_matmul/batch_matmul.c.j2", context)
+            c_content = self.render_template(c_template, context)
             c_path = output_dir / f"{name}_batch_matmul.c"
             with open(c_path, 'w') as f:
                 f.write(c_content)
@@ -479,7 +521,13 @@ class OpBatchMatMul(OperationBase):
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
             'buffer_size_max': buffer_size_max,
         }
-        
+        fault = self.fault_kind()
+        c_template = "FullyConnectedFunctions/batch_matmul/batch_matmul.c.j2"
+        if fault:
+            self._check_fault_reachable(fault, context)
+            context.update(self.fault_context())
+            c_template = "FullyConnectedFunctions/batch_matmul/batch_matmul_fault.c.j2"
+
         # Render templates
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)
@@ -489,7 +537,7 @@ class OpBatchMatMul(OperationBase):
         with open(h_path, 'w') as f:
             f.write(h_content)
         
-        c_content = self.render_template("FullyConnectedFunctions/batch_matmul/batch_matmul.c.j2", context)
+        c_content = self.render_template(c_template, context)
         c_path = output_dir / f"{name}_batch_matmul.c"
         with open(c_path, 'w') as f:
             f.write(c_content)

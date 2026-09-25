@@ -1,4 +1,4 @@
-"""Regression tests for the BasicMathFunctions Add/Sub perf-stream hardware bridge.
+"""Regression tests for the BasicMathFunctions Add/Sub hardware bridge.
 
 Unlike ConvolutionFunctions' generated header (which has a named `cmsis_nn_conv_params`
 scalar-params struct), the Add/Sub generated `.c` file inlines all quant scalars as
@@ -21,12 +21,12 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.perf_stream.generated_test_bridge import (
+from helia_core_tester.hardware.generated_test_bridge import (
     build_case_bundle_from_generated_test,
     discover_generated_tests,
 )
-from helia_core_tester.perf_stream.case_bundle import load_case_bundle
-from helia_core_tester.perf_stream.kernel_registry import lookup_kernel_id
+from helia_core_tester.hardware.case_bundle import load_case_bundle
+from helia_core_tester.hardware.kernel_registry import lookup_kernel_id
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

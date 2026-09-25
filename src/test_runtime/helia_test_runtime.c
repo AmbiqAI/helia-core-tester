@@ -1,6 +1,7 @@
 #include "test_runtime/helia_test_runtime.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #ifdef USING_FVP_CORSTONE_300
 extern void uart_init(void);
@@ -155,4 +156,114 @@ void helia_test_nonfinite_mismatch_summary(int count)
     if (count > 0) {
         printf("HELIA_NONFINITE_MISMATCHES n=%d\r\n", count);
     }
+}
+
+void helia_guard_arm(uint8_t *head, uint8_t *tail, void *body, size_t body_bytes, bool poison_body)
+{
+    memset(head, HELIA_GUARD_CANARY_BYTE, HELIA_GUARD_BYTES);
+    memset(tail, HELIA_GUARD_CANARY_BYTE, HELIA_GUARD_BYTES);
+    if (poison_body && body != NULL && body_bytes != 0) {
+        memset(body, HELIA_GUARD_POISON_BYTE, body_bytes);
+    }
+}
+
+void helia_guard_check(const char *label, const uint8_t *head, const uint8_t *tail, int *failures)
+{
+    unsigned int i;
+    int head_breach = 0;
+    int tail_breach = 0;
+    for (i = 0; i < HELIA_GUARD_BYTES; ++i) {
+        if (head[i] != HELIA_GUARD_CANARY_BYTE) {
+            head_breach = 1;
+            break;
+        }
+    }
+    for (i = 0; i < HELIA_GUARD_BYTES; ++i) {
+        if (tail[i] != HELIA_GUARD_CANARY_BYTE) {
+            tail_breach = 1;
+            break;
+        }
+    }
+    if (head_breach || tail_breach) {
+        ++(*failures);
+        /* A corrupted head canary is a write before the buffer (underrun); a
+         * corrupted tail canary is a write past it (overrun). Report which
+         * so the direction of the boundary defect isn't misidentified. */
+        printf("GuardBreach[%s]: %s%s%s detected (canary corrupted)\r\n",
+               label,
+               head_breach ? "underrun" : "",
+               (head_breach && tail_breach) ? " and " : "",
+               tail_breach ? "overrun" : "");
+    }
+}
+
+void helia_guard_check_untouched(const char *label, const void *body, size_t body_bytes, int *failures)
+{
+    const uint8_t *bytes = (const uint8_t *)body;
+    size_t i;
+    if (body == NULL) {
+        return;
+    }
+    for (i = 0; i < body_bytes; ++i) {
+        if (bytes[i] != HELIA_GUARD_POISON_BYTE) {
+            ++(*failures);
+            /* Reported as a guard breach: the kernel returned an error status
+             * for this call, so any byte it wrote is an out-of-contract write
+             * rather than a value mismatch. */
+            printf("GuardBreach[%s]: body write detected at byte %u despite rejected call (poison overwritten)\r\n",
+                   label, (unsigned int)i);
+            return;
+        }
+    }
+}
+
+static size_t helia_guard_slack_bytes(size_t body_bytes, size_t used_bytes)
+{
+    size_t slack;
+    if (used_bytes >= body_bytes) {
+        return 0;
+    }
+    slack = body_bytes - used_bytes;
+    return slack < HELIA_GUARD_BYTES ? slack : HELIA_GUARD_BYTES;
+}
+
+void helia_guard_stamp_at(void *body, size_t body_bytes, size_t used_bytes)
+{
+    size_t slack = helia_guard_slack_bytes(body_bytes, used_bytes);
+    if (body != NULL && slack != 0) {
+        memset((uint8_t *)body + used_bytes, HELIA_GUARD_CANARY_BYTE, slack);
+    }
+}
+
+void helia_guard_check_at(const char *label, const void *body, size_t body_bytes, size_t used_bytes, int *failures)
+{
+    size_t slack = helia_guard_slack_bytes(body_bytes, used_bytes);
+    const uint8_t *slack_start = (const uint8_t *)body + used_bytes;
+    size_t i;
+    if (body == NULL) {
+        return;
+    }
+    for (i = 0; i < slack; ++i) {
+        if (slack_start[i] != HELIA_GUARD_CANARY_BYTE) {
+            ++(*failures);
+            printf("GuardBreach[%s]: overrun detected (canary corrupted)\r\n", label);
+            return;
+        }
+    }
+}
+
+/*
+ * Printed rather than returning a bare argument error, so the report can tell a
+ * sizer answering outside its documented contract from a kernel rejecting its
+ * arguments. The failure count is left to the caller's existing status path so
+ * a case still emits exactly one failure summary line.
+ */
+void helia_test_sizer_invalid(const char *label, long long value)
+{
+    printf("HELIA_SIZER_INVALID[%s]: %lld\r\n", label, value);
+}
+
+void helia_test_sizer_over_capacity(const char *label, long long value, long long capacity)
+{
+    printf("HELIA_SIZER_OVER_CAPACITY[%s]: %lld > %lld\r\n", label, value, capacity);
 }

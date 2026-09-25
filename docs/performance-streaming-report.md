@@ -21,19 +21,19 @@ This snapshot now includes both the hardware-independent proof path and a live A
   - p90
   - p99
   - unsupported/overflow propagation
-- Result-bundle writer under `artifacts/reports/performance_stream/<session_id>/`.
-- Real Apollo510 hardware runner: `helia_core_tester/perf_stream/hardware_run.py`.
+- Result-bundle writer under `artifacts/reports/hardware/<session_id>/`.
+- Board-keyed hardware runner: `helia_core_tester/hardware/session_runner.py`.
 
 ### Firmware-side
 
 - Apollo510/Cortex-M55 benchmark-server target: `hct_benchmark_server`.
 - Real C HCTP encoder/decoder.
-- Real firmware HELLO + kernel-catalog frame emission.
+- Real firmware TARGET_INFO + kernel-catalog frame emission.
 - Real firmware SEGGER RTT transport binding using neuralspotx RTT target sources.
 - Real firmware session loop for:
-  - `HELLO_ACK`
-  - `CAPABILITIES`
-  - `LOAD_PLAN`
+  - `TARGET_INFO_ACK`
+  - `KERNEL_CATALOG`
+  - `SESSION_PLAN`
   - `REQUEST_CASE`
   - `CASE_META`
   - `REQUEST_BLOB`
@@ -74,7 +74,7 @@ This snapshot now includes both the hardware-independent proof path and a live A
 
 ## Final firmware size and margins
 
-Measured from `artifacts/perf_stream/benchmark_server/memory_report.json`:
+Measured from `artifacts/hardware/benchmark_server/memory_report.json`:
 
 - Flash image: **332,452 / 4,128,768 bytes** (**8.05%**)  
 - TCM static before heap: **56,212 / 507,904 bytes** (**11.07%**)  
@@ -83,24 +83,25 @@ Measured from `artifacts/perf_stream/benchmark_server/memory_report.json`:
 
 Primary artifacts:
 
-- `build/perf_stream/benchmark_server_gcc2/perf_stream/hct_benchmark_server.elf`
-- `build/perf_stream/benchmark_server_gcc2/perf_stream/hct_benchmark_server.bin`
-- `build/perf_stream/benchmark_server_gcc2/perf_stream/hct_benchmark_server.map`
-- `artifacts/perf_stream/benchmark_server/memory_report.json`
+- `build/hardware/benchmark_server_gcc2/hardware/hct_benchmark_server.elf`
+- `build/hardware/benchmark_server_gcc2/hardware/hct_benchmark_server.bin`
+- `build/hardware/benchmark_server_gcc2/hardware/hct_benchmark_server.map`
+- `artifacts/hardware/benchmark_server/memory_report.json`
 
 ## Commands run
 
-### Targeted perf-stream tests
+### Targeted hardware tests
 
 ```bash
 uv run pytest -q \
-  helia_core_tester/tests/test_perf_stream_hctp.py \
-  helia_core_tester/tests/test_perf_stream_vertical_slice.py \
-  helia_core_tester/tests/test_perf_stream_transfer_measurement.py \
-  helia_core_tester/tests/test_perf_stream_c_wire_compat.py \
-  helia_core_tester/tests/test_perf_stream_firmware_messages.py \
-  helia_core_tester/tests/test_perf_stream_firmware_session.py \
-  helia_core_tester/tests/test_perf_stream_result_bundle.py
+  helia_core_tester/tests/test_hardware_hctp.py \
+  helia_core_tester/tests/test_hardware_wire.py \
+  helia_core_tester/tests/test_hardware_vertical_slice.py \
+  helia_core_tester/tests/test_hardware_transfer_measurement.py \
+  helia_core_tester/tests/test_hardware_c_wire_compat.py \
+  helia_core_tester/tests/test_hardware_firmware_messages.py \
+  helia_core_tester/tests/test_hardware_firmware_session.py \
+  helia_core_tester/tests/test_hardware_result_bundle.py
 ```
 
 Observed result:
@@ -122,26 +123,36 @@ Those 11 failures remain the same pre-existing/unrelated failures previously bas
 ### Benchmark-server build + flash
 
 ```bash
-cmake --build build/perf_stream/benchmark_server_gcc2 --target hct_benchmark_server_flash
+uv run helia_core_tester hardware flash --board apollo510_evb
 ```
+
+(At the time of the original run this was a bare `cmake --build ... --target
+hct_benchmark_server_flash` against `build/hardware/benchmark_server_gcc2`; the
+board-keyed CLI now builds into `build/hardware/<board>` and flashes only when
+the ELF changed.)
 
 Real transcript captured at:
 
-- `artifacts/perf_stream/hardware_probe/hct_benchmark_server_flash.txt`
+- `artifacts/hardware/hardware_probe/hct_benchmark_server_flash.txt`
 
 ### Real Apollo510 streaming session
 
+The generated suite is streamed with `hardware stream` (or end to end with
+`hardware run`); the two-kernel demo session used for this report is library code:
+
 ```bash
+uv run helia_core_tester hardware stream --board apollo510_evb --serial-no 1160002276
+
 uv run python - <<'PY'
 from pathlib import Path
-from helia_core_tester.perf_stream.hardware_run import run_apollo510_stream_session
-run_apollo510_stream_session(Path.cwd(), serial_no=1160002276, session_id='apollo510-live-session')
+from helia_core_tester.hardware.session_runner import run_demo_session
+run_demo_session(Path.cwd(), serial_no=1160002276, session_id='apollo510-live-session')
 PY
 ```
 
 Real transcript captured at:
 
-- `artifacts/perf_stream/hardware_probe/apollo510_hardware_run.txt`
+- the RTT transcript of the first live Apollo510 probe under `artifacts/hardware/hardware_probe/` (not committed)
 
 ## Real hardware evidence collected
 
@@ -157,16 +168,16 @@ Real flash succeeded through the NSX-generated target with the connected on-boar
 - programmed range: `335872 bytes`
 - reported program speed: `210 KB/s`
 
-### Live HELLO / RTT session
+### Live TARGET_INFO / RTT session
 
-The benchmark server emitted a real HELLO frame over RTT and completed a real host-target session using the same HCTP framing bytes as the Python implementation.
+The benchmark server emitted a real TARGET_INFO frame over RTT and completed a real host-target session using the same HCTP framing bytes as the Python implementation.
 
 Observed real protocol sequence for the live run included:
 
-- `RX:HELLO`
-- `TX:HELLO_ACK`
-- `TX:LOAD_PLAN`
-- `RX:CAPABILITIES`
+- `RX:TARGET_INFO`
+- `TX:TARGET_INFO_ACK`
+- `RX:KERNEL_CATALOG`
+- `TX:SESSION_PLAN`
 - `RX:REQUEST_CASE`
 - `TX:CASE_META`
 - `RX:REQUEST_BLOB`
@@ -182,7 +193,7 @@ Observed real protocol sequence for the live run included:
 
 ### Real correctness results
 
-From `artifacts/perf_stream/hardware_probe/apollo510_hardware_run.txt` / `artifacts/reports/performance_stream/apollo510-live-session/`:
+From the first live Apollo510 probe transcript (`artifacts/hardware/hardware_probe/`) and `artifacts/reports/hardware/apollo510-live-session/`:
 
 - `abs_hw_live` (`arm_abs_s8`): correctness **passed**
 - `conv_hw_live` (`arm_convolve_s8`): correctness **passed**
@@ -215,7 +226,7 @@ Representative raw samples from the real run:
 
 Generated from the live Apollo510 run:
 
-- `artifacts/reports/performance_stream/apollo510-live-session/`
+- `artifacts/reports/hardware/apollo510-live-session/`
   - `session_manifest.json`
   - `session_summary.json`
   - `memory_report.json`
@@ -236,8 +247,8 @@ Two genuine hardware issues were hit and resolved during bring-up:
 
 1. **NSX flash target path bug**  
    The generated SEGGER flash target initially tried to load:
-   `build/perf_stream/benchmark_server_gcc2/hct_benchmark_server.bin`  
-   while the actual `.bin` lived under `.../perf_stream/hct_benchmark_server.bin`.  
+   `build/hardware/benchmark_server_gcc2/hct_benchmark_server.bin`  
+   while the actual `.bin` lived under `.../hardware/hct_benchmark_server.bin`.  
    Fix: copy the built `.bin`/`.elf` into the build root after link so the NSX-generated flash target can find them.
 
 2. **RTT auto-discovery failure from SEGGER CLI tools**  
@@ -253,41 +264,62 @@ Additionally, the first live Conv2D correctness attempt stalled because the MVE 
 ### Verified live on Apollo510
 
 - real cross-built firmware flashes and boots
-- real HELLO emission over RTT
+- real TARGET_INFO emission over RTT
 - real host RTT attach through J-Link
-- real HCTP HELLO/ACK/plan/case/blob/correctness/performance/session messaging
+- real HCTP target-info/catalog/plan/case/blob/correctness/performance/session messaging
 - real single-flash persistent session across multiple operators
 - real one-case-at-a-time blob pull from target
 - real correctness execution for `arm_abs_s8`
 - real correctness execution for `arm_convolve_s8`
 - real output reconstruction on host
 - real DWT cycle measurements from hardware
-- real PMU event measurements from hardware
-- real result-bundle generation from hardware data
+- real PMU event measurements from hardware: `ARM_PMU_CPU_CYCLES` from CCNTR in every
+  pass (120-260 cycles above the DWT window, consistently) plus up to four chained
+  32-bit event counters per pass; `--pmu-counters mve:all --pmu-counters cpu:default`
+  captures all 34 MVE events over 9 passes plus the cpu pass on ConvolutionFunctions
+  cases with every entry `supported=1`
+- real PMU overflow detection: with unchained 16-bit counters a large conv case
+  (`convolve_case_03_s8`, ~238k instructions per invocation) sets the overflow status
+  bit, and the bundle marks it `overflow_detected=true` / `valid_for_regression=false`;
+  the same case chained reads the full count (952344 raw = the unchained low half +
+  14 x 65536) with no overflow
+- 32-case sessions: an 8-case BasicMath run that previously took 2 batches of 4 now
+  runs in a single batch (medians within 0.3% of the pre-change bundle)
+- real result-bundle generation from hardware data, including per-counter columns and
+  wall-clock stage timing
 
 ### Still not verified / still partial
 
-- PMU overflow handling on real hardware was not stress-tested to overflow.
+- The DWT-only firmware path (`__PMU_PRESENT == 0`, e.g. a Cortex-M4 board) is only
+  exercised by the host-compiled C harness, not on hardware.
 - Auto-calibration with `iterations_per_sample = 0` exists in firmware logic but was not exercised in the live Apollo510 run; the live run used fixed `iterations=4` from the case timing plan.
-- The current live session uses one common timing plan for both cases because the host `LOAD_PLAN` format is session-scoped; per-case live timing plans are not implemented yet.
+- The current live session uses one common timing plan for both cases because the host `SESSION_PLAN` format is session-scoped; per-case live timing plans are not implemented yet.
 - JLinkRTTLogger/JLinkRTTClient auto-discovery was not made to work; the working live path uses `pylink` + explicit RTT control-block address.
 - FVP execution remains unverified here.
 
 ## Exact hardware smoke-test steps
 
-1. Build / flash:
+1. Build / flash (serial resolves from `--serial-no`, `$HPX_JLINK_SERIAL`, or the
+   single connected probe):
 
 ```bash
-cmake --build build/perf_stream/benchmark_server_gcc2 --target hct_benchmark_server_flash
+uv run helia_core_tester hardware flash --board apollo510_evb
 ```
 
-2. Run one live Apollo510 session and write the real result bundle:
+2. Stream the generated suite and write the real result bundle (the whole
+   generate -> build -> flash -> stream pipeline is `hardware run`):
+
+```bash
+uv run helia_core_tester hardware stream --board apollo510_evb --session-id apollo510-live-session
+```
+
+   The two-kernel demo session is still callable as library code:
 
 ```bash
 uv run python - <<'PY'
 from pathlib import Path
-from helia_core_tester.perf_stream.hardware_run import run_apollo510_stream_session
-result, bundle = run_apollo510_stream_session(Path.cwd(), serial_no=1160002276, session_id='apollo510-live-session')
+from helia_core_tester.hardware.session_runner import run_demo_session
+result, bundle = run_demo_session(Path.cwd(), serial_no=1160002276, session_id='apollo510-live-session')
 print(bundle)
 for case in result.cases:
     print(case.case_bundle.case_id, case.statistics.median_cycles)
@@ -297,7 +329,7 @@ PY
 3. Inspect artifacts:
 
 ```bash
-ls artifacts/reports/performance_stream/apollo510-live-session
-cat artifacts/reports/performance_stream/apollo510-live-session/case_summary.csv
-cat artifacts/reports/performance_stream/apollo510-live-session/raw_samples.csv
+ls artifacts/reports/hardware/apollo510-live-session
+cat artifacts/reports/hardware/apollo510-live-session/case_summary.csv
+cat artifacts/reports/hardware/apollo510-live-session/raw_samples.csv
 ```

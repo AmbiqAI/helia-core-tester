@@ -254,7 +254,7 @@ def test_s8_fully_connected_bias_reaches_the_kernel_via_the_weight_sum(tmp_path:
 
     ``arm_vector_sum_s8`` accumulates the bias into the per-row sum and the
     kernel is then called with a NULL bias pointer.  The header still declares
-    the bias array, because the perf-stream bridge rebuilds the sum on device
+    the bias array, because the hardware bridge rebuilds the sum on device
     from it, so the two have to agree.
     """
     from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import vector_sum_s8

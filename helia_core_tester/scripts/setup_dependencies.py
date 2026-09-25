@@ -510,7 +510,7 @@ def setup_nsx_ambiq_sdk(project_root: Path, downloads_dir: Optional[Path] = None
 
 def setup_neuralspotx(downloads_dir: Path, force: bool = False) -> None:
     """Clone the neuralspotx (NSX workspace tooling) repo for its RTT sources
-    (examples/coremark/src/rtt/SEGGER_RTT.*), consumed by the perf-stream hardware
+    (examples/coremark/src/rtt/SEGGER_RTT.*), consumed by the hardware
     firmware build. NOT AmbiqAI/neuralSPOT (capital SPOT, the separate C SDK/example
     repo) -- that repo has a different layout and lacks this path entirely.
     """
@@ -703,8 +703,8 @@ Examples:
         action="store_true",
         help="Also fetch the remaining real-hardware build dependencies (neuralspotx and "
         "the generated NSX toolchain file). The nsx-ambiq-sdk clone itself is fetched by "
-        "default now -- pass --skip-nsx-sdk to opt out. `helia_core_tester perf-stream "
-        "flash/build-firmware/run-generated` also fetch these lazily on first use if "
+        "default now -- pass --skip-nsx-sdk to opt out. `helia_core_tester hardware "
+        "build/flash/run` also fetch these lazily on first use if "
         "missing, so this flag is only needed to pre-fetch them ahead of time."
     )
 

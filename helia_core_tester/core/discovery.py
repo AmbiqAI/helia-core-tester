@@ -244,7 +244,7 @@ def ensure_arm_toolchain_on_path(repo_root: Optional[Path] = None) -> None:
     """Prepend the downloaded ARM GCC toolchain's bin/ to this process's PATH, once,
     for the lifetime of the whole `helia_core_tester` invocation.
 
-    Several call sites across both the FVP and perf-stream/hardware paths (memory
+    Several call sites across both the FVP and hardware paths (memory
     reports, kernel-symbol-ref generation, RTT address discovery) shell out to bare
     `arm-none-eabi-{nm,size,objdump}` -- CMake's own compiler/linker/objcopy
     invocations use absolute paths from the toolchain file, but these don't. Calling

@@ -45,6 +45,12 @@ def _fake_checkout(root: Path) -> Path:
     data_dir = root / "Tests" / "UnitTest" / "TestCases" / "TestData" / "lstm_1"
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "output.h").write_text("const int8_t lstm_1_output[] = {1, 2, 3};\n")
+    tables = root / "Source" / "NNSupportFunctions"
+    tables.mkdir(parents=True, exist_ok=True)
+    (tables / "arm_nntables.c").write_text("const uint16_t sigmoid_table_uint16[256] = {0, 1};\n")
+    schema_dir = root / "Tests" / "UnitTest" / "RefactoredTestGen"
+    schema_dir.mkdir(parents=True, exist_ok=True)
+    (schema_dir / "schema.fbs").write_text("table Model {}\n")
     return root
 
 
@@ -171,7 +177,22 @@ def test_checkout_content_is_the_identity_when_the_root_is_not_a_git_tree(
     header = root / "Include" / "arm_nnfunctions.h"
     header.write_text("/* sizers hidden */\n")
     monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
-    assert reuse.cmsis_nn_checkout_identity() != perturbed
+    perturbed = reuse.cmsis_nn_checkout_identity()
+    assert perturbed != baseline
+
+    # The two files generation reads outside Include/ and TestData/: the s16
+    # activation table and the LSTM reference schema. An uncommitted edit to
+    # either must not let a stale golden be reused.
+    tables = root / "Source" / "NNSupportFunctions" / "arm_nntables.c"
+    tables.write_text(tables.read_text().replace("{0, 1}", "{0, 2}"))
+    monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
+    after_table_edit = reuse.cmsis_nn_checkout_identity()
+    assert after_table_edit != perturbed
+
+    schema = root / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
+    schema.write_text("table Model { version:int; }\n")
+    monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
+    assert reuse.cmsis_nn_checkout_identity() != after_table_edit
 
 
 def test_a_clean_git_checkout_is_identified_by_its_commit(monkeypatch, tmp_path: Path) -> None:

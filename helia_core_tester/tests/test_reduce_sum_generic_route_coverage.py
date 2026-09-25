@@ -1,5 +1,8 @@
-"""The width-only ReduceSum cases take the kernel's generic route, and the goldens the harness
-ships for them agree with the real interpreter rather than only with our own reference (#131)."""
+"""Which route each float ReduceSum case takes, pinned against the kernel's own guards, and
+the shipped goldens checked against the real interpreter rather than only against our own
+reference. Reducing a spatial axis alone takes the channel-preserving spatial path added by
+ns-cmsis-nn#488; reducing one together with the channel axis is the only thing left that
+reaches the generic traversal (#131, #488)."""
 
 import re
 from pathlib import Path
@@ -14,12 +17,19 @@ DESCRIPTORS = (
     TESTER_ROOT / "assets" / "descriptors" / "BasicMathFunctions" / "reduce_sum_float.yaml"
 )
 
-_NEW_CASES = (
+# The spatial path claims these: batch and channel retained, a spatial axis reduced.
+_SPATIAL_CASES = (
     "reduce_sum_float_axis_h_adapter_f32",
     "reduce_sum_float_axis_h_adapter_tail_f16",
     "reduce_sum_float_axis_w_c128_f32",
     "reduce_sum_float_axis_w_rows_tail_f32",
     "reduce_sum_float_axis_w_rows_tail_f16",
+)
+# Reducing a spatial axis together with the channel axis fails that guard and leaves no
+# contiguous suffix, so these are the only cases in the family that reach the generic body.
+_GENERIC_CASES = (
+    "reduce_sum_float_axis_hc_f32",
+    "reduce_sum_float_axis_hc_f16",
 )
 _SUFFIX_CONTROLS = ("reduce_sum_float_axis_c_f32", "reduce_sum_float_axis_hwc_f32")
 
@@ -49,10 +59,38 @@ def _flatten_suffix_start(in_dims, axis_arr):
     return -1
 
 
+def _takes_spatial_path(in_dims, axis_arr):
+    """Transcription of the channel-preserving spatial guard in ns-cmsis-nn
+    Source/BasicMathFunctions/arm_reduce_sum_f32.c, whose float16 twin carries the same clauses
+    in a different order. It is tried before the flatten helper, so a shape that satisfies it
+    never reaches either the flatten or the generic body.
+
+    Two groups of clauses are omitted deliberately. The overflow check needs more than 2^31
+    elements, which no generated case can carry. The output-dimension agreement clauses are
+    satisfied by construction, because build_reduce_output_dims emits exactly the dimensions the
+    kernel expects for every descriptor, including the ones setting keepdims false."""
+    reduces_spatial = bool(axis_arr[1] or axis_arr[2])
+    return (
+        not axis_arr[0]
+        and not axis_arr[3]
+        and reduces_spatial
+        and all(d > 0 for d in in_dims)
+    )
+
+
 def _route_of(desc):
     axes = set(desc["axes"])
     axis_arr = [1 if i in axes else 0 for i in range(4)]
+    if _takes_spatial_path(desc["input_shape"], axis_arr):
+        return "spatial"
     return "flatten" if _flatten_suffix_start(desc["input_shape"], axis_arr) >= 0 else "generic"
+
+
+def test_the_spatial_guard_needs_the_channel_axis_retained():
+    # The distinguishing property, pinned so a future simplification is caught: reducing h
+    # alone is spatial, reducing h with c is not.
+    assert _takes_spatial_path([1, 3, 4, 5], [0, 1, 0, 0])
+    assert not _takes_spatial_path([1, 3, 4, 5], [0, 1, 0, 1])
 
 
 def test_the_transcribed_helper_folds_size_one_dimensions_in():
@@ -61,9 +99,24 @@ def test_the_transcribed_helper_folds_size_one_dimensions_in():
     assert _flatten_suffix_start([1, 3, 4, 5], [0, 0, 1, 0]) == -1
 
 
-@pytest.mark.parametrize("name", _NEW_CASES)
-def test_new_cases_take_the_generic_route(name):
+@pytest.mark.parametrize("name", _GENERIC_CASES)
+def test_the_mixed_axis_cases_take_the_generic_route(name):
     assert _route_of(_descriptors()[name]) == "generic"
+
+
+@pytest.mark.parametrize("name", _SPATIAL_CASES)
+def test_the_shape_cases_take_the_spatial_route(name):
+    # They were written before that path existed, when these shapes fell to the generic body.
+    assert _route_of(_descriptors()[name]) == "spatial"
+
+
+def test_the_mixed_axis_pair_is_the_only_generic_cover_in_the_family():
+    generic = {
+        name
+        for name, desc in _descriptors().items()
+        if name.startswith("reduce_sum_float") and _route_of(desc) == "generic"
+    }
+    assert generic == set(_GENERIC_CASES)
 
 
 @pytest.mark.parametrize("name", _SUFFIX_CONTROLS)

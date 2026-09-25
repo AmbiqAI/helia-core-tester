@@ -1,9 +1,12 @@
 #include "{{ name }}_squared_difference.h"
 #include "arm_nnfunctions.h"
+#include <string.h>
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
+{% from "common/standalone/validation.j2" import validation_outputs with context %}
 
 #define {{ name|upper }}_OUTPUT_SIZE ({{ output_dims.n }} * {{ output_dims.h }} * {{ output_dims.w }} * {{ output_dims.c }})
-static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+{{ helia_guard_declare(output_dtype, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
 
 int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input1,
@@ -11,6 +14,14 @@ int32_t {{ name }}_run(
     {{ output_dtype }}* __restrict output
 ) {
     // Call squared difference kernel
+{% if float_kernel %}
+    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
+        input1,
+        input2,
+        output,
+        {{ block_size }}           // block_size
+    );
+{% else %}
     arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
 {% if call_style and call_style|lower == 'elementwise' %}
         input1,
@@ -50,27 +61,31 @@ int32_t {{ name }}_run(
         {{ out_activation_max }}  // out_activation_max
 {% endif %}
     );
+{% endif %}
     
     return kernel_status;
 }
 
 int32_t {{ name }}_test_case_run(void)
 {
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     int32_t status = {{ name }}_run({{ name }}_input1, {{ name }}_input2, {{ name }}_output);
+    int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("SquaredDifference") }} output", failures);
     HELIA_VALIDATE_STATUS("{{ validation_label | default("SquaredDifference") }}", status);
 
-    int failures = 0;
-    HELIA_VALIDATE_OUTPUTS(
-        {{ validation_mode_token | default("TOLERANT_INT") }},
-        {{ name }}_output,
-        {{ name }}_expected_output,
-        {{ name|upper }}_OUTPUT_SIZE,
-        {{ validation_tolerance | default(1) }},
-        {{ validation_atol }}f,
-        {{ validation_rtol }}f,
-        {{ validation_report_limit | default(20) }},
-        failures
-    );
+{% if bit_exact %}
+    /* Pinned boundary case: the golden is exact, so compare storage bits. The
+       tolerance validator cannot tell -0 from +0; this can. */
+    for (int i = 0; i < {{ name|upper }}_OUTPUT_SIZE; ++i) {
+        uint16_t actual;
+        memcpy(&actual, &{{ name }}_output[i], sizeof(actual));
+        HELIA_VALIDATE_FLOAT_BITS(actual, {{ name }}_expected_bits[i], 0x7c00u, 0, i,
+                                  {{ validation_report_limit | default(20) }}, failures);
+    }
+{% else %}
+{{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
+{% endif %}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 

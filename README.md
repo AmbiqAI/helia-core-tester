@@ -19,6 +19,8 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester clean-all`
 - `uv run helia_core_tester doctor`
 - `uv run helia_core_tester coverage-merge`
+- `uv run helia_core_tester boards` / `probes list` / `probes match`
+- `uv run helia_core_tester hardware run|build|flash|stream|memory-report`
 
 Removed interfaces:
 - `gap-check` subcommand
@@ -27,6 +29,79 @@ Removed interfaces:
 - `--regen-generated-tests-after-cleanup`
 - report-dir override flags
 - `--include-float` (replaced by `--suite float` or `--suite both`)
+- the `perf-stream` command group and `scripts/run_hardware_perf_suite.sh` (replaced by `hardware run`, see below)
+
+## Hardware CLI
+
+The FVP commands above simulate; `hardware` runs the generated kernel tests on a
+real Ambiq board over SEGGER RTT (one universal `hct_benchmark_server` firmware,
+per-case data streamed from the host). The whole pipeline is one command:
+
+```bash
+uv run helia_core_tester hardware run --board apollo510_evb
+```
+
+That generates the tests for the board's CPU, builds the firmware, flashes it only
+unless the board already confirms (via its TARGET_INFO build id) that it runs this exact
+build, streams every bridged case,
+writes the result bundle under `artifacts/reports/hardware/<session-id>/`,
+and prints the pass/fail summary (`--json` prints one JSON document on stdout
+instead, with the human output on stderr; the exit code is non-zero on any
+correctness failure). Useful narrowing flags: `--suite int|float|both`,
+`--family`, `--test-name`, `--limit`, `--precision fp16|fp32` (float-only shortcut,
+not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|strict`,
+`--skip-generate`, `--skip-flash`, `--force-flash`. The steps are also available individually as
+`hardware build`, `hardware flash [--force]`, `hardware stream` and
+`hardware memory-report`.
+
+PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
+`hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or
+`mve`; `SELECTION` is `all`, `default`, or a comma-separated list of `ARM_PMU_*`
+names from `assets/pmu/armv8m_pmu_events.json`:
+
+```bash
+uv run helia_core_tester hardware run --board apollo510_evb --family ConvolutionFunctions \
+  --pmu-counters mve:all --pmu-counters cpu:default
+uv run helia_core_tester hardware stream --pmu-counters mve:ARM_PMU_MVE_STALL,ARM_PMU_MVE_PRED
+```
+
+The default is every group at its default selection. Each group runs in passes of
+up to four chained 32-bit event counters (the Cortex-M55 PMU has eight 16-bit slots),
+so `mve:all` costs nine passes per case, and one run takes at most 16 passes (the
+firmware's `HCT_SERVER_MAX_PASSES`; `cpu:all memory:all mve:all` would be 18 and is
+refused before anything is built or flashed); `ARM_PMU_CPU_CYCLES` is always reported
+from the PMU cycle counter alongside the DWT cycles. `case_summary.csv` gets one column per
+counter (median per invocation) plus `overflow_detected` and `valid_for_regression`;
+`session_summary.json` records the passes, counters and per-stage/per-case timing.
+`--pmu-groups a,b` still works as a deprecated alias for `--pmu-counters a:default
+--pmu-counters b:default`.
+
+Identity resolution rules:
+
+- `--board` is the only identity flag. The CPU, NSX board name, SEGGER device name,
+  SWD speed, build dir (`build/hardware/<board>`), default session id
+  (`<board>-<UTC timestamp>`) and the linker-script SoC and flash/RAM region names
+  `hardware memory-report` measures against all come from the row in
+  `assets/hardware_boards.yaml` (`helia_core_tester boards` lists it). Default:
+  `$HPX_BOARD`, else `apollo510_evb`.
+- Session sizing comes from the target: every RTT session starts with the firmware's
+  `TARGET_INFO` (cases and PMU passes per plan, receive-buffer bytes, PMU width) and
+  the host batches the bridged cases from it, so a board with different firmware
+  limits needs no host change.
+- `--serial-no` is optional: the flag wins, then `$HPX_JLINK_SERIAL`, then the
+  connected J-Link probes enumerated through pylink. Exactly one connected probe is
+  used as-is; zero or several is an error naming what was found.
+  `helia_core_tester probes list` shows the probes, `probes match --board B` prints
+  the serial the hardware commands would pick.
+- The J-Link shared library pylink loads is resolved from `$HPX_JLINK_DLL` (the
+  library file), then `$JLINK_PATH` (the `JLinkExe` binary or its directory), then
+  the directory of `JLinkExe` on PATH, then pylink's own search (ldconfig,
+  `/opt/SEGGER`). These are the same variables the lab runners export for hpx;
+  `helia_core_tester doctor` prints which one resolved the library.
+
+`helia_core_tester doctor` reports the hardware toolchain (arm-none-eabi-gcc,
+cmake, the J-Link library, the fetched nsx-ambiq-sdk/neuralspotx checkouts) as
+informational checks; missing hardware tools do not fail doctor.
 
 ## Suite-Based Runs
 
@@ -192,7 +267,9 @@ non-finite output may be pinned is a per-kernel question.
   `-Ofast` and declines to promise NaN propagation end to end, the `arm_avg_pool_f16` note
   has NaN propagating at every optimization level on non-MVE while the MVE clamp resolves it to
   a bound, and the `arm_svdf_f16` note has NaN propagating through the input-activation clamp on
-  every build while the MVE output-activation clamp resolves it to a bound. It asserts robustness and non-corruption of the neighbouring lanes without encoding an
+  every build while the MVE output-activation clamp resolves it to a bound, or that are
+  simply undocumented (the `arm_elementwise_squared_difference_f16` block of
+  ns-cmsis-nn#490 says nothing about non-finite input). It asserts robustness and non-corruption of the neighbouring lanes without encoding an
   uncontracted value as a golden. Two generation-time guards keep the measurement honest: a case
   that ends up masking every lane fails, since it would assert nothing beyond `SUCCESS`, and so
   does a case where no lane moves between the probes, since a two-sided activation clamp that
@@ -204,6 +281,14 @@ the golden stays finite -- the input arrays still carry the tokens -- and the ha
 one lane masked" and "passed with every lane but one masked" are different claims; a capture
 reporting `k > n` cannot have come from the harness, so it is recorded as a failed case with a
 corrupted-capture reason rather than raising.
+
+Hardware streaming carries the exact generated mask as host-only comparison metadata;
+masked lanes are skipped before float classification and finite tolerance checks. Rebridge
+previously saved masked case bundles from their generated test sources before replaying
+them: older manifests lack the bitmap, and zeroed goldens cannot reconstruct it. Existing
+strict bundles need no migration. Matching NaNs and same-sign infinities pass strict float
+comparison; other non-finite pairings fail. This does not impose NaN-payload or signed-zero
+bit equality.
 
 `nonfinite_policy` is required by `OperationBase.nonfinite_policy()`, not by the schema: the
 `if`/`then` gate in `schema.json` is documentation until the descriptor loader validates the whole
@@ -299,7 +384,8 @@ wired to the rule.
 Two kinds of operand are check-only: the generator never steers them, so a failing one must be
 waived. An operand baked into the TFLite model (a PReLU alpha) cannot move, because the
 reference interpreter would keep using the model's copy and the golden would stop matching the
-emitted array. An operand the descriptor pins explicitly (`hint.extras.input_values`) must not
+emitted array. An operand the descriptor pins explicitly (`hint.extras.input_values`, or
+`input_1_values` / `input_2_values` for the float squared difference) must not
 move, because the pinned values are the case.
 
 An operand that is intentionally one-signed opts out in its descriptor under
@@ -365,6 +451,7 @@ Compiler cache (opt-in):
 - when `ccache` or `sccache` is on `PATH`, the CMake configure adds `CMAKE_C_COMPILER_LAUNCHER` and, at verbosity 1 or higher, logs which launcher it picked.
 - `HELIA_CORE_TESTER_COMPILER_LAUNCHER` names a specific tool; a name that is not on `PATH` fails the configure rather than building uncached. Set it to `none` (or empty) to build without a launcher even where one is installed, which is what a reproducibility build wants.
 - no image ships either tool; a host without one builds exactly as before.
+- With `ENABLE_COVERAGE=ON` (including `--coverage`), the instrumented `cmsis-nn` target bypasses `CMAKE_C_COMPILER_LAUNCHER`: cached objects can contain another build's profile-output paths. Uninstrumented harness targets and non-coverage builds retain their launcher. This does not bypass caches hidden inside compiler wrappers or custom compile rules.
 
 ## Coverage Merge
 
@@ -380,7 +467,8 @@ Outputs:
 
 Behavior:
 - for a single suite (`--suite int` or `--suite float`), merge is strict and fails if any requested CPU input is missing.
-- for `--suite both`, merge requires at least one suite input per requested CPU and reports suite-specific missing inputs.
+- for `--suite both`, merge requires both int and float inputs for every requested CPU; missing pairs are named in the failure output and reports.
+- `--include-mve-float` adds optional cortex-m55 float-MVE coverage; it cannot replace a missing required int/float input. Reports are still written when required inputs are missing.
 
 ## Clean Contract
 

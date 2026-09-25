@@ -4,10 +4,16 @@
 #include <stdint.h>
 #include "test_runtime/helia_test_runtime.h"
 
+
 static cmsis_nn_context transpose_float_default_f32_ctx = { .buf = NULL, .size = 0 };
 
 #define TRANSPOSE_FLOAT_DEFAULT_F32_OUTPUT_SIZE (1 * 3 * 2 * 4)
-static float transpose_float_default_f32_output[TRANSPOSE_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
+static struct {
+    uint8_t head[HELIA_GUARD_BYTES];
+    float body[TRANSPOSE_FLOAT_DEFAULT_F32_OUTPUT_SIZE];
+    uint8_t tail[HELIA_GUARD_BYTES];
+} transpose_float_default_f32_output_guard;
+#define transpose_float_default_f32_output (transpose_float_default_f32_output_guard.body)
 
 int32_t transpose_float_default_f32_run(
     const float* __restrict input,
@@ -28,14 +34,20 @@ int32_t transpose_float_default_f32_run(
 
 int32_t transpose_float_default_f32_test_case_run(void)
 {
+    HELIA_GUARD_ARM(transpose_float_default_f32_output, false /* real output, not scratch: don't poison */);
     int32_t status = transpose_float_default_f32_run(transpose_float_default_f32_input, transpose_float_default_f32_output);
+    int failures = 0;
+    // Checked unconditionally, even for expected-error cases: a kernel that
+    // correctly rejects the call can still have corrupted the output boundary
+    // on the way there, and that must not be masked by the "no output
+    // comparison for error cases" branch below.
+    HELIA_GUARD_CHECK(transpose_float_default_f32_output, "Transpose output", failures);
     HELIA_VALIDATE_EXPECTED_STATUS(
         "Transpose",
         status,
         ARM_CMSIS_NN_SUCCESS
     );
 
-    int failures = 0;
     HELIA_VALIDATE_OUTPUTS(
         FLOAT,
         transpose_float_default_f32_output,

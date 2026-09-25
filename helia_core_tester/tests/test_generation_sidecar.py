@@ -1,4 +1,4 @@
-"""Phase 1 sidecar validation: confirm the structured JSON sidecar emitted
+"""Sidecar validation: confirm the structured JSON sidecar emitted
 alongside each generated test case's .c/.h files is a faithful, in-sync
 reflection of what was actually rendered -- not an independently re-derived
 copy that could silently drift (the exact failure mode that motivated this
@@ -116,7 +116,7 @@ def test_sidecar_tolerance_matches_generated_validate_outputs_call(
 
 def test_sidecar_comparison_matches_hardware_bridge_resolve_comparison(tmp_path: Path) -> None:
     """The sidecar's `comparison` field is meant to be the same value the
-    hardware perf-stream bridge manifest would compute via resolve_comparison()
+    hardware bridge manifest would compute via resolve_comparison()
     -- confirm this by recomputing it directly from the case's descriptor.yaml.
     """
     import yaml
