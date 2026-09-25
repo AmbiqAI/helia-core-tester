@@ -35,6 +35,12 @@ instead of only at hardware-run time.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable, Optional
+
+import jinja2
+
+from helia_core_tester.contract.ir import ContractSet
+from helia_core_tester.contract.render import contract_globals
 
 GENERATED_BLOCK_BEGIN = (
     "/* >>> BEGIN GENERATED HARDWARE ADAPTERS -- see "
@@ -76,6 +82,15 @@ class FirmwareAdapterSpec:
     kernel_ids: tuple[str, ...]
     scalar_fields: tuple[str, ...]
     c_body: str
+    # A templated body is a Jinja template whose kernel calls are `{{ contract_call(symbol,
+    # {param: expression}) }}`: the argument order comes from the ns-cmsis-nn kernel
+    # contract export and a missing or extra parameter fails the render. A plain body is
+    # emitted verbatim (its braces are C, not Jinja).
+    templated: bool = False
+    # (name, reason) pairs waiving the drift checks in test_hardware_adapter_contract.py:
+    # a `scalar_fields` entry the body never reads, or a `symbol.param` a contract call
+    # binds to a constant rather than to session or blob state. A waiver must say why.
+    unmarshalled: tuple[tuple[str, str], ...] = ()
 
 
 _COMPUTE_CONVOLVE_OUTPUT_DIMS = '''\
@@ -2870,33 +2885,69 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
             int8_t *output_data = (int8_t *)hct_output_ptr(session);
             if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_S8)
             {
-                return arm_add_s8(input1_data, &input1_dims, input2_data, &input2_dims,
-                                  session->input1_offset, session->input1_mult, session->input1_shift,
-                                  session->input2_offset, session->input2_mult, session->input2_shift,
-                                  session->left_shift,
-                                  output_data, &output_dims,
-                                  session->output_offset, session->out_mult, session->out_shift,
-                                  session->activation_min, session->activation_max);
+                return {{ contract_call("arm_add_s8", {
+                    "input1_data": "input1_data",
+                    "input1_dims": "&input1_dims",
+                    "input2_data": "input2_data",
+                    "input2_dims": "&input2_dims",
+                    "input1_offset": "session->input1_offset",
+                    "input1_mult": "session->input1_mult",
+                    "input1_shift": "session->input1_shift",
+                    "input2_offset": "session->input2_offset",
+                    "input2_mult": "session->input2_mult",
+                    "input2_shift": "session->input2_shift",
+                    "left_shift": "session->left_shift",
+                    "output_data": "output_data",
+                    "output_dims": "&output_dims",
+                    "out_offset": "session->output_offset",
+                    "out_mult": "session->out_mult",
+                    "out_shift": "session->out_shift",
+                    "out_activation_min": "session->activation_min",
+                    "out_activation_max": "session->activation_max",
+                }, indent="                    ") }};
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SUB_S8)
             {
-                return arm_sub_s8(input1_data, &input1_dims, input2_data, &input2_dims,
-                                  session->input1_offset, session->input1_mult, session->input1_shift,
-                                  session->input2_offset, session->input2_mult, session->input2_shift,
-                                  session->left_shift,
-                                  output_data, &output_dims,
-                                  session->output_offset, session->out_mult, session->out_shift,
-                                  session->activation_min, session->activation_max);
+                return {{ contract_call("arm_sub_s8", {
+                    "input1_data": "input1_data",
+                    "input1_dims": "&input1_dims",
+                    "input2_data": "input2_data",
+                    "input2_dims": "&input2_dims",
+                    "input1_offset": "session->input1_offset",
+                    "input1_mult": "session->input1_mult",
+                    "input1_shift": "session->input1_shift",
+                    "input2_offset": "session->input2_offset",
+                    "input2_mult": "session->input2_mult",
+                    "input2_shift": "session->input2_shift",
+                    "left_shift": "session->left_shift",
+                    "output_data": "output_data",
+                    "output_dims": "&output_dims",
+                    "out_offset": "session->output_offset",
+                    "out_mult": "session->out_mult",
+                    "out_shift": "session->out_shift",
+                    "out_activation_min": "session->activation_min",
+                    "out_activation_max": "session->activation_max",
+                }, indent="                    ") }};
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_MUL_S8)
             {
                 /* arm_mul_s8 has no per-input mult/shift or left_shift -- it reuses only the
                  * input1_offset/input2_offset scalar fields (shared with Add/Sub above). */
-                return arm_mul_s8(input1_data, &input1_dims, input2_data, &input2_dims,
-                                  session->input1_offset, session->input2_offset,
-                                  output_data, &output_dims,
-                                  session->output_offset, session->out_mult, session->out_shift,
-                                  session->activation_min, session->activation_max);
+                return {{ contract_call("arm_mul_s8", {
+                    "input1_data": "input1_data",
+                    "input1_dims": "&input1_dims",
+                    "input2_data": "input2_data",
+                    "input2_dims": "&input2_dims",
+                    "input1_offset": "session->input1_offset",
+                    "input2_offset": "session->input2_offset",
+                    "output_data": "output_data",
+                    "output_dims": "&output_dims",
+                    "out_offset": "session->output_offset",
+                    "out_mult": "session->out_mult",
+                    "out_shift": "session->out_shift",
+                    "out_activation_min": "session->activation_min",
+                    "out_activation_max": "session->activation_max",
+                }, indent="                    ") }};
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SQUARED_DIFFERENCE_S8)
             {
@@ -2946,32 +2997,68 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
             int16_t *output_data = (int16_t *)hct_output_ptr(session);
             if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_S16)
             {
-                return arm_add_s16(input1_data, &input1_dims, input2_data, &input2_dims,
-                                   session->input1_offset, session->input1_mult, session->input1_shift,
-                                   session->input2_offset, session->input2_mult, session->input2_shift,
-                                   session->left_shift,
-                                   output_data, &output_dims,
-                                   session->output_offset, session->out_mult, session->out_shift,
-                                   session->activation_min, session->activation_max);
+                return {{ contract_call("arm_add_s16", {
+                    "input1_data": "input1_data",
+                    "input1_dims": "&input1_dims",
+                    "input2_data": "input2_data",
+                    "input2_dims": "&input2_dims",
+                    "input1_offset": "session->input1_offset",
+                    "input1_mult": "session->input1_mult",
+                    "input1_shift": "session->input1_shift",
+                    "input2_offset": "session->input2_offset",
+                    "input2_mult": "session->input2_mult",
+                    "input2_shift": "session->input2_shift",
+                    "left_shift": "session->left_shift",
+                    "output_data": "output_data",
+                    "output_dims": "&output_dims",
+                    "out_offset": "session->output_offset",
+                    "out_mult": "session->out_mult",
+                    "out_shift": "session->out_shift",
+                    "out_activation_min": "session->activation_min",
+                    "out_activation_max": "session->activation_max",
+                }, indent="                    ") }};
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SUB_S16)
             {
-                return arm_sub_s16(input1_data, &input1_dims, input2_data, &input2_dims,
-                                   session->input1_offset, session->input1_mult, session->input1_shift,
-                                   session->input2_offset, session->input2_mult, session->input2_shift,
-                                   session->left_shift,
-                                   output_data, &output_dims,
-                                   session->output_offset, session->out_mult, session->out_shift,
-                                   session->activation_min, session->activation_max);
+                return {{ contract_call("arm_sub_s16", {
+                    "input1_data": "input1_data",
+                    "input1_dims": "&input1_dims",
+                    "input2_data": "input2_data",
+                    "input2_dims": "&input2_dims",
+                    "input1_offset": "session->input1_offset",
+                    "input1_mult": "session->input1_mult",
+                    "input1_shift": "session->input1_shift",
+                    "input2_offset": "session->input2_offset",
+                    "input2_mult": "session->input2_mult",
+                    "input2_shift": "session->input2_shift",
+                    "left_shift": "session->left_shift",
+                    "output_data": "output_data",
+                    "output_dims": "&output_dims",
+                    "out_offset": "session->output_offset",
+                    "out_mult": "session->out_mult",
+                    "out_shift": "session->out_shift",
+                    "out_activation_min": "session->activation_min",
+                    "out_activation_max": "session->activation_max",
+                }, indent="                    ") }};
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_MUL_S16)
             {
                 /* arm_mul_s16 mirrors arm_mul_s8's (shorter) signature: no per-input mult/shift. */
-                return arm_mul_s16(input1_data, &input1_dims, input2_data, &input2_dims,
-                                   session->input1_offset, session->input2_offset,
-                                   output_data, &output_dims,
-                                   session->output_offset, session->out_mult, session->out_shift,
-                                   session->activation_min, session->activation_max);
+                return {{ contract_call("arm_mul_s16", {
+                    "input1_data": "input1_data",
+                    "input1_dims": "&input1_dims",
+                    "input2_data": "input2_data",
+                    "input2_dims": "&input2_dims",
+                    "input1_offset": "session->input1_offset",
+                    "input2_offset": "session->input2_offset",
+                    "output_data": "output_data",
+                    "output_dims": "&output_dims",
+                    "out_offset": "session->output_offset",
+                    "out_mult": "session->out_mult",
+                    "out_shift": "session->out_shift",
+                    "out_activation_min": "session->activation_min",
+                    "out_activation_max": "session->activation_max",
+                }, indent="                    ") }};
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SQUARED_DIFFERENCE_S16)
             {
@@ -3033,18 +3120,36 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
             const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
             if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_F32)
             {
-                return arm_elementwise_add_f32(input1_data, input2_data, output_data,
-                                               activation_min, activation_max, session->block_size);
+                return {{ contract_call("arm_elementwise_add_f32", {
+                    "input_1_vect": "input1_data",
+                    "input_2_vect": "input2_data",
+                    "output": "output_data",
+                    "out_activation_min": "activation_min",
+                    "out_activation_max": "activation_max",
+                    "block_size": "session->block_size",
+                }, indent="                    ") }};
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SUB_F32)
             {
-                return arm_elementwise_sub_f32(input1_data, input2_data, output_data,
-                                               activation_min, activation_max, session->block_size);
+                return {{ contract_call("arm_elementwise_sub_f32", {
+                    "input_1_vect": "input1_data",
+                    "input_2_vect": "input2_data",
+                    "output": "output_data",
+                    "out_activation_min": "activation_min",
+                    "out_activation_max": "activation_max",
+                    "block_size": "session->block_size",
+                }, indent="                    ") }};
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_MUL_F32)
             {
-                return arm_elementwise_mul_f32(input1_data, input2_data, output_data,
-                                               activation_min, activation_max, session->block_size);
+                return {{ contract_call("arm_elementwise_mul_f32", {
+                    "input_1_vect": "input1_data",
+                    "input_2_vect": "input2_data",
+                    "output": "output_data",
+                    "out_activation_min": "activation_min",
+                    "out_activation_max": "activation_max",
+                    "block_size": "session->block_size",
+                }, indent="                    ") }};
             }
             cmsis_nn_context ctxf32 = {NULL, 0};
             if (session->expected_kernel_id == HCT_KERNEL_ID_MAXIMUM_F32)
@@ -3091,18 +3196,36 @@ static arm_cmsis_nn_status run_elementwise_binary_once(hct_server_session_t *ses
             const float activation_max = quant_scale_from_bits(session->float_activation_max_bits);
             if (session->expected_kernel_id == HCT_KERNEL_ID_ADD_F16)
             {
-                return arm_elementwise_add_f16(input1_data, input2_data, output_data,
-                                               activation_min, activation_max, session->block_size);
+                return {{ contract_call("arm_elementwise_add_f16", {
+                    "input_1_vect": "input1_data",
+                    "input_2_vect": "input2_data",
+                    "output": "output_data",
+                    "out_activation_min": "activation_min",
+                    "out_activation_max": "activation_max",
+                    "block_size": "session->block_size",
+                }, indent="                    ") }};
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_SUB_F16)
             {
-                return arm_elementwise_sub_f16(input1_data, input2_data, output_data,
-                                               activation_min, activation_max, session->block_size);
+                return {{ contract_call("arm_elementwise_sub_f16", {
+                    "input_1_vect": "input1_data",
+                    "input_2_vect": "input2_data",
+                    "output": "output_data",
+                    "out_activation_min": "activation_min",
+                    "out_activation_max": "activation_max",
+                    "block_size": "session->block_size",
+                }, indent="                    ") }};
             }
             if (session->expected_kernel_id == HCT_KERNEL_ID_MUL_F16)
             {
-                return arm_elementwise_mul_f16(input1_data, input2_data, output_data,
-                                               activation_min, activation_max, session->block_size);
+                return {{ contract_call("arm_elementwise_mul_f16", {
+                    "input_1_vect": "input1_data",
+                    "input_2_vect": "input2_data",
+                    "output": "output_data",
+                    "out_activation_min": "activation_min",
+                    "out_activation_max": "activation_max",
+                    "block_size": "session->block_size",
+                }, indent="                    ") }};
             }
             cmsis_nn_context ctxf16 = {NULL, 0};
             if (session->expected_kernel_id == HCT_KERNEL_ID_MAXIMUM_F16)
@@ -5137,6 +5260,7 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
             "activation_min", "activation_max",
         ),
         c_body=_RUN_ELEMENTWISE_BINARY_ONCE,
+        templated=True,
     ),
     FirmwareAdapterSpec(
         label="Data movement/indexing families",
@@ -5201,6 +5325,14 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         guard="HCT_HOST_ABS_ONLY",
         scalar_fields=("output_n", "output_h", "output_w", "output_c", "null_arg_mask"),
         c_body=_RUN_DATA_MOVEMENT_ONCE,
+        unmarshalled=(
+            (
+                "null_arg_mask",
+                "sent by the host and parsed into the session by handle_case_meta(), but no "
+                "data-movement kernel takes a nullable pointer, so the body never reads it; "
+                "kept on the wire for HCTP compatibility.",
+            ),
+        ),
     ),
 )
 
@@ -5216,12 +5348,46 @@ def generated_test_bridge_scalar_fields(function_name: str) -> tuple[str, ...]:
     raise KeyError(f"No FirmwareAdapterSpec registered with function_name={function_name!r}")
 
 
-def render_generated_adapters_source() -> str:
+def _template_environment(globals_: dict[str, Callable]) -> jinja2.Environment:
+    environment = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True, autoescape=False)
+    environment.globals.update(globals_)
+    return environment
+
+
+def render_adapter_body(adapter: FirmwareAdapterSpec, contracts: Optional[ContractSet] = None,
+                        *, globals_: Optional[dict[str, Callable]] = None) -> str:
+    """The C body of one adapter: verbatim for a plain spec, rendered through the contract
+    globals for a templated one. `contracts` defaults to the resolved ns-cmsis-nn checkout;
+    `globals_` replaces the contract globals (tests use it to record the calls)."""
+    if not adapter.templated:
+        return adapter.c_body
+    if globals_ is None:
+        globals_ = contract_globals(None if contracts is None else (lambda: contracts))
+    return _template_environment(globals_).from_string(adapter.c_body).render()
+
+
+def contract_calls_in(adapter: FirmwareAdapterSpec, contracts: Optional[ContractSet] = None) -> list[tuple[str, dict[str, str]]]:
+    """Every `contract_call(symbol, args)` a templated body makes, in body order, with the
+    same contract-driven validation the real render applies. Empty for a plain body."""
+    recorded: list[tuple[str, dict[str, str]]] = []
+    real = contract_globals(None if contracts is None else (lambda: contracts))
+
+    def recording_call(symbol: str, args: dict[str, str], indent: str = "        ") -> str:
+        recorded.append((symbol, dict(args)))
+        return real["contract_call"](symbol, args, indent)
+
+    render_adapter_body(adapter, contracts, globals_={**real, "contract_call": recording_call})
+    return recorded
+
+
+def render_generated_adapters_source(contracts: Optional[ContractSet] = None) -> str:
     """Render `cmake/hardware/benchmark_server_adapters.gen.c` in full: the marker
     banner, the includes and forward declarations the bodies rely on, every adapter's
     C body (each wrapped in its `#ifndef {guard}` guard when one is set) and the
     `hct_run_kernel_once()` dispatch switch built from every adapter's `kernel_ids`.
-    Written by `scripts/generate_hardware_adapters.py`.
+    Written by `scripts/generate_hardware_adapters.py`. Templated bodies need the
+    ns-cmsis-nn kernel contract (`contracts`, default: the resolved checkout) and fail
+    the render without it.
     """
     pieces: list[str] = [
         GENERATED_BLOCK_BEGIN,
@@ -5255,7 +5421,7 @@ def render_generated_adapters_source() -> str:
                 pieces.append(f"#ifndef {adapter.guard}")
             open_guard = adapter.guard
         pieces.append("")
-        pieces.append(adapter.c_body)
+        pieces.append(render_adapter_body(adapter, contracts))
     if open_guard is not None:
         pieces.append("#endif")
     pieces.extend(["", *_render_dispatch(), GENERATED_BLOCK_END])
