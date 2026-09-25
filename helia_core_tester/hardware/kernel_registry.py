@@ -3,18 +3,26 @@
 This is the single Python-side entry point for looking up the `kernel_id` a bridged
 (family, operator, dtype) tuple should send over HCTP in CASE_META -- callers (currently
 `generated_test_bridge.py`) must not hardcode kernel_id integers directly, so the mapping
-stays centralized and testable against the firmware's `HCT_KERNEL_ID_*` defines in
-`cmake/hardware/benchmark_server_session.h`.
+stays centralized. Each row also carries the `c_define` name of the firmware's
+`HCT_KERNEL_ID_*` macro, which `scripts/generate_kernel_catalog.py` renders into
+`cmake/hardware/benchmark_server_adapters.h`.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 _REGISTRY_RELATIVE_PATH = Path("assets/kernel_registry.yaml")
+_C_DEFINE_RE = re.compile(r"^HCT_KERNEL_ID_[A-Z0-9_]+$")
+_C_FUNCTION_RE = re.compile(r"^arm_[a-z0-9_]+$")
+
+
+class KernelRegistryError(ValueError):
+    """Raised when assets/kernel_registry.yaml is malformed or contradicts itself."""
 
 
 @dataclass(frozen=True)
@@ -25,6 +33,7 @@ class KernelEntry:
     dtype: str
     weight_dtype: str | None
     cmsis_function: str
+    c_define: str
 
 
 class UnknownKernelError(Exception):
@@ -46,20 +55,56 @@ def _registry_path(project_root: Path) -> Path:
     return project_root / _REGISTRY_RELATIVE_PATH
 
 
+def _parse_entry(path: Path, index: int, entry: object) -> KernelEntry:
+    where = f"{path}: kernels[{index}]"
+    if not isinstance(entry, dict):
+        raise KernelRegistryError(f"{where} is not a mapping")
+    try:
+        kernel_id = int(entry["kernel_id"])
+    except (KeyError, TypeError, ValueError):
+        raise KernelRegistryError(f"{where} has no integer kernel_id") from None
+    if kernel_id <= 0:
+        raise KernelRegistryError(f"{where} kernel_id={kernel_id} must be positive")
+    where = f"{path}: kernel_id={kernel_id}"
+    for key in ("operator", "dtype"):
+        if not isinstance(entry.get(key), str) or not entry[key]:
+            raise KernelRegistryError(f"{where} has no {key}")
+    cmsis_function = entry.get("cmsis_function")
+    if not isinstance(cmsis_function, str) or not _C_FUNCTION_RE.match(cmsis_function):
+        raise KernelRegistryError(f"{where} cmsis_function {cmsis_function!r} must match {_C_FUNCTION_RE.pattern}")
+    c_define = entry.get("c_define")
+    if not isinstance(c_define, str) or not _C_DEFINE_RE.match(c_define):
+        raise KernelRegistryError(f"{where} c_define {c_define!r} must match {_C_DEFINE_RE.pattern}")
+    weight_dtype = entry.get("weight_dtype")
+    return KernelEntry(
+        kernel_id=kernel_id,
+        family=None if entry.get("family") is None else str(entry["family"]),
+        operator=entry["operator"],
+        dtype=entry["dtype"],
+        weight_dtype=None if weight_dtype is None else str(weight_dtype),
+        cmsis_function=cmsis_function,
+        c_define=c_define,
+    )
+
+
 def load_kernel_registry(project_root: Path) -> list[KernelEntry]:
+    """Load and validate the registry: every row carries an integer kernel_id, operator,
+    dtype, cmsis_function and c_define, and no kernel_id or c_define appears twice."""
     path = _registry_path(project_root)
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return [
-        KernelEntry(
-            kernel_id=int(entry["kernel_id"]),
-            family=entry.get("family"),
-            operator=str(entry["operator"]),
-            dtype=str(entry["dtype"]),
-            weight_dtype=(None if entry.get("weight_dtype") is None else str(entry["weight_dtype"])),
-            cmsis_function=str(entry.get("cmsis_function", "")),
-        )
-        for entry in data.get("kernels", [])
-    ]
+    if not isinstance(data, dict) or not isinstance(data.get("kernels"), list):
+        raise KernelRegistryError(f"{path}: expected a mapping with a `kernels` list")
+    entries = [_parse_entry(path, index, entry) for index, entry in enumerate(data["kernels"])]
+    for attribute in ("kernel_id", "c_define"):
+        seen: dict[object, int] = {}
+        for entry in entries:
+            value = getattr(entry, attribute)
+            if value in seen:
+                raise KernelRegistryError(
+                    f"{path}: {attribute} {value!r} is used by kernel_id={seen[value]} and kernel_id={entry.kernel_id}"
+                )
+            seen[value] = entry.kernel_id
+    return entries
 
 
 def lookup_kernel_id(
