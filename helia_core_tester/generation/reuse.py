@@ -29,7 +29,7 @@ STAMP_FILENAME = ".stamp"
 
 # Version prefix of the stamp payload itself. Bump when the payload layout
 # changes so old stamps cannot accidentally validate against new semantics.
-_STAMP_SCHEMA = "helia-core-tester/generation-stamp/4"
+_STAMP_SCHEMA = "helia-core-tester/generation-stamp/5"
 
 # The lock file is the whole resolved dependency set, so it covers every package
 # that can move emitted bytes -- the converter and runtime, but equally numpy's
@@ -48,13 +48,17 @@ _EXTERNAL_GENERATOR_SOURCES = (
 # Subtrees (or single files) of the ns-cmsis-nn checkout that are generation
 # inputs: the public headers drive the temp-sizer probe's choice of template
 # variant, the UnitTest data is read directly as LSTM/GRU goldens, the s16
-# activation generator reads sigmoid_table_uint16 from arm_nntables.c, and the
-# LSTM s16 reference path feeds schema.fbs to flatc.
+# activation generator reads sigmoid_table_uint16 from arm_nntables.c, the
+# LSTM s16 reference path feeds schema.fbs to flatc, and the exported kernel
+# contract (contract/ir.py) is what call-site rendering and symbol checks read
+# instead of the headers. Adding an entry here is a stamp-schema bump: an
+# uncovered input would let a stale case be reused after that input changed.
 _CMSIS_NN_INPUT_SUBTREES = (
     "Include",
     "Tests/UnitTest/TestCases/TestData",
     "Source/NNSupportFunctions/arm_nntables.c",
     "Tests/UnitTest/RefactoredTestGen",
+    "Tests/KernelContracts",
 )
 
 _version_hash_cache: Optional[str] = None
