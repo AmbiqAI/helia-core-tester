@@ -38,13 +38,17 @@ static inline uint32_t helia_dwt_cycles(void)
  * via the DWT cycle counter. Only the op call itself is timed -- never
  * `_bench_init()` (buffer setup / weight-sum precompute) and never output
  * validation/compare, which happen separately in the non-benchmark path.
+ * Returns the failure count: 0, or 1 at the first call that does not succeed.
  */
-static inline void helia_benchmark_run(const char *name, helia_bench_op_fn op)
+static inline int32_t helia_benchmark_run(const char *name, helia_bench_op_fn op)
 {
     helia_dwt_enable();
 
     for (int i = 0; i < HELIA_BENCHMARK_WARMUP_RUNS; i++) {
-        (void)op();
+        int32_t status = op();
+        if (status != ARM_CMSIS_NN_SUCCESS) {
+            return helia_test_status_failure(name, status);
+        }
     }
 
     printf("[BENCH] %s warmup_runs=%d measured_runs=%d\r\n",
@@ -52,10 +56,14 @@ static inline void helia_benchmark_run(const char *name, helia_bench_op_fn op)
 
     for (int i = 0; i < HELIA_BENCHMARK_MEASURED_RUNS; i++) {
         uint32_t start = helia_dwt_cycles();
-        (void)op();
+        int32_t status = op();
         uint32_t end = helia_dwt_cycles();
+        if (status != ARM_CMSIS_NN_SUCCESS) {
+            return helia_test_status_failure(name, status);
+        }
         printf("[PERF] %s: %lu cycles\r\n", name, (unsigned long)(end - start));
     }
+    return 0;
 }
 
 #endif // HELIA_BENCHMARK_MODE
@@ -198,27 +206,21 @@ static int32_t convolve_float_default_f32_bench_op(void)
 
 }
 
-static void convolve_float_default_f32_benchmark_run(void)
+static int32_t convolve_float_default_f32_benchmark_run(void)
 {
     // A sizer check inside _bench_init() returns before the context is populated, so the
     // benchmark must not proceed on that path: _bench_op() would call the kernel with an
     // uninitialised context and time whatever happened, recording cycle counts that mean
     // nothing, or crash. The failing check has already printed its marker naming the
-    // sizer; this reports the skip and runs nothing (#133).
-    //
-    // What this still does not do is fail the case. A benchmark reports cycles, not a
-    // verdict, and helia_benchmark_run() has no failure channel to carry one, so the C
-    // failure counter stays zero and main.j2 finishes with zero either way. Note that is
-    // a statement about the counter, not about the report: this output still carries the
-    // marker the failing check printed, and if a benchmark capture were ever fed to
-    // TestResultParser it would be classified a sizer failure. No path does that today.
-    // The non-benchmark run of the same case is what turns a bad sizer answer into a
-    // verdict.
-    if (convolve_float_default_f32_bench_init() != ARM_CMSIS_NN_SUCCESS) {
+    // sizer (#133); the case fails without timing anything. A kernel call that does not
+    // succeed fails it too (helia_benchmark_run stops there), so no cycle count is
+    // reported for a call that did not do its work.
+    const int32_t init_status = convolve_float_default_f32_bench_init();
+    if (init_status != ARM_CMSIS_NN_SUCCESS) {
         printf("[BENCH] convolve_float_default_f32 skipped: scratch sizer rejected before the context was populated\r\n");
-        return;
+        return helia_test_status_failure("convolve_float_default_f32 benchmark init", init_status);
     }
-    helia_benchmark_run("convolve_float_default_f32", convolve_float_default_f32_bench_op);
+    return helia_benchmark_run("convolve_float_default_f32", convolve_float_default_f32_bench_op);
 }
 #endif // HELIA_BENCHMARK_MODE
 
@@ -250,8 +252,8 @@ int main(void)
 {
     helia_test_platform_init();
 #ifdef HELIA_BENCHMARK_MODE
-    convolve_float_default_f32_benchmark_run();
-    helia_test_finish(0);
+    int32_t failures = convolve_float_default_f32_benchmark_run();
+    helia_test_finish(failures);
 #else
     int32_t failures = convolve_float_default_f32_test_case_run();
     helia_test_finish(failures);

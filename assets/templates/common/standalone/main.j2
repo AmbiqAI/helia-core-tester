@@ -4,8 +4,8 @@ int main(void)
     helia_test_platform_init();
 {% if supports_benchmark %}
 #ifdef HELIA_BENCHMARK_MODE
-    {{ name }}_benchmark_run();
-    helia_test_finish(0);
+    int32_t failures = {{ name }}_benchmark_run();
+    helia_test_finish(failures);
 #else
     int32_t failures = {{ name }}_test_case_run();
     helia_test_finish(failures);

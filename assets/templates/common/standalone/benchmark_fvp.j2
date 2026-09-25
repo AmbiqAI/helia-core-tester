@@ -27,6 +27,9 @@
   Output format is consumed by helia_core_tester.reporting.parser.TestResultParser:
     [BENCH] <name> warmup_runs=<W> measured_runs=<M>
     [PERF] <name>: <cycles> cycles     (repeated M times, one per measured run)
+  A call that does not return ARM_CMSIS_NN_SUCCESS ends the run there with
+  "<name> failed with status <N>" and "1 Failures"; no cycles are printed for it
+  or after it.
 #}
 #ifdef HELIA_BENCHMARK_MODE
 
@@ -61,13 +64,17 @@ static inline uint32_t helia_dwt_cycles(void)
  * via the DWT cycle counter. Only the op call itself is timed -- never
  * `_bench_init()` (buffer setup / weight-sum precompute) and never output
  * validation/compare, which happen separately in the non-benchmark path.
+ * Returns the failure count: 0, or 1 at the first call that does not succeed.
  */
-static inline void helia_benchmark_run(const char *name, helia_bench_op_fn op)
+static inline int32_t helia_benchmark_run(const char *name, helia_bench_op_fn op)
 {
     helia_dwt_enable();
 
     for (int i = 0; i < HELIA_BENCHMARK_WARMUP_RUNS; i++) {
-        (void)op();
+        int32_t status = op();
+        if (status != ARM_CMSIS_NN_SUCCESS) {
+            return helia_test_status_failure(name, status);
+        }
     }
 
     printf("[BENCH] %s warmup_runs=%d measured_runs=%d\r\n",
@@ -75,10 +82,14 @@ static inline void helia_benchmark_run(const char *name, helia_bench_op_fn op)
 
     for (int i = 0; i < HELIA_BENCHMARK_MEASURED_RUNS; i++) {
         uint32_t start = helia_dwt_cycles();
-        (void)op();
+        int32_t status = op();
         uint32_t end = helia_dwt_cycles();
+        if (status != ARM_CMSIS_NN_SUCCESS) {
+            return helia_test_status_failure(name, status);
+        }
         printf("[PERF] %s: %lu cycles\r\n", name, (unsigned long)(end - start));
     }
+    return 0;
 }
 
 #endif // HELIA_BENCHMARK_MODE
