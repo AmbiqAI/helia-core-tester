@@ -35,6 +35,9 @@
     [BENCH] <name> warmup_runs=<W> measured_runs=<M>
     [PERF] <name>: <cycles> cycles
     [PMU] <name>: inst_retired=<N> l1d_refill=<N> stall=<N> br_mispred=<N>
+  A call that does not return ARM_CMSIS_NN_SUCCESS ends the run there with
+  "<name> failed with status <N>" and "1 Failures"; no counters are printed for
+  it or after it.
 
   IMPORTANT (verified against modules/nsx-ambiq-sdk/modules/nsx-core/src/nsx_retarget.c
   and modules/nsx-ambiq-sdk/modules/nsx-core/src/apollo510/nsx_system_platform.c):

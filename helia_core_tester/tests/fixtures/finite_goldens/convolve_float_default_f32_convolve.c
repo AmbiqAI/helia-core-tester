@@ -20,6 +20,15 @@
 
 typedef int32_t (*helia_bench_op_fn)(void);
 
+/* Op templates print benchmark lines and report failures through these, so the
+ * same template text works on both backends (see benchmark_hw.j2). */
+#define HELIA_BENCH_PRINTF printf
+
+static inline int32_t helia_benchmark_failed(const char *name, int32_t status)
+{
+    return helia_test_status_failure(name, status);
+}
+
 static inline void helia_dwt_enable(void)
 {
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
@@ -47,7 +56,7 @@ static inline int32_t helia_benchmark_run(const char *name, helia_bench_op_fn op
     for (int i = 0; i < HELIA_BENCHMARK_WARMUP_RUNS; i++) {
         int32_t status = op();
         if (status != ARM_CMSIS_NN_SUCCESS) {
-            return helia_test_status_failure(name, status);
+            return helia_benchmark_failed(name, status);
         }
     }
 
@@ -59,7 +68,7 @@ static inline int32_t helia_benchmark_run(const char *name, helia_bench_op_fn op
         int32_t status = op();
         uint32_t end = helia_dwt_cycles();
         if (status != ARM_CMSIS_NN_SUCCESS) {
-            return helia_test_status_failure(name, status);
+            return helia_benchmark_failed(name, status);
         }
         printf("[PERF] %s: %lu cycles\r\n", name, (unsigned long)(end - start));
     }
@@ -217,8 +226,8 @@ static int32_t convolve_float_default_f32_benchmark_run(void)
     // reported for a call that did not do its work.
     const int32_t init_status = convolve_float_default_f32_bench_init();
     if (init_status != ARM_CMSIS_NN_SUCCESS) {
-        printf("[BENCH] convolve_float_default_f32 skipped: scratch sizer rejected before the context was populated\r\n");
-        return helia_test_status_failure("convolve_float_default_f32 benchmark init", init_status);
+        HELIA_BENCH_PRINTF("[BENCH] convolve_float_default_f32 skipped: scratch sizer rejected before the context was populated\r\n");
+        return helia_benchmark_failed("convolve_float_default_f32 benchmark init", init_status);
     }
     return helia_benchmark_run("convolve_float_default_f32", convolve_float_default_f32_bench_op);
 }

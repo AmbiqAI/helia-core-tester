@@ -257,8 +257,8 @@ static int32_t {{ name }}_benchmark_run(void)
     // reported for a call that did not do its work.
     const int32_t init_status = {{ name }}_bench_init();
     if (init_status != ARM_CMSIS_NN_SUCCESS) {
-        printf("[BENCH] {{ name }} skipped: scratch sizer rejected before the context was populated\r\n");
-        return helia_test_status_failure("{{ name }} benchmark init", init_status);
+        HELIA_BENCH_PRINTF("[BENCH] {{ name }} skipped: scratch sizer rejected before the context was populated\r\n");
+        return helia_benchmark_failed("{{ name }} benchmark init", init_status);
     }
     return helia_benchmark_run("{{ name }}", {{ name }}_bench_op);
 }

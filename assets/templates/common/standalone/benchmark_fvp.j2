@@ -46,6 +46,15 @@
 
 typedef int32_t (*helia_bench_op_fn)(void);
 
+/* Op templates print benchmark lines and report failures through these, so the
+ * same template text works on both backends (see benchmark_hw.j2). */
+#define HELIA_BENCH_PRINTF printf
+
+static inline int32_t helia_benchmark_failed(const char *name, int32_t status)
+{
+    return helia_test_status_failure(name, status);
+}
+
 static inline void helia_dwt_enable(void)
 {
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
@@ -73,7 +82,7 @@ static inline int32_t helia_benchmark_run(const char *name, helia_bench_op_fn op
     for (int i = 0; i < HELIA_BENCHMARK_WARMUP_RUNS; i++) {
         int32_t status = op();
         if (status != ARM_CMSIS_NN_SUCCESS) {
-            return helia_test_status_failure(name, status);
+            return helia_benchmark_failed(name, status);
         }
     }
 
@@ -85,7 +94,7 @@ static inline int32_t helia_benchmark_run(const char *name, helia_bench_op_fn op
         int32_t status = op();
         uint32_t end = helia_dwt_cycles();
         if (status != ARM_CMSIS_NN_SUCCESS) {
-            return helia_test_status_failure(name, status);
+            return helia_benchmark_failed(name, status);
         }
         printf("[PERF] %s: %lu cycles\r\n", name, (unsigned long)(end - start));
     }
