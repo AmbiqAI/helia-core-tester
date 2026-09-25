@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import jinja2
 
+from helia_core_tester.generation.ops._shared.base import template_environment
 from helia_core_tester.generation.ops.BroadcastFunctions.broadcast_to import OpBroadcastTo
 from helia_core_tester.generation.ops.DynamicUpdateSliceFunctions.dynamic_update_slice import OpDynamicUpdateSlice
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
@@ -18,11 +18,7 @@ def _templates_root() -> Path:
 
 
 def _render(template_name: str, context: dict[str, object]) -> str:
-    env = jinja2.Environment(
-        loader=jinja2.FileSystemLoader(str(_templates_root())),
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
+    env = template_environment(str(_templates_root()))
     render_context = TemplateContextBuilder.build_validation_context(template_name, context)
     return env.get_template(template_name).render(**render_context)
 
