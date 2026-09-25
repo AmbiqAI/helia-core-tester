@@ -111,6 +111,7 @@ def _fake_build(build_dir: Path) -> Path:
     elf = build_dir / "hardware" / "hct_benchmark_server.elf"
     elf.parent.mkdir(parents=True)
     elf.write_bytes(b"elf")
+    report.nsx_app_dir(build_dir).mkdir(parents=True)
     return elf
 
 
@@ -201,3 +202,31 @@ def test_write_text_lf_writes_lf(tmp_path: Path) -> None:
     target = tmp_path / "out.txt"
     pathutil.write_text_lf(target, "a\nb\n")
     assert target.read_bytes() == b"a\nb\n"
+
+
+def _write_script(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("MEMORY {}\n", encoding="utf-8")
+    return path
+
+
+def test_linker_script_prefers_the_nsx_app(tmp_path: Path, monkeypatch) -> None:
+    build = tmp_path / "build"
+    sdk = report.nsx_app_dir(build) / "modules" / report.NSX_SDK_MODULE
+    expected = _write_script(report.linker_script_path(BOARD, sdk))
+    monkeypatch.setattr(report, "nsx_ambiq_sdk_dir", lambda root: tmp_path / "legacy")
+    _write_script(report.linker_script_path(BOARD, tmp_path / "legacy"))
+    assert report.app_linker_script(BOARD, build, tmp_path) == expected
+
+
+def test_linker_script_falls_back_for_a_pre_nsx_build(tmp_path: Path, monkeypatch) -> None:
+    # --skip-flash on an old CMake build dir.
+    monkeypatch.setattr(report, "nsx_ambiq_sdk_dir", lambda root: tmp_path / "legacy")
+    expected = _write_script(report.linker_script_path(BOARD, tmp_path / "legacy"))
+    assert report.app_linker_script(BOARD, tmp_path / "old-build", tmp_path) == expected
+
+
+def test_linker_script_missing_everywhere_names_the_fix(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(report, "nsx_ambiq_sdk_dir", lambda root: tmp_path / "legacy")
+    with pytest.raises(FileNotFoundError, match="rerun hardware build"):
+        report.app_linker_script(BOARD, tmp_path / "old-build", tmp_path)

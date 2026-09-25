@@ -63,9 +63,16 @@ def linker_script_path(board: BoardSpec, sdk_root: Path) -> Path:
     return sdk_root / "modules" / "nsx-core" / "src" / board.soc / "gcc" / "linker_script_sbl.ld"
 
 
-def app_linker_script(board: BoardSpec, build_dir: Path) -> Path:
-    """The linker script the NSX-built server used."""
-    return linker_script_path(board, nsx_app_dir(build_dir) / "modules" / NSX_SDK_MODULE)
+def app_linker_script(board: BoardSpec, build_dir: Path, project_root: Path) -> Path:
+    """The linker script the server was linked with."""
+    app_dir = nsx_app_dir(build_dir)
+    if app_dir.is_dir():
+        return linker_script_path(board, app_dir / "modules" / NSX_SDK_MODULE)
+    # Build dir predates NSX: legacy SDK.
+    legacy = linker_script_path(board, nsx_ambiq_sdk_dir(project_root))
+    if legacy.is_file():
+        return legacy
+    raise FileNotFoundError(f"No linker script for {build_dir}; rerun hardware build.")
 
 
 def parse_memory_regions(linker_script: Path) -> list[dict[str, int | str]]:
@@ -228,7 +235,7 @@ def generate_memory_report(
     elf = elf_path(build_root)
     if not elf.is_file():
         raise FileNotFoundError(f"Built firmware ELF not found: {elf} -- run `hardware build` for this board/build dir first.")
-    analysis = analyze_elf(elf, board, app_linker_script(board, build_root), project_root)
+    analysis = analyze_elf(elf, board, app_linker_script(board, build_root, project_root), project_root)
     symbols = analysis.symbols
     retained = {name: name in symbols for name in _SELECTED_ADAPTERS}
     catalog = json.loads((project_root / "cmake" / "hardware" / "kernel_catalog.json").read_text(encoding="utf-8"))
