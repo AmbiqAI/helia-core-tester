@@ -1,5 +1,8 @@
-name: Auto Tag on PR Merge
+name: Tag Release
 
+# Tags only merged release-please release PRs, with the version release-please
+# wrote to .release-please-manifest.json (scripts/release_tag.py decides). Any
+# other merged PR gets no tag.
 on:
   pull_request:
     types: [closed]
@@ -8,43 +11,52 @@ on:
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: tag-release
+  cancel-in-progress: false
 
 jobs:
   tag:
-    if: github.event.pull_request.merged == true
+    if: "github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'autorelease: pending')"
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout the merge commit
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
 
-      - name: Fetch all tags
-        run: git fetch --tags
-
-      - name: Compute next tag
-        id: next_tag
-        shell: bash
-        run: |
-          latest=$(git tag | sort -V | tail -n 1)
-
-          if [ -z "$latest" ]; then
-            next="v0.0.1"
-          else
-            version="${latest#v}"
-            IFS='.' read -r major minor patch <<< "$version"
-            patch=$((patch + 1))
-            next="v${major}.${minor}.${patch}"
-          fi
-
-          echo "next=$next" >> "$GITHUB_OUTPUT"
+      - name: Decide the release tag
+        id: release
+        run: python3 scripts/release_tag.py "$GITHUB_EVENT_PATH" .release-please-manifest.json >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
+        if: steps.release.outputs.tag != ''
         env:
-          TAG: ${{ steps.next_tag.outputs.next }}
+          TAG: ${{ steps.release.outputs.tag }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "$TAG"
-          git push origin "$TAG"
+          git fetch --tags --force
+          if existing=$(git rev-parse -q --verify "refs/tags/${TAG}^{commit}"); then
+            if [ "$existing" = "$SHA" ]; then
+              echo "${TAG} already points at ${SHA}"
+              exit 0
+            fi
+            echo "::error::${TAG} already exists at ${existing}, not ${SHA}"
+            exit 1
+          fi
+          git tag "$TAG" "$SHA"
+          git push origin "refs/tags/${TAG}"
+
+      - name: Mark the release PR tagged
+        if: steps.release.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh label create "autorelease: tagged" --repo "$GITHUB_REPOSITORY" --color ededed --force
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label "autorelease: pending" --add-label "autorelease: tagged"
