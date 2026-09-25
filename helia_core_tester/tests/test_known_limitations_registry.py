@@ -16,6 +16,7 @@ import pytest
 from helia_core_tester.hardware import generated_test_bridge as gtb
 from helia_core_tester.hardware import known_limitations
 from helia_core_tester.hardware.known_limitations import KnownLimitation, lookup_known_limitation
+from helia_core_tester.tests.generated_inputs import discover_or_skip
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -46,14 +47,12 @@ def test_large_batch_matmul_cases_no_longer_have_arena_limitations(case_name: st
     "batch_matmul_float_mve_scalar_rhs_stride_f16",
 ])
 def test_large_batch_matmul_cases_fit_default_workspace(case_name: str, tmp_path: Path):
-    cases = gtb.discover_generated_tests(
+    cases = discover_or_skip(
         _PROJECT_ROOT,
         suite="float",
         family="FullyConnectedFunctions",
         name_filter=case_name,
     )
-    if not cases:
-        pytest.skip(f"generated case {case_name} is not present")
     bundle = gtb.build_case_bundle_from_generated_test(
         _PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False
     )
@@ -70,10 +69,7 @@ def test_bridge_raises_unsupported_for_known_limitation_case(tmp_path, monkeypat
         fake_case_name,
         KnownLimitation(case_name=fake_case_name, reason="synthetic test-only limitation"),
     )
-    case_dir = _PROJECT_ROOT / "artifacts/generated_tests/int/cortex-m55/BasicMathFunctions" / fake_case_name
-    if not case_dir.is_dir():
-        pytest.skip(f"{case_dir} not present in this local artifacts tree (run generation first)")
-    generated_test = gtb.discover_generated_tests(
+    generated_test = discover_or_skip(
         _PROJECT_ROOT, cpu="cortex-m55", family="BasicMathFunctions", name_filter=fake_case_name
     )
     assert len(generated_test) == 1

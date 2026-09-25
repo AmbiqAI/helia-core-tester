@@ -60,5 +60,8 @@ def test_both_is_the_union_of_int_and_float() -> None:
 def test_case_ids_do_not_collide_across_suites() -> None:
     """One merged result bundle keys cases by case_id, so a collision between
     an int and a float case would silently overwrite one of them."""
+    discover_or_skip(PROJECT_ROOT, family="BasicMathFunctions", suite="int")
+    discover_or_skip(PROJECT_ROOT, family="BasicMathFunctions", suite="float")
     both_ids = [b.case_id for b in _bundles("both")]
+    assert both_ids, "expected bridged int and float BasicMath cases"
     assert len(both_ids) == len(set(both_ids))

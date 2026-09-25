@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from helia_core_tester.hardware.generated_test_bridge import GeneratedTestCase, discover_generated_tests
 
@@ -29,12 +30,15 @@ def discover_or_skip(
     suite: str = "int",
 ) -> list[GeneratedTestCase]:
     """discover_generated_tests(), skipping when no matching case was generated."""
-    cases = discover_generated_tests(
-        project_root, cpu=cpu, family=family, name_filter=name_filter, limit=limit, suite=suite
-    )
+    root = generated_family_dir(project_root, suite=suite, cpu=cpu, family=family)
+    try:
+        cases = discover_generated_tests(
+            project_root, cpu=cpu, family=family, name_filter=name_filter, limit=limit, suite=suite
+        )
+    except yaml.YAMLError as exc:
+        pytest.fail(f"a generated case descriptor.yaml under {root} is unreadable: {exc}")
     if cases:
         return cases
-    root = generated_family_dir(project_root, suite=suite, cpu=cpu, family=family)
     present = sorted(
         directory.name
         for directory in (root.iterdir() if root.is_dir() else ())
