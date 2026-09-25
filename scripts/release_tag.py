@@ -35,7 +35,8 @@ def is_release_pull_request(event: dict[str, Any]) -> bool:
     labels = {label.get("name") for label in pull_request.get("labels") or []}
     head = (pull_request.get("head") or {}).get("ref", "")
     base = (pull_request.get("base") or {}).get("ref", "")
-    return RELEASE_LABEL in labels and head.startswith(RELEASE_BRANCH_PREFIX) and base == RELEASE_BASE
+    release_branch = head == RELEASE_BRANCH_PREFIX or head.startswith(RELEASE_BRANCH_PREFIX + "--")
+    return RELEASE_LABEL in labels and release_branch and base == RELEASE_BASE
 
 
 def release_tag(event: dict[str, Any], manifest: dict[str, Any]) -> Optional[str]:

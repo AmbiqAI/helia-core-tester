@@ -2,7 +2,9 @@ name: Tag Release
 
 # Tags only merged release-please release PRs, with the version release-please
 # wrote to .release-please-manifest.json (scripts/release_tag.py decides). Any
-# other merged PR gets no tag.
+# other merged PR gets no tag. No concurrency group: every closed PR would join
+# it, and a queued release run can be cancelled by a later ordinary merge. Only
+# one release PR is open at a time and the tag step is safe to repeat.
 on:
   pull_request:
     types: [closed]
@@ -13,10 +15,6 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
-
-concurrency:
-  group: tag-release
-  cancel-in-progress: false
 
 jobs:
   tag:
