@@ -2,8 +2,8 @@
 
 Host-side glue only: the firmware sources stay under cmake/hardware/. This
 module renders them as an NSX app inside the build dir (nsx_app.py), drives
-NSX lock/sync/configure/build through nsx_cli.py, and owns the "flash only if
-the ELF changed" decision.
+NSX lock/sync/configure/build/flash through nsx_cli.py, and owns the "flash
+only if the ELF changed" decision.
 
 That decision has two halves. The host-side stamp
 (`<build_dir>/.flashed-<serial>.sha256`) says whether *this build dir* last
@@ -23,25 +23,24 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from importlib import metadata
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Iterator, Optional
 
 import typer
 
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .jlink_library import JLinkLibraryError, find_jlink_exe
-from .toolchain import DOWNLOADS_DIR, add_toolchain_to_path, toolchain_bin_dir
+from .toolchain import DOWNLOADS_DIR, add_toolchain_to_path
 
 if TYPE_CHECKING:
     from .nsx_app import AppOptions
 
 SERVER_TARGET = "hct_benchmark_server"
-FLASH_TARGET = "hct_benchmark_server_flash"
 
 
 def ensure_build_tools(repo_root: Path) -> None:
@@ -117,25 +116,14 @@ def _cached_var(cache_text: str, name: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def _configured_for(
-    build_dir: Path, app_dir: Path, board: BoardSpec, serial_no: Optional[int], jlink_exe: Optional[str],
-) -> bool:
-    """The cache belongs to this app, board, probe."""
+def _configured_for(build_dir: Path, app_dir: Path, board: BoardSpec) -> bool:
+    """The cache belongs to this app and board."""
     cache = build_dir / "CMakeCache.txt"
     if not cache.is_file() or not (build_dir / "build.ninja").is_file():
         return False
     text = cache.read_text(encoding="utf-8", errors="ignore")
     wanted = {"CMAKE_HOME_DIRECTORY": str(app_dir.resolve()), "NSX_BOARD": board.nsx_board}
-    # Flash target bakes in the serial.
-    if serial_no is not None:
-        wanted["NSX_JLINK_SERIAL"] = str(serial_no)
-    if not all(_cached_var(text, name) == value for name, value in wanted.items()):
-        return False
-    # ...and JLinkExe; NSX caches "-NOTFOUND" otherwise.
-    cached_exe = _cached_var(text, "NSX_JLINK_EXE") or ""
-    if jlink_exe is None:
-        return cached_exe == "" or cached_exe.endswith("-NOTFOUND")
-    return cached_exe == jlink_exe
+    return all(_cached_var(text, name) == value for name, value in wanted.items())
 
 
 def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
@@ -151,39 +139,25 @@ def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
     shutil.rmtree(build_dir / "CMakeFiles", ignore_errors=True)
 
 
-# JLINK_PATH before our first export.
-_UNSET = object()
-_jlink_path_before: object = _UNSET
-
-
-def _restore_jlink_path() -> None:
-    """Undo our own JLINK_PATH export."""
-    global _jlink_path_before
-    if _jlink_path_before is _UNSET:
-        return
-    if _jlink_path_before is None:
-        os.environ.pop("JLINK_PATH", None)
-    else:
-        os.environ["JLINK_PATH"] = str(_jlink_path_before)
-    _jlink_path_before = _UNSET
-
-
-def _export_jlink_exe() -> Optional[str]:
-    """Hand NSX the JLinkExe doctor reports."""
-    global _jlink_path_before
+@contextmanager
+def _jlink_path() -> Iterator[None]:
+    """Point NSX at doctor's JLinkExe."""
     # NSX reads $JLINK_PATH, then PATH.
     try:
         found = find_jlink_exe()
     except JLinkLibraryError as exc:
         typer.echo(f"[hardware] WARNING: {exc}", err=True)
         found = None
-    if found is None:
-        _restore_jlink_path()
-        return None
-    if _jlink_path_before is _UNSET:
-        _jlink_path_before = os.environ.get("JLINK_PATH")
-    os.environ["JLINK_PATH"] = found.path
-    return found.path
+    before = os.environ.get("JLINK_PATH")
+    if found is not None:
+        os.environ["JLINK_PATH"] = found.path
+    try:
+        yield
+    finally:
+        if before is None:
+            os.environ.pop("JLINK_PATH", None)
+        else:
+            os.environ["JLINK_PATH"] = before
 
 
 def _sync_modules(app_dir: Path, relock: bool) -> None:
@@ -201,21 +175,6 @@ def _sync_modules(app_dir: Path, relock: bool) -> None:
         typer.echo(f"[hardware] modules/ drifted from nsx.lock; relocking. ({exc})")
         nsx_cli.lock_app(app_dir)
         nsx_cli.sync_app(app_dir)
-
-
-def build(build_dir: Path, target: str, jobs: Optional[int]) -> None:
-    cmd = ["cmake", "--build", str(build_dir), "--target", target]
-    if jobs:
-        cmd += ["-j", str(jobs)]
-    typer.echo(f"[hardware] Building: {' '.join(cmd)}")
-    # generate_kernel_symbol_refs.py (run as a build step) shells out to the
-    # bare command name "arm-none-eabi-nm" -- the toolchain file points CMake's
-    # own compiler/linker/objcopy invocations at absolute paths, but this one
-    # still needs the toolchain's bin/ on PATH.
-    env = os.environ.copy()
-    toolchain_bin = str(toolchain_bin_dir(tester_repo_root()).resolve())
-    env["PATH"] = f"{toolchain_bin}{os.pathsep}{env.get('PATH', '')}"
-    subprocess.run(cmd, cwd=tester_repo_root(), check=True, env=env)
 
 
 # --- flash-only-if-changed stamp -------------------------------------------------
@@ -390,7 +349,6 @@ def build_firmware(
     build_dir: Path,
     jobs: Optional[int] = None,
     force_reconfigure: bool = False,
-    serial_no: Optional[int] = None,
     options: Optional["AppOptions"] = None,
     update_dependencies: bool = False,
 ) -> Path:
@@ -426,12 +384,10 @@ def build_firmware(
         # Unfinished builds must touch again.
         built.unlink(missing_ok=True)
         _touch_tree(kernel_dir(app_dir, options))
-    jlink_exe = _export_jlink_exe()
-    if force_reconfigure or not _configured_for(build_dir, app_dir, board, serial_no, jlink_exe):
+    if force_reconfigure or not _configured_for(build_dir, app_dir, board):
         _drop_foreign_cache(build_dir, app_dir)
-        nsx_cli.configure_app(
-            app_dir, board.nsx_board, build_dir=build_dir, probe_serial=serial_no, frozen=True,
-        )
+        with _jlink_path():
+            nsx_cli.configure_app(app_dir, board.nsx_board, build_dir=build_dir, frozen=True)
     else:
         typer.echo(f"[hardware] Reusing configured build dir: {build_dir}")
     nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=jobs, frozen=True)
@@ -451,12 +407,14 @@ def flash_firmware(
     options: Optional["AppOptions"] = None,
     update_dependencies: bool = False,
 ) -> FlashDecision:
-    """Build, then flash through the NSX-generated J-Link target unless the ELF is
+    """Build, then flash through NSX's `flash_app` unless the ELF is
     unchanged since this build dir last flashed this probe *and* the board confirms
     it is running this build's id (or `force` is set)."""
+    from . import nsx_cli
+
     build_started = time.monotonic()
     build_firmware(
-        board, build_dir=build_dir, jobs=jobs, force_reconfigure=force_reconfigure, serial_no=serial_no,
+        board, build_dir=build_dir, jobs=jobs, force_reconfigure=force_reconfigure,
         options=options, update_dependencies=update_dependencies,
     )
     build_seconds = time.monotonic() - build_started
@@ -469,6 +427,10 @@ def flash_firmware(
         return replace(decision, build_seconds=build_seconds)
     typer.echo(f"[hardware] Flashing {board.id} via J-Link serial {serial_no} ({decision.reason}).")
     flash_started = time.monotonic()
-    build(build_dir, FLASH_TARGET, jobs)
+    with _jlink_path():
+        nsx_cli.flash_app(
+            nsx_app_dir(build_dir), board=board.nsx_board, build_dir=build_dir,
+            target=SERVER_TARGET, probe_serial=serial_no,
+        )
     record_flash(build_dir, serial_no, decision.digest)
     return replace(decision, build_seconds=build_seconds, flash_seconds=time.monotonic() - flash_started)

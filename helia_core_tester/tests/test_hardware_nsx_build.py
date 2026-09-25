@@ -56,31 +56,28 @@ def nsx(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
             raise nsx_cli.HardwareBuildError("nsx sync failed: drift")
         (app_dir / "modules").mkdir(exist_ok=True)
 
-    def configure_app(app_dir, board, *, build_dir, probe_serial=None, frozen=False):
-        calls.append(("configure", probe_serial, frozen))
+    def configure_app(app_dir, board, *, build_dir, frozen=False):
+        calls.append(("configure", frozen))
         (build_dir / "build.ninja").write_text("", encoding="utf-8")
         (build_dir / "CMakeCache.txt").write_text(
-            f"CMAKE_HOME_DIRECTORY:INTERNAL={app_dir.resolve()}\n"
-            f"NSX_BOARD:STRING={board}\n"
-            f"NSX_JLINK_SERIAL:UNINITIALIZED={probe_serial or ''}\n"
-            f"NSX_JLINK_EXE:FILEPATH={os.environ.get('JLINK_PATH') or 'NSX_JLINK_EXE-NOTFOUND'}\n",
-            encoding="utf-8",
+            f"CMAKE_HOME_DIRECTORY:INTERNAL={app_dir.resolve()}\nNSX_BOARD:STRING={board}\n", encoding="utf-8",
         )
 
     def build_app(app_dir, *, board, build_dir, jobs=None, frozen=False):
         calls.append(("build", jobs, frozen))
 
     monkeypatch.setattr(firmware_build, "ensure_build_tools", lambda repo_root: None)
-    monkeypatch.setattr(firmware_build, "_jlink_path_before", firmware_build._UNSET)
-    # Host JLINK_PATH must not leak in.
-    monkeypatch.setenv("JLINK_PATH", "")
-    monkeypatch.delenv("JLINK_PATH")
-    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: None)
+    _use_jlink(monkeypatch, None)
     monkeypatch.setattr(nsx_cli, "starter_profile", lambda board: {"modules": ["nsx-core"]})
     monkeypatch.setattr(nsx_app, "render_app", render_app)
     for fake in (lock_app, sync_app, configure_app, build_app):
         monkeypatch.setattr(nsx_cli, fake.__name__, fake)
     return calls
+
+
+def _use_jlink(monkeypatch, path: str | None) -> None:
+    found = None if path is None else JLinkExecutable(path, "$JLINK_PATH")
+    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: found)
 
 
 def _steps(calls: list[tuple]) -> list[str]:
@@ -94,7 +91,7 @@ def test_first_build_runs_every_step_in_order(tmp_path: Path, nsx: list[tuple]) 
         ("render", AppOptions()),
         ("lock", False),
         ("sync", False),
-        ("configure", None, True),
+        ("configure", True),
         ("build", 4, True),
     ]
     assert (firmware_build.nsx_app_dir(tmp_path) / "nsx.yml").is_file()
@@ -247,22 +244,6 @@ def test_failed_frozen_sync_relocks(tmp_path: Path, nsx: list[tuple]) -> None:
     assert nsx[1:4] == [("sync", True), ("lock", False), ("sync", False)]
 
 
-def test_serial_change_or_force_reconfigures(tmp_path: Path, nsx: list[tuple]) -> None:
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path, serial_no=SERIAL)
-    assert ("configure", SERIAL, True) in nsx
-    nsx.clear()
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path, serial_no=SERIAL)
-    assert "configure" not in _steps(nsx)
-    # Build without a probe keeps the cached one.
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert "configure" not in _steps(nsx)
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path, serial_no=7)
-    assert ("configure", 7, True) in nsx
-    nsx.clear()
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path, serial_no=7, force_reconfigure=True)
-    assert ("configure", 7, True) in nsx
-
-
 def test_old_path_cache_is_dropped(tmp_path: Path, nsx: list[tuple]) -> None:
     """The root-CMakeLists cache would block NSX's configure."""
     (tmp_path / "CMakeFiles").mkdir()
@@ -273,89 +254,36 @@ def test_old_path_cache_is_dropped(tmp_path: Path, nsx: list[tuple]) -> None:
     assert not (tmp_path / "CMakeFiles").exists()
 
 
-def test_configure_hands_nsx_the_resolved_jlinkexe(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
-    monkeypatch.setenv("JLINK_PATH", "")
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path, serial_no=SERIAL)
-    # JLinkExe appears later: the flash target must follow.
-    found = JLinkExecutable("/opt/SEGGER/JLink/JLinkExe", "next to $HPX_JLINK_DLL")
-    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: found)
-    nsx.clear()
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path, serial_no=SERIAL)
-    assert os.environ["JLINK_PATH"] == "/opt/SEGGER/JLink/JLinkExe"
-    assert ("configure", SERIAL, True) in nsx
-    nsx.clear()
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path, serial_no=SERIAL)
-    assert "configure" not in _steps(nsx)
-
-    # A broken $HPX_JLINK_DLL must not stop a build.
-    def _broken():
-        raise JLinkLibraryError("$HPX_JLINK_DLL=/x/gone.so does not exist")
-
-    monkeypatch.setattr(firmware_build, "find_jlink_exe", _broken)
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path / "other")
-
-
-def _use_jlink(monkeypatch, path: str | None) -> None:
-    found = None if path is None else JLinkExecutable(path, "$JLINK_PATH")
-    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: found)
-
-
-def test_build_without_serial_follows_jlinkexe(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
-    monkeypatch.setenv("JLINK_PATH", "")
-    _use_jlink(monkeypatch, "/opt/a/JLinkExe")
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    nsx.clear()
-    _use_jlink(monkeypatch, "/opt/b/JLinkExe")
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert ("configure", None, True) in nsx
-
-
-def test_vanished_jlinkexe_reconfigures(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
-    monkeypatch.setenv("JLINK_PATH", "")
-    _use_jlink(monkeypatch, "/opt/a/JLinkExe")
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    nsx.clear()
-    _use_jlink(monkeypatch, None)
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert "configure" in _steps(nsx)
-    # The rewrite cached NOTFOUND: reuse now.
-    nsx.clear()
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert "configure" not in _steps(nsx)
-
-
-def test_failed_resolution_clears_only_our_jlink_path(monkeypatch) -> None:
-    monkeypatch.setattr(firmware_build, "_jlink_path_before", firmware_build._UNSET)
-    # setenv first so teardown restores it.
-    monkeypatch.setenv("JLINK_PATH", "")
-    monkeypatch.delenv("JLINK_PATH")
-    _use_jlink(monkeypatch, "/opt/a/JLinkExe")
-    assert firmware_build._export_jlink_exe() == "/opt/a/JLinkExe"
-    _use_jlink(monkeypatch, None)
-    assert firmware_build._export_jlink_exe() is None
-    assert "JLINK_PATH" not in os.environ
-
-    # A host-wide JLINK_PATH survives a miss.
-    monkeypatch.setenv("JLINK_PATH", "/etc/jlink/JLinkExe")
-    assert firmware_build._export_jlink_exe() is None
-    assert os.environ["JLINK_PATH"] == "/etc/jlink/JLinkExe"
-    _use_jlink(monkeypatch, "/opt/a/JLinkExe")
-    firmware_build._export_jlink_exe()
-    _use_jlink(monkeypatch, None)
-    firmware_build._export_jlink_exe()
-    assert os.environ["JLINK_PATH"] == "/etc/jlink/JLinkExe"
-
-
-def test_flash_forwards_app_options(tmp_path: Path, monkeypatch) -> None:
+def test_flash_goes_through_nsx(tmp_path: Path, monkeypatch) -> None:
+    """Scoped JLINK_PATH, like hpx's nsx flash."""
     seen: dict = {}
     monkeypatch.setattr(firmware_build, "build_firmware", lambda board, **kwargs: seen.update(kwargs))
-    monkeypatch.setattr(firmware_build, "build", lambda build_dir, target, jobs: None)
+
+    def flash_app(app_dir, **kwargs):
+        seen["flash"] = dict(kwargs, app_dir=app_dir, jlink=os.environ.get("JLINK_PATH"))
+
+    monkeypatch.setattr(nsx_cli, "flash_app", flash_app)
+    monkeypatch.setenv("JLINK_PATH", "/etc/jlink/JLinkExe")
+    _use_jlink(monkeypatch, "/opt/a/JLinkExe")
     elf = firmware_build.elf_path(tmp_path)
     elf.parent.mkdir(parents=True)
     elf.write_bytes(b"fw")
     options = AppOptions(enable_f32=False)
     firmware_build.flash_firmware(BOARD, SERIAL, build_dir=tmp_path, options=options, update_dependencies=True)
-    assert seen["options"] is options and seen["update_dependencies"] is True and seen["serial_no"] == SERIAL
+    assert seen["options"] is options and seen["update_dependencies"] is True
+    assert seen["flash"] == {
+        "app_dir": firmware_build.nsx_app_dir(tmp_path), "board": BOARD.nsx_board, "build_dir": tmp_path,
+        "target": firmware_build.SERVER_TARGET, "probe_serial": SERIAL, "jlink": "/opt/a/JLinkExe",
+    }
+    assert os.environ["JLINK_PATH"] == "/etc/jlink/JLinkExe"
+
+    # A broken $HPX_JLINK_DLL must not stop a flash.
+    def _broken():
+        raise JLinkLibraryError("$HPX_JLINK_DLL=/x/gone.so does not exist")
+
+    monkeypatch.setattr(firmware_build, "find_jlink_exe", _broken)
+    firmware_build.flash_firmware(BOARD, SERIAL, build_dir=tmp_path, force=True)
+    assert seen["flash"]["jlink"] == "/etc/jlink/JLinkExe"
 
 
 # --- CLI flags ---------------------------------------------------------------------

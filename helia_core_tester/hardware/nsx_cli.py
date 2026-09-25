@@ -1,7 +1,7 @@
 """Thin facade over the neuralspotx Python API.
 
-`hardware build` goes through here instead of
-``neuralspotx.api`` so that every lock/sync/configure/build call carries a
+`hardware build` and `hardware flash` go through here instead of
+``neuralspotx.api`` so that every lock/sync/configure/build/flash call carries a
 wall-clock timeout, drops NSX's own notes at verbosity 0, and fails as
 :class:`HardwareBuildError` naming the step. Subprocess output (cmake,
 ninja, git) still inherits the caller's stdio.
@@ -24,10 +24,11 @@ LOCK_TIMEOUT_S = 180
 SYNC_TIMEOUT_S = 300
 CONFIGURE_TIMEOUT_S = 120
 BUILD_TIMEOUT_S = 300
+FLASH_TIMEOUT_S = 120
 
 
 class HardwareBuildError(RuntimeError):
-    """An NSX lock, sync, configure or build step failed."""
+    """An NSX lock, sync, configure, build or flash step failed."""
 
 
 def _quiet_emitter(event: Event) -> None:
@@ -111,14 +112,12 @@ def configure_app(
     *,
     build_dir: Optional[Path] = None,
     toolchain: Optional[str] = None,
-    probe_serial: Optional[int] = None,
     frozen: bool = False,
     timeout_s: float = CONFIGURE_TIMEOUT_S,
     verbosity: int = 0,
 ) -> None:
     """Run the CMake configure for one board.
 
-    ``probe_serial`` lands in the generated flash target.
     ``frozen`` refuses to re-vendor modules/ if it drifts from nsx.lock.
     """
     with _nsx_errors("nsx configure"):
@@ -127,7 +126,6 @@ def configure_app(
             board=board,
             build_dir=build_dir,
             toolchain=toolchain,
-            probe_serial=None if probe_serial is None else str(probe_serial),
             frozen=frozen,
             timeout_s=timeout_s,
             emit=emitter_for_verbosity(verbosity),
@@ -162,6 +160,34 @@ def build_app(
             timeout_s=timeout_s,
             emit=emitter_for_verbosity(verbosity),
             **kwargs,
+        )
+
+
+def flash_app(
+    app_dir: Path,
+    *,
+    board: str,
+    build_dir: Path,
+    target: str,
+    probe_serial: int,
+    frozen: bool = True,
+    timeout_s: float = FLASH_TIMEOUT_S,
+    verbosity: int = 0,
+) -> None:
+    """Flash through NSX's generated J-Link target.
+
+    NSX reconfigures whenever a probe serial is given.
+    """
+    with _nsx_errors("nsx flash"):
+        nsx_api.flash_app(
+            app_dir,
+            board=board,
+            build_dir=build_dir,
+            target=target,
+            probe_serial=str(probe_serial),
+            frozen=frozen,
+            timeout_s=timeout_s,
+            emit=emitter_for_verbosity(verbosity),
         )
 
 

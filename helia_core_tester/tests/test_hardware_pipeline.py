@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.hardware import firmware_build
+from helia_core_tester.hardware import firmware_build, nsx_cli
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, load_case_bundle
 from helia_core_tester.hardware.fake_target import FakeTargetTransport
@@ -222,7 +222,8 @@ def fake_toolchain(monkeypatch):
     """Stub the NSX build and flash target; returns the list of built targets."""
     built: list[str] = []
     monkeypatch.setattr(firmware_build, "build_firmware", lambda *a, **k: built.append(firmware_build.SERVER_TARGET))
-    monkeypatch.setattr(firmware_build, "build", lambda build_dir, target, jobs: built.append(target))
+    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: None)
+    monkeypatch.setattr(nsx_cli, "flash_app", lambda app_dir, **kwargs: built.append("flash"))
     return built
 
 
@@ -233,7 +234,7 @@ def test_flash_firmware_skips_flash_target_when_unchanged_and_board_confirms(tmp
 
     first = firmware_build.flash_firmware(BOARD, 7, build_dir=build_dir, board_build_id_reader=_silent_board)
     assert first.needed
-    assert fake_toolchain == [firmware_build.SERVER_TARGET, firmware_build.FLASH_TARGET]
+    assert fake_toolchain == [firmware_build.SERVER_TARGET, "flash"]
 
     fake_toolchain.clear()
     second = firmware_build.flash_firmware(BOARD, 7, build_dir=build_dir, board_build_id_reader=board)
@@ -246,7 +247,7 @@ def test_flash_firmware_skips_flash_target_when_unchanged_and_board_confirms(tmp
     fake_toolchain.clear()
     forced = firmware_build.flash_firmware(BOARD, 7, build_dir=build_dir, force=True, board_build_id_reader=_silent_board)
     assert forced.needed and "--force" in forced.reason
-    assert fake_toolchain == [firmware_build.SERVER_TARGET, firmware_build.FLASH_TARGET]
+    assert fake_toolchain == [firmware_build.SERVER_TARGET, "flash"]
 
 
 def test_flash_skip_is_refused_when_another_build_dir_flashed_the_probe(tmp_path: Path, fake_toolchain) -> None:
@@ -267,7 +268,7 @@ def test_flash_skip_is_refused_when_another_build_dir_flashed_the_probe(tmp_path
     board_runs_b = _board_running("hct-bbb")
     decision = firmware_build.flash_firmware(BOARD, SERIAL, build_dir=build_a, board_build_id_reader=board_runs_b)
     assert decision.needed
-    assert fake_toolchain == [firmware_build.SERVER_TARGET, firmware_build.FLASH_TARGET]
+    assert fake_toolchain == [firmware_build.SERVER_TARGET, "flash"]
     assert "board reports build id hct-bbb, expected hct-aaa" in decision.reason
     assert decision.build_id == "hct-aaa" and decision.board_build_id == "hct-bbb"
 

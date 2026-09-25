@@ -289,7 +289,7 @@ def _toolchain_env(project_root: Path) -> dict[str, str]:
     """The child environment for a size-probe configure/build: the checkout's downloaded
     ARM GCC `bin/` first on PATH. The CMake build runs generate_kernel_symbol_refs.py,
     whose `arm-none-eabi-nm` lookup is bare, so the toolchain must be reachable through
-    PATH and not only through the toolchain file (same rule as firmware_build.build())."""
+    PATH and not only through the toolchain file."""
     env = os.environ.copy()
     bin_dir = str(toolchain_bin_dir(project_root).resolve())
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
