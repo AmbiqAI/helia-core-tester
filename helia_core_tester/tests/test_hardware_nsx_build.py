@@ -52,8 +52,6 @@ def nsx(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
 
     def sync_app(app_dir, *, frozen=False):
         calls.append(("sync", frozen))
-        if frozen and (app_dir / "drifted").exists():
-            raise nsx_cli.HardwareBuildError("nsx sync failed: drift")
         (app_dir / "modules").mkdir(exist_ok=True)
 
     def configure_app(app_dir, board, *, build_dir, frozen=False):
@@ -106,11 +104,10 @@ def test_unchanged_rebuild_skips_lock_sync_configure(tmp_path: Path, nsx: list[t
 
 def test_neuralspotx_upgrade_resyncs(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    monkeypatch.setattr(firmware_build.metadata, "version", lambda name: "99.0.0")
+    monkeypatch.setattr(nsx_cli.metadata, "version", lambda name: "99.0.0")
     nsx.clear()
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert _steps(nsx) == ["render", "sync", "build"]
-    assert ("sync", True) in nsx
+    assert nsx[1:] == [("sync", False), ("build", None, True)]
 
 
 def test_manifest_change_relocks_and_syncs_unfrozen(tmp_path: Path, nsx: list[tuple]) -> None:
@@ -176,18 +173,6 @@ def test_changed_options_warn(tmp_path: Path, nsx: list[tuple], capsys) -> None:
     out = capsys.readouterr()
     assert "build options changed since the last build (CMakeLists.txt)" in out.err
     assert "inline asm off" in out.out
-
-
-def test_failed_frozen_sync_relocks(tmp_path: Path, nsx: list[tuple]) -> None:
-    """An interrupted sync or NSX upgrade self-heals."""
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    app_dir = firmware_build.nsx_app_dir(tmp_path)
-    (app_dir / "drifted").touch()
-    # No state: the last sync never finished.
-    (app_dir / firmware_build.SYNC_STATE).unlink()
-    nsx.clear()
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert nsx[1:4] == [("sync", True), ("lock", False), ("sync", False)]
 
 
 def test_old_path_cache_is_dropped(tmp_path: Path, nsx: list[tuple]) -> None:

@@ -19,14 +19,12 @@ RTT session to read it.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import shutil
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from importlib import metadata
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterator, Optional
 
@@ -158,23 +156,6 @@ def _jlink_path() -> Iterator[None]:
             os.environ.pop("JLINK_PATH", None)
         else:
             os.environ["JLINK_PATH"] = before
-
-
-def _sync_modules(app_dir: Path, relock: bool) -> None:
-    """Sync modules/; relock if frozen sync fails."""
-    from . import nsx_cli
-
-    # Frozen sync cannot populate a tree.
-    frozen = not relock and (app_dir / "modules").is_dir()
-    try:
-        nsx_cli.sync_app(app_dir, frozen=frozen)
-    except nsx_cli.HardwareBuildError as exc:
-        if not frozen:
-            raise
-        # Interrupted sync or NSX upgrade.
-        typer.echo(f"[hardware] modules/ drifted from nsx.lock; relocking. ({exc})")
-        nsx_cli.lock_app(app_dir)
-        nsx_cli.sync_app(app_dir)
 
 
 # --- flash-only-if-changed stamp -------------------------------------------------
@@ -314,24 +295,7 @@ def _echo_kernels(options: "AppOptions", repo_root: Path) -> None:
 
 
 # Written after a sync that finished.
-SYNC_STATE = ".hct-sync.json"
-
-
-def _sync_state(app_dir: Path) -> dict[str, Optional[str]]:
-    """What the last finished sync used."""
-    lock = app_dir / "nsx.lock"
-    return {
-        "lock": hashlib.sha256(lock.read_bytes()).hexdigest() if lock.is_file() else None,
-        "neuralspotx": metadata.version("neuralspotx"),
-    }
-
-
-def _last_sync(app_dir: Path) -> dict:
-    """Read the saved sync state."""
-    try:
-        return json.loads((app_dir / SYNC_STATE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+SYNC_STAMP = ".hct-sync"
 
 
 def build_firmware(
@@ -361,11 +325,13 @@ def build_firmware(
     if relock:
         typer.echo(f"[hardware] Locking NSX modules for {app_dir}")
         nsx_cli.lock_app(app_dir, update=update_dependencies)
-    synced = _last_sync(app_dir) == _sync_state(app_dir) and (app_dir / "modules").is_dir()
-    if relock or force_reconfigure or not synced:
-        _sync_modules(app_dir, relock)
-        state = _sync_state(app_dir)
-        (app_dir / SYNC_STATE).write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    # Unfrozen sync repairs from the lock.
+    stamp = app_dir / SYNC_STAMP
+    synced = stamp.is_file() and stamp.read_text(encoding="utf-8") == nsx_cli.sync_stamp(app_dir)
+    if relock or force_reconfigure or not synced or not (app_dir / "modules").is_dir():
+        stamp.unlink(missing_ok=True)
+        nsx_cli.sync_app(app_dir)
+        stamp.write_text(nsx_cli.sync_stamp(app_dir), encoding="utf-8")
     else:
         typer.echo("[hardware] NSX modules unchanged; skipping lock and sync.")
     if force_reconfigure or not _configured_for(build_dir, app_dir, board):

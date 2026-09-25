@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import subprocess
 from contextlib import contextmanager
+from importlib import metadata
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from neuralspotx import api as nsx_api
 from neuralspotx._io import Emitter, Event
 from neuralspotx.api import NSXError
-from neuralspotx.nsx_lock import LockKind, NsxLock, hash_manifest, hash_tree, read_lock
+from neuralspotx.nsx_lock import LockKind, NsxLock, hash_file, hash_manifest, hash_tree, lock_path, read_lock
 
 # Per-subprocess budgets, in seconds.
 LOCK_TIMEOUT_S = 180
@@ -80,6 +81,11 @@ def lock_is_current(app_dir: Path, board: str) -> bool:
         for entry in lock.modules.values()
         if entry.kind == LockKind.VENDORED
     )
+
+
+def sync_stamp(app_dir: Path) -> str:
+    """nsx.lock hash and neuralspotx version."""
+    return f"{hash_file(lock_path(app_dir))} {metadata.version('neuralspotx')}"
 
 
 def sync_app(
