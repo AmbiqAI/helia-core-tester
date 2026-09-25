@@ -64,13 +64,14 @@ The firmware builds as a neuralspotx (NSX) app rendered into
 - `--cmsis-nn-ref REF` builds another tag or commit; `--cmsis-nn-root PATH`
   builds another local checkout.
 
-A local checkout is not handed to NSX whole. The files git would commit
-(tracked, or untracked but not ignored) are mirrored into
-`build/hardware/<board>/kernel_src`, without the nested tester and the build dir,
-and only changed files are copied. So the build dir may live inside the checkout,
-and NSX relocks only when a kernel file changes. Every build prints the kernel
-source and the inline-asm setting, and warns when the build options differ from
-the last build in that build dir. `--no-inline-asm` builds requantize without
+A local checkout is consumed the way helia-profiler consumes one: its
+`Include/`, `Source/` and `cmake/` trees and its native `nsx/` module are copied
+into the app's `modules/nsx-cmsis-nn`, which `nsx.yml` declares as a vendored
+(in-app) module. NSX never sees the checkout itself, so the nested tester and the
+build dir inside it are not hashed or copied. NSX relocks only when a kernel file
+changes, and switching kernel source recompiles every kernel. Every build prints
+the kernel source and the inline-asm setting, and warns when the build options
+differ from the last build in that build dir. `--no-inline-asm` builds requantize without
 inline assembly; `--update-dependencies` re-resolves the NSX modules into
 `nsx.lock`. `hardware flash` and `hardware run` rebuild with their own flags, so
 pass the same kernel flags you built with.

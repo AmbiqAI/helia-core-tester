@@ -32,6 +32,25 @@ def _render(tmp_path: Path, **options) -> nsx_app.AppRender:
     return nsx_app.render_app(BOARD, nsx_app.AppOptions(**options), tmp_path / "app")
 
 
+def _write(path: Path, text: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def make_checkout(root: Path) -> Path:
+    """ns-cmsis-nn stand-in with a nested tester."""
+    _write(root / "Source" / "arm_add.c", "int add;\n")
+    _write(root / "Source" / "sub" / "arm_sub.c", "int sub;\n")
+    _write(root / "Include" / "arm_nn.h", "#pragma once\n")
+    _write(root / "cmake" / "flags.cmake", "# flags\n")
+    _write(root / "nsx" / "CMakeLists.txt", "add_library(nsx_cmsis_nn)\n")
+    _write(root / "nsx" / "nsx-module.yaml", "module:\n  name: nsx-cmsis-nn\n")
+    _write(root / "Tests" / "helia-core-tester" / "artifacts" / "big.bin", "x" * 1000)
+    _write(root / "Documentation" / "index.md", "docs\n")
+    return root
+
+
 # --- nsx.yml -----------------------------------------------------------------------
 
 
@@ -45,6 +64,7 @@ def test_nsx_yml_declares_profile_modules_plus_extras(tmp_path: Path) -> None:
     names = [entry["name"] for entry in manifest["modules"]]
     assert names == PROFILE_MODULES + ["nsx-cmsis-nn", "nsx-segger-rtt", "nsx-pmu-armv8m"]
 
+    assert "source" not in manifest["modules"][names.index("nsx-cmsis-nn")]
     registry = manifest["module_registry"]
     assert registry["projects"]["ns-cmsis-nn"] == {"revision": "v9.9.9"}
     assert registry["modules"]["nsx-cmsis-nn"] == {
@@ -72,15 +92,60 @@ def test_pmu_appended_once_and_channel_optional(tmp_path: Path, fake_profile: di
     assert "channel" not in yaml.safe_load(render.nsx_yml)
 
 
-def test_cmsis_nn_root_is_a_local_path_without_git_coordinates(tmp_path: Path) -> None:
-    checkout = tmp_path / "ns-cmsis-nn"
-    registry = yaml.safe_load(_render(tmp_path, cmsis_nn_root=checkout).nsx_yml)["module_registry"]
-    assert registry["projects"]["ns-cmsis-nn"] == {"local_path": str(checkout)}
-    # A module revision would outrank the project's.
-    assert registry["modules"]["nsx-cmsis-nn"] == {
-        "project": "ns-cmsis-nn",
-        "metadata": "modules/ns-cmsis-nn/nsx/nsx-module.yaml",
+def test_cmsis_nn_root_is_vendored_in_the_app(tmp_path: Path) -> None:
+    """Same as hpx: no local_path for NSX."""
+    render = _render(tmp_path, cmsis_nn_root=make_checkout(tmp_path / "ns-cmsis-nn"))
+    manifest = yaml.safe_load(render.nsx_yml)
+    entry = next(module for module in manifest["modules"] if module["name"] == "nsx-cmsis-nn")
+    assert entry == {"name": "nsx-cmsis-nn", "source": {"vendored": True}}
+    registry = manifest["module_registry"]
+    assert "ns-cmsis-nn" not in registry["projects"] and "nsx-cmsis-nn" not in registry["modules"]
+    assert "local_path" not in render.nsx_yml
+    assert 'HCT_KERNEL_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/modules/nsx-cmsis-nn"' in render.cmakelists
+    pinned = _render(tmp_path / "pinned").cmakelists
+    assert 'HCT_KERNEL_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/modules/ns-cmsis-nn"' in pinned
+
+
+def _listing(root: Path) -> set[str]:
+    return {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
+
+
+def test_local_kernels_are_written_as_hpx_writes_them(tmp_path: Path) -> None:
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    _render(tmp_path, cmsis_nn_root=checkout)
+    module = tmp_path / "app" / "modules" / "nsx-cmsis-nn"
+    assert _listing(module) == {
+        "nsx-module.yaml", "nsx/CMakeLists.txt", "CMakeLists.txt", "Include/arm_nn.h",
+        "Source/arm_add.c", "Source/sub/arm_sub.c", "cmake/flags.cmake",
     }
+    assert (module / "CMakeLists.txt").read_text(encoding="utf-8") == nsx_app.KERNEL_SHIM
+    assert "add_subdirectory(nsx)" in nsx_app.KERNEL_SHIM
+    assert (module / "nsx-module.yaml").read_bytes() == (checkout / "nsx" / "nsx-module.yaml").read_bytes()
+    # Mtimes survive; the shim is kept.
+    os.utime(checkout / "Source" / "arm_add.c", (1, 1))
+    os.utime(module / "CMakeLists.txt", (2, 2))
+    (checkout / "Source" / "sub" / "arm_sub.c").unlink()
+    _render(tmp_path, cmsis_nn_root=checkout)
+    assert (module / "Source" / "arm_add.c").stat().st_mtime == 1
+    assert (module / "CMakeLists.txt").stat().st_mtime == 2
+    assert not (module / "Source" / "sub" / "arm_sub.c").exists()
+
+
+def test_a_non_checkout_is_rejected(tmp_path: Path) -> None:
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    (checkout / "nsx" / "nsx-module.yaml").unlink()
+    with pytest.raises(nsx_app.AppRenderError, match="lacks nsx/nsx-module.yaml"):
+        _render(tmp_path, cmsis_nn_root=checkout)
+    assert not (tmp_path / "app" / "nsx.yml").exists()
+
+
+def test_nested_kernel_root(tmp_path: Path) -> None:
+    root = make_checkout(tmp_path / "ns-cmsis-nn")
+    tester = root / "Tests" / "helia-core-tester"
+    assert nsx_app.nested_kernel_root(tester) == root.resolve()
+    (root / "nsx" / "nsx-module.yaml").unlink()
+    assert nsx_app.nested_kernel_root(tester) is None
+    assert nsx_app.nested_kernel_root(tmp_path / "standalone") is None
 
 
 def test_missing_profile_is_an_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,15 +230,6 @@ def test_render_is_idempotent_and_keeps_mtimes(tmp_path: Path) -> None:
     assert [path.stat().st_mtime for path in paths] == [1_000_000_000.0] * 3
 
 
-def test_relative_cmsis_nn_root_is_resolved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # NSX resolves local_path against the app dir, not the cwd.
-    checkout = tmp_path / "ns-cmsis-nn"
-    checkout.mkdir()
-    monkeypatch.chdir(tmp_path)
-    registry = yaml.safe_load(_render(tmp_path, cmsis_nn_root=Path("ns-cmsis-nn")).nsx_yml)["module_registry"]
-    assert registry["projects"]["ns-cmsis-nn"]["local_path"] == str(checkout.resolve())
-
-
 def test_synced_modules_cmake_is_left_alone(tmp_path: Path) -> None:
     # NSX owns cmake/nsx/modules.cmake after sync.
     first = _render(tmp_path)
@@ -181,18 +237,3 @@ def test_synced_modules_cmake_is_left_alone(tmp_path: Path) -> None:
     synced.write_text("# written by nsx sync\n", encoding="utf-8")
     _render(tmp_path)
     assert synced.read_text(encoding="utf-8") == "# written by nsx sync\n"
-
-
-@pytest.mark.parametrize("app_rel", ["Tests/helia-core-tester/build/hardware/x", "."])
-def test_app_dir_inside_cmsis_nn_root_is_rejected(tmp_path: Path, app_rel: str) -> None:
-    # NSX skips vendoring and the lock never settles.
-    checkout = tmp_path / "ns-cmsis-nn"
-    with pytest.raises(nsx_app.AppRenderError, match="overlaps cmsis_nn_root"):
-        nsx_app.render_app(BOARD, nsx_app.AppOptions(cmsis_nn_root=checkout), checkout / app_rel)
-    assert not (checkout / app_rel / "nsx.yml").exists()
-
-
-def test_cmsis_nn_root_inside_app_dir_is_rejected(tmp_path: Path) -> None:
-    app = tmp_path / "app"
-    with pytest.raises(nsx_app.AppRenderError, match="overlaps cmsis_nn_root"):
-        nsx_app.render_app(BOARD, nsx_app.AppOptions(cmsis_nn_root=app / "kernels"), app)

@@ -344,41 +344,29 @@ def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
 # --- high-level entry points ------------------------------------------------------
 
 
-def _stage_kernels(
-    options: "AppOptions", build_dir: Path, repo_root: Path,
-) -> tuple["AppOptions", str, Optional[str]]:
-    """Echo kernels; mirror a local root."""
-    from .kernel_mirror import drop_mirror, mirror_kernels, nested_kernel_root
+def _echo_kernels(options: "AppOptions", repo_root: Path) -> str:
+    """Print the kernel source and inline asm."""
+    from .nsx_app import nested_kernel_root
 
-    asm = "on" if options.requantize_inline_asm else "off"
+    source = options.kernel_source()
     root = options.cmsis_nn_root
-    if root is None:
-        label = f"ns-cmsis-nn {options.cmsis_nn_ref}"
-        typer.echo(f"[hardware] Kernels: {label}, inline asm {asm}")
-        # A later mirror must copy fresh.
-        drop_mirror(build_dir)
-        return options, label, None
-    root = root.expanduser().resolve()
-    where = " (enclosing checkout)" if root == nested_kernel_root(repo_root) else ""
-    typer.echo(f"[hardware] Kernels: {root}{where}, inline asm {asm}")
-    mirror = mirror_kernels(root, build_dir, exclude=[repo_root])
-    typer.echo(
-        f"[hardware] Mirrored {mirror.files} files ({mirror.size / 1e6:.1f} MB), {mirror.changed} changed"
-    )
-    return replace(options, cmsis_nn_root=mirror.path), str(root), mirror.stamp
+    where = " (enclosing checkout)" if root and root.resolve() == nested_kernel_root(repo_root) else ""
+    asm = "on" if options.requantize_inline_asm else "off"
+    typer.echo(f"[hardware] Kernels: {source}{where}, inline asm {asm}")
+    return source
 
 
 # Written after a sync that finished.
 SYNC_STATE = ".hct-sync.json"
+# Kernel source of the last finished build.
+BUILT_KERNELS = ".hct-kernels"
 
 
-def _sync_state(app_dir: Path, source: str, kernel_stamp: Optional[str]) -> dict[str, Optional[str]]:
+def _sync_state(app_dir: Path) -> dict[str, Optional[str]]:
     """What the last finished sync used."""
     lock = app_dir / "nsx.lock"
     return {
         "lock": hashlib.sha256(lock.read_bytes()).hexdigest() if lock.is_file() else None,
-        "source": source,
-        "kernels": kernel_stamp,
         "neuralspotx": metadata.version("neuralspotx"),
     }
 
@@ -410,37 +398,33 @@ def build_firmware(
 ) -> Path:
     """Build hct_benchmark_server through NSX; returns the ELF path."""
     from . import nsx_cli
-    from .nsx_app import CMSIS_NN_PROJECT, AppOptions, render_app
+    from .nsx_app import AppOptions, kernel_dir, render_app
 
     repo_root = tester_repo_root()
     ensure_build_tools(repo_root)
     options = options or AppOptions()
     app_dir = nsx_app_dir(build_dir)
-    staged, source, kernel_stamp = _stage_kernels(options, build_dir, repo_root)
-    rendered = render_app(board, staged, app_dir, repo_root=repo_root, kernel_source=source)
+    source = _echo_kernels(options, repo_root)
+    rendered = render_app(board, options, app_dir, repo_root=repo_root)
     if rendered.changed:
         names = ", ".join(rendered.changed)
         typer.echo(f"[hardware] WARNING: build options changed since the last build ({names}).", err=True)
-    last = _last_sync(app_dir)
-    # Mirror edits skip nsx.yml.
-    relock = (
-        update_dependencies
-        or last.get("kernels") != kernel_stamp
-        or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
-    )
+    # Kernel edits change the vendored hash.
+    relock = update_dependencies or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
     if relock:
         typer.echo(f"[hardware] Locking NSX modules for {app_dir}")
         nsx_cli.lock_app(app_dir, update=update_dependencies)
-    synced = last == _sync_state(app_dir, source, kernel_stamp) and (app_dir / "modules").is_dir()
+    synced = _last_sync(app_dir) == _sync_state(app_dir) and (app_dir / "modules").is_dir()
     if relock or force_reconfigure or not synced:
         _sync_modules(app_dir, relock)
-        # Vendored copies keep old mtimes.
-        if last.get("source") != source:
-            _touch_tree(app_dir / "modules" / CMSIS_NN_PROJECT)
-        state = _sync_state(app_dir, source, kernel_stamp)
+        state = _sync_state(app_dir)
         (app_dir / SYNC_STATE).write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
     else:
         typer.echo("[hardware] NSX modules unchanged; skipping lock and sync.")
+    # Copies keep old mtimes; recompile all.
+    built = app_dir / BUILT_KERNELS
+    if not built.is_file() or built.read_text(encoding="utf-8") != source:
+        _touch_tree(kernel_dir(app_dir, options))
     jlink_exe = _export_jlink_exe()
     if force_reconfigure or not _configured_for(build_dir, app_dir, board, serial_no, jlink_exe):
         _drop_foreign_cache(build_dir, app_dir)
@@ -450,6 +434,7 @@ def build_firmware(
     else:
         typer.echo(f"[hardware] Reusing configured build dir: {build_dir}")
     nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=jobs, frozen=True)
+    (app_dir / BUILT_KERNELS).write_text(source, encoding="utf-8")
     return elf_path(build_dir)
 
 

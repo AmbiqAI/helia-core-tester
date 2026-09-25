@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 import pytest
-from neuralspotx.nsx_lock import NsxLock, hash_manifest, write_lock
+from neuralspotx.nsx_lock import LockKind, NsxLock, ResolvedModule, hash_manifest, hash_tree, write_lock
 from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
@@ -18,15 +18,22 @@ from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_ap
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.jlink_library import JLinkExecutable, JLinkLibraryError
 from helia_core_tester.hardware.nsx_app import AppOptions
-from helia_core_tester.tests.test_hardware_kernel_mirror import make_checkout
+from helia_core_tester.tests.test_hardware_nsx_app import make_checkout
 
 BOARD = resolve_board("apollo510_evb")
 SERIAL = 1160003180
 
 
 def _write_lock(app_dir: Path) -> None:
-    """Minimal nsx.lock for the current nsx.yml."""
-    write_lock(app_dir, NsxLock(manifest_hash=hash_manifest(app_dir / "nsx.yml")), board=BOARD.nsx_board)
+    """Minimal nsx.lock, vendored kernels hashed."""
+    lock = NsxLock(manifest_hash=hash_manifest(app_dir / "nsx.yml"))
+    kernels = app_dir / "modules" / nsx_app.CMSIS_NN_MODULE
+    if kernels.is_dir():
+        lock.modules[nsx_app.CMSIS_NN_MODULE] = ResolvedModule(
+            project=nsx_app.CMSIS_NN_MODULE, kind=LockKind.VENDORED, constraint="vendored",
+            vendored_at=f"modules/{nsx_app.CMSIS_NN_MODULE}", content_hash=hash_tree(kernels), acquired_at="",
+        )
+    write_lock(app_dir, lock, board=BOARD.nsx_board)
 
 
 @pytest.fixture
@@ -124,13 +131,13 @@ def test_update_dependencies_forces_lock_update(tmp_path: Path, nsx: list[tuple]
 
 
 def test_local_kernel_root_relocks_only_on_edits(tmp_path: Path, nsx: list[tuple]) -> None:
-    """Mirror stamp, not NSX hashing, drives relock."""
+    """The lock's vendored hash drives relock."""
     kernels = make_checkout(tmp_path / "kernels")
     options = AppOptions(cmsis_nn_root=kernels)
     build_dir = tmp_path / "build"
     firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
-    assert nsx[0] == ("render", AppOptions(cmsis_nn_root=build_dir.resolve() / "kernel_src"))
-    assert (build_dir / "kernel_src" / "Source" / "arm_add.c").is_file()
+    vendored = firmware_build.nsx_app_dir(build_dir) / "modules" / "nsx-cmsis-nn"
+    assert (vendored / "Source" / "arm_add.c").is_file()
     nsx.clear()
     firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
     assert _steps(nsx) == ["render", "build"]
@@ -141,34 +148,56 @@ def test_local_kernel_root_relocks_only_on_edits(tmp_path: Path, nsx: list[tuple
     firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
     assert _steps(nsx) == ["render", "lock", "sync", "build"]
     assert ("sync", False) in nsx
+    assert (vendored / "Source" / "arm_add.c").read_text(encoding="utf-8") == "int add; // edit\n"
 
 
 def test_build_dir_inside_kernel_root_builds(tmp_path: Path, nsx: list[tuple]) -> None:
     """The nested default build dir is fine."""
     kernels = make_checkout(tmp_path / "kernels")
-    build_dir = kernels / "Tests" / "hct" / "build" / "hardware" / BOARD.id
+    build_dir = kernels / "Tests" / "helia-core-tester" / "build" / "hardware" / BOARD.id
     options = AppOptions(cmsis_nn_root=kernels)
     firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
     nsx.clear()
     firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
     assert _steps(nsx) == ["render", "build"]
-    assert not (build_dir / "kernel_src" / "Tests").exists()
+    assert not (firmware_build.nsx_app_dir(build_dir) / "modules" / "nsx-cmsis-nn" / "Tests").exists()
 
 
-def test_pinned_build_drops_the_mirror(tmp_path: Path, nsx: list[tuple]) -> None:
-    """Switching back must recopy fresh mtimes."""
-    options = AppOptions(cmsis_nn_root=make_checkout(tmp_path / "kernels"))
+def _age(root: Path) -> None:
+    """Old mtimes, as copy2 carries over."""
+    for path in root.rglob("*"):
+        os.utime(path, (1, 1))
+
+
+def test_root_switch_recompiles_kernels(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
+    """copy2 keeps mtimes; ninja needs new ones."""
+    first, second = make_checkout(tmp_path / "a"), make_checkout(tmp_path / "b")
+    _age(first)
+    _age(second)
     build_dir = tmp_path / "build"
-    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
-    firmware_build.build_firmware(BOARD, build_dir=build_dir)
-    assert not (build_dir / "kernel_src").exists()
-    nsx.clear()
-    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
-    assert _steps(nsx) == ["render", "lock", "sync", "build"]
+    vendored = firmware_build.nsx_app_dir(build_dir) / "modules" / "nsx-cmsis-nn" / "Source" / "arm_add.c"
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=first))
+    assert vendored.stat().st_mtime > 1
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=first))
+    assert vendored.stat().st_mtime == 1
+
+    # An interrupted build touches again.
+    def _fail(*args, **kwargs):
+        raise nsx_cli.HardwareBuildError("nsx build failed")
+
+    real_build = nsx_cli.build_app
+    monkeypatch.setattr(nsx_cli, "build_app", _fail)
+    with pytest.raises(nsx_cli.HardwareBuildError):
+        firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=second))
+    monkeypatch.setattr(nsx_cli, "build_app", real_build)
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=second))
+    assert vendored.stat().st_mtime > 1
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=AppOptions(cmsis_nn_root=second))
+    assert vendored.stat().st_mtime == 1
 
 
-def test_source_switch_freshens_vendored_kernels(tmp_path: Path, nsx: list[tuple]) -> None:
-    """Old cached mtimes would skip recompiles."""
+def test_ref_switch_freshens_synced_kernels(tmp_path: Path, nsx: list[tuple]) -> None:
+    """NSX's module cache keeps old mtimes."""
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
     vendored = firmware_build.nsx_app_dir(tmp_path) / "modules" / nsx_app.CMSIS_NN_PROJECT / "arm_add.c"
     vendored.parent.mkdir(parents=True)

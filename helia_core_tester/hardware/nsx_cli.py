@@ -17,7 +17,7 @@ from typing import Any, Iterator, Optional
 from neuralspotx import api as nsx_api
 from neuralspotx._io import Emitter, Event
 from neuralspotx.api import NSXError
-from neuralspotx.nsx_lock import NsxLock, hash_manifest, read_lock
+from neuralspotx.nsx_lock import LockKind, NsxLock, hash_manifest, hash_tree, read_lock
 
 # Per-subprocess budgets, in seconds.
 LOCK_TIMEOUT_S = 180
@@ -66,12 +66,19 @@ def lock_app(
 
 
 def lock_is_current(app_dir: Path, board: str) -> bool:
-    """nsx.lock matches the current nsx.yml."""
+    """nsx.lock matches nsx.yml and vendored modules."""
     try:
         lock = read_lock(app_dir, board)
     except NSXError:
         return False
-    return lock is not None and lock.manifest_hash == hash_manifest(app_dir / "nsx.yml")
+    if lock is None or lock.manifest_hash != hash_manifest(app_dir / "nsx.yml"):
+        return False
+    # NSX records vendored trees by content.
+    return all(
+        entry.content_hash == hash_tree(app_dir / entry.vendored_at)
+        for entry in lock.modules.values()
+        if entry.kind == LockKind.VENDORED
+    )
 
 
 def sync_app(

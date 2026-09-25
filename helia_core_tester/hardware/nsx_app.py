@@ -1,16 +1,18 @@
 """Render the hardware firmware as an NSX app.
 
-Pure renderer behind `hardware build`: writes ``nsx.yml``, a
-placeholder ``cmake/nsx/modules.cmake`` and ``CMakeLists.txt`` into an app
-directory. ``nsx lock``/``nsx sync`` own ``cmake/nsx/`` and ``modules/``
-from there; the firmware sources stay in this checkout. NSX copies the rest
-of ``cmake/nsx/`` (bootstrap, helpers, toolchain flags) out of its own wheel
-on every lock and sync, so the app never ships them.
+Renderer behind `hardware build`: writes ``nsx.yml``, a placeholder
+``cmake/nsx/modules.cmake`` and ``CMakeLists.txt`` into an app directory,
+plus ``modules/nsx-cmsis-nn`` for a local kernel checkout, vendored the way
+helia-profiler does it. ``nsx lock``/``nsx sync`` own ``cmake/nsx/`` and the
+other ``modules/`` from there; the firmware sources stay in this checkout.
+NSX copies the rest of ``cmake/nsx/`` (bootstrap, helpers, toolchain flags)
+out of its own wheel on every lock and sync, so the app never ships them.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,7 +24,6 @@ from . import nsx_cli
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .firmware_build import BUILD_ID_TXT, IMAGE_SUBDIR, SERVER_TARGET
-from .pathutil import is_relative_to
 from .toolchain import DOWNLOADS_DIR
 
 APP_NAME = "hct_benchmark_server"
@@ -42,6 +43,10 @@ SEGGER_RTT_METADATA = "nsx-module.yaml"
 SEGGER_RTT_REF = "v0.1.2"
 
 PMU_MODULE = "nsx-pmu-armv8m"
+
+# Copied from a local checkout, like hpx.
+KERNEL_TREES = ("Include", "Source", "cmake")
+KERNEL_SHIM = "# Shim: delegates to the native ns-cmsis-nn NSX build.\nadd_subdirectory(nsx)\n"
 
 RTT_BUFFER_SIZE_UP = 8192
 RTT_BUFFER_SIZE_DOWN = 512
@@ -74,6 +79,10 @@ class AppOptions:
     enable_f32: bool = True
     enable_f16: bool = True
     build_size_probe: bool = False
+
+    def kernel_source(self) -> str:
+        """Kernel source, as printed."""
+        return str(self.cmsis_nn_root or f"ns-cmsis-nn {self.cmsis_nn_ref}")
 
     def cache_vars(self) -> dict[str, str]:
         """Switches forced before the NSX bootstrap."""
@@ -110,25 +119,33 @@ def module_names(board: BoardSpec, profile: dict[str, Any]) -> list[str]:
 
 def module_registry(options: AppOptions) -> dict[str, Any]:
     """Overrides for the modules the profile lacks."""
-    # local_path replaces url and every revision.
-    root = options.cmsis_nn_root
-    pin = {} if root else {"revision": options.cmsis_nn_ref}
-    kernels_project = {"local_path": str(root)} if root else pin
-    kernels_module = {"project": CMSIS_NN_PROJECT, **pin, "metadata": CMSIS_NN_METADATA}
-    return {
-        "projects": {
-            CMSIS_NN_PROJECT: kernels_project,
-            SEGGER_RTT_MODULE: {"url": SEGGER_RTT_URL, "revision": SEGGER_RTT_REF},
-        },
-        "modules": {
-            CMSIS_NN_MODULE: kernels_module,
-            SEGGER_RTT_MODULE: {
-                "project": SEGGER_RTT_MODULE,
-                "revision": SEGGER_RTT_REF,
-                "metadata": SEGGER_RTT_METADATA,
-            },
-        },
+    projects: dict[str, Any] = {SEGGER_RTT_MODULE: {"url": SEGGER_RTT_URL, "revision": SEGGER_RTT_REF}}
+    modules: dict[str, Any] = {
+        SEGGER_RTT_MODULE: {"project": SEGGER_RTT_MODULE, "revision": SEGGER_RTT_REF, "metadata": SEGGER_RTT_METADATA},
     }
+    # A local checkout is vendored instead.
+    if options.cmsis_nn_root is None:
+        ref = options.cmsis_nn_ref
+        projects[CMSIS_NN_PROJECT] = {"revision": ref}
+        modules[CMSIS_NN_MODULE] = {"project": CMSIS_NN_PROJECT, "revision": ref, "metadata": CMSIS_NN_METADATA}
+    return {"projects": projects, "modules": modules}
+
+
+def nested_kernel_root(repo_root: Path) -> Optional[Path]:
+    """The enclosing ns-cmsis-nn checkout, if any."""
+    # Layout: ns-cmsis-nn/Tests/helia-core-tester.
+    root = repo_root.resolve().parent.parent
+    markers = (root / "Include", root / "Source")
+    if all(path.is_dir() for path in markers) and (root / "nsx" / "nsx-module.yaml").is_file():
+        return root
+    return None
+
+
+def kernel_dir(app_dir: Path, options: AppOptions) -> Path:
+    """Where the build reads kernels."""
+    # NSX vendors by module, clones by project.
+    name = CMSIS_NN_MODULE if options.cmsis_nn_root else CMSIS_NN_PROJECT
+    return app_dir / "modules" / name
 
 
 def _write_if_absent(path: Path, text: str) -> None:
@@ -152,14 +169,23 @@ def _write_if_changed(path: Path, text: str) -> bool:
     return existed
 
 
-def _checked_kernel_root(root: Path, app_dir: Path) -> Path:
-    """Resolve root; refuse overlap with the app."""
-    # NSX hashes and vendors local_path whole.
-    root = root.expanduser().resolve()
-    app = app_dir.expanduser().resolve()
-    if is_relative_to(app, root) or is_relative_to(root, app):
-        raise AppRenderError(f"App dir {app} overlaps cmsis_nn_root {root}")
-    return root
+def write_kernels(root: Path, module_dir: Path) -> None:
+    """Vendor a local checkout, as hpx does."""
+    needed = ("Include", "Source", "nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
+    missing = [name for name in needed if not (root / name).exists()]
+    if missing:
+        raise AppRenderError(f"Not an ns-cmsis-nn checkout: {root} lacks {missing[0]}")
+    (module_dir / "nsx").mkdir(parents=True, exist_ok=True)
+    # Native manifest at the module root.
+    shutil.copy2(root / "nsx" / "nsx-module.yaml", module_dir / "nsx-module.yaml")
+    shutil.copy2(root / "nsx" / "CMakeLists.txt", module_dir / "nsx" / "CMakeLists.txt")
+    # A fresh mtime would rerun CMake.
+    _write_if_changed(module_dir / "CMakeLists.txt", KERNEL_SHIM)
+    # copytree keeps mtimes: ninja skips unchanged.
+    for name in KERNEL_TREES:
+        shutil.rmtree(module_dir / name, ignore_errors=True)
+        if (root / name).is_dir():
+            shutil.copytree(root / name, module_dir / name)
 
 
 def render_app(
@@ -168,14 +194,9 @@ def render_app(
     app_dir: Path,
     *,
     repo_root: Optional[Path] = None,
-    kernel_source: Optional[str] = None,
 ) -> AppRender:
-    """Write nsx.yml, modules.cmake and CMakeLists.txt."""
+    """Write nsx.yml, modules.cmake, CMakeLists.txt, local kernels."""
     repo_root = (repo_root or tester_repo_root()).resolve()
-    if kernel_source is None:
-        kernel_source = str(options.cmsis_nn_root or f"ns-cmsis-nn {options.cmsis_nn_ref}")
-    if options.cmsis_nn_root is not None:
-        options = replace(options, cmsis_nn_root=_checked_kernel_root(options.cmsis_nn_root, app_dir))
     profile = nsx_cli.starter_profile(board.nsx_board)
     if profile is None:
         raise AppRenderError(f"No NSX starter profile for {board.nsx_board}")
@@ -195,8 +216,9 @@ def render_app(
         toolchain=TOOLCHAIN,
         channel=profile.get("channel"),
         modules=modules,
+        vendored=[CMSIS_NN_MODULE] if options.cmsis_nn_root else [],
         module_registry_yaml=registry_yaml,
-        kernel_source=kernel_source,
+        kernel_source=options.kernel_source(),
     )
     modules_cmake = env.get_template("modules.cmake.j2").render(modules=modules)
 
@@ -213,7 +235,7 @@ def render_app(
         hardware_dir=repo_root / "cmake" / "hardware",
         scripts_dir=repo_root / "scripts",
         cmsis_core_include=repo_root / DOWNLOADS_DIR / "CMSIS_5" / "CMSIS" / "Core" / "Include",
-        kernel_project=CMSIS_NN_PROJECT,
+        kernel_dir=kernel_dir(app_dir, options).name,
         image_dir="probe" if probe else IMAGE_SUBDIR,
         build_id_txt=BUILD_ID_TXT,
         link_pmu=PMU_MODULE in modules,
@@ -221,6 +243,8 @@ def render_app(
         rtt_buffer_size_down=RTT_BUFFER_SIZE_DOWN,
     )
 
+    if options.cmsis_nn_root is not None:
+        write_kernels(options.cmsis_nn_root, kernel_dir(app_dir, options))
     changed = tuple(
         name for name, text in (("nsx.yml", nsx_yml), ("CMakeLists.txt", cmakelists))
         if _write_if_changed(app_dir / name, text)

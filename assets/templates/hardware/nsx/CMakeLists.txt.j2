@@ -28,8 +28,8 @@ nsx_bootstrap_app(
 # Sources live in the rendering checkout.
 set(HCT_HARDWARE_DIR "{{ hardware_dir }}")
 set(HCT_SCRIPTS_DIR "{{ scripts_dir }}")
-# Kernels as `nsx sync` materialises them.
-set(HCT_KERNEL_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/modules/{{ kernel_project }}")
+# Synced or vendored kernels.
+set(HCT_KERNEL_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/modules/{{ kernel_dir }}")
 # pmu_armv8.h; nsx-cmsis-core lacks it.
 set(HCT_CMSIS_CORE_INCLUDE "{{ cmsis_core_include }}")
 
