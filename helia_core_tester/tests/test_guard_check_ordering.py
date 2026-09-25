@@ -11,6 +11,11 @@ validator, counted from the first guard arm. Anchoring on the arm skips the
 temp-sizer scalar checks the recurrent templates run before touching any
 buffer, and lands before every kernel call, since a buffer is armed before
 it is handed to the kernel.
+
+Participation is enforced by inventory, not by the templates that already opt
+in: every template must arm a guard, must not declare a writable static array
+outside helia_guard_declare, and must arm and check every buffer it declares
+that way.
 """
 
 from __future__ import annotations
@@ -30,6 +35,17 @@ GUARD_CHECK_RE = re.compile(r"HELIA_GUARD_CHECK(?:_SLACK)?\(|helia_guard_check\(
 GUARD_ARM_RE = re.compile(r"HELIA_GUARD_ARM\(|helia_guard_arm\(")
 # A returning validator whose subject is a sizer query rather than a kernel result.
 SIZER_PROBE_RE = re.compile(r"ctx size|_get_buffer_size")
+# A static array declaration, optionally behind Jinja control tags on the same line.
+# Const tables and pointer tables are not kernel write targets.
+STATIC_ARRAY_RE = re.compile(
+    r"^[ \t]*(?:\{%-?[^%]*-?%\}[ \t]*)*static\s+(?!const\b)"
+    r"(?P<type>[^;=(){}\[\]]*?(?:\{\{[^}]*\}\}[^;=(){}\[\]]*?)*)\s*"
+    r"(?P<ident>(?:\{\{[^}]*\}\})?\w*)\s*\[",
+    re.MULTILINE,
+)
+GUARD_DECLARE_RE = re.compile(r"helia_guard_declare\(\s*[^,]+,\s*(?P<ident>[^,]+?)\s*,")
+GUARD_CHECK_ANY_RE = r"HELIA_GUARD_CHECK(?:_SLACK|_UNTOUCHED)?\(\s*"
+LITERAL_FOR_RE = re.compile(r"\{%-?\s*for\s+(?P<var>\w+)\s+in\s+\[(?P<items>[^\]]*)\]\s*-?%\}")
 
 RENDERED_CASES = [
     "convolve_default_s8",
@@ -48,6 +64,16 @@ RENDERED_CASES = [
     "lstm_unidirectional_error_null_input_f32",
     "gru_unidirectional_error_stateful_batch_gt1_f32",
     "gru_unidirectional_error_missing_temp1_prereset_f32",
+    "fill_float_block16_f32",
+    "fill_float_block0_noop_f32",
+    "pack_float_rank1_n2_axis0_f32",
+    "unpack_float_rank2_axis1_f32",
+    "split_float_zero_slice_v_f32",
+    "rsqrt_float_special_inplace_f32",
+    "reduce_max_all_boundary_f32",
+    "convolve_fault_null_ctx_buf_s8",
+    "max_pool_fault_zero_dim_s8",
+    "svdf_fault_null_output_f32",
 ]
 RENDERED_CPU = "cortex-m55"
 
@@ -78,17 +104,76 @@ def _first_guard_precedes_first_returning_validator(text: str, label: str) -> No
     )
 
 
-def _guarded_templates() -> list[Path]:
-    return sorted(
-        path
-        for path in TEMPLATES_ROOT.glob("**/*.c.j2")
-        if "HELIA_GUARD_ARM(" in path.read_text() or "helia_guard_arm(" in path.read_text()
-    )
+def _all_templates() -> list[Path]:
+    return sorted(TEMPLATES_ROOT.glob("**/*.c.j2"))
 
 
-@pytest.mark.parametrize(
-    "template", _guarded_templates(), ids=lambda p: str(p.relative_to(TEMPLATES_ROOT))
-)
+def _unguarded_writable_arrays(text: str) -> list[str]:
+    return [
+        match.group(0).strip()
+        for match in STATIC_ARRAY_RE.finditer(text)
+        if "*" not in match.group("type")
+    ]
+
+
+def _declared_guard_idents(text: str) -> list[tuple[str, str]]:
+    """(expanded, as-written) spellings of each helia_guard_declare identifier.
+
+    name ~ "_output" is referenced as {{ name }}_output. A loop variable over a
+    literal list ({% for gate in ["input", ...] %}) is expanded to each value,
+    and a site may use either the expanded name or the loop form.
+    """
+    literal_loops = {
+        match.group("var"): re.findall(r"[\"']([^\"']*)[\"']", match.group("items"))
+        for match in LITERAL_FOR_RE.finditer(text)
+    }
+    idents = []
+    for match in GUARD_DECLARE_RE.finditer(text):
+        parts = [part.strip() for part in match.group("ident").split("~")]
+        written = "".join(part.strip("\"'") if part[:1] in "\"'" else "{{ " + part + " }}" for part in parts)
+        spellings = [""]
+        for part in parts:
+            if part[:1] in "\"'":
+                values = [part.strip("\"'")]
+            elif part in literal_loops:
+                values = literal_loops[part]
+            else:
+                values = ["{{ " + part + " }}"]
+            spellings = [prefix + value for prefix in spellings for value in values]
+        idents.extend((spelling, written) for spelling in spellings)
+    return idents
+
+
+def _template_id(path: Path) -> str:
+    return str(path.relative_to(TEMPLATES_ROOT))
+
+
+def test_inventory_covers_every_template() -> None:
+    assert len(_all_templates()) > 80
+
+
+@pytest.mark.parametrize("template", _all_templates(), ids=_template_id)
+def test_template_guards_every_writable_buffer(template: Path) -> None:
+    text = template.read_text()
+    assert GUARD_ARM_RE.search(text), f"{_template_id(template)}: no guarded buffer"
+    raw = _unguarded_writable_arrays(text)
+    assert not raw, f"{_template_id(template)}: writable static arrays outside helia_guard_declare: {raw}"
+
+
+@pytest.mark.parametrize("template", _all_templates(), ids=_template_id)
+def test_template_arms_and_checks_every_declared_guard(template: Path) -> None:
+    text = template.read_text()
+    for ident, written in _declared_guard_idents(text):
+        names = "(?:" + re.escape(ident) + "|" + re.escape(written) + ")"
+        assert re.search(r"HELIA_GUARD_ARM\(\s*" + names + r"\s*,", text), (
+            f"{_template_id(template)}: {ident} is declared guarded but never armed"
+        )
+        assert re.search(GUARD_CHECK_ANY_RE + names + r"\s*,", text), (
+            f"{_template_id(template)}: {ident} is declared guarded but never checked"
+        )
+
+
+@pytest.mark.parametrize("template", _all_templates(), ids=_template_id)
 def test_template_guard_check_precedes_returning_validators(template: Path) -> None:
     _first_guard_precedes_first_returning_validator(template.read_text(), str(template))
 

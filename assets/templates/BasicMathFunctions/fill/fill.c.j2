@@ -1,13 +1,15 @@
 #include "{{ name }}_fill.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 {% from "common/standalone/validation.j2" import validation_outputs with context %}
 
 #define {{ name|upper }}_OUTPUT_SIZE ({{ block_size }})
 {% if block_size > 0 %}
-static {{ output_dtype }} {{ name }}_output[{{ name|upper }}_OUTPUT_SIZE];
+{{ helia_guard_declare(output_dtype, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
 {% else %}
-static {{ output_dtype }} {{ name }}_output[1];  // block_size 0 is a no-op: storage only
+// block_size 0 is a no-op: storage only
+{{ helia_guard_declare(output_dtype, name ~ "_output", 1) }}
 {% endif %}
 
 int32_t {{ name }}_run(
@@ -25,10 +27,19 @@ int32_t {{ name }}_run(
 
 int32_t {{ name }}_test_case_run(void)
 {
+{% if block_size > 0 %}
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
+{% else %}
+    HELIA_GUARD_ARM({{ name }}_output, true /* no-op fill must not write it: poison */);
+{% endif %}
     int32_t status = {{ name }}_run({{ name }}_output);
+    int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Fill") }} output", failures);
+{% if block_size == 0 %}
+    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("Fill") }} output", failures);
+{% endif %}
     HELIA_VALIDATE_STATUS("{{ validation_label | default("Fill") }}", status);
 
-    int failures = 0;
 {{ validation_outputs(validation_mode_token | default("FLOAT"), validation_tolerance | default(1)) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

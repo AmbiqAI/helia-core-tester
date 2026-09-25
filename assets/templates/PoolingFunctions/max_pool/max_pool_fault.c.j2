@@ -1,6 +1,7 @@
 #include "{{ name }}_max_pool.h"
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 
 {% if requires_kernel_prototype | default(false) %}
 arm_cmsis_nn_status {{ kernel_fn }}(const cmsis_nn_context *ctx,
@@ -14,8 +15,8 @@ arm_cmsis_nn_status {{ kernel_fn }}(const cmsis_nn_context *ctx,
 {% endif %}
 {# Declare only the buffers this fault mode actually passes to the kernel so a
    NULL-substituted buffer never becomes an unused static (-Wunused-variable). #}
-{% if fault != "null_output" %}static {{ output_dtype }} {{ name }}_output[{{ output_dims.n * output_dims.h * output_dims.w * output_dims.c }}];
-{% endif %}{% if buffer_size_max > 0 %}static uint8_t {{ name }}_buffer[{{ buffer_size_max }}];
+{% if fault != "null_output" %}{{ helia_guard_declare(output_dtype, name ~ "_output", output_dims.n * output_dims.h * output_dims.w * output_dims.c) }}
+{% endif %}{% if buffer_size_max > 0 %}{{ helia_guard_declare("uint8_t", name ~ "_buffer", buffer_size_max) }}
 {% endif %}
 
 /*
@@ -55,13 +56,19 @@ static int32_t run_max_pool(void)
 
 int32_t {{ name }}_test_case_run(void)
 {
-    int32_t status = run_max_pool();
-    HELIA_VALIDATE_EXPECTED_STATUS(
+{% if fault != "null_output" %}    HELIA_GUARD_ARM({{ name }}_output, true /* rejected call must not write it: poison */);
+{% endif %}{% if buffer_size_max > 0 %}    HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison-safe */);
+{% endif %}    int32_t status = run_max_pool();
+    int failures = 0;
+{% if fault != "null_output" %}    HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Pooling") }} output", failures);
+{% if expected_status != "ARM_CMSIS_NN_SUCCESS" %}    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("Pooling") }} output", failures);
+{% endif %}{% endif %}{% if buffer_size_max > 0 %}    HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Pooling") }} buffer", failures);
+{% endif %}    HELIA_VALIDATE_EXPECTED_STATUS(
         "{{ validation_label | default("Pooling") }}",
         status,
         {{ expected_status }}
     );
-    HELIA_VALIDATE_RETURN_FAILURES(0);
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 
 {% include "common/standalone/main.j2" %}

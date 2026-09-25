@@ -8,7 +8,8 @@
 {% if out.size > 0 %}
 {{ helia_guard_declare(output_dtype, out.name ~ "_output", out.name|upper ~ "_OUTPUT_SIZE") }}
 {% else %}
-static {{ output_dtype }} {{ out.name }}_output[1];  // zero-extent slice: storage only, nothing is compared
+// zero-extent slice: storage only, nothing is compared
+{{ helia_guard_declare(output_dtype, out.name ~ "_output", 1) }}
 {% endif %}
 {% endfor %}
 
@@ -22,9 +23,11 @@ int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input
 ) {
     {% for out in outputs %}
-    {% if out.size > 0 %}
+{% if out.size > 0 %}
     HELIA_GUARD_ARM({{ out.name }}_output, false /* real output, not scratch: don't poison */);
-    {% endif %}
+{% else %}
+    HELIA_GUARD_ARM({{ out.name }}_output, true /* zero-extent slice must not be written: poison */);
+{% endif %}
     {% endfor %}
     // Call Split kernel
     // Note: Split has multiple outputs, but we only handle the first one for now
@@ -46,9 +49,10 @@ int32_t {{ name }}_test_case_run(void)
     int32_t status = {{ name }}_run({{ name }}_input);
     int failures = 0;
     {% for out in outputs %}
-    {% if out.size > 0 %}
     HELIA_GUARD_CHECK({{ out.name }}_output, "{{ validation_label | default("Split") }} {{ out.name }} output", failures);
-    {% endif %}
+{% if out.size == 0 %}
+    HELIA_GUARD_CHECK_UNTOUCHED({{ out.name }}_output, "{{ validation_label | default("Split") }} {{ out.name }} output", failures);
+{% endif %}
     {% endfor %}
     HELIA_VALIDATE_STATUS("{{ validation_label | default("Split") }}", status);
 
