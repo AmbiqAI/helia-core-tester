@@ -54,7 +54,7 @@ def nsx(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
             f"CMAKE_HOME_DIRECTORY:INTERNAL={app_dir.resolve()}\n"
             f"NSX_BOARD:STRING={board}\n"
             f"NSX_JLINK_SERIAL:UNINITIALIZED={probe_serial or ''}\n"
-            f"NSX_JLINK_EXE:FILEPATH={os.environ.get('JLINK_PATH', 'NSX_JLINK_EXE-NOTFOUND')}\n",
+            f"NSX_JLINK_EXE:FILEPATH={os.environ.get('JLINK_PATH') or 'NSX_JLINK_EXE-NOTFOUND'}\n",
             encoding="utf-8",
         )
 
@@ -62,6 +62,10 @@ def nsx(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
         calls.append(("build", jobs, frozen))
 
     monkeypatch.setattr(firmware_build, "ensure_build_tools", lambda repo_root: None)
+    monkeypatch.setattr(firmware_build, "_jlink_path_before", firmware_build._UNSET)
+    # Host JLINK_PATH must not leak in.
+    monkeypatch.setenv("JLINK_PATH", "")
+    monkeypatch.delenv("JLINK_PATH")
     monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: None)
     monkeypatch.setattr(nsx_cli, "starter_profile", lambda board: {"modules": ["nsx-core"]})
     monkeypatch.setattr(nsx_app, "render_app", render_app)
@@ -175,6 +179,57 @@ def test_configure_hands_nsx_the_resolved_jlinkexe(tmp_path: Path, nsx: list[tup
 
     monkeypatch.setattr(firmware_build, "find_jlink_exe", _broken)
     firmware_build.build_firmware(BOARD, build_dir=tmp_path / "other")
+
+
+def _use_jlink(monkeypatch, path: str | None) -> None:
+    found = None if path is None else JLinkExecutable(path, "$JLINK_PATH")
+    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: found)
+
+
+def test_build_without_serial_follows_jlinkexe(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
+    monkeypatch.setenv("JLINK_PATH", "")
+    _use_jlink(monkeypatch, "/opt/a/JLinkExe")
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    nsx.clear()
+    _use_jlink(monkeypatch, "/opt/b/JLinkExe")
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert ("configure", None, True) in nsx
+
+
+def test_vanished_jlinkexe_reconfigures(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
+    monkeypatch.setenv("JLINK_PATH", "")
+    _use_jlink(monkeypatch, "/opt/a/JLinkExe")
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    nsx.clear()
+    _use_jlink(monkeypatch, None)
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert "configure" in _steps(nsx)
+    # The rewrite cached NOTFOUND: reuse now.
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert "configure" not in _steps(nsx)
+
+
+def test_failed_resolution_clears_only_our_jlink_path(monkeypatch) -> None:
+    monkeypatch.setattr(firmware_build, "_jlink_path_before", firmware_build._UNSET)
+    # setenv first so teardown restores it.
+    monkeypatch.setenv("JLINK_PATH", "")
+    monkeypatch.delenv("JLINK_PATH")
+    _use_jlink(monkeypatch, "/opt/a/JLinkExe")
+    assert firmware_build._export_jlink_exe() == "/opt/a/JLinkExe"
+    _use_jlink(monkeypatch, None)
+    assert firmware_build._export_jlink_exe() is None
+    assert "JLINK_PATH" not in os.environ
+
+    # A host-wide JLINK_PATH survives a miss.
+    monkeypatch.setenv("JLINK_PATH", "/etc/jlink/JLinkExe")
+    assert firmware_build._export_jlink_exe() is None
+    assert os.environ["JLINK_PATH"] == "/etc/jlink/JLinkExe"
+    _use_jlink(monkeypatch, "/opt/a/JLinkExe")
+    firmware_build._export_jlink_exe()
+    _use_jlink(monkeypatch, None)
+    firmware_build._export_jlink_exe()
+    assert os.environ["JLINK_PATH"] == "/etc/jlink/JLinkExe"
 
 
 def test_flash_forwards_app_options(tmp_path: Path, monkeypatch) -> None:

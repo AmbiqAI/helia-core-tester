@@ -124,12 +124,16 @@ def _configured_for(
         return False
     text = cache.read_text(encoding="utf-8", errors="ignore")
     wanted = {"CMAKE_HOME_DIRECTORY": str(app_dir.resolve()), "NSX_BOARD": board.nsx_board}
-    # Flash target bakes in serial, JLinkExe.
+    # Flash target bakes in the serial.
     if serial_no is not None:
         wanted["NSX_JLINK_SERIAL"] = str(serial_no)
-        if jlink_exe is not None:
-            wanted["NSX_JLINK_EXE"] = jlink_exe
-    return all(_cached_var(text, name) == value for name, value in wanted.items())
+    if not all(_cached_var(text, name) == value for name, value in wanted.items()):
+        return False
+    # ...and JLinkExe; NSX caches "-NOTFOUND" otherwise.
+    cached_exe = _cached_var(text, "NSX_JLINK_EXE") or ""
+    if jlink_exe is None:
+        return cached_exe == "" or cached_exe.endswith("-NOTFOUND")
+    return cached_exe == jlink_exe
 
 
 def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
@@ -145,16 +149,37 @@ def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
     shutil.rmtree(build_dir / "CMakeFiles", ignore_errors=True)
 
 
+# JLINK_PATH before our first export.
+_UNSET = object()
+_jlink_path_before: object = _UNSET
+
+
+def _restore_jlink_path() -> None:
+    """Undo our own JLINK_PATH export."""
+    global _jlink_path_before
+    if _jlink_path_before is _UNSET:
+        return
+    if _jlink_path_before is None:
+        os.environ.pop("JLINK_PATH", None)
+    else:
+        os.environ["JLINK_PATH"] = str(_jlink_path_before)
+    _jlink_path_before = _UNSET
+
+
 def _export_jlink_exe() -> Optional[str]:
     """Hand NSX the JLinkExe doctor reports."""
+    global _jlink_path_before
     # NSX reads $JLINK_PATH, then PATH.
     try:
         found = find_jlink_exe()
     except JLinkLibraryError as exc:
         typer.echo(f"[hardware] WARNING: {exc}", err=True)
-        return None
+        found = None
     if found is None:
+        _restore_jlink_path()
         return None
+    if _jlink_path_before is _UNSET:
+        _jlink_path_before = os.environ.get("JLINK_PATH")
     os.environ["JLINK_PATH"] = found.path
     return found.path
 
