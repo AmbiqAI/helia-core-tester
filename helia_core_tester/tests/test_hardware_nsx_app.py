@@ -127,6 +127,8 @@ def test_server_sources_compile_out_of_this_checkout(tmp_path: Path) -> None:
     assert f"HCT_SERVER_WORKSPACE_BYTES={BOARD.workspace_bytes}" in text
     assert f'HCT_BENCHMARK_SERVER_TARGET_CPU="{BOARD.cpu}"' in text
     assert "patch_build_id.py" in text, "the post-link build-id stamp must survive"
+    # MVE in the harness skews MVE counters.
+    assert "-fno-tree-vectorize" in text
     assert 'RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/hardware"' in text
     assert '"$<TARGET_FILE_DIR:hct_benchmark_server>/hct_benchmark_server.elf"' in text
 
