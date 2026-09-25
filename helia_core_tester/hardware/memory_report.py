@@ -49,10 +49,6 @@ _MEMORY_RE = re.compile(
 _SYMBOL_RE = re.compile(r"^[0-9a-fA-F]+\s+[A-Za-z]\s+(arm_[A-Za-z0-9_]+)$")
 
 
-# Project that vendors the nsx-core module.
-NSX_SDK_MODULE = "nsx-ambiq-sdk"
-
-
 def linker_script_path(board: BoardSpec, sdk_root: Path) -> Path:
     """The board's SoC linker script under an NSX SDK tree.
 
@@ -65,9 +61,12 @@ def linker_script_path(board: BoardSpec, sdk_root: Path) -> Path:
 
 def app_linker_script(board: BoardSpec, build_dir: Path, project_root: Path) -> Path:
     """The linker script the server was linked with."""
+    from . import nsx_cli
+
     app_dir = nsx_app_dir(build_dir)
-    if app_dir.is_dir():
-        return linker_script_path(board, app_dir / "modules" / NSX_SDK_MODULE)
+    sdk = nsx_cli.module_project("nsx-core")
+    if app_dir.is_dir() and sdk:
+        return linker_script_path(board, app_dir / "modules" / sdk)
     # Build dir predates NSX: legacy SDK.
     legacy = linker_script_path(board, nsx_ambiq_sdk_dir(project_root))
     if legacy.is_file():

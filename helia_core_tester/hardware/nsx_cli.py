@@ -180,10 +180,7 @@ def flash_app(
     timeout_s: float = FLASH_TIMEOUT_S,
     verbosity: int = 0,
 ) -> None:
-    """Flash through NSX's generated J-Link target.
-
-    NSX reconfigures whenever a probe serial is given.
-    """
+    """Flash via NSX; a serial forces reconfigure."""
     with _nsx_errors("nsx flash"):
         nsx_api.flash_app(
             app_dir,
@@ -200,3 +197,8 @@ def flash_app(
 def starter_profile(board: str) -> Optional[dict[str, Any]]:
     """The board's minimal starter profile, or None."""
     return nsx_api.starter_profile(board)
+
+
+def module_project(name: str) -> Optional[str]:
+    """The registry project that owns a module."""
+    return nsx_api.registry_module_project(name)

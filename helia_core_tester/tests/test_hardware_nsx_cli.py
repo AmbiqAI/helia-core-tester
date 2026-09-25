@@ -100,6 +100,14 @@ def test_build_app_jobs_none_keeps_nsx_default(monkeypatch: pytest.MonkeyPatch) 
     assert seen["timeout_s"] == nsx_cli.BUILD_TIMEOUT_S
 
 
+def test_flash_app_passes_serial_as_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _capture(monkeypatch, "flash_app")
+    nsx_cli.flash_app(APP, board="apollo510_evb", build_dir=Path("/tmp/b"), target="t", probe_serial=1160003180)
+    assert seen["probe_serial"] == "1160003180"
+    assert seen["frozen"] is True
+    assert seen["timeout_s"] == nsx_cli.FLASH_TIMEOUT_S
+
+
 def test_starter_profile_forwards_board(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, Any] = {}
 
@@ -119,6 +127,7 @@ def test_starter_profile_forwards_board(monkeypatch: pytest.MonkeyPatch) -> None
         ("sync_app", lambda: nsx_cli.sync_app(APP)),
         ("configure_app", lambda: nsx_cli.configure_app(APP, "apollo510_evb")),
         ("build_app", lambda: nsx_cli.build_app(APP)),
+        ("flash_app", lambda: nsx_cli.flash_app(APP, board="b", build_dir=APP, target="t", probe_serial=1)),
     ],
 )
 def test_nsx_error_becomes_hardware_build_error(monkeypatch: pytest.MonkeyPatch, name: str, call: Any) -> None:

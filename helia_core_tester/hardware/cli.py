@@ -137,13 +137,14 @@ _CMSIS_NN_ROOT_HELP = (
     "tester sits at ns-cmsis-nn/Tests/helia-core-tester, else the pinned release. "
     "Copies its Include/, Source/, cmake/ and nsx/ into the app."
 )
+_JOBS_HELP = "Parallel build jobs (default: CPU count + 2, like ninja)."
 _UPDATE_DEPS_HELP = "Re-resolve NSX modules and rewrite nsx.lock before building."
 _NO_INLINE_ASM_HELP = "Build requantize without inline assembly (the old path's kernels)."
 
 
 def _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm):
     """Firmware build flags as NSX app options."""
-    from .nsx_app import CMSIS_NN_REF, AppOptions, nested_kernel_root
+    from .nsx_app import AppOptions, nested_kernel_root
 
     if cmsis_nn_ref and cmsis_nn_root:
         _fail("Pass --cmsis-nn-ref or --cmsis-nn-root, not both.")
@@ -152,10 +153,8 @@ def _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm):
         cmsis_nn_root = cmsis_nn_root.expanduser().resolve()
     elif not cmsis_nn_ref:
         cmsis_nn_root = nested_kernel_root(repo_root())
-    return AppOptions(
-        cmsis_nn_ref=cmsis_nn_ref or CMSIS_NN_REF, cmsis_nn_root=cmsis_nn_root,
-        requantize_inline_asm=not no_inline_asm,
-    )
+    ref = {"cmsis_nn_ref": cmsis_nn_ref} if cmsis_nn_ref else {}
+    return AppOptions(cmsis_nn_root=cmsis_nn_root, requantize_inline_asm=not no_inline_asm, **ref)
 
 
 # --- boards / probes ---------------------------------------------------------------
@@ -208,7 +207,7 @@ def probes_match(
 def build(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
-    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel build jobs."),
+    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help=_JOBS_HELP),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
@@ -234,7 +233,7 @@ def flash(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     serial_no: Optional[int] = typer.Option(None, "--serial-no", help=_SERIAL_HELP),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
-    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel build jobs."),
+    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help=_JOBS_HELP),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
     force: bool = typer.Option(False, "--force", help=_FORCE_FLASH_HELP),
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
@@ -426,7 +425,7 @@ def run(
     force_flash: bool = typer.Option(False, "--force-flash", help=_FORCE_FLASH_HELP + " Mirror of `hardware flash --force`."),
     allow_unverified_firmware: bool = typer.Option(False, "--allow-unverified-firmware", help=_ALLOW_UNVERIFIED_HELP + " Only meaningful with --skip-flash."),
     as_json: bool = typer.Option(False, "--json", help="Print one JSON summary document on stdout (human output goes to stderr)."),
-    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel firmware build jobs."),
+    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help=_JOBS_HELP),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure the CMake build dir even if it already exists."),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),

@@ -64,17 +64,11 @@ The firmware builds as a neuralspotx (NSX) app rendered into
 - `--cmsis-nn-ref REF` builds another tag or commit; `--cmsis-nn-root PATH`
   builds another local checkout.
 
-A local checkout is consumed the way helia-profiler consumes one: its
-`Include/`, `Source/` and `cmake/` trees and its native `nsx/` module are copied
-into the app's `modules/nsx-cmsis-nn`, which `nsx.yml` declares as a vendored
-(in-app) module. NSX never sees the checkout itself, so the nested tester and the
-build dir inside it are not hashed or copied. NSX relocks only when a kernel file
-changes, and switching kernel source recompiles every kernel. Every build prints
-the kernel source and the inline-asm setting, and warns when the build options
-differ from the last build in that build dir. `--no-inline-asm` builds requantize without
-inline assembly; `--update-dependencies` re-resolves the NSX modules into
-`nsx.lock`. `hardware flash` and `hardware run` rebuild with their own flags, so
-pass the same kernel flags you built with.
+`--no-inline-asm` builds requantize without inline assembly;
+`--update-dependencies` re-resolves the NSX modules into `nsx.lock`. Every build
+prints the kernel source and warns when the build options changed since the last
+build in that build dir. `hardware flash` and `hardware run` rebuild with their
+own flags, so pass the same kernel flags you built with.
 
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
 `hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or

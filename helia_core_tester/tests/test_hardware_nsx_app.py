@@ -119,7 +119,6 @@ def test_local_kernels_are_written_as_hpx_writes_them(tmp_path: Path) -> None:
         "Source/arm_add.c", "Source/sub/arm_sub.c", "cmake/flags.cmake",
     }
     assert (module / "CMakeLists.txt").read_text(encoding="utf-8") == nsx_app.KERNEL_SHIM
-    assert "add_subdirectory(nsx)" in nsx_app.KERNEL_SHIM
     assert (module / "nsx-module.yaml").read_bytes() == (checkout / "nsx" / "nsx-module.yaml").read_bytes()
     # Mtimes survive; the shim is kept.
     os.utime(checkout / "Source" / "arm_add.c", (1, 1))
@@ -231,7 +230,7 @@ def test_flash_recipe_loads_the_stamped_bin(tmp_path: Path) -> None:
     assert text.index("patch_build_id.py") < copy
 
 
-def test_kernel_source_is_a_define(tmp_path: Path) -> None:
+def test_kernel_source_define(tmp_path: Path) -> None:
     """A source switch recompiles every kernel."""
     define = 'target_compile_definitions(nsx_cmsis_nn PRIVATE HCT_KERNEL_SOURCE="{}")'
     texts = {

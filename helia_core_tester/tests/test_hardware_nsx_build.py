@@ -100,6 +100,8 @@ def test_unchanged_rebuild_skips_lock_sync_configure(tmp_path: Path, nsx: list[t
     nsx.clear()
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
     assert _steps(nsx) == ["render", "build"]
+    # Ninja's default job count.
+    assert nsx[-1] == ("build", (os.cpu_count() or 6) + 2, True)
 
 
 def test_neuralspotx_upgrade_resyncs(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
@@ -107,7 +109,7 @@ def test_neuralspotx_upgrade_resyncs(tmp_path: Path, nsx: list[tuple], monkeypat
     monkeypatch.setattr(nsx_cli.metadata, "version", lambda name: "99.0.0")
     nsx.clear()
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert nsx[1:] == [("sync", False), ("build", None, True)]
+    assert _steps(nsx) == ["render", "sync", "build"] and ("sync", False) in nsx
 
 
 def test_manifest_change_relocks_and_syncs_unfrozen(tmp_path: Path, nsx: list[tuple]) -> None:

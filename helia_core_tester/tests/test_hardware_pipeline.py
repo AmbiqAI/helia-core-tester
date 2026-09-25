@@ -222,7 +222,6 @@ def fake_toolchain(monkeypatch):
     """Stub the NSX build and flash target; returns the list of built targets."""
     built: list[str] = []
     monkeypatch.setattr(firmware_build, "build_firmware", lambda *a, **k: built.append(firmware_build.SERVER_TARGET))
-    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: None)
     monkeypatch.setattr(nsx_cli, "flash_app", lambda app_dir, **kwargs: built.append("flash"))
     return built
 

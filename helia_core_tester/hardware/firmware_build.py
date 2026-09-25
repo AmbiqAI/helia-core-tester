@@ -107,30 +107,31 @@ def read_build_id(build_dir: Path) -> Optional[str]:
     return value or None
 
 
-def _cached_var(cache_text: str, name: str) -> Optional[str]:
-    """Return the cached value of a CMakeCache.txt entry (e.g. `NSX_JLINK_SERIAL`),
-    or None if it isn't present. Cache lines look like `NAME:TYPE=value`."""
-    match = re.search(rf"^{re.escape(name)}:[^=]*=(.*)$", cache_text, re.MULTILINE)
+def _cache_value(build_dir: Path, name: str) -> Optional[str]:
+    """One CMakeCache.txt entry, or None."""
+    cache = build_dir / "CMakeCache.txt"
+    if not cache.is_file():
+        return None
+    # Lines look like NAME:TYPE=value.
+    text = cache.read_text(encoding="utf-8", errors="ignore")
+    match = re.search(rf"^{re.escape(name)}:[^=]*=(.*)$", text, re.MULTILINE)
     return match.group(1) if match else None
 
 
 def _configured_for(build_dir: Path, app_dir: Path, board: BoardSpec) -> bool:
     """The cache belongs to this app and board."""
-    cache = build_dir / "CMakeCache.txt"
-    if not cache.is_file() or not (build_dir / "build.ninja").is_file():
-        return False
-    text = cache.read_text(encoding="utf-8", errors="ignore")
-    wanted = {"CMAKE_HOME_DIRECTORY": str(app_dir.resolve()), "NSX_BOARD": board.nsx_board}
-    return all(_cached_var(text, name) == value for name, value in wanted.items())
+    return (
+        (build_dir / "build.ninja").is_file()
+        and _cache_value(build_dir, "CMAKE_HOME_DIRECTORY") == str(app_dir.resolve())
+        and _cache_value(build_dir, "NSX_BOARD") == board.nsx_board
+    )
 
 
 def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
     """Remove a cache another source tree wrote."""
     cache = build_dir / "CMakeCache.txt"
-    if not cache.is_file():
-        return
-    home = _cached_var(cache.read_text(encoding="utf-8", errors="ignore"), "CMAKE_HOME_DIRECTORY")
-    if home == str(app_dir.resolve()):
+    home = _cache_value(build_dir, "CMAKE_HOME_DIRECTORY")
+    if not cache.is_file() or home == str(app_dir.resolve()):
         return
     typer.echo(f"[hardware] Dropping CMake cache from {home}.")
     cache.unlink()
@@ -284,16 +285,6 @@ def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
 # --- high-level entry points ------------------------------------------------------
 
 
-def _echo_kernels(options: "AppOptions", repo_root: Path) -> None:
-    """Print the kernel source and inline asm."""
-    from .nsx_app import nested_kernel_root
-
-    root = options.cmsis_nn_root
-    where = " (enclosing checkout)" if root and root == nested_kernel_root(repo_root) else ""
-    asm = "on" if options.requantize_inline_asm else "off"
-    typer.echo(f"[hardware] Kernels: {options.kernel_source()}{where}, inline asm {asm}")
-
-
 # Written after a sync that finished.
 SYNC_STAMP = ".hct-sync"
 
@@ -315,7 +306,8 @@ def build_firmware(
     ensure_build_tools(repo_root)
     options = options or AppOptions()
     app_dir = nsx_app_dir(build_dir)
-    _echo_kernels(options, repo_root)
+    asm = "on" if options.requantize_inline_asm else "off"
+    typer.echo(f"[hardware] Kernels: {options.kernel_source()}, inline asm {asm}")
     rendered = render_app(board, options, app_dir, repo_root=repo_root)
     if rendered.changed:
         names = ", ".join(rendered.changed)
@@ -340,6 +332,8 @@ def build_firmware(
             nsx_cli.configure_app(app_dir, board.nsx_board, build_dir=build_dir, frozen=True)
     else:
         typer.echo(f"[hardware] Reusing configured build dir: {build_dir}")
+    # Ninja's default, not NSX's fixed 8.
+    jobs = jobs or (os.cpu_count() or 6) + 2
     nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=jobs, frozen=True)
     return elf_path(build_dir)
 

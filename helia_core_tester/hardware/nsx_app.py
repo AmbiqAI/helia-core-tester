@@ -139,11 +139,16 @@ def module_registry(options: AppOptions) -> dict[str, Any]:
     return {"projects": projects, "modules": modules}
 
 
+def _checkout_missing(root: Path) -> list[str]:
+    """Checkout files absent under root."""
+    return [name for name in CHECKOUT_FILES if not (root / name).exists()]
+
+
 def nested_kernel_root(repo_root: Path) -> Optional[Path]:
     """The enclosing ns-cmsis-nn checkout, if any."""
     # Layout: ns-cmsis-nn/Tests/helia-core-tester.
     root = repo_root.resolve().parent.parent
-    return root if all((root / name).exists() for name in CHECKOUT_FILES) else None
+    return None if _checkout_missing(root) else root
 
 
 def kernel_dir(app_dir: Path, options: AppOptions) -> Path:
@@ -185,7 +190,7 @@ def _check_no_overlap(root: Path, module_dir: Path) -> None:
 
 def write_kernels(root: Path, module_dir: Path) -> None:
     """Vendor a local checkout, as hpx does."""
-    missing = [name for name in CHECKOUT_FILES if not (root / name).exists()]
+    missing = _checkout_missing(root)
     if missing:
         raise AppRenderError(f"Not an ns-cmsis-nn checkout: {root} lacks {missing[0]}")
     _check_no_overlap(root, module_dir)
