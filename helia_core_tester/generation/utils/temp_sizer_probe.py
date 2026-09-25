@@ -120,6 +120,19 @@ def _public_header_corpus(cmsis_nn_root: Optional[Path]) -> Optional[str]:
     return "\n".join(corpus)
 
 
+def undeclared_in_header(header: Path, symbols: Iterable[str]) -> list[str]:
+    """Return the subset of ``symbols`` not declared (declaration shape) in one header.
+
+    Sibling of missing_header_symbols() for callers that already know which header a
+    symbol must live in (the exported kernel contract names it per function), so the
+    check is exact rather than corpus-wide. Raises OSError when the header cannot be
+    read: the caller decides whether that is a skip or a contradiction.
+    """
+    text = _strip_comments(Path(header).read_text(encoding="utf-8", errors="replace"))
+    return [symbol for symbol in symbols
+            if re.search(rf"\b{re.escape(symbol)}\s*\(", text) is None]
+
+
 def probe_header_symbols(symbols: Iterable[str], cmsis_nn_root: Optional[Path] = None) -> bool:
     """True iff every symbol is declared in the checkout's public Include/
     headers (declaration shape: ``symbol(`` -- see _symbol_declared).
