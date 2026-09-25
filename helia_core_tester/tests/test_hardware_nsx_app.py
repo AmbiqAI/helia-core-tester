@@ -139,6 +139,32 @@ def test_a_non_checkout_is_rejected(tmp_path: Path) -> None:
     assert not (tmp_path / "app" / "nsx.yml").exists()
 
 
+@pytest.mark.parametrize(
+    "module",
+    [
+        lambda root: root,
+        lambda root: root.parent,
+        lambda root: root / "Source" / "build" / "nsx-cmsis-nn",
+    ],
+    ids=["same-dir", "root-inside-module", "module-inside-source"],
+)
+def test_overlapping_kernel_root_is_refused(tmp_path: Path, module) -> None:
+    # Refuse before rmtree can delete sources.
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    before = sorted(p.relative_to(checkout) for p in checkout.rglob("*"))
+    with pytest.raises(nsx_app.AppRenderError, match="overlaps"):
+        nsx_app.write_kernels(checkout, module(checkout))
+    assert sorted(p.relative_to(checkout) for p in checkout.rglob("*")) == before
+
+
+def test_module_under_the_checkout_is_allowed(tmp_path: Path) -> None:
+    # The nested layout builds inside the checkout.
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    module = checkout / "Tests" / "helia-core-tester" / "build" / "nsx-cmsis-nn"
+    nsx_app.write_kernels(checkout, module)
+    assert (module / "Include").is_dir()
+
+
 def test_nested_kernel_root(tmp_path: Path) -> None:
     root = make_checkout(tmp_path / "ns-cmsis-nn")
     tester = root / "Tests" / "helia-core-tester"

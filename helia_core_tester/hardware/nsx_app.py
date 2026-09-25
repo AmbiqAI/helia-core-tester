@@ -24,6 +24,7 @@ from . import nsx_cli
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .firmware_build import BUILD_ID_TXT, IMAGE_SUBDIR, SERVER_TARGET
+from .pathutil import is_relative_to
 from .toolchain import DOWNLOADS_DIR
 
 APP_NAME = "hct_benchmark_server"
@@ -168,11 +169,21 @@ def _write_if_changed(path: Path, text: str) -> bool:
     return existed
 
 
+def _check_no_overlap(root: Path, module_dir: Path) -> None:
+    """Refuse copies that would delete sources."""
+    # rmtree of the module must not reach root.
+    src, dst = root.resolve(), module_dir.resolve()
+    inside_tree = any(is_relative_to(dst, src / name) for name in KERNEL_TREES)
+    if dst == src or is_relative_to(src, dst) or inside_tree:
+        raise AppRenderError(f"Kernel root overlaps the app: {root}")
+
+
 def write_kernels(root: Path, module_dir: Path) -> None:
     """Vendor a local checkout, as hpx does."""
     missing = [name for name in CHECKOUT_FILES if not (root / name).exists()]
     if missing:
         raise AppRenderError(f"Not an ns-cmsis-nn checkout: {root} lacks {missing[0]}")
+    _check_no_overlap(root, module_dir)
     (module_dir / "nsx").mkdir(parents=True, exist_ok=True)
     # Native manifest at the module root.
     shutil.copy2(root / "nsx" / "nsx-module.yaml", module_dir / "nsx-module.yaml")
