@@ -209,3 +209,18 @@ def rendered_source(request, tmp_path, _descriptors_by_name) -> str:
 def test_guard_check_precedes_returning_validators(rendered_source: str, request) -> None:
     case_name = request.node.callspec.params["rendered_source"]
     _first_guard_precedes_first_returning_validator(rendered_source, case_name)
+
+
+@pytest.mark.parametrize(
+    ("rendered_source", "output"),
+    [
+        ("fill_float_block0_noop_f32", "fill_float_block0_noop_f32_output"),
+        ("split_float_zero_slice_v_f32", "split_float_zero_slice_v_f32_out_1_output"),
+    ],
+    indirect=["rendered_source"],
+)
+def test_zero_extent_output_must_stay_untouched(rendered_source: str, output: str) -> None:
+    """A write into 1-element placeholder storage lands inside the body, where the
+    canaries cannot see it; only the poison check does."""
+    assert f"HELIA_GUARD_ARM({output}, true" in rendered_source
+    assert f"HELIA_GUARD_CHECK_UNTOUCHED({output}," in rendered_source

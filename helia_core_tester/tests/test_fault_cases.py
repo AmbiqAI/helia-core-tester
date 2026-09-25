@@ -220,6 +220,12 @@ def test_rendered_fault_case_asserts_status_and_never_validates_output(
     if "HELIA_GUARD_CHECK(" in body:
         assert body.rindex("HELIA_GUARD_CHECK(") < body.index("HELIA_VALIDATE_EXPECTED_STATUS(")
     assert "HELIA_VALIDATE_RETURN_FAILURES(failures)" in body
+    # A rejected call must not write the output it was handed.
+    if descriptors[case_name]["fault"] == "null_output":
+        assert f"{case_name}_output" not in body
+    else:
+        assert f"HELIA_GUARD_ARM({case_name}_output, true" in body
+        assert f"HELIA_GUARD_CHECK_UNTOUCHED({case_name}_output," in body
     assert "HELIA_VALIDATE_OUTPUTS" not in source
     assert "HELIA_VALIDATE_STATUS(" not in source
     assert marker in source, f"{case_name}: fault substitution {marker!r} missing"
