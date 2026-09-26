@@ -355,11 +355,11 @@ depth_multiplier: 2
 dilation:
 - 2
 - 3
+---
 # Dilated 1D layers (filter, input and output height 1, stride 1, no vertical padding,
 # ch_mult 1): ns-cmsis-nn v7.36.0 routes these to arm_depthwise_conv_s8_opt and
 # arm_depthwise_conv_fast_s16 instead of the generic kernels. Shapes follow the dilated
 # TCN layers in sleepkit/heartkit models (k7, W240, d2..d16).
----
 operator: DepthwiseConv
 name: depthwise_conv_dilated_1d_k7_d2_c24_s8
 activation_dtype: S8

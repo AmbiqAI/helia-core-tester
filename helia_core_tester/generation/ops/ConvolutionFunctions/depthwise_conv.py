@@ -115,13 +115,12 @@ class OpDepthwiseConv(OperationBase):
                 params["ch_mult"] == 1
                 and input_dims["n"] == 1
                 and _opt_dilation_supported(params, input_dims, filter_dims, context["output_dims"])
-                and not (is_3x3 and params["pad_w"] <= 1 and unit_dilation)
+                and not (is_3x3 and params["pad_h"] <= 1 and params["pad_w"] <= 1 and unit_dilation)
                 and input_dims["c"] != 1
             )
         elif kernel_fn == "arm_depthwise_conv_wrapper_s16":
             optimized = (
                 params["ch_mult"] == 1
-                and input_dims["n"] == 1
                 and _opt_dilation_supported(params, input_dims, filter_dims, context["output_dims"])
                 and filter_dims["w"] * filter_dims["h"] < 512
             )
@@ -131,8 +130,8 @@ class OpDepthwiseConv(OperationBase):
             raise self.fault_unreachable(
                 kind,
                 f"{kernel_fn} only checks it on the optimized route "
-                "(ch_mult 1, batch 1, unit dilation or dilated 1D; s8: not a 3x3 filter with pad <= 1 and "
-                "input_ch > 1; s16: filter w*h < 512)",
+                "(ch_mult 1, unit dilation or dilated 1D; s8: batch 1, not a 3x3 filter with pad <= 1 and "
+                "input_ch > 1; s16: filter w*h < 512; s4: batch 1)",
             )
         if kind == "null_ctx_buf" and kernel_fn != "arm_depthwise_conv_wrapper_s4":
             if "dsp" not in self.required_capabilities() and "mve" not in self.required_capabilities():

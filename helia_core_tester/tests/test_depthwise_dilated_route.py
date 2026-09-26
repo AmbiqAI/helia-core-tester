@@ -12,6 +12,7 @@ import math
 import re
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
@@ -78,14 +79,16 @@ def _op(required_capabilities=("dsp",)) -> OpDepthwiseConv:
     return op
 
 
-def _context(kernel_fn: str, *, dilation=(1, 2), n: int = 1, c: int = 24, filter_w: int = 7) -> dict:
+def _context(
+    kernel_fn: str, *, dilation=(1, 2), pad=(0, 3), n: int = 1, c: int = 24, filter_hw=(1, 7), height: int = 1
+) -> dict:
     return {
         "kernel_fn": kernel_fn,
         "float_kernel": False,
-        "dw_conv_params": _params(dilation=dilation),
-        "input_dims": _dims(n=n, c=c),
-        "filter_dims": _dims(w=filter_w, c=c),
-        "output_dims": _dims(c=c),
+        "dw_conv_params": _params(dilation=dilation, pad=pad),
+        "input_dims": _dims(n=n, h=height, c=c),
+        "filter_dims": _dims(h=filter_hw[0], w=filter_hw[1], c=c),
+        "output_dims": _dims(h=height, c=c),
     }
 
 
@@ -104,13 +107,39 @@ def test_dilated_1d_layer_reaches_the_optimized_route(kernel_fn: str, kind: str)
 @pytest.mark.parametrize(
     ("kernel_fn", "context"),
     [
+        ("arm_depthwise_conv_wrapper_s16", _context("arm_depthwise_conv_wrapper_s16", n=2)),
+        (
+            "arm_depthwise_conv_wrapper_s8",
+            _context("arm_depthwise_conv_wrapper_s8", dilation=(1, 1), pad=(2, 1), filter_hw=(3, 3), height=5),
+        ),
+    ],
+    ids=["s16-batch-2", "s8-3x3-vertical-pad-2"],
+)
+def test_other_layers_on_the_optimized_route_are_accepted(kernel_fn: str, context: dict) -> None:
+    _op()._check_fault_reachable("null_ctx_buf", context)
+
+
+@pytest.mark.parametrize(
+    ("kernel_fn", "context"),
+    [
         ("arm_depthwise_conv_wrapper_s8", _context("arm_depthwise_conv_wrapper_s8", dilation=(2, 2))),
         ("arm_depthwise_conv_wrapper_s8", _context("arm_depthwise_conv_wrapper_s8", n=2)),
         ("arm_depthwise_conv_wrapper_s16", _context("arm_depthwise_conv_wrapper_s16", dilation=(2, 1))),
-        ("arm_depthwise_conv_wrapper_s16", _context("arm_depthwise_conv_wrapper_s16", filter_w=512)),
+        ("arm_depthwise_conv_wrapper_s16", _context("arm_depthwise_conv_wrapper_s16", filter_hw=(1, 512))),
+        (
+            "arm_depthwise_conv_wrapper_s8",
+            _context("arm_depthwise_conv_wrapper_s8", dilation=(1, 1), pad=(1, 1), filter_hw=(3, 3), height=5),
+        ),
         ("arm_depthwise_conv_wrapper_s4", _context("arm_depthwise_conv_wrapper_s4")),
     ],
-    ids=["s8-dilated-2d", "s8-batch-2", "s16-vertical-dilation", "s16-large-filter", "s4-dilated-1d-unchanged"],
+    ids=[
+        "s8-dilated-2d",
+        "s8-batch-2",
+        "s16-vertical-dilation",
+        "s16-large-filter",
+        "s8-3x3-pad-1",
+        "s4-dilated-1d-unchanged",
+    ],
 )
 def test_layers_off_the_optimized_route_are_rejected(kernel_fn: str, context: dict) -> None:
     with pytest.raises(ValueError, match="only checks it on the optimized route"):
@@ -120,7 +149,7 @@ def test_layers_off_the_optimized_route_are_rejected(kernel_fn: str, context: di
 def _q31_multiplier(scale: float) -> int:
     """TFLite QuantizeMultiplier on a double-precision scale."""
     fraction, _ = math.frexp(scale)
-    multiplier = int(round(fraction * (1 << 31)))
+    multiplier = int(math.floor(fraction * (1 << 31) + 0.5))
     return multiplier // 2 if multiplier == 1 << 31 else multiplier
 
 
@@ -140,7 +169,9 @@ def test_per_channel_multipliers_come_from_double_precision_scales(tmp_path: Pat
 
     interpreter = Interpreter(model_path=str(tflite_path))
     details = interpreter.get_tensor_details()
-    weight_scales = next(d for d in details if len(d["quantization_parameters"]["scales"]) > 1)["quantization_parameters"]["scales"]
+    weights = next(d for d in details if d["dtype"] == np.int8 and len(d["shape"]) == 4)
+    weight_scales = weights["quantization_parameters"]["scales"]
+    assert len(weight_scales) == 24
     input_scale = float(interpreter.get_input_details()[0]["quantization_parameters"]["scales"][0])
     output_scale = float(interpreter.get_output_details()[0]["quantization_parameters"]["scales"][0])
     expected = [_q31_multiplier(input_scale * float(s) / output_scale) for s in weight_scales]
