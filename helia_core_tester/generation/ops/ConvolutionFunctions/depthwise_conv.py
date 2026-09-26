@@ -809,7 +809,9 @@ class OpDepthwiseConv(OperationBase):
         # Calculate effective scales: (input_scale * weight_scale) / output_scale
         if per_channel and isinstance(weight_scale, np.ndarray):
             # Per-channel: effective_scale[i] = (input_scale * weight_scale[i]) / output_scale
-            effective_scales = (input_scale * weight_scale) / output_scale
+            # in double precision, as TFLite computes it. The weight scales are float32, and
+            # float32 arithmetic can move a Q31 multiplier onto a different Q15 rounding for s16.
+            effective_scales = (input_scale * weight_scale.astype(np.float64)) / output_scale
             effective_quant = {
                 'scale': effective_scales,
                 'zero_point': output_quant.get('zero_point', 0),

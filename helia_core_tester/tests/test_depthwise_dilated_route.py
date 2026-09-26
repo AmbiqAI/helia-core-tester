@@ -8,12 +8,19 @@ which fault descriptors can exist.
 
 from __future__ import annotations
 
+import math
+import re
+from pathlib import Path
+
 import pytest
 
+from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import (
     OpDepthwiseConv,
     _opt_dilation_supported,
 )
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _dims(n: int = 1, h: int = 1, w: int = 240, c: int = 24) -> dict:
@@ -108,3 +115,34 @@ def test_dilated_1d_layer_reaches_the_optimized_route(kernel_fn: str, kind: str)
 def test_layers_off_the_optimized_route_are_rejected(kernel_fn: str, context: dict) -> None:
     with pytest.raises(ValueError, match="only checks it on the optimized route"):
         _op()._check_fault_reachable("null_ctx_buf", context)
+
+
+def _q31_multiplier(scale: float) -> int:
+    """TFLite QuantizeMultiplier on a double-precision scale."""
+    fraction, _ = math.frexp(scale)
+    multiplier = int(round(fraction * (1 << 31)))
+    return multiplier // 2 if multiplier == 1 << 31 else multiplier
+
+
+def test_per_channel_multipliers_come_from_double_precision_scales(tmp_path: Path) -> None:
+    # Channel 3 of this case sits where a float32 effective scale lands exactly on a
+    # Q15 rounding tie, so the s16 kernel's reduced multiplier differs from TFLite's.
+    name = "depthwise_conv_dilated_1d_k7_d8_c24_s16"
+    desc = next(d for d in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors")) if d["name"] == name)
+    op = OpDepthwiseConv(desc, seed=500, target_cpu="cortex-m55")
+    tflite_path = tmp_path / f"{name}.tflite"
+    op.convert_to_tflite(op.build_keras_model(), str(tflite_path), 500)
+    op.generate_c_files(tmp_path)
+    header = next((tmp_path / "includes").glob(f"{name}_*.h")).read_text()
+    emitted = [int(v) for v in re.findall(r"-?\d+", re.search(r"_multiplier\[[0-9]*\]\s*=\s*\{([^}]*)\}", header).group(1))]
+
+    from ai_edge_litert.interpreter import Interpreter
+
+    interpreter = Interpreter(model_path=str(tflite_path))
+    details = interpreter.get_tensor_details()
+    weight_scales = next(d for d in details if len(d["quantization_parameters"]["scales"]) > 1)["quantization_parameters"]["scales"]
+    input_scale = float(interpreter.get_input_details()[0]["quantization_parameters"]["scales"][0])
+    output_scale = float(interpreter.get_output_details()[0]["quantization_parameters"]["scales"][0])
+    expected = [_q31_multiplier(input_scale * float(s) / output_scale) for s in weight_scales]
+
+    assert emitted == expected
