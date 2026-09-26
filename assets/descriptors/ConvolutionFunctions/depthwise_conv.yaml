@@ -356,6 +356,145 @@ dilation:
 - 2
 - 3
 ---
+# Dilated 1D layers (filter, input and output height 1, stride 1, no vertical padding,
+# ch_mult 1): ns-cmsis-nn v7.36.0 routes these to arm_depthwise_conv_s8_opt and
+# arm_depthwise_conv_fast_s16 instead of the generic kernels. Shapes follow the dilated
+# TCN layers in sleepkit/heartkit models (k7, W240, d2..d16).
+operator: DepthwiseConv
+name: depthwise_conv_dilated_1d_k7_d2_c24_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 240
+- 24
+filter_shape:
+- 1
+- 7
+- 24
+- 1
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 2
+---
+operator: DepthwiseConv
+name: depthwise_conv_dilated_1d_k7_d16_c48_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 240
+- 48
+filter_shape:
+- 1
+- 7
+- 48
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 16
+---
+operator: DepthwiseConv
+name: depthwise_conv_dilated_1d_k5_d4_c17_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 64
+- 17
+filter_shape:
+- 1
+- 5
+- 17
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 4
+---
+operator: DepthwiseConv
+name: depthwise_conv_dilated_1d_k7_d8_c24_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 240
+- 24
+filter_shape:
+- 1
+- 7
+- 24
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 8
+---
+operator: DepthwiseConv
+name: depthwise_conv_dilated_1d_k5_d4_c17_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 64
+- 17
+filter_shape:
+- 1
+- 5
+- 17
+- 1
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 4
+---
 operator: DepthwiseConv
 name: depthwise_conv_mult4_s16
 activation_dtype: S16
