@@ -14,6 +14,10 @@ channel: {{ channel }}
 modules:
 {% for name in modules %}
   - name: {{ name }}
+{% if name in vendored %}
+    source:
+      vendored: true
+{% endif %}
 {% endfor %}
 features: {}
 {{ module_registry_yaml -}}

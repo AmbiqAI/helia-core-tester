@@ -131,6 +131,32 @@ def _serial(explicit: Optional[int]) -> int:
         raise AssertionError("unreachable")
 
 
+_CMSIS_NN_REF_HELP = "ns-cmsis-nn tag or commit to build (default: see --cmsis-nn-root)."
+_CMSIS_NN_ROOT_HELP = (
+    "Local ns-cmsis-nn checkout to build. Default: the enclosing checkout when the "
+    "tester sits at ns-cmsis-nn/Tests/helia-core-tester, else the pinned release. "
+    "Copies its Include/, Source/, cmake/ and nsx/ into the app."
+)
+_JOBS_HELP = "Parallel build jobs (default: CPU count + 2, like ninja)."
+_UPDATE_DEPS_HELP = "Re-resolve NSX modules and rewrite nsx.lock before building."
+_NO_INLINE_ASM_HELP = "Build requantize without inline assembly (the old path's kernels)."
+
+
+def _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm):
+    """Firmware build flags as NSX app options."""
+    from .nsx_app import AppOptions, nested_kernel_root
+
+    if cmsis_nn_ref and cmsis_nn_root:
+        _fail("Pass --cmsis-nn-ref or --cmsis-nn-root, not both.")
+    # Nested layout builds the enclosing checkout.
+    if cmsis_nn_root:
+        cmsis_nn_root = cmsis_nn_root.expanduser().resolve()
+    elif not cmsis_nn_ref:
+        cmsis_nn_root = nested_kernel_root(repo_root())
+    ref = {"cmsis_nn_ref": cmsis_nn_ref} if cmsis_nn_ref else {}
+    return AppOptions(cmsis_nn_root=cmsis_nn_root, requantize_inline_asm=not no_inline_asm, **ref)
+
+
 # --- boards / probes ---------------------------------------------------------------
 
 
@@ -181,16 +207,24 @@ def probes_match(
 def build(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
-    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel build jobs."),
+    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help=_JOBS_HELP),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
+    cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
+    no_inline_asm: bool = typer.Option(False, "--no-inline-asm", help=_NO_INLINE_ASM_HELP),
+    update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
     """Cross-compile the hct_benchmark_server firmware for --board (no flashing)."""
     from .firmware_build import build_firmware, resolve_build_dir
 
     spec = _board(board)
+    app_options = _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm)
     with _pipeline_errors(_verbosity(verbosity)):
-        elf = build_firmware(spec, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs, force_reconfigure=force_reconfigure)
+        elf = build_firmware(
+            spec, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs,
+            force_reconfigure=force_reconfigure, options=app_options, update_dependencies=update_dependencies,
+        )
     typer.echo(f"✓ Firmware build completed successfully: {elf}")
 
 
@@ -199,9 +233,13 @@ def flash(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     serial_no: Optional[int] = typer.Option(None, "--serial-no", help=_SERIAL_HELP),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
-    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel build jobs."),
+    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help=_JOBS_HELP),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
     force: bool = typer.Option(False, "--force", help=_FORCE_FLASH_HELP),
+    cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
+    no_inline_asm: bool = typer.Option(False, "--no-inline-asm", help=_NO_INLINE_ASM_HELP),
+    update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
     """Build (if needed) and flash the hct_benchmark_server firmware to --board via J-Link.
@@ -210,11 +248,13 @@ def flash(
     from .firmware_build import flash_firmware, resolve_build_dir
 
     spec = _board(board)
+    app_options = _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm)
     serial = _serial(serial_no)
     with _pipeline_errors(_verbosity(verbosity)):
         decision = flash_firmware(
             spec, serial, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs,
-            force_reconfigure=force_reconfigure, force=force,
+            force_reconfigure=force_reconfigure, force=force, options=app_options,
+            update_dependencies=update_dependencies,
         )
     if decision.needed:
         typer.echo("✓ Firmware flashed successfully")
@@ -385,9 +425,13 @@ def run(
     force_flash: bool = typer.Option(False, "--force-flash", help=_FORCE_FLASH_HELP + " Mirror of `hardware flash --force`."),
     allow_unverified_firmware: bool = typer.Option(False, "--allow-unverified-firmware", help=_ALLOW_UNVERIFIED_HELP + " Only meaningful with --skip-flash."),
     as_json: bool = typer.Option(False, "--json", help="Print one JSON summary document on stdout (human output goes to stderr)."),
-    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help="Parallel firmware build jobs."),
+    jobs: Optional[int] = typer.Option(None, "--jobs", "-j", help=_JOBS_HELP),
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure the CMake build dir even if it already exists."),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
+    cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
+    cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
+    no_inline_asm: bool = typer.Option(False, "--no-inline-asm", help=_NO_INLINE_ASM_HELP),
+    update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
     """The whole hardware pipeline: generate tests for the board's CPU, build the
@@ -399,6 +443,7 @@ def run(
         _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
     options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
+    app_options = _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm)
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
@@ -406,6 +451,7 @@ def run(
             repo_root(), spec, serial, options=options, build_dir=build_dir,
             skip_generate=skip_generate, skip_flash=skip_flash, force_flash=force_flash, jobs=jobs,
             force_reconfigure=force_reconfigure, echo=echo, progress_to_stderr=as_json,
-            allow_unverified_firmware=allow_unverified_firmware,
+            allow_unverified_firmware=allow_unverified_firmware, app_options=app_options,
+            update_dependencies=update_dependencies,
         )
     _report(outcome, spec, as_json=as_json)

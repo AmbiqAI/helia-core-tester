@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.hardware import firmware_build
+from helia_core_tester.hardware import firmware_build, nsx_cli
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, load_case_bundle
 from helia_core_tester.hardware.fake_target import FakeTargetTransport
@@ -219,10 +219,10 @@ def test_flash_decision_requires_built_elf(tmp_path: Path) -> None:
 
 @pytest.fixture
 def fake_toolchain(monkeypatch):
-    """Stub configure/build so flash_firmware runs without CMake; returns the list of built targets."""
+    """Stub the NSX build and flash target; returns the list of built targets."""
     built: list[str] = []
-    monkeypatch.setattr(firmware_build, "configure", lambda *a, **k: None)
-    monkeypatch.setattr(firmware_build, "build", lambda build_dir, target, jobs: built.append(target))
+    monkeypatch.setattr(firmware_build, "build_firmware", lambda *a, **k: built.append(firmware_build.SERVER_TARGET))
+    monkeypatch.setattr(nsx_cli, "flash_app", lambda app_dir, **kwargs: built.append("flash"))
     return built
 
 
@@ -233,7 +233,7 @@ def test_flash_firmware_skips_flash_target_when_unchanged_and_board_confirms(tmp
 
     first = firmware_build.flash_firmware(BOARD, 7, build_dir=build_dir, board_build_id_reader=_silent_board)
     assert first.needed
-    assert fake_toolchain == [firmware_build.SERVER_TARGET, firmware_build.FLASH_TARGET]
+    assert fake_toolchain == [firmware_build.SERVER_TARGET, "flash"]
 
     fake_toolchain.clear()
     second = firmware_build.flash_firmware(BOARD, 7, build_dir=build_dir, board_build_id_reader=board)
@@ -246,7 +246,7 @@ def test_flash_firmware_skips_flash_target_when_unchanged_and_board_confirms(tmp
     fake_toolchain.clear()
     forced = firmware_build.flash_firmware(BOARD, 7, build_dir=build_dir, force=True, board_build_id_reader=_silent_board)
     assert forced.needed and "--force" in forced.reason
-    assert fake_toolchain == [firmware_build.SERVER_TARGET, firmware_build.FLASH_TARGET]
+    assert fake_toolchain == [firmware_build.SERVER_TARGET, "flash"]
 
 
 def test_flash_skip_is_refused_when_another_build_dir_flashed_the_probe(tmp_path: Path, fake_toolchain) -> None:
@@ -267,7 +267,7 @@ def test_flash_skip_is_refused_when_another_build_dir_flashed_the_probe(tmp_path
     board_runs_b = _board_running("hct-bbb")
     decision = firmware_build.flash_firmware(BOARD, SERIAL, build_dir=build_a, board_build_id_reader=board_runs_b)
     assert decision.needed
-    assert fake_toolchain == [firmware_build.SERVER_TARGET, firmware_build.FLASH_TARGET]
+    assert fake_toolchain == [firmware_build.SERVER_TARGET, "flash"]
     assert "board reports build id hct-bbb, expected hct-aaa" in decision.reason
     assert decision.build_id == "hct-aaa" and decision.board_build_id == "hct-bbb"
 
@@ -433,65 +433,6 @@ def test_read_target_info_returns_the_full_payload_without_acknowledging() -> No
     assert transport.read() == b""  # nothing else was sent: the fake is still waiting for TARGET_INFO_ACK
 
 
-# --- configure flags ---------------------------------------------------------------
-
-
-@pytest.fixture
-def captured_cmake(monkeypatch, tmp_path: Path):
-    """Run `configure()` without CMake or the dependency fetch; returns the argv it would run."""
-    calls: list[list[str]] = []
-    monkeypatch.setattr(firmware_build, "ensure_hardware_dependencies", lambda repo_root: None)
-    monkeypatch.setattr(firmware_build, "tester_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(firmware_build.subprocess, "run", lambda cmd, **kwargs: calls.append(list(cmd)))
-    return calls
-
-
-def test_configure_passes_the_board_row_to_cmake(captured_cmake, monkeypatch, tmp_path: Path) -> None:
-    from dataclasses import replace
-
-    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: None)
-    firmware_build.configure(tmp_path / "bd", BOARD, force=False)
-    [cmd] = captured_cmake
-    assert cmd[:4] == ["cmake", "-S", str(tmp_path), "-B", str(tmp_path / "bd")][:4]
-    assert "-DHELIA_HARDWARE_BOARD=apollo510_evb" in cmd and "-DTARGET_CPU=cortex-m55" in cmd
-    # apollo510_evb's workspace must stay at the historical 114688 so the memory report is unchanged.
-    assert BOARD.workspace_bytes == 114688 and "-DHCT_SERVER_WORKSPACE_BYTES=114688" in cmd
-
-    captured_cmake.clear()
-    other = replace(BOARD, id="other_evb", workspace_bytes=65536)
-    firmware_build.configure(tmp_path / "bd2", other, force=False)
-    assert "-DHCT_SERVER_WORKSPACE_BYTES=65536" in captured_cmake[0]
-
-
-def test_configure_forwards_the_resolved_jlinkexe_to_the_flash_target(captured_cmake, monkeypatch, tmp_path: Path) -> None:
-    from helia_core_tester.hardware.jlink_library import JLinkExecutable, JLinkLibraryError
-
-    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: JLinkExecutable("/opt/SEGGER/JLink/JLinkExe", "$JLINK_PATH"))
-    firmware_build.configure(tmp_path / "bd", BOARD, force=False, serial_no=SERIAL)
-    [cmd] = captured_cmake
-    assert "-DNSX_JLINK_EXE=/opt/SEGGER/JLink/JLinkExe" in cmd
-    assert f"-DNSX_JLINK_SERIAL={SERIAL}" in cmd
-
-    # Nothing resolved: unset any cached value so CMake's find_program(JLinkExe)
-    # searches PATH afresh instead of reusing a stale path from an earlier configure.
-    captured_cmake.clear()
-    monkeypatch.setattr(firmware_build, "find_jlink_exe", lambda: None)
-    firmware_build.configure(tmp_path / "bd", BOARD, force=False)
-    assert not any(arg.startswith("-DNSX_JLINK_EXE") for arg in captured_cmake[0])
-    assert "-UNSX_JLINK_EXE" in captured_cmake[0]
-
-    # A broken $HPX_JLINK_DLL is doctor's problem, not a reason to refuse `hardware build`.
-    captured_cmake.clear()
-
-    def _broken():
-        raise JLinkLibraryError("$HPX_JLINK_DLL=/x/gone.so does not exist")
-
-    monkeypatch.setattr(firmware_build, "find_jlink_exe", _broken)
-    firmware_build.configure(tmp_path / "bd", BOARD, force=False)
-    assert len(captured_cmake) == 1 and not any(arg.startswith("-DNSX_JLINK_EXE") for arg in captured_cmake[0])
-    assert "-UNSX_JLINK_EXE" in captured_cmake[0]
-
-
 # --- --json summary ----------------------------------------------------------------
 
 
@@ -540,7 +481,7 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     def _generate(repo_root, spec, suite, float_precision=None):
         order.append(f"generate:{spec.cpu}:{suite}:{float_precision}")
 
-    def _flash(spec, serial, *, build_dir, jobs, force_reconfigure, force):
+    def _flash(spec, serial, *, build_dir, jobs, force_reconfigure, force, options, update_dependencies):
         order.append(f"flash:{serial}:{build_dir.relative_to(tmp_path)}:force={force}")
         return firmware_build.FlashDecision(True, "abc", "test")
 

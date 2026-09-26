@@ -1,7 +1,7 @@
 """Thin facade over the neuralspotx Python API.
 
-Not wired into any command yet. Callers go through here instead of
-``neuralspotx.api`` so that every lock/sync/configure/build call carries a
+`hardware build` and `hardware flash` go through here instead of
+``neuralspotx.api`` so that every lock/sync/configure/build/flash call carries a
 wall-clock timeout, drops NSX's own notes at verbosity 0, and fails as
 :class:`HardwareBuildError` naming the step. Subprocess output (cmake,
 ninja, git) still inherits the caller's stdio.
@@ -11,23 +11,25 @@ from __future__ import annotations
 
 import subprocess
 from contextlib import contextmanager
+from importlib import metadata
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from neuralspotx import api as nsx_api
 from neuralspotx._io import Emitter, Event
 from neuralspotx.api import NSXError
-from neuralspotx.nsx_lock import NsxLock
+from neuralspotx.nsx_lock import LockKind, NsxLock, hash_file, hash_manifest, hash_tree, lock_path, read_lock
 
 # Per-subprocess budgets, in seconds.
 LOCK_TIMEOUT_S = 180
 SYNC_TIMEOUT_S = 300
 CONFIGURE_TIMEOUT_S = 120
 BUILD_TIMEOUT_S = 300
+FLASH_TIMEOUT_S = 120
 
 
 class HardwareBuildError(RuntimeError):
-    """An NSX lock, sync, configure or build step failed."""
+    """An NSX lock, sync, configure, build or flash step failed."""
 
 
 def _quiet_emitter(event: Event) -> None:
@@ -63,6 +65,27 @@ def lock_app(
             timeout_s=timeout_s,
             emit=emitter_for_verbosity(verbosity),
         )
+
+
+def lock_is_current(app_dir: Path, board: str) -> bool:
+    """nsx.lock matches nsx.yml and vendored modules."""
+    try:
+        lock = read_lock(app_dir, board)
+    except NSXError:
+        return False
+    if lock is None or lock.manifest_hash != hash_manifest(app_dir / "nsx.yml"):
+        return False
+    # NSX records vendored trees by content.
+    return all(
+        entry.content_hash == hash_tree(app_dir / entry.vendored_at)
+        for entry in lock.modules.values()
+        if entry.kind == LockKind.VENDORED
+    )
+
+
+def sync_stamp(app_dir: Path) -> str:
+    """nsx.lock hash and neuralspotx version."""
+    return f"{hash_file(lock_path(app_dir))} {metadata.version('neuralspotx')}"
 
 
 def sync_app(
@@ -146,6 +169,36 @@ def build_app(
         )
 
 
+def flash_app(
+    app_dir: Path,
+    *,
+    board: str,
+    build_dir: Path,
+    target: str,
+    probe_serial: int,
+    frozen: bool = True,
+    timeout_s: float = FLASH_TIMEOUT_S,
+    verbosity: int = 0,
+) -> None:
+    """Flash via NSX; a serial forces reconfigure."""
+    with _nsx_errors("nsx flash"):
+        nsx_api.flash_app(
+            app_dir,
+            board=board,
+            build_dir=build_dir,
+            target=target,
+            probe_serial=str(probe_serial),
+            frozen=frozen,
+            timeout_s=timeout_s,
+            emit=emitter_for_verbosity(verbosity),
+        )
+
+
 def starter_profile(board: str) -> Optional[dict[str, Any]]:
     """The board's minimal starter profile, or None."""
     return nsx_api.starter_profile(board)
+
+
+def module_project(name: str) -> Optional[str]:
+    """The registry project that owns a module."""
+    return nsx_api.registry_module_project(name)

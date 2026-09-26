@@ -14,6 +14,7 @@ from helia_core_tester.hardware import memory_report as report
 from helia_core_tester.hardware import toolchain
 from helia_core_tester.hardware.boards import DEFAULT_BOARD_ID, resolve_board
 from helia_core_tester.hardware.pathutil import display_path, is_relative_to
+from helia_core_tester.tests.test_hardware_nsx_app import _write
 
 
 BOARD = resolve_board(DEFAULT_BOARD_ID)
@@ -111,6 +112,7 @@ def _fake_build(build_dir: Path) -> Path:
     elf = build_dir / "hardware" / "hct_benchmark_server.elf"
     elf.parent.mkdir(parents=True)
     elf.write_bytes(b"elf")
+    report.nsx_app_dir(build_dir).mkdir(parents=True)
     return elf
 
 
@@ -186,9 +188,9 @@ def test_memory_report_fails_closed_when_a_board_region_is_missing(tmp_path: Pat
     elf = tmp_path / "fw.elf"
     elf.write_bytes(b"elf")
     with pytest.raises(ValueError, match=r"defines no memory region\(s\) \['MCU_TCM_TYPO'\]; available regions: \['MCU_MRAM', 'MCU_TCM'\]"):
-        report.analyze_elf(elf, board, report_env)
+        report.analyze_elf(elf, board, tmp_path / "fw.ld", report_env)
     # With both regions present the gates are computed against real capacities.
-    usage = report.analyze_elf(elf, resolve_board(DEFAULT_BOARD_ID), report_env).usage
+    usage = report.analyze_elf(elf, resolve_board(DEFAULT_BOARD_ID), tmp_path / "fw.ld", report_env).usage
     assert usage["flash_capacity_bytes"] == 4128768 and usage["tcm_capacity_bytes"] == 507904
     assert usage["flash_gate_pass"] is True and usage["tcm_gate_pass"] is True
 
@@ -201,3 +203,28 @@ def test_write_text_lf_writes_lf(tmp_path: Path) -> None:
     target = tmp_path / "out.txt"
     pathutil.write_text_lf(target, "a\nb\n")
     assert target.read_bytes() == b"a\nb\n"
+
+
+SCRIPT = "MEMORY {}\n"
+
+
+def test_linker_script_prefers_the_nsx_app(tmp_path: Path, monkeypatch) -> None:
+    build = tmp_path / "build"
+    sdk = report.nsx_app_dir(build) / "modules" / "nsx-ambiq-sdk"
+    expected = _write(report.linker_script_path(BOARD, sdk), SCRIPT)
+    monkeypatch.setattr(report, "nsx_ambiq_sdk_dir", lambda root: tmp_path / "legacy")
+    _write(report.linker_script_path(BOARD, tmp_path / "legacy"), SCRIPT)
+    assert report.app_linker_script(BOARD, build, tmp_path) == expected
+
+
+def test_linker_script_falls_back_for_a_pre_nsx_build(tmp_path: Path, monkeypatch) -> None:
+    # --skip-flash on an old CMake build dir.
+    monkeypatch.setattr(report, "nsx_ambiq_sdk_dir", lambda root: tmp_path / "legacy")
+    expected = _write(report.linker_script_path(BOARD, tmp_path / "legacy"), SCRIPT)
+    assert report.app_linker_script(BOARD, tmp_path / "old-build", tmp_path) == expected
+
+
+def test_linker_script_missing_everywhere_names_the_fix(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(report, "nsx_ambiq_sdk_dir", lambda root: tmp_path / "legacy")
+    with pytest.raises(FileNotFoundError, match="rerun hardware build"):
+        report.app_linker_script(BOARD, tmp_path / "old-build", tmp_path)

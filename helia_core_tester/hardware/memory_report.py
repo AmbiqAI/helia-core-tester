@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from .boards import DEFAULT_BOARD_ID, BoardSpec, repo_root, resolve_board
-from .firmware_build import SERVER_TARGET, bin_path, elf_path, map_path
+from .firmware_build import SERVER_TARGET, bin_path, elf_path, map_path, nsx_app_dir
 from .pathutil import display_path, write_text_lf
 from .toolchain import arm_tool, toolchain_bin_dir
 from ..scripts.setup_dependencies import nsx_ambiq_sdk_dir
@@ -49,15 +49,29 @@ _MEMORY_RE = re.compile(
 _SYMBOL_RE = re.compile(r"^[0-9a-fA-F]+\s+[A-Za-z]\s+(arm_[A-Za-z0-9_]+)$")
 
 
-def linker_script_path(board: BoardSpec, project_root: Optional[Path] = None) -> Path:
-    """The NSX SDK linker script the firmware for `board` is linked with.
+def linker_script_path(board: BoardSpec, sdk_root: Path) -> Path:
+    """The board's SoC linker script under an NSX SDK tree.
 
     The SDK's `cmake/socs/<soc>.cmake` selects it (`NSX_LINKER_SCRIPT`) but never
     exports it to the CMake cache, so the same default path is rebuilt here from the
     board's SoC directory.
     """
-    sdk = nsx_ambiq_sdk_dir(project_root or repo_root())
-    return sdk / "modules" / "nsx-core" / "src" / board.soc / "gcc" / "linker_script_sbl.ld"
+    return sdk_root / "modules" / "nsx-core" / "src" / board.soc / "gcc" / "linker_script_sbl.ld"
+
+
+def app_linker_script(board: BoardSpec, build_dir: Path, project_root: Path) -> Path:
+    """The linker script the server was linked with."""
+    from . import nsx_cli
+
+    app_dir = nsx_app_dir(build_dir)
+    sdk = nsx_cli.module_project("nsx-core")
+    if app_dir.is_dir() and sdk:
+        return linker_script_path(board, app_dir / "modules" / sdk)
+    # Build dir predates NSX: legacy SDK.
+    legacy = linker_script_path(board, nsx_ambiq_sdk_dir(project_root))
+    if legacy.is_file():
+        return legacy
+    raise FileNotFoundError(f"No linker script for {build_dir}; rerun hardware build.")
 
 
 def parse_memory_regions(linker_script: Path) -> list[dict[str, int | str]]:
@@ -155,7 +169,7 @@ class ElfAnalysis:
         write_text_lf(out_root / "objdump_h.txt", self.objdump_headers)
 
 
-def analyze_elf(elf: Path, board: BoardSpec, project_root: Optional[Path] = None) -> ElfAnalysis:
+def analyze_elf(elf: Path, board: BoardSpec, linker_script: Path, project_root: Optional[Path] = None) -> ElfAnalysis:
     size_default = _probe_binary("arm-none-eabi-size", [str(elf)], project_root)
     size_sections = _probe_binary("arm-none-eabi-size", ["-A", str(elf)], project_root)
     nm_size_sort = _probe_binary("arm-none-eabi-nm", ["-S", "--size-sort", str(elf)], project_root)
@@ -163,7 +177,7 @@ def analyze_elf(elf: Path, board: BoardSpec, project_root: Optional[Path] = None
     objdump_headers = _probe_binary("arm-none-eabi-objdump", ["-h", str(elf)], project_root)
 
     sections = _parse_size_a(size_sections)
-    memory_regions = parse_memory_regions(linker_script_path(board, project_root))
+    memory_regions = parse_memory_regions(linker_script)
     region_map = {str(row["name"]): int(row["capacity"]) for row in memory_regions}
     flash_image_bytes = sections.get(".text", 0) + sections.get(".itcm_text", 0) + sections.get(".data", 0)
     tcm_static_bytes = sections.get(".stack", 0) + sections.get(".data", 0) + sections.get(".bss", 0)
@@ -220,7 +234,7 @@ def generate_memory_report(
     elf = elf_path(build_root)
     if not elf.is_file():
         raise FileNotFoundError(f"Built firmware ELF not found: {elf} -- run `hardware build` for this board/build dir first.")
-    analysis = analyze_elf(elf, board, project_root)
+    analysis = analyze_elf(elf, board, app_linker_script(board, build_root, project_root), project_root)
     symbols = analysis.symbols
     retained = {name: name in symbols for name in _SELECTED_ADAPTERS}
     catalog = json.loads((project_root / "cmake" / "hardware" / "kernel_catalog.json").read_text(encoding="utf-8"))
@@ -274,7 +288,7 @@ def _toolchain_env(project_root: Path) -> dict[str, str]:
     """The child environment for a size-probe configure/build: the checkout's downloaded
     ARM GCC `bin/` first on PATH. The CMake build runs generate_kernel_symbol_refs.py,
     whose `arm-none-eabi-nm` lookup is bare, so the toolchain must be reachable through
-    PATH and not only through the toolchain file (same rule as firmware_build.build())."""
+    PATH and not only through the toolchain file."""
     env = os.environ.copy()
     bin_dir = str(toolchain_bin_dir(project_root).resolve())
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
@@ -319,7 +333,8 @@ def build_size_probe(board: BoardSpec, variant: SizeProbeVariant, *, project_roo
 
     out_dir = build_dir / "probe"
     elf = out_dir / f"{SIZE_PROBE_TARGET}.elf"
-    analysis = analyze_elf(elf, board, project_root)
+    # Probe still uses the old SDK.
+    analysis = analyze_elf(elf, board, linker_script_path(board, nsx_ambiq_sdk_dir(project_root)), project_root)
 
     report = {
         "schema": "hct.memory_report",
