@@ -130,8 +130,8 @@ class OpDepthwiseConv(OperationBase):
             raise self.fault_unreachable(
                 kind,
                 f"{kernel_fn} only checks it on the optimized route "
-                "(ch_mult 1, unit dilation or dilated 1D; s8: batch 1, not a 3x3 filter with pad <= 1 and "
-                "input_ch > 1; s16: filter w*h < 512; s4: batch 1)",
+                "(ch_mult 1; s8 and s16: unit dilation or dilated 1D; s8: batch 1, not a 3x3 filter with "
+                "pad <= 1 and input_ch > 1; s16: filter w*h < 512; s4: batch 1, unit dilation)",
             )
         if kind == "null_ctx_buf" and kernel_fn != "arm_depthwise_conv_wrapper_s4":
             if "dsp" not in self.required_capabilities() and "mve" not in self.required_capabilities():
