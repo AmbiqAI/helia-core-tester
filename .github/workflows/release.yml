@@ -1,5 +1,10 @@
 name: Release
 
+# release-please keeps a release PR up to date from main. The run for the push
+# that merges it creates the vX.Y.Z tag and GitHub release on the merge commit
+# (only merged PRs labelled `autorelease: pending` are released) before it
+# builds the next release PR, so that run already sees the new release.
+# No other workflow creates tags or releases.
 on:
   push:
     branches:
@@ -11,9 +16,13 @@ permissions:
   issues: write
   pull-requests: write
 
+# One queue for every run, whatever ref it was dispatched from (release-please
+# always acts on main), and no cancelling: a cancelled run could stop between
+# creating a release and relabelling its PR, and parallel runs could build a
+# release PR before the previous one is marked released.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-please
+  cancel-in-progress: false
 
 jobs:
   release-please:
@@ -26,4 +35,3 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          skip-github-release: true
