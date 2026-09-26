@@ -14,6 +14,29 @@ from helia_core_tester.generation.ops._shared.bias_init import (
 from helia_core_tester.generation.kernel_dispatch import resolve_depthwise_conv_kernel
 
 
+def _opt_dilation_supported(
+    params: Dict[str, int],
+    input_dims: Dict[str, int],
+    filter_dims: Dict[str, int],
+    output_dims: Dict[str, int],
+) -> bool:
+    """Mirror of ns-cmsis-nn arm_nn_dw_conv_opt_dilation_supported() (v7.36.0): the s8 opt and
+    s16 fast depthwise kernels take unit dilation, or a dilated 1D layer with no vertical
+    extent, unit stride and no vertical padding."""
+    if params["dilation_w"] == 1 and params["dilation_h"] == 1:
+        return True
+    return (
+        params["dilation_h"] == 1
+        and params["dilation_w"] >= 1
+        and filter_dims["h"] == 1
+        and input_dims["h"] == 1
+        and output_dims["h"] == 1
+        and params["stride_w"] == 1
+        and params["stride_h"] == 1
+        and params["pad_h"] == 0
+    )
+
+
 def vector_sum_s8(
     vector_data: np.ndarray,
     vector_cols: int,
@@ -85,23 +108,31 @@ class OpDepthwiseConv(OperationBase):
         params = context["dw_conv_params"]
         input_dims = context["input_dims"]
         filter_dims = context["filter_dims"]
-        optimized = (
-            params["ch_mult"] == 1
-            and input_dims["n"] == 1
-            and params["dilation_w"] == 1
-            and params["dilation_h"] == 1
-        )
+        unit_dilation = params["dilation_w"] == 1 and params["dilation_h"] == 1
         if kernel_fn == "arm_depthwise_conv_wrapper_s8":
             is_3x3 = filter_dims["w"] == 3 and filter_dims["h"] == 3
-            optimized = optimized and not (is_3x3 and params["pad_w"] <= 1) and input_dims["c"] != 1
+            optimized = (
+                params["ch_mult"] == 1
+                and input_dims["n"] == 1
+                and _opt_dilation_supported(params, input_dims, filter_dims, context["output_dims"])
+                and not (is_3x3 and params["pad_w"] <= 1 and unit_dilation)
+                and input_dims["c"] != 1
+            )
         elif kernel_fn == "arm_depthwise_conv_wrapper_s16":
-            optimized = optimized and filter_dims["w"] * filter_dims["h"] < 512
+            optimized = (
+                params["ch_mult"] == 1
+                and input_dims["n"] == 1
+                and _opt_dilation_supported(params, input_dims, filter_dims, context["output_dims"])
+                and filter_dims["w"] * filter_dims["h"] < 512
+            )
+        else:
+            optimized = params["ch_mult"] == 1 and input_dims["n"] == 1 and unit_dilation
         if not optimized:
             raise self.fault_unreachable(
                 kind,
                 f"{kernel_fn} only checks it on the optimized route "
-                "(ch_mult 1, batch 1, unit dilation; s8: not a 3x3 filter with pad <= 1 and input_ch > 1; "
-                "s16: filter w*h < 512)",
+                "(ch_mult 1, batch 1, unit dilation or dilated 1D; s8: not a 3x3 filter with pad <= 1 and "
+                "input_ch > 1; s16: filter w*h < 512)",
             )
         if kind == "null_ctx_buf" and kernel_fn != "arm_depthwise_conv_wrapper_s4":
             if "dsp" not in self.required_capabilities() and "mve" not in self.required_capabilities():
