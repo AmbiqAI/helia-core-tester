@@ -526,7 +526,8 @@ class OpTransposeConv(OperationBase):
         # Calculate effective scales: (input_scale * weight_scale) / output_scale
         if per_channel and isinstance(weight_scale, np.ndarray):
             # Per-channel: effective_scale[i] = (input_scale * weight_scale[i]) / output_scale
-            effective_scales = (input_scale * weight_scale) / output_scale
+            # in double precision, as TFLite computes it. The weight scales are float32.
+            effective_scales = (input_scale * weight_scale.astype(np.float64)) / output_scale
             # Create a temporary quant_params dict with effective scales
             effective_quant = {
                 'scale': effective_scales,
