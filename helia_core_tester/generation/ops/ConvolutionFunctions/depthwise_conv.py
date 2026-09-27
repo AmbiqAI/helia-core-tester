@@ -577,10 +577,14 @@ class OpDepthwiseConv(OperationBase):
         # CMSIS expects filter_dims: n=depth_multiplier, h=H, w=W, c=output_channels
         # Note: filter_dims.c must be output_channels (not input_channels) because CMSIS-NN
         # uses it as the first dimension in the transposed filter: {filter_dims->c, h, w, n}
+        # A descriptor shape can start with 1 (kernel height 1), so only a shape taken from the
+        # model's weights may be read as TFLite format.
+        descriptor_filter_shape = True
         if weight_dtype == "S4":
             filter_shape = tuple(self.desc['filter_shape'])
         elif weights is not None:
             filter_shape = tuple(weights.shape)
+            descriptor_filter_shape = False
             if not float_kernel and weights.dtype != np.int8:
                 weights = weights.astype(np.int8)
         else:
@@ -612,7 +616,7 @@ class OpDepthwiseConv(OperationBase):
         
         if len(filter_shape) == 4:
             # Check if TFLite format [1, H, W, C_OUT] or descriptor format [H, W, I, M]
-            is_tflite_format = filter_shape[0] == 1
+            is_tflite_format = not descriptor_filter_shape and filter_shape[0] == 1
             if is_tflite_format:
                 # TFLite format: [1, H, W, C_OUT]
                 # Extract H and W from indices 1 and 2
