@@ -605,7 +605,8 @@ class OpConvolve(OperationBase):
             
             # Calculate effective scales: (input_scale * weight_scale) / output_scale
             if per_channel and isinstance(weight_scale, np.ndarray):
-                effective_scales = (input_scale * weight_scale) / output_scale
+                # In double precision, as TFLite computes it; the weight scales are float32.
+                effective_scales = (input_scale * weight_scale.astype(np.float64)) / output_scale
                 effective_quant = {
                     'scale': effective_scales,
                     'zero_point': output_quant.get('zero_point', 0),
