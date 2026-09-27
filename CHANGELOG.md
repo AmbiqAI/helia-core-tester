@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/AmbiqAI/helia-core-tester/compare/v0.3.0...v0.3.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **conv:** compute convolve and transpose conv per-channel scales in double ([#219](https://github.com/AmbiqAI/helia-core-tester/issues/219)) ([9f865b0](https://github.com/AmbiqAI/helia-core-tester/commit/9f865b0b1a4b7c85af89c5cb6f4165bc030c72fe)), closes [#215](https://github.com/AmbiqAI/helia-core-tester/issues/215)
+
 ## [0.3.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.2.0...v0.3.0) (2026-09-26)
 
 
