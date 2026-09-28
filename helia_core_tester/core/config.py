@@ -81,6 +81,7 @@ class Config:
     jobs: Optional[int] = None
     coverage: bool = False
     coverage_mve_float: bool = False
+    coverage_mve_int: bool = False
     suite: str = "int"
     suites: list[str] = field(default_factory=list)
     float_precision: str = "both"
@@ -224,6 +225,7 @@ class Config:
         if key in {
             "coverage",
             "coverage_mve_float",
+            "coverage_mve_int",
             "fail_fast",
             "dry_run",
             "plan",
@@ -273,6 +275,7 @@ class Config:
         self.suites = ["int", "float"] if self.suite == "both" else [self.suite]
         self._validate_float_precision_cpu_compatibility()
         self._validate_coverage_mve_float()
+        self._validate_coverage_mve_int()
 
         if not 0 <= self.verbosity <= 3:
             raise ValueError(f"verbosity must be between 0 and 3, got {self.verbosity}")
@@ -357,6 +360,23 @@ class Config:
             cpu_list = ", ".join(unsupported)
             raise ConfigurationError(
                 "--coverage-mve-float is only supported for cortex-m55; "
+                f"unsupported CPUs: {cpu_list}"
+            )
+
+    def _validate_coverage_mve_int(self) -> None:
+        if not self.coverage_mve_int:
+            return
+
+        if not self.coverage:
+            raise ConfigurationError("--coverage-mve-int requires --coverage")
+        if "int" not in self.suites:
+            raise ConfigurationError("--coverage-mve-int requires --suite int or --suite both")
+
+        unsupported = [cpu for cpu in self.cpus if cpu != "cortex-m55"]
+        if unsupported:
+            cpu_list = ", ".join(unsupported)
+            raise ConfigurationError(
+                "--coverage-mve-int is only supported for cortex-m55; "
                 f"unsupported CPUs: {cpu_list}"
             )
 
@@ -450,6 +470,7 @@ class Config:
             "jobs": self.jobs,
             "coverage": self.coverage,
             "coverage_mve_float": self.coverage_mve_float,
+            "coverage_mve_int": self.coverage_mve_int,
             "suite": self.suite,
             "suites": list(self.suites),
             "float_precision": self.float_precision,

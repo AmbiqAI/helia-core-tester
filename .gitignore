@@ -47,6 +47,8 @@ CMakeFiles/
 !cmake/nsx/nsx_app_bootstrap.cmake
 !cmake/nsx/nsx_helpers.cmake
 !cmake/nsx/nsx_toolchain_flags.cmake
+# Coverage-build source selection, included by CMakeLists.txt.
+!cmake/coverage_autovectorize.cmake
 *.a
 *.o
 *.elf

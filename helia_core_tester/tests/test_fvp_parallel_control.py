@@ -153,6 +153,33 @@ def test_run_step_routes_mve_float_coverage_to_float_mve_report_lane(tmp_path: P
     assert "float-mve" in cmd
 
 
+def test_run_step_routes_mve_int_coverage_to_int_mve_report_lane(tmp_path: Path, monkeypatch) -> None:
+    captured = {}
+
+    def fake_run(cmd, cwd, check, text, bufsize, env=None):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr("helia_core_tester.core.steps.run.subprocess.run", fake_run)
+
+    root = _make_config_root(tmp_path)
+    cfg = Config(
+        project_root=root,
+        cpu="cortex-m55",
+        suite="int",
+        coverage=True,
+        coverage_mve_int=True,
+        enable_reporting=False,
+        _explicit_overrides={"project_root", "cpu", "suite", "coverage", "coverage_mve_int"},
+    )
+
+    result = RunStep(cfg, runtime_env=_runtime_env(root))._do_execute()
+
+    assert result.success
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("--coverage-report-suite") + 1] == "int-mve"
+
+
 def test_resolve_run_jobs_caps_to_test_count() -> None:
     assert _resolve_run_jobs(0, 8) >= 1
     assert _resolve_run_jobs(16, 5) == 5

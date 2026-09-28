@@ -83,6 +83,8 @@ class RunStep(StepBase):
                     cmd.append("--coverage")
                     if suite == "float" and getattr(self.config, "coverage_mve_float", False):
                         cmd.extend(["--coverage-report-suite", "float-mve"])
+                    if suite == "int" and getattr(self.config, "coverage_mve_int", False):
+                        cmd.extend(["--coverage-report-suite", "int-mve"])
 
                 # Always forwarded, 0 included: the child's own default is
                 # non-zero, so withholding the flag would turn the explicit

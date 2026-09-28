@@ -469,7 +469,7 @@ def run_coverage_merge(
     root = Path(project_root).resolve()
     cpu_list = parse_cpu_list(cpus)
     suite_list = ["int", "float"] if suites is None else [str(item).strip().lower() for item in suites]
-    suite_list = [item for item in suite_list if item in {"int", "float", "float-mve"}]
+    suite_list = [item for item in suite_list if item in {"int", "float", "float-mve", "int-mve"}]
     if not suite_list:
         suite_list = ["int", "float"]
 
@@ -488,9 +488,9 @@ def run_coverage_merge(
 
     for suite in suite_list:
         for cpu in cpu_list:
-            # float-mve coverage is produced only for cortex-m55 and is optional:
-            # skip other CPUs and do not treat its absence as a missing required input.
-            optional_suite = suite == "float-mve"
+            # MVE coverage lanes (float-mve, int-mve) are produced only for cortex-m55 and are
+            # optional: skip other CPUs and do not treat their absence as a missing required input.
+            optional_suite = suite in {"float-mve", "int-mve"}
             if optional_suite and cpu != "cortex-m55":
                 continue
 

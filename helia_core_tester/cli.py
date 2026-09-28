@@ -166,6 +166,7 @@ def build(
     jobs: Optional[int] = typer.Option(None, help="Parallel build jobs"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn code coverage instrumentation"),
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Enable Cortex-M55 float MVE paths during coverage builds"),
+    coverage_mve_int: bool = typer.Option(False, "--coverage-mve-int", help="Enable Cortex-M55 integer MVE paths (no ARM_MATH_AUTOVECTORIZE) during coverage builds"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision selection for float suite: f16, f32, or both"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
@@ -184,6 +185,7 @@ def build(
         jobs=jobs,
         coverage=coverage,
         coverage_mve_float=coverage_mve_float,
+        coverage_mve_int=coverage_mve_int,
         suite=suite,
         float_precision=float_precision,
     )
@@ -206,6 +208,7 @@ def run(
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Do not stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Collect and merge ns-cmsis-nn gcov streams"),
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Write MVE float coverage to the float-mve report lane"),
+    coverage_mve_int: bool = typer.Option(False, "--coverage-mve-int", help="Write MVE integer coverage to the int-mve report lane"),
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     no_report: bool = typer.Option(False, "--no-report", help="Disable test reporting"),
     report_formats: list[str] = typer.Option(["json"], help="Report formats (json, html, md, junit)"),
@@ -227,6 +230,7 @@ def run(
         report_formats=report_formats,
         coverage=coverage,
         coverage_mve_float=coverage_mve_float,
+        coverage_mve_int=coverage_mve_int,
         run_jobs=run_jobs,
         suite=suite,
     )
@@ -258,6 +262,7 @@ def full(
     no_fail_fast: bool = typer.Option(False, "--no-fail-fast", help="Do not stop on first failure"),
     coverage: bool = typer.Option(False, "--coverage", help="Enable ns-cmsis-nn coverage collection/reporting"),
     coverage_mve_float: bool = typer.Option(False, "--coverage-mve-float", help="Enable Cortex-M55 float MVE paths during coverage builds"),
+    coverage_mve_int: bool = typer.Option(False, "--coverage-mve-int", help="Enable Cortex-M55 integer MVE paths (no ARM_MATH_AUTOVECTORIZE) during coverage builds"),
     force_generate: bool = typer.Option(False, "--force-generate", help="Regenerate every case even when its reuse stamp still matches"),
     skip_generation: bool = typer.Option(False, "--skip-generation", help="Skip TFLite generation"),
     skip_build: bool = typer.Option(False, "--skip-build", help="Skip FVP build"),
@@ -291,6 +296,7 @@ def full(
         fail_fast=not no_fail_fast,
         coverage=coverage,
         coverage_mve_float=coverage_mve_float,
+        coverage_mve_int=coverage_mve_int,
         force_generate=force_generate,
         skip_generation=skip_generation,
         skip_build=skip_build,
@@ -434,6 +440,11 @@ def coverage_merge(
         "--include-mve-float",
         help="Also merge cortex-m55 MVE float coverage (reports/coverage/float-mve).",
     ),
+    include_mve_int: bool = typer.Option(
+        False,
+        "--include-mve-int",
+        help="Also merge cortex-m55 MVE integer coverage (reports/coverage/int-mve).",
+    ),
     expected_zero_config: Optional[Path] = typer.Option(
         None,
         help="Path to expected-zero JSON config (default: assets/coverage_expected_zero.json)",
@@ -447,6 +458,8 @@ def coverage_merge(
     merge_suites = list(config.suites)
     if include_mve_float and "float-mve" not in merge_suites:
         merge_suites.append("float-mve")
+    if include_mve_int and "int-mve" not in merge_suites:
+        merge_suites.append("int-mve")
 
     exit_code, report = run_coverage_merge(
         project_root=config.project_root,
