@@ -183,7 +183,8 @@ def _check_no_overlap(root: Path, module_dir: Path) -> None:
     """Refuse copies that would delete sources."""
     # rmtree of the module must not reach root.
     src, dst = root.resolve(), module_dir.resolve()
-    inside_tree = any(is_relative_to(dst, src / name) for name in KERNEL_TREES)
+    copied = (*KERNEL_TREES, "nsx")
+    inside_tree = any(is_relative_to(dst, src / name) for name in copied)
     if dst == src or is_relative_to(src, dst) or inside_tree:
         raise AppRenderError(f"Kernel root overlaps the app: {root}")
 

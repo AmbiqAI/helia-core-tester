@@ -144,8 +144,10 @@ def test_a_non_checkout_is_rejected(tmp_path: Path) -> None:
         lambda root: root,
         lambda root: root.parent,
         lambda root: root / "Source" / "build" / "nsx-cmsis-nn",
+        lambda root: root / "nsx",
+        lambda root: root / "nsx" / "build",
     ],
-    ids=["same-dir", "root-inside-module", "module-inside-source"],
+    ids=["same-dir", "root-inside-module", "module-inside-source", "module-is-nsx", "module-under-nsx"],
 )
 def test_overlapping_kernel_root_is_refused(tmp_path: Path, module) -> None:
     # Refuse before rmtree can delete sources.
