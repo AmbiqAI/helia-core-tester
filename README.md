@@ -65,8 +65,9 @@ The firmware builds as a neuralspotx (NSX) app rendered into
   builds another local checkout.
 
 Edit kernels in the checkout. Every build recopies a local checkout's
-`Include/`, `Source/`, `cmake/` and `nsx/` into `nsx_app/modules/nsx-cmsis-nn`,
-so edits made there are overwritten.
+`Include/`, `Source/` and `cmake/` trees, plus `nsx/nsx-module.yaml` and
+`nsx/CMakeLists.txt`, into `nsx_app/modules/nsx-cmsis-nn`, so edits made
+there are overwritten. Other files under `nsx/` are not used.
 
 `hardware run` generates the tests from the same kernel tree: the local
 checkout, or for a ref the clone NSX syncs into `nsx_app/modules/ns-cmsis-nn`.
