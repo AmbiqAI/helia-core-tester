@@ -200,6 +200,14 @@ def test_missing_profile_is_an_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
 # --- CMakeLists.txt ----------------------------------------------------------------
 
 
+def test_board_cache_follows_the_render(tmp_path: Path) -> None:
+    # A reused build dir must switch boards.
+    text = _render(tmp_path).cmakelists
+    for name in ("NSX_BOARD", "NSX_AMBIQ_BSP_LIB_SUBDIR"):
+        line = next(l for l in text.splitlines() if l.startswith(f"set({name} "))
+        assert f'"{BOARD.nsx_board}"' in line and line.endswith("FORCE)")
+
+
 def test_cache_switches_precede_the_bootstrap(tmp_path: Path) -> None:
     """An option() default cannot be overridden later."""
     text = _render(tmp_path, enable_f16=False).cmakelists

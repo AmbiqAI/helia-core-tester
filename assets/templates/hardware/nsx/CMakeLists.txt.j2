@@ -3,10 +3,10 @@
 cmake_minimum_required(VERSION 3.24)
 project({{ app_name }} LANGUAGES C ASM)
 
-set(NSX_BOARD "{{ board.nsx_board }}" CACHE STRING "Target board")
+set(NSX_BOARD "{{ board.nsx_board }}" CACHE STRING "Target board" FORCE)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Pinned before any BSP module loads.
-set(NSX_AMBIQ_BSP_LIB_SUBDIR "{{ board.nsx_board }}" CACHE STRING "AmbiqSuite BSP lib subdir")
+set(NSX_AMBIQ_BSP_LIB_SUBDIR "{{ board.nsx_board }}" CACHE STRING "AmbiqSuite BSP lib subdir" FORCE)
 
 # Kernel switches; option() defaults cannot follow.
 {% for name, value in cache_vars.items() %}
