@@ -2162,3 +2162,582 @@ padding: VALID
 use_bias: true
 fault: channel_group_mismatch
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# arm_convolve_s8 small input depth (MVE; Cin 1-3, kernel_w*Cin <= 16, K <= 48,
+# out_c % 4 == 0) and 3x3 with 16 input channels at stride 1. The stride-2 Cin16 case
+# stays on the general path.
+operator: Convolve
+name: convolve_small_cin1_49x10_k10x4_stride2_co64_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 49
+- 10
+- 1
+filter_shape:
+- 10
+- 4
+- 1
+- 64
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_small_cin3_12x12_k3x3_stride2_co8_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 12
+- 12
+- 3
+filter_shape:
+- 3
+- 3
+- 3
+- 8
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_small_cin3_8x8_k3x3_co16_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 3
+filter_shape:
+- 3
+- 3
+- 3
+- 16
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_small_cin1_1x64_k1x9_stride2_co4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 64
+- 1
+filter_shape:
+- 1
+- 9
+- 1
+- 4
+strides:
+- 1
+- 2
+padding: SAME
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_small_cin1_6x6_k4x4_co4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 6
+- 6
+- 1
+filter_shape:
+- 4
+- 4
+- 1
+- 4
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_small_cin3_6x6_k4x4_co4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 6
+- 6
+- 3
+filter_shape:
+- 4
+- 4
+- 3
+- 4
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_small_cin2_5x5_k3x3_valid_co12_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 5
+- 5
+- 2
+filter_shape:
+- 3
+- 3
+- 2
+- 12
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_small_cin3_6x6_k3x3_batch2_co8_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 2
+- 6
+- 6
+- 3
+filter_shape:
+- 3
+- 3
+- 3
+- 8
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_small_cin1_2x2_k3x3_co4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 2
+- 2
+- 1
+filter_shape:
+- 3
+- 3
+- 1
+- 4
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_small_cin2_6x6_k3x3_co8_no_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 6
+- 6
+- 2
+filter_shape:
+- 3
+- 3
+- 2
+- 8
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: false
+
+---
+operator: Convolve
+name: convolve_cin16_16x16_k3x3_co16_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 16
+- 16
+- 16
+filter_shape:
+- 3
+- 3
+- 16
+- 16
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_cin16_7x9_k3x3_co32_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 7
+- 9
+- 16
+filter_shape:
+- 3
+- 3
+- 16
+- 32
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_cin16_6x6_k3x3_valid_co16_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 6
+- 6
+- 16
+filter_shape:
+- 3
+- 3
+- 16
+- 16
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_cin16_5x5_k3x3_batch2_co16_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 2
+- 5
+- 5
+- 16
+filter_shape:
+- 3
+- 3
+- 16
+- 16
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_cin16_8x8_k3x3_stride2_co16_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 16
+filter_shape:
+- 3
+- 3
+- 16
+- 16
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: true
+---
+# arm_convolve_1x1_s8_fast with a short K (MVE; stride 1, no padding, Cin <= 16, at
+# least 8 output pixels). Cin 17 and 6 pixels are the neighbours outside it.
+operator: Convolve
+name: convolve_1x1_short_k8_12x12_co16_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 12
+- 12
+- 8
+filter_shape:
+- 1
+- 1
+- 8
+- 16
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_1x1_short_k16_6x6_co32_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 6
+- 6
+- 16
+filter_shape:
+- 1
+- 1
+- 16
+- 32
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_1x1_short_k8_1x64_co8_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 64
+- 8
+filter_shape:
+- 1
+- 1
+- 8
+- 8
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_1x1_short_k14_1x64_co8_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 64
+- 14
+filter_shape:
+- 1
+- 1
+- 14
+- 8
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_1x1_short_k16_1x64_co24_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 64
+- 16
+filter_shape:
+- 1
+- 1
+- 16
+- 24
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_1x1_short_k8_3x3_co8_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 3
+- 3
+- 8
+filter_shape:
+- 1
+- 1
+- 8
+- 8
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_1x1_short_k4_2x4_co4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 2
+- 4
+- 4
+filter_shape:
+- 1
+- 1
+- 4
+- 4
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_1x1_k17_1x64_co16_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 64
+- 17
+filter_shape:
+- 1
+- 1
+- 17
+- 16
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+
+---
+operator: Convolve
+name: convolve_1x1_short_k8_2x3_co8_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 2
+- 3
+- 8
+filter_shape:
+- 1
+- 1
+- 8
+- 8
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true

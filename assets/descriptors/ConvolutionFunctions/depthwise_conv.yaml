@@ -1887,6 +1887,225 @@ dilation:
 - 1
 - 1
 ---
+# arm_depthwise_conv_s8_opt 1xk layers beyond the planar path (C > 32 or
+# C*dilation_w > 128; filter_h 1, filter_w >= 3, stride_w 1, C % 4 == 0). C 37 at stride 2
+# and C 16 at dilation 2 are the neighbours outside it.
+operator: DepthwiseConv
+name: depthwise_conv_1xk_k7_d8_c32_1x256_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 256
+- 32
+filter_shape:
+- 1
+- 7
+- 32
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 8
+---
+operator: DepthwiseConv
+name: depthwise_conv_1xk_k9_c40_1x32_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 32
+- 40
+filter_shape:
+- 1
+- 9
+- 40
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_1xk_k15_d2_c64_1x64_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 64
+- 64
+filter_shape:
+- 1
+- 15
+- 64
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 2
+---
+operator: DepthwiseConv
+name: depthwise_conv_1xk_k31_c48_1x128_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 128
+- 48
+filter_shape:
+- 1
+- 31
+- 48
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_1xk_k3_c40_1x32_valid_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 32
+- 40
+filter_shape:
+- 1
+- 3
+- 40
+- 1
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_1xk_k3_c48_1x8_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 8
+- 48
+filter_shape:
+- 1
+- 3
+- 48
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_1xk_k3_c37_1x64_stride2_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 64
+- 37
+filter_shape:
+- 1
+- 3
+- 37
+- 1
+strides:
+- 1
+- 2
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_1xk_k7_d2_c16_1x256_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 256
+- 16
+filter_shape:
+- 1
+- 7
+- 16
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 2
+---
 # Fault-injection cases (issue #72): each case feeds an argument the kernel's
 # own validation rejects and asserts ARM_CMSIS_NN_ARG_ERROR instead of
 # validating outputs. The optimized (ch_mult 1) routes hold the guards.
