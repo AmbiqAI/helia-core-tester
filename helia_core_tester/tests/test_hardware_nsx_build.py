@@ -6,6 +6,7 @@ Every nsx_cli step is monkeypatched; nothing here runs NSX or CMake.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,10 @@ SERIAL = 1160003180
 def _write_lock(app_dir: Path) -> None:
     """Minimal nsx.lock, vendored kernels hashed."""
     lock = NsxLock(manifest_hash=hash_manifest(app_dir / "nsx.yml"))
+    lock.modules["nsx-core"] = ResolvedModule(
+        project="nsx-ambiq-sdk", kind=LockKind.GIT, constraint="v1", vendored_at="modules/nsx-ambiq-sdk",
+        content_hash="sha256:0", acquired_at="", url="https://example.invalid/sdk.git", commit="0" * 40,
+    )
     kernels = app_dir / "modules" / nsx_app.CMSIS_NN_MODULE
     if kernels.is_dir():
         lock.modules[nsx_app.CMSIS_NN_MODULE] = ResolvedModule(
@@ -53,7 +58,7 @@ def nsx(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
 
     def sync_app(app_dir, *, frozen=False):
         calls.append(("sync", frozen))
-        (app_dir / "modules").mkdir(exist_ok=True)
+        (app_dir / "modules" / "nsx-ambiq-sdk").mkdir(parents=True, exist_ok=True)
 
     def configure_app(app_dir, board, *, build_dir, frozen=False):
         calls.append(("configure", frozen))
@@ -103,6 +108,16 @@ def test_unchanged_rebuild_skips_lock_sync_configure(tmp_path: Path, nsx: list[t
     assert _steps(nsx) == ["render", "build"]
     # Ninja's default job count.
     assert nsx[-1] == ("build", (os.cpu_count() or 6) + 2, True)
+
+
+def test_missing_module_resyncs(tmp_path: Path, nsx: list[tuple]) -> None:
+    # The stamp alone cannot prove the tree.
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    shutil.rmtree(firmware_build.nsx_app_dir(tmp_path) / "modules" / "nsx-ambiq-sdk")
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    assert "sync" in _steps(nsx)
+    assert (firmware_build.nsx_app_dir(tmp_path) / "modules" / "nsx-ambiq-sdk").is_dir()
 
 
 def test_neuralspotx_upgrade_resyncs(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:

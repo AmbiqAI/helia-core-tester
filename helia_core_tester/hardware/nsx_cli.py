@@ -83,6 +83,21 @@ def lock_is_current(app_dir: Path, board: str) -> bool:
     )
 
 
+def modules_present(app_dir: Path, board: str) -> bool:
+    """Every locked module is on disk."""
+    try:
+        lock = read_lock(app_dir, board)
+    except NSXError:
+        return False
+    if lock is None:
+        return False
+    return all(
+        (app_dir / entry.vendored_at).is_dir()
+        for entry in lock.modules.values()
+        if entry.vendored_at
+    )
+
+
 def sync_stamp(app_dir: Path) -> str:
     """nsx.lock hash and neuralspotx version."""
     return f"{hash_file(lock_path(app_dir))} {metadata.version('neuralspotx')}"

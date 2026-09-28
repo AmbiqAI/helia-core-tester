@@ -316,8 +316,12 @@ def stage_kernels(
         nsx_cli.lock_app(app_dir, update=update_dependencies)
     # Unfrozen sync repairs from the lock.
     stamp = app_dir / SYNC_STAMP
-    synced = stamp.is_file() and stamp.read_text(encoding="utf-8") == nsx_cli.sync_stamp(app_dir)
-    if relock or force_sync or not synced or not (app_dir / "modules").is_dir():
+    synced = (
+        stamp.is_file()
+        and stamp.read_text(encoding="utf-8") == nsx_cli.sync_stamp(app_dir)
+        and nsx_cli.modules_present(app_dir, board.nsx_board)
+    )
+    if relock or force_sync or not synced:
         stamp.unlink(missing_ok=True)
         # Re-glob kernels after any resync.
         (build_dir / "build.ninja").unlink(missing_ok=True)
