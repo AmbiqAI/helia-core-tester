@@ -134,7 +134,8 @@ jobs:
       matrix:
         include:
           - leg: present
-            ns_cmsis_nn_ref: ${{ github.event.inputs.ns_cmsis_nn_ref || 'main' }}
+            # ns-cmsis-nn dev/kernel-contracts carries the export until it merges to main.
+            ns_cmsis_nn_ref: ${{ github.event.inputs.ns_cmsis_nn_ref || 'dev/kernel-contracts' }}
           - leg: absent
             ns_cmsis_nn_ref: v7.35.1
 
