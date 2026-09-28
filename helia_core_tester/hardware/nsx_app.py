@@ -216,6 +216,9 @@ def render_app(
     repo_root: Optional[Path] = None,
 ) -> AppRender:
     """Write nsx.yml, modules.cmake, CMakeLists.txt, local kernels."""
+    if options.cmsis_nn_root is not None:
+        # App files must not land in root.
+        _check_no_overlap(options.cmsis_nn_root, app_dir)
     repo_root = (repo_root or tester_repo_root()).resolve()
     profile = nsx_cli.starter_profile(board.nsx_board)
     if profile is None:

@@ -158,6 +158,22 @@ def test_overlapping_kernel_root_is_refused(tmp_path: Path, module) -> None:
     assert sorted(p.relative_to(checkout) for p in checkout.rglob("*")) == before
 
 
+@pytest.mark.parametrize(
+    "app",
+    [lambda root: root, lambda root: root / "cmake" / "app"],
+    ids=["app-is-root", "app-under-cmake"],
+)
+def test_app_dir_overlapping_the_root_is_refused(tmp_path: Path, app) -> None:
+    # Refuse before nsx.yml or CMakeLists.txt land.
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    (checkout / "CMakeLists.txt").write_text("# ns-cmsis-nn\n", encoding="utf-8")
+    before = {p: p.read_bytes() for p in checkout.rglob("*") if p.is_file()}
+    with pytest.raises(nsx_app.AppRenderError, match="overlaps"):
+        nsx_app.render_app(BOARD, nsx_app.AppOptions(cmsis_nn_root=checkout), app(checkout))
+    after = {p: p.read_bytes() for p in checkout.rglob("*") if p.is_file()}
+    assert after == before
+
+
 def test_module_under_the_checkout_is_allowed(tmp_path: Path) -> None:
     # The nested layout builds inside the checkout.
     checkout = make_checkout(tmp_path / "ns-cmsis-nn")
