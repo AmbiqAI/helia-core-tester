@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.3.3...v0.4.0) (2026-09-28)
+
+
+### Features
+
+* **coverage:** add a cortex-m55 coverage lane for integer MVE paths ([#234](https://github.com/AmbiqAI/helia-core-tester/issues/234)) ([fb57a0d](https://github.com/AmbiqAI/helia-core-tester/commit/fb57a0dd393cbe0f81f2e722c9ad2c64851d939f)), closes [#233](https://github.com/AmbiqAI/helia-core-tester/issues/233)
+* **depthwise:** call a named ns-cmsis-nn depthwise entry from a descriptor ([#238](https://github.com/AmbiqAI/helia-core-tester/issues/238)) ([4af62bf](https://github.com/AmbiqAI/helia-core-tester/commit/4af62bf99df3c676bcebacf514812cb4913aaba5)), closes [#237](https://github.com/AmbiqAI/helia-core-tester/issues/237)
+
 ## [0.3.3](https://github.com/AmbiqAI/helia-core-tester/compare/v0.3.2...v0.3.3) (2026-09-28)
 
 
