@@ -205,8 +205,12 @@
       "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"
     },
     "entry": {
-      "description": "Public ns-cmsis-nn entry the generated case calls instead of the wrapper its dispatch selects (DepthwiseConv s8 only; see kernel_dispatch.DEPTHWISE_CONV_S8_DIRECT_ENTRIES). The case is skipped when the ns-cmsis-nn checkout does not declare the entry.",
+      "description": "Public ns-cmsis-nn entry the generated case calls instead of the wrapper its dispatch selects (the entries in kernel_dispatch.DIRECT_ENTRIES). The case is skipped when the ns-cmsis-nn checkout does not declare the entry.",
       "type": "string"
+    },
+    "autovectorize_declines": {
+      "description": "The entry declines (ARM_CMSIS_NN_NO_IMPL_ERROR, output untouched) on a build whose ns-cmsis-nn integer sources have ARM_MATH_AUTOVECTORIZE (the default coverage build); the case expects that there and the full result elsewhere.",
+      "type": "boolean"
     },
     "planar_supported": {
       "description": "Also call arm_depthwise_conv_s8_opt_planar_supported() on the case's shape and require this answer.",

@@ -447,6 +447,11 @@ add_library(helia_test_runtime STATIC src/test_runtime/helia_test_runtime.c)
 target_include_directories(helia_test_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_definitions(helia_test_runtime PRIVATE $<IF:$<BOOL:${HELIA_HARDWARE_BUILD}>,HELIA_HARDWARE_BUILD,USING_FVP_CORSTONE_300>)
 target_link_libraries(helia_test_runtime PRIVATE cmsis-nn)
+if(ENABLE_COVERAGE AND NOT ENABLE_COVERAGE_MVE_INT)
+  # This build gives ns-cmsis-nn's integer sources ARM_MATH_AUTOVECTORIZE, which compiles out their
+  # MVE integer paths; a harness whose entry lives only on those paths expects it to decline.
+  target_compile_definitions(helia_test_runtime PUBLIC HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
+endif()
 
 # ---------- Helpers ----------
 function(_normalize_target_name out_var in_path)

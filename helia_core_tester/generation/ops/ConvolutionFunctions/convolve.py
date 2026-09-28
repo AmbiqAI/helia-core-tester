@@ -13,7 +13,7 @@ from helia_core_tester.generation.ops._shared.bias_init import (
     bias_is_hoisted_by_lowering,
     inject_hoisted_dilation_bias,
 )
-from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel
+from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel, resolve_direct_entry
 
 
 class OpConvolve(OperationBase):
@@ -312,6 +312,21 @@ class OpConvolve(OperationBase):
         hint = self._hint()
 
         variant = str(hint.get("kernel_variant", "")).lower()
+        entry = self.desc.get("entry")
+        if entry:
+            if variant or self.desc.get("fault"):
+                raise ValueError(
+                    f"{self.desc.get('name')}: entry {entry!r} is not supported with a kernel_variant hint or fault"
+                )
+            info.update(
+                resolve_direct_entry(
+                    "Convolve",
+                    str(entry),
+                    self.desc.get("activation_dtype", "S8"),
+                    self.desc.get("weight_dtype", "S8"),
+                )
+            )
+            return info
         if not variant:
             return info
 
@@ -767,6 +782,15 @@ class OpConvolve(OperationBase):
             # silicon). No CLI flag exists yet for this -- set via env var so
             # benchmarking scripts can select it without deeper Config/CLI plumbing.
             'benchmark_target': os.environ.get("HELIA_BENCH_TARGET", "fvp"),
+            # Direct entries (entry:) of the convolve_s8 family take arm_convolve_s8's arguments,
+            # weight sums included, and size scratch from the input and filter dims alone.
+            'entry_family': kernel_info.get("entry_family"),
+            'conv_s8_weight_sum': kernel_info["kernel_fn"] == "arm_convolve_wrapper_s8"
+            or kernel_info.get("entry_family") == "convolve_s8",
+            'expected_status': self.expected_status(),
+            # The entry lives only on ns-cmsis-nn's MVE integer paths, so it declines on a build
+            # that compiles them out (HELIA_CMSIS_NN_INT_AUTOVECTORIZE, set by CMakeLists.txt).
+            'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
         }
         if float_kernel:
             context['conv_activation_min_literal'] = builder.format_float_literal(conv_params['activation_min'])
