@@ -199,6 +199,16 @@ def test_checkout_entries_must_have_the_right_kind(tmp_path: Path, name: str) ->
     assert nsx_app.nested_kernel_root(checkout / "Tests" / "helia-core-tester") is None
 
 
+def test_relative_root_is_resolved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Same checkout, same kernel id.
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    monkeypatch.chdir(tmp_path)
+    relative = nsx_app.AppOptions(cmsis_nn_root=Path("ns-cmsis-nn"))
+    absolute = nsx_app.AppOptions(cmsis_nn_root=checkout)
+    assert relative.cmsis_nn_root == checkout.resolve()
+    assert relative.kernel_id() == absolute.kernel_id()
+
+
 def test_nested_kernel_root(tmp_path: Path) -> None:
     root = make_checkout(tmp_path / "ns-cmsis-nn")
     tester = root / "Tests" / "helia-core-tester"

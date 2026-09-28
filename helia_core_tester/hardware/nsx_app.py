@@ -85,6 +85,11 @@ class AppOptions:
     enable_f16: bool = True
     build_size_probe: bool = False
 
+    def __post_init__(self) -> None:
+        # One spelling per checkout.
+        if self.cmsis_nn_root is not None:
+            object.__setattr__(self, "cmsis_nn_root", Path(self.cmsis_nn_root).expanduser().resolve())
+
     def kernel_source(self) -> str:
         """Kernel source, as printed."""
         return str(self.cmsis_nn_root or f"ns-cmsis-nn {self.cmsis_nn_ref}")
