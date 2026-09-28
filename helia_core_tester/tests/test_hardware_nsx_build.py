@@ -232,11 +232,13 @@ def test_flash_goes_through_nsx(tmp_path: Path, monkeypatch) -> None:
     elf.parent.mkdir(parents=True)
     elf.write_bytes(b"fw")
     options = AppOptions(enable_f32=False)
-    firmware_build.flash_firmware(BOARD, SERIAL, build_dir=tmp_path, options=options, update_dependencies=True)
-    assert seen["options"] is options and seen["update_dependencies"] is True
+    firmware_build.flash_firmware(
+        BOARD, SERIAL, build_dir=tmp_path, options=options, update_dependencies=True, jobs=5,
+    )
+    assert seen["options"] is options and seen["update_dependencies"] is True and seen["jobs"] == 5
     assert seen["flash"] == {
         "app_dir": firmware_build.nsx_app_dir(tmp_path), "board": BOARD.nsx_board, "build_dir": tmp_path,
-        "target": firmware_build.SERVER_TARGET, "probe_serial": SERIAL, "jlink": "/opt/a/JLinkExe",
+        "target": firmware_build.SERVER_TARGET, "probe_serial": SERIAL, "jobs": 5, "jlink": "/opt/a/JLinkExe",
     }
     assert os.environ["JLINK_PATH"] == "/etc/jlink/JLinkExe"
 

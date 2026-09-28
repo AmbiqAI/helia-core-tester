@@ -106,6 +106,9 @@ def test_flash_app_passes_serial_as_text(monkeypatch: pytest.MonkeyPatch) -> Non
     assert seen["probe_serial"] == "1160003180"
     assert seen["frozen"] is True
     assert seen["timeout_s"] == nsx_cli.FLASH_TIMEOUT_S
+    assert "jobs" not in seen
+    nsx_cli.flash_app(APP, board="b", build_dir=APP, target="t", probe_serial=1, jobs=6)
+    assert seen["jobs"] == 6
 
 
 def test_starter_profile_forwards_board(monkeypatch: pytest.MonkeyPatch) -> None:

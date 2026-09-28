@@ -333,6 +333,11 @@ def stage_kernels(
     return options.cmsis_nn_root or kernel_dir(app_dir, options)
 
 
+def _jobs(jobs: Optional[int]) -> int:
+    """Ninja's default, not NSX's fixed 8."""
+    return jobs or (os.cpu_count() or 6) + 2
+
+
 def build_firmware(
     board: BoardSpec,
     *,
@@ -358,8 +363,7 @@ def build_firmware(
     else:
         typer.echo(f"[hardware] Reusing configured build dir: {build_dir}")
     # Ninja's default, not NSX's fixed 8.
-    jobs = jobs or (os.cpu_count() or 6) + 2
-    nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=jobs, frozen=True)
+    nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=_jobs(jobs), frozen=True)
     return elf_path(build_dir)
 
 
@@ -398,7 +402,7 @@ def flash_firmware(
     with _jlink_path():
         nsx_cli.flash_app(
             nsx_app_dir(build_dir), board=board.nsx_board, build_dir=build_dir,
-            target=SERVER_TARGET, probe_serial=serial_no,
+            target=SERVER_TARGET, probe_serial=serial_no, jobs=_jobs(jobs),
         )
     record_flash(build_dir, serial_no, decision.digest)
     return replace(decision, build_seconds=build_seconds, flash_seconds=time.monotonic() - flash_started)

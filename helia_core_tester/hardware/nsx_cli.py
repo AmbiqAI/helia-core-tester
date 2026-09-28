@@ -191,11 +191,13 @@ def flash_app(
     build_dir: Path,
     target: str,
     probe_serial: int,
+    jobs: Optional[int] = None,
     frozen: bool = True,
     timeout_s: float = FLASH_TIMEOUT_S,
     verbosity: int = 0,
 ) -> None:
     """Flash via NSX; a serial forces reconfigure."""
+    kwargs: dict[str, Any] = {} if jobs is None else {"jobs": jobs}
     with _nsx_errors("nsx flash"):
         nsx_api.flash_app(
             app_dir,
@@ -204,6 +206,7 @@ def flash_app(
             target=target,
             probe_serial=str(probe_serial),
             frozen=frozen,
+            **kwargs,
             timeout_s=timeout_s,
             emit=emitter_for_verbosity(verbosity),
         )
