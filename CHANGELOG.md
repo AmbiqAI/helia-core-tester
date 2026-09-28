@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/AmbiqAI/helia-core-tester/compare/v0.3.2...v0.3.3) (2026-09-28)
+
+
+### Chores
+
+* release 0.3.3 ([#231](https://github.com/AmbiqAI/helia-core-tester/issues/231)) ([506ca17](https://github.com/AmbiqAI/helia-core-tester/commit/506ca173c0b4b97a10737071b6c4a3261739f046)), closes [#229](https://github.com/AmbiqAI/helia-core-tester/issues/229)
+
 ## [0.3.2](https://github.com/AmbiqAI/helia-core-tester/compare/v0.3.1...v0.3.2) (2026-09-28)
 
 
