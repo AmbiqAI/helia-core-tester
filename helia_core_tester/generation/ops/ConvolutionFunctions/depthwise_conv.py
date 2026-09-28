@@ -11,7 +11,11 @@ from helia_core_tester.generation.ops._shared.bias_init import (
     bias_is_hoisted_by_lowering,
     inject_hoisted_dilation_bias,
 )
-from helia_core_tester.generation.kernel_dispatch import resolve_depthwise_conv_kernel
+from helia_core_tester.generation.kernel_dispatch import (
+    DEPTHWISE_CONV_S8_PLANAR_RULE,
+    resolve_depthwise_conv_entry,
+    resolve_depthwise_conv_kernel,
+)
 
 
 def _opt_dilation_supported(
@@ -342,6 +346,18 @@ class OpDepthwiseConv(OperationBase):
         )
         info.setdefault("kernel_needs_layout", info["input_c_type"] in {"float", "float16_t"})
         info.setdefault("buffer_size_needs_layout", info["input_c_type"] in {"float", "float16_t"})
+        entry = self.desc.get("entry")
+        if entry:
+            if self.desc.get("fault"):
+                raise ValueError(f"{self.desc.get('name')}: fault cases call the wrapper; entry {entry!r} is not supported with fault")
+            info.update(
+                resolve_depthwise_conv_entry(
+                    str(entry),
+                    self.desc.get("activation_dtype", "S8"),
+                    self.desc.get("weight_dtype", "S8"),
+                )
+            )
+            info["direct_entry"] = True
 
         variant = str(self._hint().get("kernel_variant", "")).lower()
         if not variant:
@@ -996,6 +1012,13 @@ class OpDepthwiseConv(OperationBase):
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
             'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
+            # Entries share the s8 wrapper's argument list but size scratch from the dims alone.
+            'takes_weight_sum_ctx': kernel_info["kernel_fn"] == "arm_depthwise_conv_wrapper_s8"
+            or bool(kernel_info.get("direct_entry")),
+            'direct_entry': bool(kernel_info.get("direct_entry")),
+            'expected_status': self.expected_status(),
+            'planar_supported': self.desc.get("planar_supported"),
+            'planar_rule_fn': DEPTHWISE_CONV_S8_PLANAR_RULE,
         }
         fault = self.fault_kind()
         c_template = "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2"

@@ -18,6 +18,30 @@ def _cpu_buffer_api(base: str, cpu: str) -> str:
     return base
 
 
+# Public s8 depthwise entries that no wrapper routes to, callable through a descriptor's
+# `entry:` field. Each takes arm_depthwise_conv_wrapper_s8's argument list (weight sums
+# included) and sizes its scratch with arm_depthwise_conv_s8_opt_get_buffer_size().
+DEPTHWISE_CONV_S8_DIRECT_ENTRIES = (
+    "arm_depthwise_conv_s8_opt_3x3",
+    "arm_depthwise_conv_s8_opt_3x3_c64_s1",
+    "arm_depthwise_conv_s8_opt_planar",
+    "arm_depthwise_conv_s8_opt_channelwise",
+)
+DEPTHWISE_CONV_S8_PLANAR_RULE = "arm_depthwise_conv_s8_opt_planar_supported"
+
+
+def resolve_depthwise_conv_entry(entry: str, activation_dtype: str, weight_dtype: str) -> Dict[str, str]:
+    """Kernel-info overrides for a descriptor that calls a named depthwise entry."""
+    if str(activation_dtype).upper() != "S8" or str(weight_dtype).upper() != "S8":
+        raise ValueError(f"entry {entry!r} is an s8 depthwise entry; the descriptor is {activation_dtype} x {weight_dtype}")
+    if entry not in DEPTHWISE_CONV_S8_DIRECT_ENTRIES:
+        raise ValueError(f"Unknown DepthwiseConv entry {entry!r}; known entries are {list(DEPTHWISE_CONV_S8_DIRECT_ENTRIES)}")
+    return {
+        "kernel_fn": entry,
+        "kernel_get_buffer_size_fn": "arm_depthwise_conv_s8_opt_get_buffer_size",
+    }
+
+
 def resolve_convolve_kernel(activation_dtype: str, weight_dtype: str, cpu: str) -> Dict[str, str]:
     act = str(activation_dtype).upper()
     w = str(weight_dtype).upper()

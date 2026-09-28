@@ -204,6 +204,14 @@
       "type": "string",
       "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"
     },
+    "entry": {
+      "description": "Public ns-cmsis-nn entry the generated case calls instead of the wrapper its dispatch selects (DepthwiseConv s8 only; see kernel_dispatch.DEPTHWISE_CONV_S8_DIRECT_ENTRIES). The case is skipped when the ns-cmsis-nn checkout does not declare the entry.",
+      "type": "string"
+    },
+    "planar_supported": {
+      "description": "Also call arm_depthwise_conv_s8_opt_planar_supported() on the case's shape and require this answer.",
+      "type": "boolean"
+    },
     "expected_status": {
       "description": "arm_cmsis_nn_status token the kernel call must return. Defaults to ARM_CMSIS_NN_SUCCESS; a fault case normally sets ARM_CMSIS_NN_ARG_ERROR.",
       "type": "string",
