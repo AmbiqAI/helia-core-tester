@@ -66,7 +66,10 @@ def app_linker_script(board: BoardSpec, build_dir: Path, project_root: Path) -> 
     app_dir = nsx_app_dir(build_dir)
     sdk = nsx_cli.module_project("nsx-core")
     if app_dir.is_dir() and sdk:
-        return linker_script_path(board, app_dir / "modules" / sdk)
+        nsx_script = linker_script_path(board, app_dir / "modules" / sdk)
+        # A failed first sync leaves none.
+        if nsx_script.is_file():
+            return nsx_script
     # Build dir predates NSX: legacy SDK.
     legacy = linker_script_path(board, nsx_ambiq_sdk_dir(project_root))
     if legacy.is_file():

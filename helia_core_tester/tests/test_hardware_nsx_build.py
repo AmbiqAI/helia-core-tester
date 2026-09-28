@@ -16,6 +16,7 @@ from helia_core_tester.cli import app
 from helia_core_tester.hardware import cli as hardware_cli
 from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app, nsx_cli
 from helia_core_tester.hardware.boards import resolve_board
+from helia_core_tester.hardware.hardware_pipeline import HardwareRunOutcome, StreamOptions
 from helia_core_tester.hardware.jlink_library import JLinkExecutable, JLinkLibraryError
 from helia_core_tester.hardware.nsx_app import AppOptions
 from helia_core_tester.tests.test_hardware_nsx_app import make_checkout
@@ -231,6 +232,66 @@ def test_flash_goes_through_nsx(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(firmware_build, "find_jlink_exe", _broken)
     firmware_build.flash_firmware(BOARD, SERIAL, build_dir=tmp_path, force=True)
     assert seen["flash"]["jlink"] == "/etc/jlink/JLinkExe"
+
+
+# --- hardware run: kernel root for generation ---------------------------------------
+
+
+def _run(tmp_path: Path, monkeypatch, nsx: list[tuple], repo_root: Path, **kwargs) -> Path:
+    """Pipeline with NSX, generate, flash, stream faked."""
+    build_dir = tmp_path / "build"
+
+    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None):
+        nsx.append(("generate", cmsis_nn_root))
+
+    def _flash(spec, serial, *, force, **build_kwargs):
+        firmware_build.build_firmware(spec, **build_kwargs)
+        return firmware_build.FlashDecision(False, "digest", "test")
+
+    def _stream(*args, **kw):
+        return HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[])
+
+    monkeypatch.setattr(hardware_pipeline, "generate_tests_for_board", _generate)
+    monkeypatch.setattr(hardware_pipeline, "flash_firmware", _flash)
+    monkeypatch.setattr(hardware_pipeline, "stream_generated_tests", _stream)
+    hardware_pipeline.run_hardware_pipeline(
+        repo_root, BOARD, SERIAL, options=StreamOptions(), build_dir=build_dir, echo=lambda _msg: None, **kwargs,
+    )
+    return build_dir
+
+
+def test_run_generates_from_the_given_root(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
+    kernels = make_checkout(tmp_path / "kernels")
+    options = AppOptions(cmsis_nn_root=kernels)
+    _run(tmp_path, monkeypatch, nsx, tmp_path, app_options=options)
+    # Build restages as a no-op.
+    assert _steps(nsx) == ["render", "lock", "sync", "generate", "render", "configure", "build"]
+    assert ("generate", kernels) in nsx
+
+    # One forced sync, then reconfigure.
+    nsx.clear()
+    _run(tmp_path, monkeypatch, nsx, tmp_path, app_options=options, force_reconfigure=True, update_dependencies=True)
+    assert _steps(nsx) == ["render", "lock", "sync", "generate", "render", "configure", "build"]
+    assert ("lock", True) in nsx
+
+
+def test_run_generates_from_the_synced_ref(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
+    build_dir = _run(tmp_path, monkeypatch, nsx, tmp_path, app_options=AppOptions(cmsis_nn_ref="v7.35.1"))
+    clone = firmware_build.nsx_app_dir(build_dir) / "modules" / nsx_app.CMSIS_NN_PROJECT
+    assert _steps(nsx) == ["render", "lock", "sync", "generate", "render", "configure", "build"]
+    assert ("generate", clone) in nsx
+
+
+def test_run_defaults_to_the_enclosing_checkout(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
+    kernels, tester = _nested_layout(tmp_path)
+    _run(tmp_path, monkeypatch, nsx, tester)
+    assert ("render", AppOptions(cmsis_nn_root=kernels.resolve())) in nsx
+    assert ("generate", kernels.resolve()) in nsx
+
+
+def test_skip_generate_stages_once(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
+    _run(tmp_path, monkeypatch, nsx, tmp_path, app_options=AppOptions(), skip_generate=True)
+    assert _steps(nsx) == ["render", "lock", "sync", "configure", "build"]
 
 
 # --- CLI flags ---------------------------------------------------------------------

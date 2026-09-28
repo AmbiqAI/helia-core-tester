@@ -112,7 +112,8 @@ def _fake_build(build_dir: Path) -> Path:
     elf = build_dir / "hardware" / "hct_benchmark_server.elf"
     elf.parent.mkdir(parents=True)
     elf.write_bytes(b"elf")
-    report.nsx_app_dir(build_dir).mkdir(parents=True)
+    sdk = report.nsx_app_dir(build_dir) / "modules" / "nsx-ambiq-sdk"
+    _write(report.linker_script_path(BOARD, sdk), "MEMORY {}\n")
     return elf
 
 
@@ -215,6 +216,18 @@ def test_linker_script_prefers_the_nsx_app(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(report, "nsx_ambiq_sdk_dir", lambda root: tmp_path / "legacy")
     _write(report.linker_script_path(BOARD, tmp_path / "legacy"), SCRIPT)
     assert report.app_linker_script(BOARD, build, tmp_path) == expected
+
+
+def test_failed_nsx_sync_falls_back_to_legacy(tmp_path: Path, monkeypatch) -> None:
+    # render_app made nsx_app/, sync failed.
+    build = tmp_path / "build"
+    report.nsx_app_dir(build).mkdir(parents=True)
+    monkeypatch.setattr(report, "nsx_ambiq_sdk_dir", lambda root: tmp_path / "legacy")
+    expected = _write(report.linker_script_path(BOARD, tmp_path / "legacy"), SCRIPT)
+    assert report.app_linker_script(BOARD, build, tmp_path) == expected
+    expected.unlink()
+    with pytest.raises(FileNotFoundError, match="rerun hardware build"):
+        report.app_linker_script(BOARD, build, tmp_path)
 
 
 def test_linker_script_falls_back_for_a_pre_nsx_build(tmp_path: Path, monkeypatch) -> None:

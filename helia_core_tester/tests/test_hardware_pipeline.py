@@ -112,6 +112,16 @@ def test_precision_is_an_explicit_override_for_generation(monkeypatch) -> None:
     assert captured[-1].float_precision == "f32"
 
 
+def test_generation_exports_the_kernel_root(tmp_path: Path, monkeypatch) -> None:
+    import helia_core_tester.core.steps.generate as generate
+
+    envs: list = []
+    monkeypatch.setattr(generate, "run_command", lambda cmd, cwd, verbosity, env: envs.append(env))
+    monkeypatch.delenv("HELIA_CORE_TESTER_CONFIG", raising=False)
+    generate_tests_for_board(PROJECT_ROOT, BOARD, "int", cmsis_nn_root=tmp_path)
+    assert envs and all(env["CMSIS_NN_ROOT"] == str(tmp_path.resolve()) for env in envs)
+
+
 def test_fvp_gate_and_pmu_groups_parsing() -> None:
     validate_fvp_gate(None)
     validate_fvp_gate("advisory")
@@ -478,8 +488,12 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     board = resolve_board("apollo510_evb")
     order: list[str] = []
 
-    def _generate(repo_root, spec, suite, float_precision=None):
-        order.append(f"generate:{spec.cpu}:{suite}:{float_precision}")
+    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None):
+        order.append(f"generate:{spec.cpu}:{suite}:{float_precision}:{cmsis_nn_root}")
+
+    def _stage(spec, *, build_dir, options, force_sync, update_dependencies):
+        order.append(f"stage:{build_dir.relative_to(tmp_path)}")
+        return Path("/kernels")
 
     def _flash(spec, serial, *, build_dir, jobs, force_reconfigure, force, options, update_dependencies):
         order.append(f"flash:{serial}:{build_dir.relative_to(tmp_path)}:force={force}")
@@ -490,13 +504,17 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
         return hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[])
 
     monkeypatch.setattr(hardware_pipeline, "generate_tests_for_board", _generate)
+    monkeypatch.setattr(hardware_pipeline, "stage_kernels", _stage)
     monkeypatch.setattr(hardware_pipeline, "flash_firmware", _flash)
     monkeypatch.setattr(hardware_pipeline, "stream_generated_tests", _stream)
 
     outcome = run_hardware_pipeline(
         tmp_path, board, 42, options=StreamOptions(suite="float", test_name="_f16", float_precision="f16"), echo=lambda _msg: None,
     )
-    assert order == ["generate:cortex-m55:float:f16", "flash:42:build/hardware/apollo510_evb:force=False", "stream:float:_f16:unverified=False"]
+    assert order == [
+        "stage:build/hardware/apollo510_evb", "generate:cortex-m55:float:f16:/kernels", "flash:42:build/hardware/apollo510_evb:force=False",
+        "stream:float:_f16:unverified=False",
+    ]
     assert outcome.flash is not None and outcome.flash.needed
 
     order.clear()

@@ -289,26 +289,23 @@ def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
 SYNC_STAMP = ".hct-sync"
 
 
-def build_firmware(
+def stage_kernels(
     board: BoardSpec,
     *,
     build_dir: Path,
-    jobs: Optional[int] = None,
-    force_reconfigure: bool = False,
     options: Optional["AppOptions"] = None,
+    force_sync: bool = False,
     update_dependencies: bool = False,
 ) -> Path:
-    """Build hct_benchmark_server through NSX; returns the ELF path."""
+    """Render, lock, sync; return the kernel source."""
     from . import nsx_cli
-    from .nsx_app import AppOptions, render_app
+    from .nsx_app import AppOptions, kernel_dir, render_app
 
-    repo_root = tester_repo_root()
-    ensure_build_tools(repo_root)
     options = options or AppOptions()
     app_dir = nsx_app_dir(build_dir)
     asm = "on" if options.requantize_inline_asm else "off"
     typer.echo(f"[hardware] Kernels: {options.kernel_source()}, inline asm {asm}")
-    rendered = render_app(board, options, app_dir, repo_root=repo_root)
+    rendered = render_app(board, options, app_dir, repo_root=tester_repo_root())
     if rendered.changed:
         names = ", ".join(rendered.changed)
         typer.echo(f"[hardware] WARNING: build options changed since the last build ({names}).", err=True)
@@ -320,15 +317,37 @@ def build_firmware(
     # Unfrozen sync repairs from the lock.
     stamp = app_dir / SYNC_STAMP
     synced = stamp.is_file() and stamp.read_text(encoding="utf-8") == nsx_cli.sync_stamp(app_dir)
-    resync = relock or force_reconfigure or not synced or not (app_dir / "modules").is_dir()
-    if resync:
+    if relock or force_sync or not synced or not (app_dir / "modules").is_dir():
         stamp.unlink(missing_ok=True)
+        # Re-glob kernels after any resync.
+        (build_dir / "build.ninja").unlink(missing_ok=True)
         nsx_cli.sync_app(app_dir)
         stamp.write_text(nsx_cli.sync_stamp(app_dir), encoding="utf-8")
     else:
         typer.echo("[hardware] NSX modules unchanged; skipping lock and sync.")
-    # Re-glob kernels after any resync.
-    if resync or not _configured_for(build_dir, app_dir, board):
+    # Generation needs Tests/, absent when vendored.
+    return options.cmsis_nn_root or kernel_dir(app_dir, options)
+
+
+def build_firmware(
+    board: BoardSpec,
+    *,
+    build_dir: Path,
+    jobs: Optional[int] = None,
+    force_reconfigure: bool = False,
+    options: Optional["AppOptions"] = None,
+    update_dependencies: bool = False,
+) -> Path:
+    """Build hct_benchmark_server through NSX; returns the ELF path."""
+    from . import nsx_cli
+
+    ensure_build_tools(tester_repo_root())
+    stage_kernels(
+        board, build_dir=build_dir, options=options, force_sync=force_reconfigure,
+        update_dependencies=update_dependencies,
+    )
+    app_dir = nsx_app_dir(build_dir)
+    if not _configured_for(build_dir, app_dir, board):
         _drop_foreign_cache(build_dir, app_dir)
         with _jlink_path():
             nsx_cli.configure_app(app_dir, board.nsx_board, build_dir=build_dir, frozen=True)
