@@ -7,6 +7,7 @@ installed NSX registry.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -180,6 +181,22 @@ def test_module_under_the_checkout_is_allowed(tmp_path: Path) -> None:
     module = checkout / "Tests" / "helia-core-tester" / "build" / "nsx-cmsis-nn"
     nsx_app.write_kernels(checkout, module)
     assert (module / "Include").is_dir()
+
+
+@pytest.mark.parametrize("name", ["Include", "Source", "nsx/nsx-module.yaml"])
+def test_checkout_entries_must_have_the_right_kind(tmp_path: Path, name: str) -> None:
+    # A file named Source is not a checkout.
+    checkout = make_checkout(tmp_path / "ns-cmsis-nn")
+    entry = checkout / name
+    if entry.is_dir():
+        shutil.rmtree(entry)
+        entry.write_text("", encoding="utf-8")
+    else:
+        entry.unlink()
+        entry.mkdir()
+    with pytest.raises(nsx_app.AppRenderError, match=name):
+        nsx_app.write_kernels(checkout, tmp_path / "module")
+    assert nsx_app.nested_kernel_root(checkout / "Tests" / "helia-core-tester") is None
 
 
 def test_nested_kernel_root(tmp_path: Path) -> None:

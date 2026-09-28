@@ -49,7 +49,8 @@ PMU_MODULE = "nsx-pmu-armv8m"
 # Copied from a local checkout, like hpx.
 KERNEL_TREES = ("Include", "Source", "cmake")
 # What makes a dir a checkout.
-CHECKOUT_FILES = ("Include", "Source", "nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
+CHECKOUT_DIRS = ("Include", "Source")
+CHECKOUT_FILES = ("nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
 KERNEL_SHIM = "# Shim: delegates to the native ns-cmsis-nn NSX build.\nadd_subdirectory(nsx)\n"
 
 RTT_BUFFER_SIZE_UP = 8192
@@ -141,7 +142,8 @@ def module_registry(options: AppOptions) -> dict[str, Any]:
 
 def _checkout_missing(root: Path) -> list[str]:
     """Checkout files absent under root."""
-    return [name for name in CHECKOUT_FILES if not (root / name).exists()]
+    dirs = [name for name in CHECKOUT_DIRS if not (root / name).is_dir()]
+    return dirs + [name for name in CHECKOUT_FILES if not (root / name).is_file()]
 
 
 def nested_kernel_root(repo_root: Path) -> Optional[Path]:
