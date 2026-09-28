@@ -13,8 +13,8 @@ from helia_core_tester.generation.ops._shared.bias_init import (
 )
 from helia_core_tester.generation.kernel_dispatch import (
     DEPTHWISE_CONV_S8_PLANAR_RULE,
-    resolve_depthwise_conv_entry,
     resolve_depthwise_conv_kernel,
+    resolve_direct_entry,
 )
 
 
@@ -351,13 +351,16 @@ class OpDepthwiseConv(OperationBase):
             if self.desc.get("fault"):
                 raise ValueError(f"{self.desc.get('name')}: fault cases call the wrapper; entry {entry!r} is not supported with fault")
             info.update(
-                resolve_depthwise_conv_entry(
+                resolve_direct_entry(
+                    "DepthwiseConv",
                     str(entry),
                     self.desc.get("activation_dtype", "S8"),
                     self.desc.get("weight_dtype", "S8"),
                 )
             )
-            info["direct_entry"] = True
+            # The s8 entries take weight sums and size scratch from the dims alone; float
+            # entries keep their default entry's call with the registry's layout flags.
+            info["direct_entry"] = info["entry_family"] == "depthwise_s8"
 
         variant = str(self._hint().get("kernel_variant", "")).lower()
         if not variant:

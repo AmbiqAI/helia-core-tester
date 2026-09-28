@@ -112,8 +112,9 @@ int32_t {{ name }}_run(
         NULL,
         {% endif %}
         &{{ name }}_output_dims,
-        output,
+        output{% if kernel_needs_layout is not defined or kernel_needs_layout %},
         {{ kernel_layout }}
+        {% endif %}
     );
     {% elif kernel_fn == 'arm_fully_connected_s4' %}
     arm_cmsis_nn_status kernel_status = arm_fully_connected_s4(
