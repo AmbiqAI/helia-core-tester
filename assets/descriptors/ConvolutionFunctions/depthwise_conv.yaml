@@ -2106,6 +2106,425 @@ dilation:
 - 1
 - 2
 ---
+# Direct entries (entry:): public s8 depthwise entries that no wrapper routes to. A case is
+# generated only when the ns-cmsis-nn checkout declares its entry. The 3x3 and planar entries
+# run on MVE only and decline elsewhere; each entry also has a shape it declines.
+operator: DepthwiseConv
+name: depthwise_conv_entry_3x3_25x5_c64_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_3x3
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 25
+- 5
+- 64
+filter_shape:
+- 3
+- 3
+- 64
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+required_capabilities:
+- mve
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_3x3_48x48_c16_stride2_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_3x3
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 48
+- 48
+- 16
+filter_shape:
+- 3
+- 3
+- 16
+- 1
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+required_capabilities:
+- mve
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_3x3_14x10_c36_stride2_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_3x3
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 14
+- 10
+- 36
+filter_shape:
+- 3
+- 3
+- 36
+- 1
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+required_capabilities:
+- mve
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_3x3_6x6_c68_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_3x3
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 6
+- 6
+- 68
+filter_shape:
+- 3
+- 3
+- 68
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+required_capabilities:
+- mve
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_3x3_5x8_c64_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_3x3
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 5
+- 8
+- 64
+filter_shape:
+- 3
+- 3
+- 64
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+required_capabilities:
+- mve
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_3x3_declines_c62_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_3x3
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 5
+- 5
+- 62
+filter_shape:
+- 3
+- 3
+- 62
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_3x3_c64_s1_25x5_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_3x3_c64_s1
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 25
+- 5
+- 64
+filter_shape:
+- 3
+- 3
+- 64
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+required_capabilities:
+- mve
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_3x3_c64_s1_12x12_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_3x3_c64_s1
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 12
+- 12
+- 64
+filter_shape:
+- 3
+- 3
+- 64
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+required_capabilities:
+- mve
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_3x3_c64_s1_declines_stride2_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_3x3_c64_s1
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 12
+- 12
+- 64
+filter_shape:
+- 3
+- 3
+- 64
+- 1
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_planar_48x48_c8_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_planar
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 48
+- 48
+- 8
+filter_shape:
+- 3
+- 3
+- 8
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+required_capabilities:
+- mve
+planar_supported: true
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_planar_1x240_c14_k1x3_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_planar
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 240
+- 14
+filter_shape:
+- 1
+- 3
+- 14
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+required_capabilities:
+- mve
+planar_supported: true
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_planar_declines_25x5_c64_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_planar
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 25
+- 5
+- 64
+filter_shape:
+- 3
+- 3
+- 64
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+planar_supported: false
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_channelwise_25x5_c64_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_channelwise
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 25
+- 5
+- 64
+filter_shape:
+- 3
+- 3
+- 64
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_channelwise_48x48_c8_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_channelwise
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 48
+- 48
+- 8
+filter_shape:
+- 3
+- 3
+- 8
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
 # Fault-injection cases (issue #72): each case feeds an argument the kernel's
 # own validation rejects and asserts ARM_CMSIS_NN_ARG_ERROR instead of
 # validating outputs. The optimized (ch_mult 1) routes hold the guards.
