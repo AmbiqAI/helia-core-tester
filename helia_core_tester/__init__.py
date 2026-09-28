@@ -4,7 +4,7 @@ CMSIS-NN Tools Package
 A comprehensive toolkit for CMSIS-NN testing, model generation, and FVP simulation.
 """
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 __author__ = "Helia-Core Team"
 
 from helia_core_tester.core.config import Config

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/AmbiqAI/helia-core-tester/compare/v0.3.1...v0.3.2) (2026-09-28)
+
+
+### Tests
+
+* **depthwise:** cover generic s4 depthwise with odd channel counts and padding ([#223](https://github.com/AmbiqAI/helia-core-tester/issues/223)) ([1e6648c](https://github.com/AmbiqAI/helia-core-tester/commit/1e6648ca0d898fa12aa2babe34df16fdb39e1f1b))
+* **depthwise:** cover the s4 optimized depthwise channel and pixel tails ([#226](https://github.com/AmbiqAI/helia-core-tester/issues/226)) ([844e927](https://github.com/AmbiqAI/helia-core-tester/commit/844e9274fe7114c29f73fc63b3e51cee64132b2b))
+
 ## [0.3.1](https://github.com/AmbiqAI/helia-core-tester/compare/v0.3.0...v0.3.1) (2026-09-27)
 
 
