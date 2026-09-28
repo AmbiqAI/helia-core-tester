@@ -64,6 +64,10 @@ The firmware builds as a neuralspotx (NSX) app rendered into
 - `--cmsis-nn-ref REF` builds another tag or commit; `--cmsis-nn-root PATH`
   builds another local checkout.
 
+Edit kernels in the checkout. Every build recopies a local checkout's
+`Include/`, `Source/`, `cmake/` and `nsx/` into `nsx_app/modules/nsx-cmsis-nn`,
+so edits made there are overwritten.
+
 `hardware run` generates the tests from the same kernel tree: the local
 checkout, or for a ref the clone NSX syncs into `nsx_app/modules/ns-cmsis-nn`.
 
