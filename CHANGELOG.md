@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/AmbiqAI/helia-core-tester/compare/v0.3.2...v0.3.3) (2026-09-28)
+
+
+### Tests
+
+* **conv:** cover pending ns-cmsis-nn conv, pointwise and 1xk depthwise paths ([#230](https://github.com/AmbiqAI/helia-core-tester/issues/230)) ([989c73a](https://github.com/AmbiqAI/helia-core-tester/commit/989c73a7b51539d34fd6704fb005fe084ef6288b))
+
 ## [0.3.2](https://github.com/AmbiqAI/helia-core-tester/compare/v0.3.1...v0.3.2) (2026-09-28)
 
 
