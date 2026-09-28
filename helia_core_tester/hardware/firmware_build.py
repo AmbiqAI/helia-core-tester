@@ -320,13 +320,15 @@ def build_firmware(
     # Unfrozen sync repairs from the lock.
     stamp = app_dir / SYNC_STAMP
     synced = stamp.is_file() and stamp.read_text(encoding="utf-8") == nsx_cli.sync_stamp(app_dir)
-    if relock or force_reconfigure or not synced or not (app_dir / "modules").is_dir():
+    resync = relock or force_reconfigure or not synced or not (app_dir / "modules").is_dir()
+    if resync:
         stamp.unlink(missing_ok=True)
         nsx_cli.sync_app(app_dir)
         stamp.write_text(nsx_cli.sync_stamp(app_dir), encoding="utf-8")
     else:
         typer.echo("[hardware] NSX modules unchanged; skipping lock and sync.")
-    if force_reconfigure or not _configured_for(build_dir, app_dir, board):
+    # Re-glob kernels after any resync.
+    if resync or not _configured_for(build_dir, app_dir, board):
         _drop_foreign_cache(build_dir, app_dir)
         with _jlink_path():
             nsx_cli.configure_app(app_dir, board.nsx_board, build_dir=build_dir, frozen=True)

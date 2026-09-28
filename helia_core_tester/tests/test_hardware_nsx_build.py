@@ -109,7 +109,7 @@ def test_neuralspotx_upgrade_resyncs(tmp_path: Path, nsx: list[tuple], monkeypat
     monkeypatch.setattr(nsx_cli.metadata, "version", lambda name: "99.0.0")
     nsx.clear()
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert _steps(nsx) == ["render", "sync", "build"] and ("sync", False) in nsx
+    assert _steps(nsx) == ["render", "sync", "configure", "build"] and ("sync", False) in nsx
 
 
 def test_manifest_change_relocks_and_syncs_unfrozen(tmp_path: Path, nsx: list[tuple]) -> None:
@@ -142,9 +142,23 @@ def test_local_kernel_root_relocks_only_on_edits(tmp_path: Path, nsx: list[tuple
     edited.write_text("int add; // edit\n", encoding="utf-8")
     nsx.clear()
     firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
-    assert _steps(nsx) == ["render", "lock", "sync", "build"]
+    assert _steps(nsx) == ["render", "lock", "sync", "configure", "build"]
     assert ("sync", False) in nsx
     assert (vendored / "Source" / "arm_add.c").read_text(encoding="utf-8") == "int add; // edit\n"
+
+
+def test_new_kernel_file_reconfigures(tmp_path: Path, nsx: list[tuple]) -> None:
+    # ns-cmsis-nn globs sources at configure.
+    kernels = make_checkout(tmp_path / "kernels")
+    options = AppOptions(cmsis_nn_root=kernels)
+    build_dir = tmp_path / "build"
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
+    (kernels / "Source" / "arm_zzz_s8.c").write_text("int zzz;\n", encoding="utf-8")
+    nsx.clear()
+    firmware_build.build_firmware(BOARD, build_dir=build_dir, options=options)
+    assert "configure" in _steps(nsx)
+    vendored = firmware_build.nsx_app_dir(build_dir) / "modules" / "nsx-cmsis-nn"
+    assert (vendored / "Source" / "arm_zzz_s8.c").is_file()
 
 
 def test_build_dir_inside_kernel_root_builds(tmp_path: Path, nsx: list[tuple]) -> None:
