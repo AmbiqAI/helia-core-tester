@@ -29,7 +29,6 @@ from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .firmware_build import BUILD_ID_TXT, IMAGE_SUBDIR, SERVER_TARGET
 from .pathutil import is_relative_to
-from .toolchain import DOWNLOADS_DIR
 
 APP_NAME = "hct_benchmark_server"
 SIZE_PROBE_TARGET = "hct_universal_size_probe"
@@ -367,7 +366,6 @@ def render_app(
         enable_f16=options.enable_f16,
         hardware_dir=repo_root / "cmake" / "hardware",
         scripts_dir=repo_root / "scripts",
-        cmsis_core_include=repo_root / DOWNLOADS_DIR / "CMSIS_5" / "CMSIS" / "Core" / "Include",
         kernel_dir=kernel_dir(app_dir, options).name,
         kernel_id=options.kernel_id(),
         image_dir="probe" if probe else IMAGE_SUBDIR,
