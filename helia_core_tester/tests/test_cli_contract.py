@@ -353,3 +353,55 @@ def test_stream_only_run_skips_option_resolution(monkeypatch, tmp_path) -> None:
     nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_root=tmp_path / "moved", requantize_inline_asm=False))
     result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-generate", "--skip-flash"])
     assert seen["app_options"] is None and "inline asm off" in _result_text(result)
+
+
+def _capture_run(monkeypatch, seen: dict) -> None:
+    from helia_core_tester.hardware import hardware_pipeline
+
+    def _pipeline(*args, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _pipeline)
+
+
+def test_skip_flash_generates_from_the_built_kernels(monkeypatch, tmp_path) -> None:
+    """Generation matches the flashed firmware."""
+    from helia_core_tester.hardware import firmware_build, nsx_app
+
+    seen: dict = {}
+    _capture_run(monkeypatch, seen)
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    built = nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=False)
+    nsx_app.save_options(app_dir, built)
+    base = ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash"]
+    result = runner.invoke(app, base)
+    assert seen["app_options"] == built and "Options changed" not in _result_text(result)
+    seen.clear()
+    result = runner.invoke(app, base + ["--no-inline-asm", "--cmsis-nn-ref", "v9"])
+    assert seen["app_options"] == built
+
+
+@pytest.mark.parametrize("flags", [["--cmsis-nn-ref", "v10"], ["--inline-asm"]])
+def test_skip_flash_refuses_new_kernel_flags(monkeypatch, tmp_path, flags) -> None:
+    """New flags would not reach the firmware."""
+    from helia_core_tester.hardware import firmware_build, nsx_app
+
+    seen: dict = {}
+    _capture_run(monkeypatch, seen)
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=False))
+    result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash", *flags])
+    assert result.exit_code != 0 and not seen
+    assert "--skip-flash keeps the built kernels" in _result_text(result)
+
+
+def test_skip_flash_needs_a_saved_build(monkeypatch, tmp_path) -> None:
+    seen: dict = {}
+    _capture_run(monkeypatch, seen)
+    result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash"])
+    assert result.exit_code != 0 and not seen
+    assert "needs a saved build" in _result_text(result)

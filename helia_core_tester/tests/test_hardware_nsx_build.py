@@ -495,3 +495,17 @@ def test_missing_saved_root_fails_clearly(tmp_path: Path) -> None:
     result = runner.invoke(app, ["hardware", "build", "--build-dir", str(tmp_path)])
     assert result.exit_code == 1
     assert "kernel root is gone" in result.output and "--cmsis-nn-root" in result.output
+
+
+def test_failed_save_keeps_the_last_record(tmp_path: Path, monkeypatch) -> None:
+    """A torn write never replaces it."""
+    nsx_app.save_options(tmp_path, AppOptions(requantize_inline_asm=False))
+
+    def _torn(self, text, encoding=None):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", _torn)
+    with pytest.raises(OSError):
+        nsx_app.save_options(tmp_path, AppOptions())
+    monkeypatch.undo()
+    assert nsx_app.saved_options(tmp_path) == AppOptions(requantize_inline_asm=False)

@@ -170,6 +170,31 @@ def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
     return options
 
 
+def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
+    """The flashed build's options, unchanged."""
+    from .firmware_build import nsx_app_dir
+    from .nsx_app import AppRenderError, resolve_options, saved_options
+
+    if cmsis_nn_ref and cmsis_nn_root:
+        _fail("Pass --cmsis-nn-ref or --cmsis-nn-root, not both.")
+    app_dir = nsx_app_dir(build_dir)
+    saved = saved_options(app_dir)
+    if saved is None:
+        _fail("--skip-flash needs a saved build; run hardware build.")
+    try:
+        wanted = resolve_options(
+            app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
+        )
+    except AppRenderError as exc:
+        _fail(f"{exc}; pass --skip-generate to stream only.")
+    # Generation must match the flashed firmware.
+    changes = wanted.changes_from(saved)
+    if changes:
+        _fail(f"--skip-flash keeps the built kernels: {'; '.join(changes)}")
+    typer.echo(f"[hardware] Kernels: {saved.summary()}", err=True)
+    return saved
+
+
 def _saved_kernels(build_dir: Path, echo) -> None:
     """Print the kernels the build dir built."""
     from .firmware_build import nsx_app_dir
@@ -473,7 +498,12 @@ def run(
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
     # Neither builds nor generates: nothing to resolve.
     streams_only = skip_generate and skip_flash
-    app_options = None if streams_only else _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
+    if streams_only:
+        app_options = None
+    elif skip_flash:
+        app_options = _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
+    else:
+        app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     if streams_only:

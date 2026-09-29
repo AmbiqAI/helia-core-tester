@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -153,7 +154,10 @@ def saved_options(app_dir: Path) -> Optional[AppOptions]:
 
 
 def save_options(app_dir: Path, options: AppOptions) -> None:
-    (app_dir / OPTIONS_FILE).write_text(options.to_json(), encoding="utf-8")
+    """Replace the record atomically."""
+    tmp = app_dir / f"{OPTIONS_FILE}.tmp"
+    tmp.write_text(options.to_json(), encoding="utf-8")
+    os.replace(tmp, app_dir / OPTIONS_FILE)
 
 
 def resolve_options(
