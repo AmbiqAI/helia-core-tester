@@ -354,10 +354,9 @@ _PMU_COUNTERS_HELP = (
     "PMU counters to capture, as GROUP:SELECTION (repeatable; hpx syntax). GROUP is cpu, "
     "memory or mve; SELECTION is 'all', 'default', or a comma-separated list of ARM_PMU_* "
     "names from assets/pmu/armv8m_pmu_events.json, e.g. --pmu-counters mve:all "
-    "--pmu-counters cpu:ARM_PMU_INST_RETIRED,ARM_PMU_STALL. Each group is measured in "
-    "passes of up to 4 chained 32-bit counters; ARM_PMU_CPU_CYCLES is always reported. "
-    "One run takes at most 16 passes (HCT_SERVER_MAX_PASSES), so cpu:all memory:all mve:all "
-    "(18) is refused before anything is built or flashed. "
+    "--pmu-counters cpu:ARM_PMU_INST_RETIRED,ARM_PMU_STALL. A bare 'all' is cpu:all "
+    "memory:all mve:all: the full catalog in one run and one bundle. Each group is measured "
+    "in passes of up to 4 chained 32-bit counters; ARM_PMU_CPU_CYCLES is always reported. "
     "Default: cpu:default memory:default mve:default."
 )
 _PMU_GROUPS_HELP = "Deprecated alias for --pmu-counters GROUP:default per listed group."

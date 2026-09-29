@@ -93,11 +93,12 @@ uv run helia_core_tester hardware stream --pmu-counters mve:ARM_PMU_MVE_STALL,AR
 
 The default is every group at its default selection. Each group runs in passes of
 up to four chained 32-bit event counters (the Cortex-M55 PMU has eight 16-bit slots),
-so `mve:all` costs nine passes per case, and one run takes at most 16 passes (the
-firmware's `HCT_SERVER_MAX_PASSES`; `cpu:all memory:all mve:all` would be 18 and is
-refused before anything is built or flashed); `ARM_PMU_CPU_CYCLES` is always reported
-from the PMU cycle counter alongside the DWT cycles. `case_summary.csv` gets one column per
-counter (median per invocation) plus `overflow_detected` and `valid_for_regression`;
+so `mve:all` costs nine passes per case. One run takes up to 32 passes (the firmware's
+`HCT_SERVER_MAX_PASSES`), so the full catalog (`--pmu-counters all`, i.e.
+`cpu:all memory:all mve:all`, 18 passes) fits one run and one bundle.
+`ARM_PMU_CPU_CYCLES` is always reported from the PMU cycle counter alongside the DWT
+cycles. `case_summary.csv` gets one column per counter (median per invocation) plus
+`overflow_detected` and `valid_for_regression`;
 `session_summary.json` records the passes, counters and per-stage/per-case timing.
 `--pmu-groups a,b` still works as a deprecated alias for `--pmu-counters a:default
 --pmu-counters b:default`.

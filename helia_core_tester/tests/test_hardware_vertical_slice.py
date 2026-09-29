@@ -88,7 +88,7 @@ def test_fake_abs_vertical_slice_end_to_end(tmp_path: Path) -> None:
     assert result.target_info.pmu_counter_slots == 8
     assert result.target_info.max_rx_payload == 2048 - 32
     assert result.target_info.max_cases_per_session == 32
-    assert result.target_info.max_passes == 16
+    assert result.target_info.max_passes == 32
     # Every sample leads with ARM_PMU_CPU_CYCLES from CCNTR, close to the DWT cycles,
     # and the remaining entries are the pass's counters named from the catalog (the
     # target sends empty names).
@@ -195,35 +195,37 @@ def test_mve_all_plans_nine_passes_and_every_pass_reports_ccntr(tmp_path: Path) 
     assert len(case.statistics.unsupported_counters) == 34
 
 
-def test_every_group_all_exceeds_the_firmware_pass_limit_and_fails_before_session_plan(tmp_path: Path) -> None:
-    # Every value the --pmu-counters help advertises at once: 21 cpu + 15 memory + 34 mve
-    # events plan 5 + 4 + 9 = 18 passes, two over HCT_SERVER_MAX_PASSES. The firmware
-    # would answer the SESSION_PLAN with an ERROR frame after flash/TARGET_INFO/catalog; the host
-    # must refuse first (the parser does from MAX_PASSES_PER_PLAN; the session from the
-    # target-advertised max_passes), naming the passes and the limit, and never send a plan.
+def test_every_group_all_runs_in_one_session_and_the_pass_limit_holds(tmp_path: Path) -> None:
+    # The full catalog: 21 cpu + 15 memory + 34 mve events plan 5 + 4 + 9 = 18 passes,
+    # within HCT_SERVER_MAX_PASSES, so one session measures every counter.
     bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_all_groups").manifest_path)
     passes = counter_passes_for_selection({"cpu": "all", "memory": "all", "mve": "all"})
-    assert len(passes) == 18 and MAX_PASSES_PER_PLAN == 16
+    assert len(passes) == 18 and MAX_PASSES_PER_PLAN == 32
+    result = HostSession(FakeTargetTransport(), counter_passes=passes).run(bundle)
+    assert [s.pass_name for s in result.samples][::3] == [p.name for p in passes]
+    assert len({c.name for s in result.samples for c in s.counters}) == 70
 
-    session = HostSession(FakeTargetTransport(), counter_passes=passes)
+    # Firmware that advertises a lower max_passes (an older build) is refused at the
+    # handshake, naming the passes and the limit, and never sent a plan.
+    session = HostSession(FakeTargetTransport(max_passes=16), counter_passes=passes)
     with pytest.raises(RuntimeError, match=r"18 PMU passes planned \(cpu_0, cpu_1, cpu_2, cpu_3, cpu_4, memory_0, .*mve_8\) but target 'fake_board' runs at most 16 per SESSION_PLAN \(TARGET_INFO max_passes\)"):
         session.run_many([bundle])
     assert "TX:SESSION_PLAN" not in session._trace and "TX:TARGET_INFO_ACK" not in session._trace
 
-    # Exactly the limit is accepted (16 x 4 chained counters would need 64 slots, so
-    # build it from single-counter passes) and the fake target runs every pass.
+    # Exactly the limit is accepted (build it from single-counter passes) and the fake
+    # target runs every pass.
     single = counter_by_name("ARM_PMU_INST_RETIRED")
-    sixteen = tuple(CounterPass("cpu", i, (single,)) for i in range(MAX_PASSES_PER_PLAN))
-    check_pass_count(sixteen)
-    result = HostSession(FakeTargetTransport(), counter_passes=sixteen).run(bundle)
+    at_limit = tuple(CounterPass("cpu", i, (single,)) for i in range(MAX_PASSES_PER_PLAN))
+    check_pass_count(at_limit)
+    result = HostSession(FakeTargetTransport(), counter_passes=at_limit).run(bundle)
     assert len({s.pass_name for s in result.samples}) == MAX_PASSES_PER_PLAN
 
-    # The fake target mirrors parse_pmu_passes(): a 17-pass plan is rejected on decode.
-    seventeen = sixteen + (CounterPass("cpu", 16, (single,)),)
-    with pytest.raises(TooManyPassesError, match="17 PMU passes planned"):
-        check_pass_count(seventeen)
-    with pytest.raises(ValueError, match="17 PMU passes; fake target accepts at most 16"):
-        FakeTargetTransport()._admit_session_plan(encode_session_plan(session_plan_for_bundles([bundle], seventeen)))
+    # The fake target mirrors parse_pmu_passes(): one pass over is rejected on decode.
+    over = at_limit + (CounterPass("cpu", MAX_PASSES_PER_PLAN, (single,)),)
+    with pytest.raises(TooManyPassesError, match="33 PMU passes planned"):
+        check_pass_count(over)
+    with pytest.raises(ValueError, match="33 PMU passes; fake target accepts at most 32"):
+        FakeTargetTransport()._admit_session_plan(encode_session_plan(session_plan_for_bundles([bundle], over)))
 
 
 def test_case_id_at_the_firmware_limit_runs_and_one_byte_over_fails_before_session_plan(tmp_path: Path) -> None:

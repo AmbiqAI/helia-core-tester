@@ -40,13 +40,13 @@ class _DummyCaseBundle:
 
 
 def _target_info(**overrides: Any) -> TargetInfo:
-    """A TARGET_INFO like the real apollo510_evb firmware's (32 cases, 16 passes, 2016-byte
+    """A TARGET_INFO like the real apollo510_evb firmware's (32 cases, 32 passes, 2016-byte
     plans, 8 PMU slots) unless overridden."""
     fields = dict(
         build_id="fake", catalog_hash=bytes(32), max_frame_payload=256, runtime_arena_capacity=114688,
         transfer_mode=1, output_mode=1, board_id="apollo510_evb", target_cpu="cortex-m55", transport_kind=1,
         capability_flags=CAP_PMU_ARMV8M, pmu_counter_slots=8, max_rx_payload=2048 - 32,
-        max_cases_per_session=32, max_passes=16,
+        max_cases_per_session=32, max_passes=32,
     )
     fields.update(overrides)
     return TargetInfo(**fields)
@@ -59,8 +59,8 @@ def test_host_constants_match_the_firmware_header() -> None:
     header = (PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_session.h").read_text()
     assert measurement.MAX_CASES_PER_PLAN == 32
     assert re.search(r"#define HCT_SERVER_MAX_CASES 32u", header)
-    assert measurement.MAX_PASSES_PER_PLAN == 16
-    assert re.search(r"#define HCT_SERVER_MAX_PASSES 16u", header)
+    assert measurement.MAX_PASSES_PER_PLAN == 32
+    assert re.search(r"#define HCT_SERVER_MAX_PASSES 32u", header)
     # char[96] storage and cursor_text() needs the NUL, so 95 payload bytes.
     assert session.MAX_CASE_ID_BYTES == 96 - 1
     assert re.search(r"#define HCT_SERVER_MAX_CASE_ID 96u", header)
@@ -71,12 +71,12 @@ def test_host_constants_match_the_firmware_header() -> None:
 
 
 def test_run_case_bundles_refuses_more_passes_than_the_firmware_runs_before_opening_the_probe(tmp_path: Path, monkeypatch) -> None:
-    # cpu:all memory:all mve:all is 5 + 4 + 9 = 18 passes -- over HCT_SERVER_MAX_PASSES.
-    # The runner must refuse before symbol lookup / J-Link, naming the passes and the limit.
-    passes = counter_passes_for_selection({"cpu": "all", "memory": "all", "mve": "all"})
-    assert len(passes) == 18
+    # One pass over HCT_SERVER_MAX_PASSES: the runner must refuse before symbol
+    # lookup / J-Link, naming the passes and the limit.
+    single = counter_passes_for_selection({"cpu": ["ARM_PMU_INST_RETIRED"]})[0].counters
+    passes = tuple(CounterPass("cpu", i, single) for i in range(measurement.MAX_PASSES_PER_PLAN + 1))
     monkeypatch.setattr(session_runner, "open_rtt_session", lambda *a, **k: pytest.fail("probe opened"))
-    with pytest.raises(ValueError, match=r"18 PMU passes planned \(cpu_0, .*mve_8\) but the firmware runs at most 16 per SESSION_PLAN"):
+    with pytest.raises(ValueError, match=r"33 PMU passes planned \(cpu_0, .*cpu_32\) but the firmware runs at most 32 per SESSION_PLAN"):
         session_runner.run_case_bundles(
             tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
             board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=passes, build_dir=tmp_path,
@@ -124,7 +124,7 @@ class _FakeTransport:
 
 def test_limits_are_derived_from_target_info() -> None:
     limits = TargetLimits.from_target_info(_target_info())
-    assert (limits.max_cases, limits.max_plan_bytes, limits.max_passes, limits.pmu_counter_slots) == (32, 2016, 16, 8)
+    assert (limits.max_cases, limits.max_plan_bytes, limits.max_passes, limits.pmu_counter_slots) == (32, 2016, 32, 8)
     assert limits.has_pmu and limits.max_counters_per_pass == MAX_COUNTERS_PER_PASS == 4
     # The chained-pair planning rule is bounded by the advertised slot count.
     assert TargetLimits.from_target_info(_target_info(pmu_counter_slots=4)).max_counters_per_pass == 2
@@ -156,9 +156,9 @@ def test_batches_are_split_by_case_count_and_encoded_plan_size() -> None:
         ids = [b.case_id for b in batch] + [following[0].case_id]
         assert session_plan_size(ids, DEFAULT_PASSES) > limits.max_plan_bytes
 
-    # mve:all is nine passes; the plan header grows but every batch still fits.
-    many_passes = counter_passes_for_selection({"mve": "all", "cpu": "default"})
-    assert len(many_passes) == 10
+    # The full catalog is 18 passes; the plan header grows but every batch still fits.
+    many_passes = counter_passes_for_selection({"cpu": "all", "memory": "all", "mve": "all"})
+    assert len(many_passes) == 18
     for batch in session_runner.split_case_bundles_into_batches(long_ids, many_passes, limits):
         assert session_plan_size([b.case_id for b in batch], many_passes) <= limits.max_plan_bytes
 
@@ -310,7 +310,7 @@ def test_run_case_bundles_refuses_to_merge_sessions_from_different_firmware(tmp_
         return _FakeSession(next(infos), calls), _FakeTransport(), 0
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
-    with pytest.raises(RuntimeError, match=r"TARGET_INFO of batch 1 differs from the first session's.*build_id: 'hct-first' -> 'hct-second'.*max_passes: 16 -> 8"):
+    with pytest.raises(RuntimeError, match=r"TARGET_INFO of batch 1 differs from the first session's.*build_id: 'hct-first' -> 'hct-second'.*max_passes: 32 -> 8"):
         session_runner.run_case_bundles(
             tmp_path, bundles, board=resolve_board("apollo510_evb"), serial_no=1160002276,  # type: ignore[arg-type]
             counter_passes=DEFAULT_PASSES, session_id="s", build_dir=tmp_path,

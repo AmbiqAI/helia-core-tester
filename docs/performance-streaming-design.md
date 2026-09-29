@@ -157,7 +157,7 @@ built for a core whose device header declares `__PMU_PRESENT == 1`;
 `max_rx_payload` is the largest frame payload the target's fixed receive buffer can
 hold (`HCT_SERVER_RX_BUFFER_BYTES - HCTP_HEADER_SIZE`, 2016 today);
 `max_cases_per_session` and `max_passes` are the firmware's `HCT_SERVER_MAX_CASES`
-(32) and `HCT_SERVER_MAX_PASSES` (16). After the handshake the advertised values are
+(32) and `HCT_SERVER_MAX_PASSES` (32). After the handshake the advertised values are
 authoritative: the host derives its batching (`session.TargetLimits`) from every
 session's `TARGET_INFO`, cuts each batch so the plan stays within all three, checks
 its chained-pair planning rule (four counters per pass) against `pmu_counter_slots / 2`,
@@ -205,16 +205,18 @@ the case's warmups and samples with its counters programmed, so a selection like
 event-counter slot -- it is reported from `CCNTR` in every pass -- so it is stripped
 when planning and a cycles-only selection still yields one empty `cpu_0` pass.
 
-A plan carries at most `HCT_SERVER_MAX_PASSES` (16) passes. The target advertises
+A plan carries at most `HCT_SERVER_MAX_PASSES` (32) passes. The target advertises
 the limit in `TARGET_INFO` (`max_passes`) and `HostSession` refuses a longer pass
 list at the handshake, before `TARGET_INFO_ACK`; the host also mirrors the constant
 as `measurement.MAX_PASSES_PER_PLAN` so the `--pmu-counters` parser and
 `session_runner.run_case_bundles` can refuse the selection before generate/build/
 flash and before the probe is opened, and the fake target's `SESSION_PLAN` admission
 applies the same bound. Every error names the planned passes. Passes are never split
-across sessions, so `cpu:all memory:all mve:all` (5 + 4 + 9 = 18 passes) is an
-error; select fewer counters per run. An empty name list (`mve:,`) is rejected the
-same way instead of degrading to a cycles-only pass.
+across sessions; the full catalog (`cpu:all memory:all mve:all`, or the bare `all`
+shorthand) plans 5 + 4 + 9 = 18 passes and fits one plan. The firmware queues every
+`SAMPLE_RESULT` of a case in its 32 KiB outbox before flushing, about 127 bytes per
+frame, so passes x samples must stay under about 250 (18 x 5 = 90 today). An empty
+name list (`mve:,`) is rejected the same way instead of degrading to a cycles-only pass.
 
 Armv8.1-M event counters are 16 bits wide. Passes are chained by default: counter
 `i` is programmed into slot `2i` and slot `2i+1` is programmed with `ARM_PMU_CHAIN`
