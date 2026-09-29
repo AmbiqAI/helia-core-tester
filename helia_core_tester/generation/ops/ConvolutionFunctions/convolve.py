@@ -749,6 +749,23 @@ class OpConvolve(OperationBase):
                 input_dims, filter_dims, output_dims, 
                 output_dtype=activation_dtype
             )
+        entry_scratch_bytes = kernel_info.get("entry_scratch_bytes")
+        if entry_scratch_bytes is not None:
+            buffer_size_max = max(buffer_size_max, int(entry_scratch_bytes))
+
+        # A contract entry (entry: outside DIRECT_ENTRIES) gets the weight-sum pre-pass and the
+        # struct-typed bias exactly when its prototype takes them; the table's kernels keep
+        # the rules they always had.
+        contract_decl = None
+        if kernel_info.get("entry_family") == "contract":
+            from helia_core_tester.contract import render as contract_render
+            from helia_core_tester.contract.bind import takes
+
+            contract_decl = contract_render.load_current_contracts().require(kernel_info["kernel_fn"])
+        bias_is_struct = kernel_info["kernel_fn"] == "arm_convolve_wrapper_s16" or (
+            contract_decl is not None and takes(contract_decl, "bias_data")
+            and "cmsis_nn_bias_data" in next(p.c_type for p in contract_decl.params if p.name in ("bias_data", "bias"))
+        )
 
         # Build template context
         context = {
@@ -789,7 +806,10 @@ class OpConvolve(OperationBase):
             # weight sums included, and size scratch from the input and filter dims alone.
             'entry_family': kernel_info.get("entry_family"),
             'conv_s8_weight_sum': kernel_info["kernel_fn"] == "arm_convolve_wrapper_s8"
-            or kernel_info.get("entry_family") == "convolve_s8",
+            or kernel_info.get("entry_family") == "convolve_s8"
+            or (contract_decl is not None and takes(contract_decl, "weight_sum_ctx")),
+            'bias_is_struct': bias_is_struct,
+            'entry_scratch_bytes': entry_scratch_bytes,
             'expected_status': self.expected_status(),
             # The entry lives only on ns-cmsis-nn's MVE integer paths, so it declines on a build
             # that compiles them out (HELIA_CMSIS_NN_INT_AUTOVECTORIZE, set by CMakeLists.txt).

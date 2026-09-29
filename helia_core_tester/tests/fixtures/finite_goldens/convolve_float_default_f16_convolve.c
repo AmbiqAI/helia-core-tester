@@ -114,11 +114,11 @@ int32_t convolve_float_default_f16_run(
 ) {
         // Calculate required buffer size
     int32_t required_buffer_size = arm_convolve_f16_get_buffer_size(
-        &convolve_float_default_f16_conv_params,
-        &convolve_float_default_f16_input_dims,
-        &convolve_float_default_f16_filter_dims,
-        &convolve_float_default_f16_output_dims,
-        ARM_NN_LAYOUT_NHWC
+        &convolve_float_default_f16_conv_params, /* conv_params */
+        &convolve_float_default_f16_input_dims, /* input_dims */
+        &convolve_float_default_f16_filter_dims, /* filter_dims */
+        &convolve_float_default_f16_output_dims, /* output_dims */
+        ARM_NN_LAYOUT_NHWC /* layout */
     );
     // Armed before the capacity check below: an early return there would otherwise leave
     // these canaries unstamped, and the unconditional check in _test_case_run would
@@ -167,11 +167,11 @@ static int32_t convolve_float_default_f16_bench_init(void)
 {
         // Calculate required buffer size
     int32_t required_buffer_size = arm_convolve_f16_get_buffer_size(
-        &convolve_float_default_f16_conv_params,
-        &convolve_float_default_f16_input_dims,
-        &convolve_float_default_f16_filter_dims,
-        &convolve_float_default_f16_output_dims,
-        ARM_NN_LAYOUT_NHWC
+        &convolve_float_default_f16_conv_params, /* conv_params */
+        &convolve_float_default_f16_input_dims, /* input_dims */
+        &convolve_float_default_f16_filter_dims, /* filter_dims */
+        &convolve_float_default_f16_output_dims, /* output_dims */
+        ARM_NN_LAYOUT_NHWC /* layout */
     );
     // Armed before the capacity check below: an early return there would otherwise leave
     // these canaries unstamped, and the unconditional check in _test_case_run would

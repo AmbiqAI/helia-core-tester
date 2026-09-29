@@ -62,7 +62,7 @@ def test_entry_case_calls_the_entry_with_arm_convolve_s8_arguments(tmp_path: Pat
     assert call and call.group(1) == "arm_convolve_s8_small_cin"
     args = [arg.strip() for arg in call.group(2).split(",")]
     assert args[8] == "NULL" and "NULL, /* upscale_dims */" in source
-    assert re.search(r"arm_convolve_s8_get_buffer_size\(\s*&\w+_input_dims,\s*&\w+_filter_dims\s*\)", source)
+    assert re.search(r"arm_convolve_s8_get_buffer_size\(\s*&\w+_input_dims,\s*&\w+_filter_dims\s*\)", code)
     assert "arm_convolve_weight_sum(" in source
     assert "arm_convolve_wrapper_s8(" not in source
 

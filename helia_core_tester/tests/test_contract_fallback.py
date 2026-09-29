@@ -20,7 +20,7 @@ def test_fixture_is_a_loadable_contract_of_convolve_kernels() -> None:
     contracts = load_contract_set(FIXTURE_ROOT)
     assert contracts.present
     assert contracts.functions and all(name.startswith("arm_convolve_") for name in contracts.functions)
-    assert not any("_get_" in name for name in contracts.functions)
+    assert {"arm_convolve_wrapper_s8_get_buffer_size_mve", "arm_convolve_s8_get_buffer_size"} <= set(contracts.functions)
     assert {"arm_convolve_wrapper_s8", "arm_convolve_s8", "arm_convolve_f32", "arm_convolve_wrapper_f16"} <= set(contracts.functions)
 
 
@@ -66,7 +66,7 @@ def test_convolve_contract_fixture_matches_the_real_tree() -> None:
             pytest.fail(f"HELIA_CORE_TESTER_REQUIRE_CONTRACT is set but {root} has no kernel contract")
         pytest.skip("no ns-cmsis-nn checkout with a kernel contract")
     fixture = load_contract_set(FIXTURE_ROOT)
-    kernels = {name for name in real.functions if name.startswith("arm_convolve_") and "_get_" not in name}
+    kernels = {name for name in real.functions if name.startswith("arm_convolve_")}
     assert set(fixture.functions) == kernels, (
         f"refresh {FIXTURE_ROOT} from {real.path}: missing {sorted(kernels - set(fixture.functions))}, "
         f"extra {sorted(set(fixture.functions) - kernels)}")

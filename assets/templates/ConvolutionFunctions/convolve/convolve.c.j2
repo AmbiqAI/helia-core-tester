@@ -37,7 +37,7 @@ static const cmsis_nn_dims {{ name }}_bias_dims = {
     .n = 0, .h = 0, .w = 0, .c = {{ filter_dims.n }}
 };
 {% if float_kernel %}
-{% elif kernel_fn == 'arm_convolve_wrapper_s16' %}
+{% elif bias_is_struct %}
 // s16 requires cmsis_nn_bias_data struct wrapper
 static const cmsis_nn_bias_data {{ name }}_bias_data = {
     .data = {{ name }}_biases,
@@ -54,28 +54,23 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
   (init vs. the timed kernel call), not the logic itself.
 #}
 {% macro conv_bench_init() %}
+    {#
+      The scratch query is bound from the same pool as the kernel call: the contract says
+      which of these a sizer takes, so one line serves every sizer the Convolve entries use.
+    #}
+    {% set sizer_pool = {
+        'conv_params': '&' ~ name ~ '_conv_params',
+        'input_dims': '&' ~ name ~ '_input_dims',
+        'filter_dims': '&' ~ name ~ '_filter_dims',
+        'output_dims': '&' ~ name ~ '_output_dims',
+        'layout': kernel_layout,
+    } %}
+    {% if kernel_get_buffer_size_fn %}
     // Calculate required buffer size
-    {% if float_kernel %}
-    int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
-        &{{ name }}_conv_params,
-        &{{ name }}_input_dims,
-        &{{ name }}_filter_dims,
-        &{{ name }}_output_dims{% if buffer_size_needs_layout %},
-        {{ kernel_layout }}
-        {% endif %}
-    );
-    {% elif entry_family %}
-    int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
-        &{{ name }}_input_dims,
-        &{{ name }}_filter_dims
-    );
+    int32_t required_buffer_size = {{ contract_bind(kernel_get_buffer_size_fn, sizer_pool) }};
     {% else %}
-    int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
-        &{{ name }}_conv_params,
-        &{{ name }}_input_dims,
-        &{{ name }}_filter_dims,
-        &{{ name }}_output_dims
-    );
+    // The entry takes no scratch query (entry_scratch in the descriptor).
+    int32_t required_buffer_size = {{ entry_scratch_bytes }};
     {% endif %}
     // Armed before the capacity check below: an early return there would otherwise leave
     // these canaries unstamped, and the unconditional check in _test_case_run would
@@ -94,8 +89,10 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
     // answer is the documented out-of-range sentinel and never a usable size; an answer
     // above this case's static means our generation-time bound and the shipped kernel
     // disagree. They are separate failures because they have separate owners.
+    {% if kernel_get_buffer_size_fn %}
     HELIA_VALIDATE_SIZER("{{ kernel_get_buffer_size_fn }}", required_buffer_size);
     HELIA_VALIDATE_SIZER_FITS("{{ kernel_get_buffer_size_fn }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
+    {% endif %}
 
     // Initialize context buffer
     {{ name }}_ctx.buf = {{ name }}_buffer;
@@ -131,12 +128,13 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
 {% endmacro %}
 {% macro conv_kernel_call(input_expr, output_expr) %}
     {#
-      The argument list is rendered from the kernel contract export in prototype order
-      (contract_call): the template names what it passes, the contract decides the order
-      and refuses a missing or unknown argument, and the file-scope parity assert above
-      makes a header that drifts from the export a compile error rather than a wrong call.
+      The argument list is bound from the kernel contract export (contract_bind): the pool
+      offers every value this harness can supply, the contract picks and orders the ones the
+      prototype takes and refuses one it cannot supply, so any public Convolve entry renders
+      here; the file-scope parity assert above makes a header that drifts from the export a
+      compile error rather than a wrong call.
     #}
-    {% set conv_args = {
+    {% set conv_pool = {
         'ctx': '&' ~ name ~ '_ctx',
         'conv_params': '&' ~ name ~ '_conv_params',
         'input_dims': '&' ~ name ~ '_input_dims',
@@ -144,23 +142,19 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
         'filter_dims': '&' ~ name ~ '_filter_dims',
         'filter_data': name ~ '_weights',
         'bias_dims': ('&' ~ name ~ '_bias_dims') if has_biases else 'NULL',
-        'bias_data': (('&' ~ name ~ '_bias_data') if kernel_fn == 'arm_convolve_wrapper_s16' else (name ~ '_biases')) if has_biases else 'NULL',
+        'bias_data': (('&' ~ name ~ '_bias_data') if bias_is_struct else (name ~ '_biases')) if has_biases else 'NULL',
         'output_dims': '&' ~ name ~ '_output_dims',
         'output_data': output_expr,
+        'upscale_dims': 'NULL',
+        'layout': kernel_layout,
     } %}
     {% if conv_s8_weight_sum %}
-    {% set _ = conv_args.update({'weight_sum_ctx': '&' ~ name ~ '_weight_sum_ctx'}) %}
-    {% endif %}
-    {% if entry_family == 'convolve_s8' %}
-    {% set _ = conv_args.update({'upscale_dims': 'NULL'}) %}
+    {% set _ = conv_pool.update({'weight_sum_ctx': '&' ~ name ~ '_weight_sum_ctx'}) %}
     {% endif %}
     {% if not float_kernel %}
-    {% set _ = conv_args.update({'quant_params': '&' ~ name ~ '_quant_params'}) %}
+    {% set _ = conv_pool.update({'quant_params': '&' ~ name ~ '_quant_params'}) %}
     {% endif %}
-    {% if kernel_needs_layout %}
-    {% set _ = conv_args.update({'layout': kernel_layout}) %}
-    {% endif %}
-    return {{ contract_call(kernel_fn, conv_args) }};
+    return {{ contract_bind(kernel_fn, conv_pool) }};
 {% endmacro %}
 int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input,
