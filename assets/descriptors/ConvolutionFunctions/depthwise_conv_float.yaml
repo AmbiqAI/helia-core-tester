@@ -806,3 +806,90 @@ use_bias: true
 depth_multiplier: 1
 fault: invalid_layout
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# Direct entries (entry:): FP16 entries that no wrapper routes to. The _nhwc_ entries take no
+# layout argument; the _acc16 entries keep float16 lane accumulation (heliaAOT fast mode) and
+# are skipped on an ns-cmsis-nn checkout that does not declare them.
+operator: DepthwiseConv
+name: depthwise_conv_float_entry_acc16_5x5_c4_f16
+entry: arm_depthwise_conv_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 5, 5, 4]
+filter_shape: [3, 3, 4, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_float_entry_acc16_chmult2_f16
+entry: arm_depthwise_conv_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 5, 5, 2]
+filter_shape: [3, 3, 2, 2]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 2
+---
+operator: DepthwiseConv
+name: depthwise_conv_float_entry_nhwc_5x5_c4_f16
+entry: arm_depthwise_nhwc_conv_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 5, 5, 4]
+filter_shape: [3, 3, 4, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_float_entry_nhwc_acc16_5x5_c4_f16
+entry: arm_depthwise_nhwc_conv_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 5, 5, 4]
+filter_shape: [3, 3, 4, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_float_entry_nhwc_acc16_chmult2_f16
+entry: arm_depthwise_nhwc_conv_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 5, 5, 2]
+filter_shape: [3, 3, 2, 2]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 2
+---
+operator: DepthwiseConv
+name: depthwise_conv_float_entry_wrapper_acc16_6x6_c3_f16
+entry: arm_depthwise_conv_wrapper_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 3]
+filter_shape: [3, 3, 3, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1

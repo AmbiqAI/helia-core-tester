@@ -469,6 +469,7 @@ Behavior:
 - for a single suite (`--suite int` or `--suite float`), merge is strict and fails if any requested CPU input is missing.
 - for `--suite both`, merge requires both int and float inputs for every requested CPU; missing pairs are named in the failure output and reports.
 - `--include-mve-float` adds optional cortex-m55 float-MVE coverage; it cannot replace a missing required int/float input. Reports are still written when required inputs are missing.
+- `--include-mve-int` adds optional cortex-m55 integer-MVE coverage from a `--coverage --coverage-mve-int` run (`artifacts/reports/coverage/int-mve`), under the same rules. The default coverage build defines `ARM_MATH_AUTOVECTORIZE`, which compiles out integer MVE paths guarded by `!ARM_MATH_AUTOVECTORIZE`; `--coverage-mve-int` builds integer sources without it, except `arm_nn_mat_mul_core_4x_s8.c`.
 
 ## Clean Contract
 
@@ -478,9 +479,10 @@ Behavior:
 ## Release Process
 
 - Pull request titles should use conventional commit prefixes such as `feat:`, `fix:`, `perf:`, `refactor:`, `chore:`, `docs:`, `test:`, `ci:`, or `build:`
-- Pushes to `main` update a release PR through release-please; release-please updates the version files and changelog, but does not create a GitHub Release.
-- Merging the release PR creates the `vX.Y.Z` git tag automatically through the tag workflow.
-- The release workflow manages `CHANGELOG.md`, `pyproject.toml`, and `helia_core_tester/__init__.py`.
+- Pushes to `main` update a release PR through release-please, which updates the version files and changelog.
+- Merging the release PR makes release-please create the `vX.Y.Z` tag and GitHub Release on the merge commit, with that version's changelog section as notes, and mark the release PR `autorelease: tagged`.
+- Merging any other PR creates no tag or release; no other workflow creates them (see `helia_core_tester/tests/test_release_workflow.py`).
+- The release workflow manages `CHANGELOG.md`, `pyproject.toml`, `helia_core_tester/__init__.py` and the package version in `uv.lock`.
 - To force a specific version, add a `Release-As: 1.2.3` footer to the merged commit body.
 
 ## Config Precedence

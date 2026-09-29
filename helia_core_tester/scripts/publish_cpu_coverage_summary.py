@@ -15,7 +15,7 @@ from typing import Dict, Iterable, List, Tuple
 from helia_core_tester.core.cpu_targets import parse_cpu_list
 
 
-VALID_SUITES = {"int", "float", "float-mve"}
+VALID_SUITES = {"int", "float", "float-mve", "int-mve"}
 
 
 @dataclass
@@ -177,7 +177,7 @@ def _normalize_suite_list(raw: Iterable[str]) -> List[str]:
         if not normalized:
             continue
         if normalized not in VALID_SUITES:
-            raise ValueError(f"Invalid suite value: {suite!r} (expected one of int,float,float-mve)")
+            raise ValueError(f"Invalid suite value: {suite!r} (expected one of int,float,float-mve,int-mve)")
         if normalized not in suite_list:
             suite_list.append(normalized)
     return suite_list
@@ -247,7 +247,7 @@ def build_rows(
             cpu=cpu,
             reports_root=default_reports_root,
             coverage_suites=list(suite_list),
-            test_suites=[item for item in suite_list if item != "float-mve"],
+            test_suites=[item for item in suite_list if item not in {"float-mve", "int-mve"}],
         )
         for cpu in cpu_list
     ]
@@ -413,6 +413,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Also include cortex-m55 MVE float coverage (reports/coverage/float-mve) in the summary.",
     )
     parser.add_argument(
+        "--include-mve-int",
+        action="store_true",
+        help="Also include cortex-m55 MVE integer coverage (reports/coverage/int-mve) in the summary.",
+    )
+    parser.add_argument(
         "--profile",
         action="append",
         default=[],
@@ -440,6 +445,8 @@ def main(argv: List[str] | None = None) -> int:
         suites = _normalize_suites(args.suite)
         if args.include_mve_float and "float-mve" not in suites:
             suites.append("float-mve")
+        if args.include_mve_int and "int-mve" not in suites:
+            suites.append("int-mve")
         profiles = [_parse_profile_spec(item) for item in args.profile]
         rows, total = build_rows(args.artifacts_root, cpus, suites=suites, profiles=profiles)
         table = render_markdown_table(rows, total)
