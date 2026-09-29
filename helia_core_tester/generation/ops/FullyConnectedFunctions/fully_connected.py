@@ -7,7 +7,11 @@ import numpy as np
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
-from helia_core_tester.generation.kernel_dispatch import resolve_direct_entry, resolve_fully_connected_kernel
+from helia_core_tester.generation.kernel_dispatch import (
+    check_entry_fault,
+    resolve_direct_entry,
+    resolve_fully_connected_kernel,
+)
 from helia_core_tester.core.cpu_targets import get_cpu_profile
 import keras
 from pathlib import Path
@@ -31,6 +35,8 @@ class OpFullyConnected(OperationBase):
         if context.get("float_kernel"):
             if kind not in ("filter_n_mismatch", "invalid_layout"):
                 raise self.fault_unreachable(kind, f"{kernel_fn} has no such guard")
+            if kind == "invalid_layout" and not context.get("kernel_needs_layout", True):
+                raise self.fault_unreachable(kind, f"{kernel_fn} takes no layout argument")
             return
         if kind in ("filter_n_mismatch", "invalid_layout"):
             raise self.fault_unreachable(kind, f"{kernel_fn} does not check {kind}")
@@ -235,8 +241,6 @@ class OpFullyConnected(OperationBase):
         )
         entry = self.desc.get("entry")
         if entry:
-            if self.desc.get("fault"):
-                raise ValueError(f"{self.desc.get('name')}: entry {entry!r} is not supported with fault")
             info.update(
                 resolve_direct_entry(
                     "FullyConnected",
@@ -245,6 +249,7 @@ class OpFullyConnected(OperationBase):
                     self.desc.get("weight_dtype", "S8"),
                 )
             )
+            check_entry_fault(self.desc, info)
         return info
 
     def _find_fully_connected_op_index(self, model: Any, subgraph: Any) -> int:

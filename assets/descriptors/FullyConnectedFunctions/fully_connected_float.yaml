@@ -465,3 +465,16 @@ tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
 input_shape: [1, 24]
 filter_shape: [17, 24]
 use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_fault_entry_acc16_invalid_layout_f16
+entry: arm_fully_connected_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 8]
+filter_shape: [4, 8]
+use_bias: true
+fault: invalid_layout
+expected_status: ARM_CMSIS_NN_ARG_ERROR
