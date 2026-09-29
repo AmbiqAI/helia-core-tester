@@ -292,10 +292,10 @@ helia-profiler already provides useful patterns to reuse:
 
 The streaming implementation aligns with those semantics instead of inventing
 incompatible PMU naming or overflow behavior: the event catalog
-(`assets/pmu/armv8m_pmu_events.json`) is transcribed from heliaPROFILER, the
-`--pmu-counters GROUP:SELECTION` syntax is hpx's, and the firmware programs and
-reads the PMU through the nsx-pmu-armv8m module, as hpx does; raw `ARM_PMU_*` calls
-only gate the window and snapshot CCNTR/OVS.
+(`assets/pmu/armv8m_pmu_events.json`) is synced from the nsx-pmu-armv8m module,
+as in hpx; the `--pmu-counters GROUP:SELECTION` syntax is hpx's, and the
+firmware programs and reads the PMU through the same module, as hpx does; raw
+`ARM_PMU_*` calls only gate the window and snapshot CCNTR/OVS.
 
 ## Timing boundaries
 

@@ -239,6 +239,8 @@ def run_case_bundles(
         target_info=board.target_info(),
         host_log_text=host_log,
         target_log_text=target_log,
+        # Unverified firmware gets no provenance.
+        build_dir=build_dir if expected_build_id is not None and build_id == expected_build_id else None,
     )
     return merged_result, bundle_root
 
