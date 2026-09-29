@@ -173,9 +173,9 @@ bounds so `--pmu-counters` can fail at option parsing, before generate, build an
 `u8 counter_count`, `u16 event_id[counter_count]`, then per case `text case_id`,
 `u32 kernel_id`. The firmware rejects `pass_count > max_passes`, `counter_count > 4`,
 `case_count > max_cases_per_session` and (when it has a PMU) a pass needing more
-slots than it advertised (`chained ? 2 * counter_count : counter_count`); event ids
-are not validated against a list -- whatever the host asks for is programmed and
-reported back.
+slots than it advertised (`chained ? 2 * counter_count : counter_count`) or an
+event id the nsx-pmu-armv8m module does not know (its event map matches
+`assets/pmu/armv8m_pmu_events.json`).
 
 `SAMPLE_RESULT` (target -> host, one per sample per pass): `u16 sample_index`,
 `u32 iterations`, `u64 cycles`, `text pass_name`, `u8 counter_count`, then per
@@ -220,10 +220,12 @@ Armv8.1-M event counters are 16 bits wide. Passes are chained by default: counte
 `i` is programmed into slot `2i` and slot `2i+1` is programmed with `ARM_PMU_CHAIN`
 (event `0x001E`), which increments on the even slot's overflow, so the pair reads as
 `(high << 16) | low`, a 32-bit counter. Four chained counters use all eight slots.
-Per sample the firmware disables the PMU, resets the event counters and `CCNTR`,
-clears the overflow status (`ARM_PMU_Set_CNTR_OVS(0xFFFFFFFF)`), enables the pass's
-slots plus `CCNTR`, runs the timed loop, disables the counters, reads the values and
-`ARM_PMU_Get_CNTR_OVS()`, and clears the bits that were set. A chained counter's
+The nsx-pmu-armv8m module programs each pass (`nsx_pmu_init`, with the overflow
+interrupts it arms turned back off). Per sample the firmware resets the counters,
+`CCNTR` and the overflow status (`nsx_pmu_reset_counters`), enables the PMU, runs the
+timed loop, disables every counter with one store, snapshots `CCNTR` and
+`ARM_PMU_Get_CNTR_OVS()`, then reads the values with `nsx_pmu_get_counters` (which
+resets them again) and parks the PMU. A chained counter's
 overflow is the odd slot's bit; an unchained counter's is its own slot's bit. Any
 overflow in any sample of a case sets `overflow_detected` and clears
 `valid_for_regression` for that case in the result bundle; the DWT cycle statistics
@@ -290,10 +292,10 @@ helia-profiler already provides useful patterns to reuse:
 
 The streaming implementation aligns with those semantics instead of inventing
 incompatible PMU naming or overflow behavior: the event catalog
-(`assets/pmu/armv8m_pmu_events.json`) is synced from the nsx-pmu-armv8m module, as in hpx; the
-`--pmu-counters GROUP:SELECTION` syntax is hpx's, and the firmware's per-sample
-reset/clear-OVS/read/clear-set-bits sequence mirrors the hpx PMU profiler. The
-firmware uses raw CMSIS `pmu_armv8.h` rather than the NSX PMU module.
+(`assets/pmu/armv8m_pmu_events.json`) is synced from the nsx-pmu-armv8m module,
+as in hpx; the `--pmu-counters GROUP:SELECTION` syntax is hpx's, and the
+firmware programs and reads the PMU through the same module, as hpx does; raw
+`ARM_PMU_*` calls only gate the window and snapshot CCNTR/OVS.
 
 ## Timing boundaries
 
@@ -426,7 +428,7 @@ name, SEGGER device name, SWD speed and the `build/hardware/<board>` build dir;
 connected J-Link probe enumerated through pylink).
 
 Cross-build the benchmark-server firmware for the board as an NSX app (fetches
-ARM GCC and CMSIS_5 on first use; NSX syncs its modules into the app):
+ARM GCC on first use; NSX syncs its modules into the app):
 
 ```bash
 uv run helia_core_tester hardware build --board apollo510_evb -j

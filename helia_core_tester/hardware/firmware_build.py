@@ -43,16 +43,13 @@ SERVER_TARGET = "hct_benchmark_server"
 
 
 def ensure_build_tools(repo_root: Path) -> None:
-    """Fetch GCC and CMSIS_5; put GCC on PATH."""
-    from ..scripts.setup_dependencies import setup_arm_gcc, setup_cmsis5
+    """Fetch GCC; put GCC on PATH."""
+    from ..scripts.setup_dependencies import setup_arm_gcc
 
     downloads = repo_root / DOWNLOADS_DIR
     downloads.mkdir(parents=True, exist_ok=True)
     if not (downloads / "arm_gcc_download").is_dir():
         setup_arm_gcc(downloads)
-    # Firmware still includes CMSIS_5's pmu_armv8.h.
-    if not (downloads / "CMSIS_5" / "CMSIS" / "Core").is_dir():
-        setup_cmsis5(downloads)
     # NSX's toolchain file finds GCC on PATH.
     add_toolchain_to_path(repo_root)
 

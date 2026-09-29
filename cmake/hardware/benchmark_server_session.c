@@ -21,7 +21,8 @@
  * present when the device header says so; a Cortex-M4 hardware build or the host
  * harness compile take the DWT-only path below. */
 #if defined(__PMU_PRESENT) && (__PMU_PRESENT == 1)
-#include "pmu_armv8.h"
+#include "nsx_pmu_map.h"
+#include "nsx_pmu_utils.h"
 #define HCT_PMU_AVAILABLE 1
 #else
 #define HCT_PMU_AVAILABLE 0
@@ -438,104 +439,78 @@ typedef struct
 
 #if HCT_PMU_AVAILABLE
 #define HCT_PMU_CCNTR_BIT (1u << 31)
-#define HCT_PMU_EVCNTR_MASK 0xFFFFu
 
-/* Slot layout for a pass: counter i lives in slot i, or -- when chained -- in slots 2i
- * (the event) and 2i+1 (ARM_PMU_CHAIN, incrementing on the even slot's overflow) so the
- * pair reads as one 32-bit counter. */
-static uint32_t pmu_pass_slot_mask(const hct_pmu_pass_t *pass)
+static nsx_pmu_config_t s_pmu_cfg;
+
+/* The module rejects unmapped events. */
+static bool pmu_event_known(uint16_t event_id)
 {
-    uint32_t mask = 0u;
     uint32_t index;
-    for (index = 0u; index < pass->count; ++index)
+    for (index = 0u; index < NSX_PMU_MAP_SIZE; ++index)
     {
-        if (pass->chained)
+        if (nsx_pmu_map[index].eventId == event_id)
         {
-            mask |= 3u << (2u * index);
-        }
-        else
-        {
-            mask |= 1u << index;
+            return true;
         }
     }
-    return mask;
+    return false;
 }
 
+/* Module programs the pass; PMU parked. */
 static void pmu_pass_program(const hct_pmu_pass_t *pass)
 {
+    const nsx_pmu_event_counter_size_e size =
+        pass->chained ? NSX_PMU_EVENT_COUNTER_SIZE_32 : NSX_PMU_EVENT_COUNTER_SIZE_16;
     uint32_t index;
-    ARM_PMU_Disable();
-    ARM_PMU_CNTR_Disable(0xFFFFFFFFu);
+    nsx_pmu_reset_config(&s_pmu_cfg);
+    s_pmu_cfg.api = &nsx_pmu_V1_0_0;
     for (index = 0u; index < pass->count; ++index)
     {
-        if (pass->chained)
-        {
-            ARM_PMU_Set_EVTYPER(2u * index, pass->event_ids[index]);
-            ARM_PMU_Set_EVTYPER(2u * index + 1u, ARM_PMU_CHAIN);
-        }
-        else
-        {
-            ARM_PMU_Set_EVTYPER(index, pass->event_ids[index]);
-        }
+        nsx_pmu_event_create(&s_pmu_cfg.events[index], pass->event_ids[index], size);
     }
+    /* SESSION_PLAN checks make this succeed. */
+    (void)nsx_pmu_init(&s_pmu_cfg);
+    /* Its overflow IRQ handler clears OVS. */
+    ARM_PMU_Set_CNTR_IRQ_Disable(0xFFFFFFFFu);
+    ARM_PMU_Disable();
 }
 
-/* Reset every counter and the overflow status, then start the pass's slots and CCNTR
- * together. Called immediately before the DWT start read of each sample. */
-static void pmu_sample_start(uint32_t slot_mask)
+/* The enable store opens the window. */
+static void pmu_sample_start(void)
 {
-    ARM_PMU_Disable();
-    ARM_PMU_CNTR_Disable(0xFFFFFFFFu);
-    ARM_PMU_EVCNTR_ALL_Reset();
-    ARM_PMU_CYCCNT_Reset();
-    ARM_PMU_Set_CNTR_OVS(0xFFFFFFFFu);
-    ARM_PMU_CNTR_Enable(slot_mask | HCT_PMU_CCNTR_BIT);
+    nsx_pmu_reset_counters();
     ARM_PMU_Enable();
 }
 
-/* Stop the counters, read them and the overflow status register (bit n = slot n,
- * bit 31 = CCNTR), and clear exactly the overflow bits that were set. A chained
- * pair's overflow is the high (odd) slot's bit; the low slot overflowing is what
- * feeds the chain and is expected. */
-static void pmu_sample_stop(const hct_pmu_pass_t *pass, uint32_t slot_mask, uint32_t dwt_elapsed, hct_pmu_sample_t *out)
+/* Inlined; one store closes the window. */
+__attribute__((always_inline)) static inline void pmu_sample_stop(const hct_pmu_pass_t *pass, uint32_t dwt_elapsed, hct_pmu_sample_t *out)
 {
     uint32_t ovs;
     uint32_t index;
-    (void)dwt_elapsed;
-    ARM_PMU_CNTR_Disable(slot_mask | HCT_PMU_CCNTR_BIT);
+    ARM_PMU_CNTR_Disable(0xFFFFFFFFu);
+    /* The module's read resets these. */
     out->ccntr = ARM_PMU_Get_CCNTR();
     ovs = ARM_PMU_Get_CNTR_OVS();
+    (void)dwt_elapsed;
     out->ccntr_overflow = (ovs & HCT_PMU_CCNTR_BIT) ? 1u : 0u;
+    (void)nsx_pmu_get_counters(&s_pmu_cfg);
+    ARM_PMU_Disable();
     for (index = 0u; index < pass->count; ++index)
     {
-        if (pass->chained)
-        {
-            const uint32_t low = ARM_PMU_Get_EVCNTR(2u * index) & HCT_PMU_EVCNTR_MASK;
-            const uint32_t high = ARM_PMU_Get_EVCNTR(2u * index + 1u) & HCT_PMU_EVCNTR_MASK;
-            out->values[index] = (high << 16) | low;
-            out->overflow[index] = (ovs & (1u << (2u * index + 1u))) ? 1u : 0u;
-        }
-        else
-        {
-            out->values[index] = ARM_PMU_Get_EVCNTR(index) & HCT_PMU_EVCNTR_MASK;
-            out->overflow[index] = (ovs & (1u << index)) ? 1u : 0u;
-        }
+        /* Chained counter i: slots 2i, 2i+1. */
+        const uint32_t slot = pass->chained ? (2u * index + 1u) : index;
+        out->values[index] = s_pmu_cfg.counter[index].counterValue;
+        out->overflow[index] = (uint8_t)((ovs >> slot) & 1u);
         out->supported[index] = 1u;
     }
-    if (ovs != 0u)
-    {
-        ARM_PMU_Set_CNTR_OVS(ovs);
-    }
-    ARM_PMU_Disable();
 }
 #else
-static uint32_t pmu_pass_slot_mask(const hct_pmu_pass_t *pass) { (void)pass; return 0u; }
+static bool pmu_event_known(uint16_t event_id) { (void)event_id; return true; }
 static void pmu_pass_program(const hct_pmu_pass_t *pass) { (void)pass; }
-static void pmu_sample_start(uint32_t slot_mask) { (void)slot_mask; }
-static void pmu_sample_stop(const hct_pmu_pass_t *pass, uint32_t slot_mask, uint32_t dwt_elapsed, hct_pmu_sample_t *out)
+static void pmu_sample_start(void) {}
+static void pmu_sample_stop(const hct_pmu_pass_t *pass, uint32_t dwt_elapsed, hct_pmu_sample_t *out)
 {
     uint32_t index;
-    (void)slot_mask;
     out->ccntr = dwt_elapsed;
     out->ccntr_overflow = 0u;
     for (index = 0u; index < pass->count; ++index)
@@ -877,10 +852,10 @@ static hctp_status_t finish_case(hct_server_session_t *session)
 /* SESSION_PLAN: u16 case_count, u8 transfer_mode, u16 warmups, u16 samples,
  * u32 iterations_per_sample, u32 min_cycles, u32 max_iterations, u8 pass_count,
  * per pass (text name, u8 chained, u8 counter_count, u16 event_id[counter_count]),
- * then per case (text case_id, u32 kernel_id). Event ids are not validated against
- * a list -- whatever the host asks for is programmed and reported -- but a pass that
- * cannot fit the PMU (too many counters, or more chained slots than the core has) is
- * rejected here rather than silently truncated at RUN_PERFORMANCE time. */
+ * then per case (text case_id, u32 kernel_id). A pass that cannot fit the PMU (too
+ * many counters, more chained slots than the core has, or an event id the PMU module
+ * does not know) is rejected here rather than silently truncated at RUN_PERFORMANCE
+ * time. */
 static hctp_status_t parse_pmu_passes(hct_server_session_t *session, hct_cursor_t *cursor)
 {
     const uint8_t slots_available = hct_benchmark_server_pmu_counter_slots();
@@ -921,6 +896,13 @@ static hctp_status_t parse_pmu_passes(hct_server_session_t *session, hct_cursor_
         if (cursor->overrun)
         {
             return HCTP_STATUS_TRUNCATED_FRAME;
+        }
+        for (counter_index = 0u; counter_index < pass->count; ++counter_index)
+        {
+            if (!pmu_event_known(pass->event_ids[counter_index]))
+            {
+                return HCTP_STATUS_INVALID_ARGUMENT;
+            }
         }
         slots_needed = pass->chained ? (2u * pass->count) : pass->count;
         if (slots_available > 0u && slots_needed > slots_available)
@@ -1193,6 +1175,36 @@ static hctp_status_t handle_run_correctness(hct_server_session_t *session)
     return queue_correctness_output(session);
 }
 
+/* Own function: stable window layout. */
+__attribute__((noinline)) static bool time_one_sample(hct_server_session_t *session,
+                                                      const hct_pmu_pass_t *pass,
+                                                      uint32_t iterations,
+                                                      hct_pmu_sample_t *out,
+                                                      uint32_t *elapsed)
+{
+    uint32_t iter;
+    uint32_t start;
+    uint32_t end;
+    pmu_sample_start();
+    start = dwt_cycles();
+    /* resolve_iterations never returns 0. */
+    iter = 0u;
+    do
+    {
+        arm_cmsis_nn_status status = hct_run_kernel_once(session);
+        session->last_kernel_status = status;
+        if (kernel_status_is_fatal(session, status))
+        {
+            /* Next pass program parks the PMU. */
+            return false;
+        }
+    } while (++iter < iterations);
+    end = dwt_cycles();
+    pmu_sample_stop(pass, end - start, out);
+    *elapsed = end - start;
+    return true;
+}
+
 static hctp_status_t handle_run_performance(hct_server_session_t *session)
 {
     uint32_t pass_index;
@@ -1203,7 +1215,6 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
     for (pass_index = 0u; pass_index < session->pass_count; ++pass_index)
     {
         const hct_pmu_pass_t *pass = &session->passes[pass_index];
-        const uint32_t slot_mask = pmu_pass_slot_mask(pass);
         enable_dwt();
         pmu_pass_program(pass);
         for (warmup = 0u; warmup < session->planned_warmups; ++warmup)
@@ -1218,24 +1229,12 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
         for (sample_index = 0u; sample_index < session->planned_samples; ++sample_index)
         {
             hct_pmu_sample_t sample;
-            uint32_t iter;
-            uint32_t start;
-            uint32_t end;
-            pmu_sample_start(slot_mask);
-            start = dwt_cycles();
-            for (iter = 0u; iter < iterations; ++iter)
+            uint32_t elapsed;
+            if (!time_one_sample(session, pass, iterations, &sample, &elapsed))
             {
-                arm_cmsis_nn_status status = hct_run_kernel_once(session);
-                session->last_kernel_status = status;
-                if (kernel_status_is_fatal(session, status))
-                {
-                    pmu_sample_stop(pass, slot_mask, 0u, &sample);
-                    return HCTP_STATUS_INVALID_ARGUMENT;
-                }
+                return HCTP_STATUS_INVALID_ARGUMENT;
             }
-            end = dwt_cycles();
-            pmu_sample_stop(pass, slot_mask, end - start, &sample);
-            if (queue_sample_result(session, (uint16_t)sample_index, iterations, (uint64_t)(end - start), pass, &sample) != HCTP_STATUS_OK)
+            if (queue_sample_result(session, (uint16_t)sample_index, iterations, (uint64_t)elapsed, pass, &sample) != HCTP_STATUS_OK)
             {
                 return HCTP_STATUS_TRUNCATED_FRAME;
             }
