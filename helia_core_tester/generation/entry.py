@@ -18,7 +18,7 @@ from helia_core_tester.contract.ir import ContractSet
 from helia_core_tester.generation.kernel_dispatch import DIRECT_ENTRIES, resolve_direct_entry
 
 # Operators whose template renders its kernel and sizer calls by binding from the contract.
-CONTRACT_BOUND_OPERATORS: frozenset[str] = frozenset({"Convolve"})
+CONTRACT_BOUND_OPERATORS: frozenset[str] = frozenset({"Convolve", "DepthwiseConv"})
 
 ENTRY_SCRATCH_NONE = "none"
 

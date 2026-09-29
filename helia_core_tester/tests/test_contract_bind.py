@@ -13,6 +13,7 @@ from helia_core_tester.contract.bind import (
     ContractBindError,
     bind,
     check_types,
+    param_type,
     pointer_element,
     takes,
 )
@@ -92,6 +93,12 @@ def test_a_parameterless_function_binds_to_nothing() -> None:
     assert bind(_decl("arm_fx_void"), POOL) == {}
 
 
+def test_param_type_follows_aliases() -> None:
+    assert param_type(DW_S16, "bias_data") == "const int64_t *"
+    assert param_type(LEGACY_S4, "bias_data") == "const int32_t *"
+    assert param_type(LEGACY_S4, "weight_sum_ctx") == ""
+
+
 def test_takes_follows_aliases() -> None:
     assert takes(LEGACY_S4, "input_data") and takes(LEGACY_S4, "input") and not takes(LEGACY_S4, "weight_sum_ctx")
 
@@ -141,6 +148,7 @@ def test_template_global_renders_like_contract_call() -> None:
     rendered = env.from_string("return {{ contract_bind('arm_fx_depthwise_s16', pool, indent='    ') }};").render(pool=POOL)
     assert rendered == "return " + render_call(DW_S16, bind(DW_S16, POOL), indent="    ") + ";"
     assert env.from_string("{{ contract_takes('arm_fx_depthwise_s4', 'input_data') }}").render() == "True"
+    assert env.from_string("{{ contract_param_type('arm_fx_depthwise_s4', 'bias_data') }}").render() == "const int32_t *"
     with pytest.raises(ContractBindError, match="cannot supply"):
         env.from_string("{{ contract_bind('arm_fx_depthwise_s16', {'ctx': '&c'}) }}").render()
 

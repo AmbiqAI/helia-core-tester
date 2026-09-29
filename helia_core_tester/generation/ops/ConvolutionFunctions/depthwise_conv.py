@@ -744,6 +744,8 @@ class OpDepthwiseConv(OperationBase):
                      + output_dims['n'] * output_dims['h'] * output_dims['w'] * output_dims['c']) * element_size
                 ),
             )
+            if kernel_info.get("entry_scratch_bytes") is not None:
+                buffer_size_max = max(buffer_size_max, int(kernel_info["entry_scratch_bytes"]))
 
             context = {
                 'name': name,
@@ -770,6 +772,7 @@ class OpDepthwiseConv(OperationBase):
                 'call_style': kernel_info.get("call_style", "baseline"),
                 'buffer_size_max': buffer_size_max,
                 'force_no_scratch': bool(self._hint().get("force_no_scratch", False)),
+                'entry_scratch_bytes': kernel_info.get("entry_scratch_bytes"),
                 'float_kernel': True,
                 'dw_conv_params_type': (
                     'cmsis_nn_dw_conv_params_f16'
@@ -992,6 +995,18 @@ class OpDepthwiseConv(OperationBase):
             input_dims, filter_dims, output_dims,
             output_dtype=activation_dtype
         )
+        if kernel_info.get("entry_scratch_bytes") is not None:
+            buffer_size_max = max(buffer_size_max, int(kernel_info["entry_scratch_bytes"]))
+        # A contract entry (entry: outside DIRECT_ENTRIES) gets the weight-sum context exactly
+        # when its prototype takes one; the table's kernels keep the rules they always had.
+        takes_weight_sum_ctx = kernel_info["kernel_fn"] == "arm_depthwise_conv_wrapper_s8" or bool(
+            kernel_info.get("direct_entry"))
+        if kernel_info.get("entry_family") == "contract":
+            from helia_core_tester.contract import render as contract_render
+            from helia_core_tester.contract.bind import takes
+
+            takes_weight_sum_ctx = takes(
+                contract_render.load_current_contracts().require(kernel_info["kernel_fn"]), "weight_sum_ctx")
         
         
         # Build template context
@@ -1017,9 +1032,8 @@ class OpDepthwiseConv(OperationBase):
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
             'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
-            # Entries share the s8 wrapper's argument list but size scratch from the dims alone.
-            'takes_weight_sum_ctx': kernel_info["kernel_fn"] == "arm_depthwise_conv_wrapper_s8"
-            or bool(kernel_info.get("direct_entry")),
+            'takes_weight_sum_ctx': takes_weight_sum_ctx,
+            'entry_scratch_bytes': kernel_info.get("entry_scratch_bytes"),
             'direct_entry': bool(kernel_info.get("direct_entry")),
             'expected_status': self.expected_status(),
             'planar_supported': self.desc.get("planar_supported"),

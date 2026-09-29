@@ -4,6 +4,9 @@
 {% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 {% from "common/standalone/validation.j2" import validation_outputs with context %}
 
+// The kernel this harness links must have the prototype the ns-cmsis-nn export records.
+{{ contract_parity_assert(kernel_fn) }}
+
 // Context for buffer allocation
 static cmsis_nn_context {{ name }}_ctx;
 
@@ -32,28 +35,24 @@ int32_t {{ name }}_run(
     {{ output_dtype }}* __restrict output
 ) {
     
+    {#
+      The scratch query and the kernel call are bound from pools of every value this harness
+      can supply (contract_bind): the contract picks and orders the ones each prototype takes
+      and refuses one it cannot supply, so any public depthwise entry renders here.
+    #}
+    {% set sizer_pool = {
+        'dw_conv_params': '&' ~ name ~ '_dw_conv_params',
+        'input_dims': '&' ~ name ~ '_input_dims',
+        'filter_dims': '&' ~ name ~ '_filter_dims',
+        'output_dims': '&' ~ name ~ '_output_dims',
+        'layout': kernel_layout | default('ARM_NN_LAYOUT_NHWC'),
+    } %}
+    {% if kernel_get_buffer_size_fn %}
     // Calculate required buffer size
-    {% if float_kernel %}
-    int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
-        &{{ name }}_dw_conv_params,
-        &{{ name }}_input_dims,
-        &{{ name }}_filter_dims,
-        &{{ name }}_output_dims{% if buffer_size_needs_layout %},
-        {{ kernel_layout }}
-        {% endif %}
-    );
-    {% elif direct_entry %}
-    int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
-        &{{ name }}_input_dims,
-        &{{ name }}_filter_dims
-    );
+    int32_t required_buffer_size = {{ contract_bind(kernel_get_buffer_size_fn, sizer_pool) }};
     {% else %}
-    int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
-        &{{ name }}_dw_conv_params,
-        &{{ name }}_input_dims,
-        &{{ name }}_filter_dims,
-        &{{ name }}_output_dims
-    );
+    // The entry takes no scratch query (entry_scratch in the descriptor).
+    int32_t required_buffer_size = {{ entry_scratch_bytes }};
     {% endif %}
     // Armed before the capacity check below: an early return there would otherwise leave
     // these canaries unstamped, and the unconditional check in _test_case_run would
@@ -72,8 +71,10 @@ int32_t {{ name }}_run(
     // answer is the documented out-of-range sentinel and never a usable size; an answer
     // above this case's static means our generation-time bound and the shipped kernel
     // disagree. They are separate failures because they have separate owners.
+    {% if kernel_get_buffer_size_fn %}
     HELIA_VALIDATE_SIZER("{{ kernel_get_buffer_size_fn }}", required_buffer_size);
     HELIA_VALIDATE_SIZER_FITS("{{ kernel_get_buffer_size_fn }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
+    {% endif %}
 
     // Initialize context buffer
     // Armed unconditionally: force_no_scratch bypasses {{ name }}_buffer entirely,
@@ -113,51 +114,27 @@ int32_t {{ name }}_run(
     {% endif %}
 
     // Call depthwise convolution kernel
-    {% if float_kernel %}
-    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
-        &{{ name }}_ctx,
-        &{{ name }}_dw_conv_params,
-        &{{ name }}_input_dims,
-        input,
-        &{{ name }}_filter_dims,
-        {{ name }}_weights,
-        &{{ name }}_bias_dims,
-        {% if has_biases %}
-        {{ name }}_biases,
-        {% else %}
-        NULL,
-        {% endif %}
-        &{{ name }}_output_dims,
-        output{% if kernel_needs_layout %},
-        {{ kernel_layout }}
-        {% endif %}
-    );
-    {% else %}
-    arm_cmsis_nn_status kernel_status = {{ kernel_fn }}(
-        &{{ name }}_ctx,
-        {% if takes_weight_sum_ctx and has_weight_sum %}
-        &{{ name }}_weight_sum_ctx,
-        {% endif %}
-        &{{ name }}_dw_conv_params,
-        &{{ name }}_quant_params,
-        &{{ name }}_input_dims,
-        input,
-        &{{ name }}_filter_dims,
-        {{ name }}_weights,
-        &{{ name }}_bias_dims,
-        {% if has_biases %}
-        {% if kernel_fn == 'arm_depthwise_conv_wrapper_s16' %}
-        (const int64_t*){{ name }}_biases,
-        {% else %}
-        {{ name }}_biases,
-        {% endif %}
-        {% else %}
-        NULL,
-        {% endif %}
-        &{{ name }}_output_dims,
-        output
-    );
+    {% set bias_type = contract_param_type(kernel_fn, 'bias_data') %}
+    {% set dw_pool = {
+        'ctx': '&' ~ name ~ '_ctx',
+        'dw_conv_params': '&' ~ name ~ '_dw_conv_params',
+        'input_dims': '&' ~ name ~ '_input_dims',
+        'input_data': 'input',
+        'filter_dims': '&' ~ name ~ '_filter_dims',
+        'filter_data': name ~ '_weights',
+        'bias_dims': '&' ~ name ~ '_bias_dims',
+        'bias_data': (('(const int64_t*)' if 'int64_t' in bias_type else '') ~ name ~ '_biases') if has_biases else 'NULL',
+        'output_dims': '&' ~ name ~ '_output_dims',
+        'output_data': 'output',
+        'layout': kernel_layout | default('ARM_NN_LAYOUT_NHWC'),
+    } %}
+    {% if takes_weight_sum_ctx and has_weight_sum %}
+    {% set _ = dw_pool.update({'weight_sum_ctx': '&' ~ name ~ '_weight_sum_ctx'}) %}
     {% endif %}
+    {% if not float_kernel %}
+    {% set _ = dw_pool.update({'quant_params': '&' ~ name ~ '_quant_params'}) %}
+    {% endif %}
+    arm_cmsis_nn_status kernel_status = {{ contract_bind(kernel_fn, dw_pool, indent='        ') }};
 
     return kernel_status;
 }

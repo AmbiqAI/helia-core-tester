@@ -59,9 +59,11 @@ def test_entry_case_calls_the_entry_with_weight_sums_and_its_scratch_query(tmp_p
     name = "depthwise_conv_entry_3x3_25x5_c64_s8"
     source = _source(name, tmp_path)
 
-    call = re.search(r"kernel_status = (\w+)\(\s*&\w+_ctx,\s*&(\w+)_weight_sum_ctx,", source)
+    # The calls are bound from the kernel contract, which names each argument in a comment.
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
+    call = re.search(r"kernel_status = (\w+)\(\s*&\w+_ctx,\s*&(\w+)_weight_sum_ctx,", code)
     assert call and call.group(1) == "arm_depthwise_conv_s8_opt_3x3"
-    assert re.search(r"arm_depthwise_conv_s8_opt_get_buffer_size\(\s*&\w+_input_dims,\s*&\w+_filter_dims\s*\)", source)
+    assert re.search(r"arm_depthwise_conv_s8_opt_get_buffer_size\(\s*&\w+_input_dims,\s*&\w+_filter_dims\s*\)", code)
     assert "arm_depthwise_conv_wrapper_s8(" not in source
     assert "HELIA_VALIDATE_OUTPUTS(" in source
 

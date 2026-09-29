@@ -5,6 +5,10 @@
 #include "test_runtime/helia_test_runtime.h"
 
 
+// The kernel this harness links must have the prototype the ns-cmsis-nn export records.
+_Static_assert(__builtin_types_compatible_p(__typeof__(arm_depthwise_conv_f32), arm_cmsis_nn_status (const cmsis_nn_context *, const cmsis_nn_dw_conv_params_f32 *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, float32_t *, arm_nn_tensor_layout)),
+               "arm_depthwise_conv_f32: prototype differs from the kernel contract export; rerun `python3 scripts/check_kernel_contract.py export` in ns-cmsis-nn and regenerate");
+
 // Context for buffer allocation
 static cmsis_nn_context depthwise_conv_float_default_f32_ctx;
 
@@ -40,11 +44,11 @@ int32_t depthwise_conv_float_default_f32_run(
     
     // Calculate required buffer size
     int32_t required_buffer_size = arm_depthwise_conv_f32_get_buffer_size(
-        &depthwise_conv_float_default_f32_dw_conv_params,
-        &depthwise_conv_float_default_f32_input_dims,
-        &depthwise_conv_float_default_f32_filter_dims,
-        &depthwise_conv_float_default_f32_output_dims,
-        ARM_NN_LAYOUT_NHWC
+        &depthwise_conv_float_default_f32_dw_conv_params, /* dw_conv_params */
+        &depthwise_conv_float_default_f32_input_dims, /* input_dims */
+        &depthwise_conv_float_default_f32_filter_dims, /* filter_dims */
+        &depthwise_conv_float_default_f32_output_dims, /* output_dims */
+        ARM_NN_LAYOUT_NHWC /* layout */
     );
     // Armed before the capacity check below: an early return there would otherwise leave
     // these canaries unstamped, and the unconditional check in _test_case_run would
@@ -73,17 +77,17 @@ int32_t depthwise_conv_float_default_f32_run(
 
     // Call depthwise convolution kernel
     arm_cmsis_nn_status kernel_status = arm_depthwise_conv_f32(
-        &depthwise_conv_float_default_f32_ctx,
-        &depthwise_conv_float_default_f32_dw_conv_params,
-        &depthwise_conv_float_default_f32_input_dims,
-        input,
-        &depthwise_conv_float_default_f32_filter_dims,
-        depthwise_conv_float_default_f32_weights,
-        &depthwise_conv_float_default_f32_bias_dims,
-        depthwise_conv_float_default_f32_biases,
-        &depthwise_conv_float_default_f32_output_dims,
-        output,
-        ARM_NN_LAYOUT_NHWC
+        &depthwise_conv_float_default_f32_ctx, /* ctx */
+        &depthwise_conv_float_default_f32_dw_conv_params, /* dw_conv_params */
+        &depthwise_conv_float_default_f32_input_dims, /* input_dims */
+        input, /* input */
+        &depthwise_conv_float_default_f32_filter_dims, /* filter_dims */
+        depthwise_conv_float_default_f32_weights, /* kernel */
+        &depthwise_conv_float_default_f32_bias_dims, /* bias_dims */
+        depthwise_conv_float_default_f32_biases, /* bias */
+        &depthwise_conv_float_default_f32_output_dims, /* output_dims */
+        output, /* output */
+        ARM_NN_LAYOUT_NHWC /* layout */
     );
 
     return kernel_status;

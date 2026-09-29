@@ -1787,6 +1787,1347 @@
       ]
     },
     {
+      "name": "arm_depthwise_conv_3x3_s8",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2254,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_fast_s16",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2193,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const int16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int64_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "int16_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_fast_s16_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2218,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s16",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2022,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const int16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int64_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "int16_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s4",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1982,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "kernel",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias",
+          "type": "const int32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in,out",
+          "name": "output",
+          "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s4_opt",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2609,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s4_opt_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2650,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s8",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1940,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s8_opt",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2332,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "weight_sum_ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s8_opt_3x3",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2496,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "weight_sum_ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s8_opt_3x3_c64_s1",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2541,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "weight_sum_ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s8_opt_3x3_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2568,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s8_opt_channelwise",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2440,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "weight_sum_ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s8_opt_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2634,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s8_opt_planar",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2403,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "weight_sum_ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s8_opt_planar_supported",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2369,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_s16",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2075,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const int16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int64_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "int16_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_s16_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2112,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_s16_get_buffer_size_dsp",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2128,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_s16_get_buffer_size_mve",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 2145,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_s4",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1772,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_s4_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1871,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_s4_get_buffer_size_dsp",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1888,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_s4_get_buffer_size_mve",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1906,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_s8",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1724,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "weight_sum_ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "quant_params",
+          "type": "const cmsis_nn_per_channel_quant_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_data",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output_data",
+          "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_s8_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1811,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_s8_get_buffer_size_dsp",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1827,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_s8_get_buffer_size_mve",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1843,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_convolve_weight_sum",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1454,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "out",
+          "name": "vector_sum_buf",
+          "type": "int32_t *"
+        },
+        {
+          "direction": "in,out",
+          "name": "scratch_buf",
+          "type": "int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "rhs",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "lhs_offset",
+          "type": "const int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "bias_data",
+          "type": "const int32_t *"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_1_x_n_f16",
       "header": "Include/arm_nnfunctions_flt.h",
       "line": 2379,
@@ -2944,6 +4285,554 @@
         {
           "direction": "in",
           "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_f16",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 2224,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params_f16 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "kernel",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "layout",
+          "type": "arm_nn_tensor_layout"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_f16_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 2263,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params_f16 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "layout",
+          "type": "arm_nn_tensor_layout"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_f32",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 119,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params_f32 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "kernel",
+          "type": "const float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias",
+          "type": "const float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "layout",
+          "type": "arm_nn_tensor_layout"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_f32_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 188,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params_f32 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "layout",
+          "type": "arm_nn_tensor_layout"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_f16",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 2249,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params_f16 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "kernel",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "float16_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_f16_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 2272,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params_f16 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_f32",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 158,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params_f32 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "kernel",
+          "type": "const float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias",
+          "type": "const float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "float32_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_wrapper_f32_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 204,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params_f32 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_nhwc_conv_f16",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 2200,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params_f16 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "kernel",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "float16_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_nhwc_conv_f32",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 79,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in,out",
+          "name": "ctx",
+          "type": "const cmsis_nn_context *"
+        },
+        {
+          "direction": "in",
+          "name": "dw_conv_params",
+          "type": "const cmsis_nn_dw_conv_params_f32 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "kernel",
+          "type": "const float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "bias_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "bias",
+          "type": "const float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "float32_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s8_opt_get_buffer_size_dsp",
+      "header": "Include/arm_nnsupportfunctions.h",
+      "line": 608,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_depthwise_conv_s8_opt_get_buffer_size_mve",
+      "header": "Include/arm_nnsupportfunctions.h",
+      "line": 593,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
           "type": "const cmsis_nn_dims *"
         }
       ]
