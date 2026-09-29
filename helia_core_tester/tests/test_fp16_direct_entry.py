@@ -10,6 +10,7 @@ import pytest
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.kernel_dispatch import DIRECT_ENTRIES, resolve_direct_entry
 from helia_core_tester.generation.test_ops import _required_kernel_symbols, generate_test
+from helia_core_tester.generation.utils.temp_sizer_probe import probe_header_symbols
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _FP16_ENTRIES = {name: spec for name, spec in DIRECT_ENTRIES.items() if spec.activation_dtype == "FP16"}
@@ -90,6 +91,12 @@ def test_acc16_case_is_gated_on_the_checkout() -> None:
 def test_entry_case_calls_the_entry_with_its_layout_arguments(
     name, entry, sizer, call_has_layout, sizer_has_layout, tmp_path: Path
 ) -> None:
+    # The pipeline skips a case whose entry this ns-cmsis-nn checkout does not declare, and
+    # the Convolve template renders its call from the kernel contract, which cannot name one.
+    desc = _descriptors()[name]
+    required = _required_kernel_symbols(desc)
+    if desc.get("operator") == "Convolve" and required and not probe_header_symbols(required):
+        pytest.skip(f"{name}: this ns-cmsis-nn checkout does not declare {required}")
     source = _source(name, tmp_path)
 
     assert ("ARM_NN_LAYOUT_" in _call(source, entry)) is call_has_layout

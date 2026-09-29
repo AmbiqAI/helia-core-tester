@@ -56,9 +56,12 @@ def test_entry_gates_the_case_on_the_checkout() -> None:
 def test_entry_case_calls_the_entry_with_arm_convolve_s8_arguments(tmp_path: Path) -> None:
     source = _source("convolve_entry_small_cin3_8x8_k3x3_co16_s8", tmp_path)
 
-    call = re.search(r"return (\w+)\(\s*&\w+_ctx,\s*&\w+_weight_sum_ctx,(.*?)\);", source, re.S)
+    # The call is rendered from the kernel contract, which names each argument in a comment.
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
+    call = re.search(r"return (\w+)\(\s*&\w+_ctx,\s*&\w+_weight_sum_ctx,(.*?)\);", code, re.S)
     assert call and call.group(1) == "arm_convolve_s8_small_cin"
-    assert "NULL,  // upscale_dims" in call.group(2)
+    args = [arg.strip() for arg in call.group(2).split(",")]
+    assert args[8] == "NULL" and "NULL, /* upscale_dims */" in source
     assert re.search(r"arm_convolve_s8_get_buffer_size\(\s*&\w+_input_dims,\s*&\w+_filter_dims\s*\)", source)
     assert "arm_convolve_weight_sum(" in source
     assert "arm_convolve_wrapper_s8(" not in source

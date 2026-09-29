@@ -1,0 +1,169 @@
+/* Verbatim declarations of every arm_convolve_* kernel from ns-cmsis-nn arm_nnfunctions_flt.h; the
+ * fallback contract for unit tests without a checkout. test_convolve_contract_fixture_matches_the_real_tree
+ * keeps it equal to the export. */
+
+#if ARM_NN_ENABLE_F16
+arm_cmsis_nn_status arm_convolve_1_x_n_f16(const cmsis_nn_context *ctx,
+                                           const cmsis_nn_conv_params_f16 *conv_params,
+                                           const cmsis_nn_dims *input_dims,
+                                           const float16_t *input_data,
+                                           const cmsis_nn_dims *filter_dims,
+                                           const float16_t *filter_data,
+                                           const cmsis_nn_dims *bias_dims,
+                                           const float16_t *bias_data,
+                                           const cmsis_nn_dims *output_dims,
+                                           float16_t *output_data,
+                                           arm_nn_tensor_layout layout);
+
+arm_cmsis_nn_status arm_convolve_1_x_n_nhwc_f16(const cmsis_nn_context *ctx,
+                                                const cmsis_nn_conv_params_f16 *conv_params,
+                                                const cmsis_nn_dims *input_dims,
+                                                const float16_t *input_data,
+                                                const cmsis_nn_dims *filter_dims,
+                                                const float16_t *filter_data,
+                                                const cmsis_nn_dims *bias_dims,
+                                                const float16_t *bias_data,
+                                                const cmsis_nn_dims *output_dims,
+                                                float16_t *output_data);
+
+arm_cmsis_nn_status arm_convolve_1x1_f16(const cmsis_nn_context *ctx,
+                                         const cmsis_nn_conv_params_f16 *conv_params,
+                                         const cmsis_nn_dims *input_dims,
+                                         const float16_t *input_data,
+                                         const cmsis_nn_dims *filter_dims,
+                                         const float16_t *filter_data,
+                                         const cmsis_nn_dims *bias_dims,
+                                         const float16_t *bias_data,
+                                         const cmsis_nn_dims *output_dims,
+                                         float16_t *output_data,
+                                         arm_nn_tensor_layout layout);
+
+arm_cmsis_nn_status arm_convolve_1x1_nhwc_f16(const cmsis_nn_context *ctx,
+                                              const cmsis_nn_conv_params_f16 *conv_params,
+                                              const cmsis_nn_dims *input_dims,
+                                              const float16_t *input_data,
+                                              const cmsis_nn_dims *filter_dims,
+                                              const float16_t *filter_data,
+                                              const cmsis_nn_dims *bias_dims,
+                                              const float16_t *bias_data,
+                                              const cmsis_nn_dims *output_dims,
+                                              float16_t *output_data);
+
+arm_cmsis_nn_status arm_convolve_f16(const cmsis_nn_context *ctx,
+                                     const cmsis_nn_conv_params_f16 *conv_params,
+                                     const cmsis_nn_dims *input_dims,
+                                     const float16_t *input_data,
+                                     const cmsis_nn_dims *filter_dims,
+                                     const float16_t *filter_data,
+                                     const cmsis_nn_dims *bias_dims,
+                                     const float16_t *bias_data,
+                                     const cmsis_nn_dims *output_dims,
+                                     float16_t *output_data,
+                                     arm_nn_tensor_layout layout);
+
+arm_cmsis_nn_status arm_convolve_nhwc_f16(const cmsis_nn_context *ctx,
+                                          const cmsis_nn_conv_params_f16 *conv_params,
+                                          const cmsis_nn_dims *input_dims,
+                                          const float16_t *input_data,
+                                          const cmsis_nn_dims *filter_dims,
+                                          const float16_t *filter_data,
+                                          const cmsis_nn_dims *bias_dims,
+                                          const float16_t *bias_data,
+                                          const cmsis_nn_dims *output_dims,
+                                          float16_t *output_data);
+
+arm_cmsis_nn_status arm_convolve_wrapper_f16(const cmsis_nn_context *ctx,
+                                             const cmsis_nn_conv_params_f16 *conv_params,
+                                             const cmsis_nn_dims *input_dims,
+                                             const float16_t *input_data,
+                                             const cmsis_nn_dims *filter_dims,
+                                             const float16_t *filter_data,
+                                             const cmsis_nn_dims *bias_dims,
+                                             const float16_t *bias_data,
+                                             const cmsis_nn_dims *output_dims,
+                                             float16_t *output_data);
+
+#endif
+
+#if ARM_NN_ENABLE_F32
+arm_cmsis_nn_status arm_convolve_1_x_n_f32(const cmsis_nn_context *ctx,
+                                           const cmsis_nn_conv_params_f32 *conv_params,
+                                           const cmsis_nn_dims *input_dims,
+                                           const float32_t *input_data,
+                                           const cmsis_nn_dims *filter_dims,
+                                           const float32_t *filter_data,
+                                           const cmsis_nn_dims *bias_dims,
+                                           const float32_t *bias_data,
+                                           const cmsis_nn_dims *output_dims,
+                                           float32_t *output_data,
+                                           arm_nn_tensor_layout layout);
+
+arm_cmsis_nn_status arm_convolve_1_x_n_nhwc_f32(const cmsis_nn_context *ctx,
+                                                const cmsis_nn_conv_params_f32 *conv_params,
+                                                const cmsis_nn_dims *input_dims,
+                                                const float32_t *input_data,
+                                                const cmsis_nn_dims *filter_dims,
+                                                const float32_t *filter_data,
+                                                const cmsis_nn_dims *bias_dims,
+                                                const float32_t *bias_data,
+                                                const cmsis_nn_dims *output_dims,
+                                                float32_t *output_data);
+
+arm_cmsis_nn_status arm_convolve_1x1_f32(const cmsis_nn_context *ctx,
+                                         const cmsis_nn_conv_params_f32 *conv_params,
+                                         const cmsis_nn_dims *input_dims,
+                                         const float32_t *input_data,
+                                         const cmsis_nn_dims *filter_dims,
+                                         const float32_t *filter_data,
+                                         const cmsis_nn_dims *bias_dims,
+                                         const float32_t *bias_data,
+                                         const cmsis_nn_dims *output_dims,
+                                         float32_t *output_data,
+                                         arm_nn_tensor_layout layout);
+
+arm_cmsis_nn_status arm_convolve_1x1_nhwc_f32(const cmsis_nn_context *ctx,
+                                              const cmsis_nn_conv_params_f32 *conv_params,
+                                              const cmsis_nn_dims *input_dims,
+                                              const float32_t *input_data,
+                                              const cmsis_nn_dims *filter_dims,
+                                              const float32_t *filter_data,
+                                              const cmsis_nn_dims *bias_dims,
+                                              const float32_t *bias_data,
+                                              const cmsis_nn_dims *output_dims,
+                                              float32_t *output_data);
+
+arm_cmsis_nn_status arm_convolve_f32(const cmsis_nn_context *ctx,
+                                     const cmsis_nn_conv_params_f32 *conv_params,
+                                     const cmsis_nn_dims *input_dims,
+                                     const float32_t *input_data,
+                                     const cmsis_nn_dims *filter_dims,
+                                     const float32_t *filter_data,
+                                     const cmsis_nn_dims *bias_dims,
+                                     const float32_t *bias_data,
+                                     const cmsis_nn_dims *output_dims,
+                                     float32_t *output_data,
+                                     arm_nn_tensor_layout layout);
+
+arm_cmsis_nn_status arm_convolve_nhwc_f32(const cmsis_nn_context *ctx,
+                                          const cmsis_nn_conv_params_f32 *conv_params,
+                                          const cmsis_nn_dims *input_dims,
+                                          const float32_t *input_data,
+                                          const cmsis_nn_dims *filter_dims,
+                                          const float32_t *filter_data,
+                                          const cmsis_nn_dims *bias_dims,
+                                          const float32_t *bias_data,
+                                          const cmsis_nn_dims *output_dims,
+                                          float32_t *output_data);
+
+arm_cmsis_nn_status arm_convolve_wrapper_f32(const cmsis_nn_context *ctx,
+                                             const cmsis_nn_conv_params_f32 *conv_params,
+                                             const cmsis_nn_dims *input_dims,
+                                             const float32_t *input_data,
+                                             const cmsis_nn_dims *filter_dims,
+                                             const float32_t *filter_data,
+                                             const cmsis_nn_dims *bias_dims,
+                                             const float32_t *bias_data,
+                                             const cmsis_nn_dims *output_dims,
+                                             float32_t *output_data);
+
+#endif
