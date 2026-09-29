@@ -168,8 +168,9 @@ def test_size_probe_builds_the_nsx_app(report_env: Path, monkeypatch, variant) -
     calls: dict[str, object] = {}
     monkeypatch.setattr(report, "ensure_build_tools", lambda root: calls.setdefault("tools", root))
 
-    def _stage(board, *, build_dir, options):
+    def _stage(board, *, build_dir, options, repo_root):
         calls["stage"] = (build_dir, options)
+        calls["repo_root"] = repo_root
 
     def _build(app_dir, *, board, build_dir, target, jobs, frozen):
         calls["build"] = (app_dir, build_dir, target)
@@ -188,11 +189,30 @@ def test_size_probe_builds_the_nsx_app(report_env: Path, monkeypatch, variant) -
     build_dir = out_dir / "build"
     staged_dir, options = calls["stage"]
     assert staged_dir == build_dir and calls["configure"] == build_dir
+    assert calls["repo_root"] == report_env
     assert options.build_size_probe and (options.enable_f32, options.enable_f16) == (variant.enable_f32, variant.enable_f16)
     assert calls["build"] == (report.nsx_app_dir(build_dir), build_dir, SIZE_PROBE_TARGET)
     data = json.loads((out_dir / "memory_report.json").read_text())
     assert data["variant"] == variant.name
     assert data["artifacts"]["elf"] == f"artifacts/hardware/size_probe/{DEFAULT_BOARD_ID}/{variant.name}/build/probe/{SIZE_PROBE_TARGET}.elf"
+
+
+def test_size_probe_renders_from_the_requested_checkout(report_env: Path, monkeypatch) -> None:
+    """The real staging path gets project_root."""
+    from helia_core_tester.hardware import nsx_app, nsx_cli
+
+    class _Rendered(Exception):
+        pass
+
+    def _render(board, options, app_dir, *, repo_root):
+        raise _Rendered(repo_root)
+
+    monkeypatch.setattr(report, "ensure_build_tools", lambda root: None)
+    monkeypatch.setattr(nsx_app, "render_app", _render)
+    monkeypatch.setattr(nsx_cli, "lock_is_current", lambda *a: True)
+    with pytest.raises(_Rendered) as info:
+        report.build_size_probe(BOARD, report.SIZE_PROBE_VARIANTS[0], project_root=report_env)
+    assert info.value.args[0] == report_env
 
 
 def test_memory_report_fails_closed_when_a_board_region_is_missing(tmp_path: Path, report_env: Path, monkeypatch) -> None:

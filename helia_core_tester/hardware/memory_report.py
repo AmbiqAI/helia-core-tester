@@ -309,7 +309,7 @@ def build_size_probe(board: BoardSpec, variant: SizeProbeVariant, *, project_roo
         build_size_probe=True,
     )
     ensure_build_tools(project_root)
-    stage_kernels(board, build_dir=build_dir, options=options)
+    stage_kernels(board, build_dir=build_dir, options=options, repo_root=project_root)
     app_dir = nsx_app_dir(build_dir)
     # Pre-NSX probe caches name the repo.
     _drop_foreign_cache(build_dir, app_dir)
