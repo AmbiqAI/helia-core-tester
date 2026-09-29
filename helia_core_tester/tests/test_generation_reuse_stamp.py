@@ -51,6 +51,9 @@ def _fake_checkout(root: Path) -> Path:
     schema_dir = root / "Tests" / "UnitTest" / "RefactoredTestGen"
     schema_dir.mkdir(parents=True, exist_ok=True)
     (schema_dir / "schema.fbs").write_text("table Model {}\n")
+    contracts = root / "Tests" / "KernelContracts"
+    contracts.mkdir(parents=True, exist_ok=True)
+    (contracts / "kernel_contracts.json").write_text('{"schema": "ns-cmsis-nn/kernel-contracts/1", "functions": []}\n')
     return root
 
 
@@ -192,7 +195,26 @@ def test_checkout_content_is_the_identity_when_the_root_is_not_a_git_tree(
     schema = root / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"
     schema.write_text("table Model { version:int; }\n")
     monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
-    assert reuse.cmsis_nn_checkout_identity() != after_table_edit
+    after_schema_edit = reuse.cmsis_nn_checkout_identity()
+    assert after_schema_edit != after_table_edit
+
+    # The exported kernel contract: a re-export after a prototype change must
+    # regenerate the cases whose call sites are rendered from it.
+    contract = root / "Tests" / "KernelContracts" / "kernel_contracts.json"
+    contract.write_text(contract.read_text().replace('"functions": []', '"functions": [{}]'))
+    monkeypatch.setattr(reuse, "_checkout_identity_cache", None)
+    assert reuse.cmsis_nn_checkout_identity() != after_schema_edit
+
+
+def test_stamp_schema_bump_invalidates_every_older_stamp(monkeypatch) -> None:
+    # Adding Tests/KernelContracts to the identity changed what a stamp means; a
+    # stamp minted under the previous schema must never validate a case now.
+    assert reuse._STAMP_SCHEMA == "helia-core-tester/generation-stamp/5"
+    assert "Tests/KernelContracts" in reuse._CMSIS_NN_INPUT_SUBTREES
+    descriptor = {"name": "Add_s8_basic", "operator": "Add", "shape": [1, 4]}
+    current = _stamp(descriptor)
+    monkeypatch.setattr(reuse, "_STAMP_SCHEMA", "helia-core-tester/generation-stamp/4")
+    assert _stamp(descriptor) != current
 
 
 def test_a_clean_git_checkout_is_identified_by_its_commit(monkeypatch, tmp_path: Path) -> None:

@@ -19,6 +19,7 @@ from helia_core_tester.core.path_layout import artifacts_root
 from helia_core_tester.core.pipeline import FullTestPipeline
 from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, RunStep
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
+from helia_core_tester.contract.cli import contract_app
 from helia_core_tester.hardware.cli import boards as boards_command
 from helia_core_tester.hardware.cli import hardware_app, probes_app
 
@@ -35,6 +36,7 @@ app = typer.Typer(
 
 app.add_typer(hardware_app, name="hardware")
 app.add_typer(probes_app, name="probes")
+app.add_typer(contract_app, name="contract")
 app.command(name="boards")(boards_command)
 
 
@@ -423,6 +425,29 @@ def doctor(
     for check in hardware_checks(repo_root):
         marker = "✓" if check.ok else "⚠"
         typer.echo(f"{marker} {check.label}: {check.detail}")
+
+    # The kernel contract export is optional for a checkout (older ns-cmsis-nn have
+    # none) but never allowed to be present and wrong.
+    from .contract.ir import ContractError, load_contract_set
+    from .generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
+
+    typer.echo("\nKernel contract (ns-cmsis-nn Tests/KernelContracts):")
+    cmsis_root = resolve_cmsis_nn_root()
+    try:
+        contracts = load_contract_set(cmsis_root)
+    except ContractError as error:
+        typer.echo(f"✗ kernel contract: {error}", err=True)
+        all_ok = False
+    else:
+        if contracts.present:
+            kinds = {}
+            for decl in contracts.functions.values():
+                kinds[decl.kind] = kinds.get(decl.kind, 0) + 1
+            typer.echo(f"✓ {contracts.path}: {len(contracts.functions)} public functions "
+                       f"({', '.join(f'{v} {k}' for k, v in sorted(kinds.items()))})")
+        else:
+            typer.echo(f"⚠ kernel contract: absent ({cmsis_root or 'no ns-cmsis-nn checkout resolved'}; "
+                       "contract-driven commands are unavailable)")
 
     if all_ok:
         typer.echo("\n✓ All preflight checks passed")
