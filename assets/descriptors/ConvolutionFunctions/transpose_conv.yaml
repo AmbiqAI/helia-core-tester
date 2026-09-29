@@ -376,3 +376,20 @@ padding: VALID
 use_bias: true
 fault: null_weight_sum_ctx
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# Contract entry (entry:): arm_transpose_conv_s8, the kernel the wrapper routes to off the
+# reverse-conv path, called directly and bound from the kernel contract. It takes no
+# weight-sum context; its output_ctx gets the reverse-conv buffer, which it documents as unused.
+operator: TransposeConv
+name: transpose_conv_entry_contract_s8_5x7_k3_co5_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_transpose_conv_s8
+hint:
+  call_style: per_tensor
+input_shape: [1, 5, 7, 6]
+filter_shape: [3, 3, 6, 5]
+strides: [2, 2]
+padding: SAME
+use_bias: true

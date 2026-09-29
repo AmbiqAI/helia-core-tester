@@ -12,11 +12,12 @@ from helia_core_tester.generation.harness.model import (
     HarnessInput,
     Provider,
     RuleCheck,
+    SizeQuery,
     render_declaration,
 )
 from helia_core_tester.generation.harness.plan import HarnessPlan, plan_harness
 
 __all__ = [
-    "ArgumentPool", "ArrayLiteral", "Declaration", "FaultEdit", "GuardedBuffer", "HarnessError", "HarnessInput", "HarnessPlan", "Provider", "RuleCheck",
+    "ArgumentPool", "ArrayLiteral", "Declaration", "FaultEdit", "GuardedBuffer", "HarnessError", "HarnessInput", "HarnessPlan", "Provider", "RuleCheck", "SizeQuery",
     "plan_harness", "render_declaration",
 ]

@@ -69,6 +69,9 @@ static cmsis_nn_context {{ name }}_ctx;
     // The entry takes no scratch query (entry_scratch in the descriptor).
     int32_t required_buffer_size = {{ harness.scratch_bytes }};
     {% endif %}
+    {% for var, call, fn, capacity in harness.size_queries %}
+    int32_t {{ var }} = {{ call }};
+    {% endfor %}
     // Armed before the capacity check below: an early return there would otherwise leave
     // these canaries unstamped, and the unconditional check in _test_case_run would
     // report a fabricated breach instead of the real sizer error (#68).
@@ -87,6 +90,10 @@ static cmsis_nn_context {{ name }}_ctx;
     HELIA_VALIDATE_SIZER("{{ harness.sizer_fn }}", required_buffer_size);
     HELIA_VALIDATE_SIZER_FITS("{{ harness.sizer_fn }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
     {% endif %}
+    {% for var, call, fn, capacity in harness.size_queries %}
+    HELIA_VALIDATE_SIZER("{{ fn }}", {{ var }});
+    HELIA_VALIDATE_SIZER_FITS("{{ fn }}", {{ var }}, {{ capacity }});
+    {% endfor %}
 
     // Initialize context buffer
     {% if force_no_scratch | default(false) %}

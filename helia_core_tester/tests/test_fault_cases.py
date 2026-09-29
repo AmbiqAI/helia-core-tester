@@ -46,7 +46,7 @@ FAULT_CASES = [
     ("transpose_conv_fault_nonunit_dilation_s8", "transpose_conv", "dilation.w = 2"),
     ("transpose_conv_fault_null_reverse_conv_ctx_buf_s8", "transpose_conv", ".buf = NULL"),
     ("transpose_conv_fault_null_weight_sum_ctx_s8", "transpose_conv", ".buf = NULL"),
-    ("transpose_conv_fault_null_output_f32", "transpose_conv", "*output_arg = NULL"),
+    ("transpose_conv_fault_null_output_f32", "transpose_conv", "NULL, /* output_data */"),
     ("fully_connected_fault_null_ctx_buf_s8", "fully_connected", ".buf = NULL"),
     ("fully_connected_fault_null_ctx_buf_s16", "fully_connected", ".buf = NULL"),
     ("fully_connected_fault_small_ctx_size_s16", "fully_connected", ".size = 1"),
@@ -74,7 +74,7 @@ FAULT_CASES = [
 # Families rendered by the generic harness: a fault is an edit of the passing case's pool,
 # so the buffers are armed in _run and checked in test_case_run, and a NULL-substituted
 # output is still declared, poisoned and checked untouched.
-HARNESS_SUFFIXES = {"convolve", "depthwise_conv", "fully_connected", "batch_matmul"}
+HARNESS_SUFFIXES = {"convolve", "depthwise_conv", "fully_connected", "batch_matmul", "transpose_conv"}
 
 GRU_LSTM_CASES = [
     ("gru_unidirectional_error_null_input_f32", "gru_unidirectional", "null_input"),
@@ -245,7 +245,6 @@ def test_rendered_fault_case_asserts_status_and_never_validates_output(
 @pytest.mark.parametrize(
     ("case_name", "op_suffix", "absent_static"),
     [
-        ("transpose_conv_fault_null_ctx_buf_s8", "transpose_conv", "_buffer["),
         ("svdf_fault_null_input_ctx_buf_s8", "svdf", "_scratch_input["),
     ],
 )

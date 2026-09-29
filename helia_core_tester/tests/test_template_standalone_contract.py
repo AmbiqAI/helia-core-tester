@@ -14,6 +14,7 @@ from helia_core_tester.tests.harness_render import (
     render_convolve,
     render_depthwise,
     render_fully_connected,
+    render_transpose_conv,
 )
 
 
@@ -344,9 +345,7 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
             "bmm_activation_min_literal": "-1.0e+30f",
             "bmm_activation_max_literal": "1.0e+30f",
         },)
-    tconv_c = _render(
-        "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2",
-        {
+    _, tconv_c = render_transpose_conv({
             "name": "transpose_conv_float_default_f32",
             "input_dims": {"n": 1, "h": 4, "w": 4, "c": 2},
             "filter_dims": {"n": 3, "h": 3, "w": 3, "c": 2},
@@ -367,13 +366,13 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
             "kernel_get_buffer_size_fn": "arm_transpose_conv_f32_get_buffer_size",
             "buffer_size_max": 1024,
             "reverse_conv_ctx_size": 1024,
+            "kernel_get_reverse_buffer_size_fn": "arm_transpose_conv_f32_get_reverse_conv_buffer_size",
             "float_kernel": True,
             "kernel_layout": "ARM_NN_LAYOUT_NHWC",
             "transpose_conv_params_type": "cmsis_nn_transpose_conv_params_f32",
             "transpose_activation_min_literal": "-1.0e+30f",
             "transpose_activation_max_literal": "1.0e+30f",
-        },
-    )
+        },)
 
     assert "cmsis_nn_conv_params_f32" in conv_h
     assert "ARM_NN_WEIGHT_FORMAT_STANDARD" in conv_h

@@ -39,6 +39,7 @@ class HarnessPlan:
     run_call: str
     bench_call: str
     checks: Sequence[tuple[str, str, str, int]] = ()
+    size_queries: Sequence[tuple[str, str, str, str]] = ()
     fault_kind: Optional[str] = None
     fault_declarations: Sequence[str] = ()
     fault_setup: str = ""
@@ -54,9 +55,9 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
     if (sizer_fn is None) == (scratch_bytes is None):
         raise HarnessError(f"{pool.name}: give either a scratch query or entry_scratch bytes, not both or neither")
     kernel = require_bound_symbol(contracts, kernel_fn)
-    providers = [p for p in pool.providers if takes(kernel, p.param)]
+    providers = [p for p in pool.providers if any(takes(kernel, name) for name in p.names)]
     values = dict(pool.values)
-    values.update({p.param: p.expr for p in providers})
+    values.update({name: p.expr for p in providers for name in p.names})
 
     fault = pool.fault
     if fault is not None:
@@ -79,6 +80,17 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         checks.append((check.result_var, render_call(rule, bind(rule, values), indent=indent), rule.name,
                        int(check.expected)))
 
+    size_queries = []
+    for provider in providers:
+        query = provider.size_query
+        if query is None:
+            continue
+        decl = require_bound_symbol(contracts, query.fn)
+        if decl.kind != "sizer":
+            raise HarnessError(f"{pool.name}: {query.fn} is a {decl.kind}, not a scratch-size query")
+        size_queries.append((query.result_var, render_call(decl, bind(decl, values), indent=indent), decl.name,
+                             query.capacity))
+
     sizer_call = None
     if sizer_fn is not None:
         sizer = require_bound_symbol(contracts, sizer_fn)
@@ -95,6 +107,7 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         run_call=call(False),
         bench_call=call(True),
         checks=checks,
+        size_queries=size_queries,
         fault_kind=fault.kind if fault else None,
         fault_declarations=[render_declaration(d) for d in fault.declarations] if fault else [],
         fault_setup=fault.setup if fault else "",

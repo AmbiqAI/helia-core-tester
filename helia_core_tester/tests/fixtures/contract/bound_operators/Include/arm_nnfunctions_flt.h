@@ -1,4 +1,4 @@
-/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*)
+/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_transpose_conv_*)
  * from ns-cmsis-nn arm_nnfunctions_flt.h; the fallback contract for unit tests without a checkout.
  * test_bound_operator_fixture_matches_the_real_tree keeps it equal to the export. */
 
@@ -194,6 +194,54 @@ arm_cmsis_nn_status arm_fully_connected_nhwc_f16(const cmsis_nn_context *ctx,
                                                  const cmsis_nn_dims *output_dims,
                                                  float16_t *output);
 
+arm_cmsis_nn_status arm_transpose_conv_f16(const cmsis_nn_context *ctx,
+                                           const cmsis_nn_context *output_ctx,
+                                           const cmsis_nn_transpose_conv_params_f16 *transpose_conv_params,
+                                           const cmsis_nn_dims *input_dims,
+                                           const float16_t *input_data,
+                                           const cmsis_nn_dims *filter_dims,
+                                           const float16_t *filter_data,
+                                           const cmsis_nn_dims *bias_dims,
+                                           const float16_t *bias_data,
+                                           const cmsis_nn_dims *output_dims,
+                                           float16_t *output_data,
+                                           arm_nn_tensor_layout layout);
+
+int32_t arm_transpose_conv_f16_get_buffer_size(const cmsis_nn_transpose_conv_params_f16 *transpose_conv_params,
+                                               const cmsis_nn_dims *input_dims,
+                                               const cmsis_nn_dims *filter_dims,
+                                               const cmsis_nn_dims *out_dims);
+
+int32_t
+arm_transpose_conv_f16_get_reverse_conv_buffer_size(const cmsis_nn_transpose_conv_params_f16 *transpose_conv_params,
+                                                    const cmsis_nn_dims *input_dims,
+                                                    const cmsis_nn_dims *filter_dims);
+
+arm_cmsis_nn_status arm_transpose_conv_nhwc_f16(const cmsis_nn_context *ctx,
+                                                const cmsis_nn_context *output_ctx,
+                                                const cmsis_nn_transpose_conv_params_f16 *transpose_conv_params,
+                                                const cmsis_nn_dims *input_dims,
+                                                const float16_t *input_data,
+                                                const cmsis_nn_dims *filter_dims,
+                                                const float16_t *filter_data,
+                                                const cmsis_nn_dims *bias_dims,
+                                                const float16_t *bias_data,
+                                                const cmsis_nn_dims *output_dims,
+                                                float16_t *output_data);
+
+arm_cmsis_nn_status arm_transpose_conv_wrapper_f16(const cmsis_nn_context *ctx,
+                                                   const cmsis_nn_context *output_ctx,
+                                                   const cmsis_nn_transpose_conv_params_f16 *transpose_conv_params,
+                                                   const cmsis_nn_dims *input_dims,
+                                                   const float16_t *input_data,
+                                                   const cmsis_nn_dims *filter_dims,
+                                                   const float16_t *filter_data,
+                                                   const cmsis_nn_dims *bias_dims,
+                                                   const float16_t *bias_data,
+                                                   const cmsis_nn_dims *output_dims,
+                                                   float16_t *output_data,
+                                                   arm_nn_tensor_layout layout);
+
 #endif
 
 #if ARM_NN_ENABLE_F32
@@ -387,5 +435,53 @@ arm_cmsis_nn_status arm_fully_connected_nhwc_f32(const cmsis_nn_context *ctx,
                                                  const float32_t *bias,
                                                  const cmsis_nn_dims *output_dims,
                                                  float32_t *output);
+
+arm_cmsis_nn_status arm_transpose_conv_f32(const cmsis_nn_context *ctx,
+                                           const cmsis_nn_context *output_ctx,
+                                           const cmsis_nn_transpose_conv_params_f32 *transpose_conv_params,
+                                           const cmsis_nn_dims *input_dims,
+                                           const float32_t *input_data,
+                                           const cmsis_nn_dims *filter_dims,
+                                           const float32_t *filter_data,
+                                           const cmsis_nn_dims *bias_dims,
+                                           const float32_t *bias_data,
+                                           const cmsis_nn_dims *output_dims,
+                                           float32_t *output_data,
+                                           arm_nn_tensor_layout layout);
+
+int32_t arm_transpose_conv_f32_get_buffer_size(const cmsis_nn_transpose_conv_params_f32 *transpose_conv_params,
+                                               const cmsis_nn_dims *input_dims,
+                                               const cmsis_nn_dims *filter_dims,
+                                               const cmsis_nn_dims *out_dims);
+
+int32_t
+arm_transpose_conv_f32_get_reverse_conv_buffer_size(const cmsis_nn_transpose_conv_params_f32 *transpose_conv_params,
+                                                    const cmsis_nn_dims *input_dims,
+                                                    const cmsis_nn_dims *filter_dims);
+
+arm_cmsis_nn_status arm_transpose_conv_nhwc_f32(const cmsis_nn_context *ctx,
+                                                const cmsis_nn_context *output_ctx,
+                                                const cmsis_nn_transpose_conv_params_f32 *transpose_conv_params,
+                                                const cmsis_nn_dims *input_dims,
+                                                const float32_t *input_data,
+                                                const cmsis_nn_dims *filter_dims,
+                                                const float32_t *filter_data,
+                                                const cmsis_nn_dims *bias_dims,
+                                                const float32_t *bias_data,
+                                                const cmsis_nn_dims *output_dims,
+                                                float32_t *output_data);
+
+arm_cmsis_nn_status arm_transpose_conv_wrapper_f32(const cmsis_nn_context *ctx,
+                                                   const cmsis_nn_context *output_ctx,
+                                                   const cmsis_nn_transpose_conv_params_f32 *transpose_conv_params,
+                                                   const cmsis_nn_dims *input_dims,
+                                                   const float32_t *input_data,
+                                                   const cmsis_nn_dims *filter_dims,
+                                                   const float32_t *filter_data,
+                                                   const cmsis_nn_dims *bias_dims,
+                                                   const float32_t *bias_data,
+                                                   const cmsis_nn_dims *output_dims,
+                                                   float32_t *output_data,
+                                                   arm_nn_tensor_layout layout);
 
 #endif
