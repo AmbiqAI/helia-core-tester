@@ -204,7 +204,9 @@ def test_session_refuses_more_cases_than_the_target_takes(tmp_path: Path) -> Non
         session.run_many(bundles[:1])
 
 
-def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path, monkeypatch) -> None:
+# None: --allow-unverified-firmware.
+@pytest.mark.parametrize("expected", ["fake", None])
+def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path, monkeypatch, expected) -> None:
     bundles = [_DummyCaseBundle(f"case_{i}") for i in range(70)]
     calls: list[list[Any]] = []
     transports: list[_FakeTransport] = []
@@ -240,7 +242,7 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
         counter_passes=DEFAULT_PASSES,
         session_id="test-batching-session",
         build_dir=tmp_path,
-        expected_build_id="fake",
+        expected_build_id=expected,
     )
 
     # The target advertised 32 cases per plan: ceil(70/32) = 3 sessions of 32, 32, 6,
@@ -258,7 +260,7 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
     # The bundle writer seeds its counter columns from the passes the plan asked for.
     assert merged.counter_passes == DEFAULT_PASSES
     # The build dir's id is checked at every session's handshake and reported once.
-    assert [s.expected_build_id for s in sessions] == ["fake"] * 3
+    assert [s.expected_build_id for s in sessions] == [expected] * 3
     assert merged.build_id == "fake"
     assert all(entry.startswith("batch") for entry in merged.protocol_trace) and len(merged.protocol_trace) == 3
 
@@ -270,7 +272,8 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
     assert "max_cases_per_session=32 max_session_plan_bytes=2016" in written["host_log"]
     assert "firmware_build_id=fake" in written["host_log"]
     assert written["result"] is merged
-    assert written["build_dir"] == tmp_path
+    # Provenance only for verified firmware.
+    assert written["build_dir"] == (tmp_path if expected else None)
     assert bundle_root == tmp_path / "artifacts" / "reports" / "hardware" / "test-batching-session"
 
     # A different target announces different limits and the same run batches differently.

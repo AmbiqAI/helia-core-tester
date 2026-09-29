@@ -46,6 +46,11 @@ def _split_protocol_trace_entry(entry: str) -> tuple[int | None, str, str]:
 
 
 
+def _text(value: Any) -> str | None:
+    """A non-empty string, else None."""
+    return value if isinstance(value, str) and value else None
+
+
 def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
     """What the last build used, plus nsx.lock."""
     # Saved records, not flags; missing means null.
@@ -59,10 +64,10 @@ def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
         return provenance, None
     app_dir = nsx_app_dir(build_dir)
     built = built_record(app_dir)
-    built_lock = built.get("lock") or None
-    kernels["tree_hash"] = built.get("kernels") or None
+    built_lock = _text(built.get("lock"))
+    kernels["tree_hash"] = _text(built.get("kernels"))
     provenance["nsx_lock_sha256"] = built_lock
-    provenance["neuralspotx_version"] = built.get("nsx_version")
+    provenance["neuralspotx_version"] = _text(built.get("nsx_version"))
 
     options = saved_options(app_dir)
     if options is not None:
@@ -71,8 +76,9 @@ def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
             kernels["ref"] = options.cmsis_nn_ref
         else:
             kernels["root"] = str(options.cmsis_nn_root)
-            kernels["root_head"] = built.get("root_head")
-            kernels["root_dirty"] = built.get("root_dirty")
+            dirty = built.get("root_dirty")
+            kernels["root_head"] = _text(built.get("root_head"))
+            kernels["root_dirty"] = dirty if isinstance(dirty, bool) else None
 
     # Trust nsx.lock only if it built.
     if built_lock is None or nsx_cli.lock_digest(app_dir) != built_lock:
@@ -137,6 +143,9 @@ def write_result_bundle(
     if lock_file is not None:
         shutil.copyfile(lock_file, bundle_root / "nsx.lock")
         session_manifest["artifacts"]["nsx_lock"] = "nsx.lock"
+    else:
+        # Drop a reused session's stale copy.
+        (bundle_root / "nsx.lock").unlink(missing_ok=True)
     write_text_lf(bundle_root / "session_manifest.json", json.dumps(session_manifest, indent=2))
 
     case_rows = []

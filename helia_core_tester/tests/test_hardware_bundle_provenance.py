@@ -151,3 +151,34 @@ def test_missing_records_leave_nulls(tmp_path: Path, with_dir: bool) -> None:
     }
     assert "nsx_lock" not in manifest["artifacts"]
     assert not (bundle_root / "nsx.lock").exists()
+
+
+def test_corrupt_record_fields_read_null(tmp_path: Path) -> None:
+    build_dir = tmp_path / "build"
+    root = tmp_path / "ns-cmsis-nn"
+    root.mkdir()
+    _fake_build(build_dir, AppOptions(cmsis_nn_root=root))
+    app_dir = nsx_app_dir(build_dir)
+    (app_dir / firmware_build.BUILT_LOCK).write_text(json.dumps({"lock": 1, "kernels": 123}), encoding="utf-8")
+    bad = {"nsx_version": [], "root_head": {}, "root_dirty": "yes"}
+    (app_dir / firmware_build.BUILT_INFO).write_text(json.dumps(bad), encoding="utf-8")
+
+    provenance, lock_file = build_provenance(build_dir)
+
+    assert lock_file is None
+    assert provenance["nsx_lock_sha256"] is None
+    assert provenance["neuralspotx_version"] is None
+    assert provenance["kernels"]["tree_hash"] is None
+    assert provenance["kernels"]["root_head"] is None
+    assert provenance["kernels"]["root_dirty"] is None
+
+
+def test_rewrite_drops_stale_lock_copy(tmp_path: Path) -> None:
+    build_dir = tmp_path / "build"
+    _fake_build(build_dir, AppOptions())
+    assert (_write_bundle(tmp_path, build_dir) / "nsx.lock").is_file()
+
+    bundle_root = _write_bundle(tmp_path, None)
+
+    assert not (bundle_root / "nsx.lock").exists()
+    assert "nsx_lock" not in _manifest(bundle_root)["artifacts"]
