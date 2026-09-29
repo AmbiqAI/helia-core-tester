@@ -893,3 +893,63 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
+---
+# Long reductions: more than 32 taps per float16 lane, so the kernels fold each block of 32 into
+# float32 (the direct and generic depthwise kernels). A comparison override is about twice the
+# case's measured maximum error on cortex-m55, which folding keeps at or below the unfolded kernels'.
+operator: DepthwiseConv
+name: depthwise_conv_float_direct_fold_7x7_c28_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 9, 9, 28]
+filter_shape: [7, 7, 28, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+comparison: {atol: 0.004, rtol: 0.004}
+---
+operator: DepthwiseConv
+name: depthwise_conv_float_direct_fold_6x6_c24_no_bias_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 10, 24]
+filter_shape: [6, 6, 24, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: false
+depth_multiplier: 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_float_generic_fold_6x6_m2_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 7, 7, 3]
+filter_shape: [6, 6, 3, 2]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 2
+comparison: {atol: 0.004, rtol: 0.004}
+---
+operator: DepthwiseConv
+name: depthwise_conv_fault_entry_acc16_invalid_layout_f16
+entry: arm_depthwise_conv_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 4, 4, 2]
+filter_shape: [3, 3, 2, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+fault: invalid_layout
+expected_status: ARM_CMSIS_NN_ARG_ERROR

@@ -41,10 +41,32 @@ static int32_t run_convolve(void)
 {% if fault == "zero_stride" %}
     conv_params.stride.w = 0;
 {% endif %}
+{% if fault == "packed_grouped" %}
+    conv_params.weight_format = ARM_NN_WEIGHT_FORMAT_NT_N_PACKED;
+{% endif %}
     cmsis_nn_dims input_dims = {{ name }}_input_dims;
 {% if fault == "channel_group_mismatch" %}
     /* groups = input_ch / filter_ch = 2 does not divide the odd input_ch */
     input_dims.c = {{ 2 * filter_dims.c + 1 }};
+{% endif %}
+{% if fault == "negative_batch" %}
+    input_dims.n = -1;
+{% endif %}
+    cmsis_nn_dims filter_dims = {{ name }}_filter_dims;
+{% if fault == "oversized_kernel_area" %}
+    filter_dims.h = INT32_MAX;
+    filter_dims.w = 2;
+{% elif fault == "oversized_patch" %}
+    filter_dims.h = INT32_MAX;
+    filter_dims.w = 1;
+{% endif %}
+    cmsis_nn_dims output_dims = {{ name }}_output_dims;
+{% if fault == "output_group_mismatch" %}
+    output_dims.c = {{ output_dims.c - 1 }};
+{% elif fault == "batch_mismatch" %}
+    output_dims.n = {{ output_dims.n + 1 }};
+{% elif fault == "zero_output_batch" %}
+    output_dims.n = 0;
 {% endif %}
     const {{ input_dtype }} *input_arg = {% if fault == "null_input" %}NULL{% else %}{{ name }}_input{% endif %};
     {{ output_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};
@@ -56,7 +78,7 @@ static int32_t run_convolve(void)
         &conv_params,
         &input_dims,
         input_arg,
-        &{{ name }}_filter_dims,
+        &filter_dims,
         {{ name }}_weights,
         {% if has_biases %}
         &{{ name }}_bias_dims,
@@ -65,7 +87,7 @@ static int32_t run_convolve(void)
         NULL,
         NULL,
         {% endif %}
-        &{{ name }}_output_dims,
+        &output_dims,
         output_arg{% if kernel_needs_layout %},
         {{ layout_arg }}
 {% endif %}
@@ -78,7 +100,7 @@ static int32_t run_convolve(void)
         &{{ name }}_quant_params,
         &input_dims,
         input_arg,
-        &{{ name }}_filter_dims,
+        &filter_dims,
         {{ name }}_weights,
         {% if has_biases %}
         &{{ name }}_bias_dims,
@@ -87,7 +109,7 @@ static int32_t run_convolve(void)
         NULL,
         NULL,
         {% endif %}
-        &{{ name }}_output_dims,
+        &output_dims,
         output_arg
     );
 {% elif kernel_fn == 'arm_convolve_wrapper_s4' %}
@@ -97,7 +119,7 @@ static int32_t run_convolve(void)
         &{{ name }}_quant_params,
         &input_dims,
         input_arg,
-        &{{ name }}_filter_dims,
+        &filter_dims,
         {{ name }}_weights,
         {% if has_biases %}
         &{{ name }}_bias_dims,
@@ -106,7 +128,7 @@ static int32_t run_convolve(void)
         NULL,
         NULL,
         {% endif %}
-        &{{ name }}_output_dims,
+        &output_dims,
         output_arg
     );
 {% elif kernel_fn == 'arm_convolve_wrapper_s16' %}
@@ -116,7 +138,7 @@ static int32_t run_convolve(void)
         &{{ name }}_quant_params,
         &input_dims,
         input_arg,
-        &{{ name }}_filter_dims,
+        &filter_dims,
         {{ name }}_weights,
         {% if has_biases %}
         &{{ name }}_bias_dims,
@@ -125,7 +147,7 @@ static int32_t run_convolve(void)
         NULL,
         NULL,
         {% endif %}
-        &{{ name }}_output_dims,
+        &output_dims,
         output_arg
     );
 {% else %}

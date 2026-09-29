@@ -1,7 +1,7 @@
 """Where the ARM GCC binutils come from for host-side ELF inspection.
 
 The hardware commands fetch ARM GCC lazily into artifacts/downloads/ (see
-`firmware_build.ensure_hardware_dependencies`). CMake is pointed at it through
+`firmware_build.ensure_build_tools`). CMake is pointed at it through
 the toolchain file, but the host also runs `arm-none-eabi-nm` (RTT block
 address, memory report) and `-size`/`-objdump` (memory report) itself. Those
 go through `arm_tool()` so a fresh clone that only just downloaded the

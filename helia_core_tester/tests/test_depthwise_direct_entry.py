@@ -82,7 +82,7 @@ def test_planar_case_checks_the_rule(tmp_path: Path) -> None:
 
 
 def test_entry_with_a_fault_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="not supported with fault"):
+    with pytest.raises(ValueError, match="supports only fault: invalid_layout"):
         _source(
             "depthwise_conv_entry_3x3_25x5_c64_s8",
             tmp_path,

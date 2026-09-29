@@ -5,7 +5,7 @@ CPU-aware kernel dispatch for generated CMSIS-NN calls.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict
+from typing import Any, Dict
 
 from helia_core_tester.core.cpu_targets import get_cpu_profile
 
@@ -126,6 +126,19 @@ def resolve_direct_entry(operator: str, entry: str, activation_dtype: str, weigh
         resolved["kernel_needs_layout"] = spec.kernel_needs_layout
         resolved["buffer_size_needs_layout"] = spec.buffer_size_needs_layout
     return resolved
+
+
+def check_entry_fault(desc: Dict[str, Any], resolved: Dict[str, Any]) -> None:
+    """Reject a fault on an entry case, except an invalid layout for a float entry that takes one."""
+    fault = desc.get("fault")
+    if not fault:
+        return
+    if fault == "invalid_layout" and resolved.get("entry_family") == "float" and resolved.get("kernel_needs_layout"):
+        return
+    raise ValueError(
+        f"{desc.get('name')}: entry {resolved['kernel_fn']!r} supports only fault: invalid_layout, "
+        f"and only as a float entry that takes a layout argument; got fault {fault!r}"
+    )
 
 
 def resolve_depthwise_conv_entry(entry: str, activation_dtype: str, weight_dtype: str) -> Dict[str, str]:
