@@ -1,7 +1,8 @@
 """Fault/rejection cases for the non-recurrent operator families (issue #72).
 
-Covers the shared `fault:` / `expected_status:` plumbing in OperationBase and
-the per-family `<op>_fault.c.j2` templates: an unknown kind is rejected with a
+Covers the shared `fault:` / `expected_status:` plumbing in OperationBase, the
+per-family `<op>_fault.c.j2` templates, and the fault edits Convolve and
+DepthwiseConv apply to their generic-harness pools: an unknown kind is rejected with a
 clear error, `expected_status` defaults to SUCCESS, the GRU/LSTM contexts the
 mechanism was lifted from are unchanged, and every rendered fault case asserts
 the kernel status without ever validating output.
@@ -32,14 +33,14 @@ FAULT_CASES = [
     ("convolve_fault_null_weight_sum_ctx_s8", "convolve", ".buf = NULL"),
     ("convolve_fault_zero_stride_s8", "convolve", "stride.w = 0"),
     ("convolve_fault_channel_group_mismatch_s8", "convolve", "input_dims.c = "),
-    ("convolve_fault_null_input_f32", "convolve", "*input_arg = NULL"),
-    ("convolve_fault_null_output_f16", "convolve", "*output_arg = NULL"),
+    ("convolve_fault_null_input_f32", "convolve", "NULL, /* input_data */"),
+    ("convolve_fault_null_output_f16", "convolve", "NULL, /* output_data */"),
     ("convolve_fault_invalid_layout_f32", "convolve", "(arm_nn_tensor_layout)(ARM_NN_LAYOUT_NHWC + 1)"),
     ("depthwise_conv_fault_null_ctx_buf_s8", "depthwise_conv", ".buf = NULL"),
     ("depthwise_conv_fault_null_ctx_buf_s4", "depthwise_conv", ".buf = NULL"),
     ("depthwise_conv_fault_null_weight_sum_ctx_s8", "depthwise_conv", ".buf = NULL"),
     ("depthwise_conv_fault_channel_mismatch_s16", "depthwise_conv", "output_dims.c = "),
-    ("depthwise_conv_fault_null_input_f32", "depthwise_conv", "*input_arg = NULL"),
+    ("depthwise_conv_fault_null_input_f32", "depthwise_conv", "NULL, /* input */"),
     ("depthwise_conv_fault_invalid_layout_f16", "depthwise_conv", "(arm_nn_tensor_layout)(ARM_NN_LAYOUT_NHWC + 1)"),
     ("transpose_conv_fault_null_ctx_buf_s8", "transpose_conv", ".buf = NULL"),
     ("transpose_conv_fault_nonunit_dilation_s8", "transpose_conv", "dilation.w = 2"),
@@ -69,6 +70,11 @@ FAULT_CASES = [
     ("svdf_fault_small_output_ctx_size_f16", "svdf", ".size = 1"),
     ("svdf_fault_zero_rank_f32", "svdf", "svdf_params.rank = 0"),
 ]
+
+# Families rendered by the generic harness: a fault is an edit of the passing case's pool,
+# so the buffers are armed in _run and checked in test_case_run, and a NULL-substituted
+# output is still declared, poisoned and checked untouched.
+HARNESS_SUFFIXES = {"convolve", "depthwise_conv"}
 
 GRU_LSTM_CASES = [
     ("gru_unidirectional_error_null_input_f32", "gru_unidirectional", "null_input"),
@@ -216,12 +222,16 @@ def test_rendered_fault_case_asserts_status_and_never_validates_output(
     assert "ARM_CMSIS_NN_ARG_ERROR" in body
     # Guard breaches on the buffers the call was handed are the verdict, not a literal 0.
     # A fault mode that hands the kernel no writable buffer has nothing to guard.
-    assert body.count("HELIA_GUARD_ARM(") == body.count("HELIA_GUARD_CHECK(")
+    scope = source if op_suffix in HARNESS_SUFFIXES else body
+    assert scope.count("HELIA_GUARD_ARM(") == scope.count("HELIA_GUARD_CHECK(")
     if "HELIA_GUARD_CHECK(" in body:
         assert body.rindex("HELIA_GUARD_CHECK(") < body.index("HELIA_VALIDATE_EXPECTED_STATUS(")
     assert "HELIA_VALIDATE_RETURN_FAILURES(failures)" in body
     # A rejected call must not write the output it was handed.
-    if descriptors[case_name]["fault"] == "null_output":
+    if descriptors[case_name]["fault"] == "null_output" and op_suffix in HARNESS_SUFFIXES:
+        assert f"HELIA_GUARD_ARM({case_name}_output, true" in body
+        assert f"HELIA_GUARD_CHECK_UNTOUCHED({case_name}_output," in body
+    elif descriptors[case_name]["fault"] == "null_output":
         assert f"{case_name}_output" not in body
     else:
         assert f"HELIA_GUARD_ARM({case_name}_output, true" in body
@@ -235,8 +245,6 @@ def test_rendered_fault_case_asserts_status_and_never_validates_output(
 @pytest.mark.parametrize(
     ("case_name", "op_suffix", "absent_static"),
     [
-        ("convolve_fault_null_output_f32", "convolve", "_output["),
-        ("depthwise_conv_fault_null_output_f16", "depthwise_conv", "_output["),
         ("transpose_conv_fault_null_ctx_buf_s8", "transpose_conv", "_buffer["),
         ("batch_matmul_fault_null_ctx_buf_s8", "batch_matmul", "_buffer["),
         ("svdf_fault_null_input_ctx_buf_s8", "svdf", "_scratch_input["),

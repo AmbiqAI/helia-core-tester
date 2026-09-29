@@ -20,6 +20,13 @@
 
 // The kernel this harness links must have the prototype the ns-cmsis-nn export records.
 {{ contract_parity_assert(kernel_fn) }}
+{% if harness.fault_kind %}
+
+/*
+ * Fault-injection test case: exercises an {{ kernel_fn }}
+ * argument-validation branch. Fault mode: {{ harness.fault_kind }}.
+ */
+{% endif %}
 
 // Context for buffer allocation
 static cmsis_nn_context {{ name }}_ctx;
@@ -44,6 +51,9 @@ static cmsis_nn_context {{ name }}_ctx;
 {{ helia_guard_declare(output_dtype, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
 
 {% for declaration in harness.source_declarations %}
+{{ declaration }}
+{% endfor %}
+{% for declaration in harness.fault_declarations %}
 {{ declaration }}
 {% endfor %}
 
@@ -79,8 +89,8 @@ static cmsis_nn_context {{ name }}_ctx;
     {% endif %}
 
     // Initialize context buffer
-    {% if force_no_scratch | default(false) %}
-    // force_no_scratch: the kernel gets no scratch buffer ({{ name }}_buffer stays armed and unused).
+    {% if force_no_scratch | default(false) or harness.no_scratch %}
+    // No scratch for the kernel ({{ name }}_buffer stays armed and unused).
     {{ name }}_ctx.buf = NULL;
     {{ name }}_ctx.size = 0;
     {% else %}
@@ -92,6 +102,10 @@ static cmsis_nn_context {{ name }}_ctx;
 
 {{ block.setup }}
     {% endfor %}
+    {% if harness.fault_setup %}
+
+{{ harness.fault_setup }}
+    {% endif %}
 {% endmacro %}
 int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input,

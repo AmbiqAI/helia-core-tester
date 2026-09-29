@@ -20,6 +20,7 @@ from helia_core_tester.generation.harness import (
     Provider,
     RuleCheck,
 )
+from helia_core_tester.generation.harness.faults import common_fault, null_context_buffer, struct_copy, with_fault
 from helia_core_tester.generation.kernel_dispatch import (
     DEPTHWISE_CONV_S8_PLANAR_RULE,
     resolve_depthwise_conv_kernel,
@@ -132,6 +133,20 @@ def depthwise_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
         name=n, values=values, header=header, source=source, providers=tuple(providers), checks=checks,
         output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})", benchmark=False,
     )
+
+
+def depthwise_fault(pool: ArgumentPool, kind: str, context: Dict[str, Any]) -> ArgumentPool:
+    """The pool of a DepthwiseConv fault case: the passing pool with the faulted argument edited."""
+    n = context["name"]
+    edit = common_fault(pool, kind, layout=context.get("kernel_layout"))
+    if edit is None and kind == "channel_mismatch":
+        edit = struct_copy(pool, kind, "output_dims", "cmsis_nn_dims", f"{n}_output_dims",
+                           {"c": int(context["input_dims"]["c"]) + 1})
+    elif edit is None and kind == "null_weight_sum_ctx":
+        edit = null_context_buffer(pool, kind, "weight_sum_ctx", f"{n}_weight_sum_ctx")
+    if edit is None:
+        raise ValueError(f"{n}: no DepthwiseConv fault edit for {kind!r}")
+    return with_fault(pool, edit)
 
 
 def _opt_dilation_supported(
@@ -262,20 +277,19 @@ class OpDepthwiseConv(OperationBase):
                 )
 
     def _render_depthwise(self, output_dir: Path, context: Dict[str, Any]) -> None:
+        pool = depthwise_argument_pool(context)
         fault = self.fault_kind()
-        fault_template = None
         if fault:
             self._check_fault_reachable(fault, context)
             context.update(self.fault_context())
-            fault_template = "ConvolutionFunctions/depthwise_conv/depthwise_conv_fault.c.j2"
+            pool = depthwise_fault(pool, fault, context)
         self.render_harness_files(
             output_dir,
             stem="depthwise_conv",
             context=context,
-            pool=depthwise_argument_pool(context),
+            pool=pool,
             validation_key="ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2",
             label="Depthwise convolution",
-            fault_template=fault_template,
         )
 
     def needs_keras_model(self) -> bool:

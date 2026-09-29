@@ -4,7 +4,7 @@ call values, described as values rather than template text."""
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping, Optional, Sequence, Union
 
 _IDENT_RE = re.compile(r"^[A-Za-z_]\w*$")
@@ -72,6 +72,22 @@ class Provider:
 
 
 @dataclass(frozen=True)
+class FaultEdit:
+    """A fault case as an edit of the pool: `values` replace what the kernel call (only) is
+    passed, `declarations` and `setup` build the replacements after the providers run, and
+    `no_scratch` hands the kernel a NULL scratch buffer. `requires` names parameters the edit
+assumes the kernel takes (a provider whose context the setup touches). The sizer and rule checks still see
+    the unedited values, so the case differs from its passing sibling in the faulted argument."""
+
+    kind: str
+    values: Mapping[str, str] = field(default_factory=dict)
+    declarations: Sequence[Declaration] = ()
+    setup: str = ""
+    no_scratch: bool = False
+    requires: Sequence[str] = ()
+
+
+@dataclass(frozen=True)
 class ArgumentPool:
     """Everything one generated case can pass to a kernel or its scratch query."""
 
@@ -85,6 +101,7 @@ class ArgumentPool:
     output_param: str = "output_data"
     output_count: str = "0"
     benchmark: bool = True
+    fault: Optional[FaultEdit] = None
 
     def validate(self) -> None:
         names: set[str] = set()
@@ -109,6 +126,20 @@ class ArgumentPool:
         for param, expr in self.values.items():
             if not isinstance(expr, str) or not expr.strip():
                 raise HarnessError(f"{self.name}: pool value {param!r} is empty")
+        if self.fault is not None:
+            fault = self.fault
+            if not (fault.values or fault.setup.strip() or fault.no_scratch):
+                raise HarnessError(f"{self.name}: fault {fault.kind!r} edits nothing")
+            for decl in fault.declarations:
+                if not _IDENT_RE.match(decl.name) or decl.name in names:
+                    raise HarnessError(f"{self.name}: fault declaration {decl.name!r} is not a free C identifier")
+                names.add(decl.name)
+            supplied = params | {self.input_param, self.output_param}
+            for param, expr in fault.values.items():
+                if param not in supplied:
+                    raise HarnessError(f"{self.name}: fault {fault.kind!r} edits {param!r}, which the pool does not supply")
+                if not isinstance(expr, str) or not expr.strip():
+                    raise HarnessError(f"{self.name}: fault {fault.kind!r} value for {param!r} is empty")
         for check in self.checks:
             if not _IDENT_RE.match(check.result_var) or check.result_var in names:
                 raise HarnessError(f"{self.name}: rule check variable {check.result_var!r} is not a free C identifier")

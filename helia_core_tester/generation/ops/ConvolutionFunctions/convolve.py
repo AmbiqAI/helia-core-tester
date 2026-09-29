@@ -14,6 +14,7 @@ from helia_core_tester.generation.ops._shared.bias_init import (
     inject_hoisted_dilation_bias,
 )
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, GuardedBuffer, Provider
+from helia_core_tester.generation.harness.faults import common_fault, null_context_buffer, struct_copy, with_fault
 from helia_core_tester.generation.entry import resolve_entry
 from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel
 
@@ -114,6 +115,24 @@ def convolve_argument_pool(context: Dict[str, Any], *, has_biases: bool, bias_is
         name=n, values=values, header=header, source=source, providers=(weight_sum,),
         output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})",
     )
+
+
+def convolve_fault(pool: ArgumentPool, kind: str, context: Dict[str, Any]) -> ArgumentPool:
+    """The pool of a Convolve fault case: the passing pool with the faulted argument edited."""
+    n = context["name"]
+    edit = common_fault(pool, kind, layout=context.get("kernel_layout"))
+    if edit is None and kind == "zero_stride":
+        edit = struct_copy(pool, kind, "conv_params", context.get("conv_params_type") or "cmsis_nn_conv_params",
+                           f"{n}_conv_params", {"stride.w": 0})
+    elif edit is None and kind == "channel_group_mismatch":
+        # groups = input_ch / filter_ch = 2 does not divide the odd input_ch.
+        edit = struct_copy(pool, kind, "input_dims", "cmsis_nn_dims", f"{n}_input_dims",
+                           {"c": 2 * int(context["filter_dims"]["c"]) + 1})
+    elif edit is None and kind == "null_weight_sum_ctx":
+        edit = null_context_buffer(pool, kind, "weight_sum_ctx", f"{n}_weight_sum_ctx")
+    if edit is None:
+        raise ValueError(f"{n}: no Convolve fault edit for {kind!r}")
+    return with_fault(pool, edit)
 
 
 class OpConvolve(OperationBase):
@@ -921,21 +940,20 @@ class OpConvolve(OperationBase):
             context['quant_params'] = quant_params_dict
         context.update(nonfinite_context)
 
+        pool = convolve_argument_pool(context, has_biases=has_biases, bias_is_struct=bias_is_struct)
         fault = self.fault_kind()
-        fault_template = None
         if fault:
             self._check_fault_reachable(fault, context)
             context.update(self.fault_context())
-            fault_template = "ConvolutionFunctions/convolve/convolve_fault.c.j2"
+            pool = convolve_fault(pool, fault, context)
 
         self.render_harness_files(
             output_dir,
             stem="convolve",
             context=context,
-            pool=convolve_argument_pool(context, has_biases=has_biases, bias_is_struct=bias_is_struct),
+            pool=pool,
             validation_key="ConvolutionFunctions/convolve/convolve.c.j2",
             label="Convolution",
-            fault_template=fault_template,
         )
 
         cmake_context = {

@@ -1088,14 +1088,13 @@ class OperationBase(ABC):
         pool: Any,
         validation_key: str,
         label: str,
-        fault_template: Optional[str] = None,
     ) -> None:
         """Write `includes/<name>_<stem>.h` and `<name>_<stem>.c` through the generic harness.
 
         The header carries the pool's data; the source binds `context['kernel_fn']` and its
         scratch query from the pool against the kernel contract. `validation_key` is the
         operator's former template path, still the key of TemplateContextBuilder's validation
-        rules. A fault case keeps its own source template (`fault_template`) for now.
+        rules. A fault case is the same render from a pool carrying a FaultEdit.
         """
         from helia_core_tester.contract import render as contract_render
         from helia_core_tester.generation.harness import plan_harness, render_declaration
@@ -1107,21 +1106,18 @@ class OperationBase(ABC):
         header = env.get_template(self.HARNESS_HEADER).render(
             name=name, header_declarations=[render_declaration(d) for d in pool.header])
         (includes_dir / f"{name}_{stem}.h").write_text(header)
-        if fault_template:
-            source = self.render_template(fault_template, context)
-        else:
-            sizer = context.get("kernel_get_buffer_size_fn")
-            plan = plan_harness(
-                pool,
-                kernel_fn=context["kernel_fn"],
-                sizer_fn=sizer,
-                scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
-                contracts=contract_render.load_current_contracts(),
-            )
-            render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)
-            render_context.update(harness=plan, header_name=f"{name}_{stem}.h", harness_label=label,
-                                  harness_output_count=pool.output_count, harness_benchmark=pool.benchmark)
-            source = env.get_template(self.HARNESS_SOURCE).render(**render_context)
+        sizer = context.get("kernel_get_buffer_size_fn")
+        plan = plan_harness(
+            pool,
+            kernel_fn=context["kernel_fn"],
+            sizer_fn=sizer,
+            scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
+            contracts=contract_render.load_current_contracts(),
+        )
+        render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)
+        render_context.update(harness=plan, header_name=f"{name}_{stem}.h", harness_label=label,
+                              harness_output_count=pool.output_count, harness_benchmark=pool.benchmark)
+        source = env.get_template(self.HARNESS_SOURCE).render(**render_context)
         (output_dir / f"{name}_{stem}.c").write_text(source)
 
     def render_template(
