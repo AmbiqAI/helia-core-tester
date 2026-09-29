@@ -1,0 +1,185 @@
+{#
+  Generic harness source (iteration 1b). It knows no operator: the kernel and its scratch
+  query are bound from the operator's ArgumentPool against the kernel contract
+  (generation/harness/plan.py), providers such as weight sums appear only when the bound
+  prototype takes them, and the correctness, benchmark and validation paths are the shared
+  standalone ones.
+#}
+#include "{{ header_name }}"
+#include "arm_nnfunctions.h"
+{% include "common/standalone/runtime_common.j2" %}
+{% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
+{% from "common/standalone/validation.j2" import validation_outputs with context %}
+
+{% include "common/standalone/benchmark.j2" %}
+
+{% set supports_benchmark = true %}
+{% set label = validation_label | default(harness_label) %}
+
+// The kernel this harness links must have the prototype the ns-cmsis-nn export records.
+{{ contract_parity_assert(kernel_fn) }}
+
+// Context for buffer allocation
+static cmsis_nn_context {{ name }}_ctx;
+
+// Runtime scratch buffer (max upper bound; actual size queried at runtime)
+#define {{ name|upper }}_BUFFER_SIZE_MAX {{ buffer_size_max }}
+{{ helia_guard_declare("uint8_t", name ~ "_buffer", name|upper ~ "_BUFFER_SIZE_MAX") }}
+
+{% for block in harness.providers %}
+{% for declaration in block.declarations %}
+{{ declaration }}
+{% endfor %}
+{% for buffer in block.buffers %}
+#define {{ buffer.count_macro }} {{ buffer.count_value }}
+{{ helia_guard_declare(buffer.ctype, buffer.name, buffer.count_macro) }}
+{% endfor %}
+{% endfor %}
+
+#define {{ name|upper }}_OUTPUT_SIZE {{ harness_output_count }}
+{{ helia_guard_declare(output_dtype, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
+
+{% for declaration in harness.source_declarations %}
+{{ declaration }}
+{% endfor %}
+
+{#
+  Shared by the correctness path ({{name}}_run) and the benchmark path ({{name}}_bench_init /
+  {{name}}_bench_op), so the two can never drift apart: only the timing boundary differs.
+#}
+{% macro harness_init() %}
+    {% if harness.sizer_call %}
+    // Calculate required buffer size
+    int32_t required_buffer_size = {{ harness.sizer_call }};
+    {% else %}
+    // The entry takes no scratch query (entry_scratch in the descriptor).
+    int32_t required_buffer_size = {{ harness.scratch_bytes }};
+    {% endif %}
+    // Armed before the capacity check below: an early return there would otherwise leave
+    // these canaries unstamped, and the unconditional check in _test_case_run would
+    // report a fabricated breach instead of the real sizer error (#68).
+    HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
+    {% for block in harness.providers %}
+    {% for buffer in block.buffers %}
+    HELIA_GUARD_ARM({{ buffer.name }}, true /* fully recomputed below: poison-safe */);
+    {% endfor %}
+    {% endfor %}
+    HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, 0u);
+
+    // The sizer's answer is checked before it becomes a context size (#133): a negative
+    // answer is the documented out-of-range sentinel, and one above this case's static bound
+    // means the generation-time bound and the shipped kernel disagree.
+    {% if harness.sizer_fn %}
+    HELIA_VALIDATE_SIZER("{{ harness.sizer_fn }}", required_buffer_size);
+    HELIA_VALIDATE_SIZER_FITS("{{ harness.sizer_fn }}", required_buffer_size, {{ name|upper }}_BUFFER_SIZE_MAX);
+    {% endif %}
+
+    // Initialize context buffer
+    {{ name }}_ctx.buf = {{ name }}_buffer;
+    {{ name }}_ctx.size = required_buffer_size;
+    HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
+    {% for block in harness.providers %}
+
+{{ block.setup }}
+    {% endfor %}
+{% endmacro %}
+int32_t {{ name }}_run(
+    const {{ input_dtype }}* __restrict input,
+    {{ output_dtype }}* __restrict output
+) {
+    {{ harness_init() }}
+    return {{ harness.run_call }};
+}
+
+#ifdef HELIA_BENCHMARK_MODE
+// --benchmark support: {{name}}_bench_init() is the one-time buffer/context/provider set-up
+// (untimed); {{name}}_bench_op() is only the kernel call (timed; see common/standalone/benchmark.j2).
+{% if use_batch_harness %}
+// Non-static: HELIA_BATCH_BENCHMARK links every generated test's .c file into a single
+// executable (see scripts/gen_batch_harness.py); names are unique per test.
+int32_t {{ name }}_bench_init(void)
+{% else %}
+static int32_t {{ name }}_bench_init(void)
+{% endif %}
+{
+    {{ harness_init() }}
+    return ARM_CMSIS_NN_SUCCESS;
+}
+
+{% if use_batch_harness %}
+int32_t {{ name }}_bench_op(void)
+{% else %}
+static int32_t {{ name }}_bench_op(void)
+{% endif %}
+{
+    return {{ harness.bench_call }};
+}
+
+{% if not use_batch_harness %}
+static int32_t {{ name }}_benchmark_run(void)
+{
+    // A sizer check inside _bench_init() returns before the context is populated, so the
+    // benchmark must not proceed on that path (#133); a kernel call that does not succeed
+    // fails it too (helia_benchmark_run stops there), so no cycle count is reported for it.
+    const int32_t init_status = {{ name }}_bench_init();
+    if (init_status != ARM_CMSIS_NN_SUCCESS) {
+        HELIA_BENCH_PRINTF("[BENCH] {{ name }} skipped: scratch sizer rejected before the context was populated\r\n");
+        return helia_benchmark_failed("{{ name }} benchmark init", init_status);
+    }
+    return helia_benchmark_run("{{ name }}", {{ name }}_bench_op);
+}
+{% endif %}
+#endif // HELIA_BENCHMARK_MODE
+
+int32_t {{ name }}_test_case_run(void)
+{
+    {% if autovectorize_declines %}
+#if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
+    HELIA_GUARD_ARM({{ name }}_output, true /* the entry declines on this build: poison */);
+#else
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
+#endif
+    {% elif expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
+    HELIA_GUARD_ARM({{ name }}_output, true /* a declined call must not write it: poison */);
+    {% else %}
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
+    {% endif %}
+    int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
+    int failures = 0;
+    HELIA_GUARD_CHECK({{ name }}_buffer, "{{ label }} scratch", failures);
+    HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ label }} scratch slack", {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u, failures);
+    {% for block in harness.providers %}
+    {% for buffer in block.buffers %}
+    HELIA_GUARD_CHECK({{ buffer.name }}, "{{ label }} {{ buffer.label }}", failures);
+    {% endfor %}
+    {% endfor %}
+    HELIA_GUARD_CHECK({{ name }}_output, "{{ label }} output", failures);
+    {% if autovectorize_declines %}
+#if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
+    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ label }} output", failures);
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ label }}",
+        status,
+        ARM_CMSIS_NN_NO_IMPL_ERROR
+    );
+#else
+    HELIA_VALIDATE_STATUS("{{ label }}", status);
+
+{{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
+#endif
+    {% elif expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
+    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ label }} output", failures);
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ label }}",
+        status,
+        {{ expected_status }}
+    );
+    {% else %}
+    HELIA_VALIDATE_STATUS("{{ label }}", status);
+
+{{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
+    {% endif %}
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
+}
+
+{% include "common/standalone/main.j2" %}

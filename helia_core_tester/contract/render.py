@@ -81,6 +81,19 @@ def render_parity_assert(decl: FunctionDecl) -> str:
     )
 
 
+def require_bound_symbol(contracts: ContractSet, symbol: str) -> FunctionDecl:
+    """`symbol` from a checkout's contract, for a template that renders its call from it. A
+    checkout without the export fails naming the ns-cmsis-nn it needs, never falling back."""
+    if not contracts.present:
+        raise ContractRenderError(
+            f"{symbol}: this template renders its call from the kernel contract, but the "
+            f"ns-cmsis-nn checkout ({contracts.root or 'unresolved'}) has no "
+            "Tests/KernelContracts/kernel_contracts.json; it needs an ns-cmsis-nn that carries "
+            "the export (AmbiqAI/ns-cmsis-nn#549 or later)"
+        )
+    return contracts.require(symbol)
+
+
 def load_current_contracts() -> ContractSet:
     """The kernel contract of the resolved ns-cmsis-nn checkout (`absent` when it has none)."""
     return load_contract_set(resolve_cmsis_nn_root())
@@ -98,15 +111,7 @@ def contract_globals(loader: Optional[Callable[[], ContractSet]] = None) -> dict
         return cache["set"]
 
     def require(symbol: str) -> FunctionDecl:
-        current = contracts()
-        if not current.present:
-            raise ContractRenderError(
-                f"{symbol}: this template renders its call from the kernel contract, but the "
-                f"ns-cmsis-nn checkout ({current.root or 'unresolved'}) has no "
-                "Tests/KernelContracts/kernel_contracts.json; it needs an ns-cmsis-nn that carries "
-                "the export (AmbiqAI/ns-cmsis-nn#549 or later)"
-            )
-        return current.require(symbol)
+        return require_bound_symbol(contracts(), symbol)
 
     def contract_call(symbol: str, args: Mapping[str, str], indent: str = "        ") -> str:
         return render_call(require(symbol), args, indent=indent)
