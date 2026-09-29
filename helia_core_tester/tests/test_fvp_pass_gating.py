@@ -27,16 +27,10 @@ from helia_core_tester.hardware.generated_test_bridge import (
     GeneratedTestCase,
     UnsupportedGeneratedTestError,
     build_case_bundle_from_generated_test,
-    discover_generated_tests,
 )
+from helia_core_tester.tests.generated_inputs import discover_or_skip
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-pytestmark = pytest.mark.skipif(
-    not (PROJECT_ROOT / "artifacts" / "generated_tests").is_dir(),
-    reason="no generated-test artifacts under artifacts/generated_tests/ "
-    "(artifacts/ is gitignored -- run `helia_core_tester generate` first)",
-)
 
 
 def _write_fake_report(root: Path, cpu: str, suite: str, descriptor_results: dict) -> Path:
@@ -154,7 +148,7 @@ def test_bridge_skips_case_with_recorded_fvp_failure(tmp_path: Path, monkeypatch
     already catch) when a fake FVP report records it as FAIL -- confirming the
     gate is actually wired into build_case_bundle_from_generated_test.
     """
-    cases = discover_generated_tests(PROJECT_ROOT, family="BasicMathFunctions", name_filter="add_default_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="BasicMathFunctions", name_filter="add_default_s8")
     assert cases, "expected a discoverable BasicMathFunctions add_default_s8 case"
     case = cases[0]
 
@@ -178,7 +172,7 @@ def test_bridge_ignores_gate_when_require_fvp_pass_false(tmp_path: Path, monkeyp
     tests that don't have a real FVP report), in which case bridging proceeds
     even if a FAIL would otherwise have been recorded.
     """
-    cases = discover_generated_tests(PROJECT_ROOT, family="BasicMathFunctions", name_filter="add_default_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="BasicMathFunctions", name_filter="add_default_s8")
     assert cases
     case = cases[0]
 
@@ -232,7 +226,7 @@ def _stale_report_for(tmp_path: Path, case) -> Path:
 
 
 def _abs_default_s8_case():
-    cases = discover_generated_tests(
+    cases = discover_or_skip(
         PROJECT_ROOT, family="BasicMathFunctions", name_filter="abs_default_s8"
     )
     assert cases, "expected a discoverable BasicMathFunctions abs_default_s8 case"

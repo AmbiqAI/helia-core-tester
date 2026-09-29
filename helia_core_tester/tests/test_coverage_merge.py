@@ -209,6 +209,59 @@ def test_coverage_merge_optional_float_mve_absent_does_not_fail(tmp_path: Path) 
     assert "float-mve:cortex-m55" not in report.missing_coverage_inputs
 
 
+def test_coverage_merge_includes_optional_int_mve_for_m55(tmp_path: Path) -> None:
+    project_root = tmp_path
+    file_a = project_root / "Source" / "ConvolutionFunctions" / "a.c"
+    file_a.parent.mkdir(parents=True, exist_ok=True)
+    file_a.write_text("// a\n")
+    for cpu in ("cortex-m4", "cortex-m55"):
+        _write_lcov(
+            project_root / "artifacts" / "reports" / "coverage" / "int" / cpu / "coverage.info",
+            [(str(file_a), [(10, 1), (20, 0)])],
+        )
+    # The MVE integer build instruments lines the AUTOVECTORIZE build compiles out.
+    _write_lcov(
+        project_root / "artifacts" / "reports" / "coverage" / "int-mve" / "cortex-m55" / "coverage.info",
+        [(str(file_a), [(20, 3), (30, 1)])],
+    )
+
+    exit_code, report = run_coverage_merge(
+        project_root=project_root,
+        cpus="cortex-m4,cortex-m55",
+        suites=["int", "int-mve"],
+        report_dir=project_root / "artifacts" / "reports" / "coverage" / "merged",
+        expected_zero_config=project_root / "assets" / "coverage_expected_zero.json",
+    )
+
+    assert exit_code == 0
+    assert "int-mve:cortex-m55" in report.coverage_inputs
+    assert "int-mve:cortex-m4" not in report.missing_coverage_inputs
+    assert report.missing_coverage_inputs == {}
+    assert "Source/ConvolutionFunctions/a.c" in report.covered_files
+
+
+def test_coverage_merge_optional_int_mve_absent_does_not_fail(tmp_path: Path) -> None:
+    project_root = tmp_path
+    file_a = project_root / "Source" / "ConvolutionFunctions" / "a.c"
+    file_a.parent.mkdir(parents=True, exist_ok=True)
+    file_a.write_text("// a\n")
+    _write_lcov(
+        project_root / "artifacts" / "reports" / "coverage" / "int" / "cortex-m55" / "coverage.info",
+        [(str(file_a), [(10, 1)])],
+    )
+
+    exit_code, report = run_coverage_merge(
+        project_root=project_root,
+        cpus="cortex-m55",
+        suites=["int", "int-mve"],
+        report_dir=project_root / "artifacts" / "reports" / "coverage" / "merged",
+        expected_zero_config=project_root / "assets" / "coverage_expected_zero.json",
+    )
+
+    assert exit_code == 0
+    assert "int-mve:cortex-m55" not in report.missing_coverage_inputs
+
+
 @pytest.mark.parametrize(
     "missing",
     [

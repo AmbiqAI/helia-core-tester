@@ -7,7 +7,7 @@ import numpy as np
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
-from helia_core_tester.generation.kernel_dispatch import resolve_fully_connected_kernel
+from helia_core_tester.generation.kernel_dispatch import resolve_direct_entry, resolve_fully_connected_kernel
 from helia_core_tester.core.cpu_targets import get_cpu_profile
 import keras
 from pathlib import Path
@@ -228,11 +228,24 @@ class OpFullyConnected(OperationBase):
             f.write(tflite_model)
     
     def _select_cmsis_fc_kernel(self) -> Dict[str, str]:
-        return resolve_fully_connected_kernel(
+        info = resolve_fully_connected_kernel(
             activation_dtype=self.desc.get('activation_dtype', 'S8'),
             weight_dtype=self.desc.get('weight_dtype', 'S8'),
             cpu=self.target_cpu,
         )
+        entry = self.desc.get("entry")
+        if entry:
+            if self.desc.get("fault"):
+                raise ValueError(f"{self.desc.get('name')}: entry {entry!r} is not supported with fault")
+            info.update(
+                resolve_direct_entry(
+                    "FullyConnected",
+                    str(entry),
+                    self.desc.get("activation_dtype", "S8"),
+                    self.desc.get("weight_dtype", "S8"),
+                )
+            )
+        return info
 
     def _find_fully_connected_op_index(self, model: Any, subgraph: Any) -> int:
         """Find the FULLY_CONNECTED operator index in the subgraph (fallback to 0)."""
@@ -707,6 +720,8 @@ class OpFullyConnected(OperationBase):
                 'float_kernel': True,
                 'fc_params_type': kernel_info.get("fc_params_type", 'cmsis_nn_fc_params_f32'),
                 'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
+                # A layout-free direct entry (entry:, e.g. arm_fully_connected_nhwc_f16) takes no layout.
+                'kernel_needs_layout': kernel_info.get("kernel_needs_layout", True),
                 'fc_activation_min_literal': builder.format_float_literal(fc_params['activation_min']),
                 'fc_activation_max_literal': builder.format_float_literal(fc_params['activation_max']),
                 'validation_mode': 'float',

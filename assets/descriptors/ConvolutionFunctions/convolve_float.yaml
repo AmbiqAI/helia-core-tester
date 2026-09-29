@@ -1896,3 +1896,139 @@ padding: VALID
 use_bias: true
 fault: invalid_layout
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# Direct entries (entry:): FP16 entries that no wrapper routes to. The _nhwc_ entries take no
+# layout argument; the _acc16 entries keep float16 lane accumulation (heliaAOT fast mode) and
+# are skipped on an ns-cmsis-nn checkout that does not declare them.
+operator: Convolve
+name: convolve_float_entry_acc16_8x8_k3x3_f16
+entry: arm_convolve_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 8, 8, 5]
+filter_shape: [3, 3, 5, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_nhwc_8x8_k3x3_f16
+entry: arm_convolve_nhwc_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 8, 8, 5]
+filter_shape: [3, 3, 5, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_nhwc_acc16_8x8_k3x3_f16
+entry: arm_convolve_nhwc_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 8, 8, 5]
+filter_shape: [3, 3, 5, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_wrapper_acc16_6x6_k3x3_f16
+entry: arm_convolve_wrapper_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 3]
+filter_shape: [3, 3, 3, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_entry_1x1_acc16_8x8_c16_f16
+entry: arm_convolve_1x1_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 8, 8, 16]
+filter_shape: [1, 1, 16, 8]
+strides: [2, 2]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_entry_1x1_nhwc_8x8_c16_f16
+entry: arm_convolve_1x1_nhwc_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 8, 8, 16]
+filter_shape: [1, 1, 16, 8]
+strides: [2, 2]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_entry_1x1_nhwc_acc16_8x8_c16_f16
+entry: arm_convolve_1x1_nhwc_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 8, 8, 16]
+filter_shape: [1, 1, 16, 8]
+strides: [2, 2]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_k5_oc4_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 9, 4]
+filter_shape: [1, 5, 4, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_entry_1xn_nhwc_k5_oc4_f16
+entry: arm_convolve_1_x_n_nhwc_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 9, 4]
+filter_shape: [1, 5, 4, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_entry_1xn_nhwc_acc16_k5_oc4_f16
+entry: arm_convolve_1_x_n_nhwc_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 9, 4]
+filter_shape: [1, 5, 4, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true

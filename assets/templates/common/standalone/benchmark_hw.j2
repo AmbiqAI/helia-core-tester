@@ -35,6 +35,9 @@
     [BENCH] <name> warmup_runs=<W> measured_runs=<M>
     [PERF] <name>: <cycles> cycles
     [PMU] <name>: inst_retired=<N> l1d_refill=<N> stall=<N> br_mispred=<N>
+  A call that does not return ARM_CMSIS_NN_SUCCESS ends the run there with
+  "<name> failed with status <N>" and "1 Failures"; no counters are printed for
+  it or after it.
 
   IMPORTANT (verified against modules/nsx-ambiq-sdk/modules/nsx-core/src/nsx_retarget.c
   and modules/nsx-ambiq-sdk/modules/nsx-core/src/apollo510/nsx_system_platform.c):
@@ -126,20 +129,36 @@ static inline void helia_pmu_stop(void)
 }
 
 /*
+ * Same failure lines as helia_test_status_failure(), which the report parser
+ * classifies, but through HELIA_BENCH_PRINTF so they reach the board's console.
+ */
+static inline int32_t helia_benchmark_failed(const char *name, int32_t status)
+{
+    HELIA_BENCH_PRINTF("%s failed with status %ld\r\n", name, (long)status);
+    HELIA_BENCH_PRINTF("1 Failures\r\n");
+    return 1;
+}
+
+/*
  * Runs `op` HELIA_BENCHMARK_WARMUP_RUNS times untimed (cache/branch-predictor
  * warmup, no counting), then HELIA_BENCHMARK_MEASURED_RUNS times timed via
  * both the DWT cycle counter and the fixed PMU event set. Only the op call
  * itself is measured -- never `_bench_init()` (buffer setup / weight-sum
  * precompute) and never output validation/compare, which happen separately
  * in the non-benchmark path.
+ * Returns the failure count: 0, or 1 at the first call that does not succeed;
+ * no counters are printed for that call or after it.
  */
-static inline void helia_benchmark_run(const char *name, helia_bench_op_fn op)
+static inline int32_t helia_benchmark_run(const char *name, helia_bench_op_fn op)
 {
     helia_dwt_enable();
     helia_pmu_setup();
 
     for (int i = 0; i < HELIA_BENCHMARK_WARMUP_RUNS; i++) {
-        (void)op();
+        int32_t status = op();
+        if (status != ARM_CMSIS_NN_SUCCESS) {
+            return helia_benchmark_failed(name, status);
+        }
     }
 
     HELIA_BENCH_PRINTF("[BENCH] %s warmup_runs=%d measured_runs=%d\r\n",
@@ -148,9 +167,12 @@ static inline void helia_benchmark_run(const char *name, helia_bench_op_fn op)
     for (int i = 0; i < HELIA_BENCHMARK_MEASURED_RUNS; i++) {
         helia_pmu_start();
         uint32_t start = helia_dwt_cycles();
-        (void)op();
+        int32_t status = op();
         uint32_t end = helia_dwt_cycles();
         helia_pmu_stop();
+        if (status != ARM_CMSIS_NN_SUCCESS) {
+            return helia_benchmark_failed(name, status);
+        }
 
         uint32_t inst_retired = ARM_PMU_Get_EVCNTR(HELIA_PMU_COUNTER_INST_RETIRED);
         uint32_t l1d_refill = ARM_PMU_Get_EVCNTR(HELIA_PMU_COUNTER_L1D_REFILL);
@@ -165,6 +187,7 @@ static inline void helia_benchmark_run(const char *name, helia_bench_op_fn op)
                (unsigned long)stall,
                (unsigned long)br_mispred);
     }
+    return 0;
 }
 
 #endif // HELIA_BENCHMARK_MODE

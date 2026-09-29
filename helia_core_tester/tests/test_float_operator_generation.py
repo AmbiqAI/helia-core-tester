@@ -81,7 +81,10 @@ def test_float_descriptors_load_and_are_tagged_as_float_suite() -> None:
 
 def test_templates_use_umbrella_public_headers_only() -> None:
     templates_root = _repo_root() / "assets" / "templates"
-    texts = "\n".join(path.read_text() for path in templates_root.rglob("*.j2"))
+    # hardware/nsx holds CMake, not generated C.
+    texts = "\n".join(
+        path.read_text() for path in templates_root.rglob("*.j2") if "hardware/nsx" not in path.as_posix()
+    )
 
     assert "arm_nnfunctions_flt.h" not in texts
     assert "arm_nn_types_flt.h" not in texts

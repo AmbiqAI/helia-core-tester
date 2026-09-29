@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.hardware.boards import DEFAULT_BOARD_ID, resolve_board
+from helia_core_tester.hardware.firmware_build import elf_path
 from helia_core_tester.hardware.memory_report import generate_memory_report
 from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
 from helia_core_tester.hardware.fake_target import FakeTargetTransport
@@ -16,13 +17,21 @@ from helia_core_tester.hardware.session import HostSession, SessionResult
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# generate_memory_report() shells out to arm-none-eabi-size/nm/objdump
-# against an already-built firmware ELF; both are unavailable in a pure-Python
-# environment (e.g. the pytest.yml CI job, which intentionally skips the ARM toolchain).
-pytestmark = pytest.mark.skipif(
-    shutil.which("arm-none-eabi-size") is None,
-    reason="ARM GCC toolchain (arm-none-eabi-*) not installed",
-)
+# generate_memory_report() shells out to arm-none-eabi-size/nm/objdump against the
+# default board's already-built benchmark-server ELF. Either can be absent: the
+# pytest.yml CI job has no ARM toolchain, and a developer tree with the toolchain may
+# not have built the firmware. A present but unreadable ELF still fails.
+BENCHMARK_SERVER_ELF = elf_path(resolve_board(DEFAULT_BOARD_ID).build_dir(PROJECT_ROOT))
+pytestmark = [
+    pytest.mark.skipif(
+        shutil.which("arm-none-eabi-size") is None,
+        reason="ARM GCC toolchain (arm-none-eabi-*) not installed",
+    ),
+    pytest.mark.skipif(
+        not BENCHMARK_SERVER_ELF.is_file(),
+        reason=f"no built benchmark-server ELF at {BENCHMARK_SERVER_ELF} (run `hardware build` first)",
+    ),
+]
 
 
 

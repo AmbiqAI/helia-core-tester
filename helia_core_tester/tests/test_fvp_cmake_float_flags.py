@@ -135,6 +135,35 @@ def test_build_step_int_suite_disables_float_cmake_defines(tmp_path: Path) -> No
 
     assert "ARM_NN_ENABLE_F32=OFF" in cmd
     assert "ARM_NN_ENABLE_F16=OFF" in cmd
+    assert "ENABLE_COVERAGE_MVE_INT=ON" not in cmd
+
+
+def test_build_step_emits_mve_int_coverage_define_for_the_int_build_only(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+    cfg = Config(
+        project_root=root,
+        cpu="cortex-m55",
+        suite="both",
+        float_precision="both",
+        coverage=True,
+        coverage_mve_int=True,
+        _explicit_overrides={
+            "project_root",
+            "cpu",
+            "suite",
+            "float_precision",
+            "coverage",
+            "coverage_mve_int",
+        },
+    )
+
+    commands = BuildStep(cfg)._plan_details().commands
+    int_cmds = [cmd for cmd in commands if "--suite" in cmd and cmd[cmd.index("--suite") + 1] == "int"]
+    float_cmds = [cmd for cmd in commands if "--suite" in cmd and cmd[cmd.index("--suite") + 1] == "float"]
+
+    assert int_cmds and float_cmds
+    assert all("ENABLE_COVERAGE_MVE_INT=ON" in cmd for cmd in int_cmds)
+    assert not any("ENABLE_COVERAGE_MVE_INT=ON" in cmd for cmd in float_cmds)
 
 
 def test_build_step_emits_cmsis_nn_root_cmake_define(tmp_path: Path) -> None:

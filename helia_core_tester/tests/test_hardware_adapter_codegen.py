@@ -16,8 +16,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from helia_core_tester.hardware.adapter_specs import (
     FIRMWARE_ADAPTERS,
     GENERATED_BLOCK_BEGIN,
@@ -50,15 +48,6 @@ from helia_core_tester.hardware.generated_test_bridge import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# The builder cross-checks read a pre-generated artifacts/generated_tests/ tree,
-# which is gitignored; the drift guards render straight from adapter_specs.py and
-# the bias-bridge regression generates its own case, so those must not inherit
-# this skip or they would never run in CI.
-requires_generated_artifacts = pytest.mark.skipif(
-    not (PROJECT_ROOT / "artifacts" / "generated_tests").is_dir(),
-    reason="no generated-test artifacts under artifacts/generated_tests/ "
-    "(artifacts/ is gitignored -- run `helia_core_tester generate` first)",
-)
 ADAPTERS_C_PATH = PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_adapters.gen.c"
 ADAPTERS_H_PATH = PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_adapters.h"
 SESSION_C_PATH = PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_session.c"
@@ -134,16 +123,15 @@ def test_every_registered_adapter_has_a_unique_function_name() -> None:
     assert len(names) == len(set(names)), f"duplicate function_name entries: {names}"
 
 
-@requires_generated_artifacts
 def test_convolve_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     """Cross-check: the Python bridge builder for Convolve must only send scalar keys the
     firmware's run_convolve_once() body (as documented in adapter_specs.py) actually reads --
     catches a renamed/typo'd scalar key at review/test time instead of only at hardware-run
     time (see the arena-capacity bug this same kind of drift caused previously).
     """
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(PROJECT_ROOT, family="ConvolutionFunctions", name_filter="convolve_case_03_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="ConvolutionFunctions", name_filter="convolve_case_03_s8")
     assert cases, "expected at least one discoverable Convolve generated test"
     bundle = _build_convolve_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
@@ -158,11 +146,10 @@ def test_convolve_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fiel
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_depthwise_conv_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(
+    cases = discover_or_skip(
         PROJECT_ROOT, family="ConvolutionFunctions", name_filter="depthwise_conv_kernel_support_s8"
     )
     assert cases, "expected a discoverable DepthwiseConv generated test"
@@ -172,11 +159,10 @@ def test_depthwise_conv_builder_scalar_keys_are_subset_of_firmware_adapter_scala
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_basic_math_reduction_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(PROJECT_ROOT, family="BasicMathFunctions", name_filter="mean_default_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="BasicMathFunctions", name_filter="mean_default_s8")
     assert cases, "expected a discoverable Mean generated test"
     bundle = _build_basic_math_reduction_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
@@ -184,11 +170,10 @@ def test_basic_math_reduction_builder_scalar_keys_are_subset_of_firmware_adapter
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_basic_math_lut_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(PROJECT_ROOT, family="BasicMathFunctions", name_filter="rsqrt_small_tensor_universal_s16")
+    cases = discover_or_skip(PROJECT_ROOT, family="BasicMathFunctions", name_filter="rsqrt_small_tensor_universal_s16")
     assert cases, "expected a discoverable Rsqrt generated test"
     bundle = _build_basic_math_lut_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
@@ -196,11 +181,10 @@ def test_basic_math_lut_builder_scalar_keys_are_subset_of_firmware_adapter_scala
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_squared_difference_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(
+    cases = discover_or_skip(
         PROJECT_ROOT, family="BasicMathFunctions", name_filter="squared_difference_batch_broadcast_input2_s16"
     )
     assert cases, "expected a discoverable SquaredDifference generated test"
@@ -210,11 +194,10 @@ def test_squared_difference_builder_scalar_keys_are_subset_of_firmware_adapter_s
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_requantize_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(PROJECT_ROOT, family="NNSupportFunctions", name_filter="requantize_default_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="NNSupportFunctions", name_filter="requantize_default_s8")
     assert cases, "expected a discoverable Requantize generated test"
     bundle = _build_requantize_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
@@ -222,11 +205,10 @@ def test_requantize_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fi
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_comparison_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(PROJECT_ROOT, family="ComparisonFunctions", name_filter="comparison_equal_batch_broadcast_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="ComparisonFunctions", name_filter="comparison_equal_batch_broadcast_s8")
     assert cases, "expected a discoverable Comparison generated test"
     bundle = _build_comparison_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
@@ -234,11 +216,10 @@ def test_comparison_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fi
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_transpose_conv_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(
+    cases = discover_or_skip(
         PROJECT_ROOT, family="ConvolutionFunctions", name_filter="transpose_conv_reverse_valid_kernel1x1_stride2x2_no_bias_s8"
     )
     assert cases, "expected a discoverable TransposeConv generated test"
@@ -256,11 +237,10 @@ def test_transpose_conv_builder_scalar_keys_are_subset_of_firmware_adapter_scala
 # matching firmware entry would previously go undetected until a hardware run).
 
 
-@requires_generated_artifacts
 def test_fully_connected_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(PROJECT_ROOT, family="FullyConnectedFunctions", name_filter="fully_connected_default_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="FullyConnectedFunctions", name_filter="fully_connected_default_s8")
     assert cases, "expected a discoverable FullyConnected generated test"
     bundle = _build_fully_connected_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
@@ -349,11 +329,10 @@ def test_s8_fully_connected_firmware_body_gates_the_kernel_sum_on_mve() -> None:
     assert "kernel_bias," in body and body.count("arm_vector_sum_s8") == 1
 
 
-@requires_generated_artifacts
 def test_batch_matmul_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(PROJECT_ROOT, family="FullyConnectedFunctions", name_filter="batch_matmul_default_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="FullyConnectedFunctions", name_filter="batch_matmul_default_s8")
     assert cases, "expected a discoverable BatchMatMul generated test"
     bundle = _build_batch_matmul_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
@@ -361,15 +340,14 @@ def test_batch_matmul_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_quantize_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
     # Every shorter "quantize_..." suffix here is also a substring of some
-    # "dequantize_..." directory name (discover_generated_tests() filters by substring),
+    # "dequantize_..." directory name (discover_or_skip() filters by substring),
     # which sorts first and would silently pick the wrong (unbridgeable) case -- this one
     # has no dequantize_* counterpart.
-    cases = discover_generated_tests(PROJECT_ROOT, family="QuantizationFunctions", name_filter="quantize_relu6_tail_vec31_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="QuantizationFunctions", name_filter="quantize_relu6_tail_vec31_s8")
     assert cases, "expected a discoverable Quantize generated test"
     bundle = _build_quantize_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
@@ -377,11 +355,10 @@ def test_quantize_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fiel
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_dequantize_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(PROJECT_ROOT, family="QuantizationFunctions", name_filter="dequantize_relu_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="QuantizationFunctions", name_filter="dequantize_relu_s8")
     assert cases, "expected a discoverable Dequantize generated test"
     bundle = _build_dequantize_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
@@ -389,11 +366,10 @@ def test_dequantize_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fi
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_softmax_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(PROJECT_ROOT, family="SoftmaxFunctions", name_filter="softmax_default_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="SoftmaxFunctions", name_filter="softmax_default_s8")
     assert cases, "expected a discoverable Softmax generated test"
     bundle = _build_softmax_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
@@ -401,11 +377,10 @@ def test_softmax_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_field
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_pooling_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(PROJECT_ROOT, family="PoolingFunctions", name_filter="avg_pool_same_pool1x3_stride2x1_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="PoolingFunctions", name_filter="avg_pool_same_pool1x3_stride2x1_s8")
     assert cases, "expected a discoverable AvgPool generated test"
     bundle = _build_pooling_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
@@ -413,11 +388,10 @@ def test_pooling_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_field
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_activation_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(PROJECT_ROOT, family="ActivationFunctions", name_filter="clamp_default_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="ActivationFunctions", name_filter="clamp_default_s8")
     assert cases, "expected a discoverable Clamp generated test"
     bundle = _build_activation_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
@@ -425,11 +399,10 @@ def test_activation_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fi
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_prelu_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(PROJECT_ROOT, family="ActivationFunctions", name_filter="prelu_default_alpha_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="ActivationFunctions", name_filter="prelu_default_alpha_s8")
     assert cases, "expected a discoverable PReLU generated test"
     bundle = _build_prelu_case(PROJECT_ROOT, cases[0], output_root=tmp_path)
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
@@ -437,14 +410,13 @@ def test_prelu_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_prelu_scalar_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
     """PReLUScalar's C body lives in the same run_prelu_once() firmware function as
     general PReLU (see the c_body comment in adapter_specs.py), so it cross-checks against
     the same scalar_fields list."""
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(
+    cases = discover_or_skip(
         PROJECT_ROOT, family="ActivationFunctions", name_filter="prelu_scalar_input_true_negative_s8"
     )
     assert cases, "expected a discoverable PReLUScalar generated test"
@@ -454,11 +426,10 @@ def test_prelu_scalar_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_reduce_sum_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(
+    cases = discover_or_skip(
         PROJECT_ROOT, family="BasicMathFunctions", name_filter="reduce_sum_float_axis_c_f32", suite="float"
     )
     assert cases, "expected a discoverable ReduceSum generated test"
@@ -468,11 +439,10 @@ def test_reduce_sum_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fi
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_batch_norm_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(
+    cases = discover_or_skip(
         PROJECT_ROOT, family="NNSupportFunctions", name_filter="batch_norm_default_f32", suite="float"
     )
     assert cases, "expected a discoverable BatchNorm generated test"
@@ -482,11 +452,10 @@ def test_batch_norm_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fi
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
 
 
-@requires_generated_artifacts
 def test_nn_activation_float_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:
-    from helia_core_tester.hardware.generated_test_bridge import discover_generated_tests
+    from helia_core_tester.tests.generated_inputs import discover_or_skip
 
-    cases = discover_generated_tests(
+    cases = discover_or_skip(
         PROJECT_ROOT, family="ActivationFunctions", name_filter="nn_activation_float_hardswish_f32", suite="float"
     )
     assert cases, "expected a discoverable NNActivationFloat generated test"

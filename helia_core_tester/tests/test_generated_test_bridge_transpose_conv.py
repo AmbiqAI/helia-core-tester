@@ -2,24 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from helia_core_tester.hardware.generated_test_bridge import (
     build_case_bundle_from_generated_test,
-    discover_generated_tests,
 )
+from helia_core_tester.tests.generated_inputs import discover_or_skip
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-pytestmark = pytest.mark.skipif(
-    not (PROJECT_ROOT / "artifacts" / "generated_tests").is_dir(),
-    reason="no generated-test artifacts under artifacts/generated_tests/ "
-    "(artifacts/ is gitignored -- run `helia_core_tester generate` first)",
-)
-
 
 def _bridge(tmp_path: Path, test_name: str) -> dict:
-    cases = discover_generated_tests(PROJECT_ROOT, family="ConvolutionFunctions", name_filter=test_name)
+    cases = discover_or_skip(PROJECT_ROOT, family="ConvolutionFunctions", name_filter=test_name)
     assert cases, f"expected discoverable generated test {test_name}"
     bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False)
     return bundle.manifest

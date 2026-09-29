@@ -9,7 +9,7 @@
 #define {{ name|upper }}_OUTPUT_SIZE ({{ output_dims.n }} * {{ output_dims.h }} * {{ output_dims.w }} * {{ output_dims.c }})
 {{ helia_guard_declare(output_dtype, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
 {% if float_kernel %}
-static {{ input_dtype }} {{ name }}_input[{{ input_count if input_count else 1 }}];
+{{ helia_guard_declare(input_dtype, name ~ "_input", input_count if input_count else 1) }}
 {% endif %}
 
 int32_t {{ name }}_run(
@@ -31,12 +31,16 @@ int32_t {{ name }}_run(
 int32_t {{ name }}_test_case_run(void)
 {
 {% if float_kernel %}
+    HELIA_GUARD_ARM({{ name }}_input, false /* copied in below; the kernel must not write it */);
     memcpy({{ name }}_input, {{ name }}_input_bits, {{ input_count }} * sizeof({{ input_dtype }}));
 {% endif %}
     HELIA_GUARD_ARM({{ name }}_output, {{ 'true' if float_kernel else 'false' }});
     int32_t status = {{ name }}_run({{ 'NULL' if float_kernel and input_count == 0 else name ~ '_input' }}, {{ name }}_output);
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("ReduceMin") }} output", failures);
+{% if float_kernel %}
+    HELIA_GUARD_CHECK({{ name }}_input, "{{ validation_label | default("ReduceMin") }} input", failures);
+{% endif %}
     HELIA_VALIDATE_STATUS("{{ validation_label | default("ReduceMin") }}", status);
 
 {% if float_kernel %}

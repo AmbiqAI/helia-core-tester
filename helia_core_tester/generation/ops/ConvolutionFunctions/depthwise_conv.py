@@ -11,7 +11,34 @@ from helia_core_tester.generation.ops._shared.bias_init import (
     bias_is_hoisted_by_lowering,
     inject_hoisted_dilation_bias,
 )
-from helia_core_tester.generation.kernel_dispatch import resolve_depthwise_conv_kernel
+from helia_core_tester.generation.kernel_dispatch import (
+    DEPTHWISE_CONV_S8_PLANAR_RULE,
+    resolve_depthwise_conv_kernel,
+    resolve_direct_entry,
+)
+
+
+def _opt_dilation_supported(
+    params: Dict[str, int],
+    input_dims: Dict[str, int],
+    filter_dims: Dict[str, int],
+    output_dims: Dict[str, int],
+) -> bool:
+    """Mirror of ns-cmsis-nn arm_nn_dw_conv_opt_dilation_supported() (v7.36.0): the s8 opt and
+    s16 fast depthwise kernels take unit dilation, or a dilated 1D layer with no vertical
+    extent, unit stride and no vertical padding."""
+    if params["dilation_w"] == 1 and params["dilation_h"] == 1:
+        return True
+    return (
+        params["dilation_h"] == 1
+        and params["dilation_w"] >= 1
+        and filter_dims["h"] == 1
+        and input_dims["h"] == 1
+        and output_dims["h"] == 1
+        and params["stride_w"] == 1
+        and params["stride_h"] == 1
+        and params["pad_h"] == 0
+    )
 
 
 def vector_sum_s8(
@@ -85,23 +112,30 @@ class OpDepthwiseConv(OperationBase):
         params = context["dw_conv_params"]
         input_dims = context["input_dims"]
         filter_dims = context["filter_dims"]
-        optimized = (
-            params["ch_mult"] == 1
-            and input_dims["n"] == 1
-            and params["dilation_w"] == 1
-            and params["dilation_h"] == 1
-        )
+        unit_dilation = params["dilation_w"] == 1 and params["dilation_h"] == 1
         if kernel_fn == "arm_depthwise_conv_wrapper_s8":
             is_3x3 = filter_dims["w"] == 3 and filter_dims["h"] == 3
-            optimized = optimized and not (is_3x3 and params["pad_w"] <= 1) and input_dims["c"] != 1
+            optimized = (
+                params["ch_mult"] == 1
+                and input_dims["n"] == 1
+                and _opt_dilation_supported(params, input_dims, filter_dims, context["output_dims"])
+                and not (is_3x3 and params["pad_h"] <= 1 and params["pad_w"] <= 1 and unit_dilation)
+                and input_dims["c"] != 1
+            )
         elif kernel_fn == "arm_depthwise_conv_wrapper_s16":
-            optimized = optimized and filter_dims["w"] * filter_dims["h"] < 512
+            optimized = (
+                params["ch_mult"] == 1
+                and _opt_dilation_supported(params, input_dims, filter_dims, context["output_dims"])
+                and filter_dims["w"] * filter_dims["h"] < 512
+            )
+        else:
+            optimized = params["ch_mult"] == 1 and input_dims["n"] == 1 and unit_dilation
         if not optimized:
             raise self.fault_unreachable(
                 kind,
                 f"{kernel_fn} only checks it on the optimized route "
-                "(ch_mult 1, batch 1, unit dilation; s8: not a 3x3 filter with pad <= 1 and input_ch > 1; "
-                "s16: filter w*h < 512)",
+                "(ch_mult 1; s8 and s16: unit dilation or dilated 1D; s8: batch 1, not a 3x3 filter with "
+                "pad <= 1 and input_ch > 1; s16: filter w*h < 512; s4: batch 1, unit dilation)",
             )
         if kind == "null_ctx_buf" and kernel_fn != "arm_depthwise_conv_wrapper_s4":
             if "dsp" not in self.required_capabilities() and "mve" not in self.required_capabilities():
@@ -312,6 +346,21 @@ class OpDepthwiseConv(OperationBase):
         )
         info.setdefault("kernel_needs_layout", info["input_c_type"] in {"float", "float16_t"})
         info.setdefault("buffer_size_needs_layout", info["input_c_type"] in {"float", "float16_t"})
+        entry = self.desc.get("entry")
+        if entry:
+            if self.desc.get("fault"):
+                raise ValueError(f"{self.desc.get('name')}: fault cases call the wrapper; entry {entry!r} is not supported with fault")
+            info.update(
+                resolve_direct_entry(
+                    "DepthwiseConv",
+                    str(entry),
+                    self.desc.get("activation_dtype", "S8"),
+                    self.desc.get("weight_dtype", "S8"),
+                )
+            )
+            # The s8 entries take weight sums and size scratch from the dims alone; float
+            # entries keep their default entry's call with the registry's layout flags.
+            info["direct_entry"] = info["entry_family"] == "depthwise_s8"
 
         variant = str(self._hint().get("kernel_variant", "")).lower()
         if not variant:
@@ -547,10 +596,14 @@ class OpDepthwiseConv(OperationBase):
         # CMSIS expects filter_dims: n=depth_multiplier, h=H, w=W, c=output_channels
         # Note: filter_dims.c must be output_channels (not input_channels) because CMSIS-NN
         # uses it as the first dimension in the transposed filter: {filter_dims->c, h, w, n}
+        # A descriptor shape can start with 1 (kernel height 1), so only a shape taken from the
+        # model's weights may be read as TFLite format.
+        descriptor_filter_shape = True
         if weight_dtype == "S4":
             filter_shape = tuple(self.desc['filter_shape'])
         elif weights is not None:
             filter_shape = tuple(weights.shape)
+            descriptor_filter_shape = False
             if not float_kernel and weights.dtype != np.int8:
                 weights = weights.astype(np.int8)
         else:
@@ -582,7 +635,7 @@ class OpDepthwiseConv(OperationBase):
         
         if len(filter_shape) == 4:
             # Check if TFLite format [1, H, W, C_OUT] or descriptor format [H, W, I, M]
-            is_tflite_format = filter_shape[0] == 1
+            is_tflite_format = not descriptor_filter_shape and filter_shape[0] == 1
             if is_tflite_format:
                 # TFLite format: [1, H, W, C_OUT]
                 # Extract H and W from indices 1 and 2
@@ -778,7 +831,9 @@ class OpDepthwiseConv(OperationBase):
         # Calculate effective scales: (input_scale * weight_scale) / output_scale
         if per_channel and isinstance(weight_scale, np.ndarray):
             # Per-channel: effective_scale[i] = (input_scale * weight_scale[i]) / output_scale
-            effective_scales = (input_scale * weight_scale) / output_scale
+            # in double precision, as TFLite computes it. The weight scales are float32, and
+            # float32 arithmetic can move a Q31 multiplier onto a different Q15 rounding for s16.
+            effective_scales = (input_scale * weight_scale.astype(np.float64)) / output_scale
             effective_quant = {
                 'scale': effective_scales,
                 'zero_point': output_quant.get('zero_point', 0),
@@ -960,6 +1015,13 @@ class OpDepthwiseConv(OperationBase):
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
             'call_style': kernel_info.get("call_style", "baseline"),
             'buffer_size_max': buffer_size_max,
+            # Entries share the s8 wrapper's argument list but size scratch from the dims alone.
+            'takes_weight_sum_ctx': kernel_info["kernel_fn"] == "arm_depthwise_conv_wrapper_s8"
+            or bool(kernel_info.get("direct_entry")),
+            'direct_entry': bool(kernel_info.get("direct_entry")),
+            'expected_status': self.expected_status(),
+            'planar_supported': self.desc.get("planar_supported"),
+            'planar_rule_fn': DEPTHWISE_CONV_S8_PLANAR_RULE,
         }
         fault = self.fault_kind()
         c_template = "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2"

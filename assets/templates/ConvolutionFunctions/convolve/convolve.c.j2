@@ -16,7 +16,7 @@ static cmsis_nn_context {{ name }}_ctx;
 #define {{ name|upper }}_BUFFER_SIZE_MAX {{ buffer_size_max }}
 {{ helia_guard_declare("uint8_t", name ~ "_buffer", name|upper ~ "_BUFFER_SIZE_MAX") }}
 
-{% if kernel_fn == 'arm_convolve_wrapper_s8' %}
+{% if conv_s8_weight_sum %}
 // Weight sum context (precomputed input-offset/bias fold, avoids per-MAC offset arithmetic)
 static cmsis_nn_context {{ name }}_weight_sum_ctx;
 // Weight sum buffer size: output channels * sizeof(int32_t)
@@ -61,6 +61,11 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
         {{ kernel_layout }}
         {% endif %}
     );
+    {% elif entry_family %}
+    int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
+        &{{ name }}_input_dims,
+        &{{ name }}_filter_dims
+    );
     {% else %}
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
         &{{ name }}_conv_params,
@@ -73,7 +78,7 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
     // these canaries unstamped, and the unconditional check in _test_case_run would
     // report a fabricated breach instead of the real sizer error (#68).
     HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
-    {% if kernel_fn == 'arm_convolve_wrapper_s8' %}
+    {% if conv_s8_weight_sum %}
     HELIA_GUARD_ARM({{ name }}_weight_sum_buffer, true /* fully recomputed below: poison-safe */);
     {% endif %}
     HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, 0u);
@@ -94,7 +99,7 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
     {{ name }}_ctx.size = required_buffer_size;
     HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
 
-    {% if kernel_fn == 'arm_convolve_wrapper_s8' %}
+    {% if conv_s8_weight_sum %}
     // Initialize weight sum context and buffer
     {{ name }}_weight_sum_ctx.buf = {{ name }}_weight_sum_buffer;
     {{ name }}_weight_sum_ctx.size = {{ name|upper }}_WEIGHT_SUM_BUFFER_SIZE;
@@ -142,6 +147,28 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
         {{ output_expr }}{% if kernel_needs_layout %},
         {{ kernel_layout }}
         {% endif %}
+    );
+    {% elif entry_family == 'convolve_s8' %}
+    // arm_convolve_s8 signature: (ctx, weight_sum_ctx, conv_params, quant_params, input_dims, input_data, filter_dims, filter_data, bias_dims, bias_data, upscale_dims, output_dims, output_data)
+    return {{ kernel_fn }}(
+        &{{ name }}_ctx,
+        &{{ name }}_weight_sum_ctx,
+        &{{ name }}_conv_params,
+        &{{ name }}_quant_params,
+        &{{ name }}_input_dims,
+        {{ input_expr }},
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        {% if has_biases %}
+        &{{ name }}_bias_dims,
+        {{ name }}_biases,
+        {% else %}
+        NULL,  // bias_dims
+        NULL,  // bias_data
+        {% endif %}
+        NULL,  // upscale_dims
+        &{{ name }}_output_dims,
+        {{ output_expr }}
     );
     {% elif kernel_fn == 'arm_convolve_wrapper_s8' %}
     // s8 signature: (ctx, weight_sum_ctx, conv_params, quant_params, input_dims, input_data, filter_dims, filter_data, bias_dims, bias_data, output_dims, output_data)
@@ -246,45 +273,71 @@ static int32_t {{ name }}_bench_op(void)
 }
 
 {% if not use_batch_harness %}
-static void {{ name }}_benchmark_run(void)
+static int32_t {{ name }}_benchmark_run(void)
 {
     // A sizer check inside _bench_init() returns before the context is populated, so the
     // benchmark must not proceed on that path: _bench_op() would call the kernel with an
     // uninitialised context and time whatever happened, recording cycle counts that mean
     // nothing, or crash. The failing check has already printed its marker naming the
-    // sizer; this reports the skip and runs nothing (#133).
-    //
-    // What this still does not do is fail the case. A benchmark reports cycles, not a
-    // verdict, and helia_benchmark_run() has no failure channel to carry one, so the C
-    // failure counter stays zero and main.j2 finishes with zero either way. Note that is
-    // a statement about the counter, not about the report: this output still carries the
-    // marker the failing check printed, and if a benchmark capture were ever fed to
-    // TestResultParser it would be classified a sizer failure. No path does that today.
-    // The non-benchmark run of the same case is what turns a bad sizer answer into a
-    // verdict.
-    if ({{ name }}_bench_init() != ARM_CMSIS_NN_SUCCESS) {
-        printf("[BENCH] {{ name }} skipped: scratch sizer rejected before the context was populated\r\n");
-        return;
+    // sizer (#133); the case fails without timing anything. A kernel call that does not
+    // succeed fails it too (helia_benchmark_run stops there), so no cycle count is
+    // reported for a call that did not do its work.
+    const int32_t init_status = {{ name }}_bench_init();
+    if (init_status != ARM_CMSIS_NN_SUCCESS) {
+        HELIA_BENCH_PRINTF("[BENCH] {{ name }} skipped: scratch sizer rejected before the context was populated\r\n");
+        return helia_benchmark_failed("{{ name }} benchmark init", init_status);
     }
-    helia_benchmark_run("{{ name }}", {{ name }}_bench_op);
+    return helia_benchmark_run("{{ name }}", {{ name }}_bench_op);
 }
 {% endif %}
 #endif // HELIA_BENCHMARK_MODE
 
 int32_t {{ name }}_test_case_run(void)
 {
+    {% if autovectorize_declines %}
+#if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
+    HELIA_GUARD_ARM({{ name }}_output, true /* the entry declines on this build: poison */);
+#else
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
+#endif
+    {% elif expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
+    HELIA_GUARD_ARM({{ name }}_output, true /* a declined call must not write it: poison */);
+    {% else %}
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
+    {% endif %}
     int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Convolution") }} scratch", failures);
     HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ validation_label | default("Convolution") }} scratch slack", {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u, failures);
-    {% if kernel_fn == 'arm_convolve_wrapper_s8' %}
+    {% if conv_s8_weight_sum %}
     HELIA_GUARD_CHECK({{ name }}_weight_sum_buffer, "{{ validation_label | default("Convolution") }} weight_sum", failures);
     {% endif %}
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Convolution") }} output", failures);
+    {% if autovectorize_declines %}
+#if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
+    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("Convolution") }} output", failures);
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ validation_label | default("Convolution") }}",
+        status,
+        ARM_CMSIS_NN_NO_IMPL_ERROR
+    );
+#else
     HELIA_VALIDATE_STATUS("{{ validation_label | default("Convolution") }}", status);
 
 {{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
+#endif
+    {% elif expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
+    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("Convolution") }} output", failures);
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ validation_label | default("Convolution") }}",
+        status,
+        {{ expected_status }}
+    );
+    {% else %}
+    HELIA_VALIDATE_STATUS("{{ validation_label | default("Convolution") }}", status);
+
+{{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
+    {% endif %}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 

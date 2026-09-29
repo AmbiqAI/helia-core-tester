@@ -324,6 +324,44 @@ def test_build_rows_includes_float_variations_for_m4_and_m55(tmp_path: Path) -> 
     assert total["tests"]["number_of_tests"] == 20
 
 
+def test_build_rows_unions_int_mve_coverage_without_double_counting_tests(tmp_path: Path) -> None:
+    _setup_cpu_artifacts(
+        tmp_path,
+        "cortex-m55",
+        "ConvolutionFunctions/conv_m55.c",
+        {
+            "da": [(30, 1)],
+            "fns": [(30, "fn_conv_m55", 1)],
+            "branches": [(30, "3", "0", "1")],
+            "total_tests": 5,
+            "passed": 5,
+            "failed": 0,
+            "skipped": 0,
+        },
+        suite="int",
+    )
+    # int-mve provides coverage only; its tests duplicate the int suite.
+    _write_lcov(
+        tmp_path / "artifacts" / "reports" / "coverage" / "int-mve" / "cortex-m55" / "coverage.info",
+        sf=str(tmp_path / "Source" / "ConvolutionFunctions" / "mve_int_m55.c"),
+        da=[(60, 2)],
+        fns=[(60, "fn_mve_int_m55", 2)],
+        branches=[(60, "6", "0", "1")],
+    )
+
+    rows, total = build_rows(
+        tmp_path / "artifacts",
+        ["cortex-m55"],
+        suites=["int", "int-mve"],
+    )
+
+    m55 = next(r for r in rows if r["cpu"] == "cortex-m55")
+    assert m55["coverage"]["lf"] == 2
+    assert m55["coverage"]["fnf"] == 2
+    assert m55["tests"]["number_of_tests"] == 5
+    assert total["tests"]["number_of_tests"] == 5
+
+
 def test_build_rows_unions_float_mve_coverage_without_double_counting_tests(tmp_path: Path) -> None:
     _setup_cpu_artifacts(
         tmp_path,

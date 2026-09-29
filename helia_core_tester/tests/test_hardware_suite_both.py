@@ -16,14 +16,9 @@ from helia_core_tester.hardware.session_runner import (
     build_generated_test_case_bundles,
     normalize_suites,
 )
+from helia_core_tester.tests.generated_inputs import discover_or_skip
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-pytestmark = pytest.mark.skipif(
-    not (PROJECT_ROOT / "artifacts" / "generated_tests").is_dir(),
-    reason="no generated-test artifacts under artifacts/generated_tests/ "
-    "(artifacts/ is gitignored -- run `helia_core_tester generate` first)",
-)
 
 
 @pytest.mark.parametrize(
@@ -52,6 +47,8 @@ def _bundles(suite: str) -> list:
 
 
 def test_both_is_the_union_of_int_and_float() -> None:
+    discover_or_skip(PROJECT_ROOT, family="BasicMathFunctions", suite="int")
+    discover_or_skip(PROJECT_ROOT, family="BasicMathFunctions", suite="float")
     int_ids = [b.case_id for b in _bundles("int")]
     float_ids = [b.case_id for b in _bundles("float")]
     both_ids = [b.case_id for b in _bundles("both")]
@@ -63,5 +60,8 @@ def test_both_is_the_union_of_int_and_float() -> None:
 def test_case_ids_do_not_collide_across_suites() -> None:
     """One merged result bundle keys cases by case_id, so a collision between
     an int and a float case would silently overwrite one of them."""
+    discover_or_skip(PROJECT_ROOT, family="BasicMathFunctions", suite="int")
+    discover_or_skip(PROJECT_ROOT, family="BasicMathFunctions", suite="float")
     both_ids = [b.case_id for b in _bundles("both")]
+    assert both_ids, "expected bridged BasicMath cases"
     assert len(both_ids) == len(set(both_ids))

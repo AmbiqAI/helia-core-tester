@@ -5,20 +5,15 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.hardware.case_bundle import load_case_bundle
-from helia_core_tester.hardware.generated_test_bridge import UnsupportedGeneratedTestError, build_case_bundle_from_generated_test, discover_generated_tests
+from helia_core_tester.hardware.generated_test_bridge import UnsupportedGeneratedTestError, build_case_bundle_from_generated_test
 from helia_core_tester.hardware.kernel_registry import lookup_kernel_id
+from helia_core_tester.tests.generated_inputs import discover_or_skip
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-pytestmark = pytest.mark.skipif(
-    not (PROJECT_ROOT / "artifacts" / "generated_tests").is_dir(),
-    reason="no generated-test artifacts under artifacts/generated_tests/ "
-    "(artifacts/ is gitignored -- run `helia_core_tester generate` first)",
-)
-
 
 def _bridge(tmp_path: Path, family: str, name_filter: str) -> dict[str, object]:
-    cases = discover_generated_tests(PROJECT_ROOT, family=family, name_filter=name_filter)
+    cases = discover_or_skip(PROJECT_ROOT, family=family, name_filter=name_filter)
     assert cases, f"expected a discoverable {family} test matching {name_filter!r}"
     bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False)
     return load_case_bundle(bundle.manifest_path).manifest
@@ -96,7 +91,7 @@ def test_pool_batch_padded_case_truncates_to_header_dims(tmp_path: Path) -> None
 
 
 def test_fp16_pooling_expected_output_manifest_uses_fp16(tmp_path: Path) -> None:
-    cases = discover_generated_tests(
+    cases = discover_or_skip(
         PROJECT_ROOT,
         suite="float",
         family="PoolingFunctions",
@@ -115,7 +110,7 @@ def test_fp16_pooling_expected_output_manifest_uses_fp16(tmp_path: Path) -> None
 def test_grouped_convolve_case_01_now_bridges_with_unified_tolerance(tmp_path: Path) -> None:
     """Regression test: convolve_grouped_conv_case_01_s8 now bridges under
     tolerant_int/tolerance=1 (was previously unbridgeable under exact_int)."""
-    cases = discover_generated_tests(PROJECT_ROOT, family="ConvolutionFunctions", name_filter="convolve_grouped_conv_case_01_s8")
+    cases = discover_or_skip(PROJECT_ROOT, family="ConvolutionFunctions", name_filter="convolve_grouped_conv_case_01_s8")
     assert cases
     bundle = build_case_bundle_from_generated_test(
         PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False
