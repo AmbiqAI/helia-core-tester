@@ -230,9 +230,14 @@ def test_failed_build_keeps_saved_options(tmp_path: Path, nsx: list[tuple], monk
         raise RuntimeError("compile error")
 
     monkeypatch.setattr(nsx_cli, "build_app", broken)
+    stamp = firmware_build.nsx_app_dir(tmp_path) / firmware_build.BUILT_LOCK
+    built = stamp.read_text(encoding="utf-8")
+    monkeypatch.setattr(nsx_cli, "lock_digest", lambda _app: "relocked")
     with pytest.raises(RuntimeError):
         firmware_build.build_firmware(BOARD, build_dir=tmp_path, options=AppOptions(requantize_inline_asm=False))
     assert nsx_app.saved_options(firmware_build.nsx_app_dir(tmp_path)) == AppOptions()
+    # Only a finished build moves it.
+    assert stamp.read_text(encoding="utf-8") == built
 
 
 def test_unsaved_build_dir_says_defaults(tmp_path: Path, nsx: list[tuple]) -> None:
@@ -532,3 +537,10 @@ def test_saved_options_round_trip(tmp_path: Path) -> None:
     options = AppOptions(cmsis_nn_ref="v9", cmsis_nn_root=tmp_path, requantize_inline_asm=False)
     nsx_app.save_options(tmp_path, options)
     assert nsx_app.saved_options(tmp_path) == options
+
+
+def test_build_records_the_lock_digest(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
+    monkeypatch.setattr(nsx_cli, "lock_digest", lambda _app: "abc123")
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    stamp = firmware_build.nsx_app_dir(tmp_path) / firmware_build.BUILT_LOCK
+    assert stamp.read_text(encoding="utf-8") == "abc123"

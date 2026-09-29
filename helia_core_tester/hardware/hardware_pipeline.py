@@ -17,6 +17,7 @@ from .boards import BoardSpec, default_session_id
 from .firmware_build import (
     FlashDecision,
     build_id_path,
+    built_kernels,
     flash_firmware,
     nsx_app_dir,
     read_build_id,
@@ -364,10 +365,16 @@ def run_hardware_pipeline(
         echo("[hardware] --skip-generate set; reusing existing artifacts/generated_tests.")
     else:
         # Generate against the firmware's kernels.
-        kernel_root = stage_kernels(
-            board, build_dir=resolved_build_dir, options=app_options, force_sync=force_reconfigure,
-            update_dependencies=update_dependencies,
-        )
+        if skip_flash:
+            if update_dependencies:
+                raise ValueError("--skip-flash cannot update dependencies.")
+            # Board keeps the built image.
+            kernel_root = built_kernels(board, resolved_build_dir, app_options)
+        else:
+            kernel_root = stage_kernels(
+                board, build_dir=resolved_build_dir, options=app_options, force_sync=force_reconfigure,
+                update_dependencies=update_dependencies,
+            )
         # Staging did the forced work.
         force_reconfigure = update_dependencies = False
         precision_note = f" float_precision={options.float_precision}" if options.float_precision else ""

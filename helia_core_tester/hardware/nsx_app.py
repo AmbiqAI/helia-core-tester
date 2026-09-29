@@ -302,6 +302,23 @@ def write_kernels(root: Path, module_dir: Path) -> None:
             shutil.copytree(root / name, module_dir / name)
 
 
+def kernels_match(root: Path, module_dir: Path) -> bool:
+    """The checkout still equals the vendored copy."""
+    from .nsx_cli import tree_hash
+
+    for name in KERNEL_TREES:
+        src, dst = root / name, module_dir / name
+        if src.is_dir() != dst.is_dir():
+            return False
+        if src.is_dir() and tree_hash(src) != tree_hash(dst):
+            return False
+    pairs = (
+        (root / "nsx" / "nsx-module.yaml", module_dir / "nsx-module.yaml"),
+        (root / "nsx" / "CMakeLists.txt", module_dir / "nsx" / "CMakeLists.txt"),
+    )
+    return all(src.is_file() and dst.is_file() and src.read_bytes() == dst.read_bytes() for src, dst in pairs)
+
+
 def render_app(
     board: BoardSpec,
     options: AppOptions,
