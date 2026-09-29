@@ -19,6 +19,7 @@ RTT session to read it.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -287,7 +288,7 @@ def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
 
 # Written after a sync that finished.
 SYNC_STAMP = ".hct-sync"
-# nsx.lock digest of the last good build.
+# Last good build: lock, kernel tree.
 BUILT_LOCK = ".hct-built-lock"
 
 
@@ -365,8 +366,27 @@ def build_firmware(
     nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=_jobs(jobs), frozen=True)
     # Record only what actually built.
     save_options(app_dir, options or AppOptions())
-    (app_dir / BUILT_LOCK).write_text(nsx_cli.lock_digest(app_dir) or "", encoding="utf-8")
+    _record_built(app_dir, options or AppOptions())
     return elf_path(build_dir)
+
+
+def _built_record(app_dir: Path, options: "AppOptions") -> dict[str, str]:
+    """Lock digest and kernel tree hash."""
+    from . import nsx_cli
+    from .nsx_app import kernel_dir
+
+    module = kernel_dir(app_dir, options)
+    return {
+        "lock": nsx_cli.lock_digest(app_dir) or "",
+        "kernels": nsx_cli.tree_hash(module) if module.is_dir() else "",
+    }
+
+
+def _record_built(app_dir: Path, options: "AppOptions") -> None:
+    """Replace the record atomically."""
+    tmp = app_dir / f"{BUILT_LOCK}.tmp"
+    tmp.write_text(json.dumps(_built_record(app_dir, options)), encoding="utf-8")
+    os.replace(tmp, app_dir / BUILT_LOCK)
 
 
 def built_kernels(board: BoardSpec, build_dir: Path, options: "AppOptions") -> Path:
@@ -375,10 +395,17 @@ def built_kernels(board: BoardSpec, build_dir: Path, options: "AppOptions") -> P
     from .nsx_app import kernel_dir, kernels_match
 
     app_dir = nsx_app_dir(build_dir)
-    stamp = app_dir / BUILT_LOCK
-    built = stamp.read_text(encoding="utf-8").strip() if stamp.is_file() else ""
-    # A later relock or resync moved it.
-    if not built or built != nsx_cli.lock_digest(app_dir) or not nsx_cli.lock_is_current(app_dir, board.nsx_board):
+    try:
+        built = json.loads((app_dir / BUILT_LOCK).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        built = None
+    # Relock, resync, or hand edits.
+    if (
+        not isinstance(built, dict)
+        or not built.get("lock")
+        or built != _built_record(app_dir, options)
+        or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
+    ):
         raise ValueError("Kernels changed since the build; rebuild first.")
     module = kernel_dir(app_dir, options)
     if options.cmsis_nn_root is None:

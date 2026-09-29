@@ -539,8 +539,13 @@ def test_saved_options_round_trip(tmp_path: Path) -> None:
     assert nsx_app.saved_options(tmp_path) == options
 
 
-def test_build_records_the_lock_digest(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
+def test_build_records_the_lock_and_kernels(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
+    import json
+
     monkeypatch.setattr(nsx_cli, "lock_digest", lambda _app: "abc123")
+    monkeypatch.setattr(nsx_cli, "tree_hash", lambda _root: "tree456")
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    nsx_app.kernel_dir(app_dir, AppOptions()).mkdir(parents=True)
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    stamp = firmware_build.nsx_app_dir(tmp_path) / firmware_build.BUILT_LOCK
-    assert stamp.read_text(encoding="utf-8") == "abc123"
+    stamp = app_dir / firmware_build.BUILT_LOCK
+    assert json.loads(stamp.read_text(encoding="utf-8")) == {"lock": "abc123", "kernels": "tree456"}

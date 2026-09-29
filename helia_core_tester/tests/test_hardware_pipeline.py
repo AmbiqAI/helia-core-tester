@@ -677,9 +677,10 @@ def _built_app(tmp_path: Path, monkeypatch, *, digest: str = "d1", current: bool
     build_dir = tmp_path / "bd"
     app_dir = firmware_build.nsx_app_dir(build_dir)
     app_dir.mkdir(parents=True)
-    (app_dir / firmware_build.BUILT_LOCK).write_text("d1", encoding="utf-8")
+    (app_dir / firmware_build.BUILT_LOCK).write_text('{"lock": "d1", "kernels": "k1"}', encoding="utf-8")
     monkeypatch.setattr(nsx_cli, "lock_digest", lambda _app: digest)
     monkeypatch.setattr(nsx_cli, "lock_is_current", lambda _app, _board: current)
+    monkeypatch.setattr(nsx_cli, "tree_hash", lambda _root: "k1")
     return build_dir, app_dir
 
 
@@ -688,8 +689,21 @@ def test_skip_flash_generates_from_the_built_pinned_kernels(tmp_path: Path, monk
 
     build_dir, app_dir = _built_app(tmp_path, monkeypatch)
     options = nsx_app.AppOptions(cmsis_nn_ref="v9")
+    nsx_app.kernel_dir(app_dir, options).mkdir(parents=True)
     seen = _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=options)
     assert seen["generate"] == nsx_app.kernel_dir(app_dir, options)
+
+
+def test_skip_flash_refuses_edits_in_the_synced_kernels(tmp_path: Path, monkeypatch) -> None:
+    """Hand edits under modules/ are caught."""
+    from helia_core_tester.hardware import nsx_app, nsx_cli
+
+    build_dir, app_dir = _built_app(tmp_path, monkeypatch)
+    options = nsx_app.AppOptions(cmsis_nn_ref="v9")
+    nsx_app.kernel_dir(app_dir, options).mkdir(parents=True)
+    monkeypatch.setattr(nsx_cli, "tree_hash", lambda _root: "k2")
+    with pytest.raises(ValueError, match="Kernels changed since the build"):
+        _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=options)
 
 
 @pytest.mark.parametrize("digest, current", [("d2", True), ("d1", False), (None, True)])
@@ -704,13 +718,22 @@ def test_skip_flash_refuses_a_moved_lock(tmp_path: Path, monkeypatch, digest, cu
 
 def test_skip_flash_refuses_an_edited_checkout(tmp_path: Path, monkeypatch) -> None:
     """Edits after the build never reach the firmware."""
-    from helia_core_tester.hardware import nsx_app
+    import json
+
+    from helia_core_tester.hardware import firmware_build, nsx_app, nsx_cli
     from helia_core_tester.tests.test_hardware_nsx_app import make_checkout
+
+    from neuralspotx.nsx_lock import hash_tree
 
     build_dir, app_dir = _built_app(tmp_path, monkeypatch)
     root = make_checkout(tmp_path / "kernels")
     options = nsx_app.AppOptions(cmsis_nn_root=root)
-    nsx_app.write_kernels(root, nsx_app.kernel_dir(app_dir, options))
+    module = nsx_app.kernel_dir(app_dir, options)
+    nsx_app.write_kernels(root, module)
+    # Real hashes: the checkout comparison needs them.
+    monkeypatch.setattr(nsx_cli, "tree_hash", hash_tree)
+    record = json.dumps({"lock": "d1", "kernels": hash_tree(module)})
+    (app_dir / firmware_build.BUILT_LOCK).write_text(record, encoding="utf-8")
     assert _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=options)["generate"] == options.cmsis_nn_root
     edited = next(path for path in (root / "Source").rglob("*") if path.is_file())
     edited.write_text(edited.read_text(encoding="utf-8") + "\n// edit\n", encoding="utf-8")
