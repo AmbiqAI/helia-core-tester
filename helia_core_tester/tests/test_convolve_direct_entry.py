@@ -12,7 +12,7 @@ from helia_core_tester.generation.kernel_dispatch import DIRECT_ENTRIES, resolve
 from helia_core_tester.generation.test_ops import _required_kernel_symbols, generate_test
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_CONVOLVE_ENTRIES = [name for name, spec in DIRECT_ENTRIES.items() if spec.operator == "Convolve"]
+_CONVOLVE_ENTRIES = [name for name, spec in DIRECT_ENTRIES.items() if spec.family == "convolve_s8"]
 
 
 def _descriptor(name: str) -> dict:
