@@ -101,6 +101,18 @@ def f(kind, gone): return (f"arm_fx_po{kind}_s8", f"arm_fx_gon{gone}")
     assert audit.gated_symbols == frozenset({"arm_fx_future_s8"})
 
 
+def test_a_named_entry_gates_its_symbol_like_generation_does() -> None:
+    from helia_core_tester.contract.symbol_audit import gated_symbols_from_descriptors
+
+    gated = gated_symbols_from_descriptors([
+        {"name": "a", "entry": "arm_fx_entry_f16_acc16"},
+        {"name": "b", "required_kernel_symbols": "arm_fx_listed"},
+        {"name": "c", "required_kernel_symbols": [" arm_fx_spaced ", ""], "entry": "arm_fx_entry_s8"},
+        {"name": "d"},
+    ])
+    assert gated == {"arm_fx_entry_f16_acc16", "arm_fx_listed", "arm_fx_spaced", "arm_fx_entry_s8"}
+
+
 def test_audit_refuses_an_absent_contract(checkout: Path, tmp_path: Path) -> None:
     (checkout / CONTRACT_RELPATH).unlink()
     with pytest.raises(ValueError, match="no kernel contract"):

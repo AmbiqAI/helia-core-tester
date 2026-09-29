@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from typing import Optional
 import subprocess
 from pathlib import Path
 
@@ -121,6 +122,20 @@ def test_parity_assert_compiles_and_catches_drift(checkout: Path, tmp_path: Path
     assert "arm_elementwise_add_s8: prototype differs from the kernel contract export" in bad.stderr
 
 
+def _executable_arm_gcc() -> Optional[str]:
+    """arm-none-eabi-gcc from PATH, or None when there is none that runs here: the
+    tester's discovery prepends its downloaded Linux toolchain to PATH, which is not
+    executable on a macOS host (the compile is a CI-on-Linux check, not a local one)."""
+    arm_gcc = shutil.which("arm-none-eabi-gcc")
+    if arm_gcc is None:
+        return None
+    try:
+        probe = subprocess.run([arm_gcc, "--version"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return arm_gcc if probe.returncode == 0 else None
+
+
 def test_parity_assert_against_the_real_headers(tmp_path: Path, host_cc: str) -> None:
     root = resolve_cmsis_nn_root()
     contracts = load_contract_set(root)
@@ -136,7 +151,7 @@ def test_parity_assert_against_the_real_headers(tmp_path: Path, host_cc: str) ->
     flags = ["-DARM_NN_ENABLE_F32=1", "-DARM_NN_ENABLE_F16=1", f"-I{root / 'Include'}"]
     result = _compile(host_cc, source, tmp_path, *flags)
     assert result.returncode == 0, result.stderr[:4000]
-    arm_gcc = shutil.which("arm-none-eabi-gcc")
+    arm_gcc = _executable_arm_gcc()
     if arm_gcc is not None:
         # Hard float as the tester's CMake builds it; soft float has no float16_t and the
         # f16 headers refuse to compile, which would be a toolchain finding, not a parity one.

@@ -30,6 +30,9 @@ _C_COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
 _CALL_RE = re.compile(r"\b(arm_[a-z0-9_]+)\s*\(")
 # Preprocessor lines and the kernel's own prototype in a harness are not calls.
 _DIRECTIVE_RE = re.compile(r"^[ \t]*#[^\n]*$", re.MULTILINE)
+# The contract parity assert spells the kernel's function type, `arm_cmsis_nn_status (...)`,
+# which is not a call; drop the whole statement before looking for calls.
+_STATIC_ASSERT_RE = re.compile(r"\b_Static_assert\s*\(.*?\);", re.DOTALL)
 
 
 class InventoryError(ValueError):
@@ -54,6 +57,7 @@ def discover_case_dirs(generated_tests_dir: Path) -> list[Path]:
 
 def _called_in_source(text: str) -> set[str]:
     text = _DIRECTIVE_RE.sub("", _C_COMMENT_RE.sub(" ", text))
+    text = _STATIC_ASSERT_RE.sub(" ", text)
     return set(_CALL_RE.findall(text))
 
 

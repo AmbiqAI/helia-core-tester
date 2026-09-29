@@ -165,3 +165,15 @@ def test_cli_exits_2_without_a_contract_or_cases(checkout: Path, tree: Path, tmp
     result = _invoke(checkout, empty)
     assert result.exit_code == 2, _text(result)
     assert "no generated cases" in _text(result)
+
+
+def test_parity_assert_function_type_is_not_a_call() -> None:
+    from helia_core_tester.contract.inventory import _called_in_source
+
+    source = (
+        '#include "arm_nnfunctions.h"\n'
+        "_Static_assert(__builtin_types_compatible_p(__typeof__(arm_fx_pool_s8), arm_cmsis_nn_status (const cmsis_nn_context *,\n"
+        '               const cmsis_nn_dims *)), "arm_fx_pool_s8: prototype differs; regenerate");\n'
+        "int run(void) { return arm_fx_pool_s8(&ctx, &dims) == ARM_CMSIS_NN_SUCCESS && arm_nn_fx_helper(); }\n"
+    )
+    assert _called_in_source(source) == {"arm_fx_pool_s8", "arm_nn_fx_helper"}
