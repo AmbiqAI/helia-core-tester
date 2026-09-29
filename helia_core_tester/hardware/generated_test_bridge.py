@@ -951,6 +951,9 @@ def _build_convolve_case(
         else "ARM_NN_WEIGHT_FORMAT_STANDARD"
     )
     is_packed_weights = weight_format_name == "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"
+    if is_packed_weights:
+        # Packing pads output channels; send all.
+        weights_data = weights_flat
 
     if expected_flat.size < _shape_product(output_shape):
         raise UnsupportedGeneratedTestError(
