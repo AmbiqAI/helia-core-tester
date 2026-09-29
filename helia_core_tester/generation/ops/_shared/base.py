@@ -1120,7 +1120,7 @@ class OperationBase(ABC):
             )
             render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)
             render_context.update(harness=plan, header_name=f"{name}_{stem}.h", harness_label=label,
-                                  harness_output_count=pool.output_count)
+                                  harness_output_count=pool.output_count, harness_benchmark=pool.benchmark)
             source = env.get_template(self.HARNESS_SOURCE).render(**render_context)
         (output_dir / f"{name}_{stem}.c").write_text(source)
 

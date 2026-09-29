@@ -38,13 +38,24 @@ class Declaration:
 
 @dataclass(frozen=True)
 class GuardedBuffer:
-    """A writable buffer framed by HELIA guard canaries, sized by a `#define`."""
+    """A writable buffer framed by HELIA guard canaries. `count` is its element count: a
+    macro that `count_value` defines, or a literal expression when `count_value` is None."""
 
     name: str
     ctype: str
-    count_macro: str
-    count_value: str
+    count: str
+    count_value: Optional[str] = None
     label: str = ""
+
+
+@dataclass(frozen=True)
+class RuleCheck:
+    """A public predicate the case asserts before validating outputs (for example a planar
+    rule): bound from the pool like the kernel, its answer must equal `expected`."""
+
+    fn: str
+    expected: int
+    result_var: str
 
 
 @dataclass(frozen=True)
@@ -69,9 +80,11 @@ class ArgumentPool:
     header: Sequence[Declaration] = ()
     source: Sequence[Declaration] = ()
     providers: Sequence[Provider] = ()
+    checks: Sequence[RuleCheck] = ()
     input_param: str = "input_data"
     output_param: str = "output_data"
     output_count: str = "0"
+    benchmark: bool = True
 
     def validate(self) -> None:
         names: set[str] = set()
@@ -96,6 +109,9 @@ class ArgumentPool:
         for param, expr in self.values.items():
             if not isinstance(expr, str) or not expr.strip():
                 raise HarnessError(f"{self.name}: pool value {param!r} is empty")
+        for check in self.checks:
+            if not _IDENT_RE.match(check.result_var) or check.result_var in names:
+                raise HarnessError(f"{self.name}: rule check variable {check.result_var!r} is not a free C identifier")
 
 
 def _render_init(value: Initializer, depth: int = 0) -> str:

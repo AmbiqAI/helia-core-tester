@@ -38,6 +38,7 @@ class HarnessPlan:
     scratch_bytes: int
     run_call: str
     bench_call: str
+    checks: Sequence[tuple[str, str, str, int]] = ()
 
 
 def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str], scratch_bytes: Optional[int],
@@ -55,6 +56,12 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         site = {**values, pool.input_param: input_expr, pool.output_param: output_expr}
         return render_call(kernel, bind(kernel, site), indent=indent)
 
+    checks = []
+    for check in pool.checks:
+        rule = require_bound_symbol(contracts, check.fn)
+        checks.append((check.result_var, render_call(rule, bind(rule, values), indent=indent), rule.name,
+                       int(check.expected)))
+
     sizer_call = None
     if sizer_fn is not None:
         sizer = require_bound_symbol(contracts, sizer_fn)
@@ -70,4 +77,5 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         scratch_bytes=int(scratch_bytes or 0),
         run_call=call("input", "output"),
         bench_call=call(f"{pool.name}_input", f"{pool.name}_output"),
+        checks=checks,
     )

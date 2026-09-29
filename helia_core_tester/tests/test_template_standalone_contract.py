@@ -7,7 +7,12 @@ from helia_core_tester.generation.ops._shared.base import template_environment
 from helia_core_tester.generation.ops.BroadcastFunctions.broadcast_to import OpBroadcastTo
 from helia_core_tester.generation.ops.DynamicUpdateSliceFunctions.dynamic_update_slice import OpDynamicUpdateSlice
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
-from helia_core_tester.tests.harness_render import convolve_context, render_convolve
+from helia_core_tester.tests.harness_render import (
+    convolve_context,
+    depthwise_context,
+    render_convolve,
+    render_depthwise,
+)
 
 
 def _repo_root() -> Path:
@@ -419,56 +424,12 @@ def test_s16_conv_templates_render_int8_weights_for_public_wrapper_signatures() 
         output_dims={"n": 1, "h": 30, "w": 30, "c": 2}, input_dtype="int16_t", output_dtype="int16_t",
         weight_dtype="int8_t", bias_dtype="int64_t", weights_array="    1", biases_array="    0",
     ), bias_is_struct=True)
-    dw_h = _render(
-        "ConvolutionFunctions/depthwise_conv/depthwise_conv.h.j2",
-        {
-            "name": "depthwise_conv_s16",
-            "input_dims": {"n": 1, "h": 8, "w": 8, "c": 4},
-            "filter_dims": {"n": 1, "h": 3, "w": 3, "c": 4},
-            "output_dims": {"n": 1, "h": 6, "w": 6, "c": 4},
-            "dw_conv_params": {"input_offset": 0, "output_offset": 0, "ch_mult": 1, "stride_w": 1, "stride_h": 1, "dilation_w": 1, "dilation_h": 1, "pad_w": 0, "pad_h": 0, "activation_min": -32768, "activation_max": 32767},
-            "quant_params": {"per_channel": False, "multiplier": 1, "shift": 0},
-            "weights_array": "    1",
-            "biases_array": "    0",
-            "has_biases": True,
-            "weight_sum_array": "",
-            "has_weight_sum": False,
-            "input_data_array": "    0",
-            "expected_output_array": "    0",
-            "input_dtype": "int16_t",
-            "output_dtype": "int16_t",
-            "weight_dtype": "int8_t",
-            "bias_dtype": "int64_t",
-            "kernel_fn": "arm_depthwise_conv_wrapper_s16",
-            "kernel_get_buffer_size_fn": "arm_depthwise_conv_wrapper_s16_get_buffer_size",
-            "buffer_size_max": 1024,
-        },
-    )
-    dw_c = _render(
-        "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2",
-        {
-            "name": "depthwise_conv_s16",
-            "input_dims": {"n": 1, "h": 8, "w": 8, "c": 4},
-            "filter_dims": {"n": 1, "h": 3, "w": 3, "c": 4},
-            "output_dims": {"n": 1, "h": 6, "w": 6, "c": 4},
-            "dw_conv_params": {"input_offset": 0, "output_offset": 0, "ch_mult": 1, "stride_w": 1, "stride_h": 1, "dilation_w": 1, "dilation_h": 1, "pad_w": 0, "pad_h": 0, "activation_min": -32768, "activation_max": 32767},
-            "quant_params": {"per_channel": False, "multiplier": 1, "shift": 0},
-            "weights_array": "    1",
-            "biases_array": "    0",
-            "has_biases": True,
-            "weight_sum_array": "",
-            "has_weight_sum": False,
-            "input_data_array": "    0",
-            "expected_output_array": "    0",
-            "input_dtype": "int16_t",
-            "output_dtype": "int16_t",
-            "weight_dtype": "int8_t",
-            "bias_dtype": "int64_t",
-            "kernel_fn": "arm_depthwise_conv_wrapper_s16",
-            "kernel_get_buffer_size_fn": "arm_depthwise_conv_wrapper_s16_get_buffer_size",
-            "buffer_size_max": 1024,
-        },
-    )
+    dw_h, dw_c = render_depthwise(depthwise_context(
+        "arm_depthwise_conv_wrapper_s16", "arm_depthwise_conv_wrapper_s16_get_buffer_size", name="depthwise_conv_s16",
+        input_dims={"n": 1, "h": 8, "w": 8, "c": 4}, filter_dims={"n": 1, "h": 3, "w": 3, "c": 4},
+        output_dims={"n": 1, "h": 6, "w": 6, "c": 4}, input_dtype="int16_t", output_dtype="int16_t",
+        weight_dtype="int8_t", bias_dtype="int64_t",
+    ))
 
     assert "static const int8_t convolve_int16xint8xint32_case_04_s16_weights[]" in conv_h
     assert "static const int64_t convolve_int16xint8xint32_case_04_s16_biases[]" in conv_h

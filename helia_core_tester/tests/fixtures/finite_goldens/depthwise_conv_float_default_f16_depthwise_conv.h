@@ -1,5 +1,5 @@
-#ifndef DEPTHWISE_CONV_FLOAT_DEFAULT_F16_DEPTHWISE_CONV2D_H
-#define DEPTHWISE_CONV_FLOAT_DEFAULT_F16_DEPTHWISE_CONV2D_H
+#ifndef DEPTHWISE_CONV_FLOAT_DEFAULT_F16_HARNESS_H
+#define DEPTHWISE_CONV_FLOAT_DEFAULT_F16_HARNESS_H
 
 #include <stdint.h>
 // Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
@@ -10,20 +10,26 @@
 
 // Input dimensions
 static const cmsis_nn_dims depthwise_conv_float_default_f16_input_dims = {
-    .n = 1, .h = 6,
-    .w = 6, .c = 3
+    .n = 1,
+    .h = 6,
+    .w = 6,
+    .c = 3
 };
 
-// Filter dimensions  
+// Filter dimensions
 static const cmsis_nn_dims depthwise_conv_float_default_f16_filter_dims = {
-    .n = 1, .h = 3,
-    .w = 3, .c = 3
+    .n = 1,
+    .h = 3,
+    .w = 3,
+    .c = 3
 };
 
 // Output dimensions
 static const cmsis_nn_dims depthwise_conv_float_default_f16_output_dims = {
-    .n = 1, .h = 6,
-    .w = 6, .c = 3
+    .n = 1,
+    .h = 6,
+    .w = 6,
+    .c = 3
 };
 
 // Depthwise convolution parameters
@@ -35,7 +41,6 @@ static const cmsis_nn_dw_conv_params_f16 depthwise_conv_float_default_f16_dw_con
     .activation = {.min = -1.0e+30f, .max = 1.0e+30f}
 };
 
-
 // Weights
 static const float16_t depthwise_conv_float_default_f16_weights[] = {
     (float16_t)0.197265625f, (float16_t)0.385253906f, (float16_t)-0.24230957f, (float16_t)0.233520508f, (float16_t)-0.065429688f, (float16_t)-0.235351562f, (float16_t)-0.025680542f, (float16_t)0.3984375f, (float16_t)0.390625f, (float16_t)-0.230957031f, (float16_t)-0.018234253f, (float16_t)0.057800293f, (float16_t)-0.161499023f, (float16_t)0.253417969f, (float16_t)-0.067626953f, (float16_t)-0.1875f,
@@ -46,8 +51,6 @@ static const float16_t depthwise_conv_float_default_f16_weights[] = {
 static const float16_t depthwise_conv_float_default_f16_biases[] = {
     (float16_t)-0.842773438f, (float16_t)-0.380371094f, (float16_t)0.952148438f
 };
-
-// Weight sum (precomputed for S8 depthwise convolutions)
 
 // Input data (for testing)
 static const float16_t depthwise_conv_float_default_f16_input[] = {
