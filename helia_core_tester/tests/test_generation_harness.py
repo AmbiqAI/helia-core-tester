@@ -6,7 +6,8 @@ from __future__ import annotations
 import pytest
 
 from helia_core_tester.contract.bind import ContractBindError
-from helia_core_tester.contract.ir import STATUS_PRESENT, ContractError, ContractSet, FunctionDecl, ParamDecl
+from helia_core_tester.contract.ir import STATUS_ABSENT, STATUS_PRESENT, ContractError, ContractSet, FunctionDecl, ParamDecl
+from helia_core_tester.contract.render import ContractRenderError
 from helia_core_tester.generation.harness import (
     ArgumentPool,
     ArrayLiteral,
@@ -68,6 +69,13 @@ def test_providers_appear_only_when_the_prototype_takes_them() -> None:
 def test_plan_scratch_errors(sizer, scratch, message: str) -> None:
     with pytest.raises(HarnessError, match=message):
         plan_harness(_pool(), kernel_fn="arm_fx_kernel_s8", sizer_fn=sizer, scratch_bytes=scratch, contracts=CONTRACTS)
+
+
+def test_a_checkout_without_the_export_names_the_ns_cmsis_nn_it_needs(tmp_path) -> None:
+    absent = ContractSet(status=STATUS_ABSENT, root=tmp_path, path=None)
+    with pytest.raises(ContractRenderError, match=r"arm_fx_kernel_s8: .*needs an ns-cmsis-nn that carries the export "
+                                                  r"\(AmbiqAI/ns-cmsis-nn#549 or later\)"):
+        plan_harness(_pool(), kernel_fn="arm_fx_kernel_s8", sizer_fn=None, scratch_bytes=0, contracts=absent)
 
 
 def test_plan_fails_closed_on_the_contract() -> None:

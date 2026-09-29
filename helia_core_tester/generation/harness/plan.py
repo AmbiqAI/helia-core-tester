@@ -8,7 +8,7 @@ from typing import Optional, Sequence
 
 from helia_core_tester.contract.bind import bind, takes
 from helia_core_tester.contract.ir import ContractSet
-from helia_core_tester.contract.render import render_call
+from helia_core_tester.contract.render import render_call, require_bound_symbol
 from helia_core_tester.generation.harness.model import ArgumentPool, HarnessError, Provider, render_declaration
 
 
@@ -46,7 +46,7 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
     pool.validate()
     if (sizer_fn is None) == (scratch_bytes is None):
         raise HarnessError(f"{pool.name}: give either a scratch query or entry_scratch bytes, not both or neither")
-    kernel = contracts.require(kernel_fn)
+    kernel = require_bound_symbol(contracts, kernel_fn)
     providers = [p for p in pool.providers if takes(kernel, p.param)]
     values = dict(pool.values)
     values.update({p.param: p.expr for p in providers})
@@ -57,7 +57,7 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
 
     sizer_call = None
     if sizer_fn is not None:
-        sizer = contracts.require(sizer_fn)
+        sizer = require_bound_symbol(contracts, sizer_fn)
         if sizer.kind != "sizer":
             raise HarnessError(f"{pool.name}: {sizer_fn} is a {sizer.kind}, not a scratch-size query")
         sizer_call = render_call(sizer, bind(sizer, values), indent=indent)
