@@ -58,8 +58,7 @@ The firmware builds as a neuralspotx (NSX) app rendered into
 `build/hardware/<board>/nsx_app`. Which kernels it builds:
 
 - Nested layout (the tester at `ns-cmsis-nn/Tests/helia-core-tester`): the
-  enclosing ns-cmsis-nn checkout, working-tree edits included, as the old CMake
-  path did.
+  enclosing ns-cmsis-nn checkout, working-tree edits included.
 - Standalone clone: the pinned ns-cmsis-nn release (`v7.35.1`).
 - `--cmsis-nn-ref REF` builds another tag or commit; `--cmsis-nn-root PATH`
   builds another local checkout.

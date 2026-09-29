@@ -339,8 +339,9 @@ Current examples:
 
 Two sizing checkpoints now exist:
 
-1. **Universal size probe** (`memory_report.build_size_probe`)
+1. **Universal size probe** (`memory_report.build_size_probe`, run as `python -m helia_core_tester.hardware.memory_report`)
    - goal: prove the whole retained ns-cmsis-nn library fits for a target profile
+   - build: the same NSX app as the server, rendered with the probe as its only target
    - artifact: `artifacts/hardware/size_probe/<board>/<variant>/memory_report.json`
 2. **Real benchmark-server firmware image** (`hardware memory-report`, `memory_report.generate_memory_report`)
    - goal: measure the actual streaming skeleton with protocol, RTT binding, catalog, session state, and adapters
@@ -424,8 +425,8 @@ name, SEGGER device name, SWD speed and the `build/hardware/<board>` build dir;
 `--serial-no` is optional and falls back to `$HPX_JLINK_SERIAL`, then to the single
 connected J-Link probe enumerated through pylink).
 
-Cross-build the benchmark-server firmware for the board (fetches nsx-ambiq-sdk,
-neuralspotx and the toolchain file on first use):
+Cross-build the benchmark-server firmware for the board as an NSX app (fetches
+ARM GCC and CMSIS_5 on first use; NSX syncs its modules into the app):
 
 ```bash
 uv run helia_core_tester hardware build --board apollo510_evb -j
