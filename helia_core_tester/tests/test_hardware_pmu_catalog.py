@@ -3,27 +3,33 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+from neuralspotx import api as nsx_api
+
 from helia_core_tester.hardware.pmu_catalog import (
     CPU_CYCLES_EVENT_ID,
     CPU_CYCLES_NAME,
     DEFAULT_SELECTIONS,
     GROUPS,
+    PMU_MODULE_REF,
     counter_by_event_id,
     counter_by_name,
     counter_name_for_event_id,
     counters_in_group,
     default_selection,
     load_pmu_events,
+    synced_module_catalogs,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CATALOG = PROJECT_ROOT / "assets" / "pmu" / "armv8m_pmu_events.json"
 
 
-def test_catalog_matches_the_transcribed_hpx_event_table() -> None:
+def test_catalog_matches_the_module_event_table() -> None:
     events = load_pmu_events()
     assert len(events) == 70
     assert {group: len(counters_in_group(group)) for group in GROUPS} == {"cpu": 21, "memory": 15, "mve": 34}
-    raw = json.loads((PROJECT_ROOT / "assets" / "pmu" / "armv8m_pmu_events.json").read_text())
+    raw = json.loads(CATALOG.read_text())
     assert [e.name for e in events] == [row["name"] for row in raw]
     assert all(isinstance(e.event_id, int) and 0 <= e.event_id <= 0xFFFF for e in events)
     assert len({e.event_id for e in events}) == 70 and len({e.name for e in events}) == 70
@@ -49,3 +55,18 @@ def test_default_selections_are_valid_and_grouped() -> None:
             counter = counter_by_name(name)
             assert counter is not None and counter.group == group, name
     assert DEFAULT_SELECTIONS["cpu"][0] == CPU_CYCLES_NAME
+
+
+def test_module_ref_matches_the_nsx_registry() -> None:
+    # The app takes the registry's revision.
+    entry = nsx_api.load_registry()["modules"]["nsx-pmu-armv8m"]
+    assert entry["revision"] == PMU_MODULE_REF
+
+
+def test_catalog_matches_the_synced_module() -> None:
+    copies = synced_module_catalogs()
+    if not copies:
+        pytest.skip("no synced nsx-pmu-armv8m module; run hardware build")
+    vendored = json.loads(CATALOG.read_text())
+    for copy in copies:
+        assert json.loads(copy.read_text()) == vendored, f"{copy} differs; run scripts/sync_pmu_catalog.py"

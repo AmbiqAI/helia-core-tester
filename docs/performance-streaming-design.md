@@ -290,7 +290,7 @@ helia-profiler already provides useful patterns to reuse:
 
 The streaming implementation aligns with those semantics instead of inventing
 incompatible PMU naming or overflow behavior: the event catalog
-(`assets/pmu/armv8m_pmu_events.json`) is transcribed from heliaPROFILER, the
+(`assets/pmu/armv8m_pmu_events.json`) is synced from the nsx-pmu-armv8m module, as in hpx; the
 `--pmu-counters GROUP:SELECTION` syntax is hpx's, and the firmware's per-sample
 reset/clear-OVS/read/clear-set-bits sequence mirrors the hpx PMU profiler. The
 firmware uses raw CMSIS `pmu_armv8.h` rather than the NSX PMU module.

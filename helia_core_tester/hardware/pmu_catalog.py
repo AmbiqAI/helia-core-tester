@@ -15,6 +15,10 @@ from typing import Dict, Optional, Tuple
 
 _CATALOG_RELATIVE_PATH = Path("assets/pmu/armv8m_pmu_events.json")
 
+# Upstream: AmbiqAI/nsx-pmu-armv8m at this tag.
+PMU_MODULE_REF = "v0.2.0"
+_MODULE_CATALOG = "modules/nsx-pmu-armv8m/data/armv8m_pmu_events.json"
+
 CPU_CYCLES_NAME = "ARM_PMU_CPU_CYCLES"
 CPU_CYCLES_EVENT_ID = 0x0011
 
@@ -67,6 +71,12 @@ def load_pmu_events(path: Optional[Path] = None) -> Tuple[CounterDescriptor, ...
         seen_ids.add(descriptor.event_id)
         descriptors.append(descriptor)
     return tuple(descriptors)
+
+
+def synced_module_catalogs(repo_root: Optional[Path] = None) -> Tuple[Path, ...]:
+    """Module catalogs in synced hardware apps."""
+    build = (repo_root or _repo_root()) / "build" / "hardware"
+    return tuple(sorted(build.glob(f"*/nsx_app/{_MODULE_CATALOG}")))
 
 
 def counters_in_group(group: str) -> Tuple[CounterDescriptor, ...]:
