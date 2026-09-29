@@ -1076,6 +1076,54 @@ class OperationBase(ABC):
         input_shape = self.desc.get('input_shape', [1, 1, 1, 1])
         return self._seeded_rng().integers(-32, 32, size=input_shape).astype(np.float32)
     
+    HARNESS_HEADER = "common/harness/harness.h.j2"
+    HARNESS_SOURCE = "common/harness/harness.c.j2"
+
+    def render_harness_files(
+        self,
+        output_dir: Path,
+        *,
+        stem: str,
+        context: Dict[str, Any],
+        pool: Any,
+        validation_key: str,
+        label: str,
+        fault_template: Optional[str] = None,
+    ) -> None:
+        """Write `includes/<name>_<stem>.h` and `<name>_<stem>.c` through the generic harness.
+
+        The header carries the pool's data; the source binds `context['kernel_fn']` and its
+        scratch query from the pool against the kernel contract. `validation_key` is the
+        operator's former template path, still the key of TemplateContextBuilder's validation
+        rules. A fault case keeps its own source template (`fault_template`) for now.
+        """
+        from helia_core_tester.contract import render as contract_render
+        from helia_core_tester.generation.harness import plan_harness, render_declaration
+
+        name = context["name"]
+        env = template_environment(str(find_tester_templates_dir()))
+        includes_dir = output_dir / "includes"
+        includes_dir.mkdir(parents=True, exist_ok=True)
+        header = env.get_template(self.HARNESS_HEADER).render(
+            name=name, header_declarations=[render_declaration(d) for d in pool.header])
+        (includes_dir / f"{name}_{stem}.h").write_text(header)
+        if fault_template:
+            source = self.render_template(fault_template, context)
+        else:
+            sizer = context.get("kernel_get_buffer_size_fn")
+            plan = plan_harness(
+                pool,
+                kernel_fn=context["kernel_fn"],
+                sizer_fn=sizer,
+                scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
+                contracts=contract_render.load_current_contracts(),
+            )
+            render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)
+            render_context.update(harness=plan, header_name=f"{name}_{stem}.h", harness_label=label,
+                                  harness_output_count=pool.output_count)
+            source = env.get_template(self.HARNESS_SOURCE).render(**render_context)
+        (output_dir / f"{name}_{stem}.c").write_text(source)
+
     def render_template(
         self, template_path: str, context: Dict[str, Any], return_context: bool = False
     ):

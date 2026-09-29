@@ -26,7 +26,7 @@ MAX_POOL_DTYPES = ["S8", "S16", "FP32", "FP16"]
 # Templates that call a scratch sizer and must route the answer through the checks.
 # max_pool is deliberately absent; see test_max_pool_still_has_no_sizer_to_check.
 SIZER_TEMPLATES = [
-    "ConvolutionFunctions/convolve/convolve.c.j2",
+    "common/harness/harness.c.j2",
     "ConvolutionFunctions/depthwise_conv/depthwise_conv.c.j2",
     "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2",
     "FullyConnectedFunctions/fully_connected/fully_connected.c.j2",

@@ -85,7 +85,6 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(arm_convolve_f32), arm_cm
 static cmsis_nn_context convolve_float_default_f32_ctx;
 
 // Runtime scratch buffer (max upper bound; actual size queried at runtime)
-// Buffer size calculated conservatively to handle MVE and DSP implementations
 #define CONVOLVE_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX 1692
 static struct {
     uint8_t head[HELIA_GUARD_BYTES];
@@ -105,7 +104,10 @@ static struct {
 
 // Bias dimensions
 static const cmsis_nn_dims convolve_float_default_f32_bias_dims = {
-    .n = 0, .h = 0, .w = 0, .c = 5
+    .n = 0,
+    .h = 0,
+    .w = 0,
+    .c = 5
 };
 
 int32_t convolve_float_default_f32_run(
@@ -125,15 +127,10 @@ int32_t convolve_float_default_f32_run(
     // report a fabricated breach instead of the real sizer error (#68).
     HELIA_GUARD_ARM(convolve_float_default_f32_buffer, true /* pure scratch: poison to catch read-before-write */);
     HELIA_GUARD_STAMP_SLACK(convolve_float_default_f32_buffer, 0u);
-    // The slack is stamped as wholly unused here so that an early return from the
-    // capacity check below leaves every canary in a checked state; it is re-stamped
-    // with the real size once the context is populated (#68).
 
-
-    // The sizer's answer is checked before it becomes a context size (#133). A negative
-    // answer is the documented out-of-range sentinel and never a usable size; an answer
-    // above this case's static means our generation-time bound and the shipped kernel
-    // disagree. They are separate failures because they have separate owners.
+    // The sizer's answer is checked before it becomes a context size (#133): a negative
+    // answer is the documented out-of-range sentinel, and one above this case's static bound
+    // means the generation-time bound and the shipped kernel disagree.
     HELIA_VALIDATE_SIZER("arm_convolve_f32_get_buffer_size", required_buffer_size);
     HELIA_VALIDATE_SIZER_FITS("arm_convolve_f32_get_buffer_size", required_buffer_size, CONVOLVE_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
 
@@ -142,8 +139,7 @@ int32_t convolve_float_default_f32_run(
     convolve_float_default_f32_ctx.size = required_buffer_size;
     HELIA_GUARD_STAMP_SLACK(convolve_float_default_f32_buffer, convolve_float_default_f32_ctx.buf == convolve_float_default_f32_buffer ? (size_t)convolve_float_default_f32_ctx.size : 0u);
 
-
-        return arm_convolve_f32(
+    return arm_convolve_f32(
         &convolve_float_default_f32_ctx, /* ctx */
         &convolve_float_default_f32_conv_params, /* conv_params */
         &convolve_float_default_f32_input_dims, /* input_dims */
@@ -156,13 +152,11 @@ int32_t convolve_float_default_f32_run(
         output, /* output_data */
         ARM_NN_LAYOUT_NHWC /* layout */
     );
-
 }
 
 #ifdef HELIA_BENCHMARK_MODE
-// --benchmark support: convolve_float_default_f32_bench_init() is the one-time buffer/context/
-// weight-sum setup (untimed); convolve_float_default_f32_bench_op() is *only* the kernel call
-// (timed, 3 warmup + 10 measured runs by default -- see common/standalone/benchmark.j2).
+// --benchmark support: convolve_float_default_f32_bench_init() is the one-time buffer/context/provider set-up
+// (untimed); convolve_float_default_f32_bench_op() is only the kernel call (timed; see common/standalone/benchmark.j2).
 static int32_t convolve_float_default_f32_bench_init(void)
 {
         // Calculate required buffer size
@@ -178,15 +172,10 @@ static int32_t convolve_float_default_f32_bench_init(void)
     // report a fabricated breach instead of the real sizer error (#68).
     HELIA_GUARD_ARM(convolve_float_default_f32_buffer, true /* pure scratch: poison to catch read-before-write */);
     HELIA_GUARD_STAMP_SLACK(convolve_float_default_f32_buffer, 0u);
-    // The slack is stamped as wholly unused here so that an early return from the
-    // capacity check below leaves every canary in a checked state; it is re-stamped
-    // with the real size once the context is populated (#68).
 
-
-    // The sizer's answer is checked before it becomes a context size (#133). A negative
-    // answer is the documented out-of-range sentinel and never a usable size; an answer
-    // above this case's static means our generation-time bound and the shipped kernel
-    // disagree. They are separate failures because they have separate owners.
+    // The sizer's answer is checked before it becomes a context size (#133): a negative
+    // answer is the documented out-of-range sentinel, and one above this case's static bound
+    // means the generation-time bound and the shipped kernel disagree.
     HELIA_VALIDATE_SIZER("arm_convolve_f32_get_buffer_size", required_buffer_size);
     HELIA_VALIDATE_SIZER_FITS("arm_convolve_f32_get_buffer_size", required_buffer_size, CONVOLVE_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
 
@@ -195,13 +184,12 @@ static int32_t convolve_float_default_f32_bench_init(void)
     convolve_float_default_f32_ctx.size = required_buffer_size;
     HELIA_GUARD_STAMP_SLACK(convolve_float_default_f32_buffer, convolve_float_default_f32_ctx.buf == convolve_float_default_f32_buffer ? (size_t)convolve_float_default_f32_ctx.size : 0u);
 
-
     return ARM_CMSIS_NN_SUCCESS;
 }
 
 static int32_t convolve_float_default_f32_bench_op(void)
 {
-        return arm_convolve_f32(
+    return arm_convolve_f32(
         &convolve_float_default_f32_ctx, /* ctx */
         &convolve_float_default_f32_conv_params, /* conv_params */
         &convolve_float_default_f32_input_dims, /* input_dims */
@@ -214,18 +202,13 @@ static int32_t convolve_float_default_f32_bench_op(void)
         convolve_float_default_f32_output, /* output_data */
         ARM_NN_LAYOUT_NHWC /* layout */
     );
-
 }
 
 static int32_t convolve_float_default_f32_benchmark_run(void)
 {
     // A sizer check inside _bench_init() returns before the context is populated, so the
-    // benchmark must not proceed on that path: _bench_op() would call the kernel with an
-    // uninitialised context and time whatever happened, recording cycle counts that mean
-    // nothing, or crash. The failing check has already printed its marker naming the
-    // sizer (#133); the case fails without timing anything. A kernel call that does not
-    // succeed fails it too (helia_benchmark_run stops there), so no cycle count is
-    // reported for a call that did not do its work.
+    // benchmark must not proceed on that path (#133); a kernel call that does not succeed
+    // fails it too (helia_benchmark_run stops there), so no cycle count is reported for it.
     const int32_t init_status = convolve_float_default_f32_bench_init();
     if (init_status != ARM_CMSIS_NN_SUCCESS) {
         HELIA_BENCH_PRINTF("[BENCH] convolve_float_default_f32 skipped: scratch sizer rejected before the context was populated\r\n");

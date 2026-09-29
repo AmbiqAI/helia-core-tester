@@ -7,6 +7,7 @@ from helia_core_tester.generation.ops._shared.base import template_environment
 from helia_core_tester.generation.ops.BroadcastFunctions.broadcast_to import OpBroadcastTo
 from helia_core_tester.generation.ops.DynamicUpdateSliceFunctions.dynamic_update_slice import OpDynamicUpdateSlice
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
+from helia_core_tester.tests.harness_render import convolve_context, render_convolve
 
 
 def _repo_root() -> Path:
@@ -287,29 +288,10 @@ def test_pooling_float_header_templates_render_public_float_params() -> None:
 
 
 def test_complex_float_templates_render_public_f32_signatures() -> None:
-    conv_h = _render(
-        "ConvolutionFunctions/convolve/convolve.h.j2",
-        {
-            "name": "convolve_float_default_f32",
-            "input_dims": {"n": 1, "h": 6, "w": 6, "c": 3},
-            "filter_dims": {"n": 5, "h": 3, "w": 3, "c": 3},
-            "output_dims": {"n": 1, "h": 6, "w": 6, "c": 5},
-            "conv_params": {"stride_w": 1, "stride_h": 1, "dilation_w": 1, "dilation_h": 1, "pad_w": 1, "pad_h": 1},
-            "weights_array": "    0.0f",
-            "biases_array": "    0.0f",
-            "has_biases": True,
-            "input_data_array": "    0.0f",
-            "expected_output_array": "    0.0f",
-            "input_dtype": "float",
-            "output_dtype": "float",
-            "weight_dtype": "float",
-            "bias_dtype": "float",
-            "float_kernel": True,
-            "conv_params_type": "cmsis_nn_conv_params_f32",
-            "conv_activation_min_literal": "-1.0e+30f",
-            "conv_activation_max_literal": "1.0e+30f",
-        },
-    )
+    conv_h, _ = render_convolve(convolve_context(
+        "arm_convolve_wrapper_f32", float_kernel=True, name="convolve_float_default_f32",
+        weights_array="    0.0f", biases_array="    0.0f", input_data_array="    0.0f", expected_output_array="    0.0f",
+    ))
     fc_h = _render(
         "FullyConnectedFunctions/fully_connected/fully_connected.h.j2",
         {
@@ -431,52 +413,12 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
 
 
 def test_s16_conv_templates_render_int8_weights_for_public_wrapper_signatures() -> None:
-    conv_h = _render(
-        "ConvolutionFunctions/convolve/convolve.h.j2",
-        {
-            "name": "convolve_int16xint8xint32_case_04_s16",
-            "input_dims": {"n": 1, "h": 32, "w": 32, "c": 2},
-            "filter_dims": {"n": 2, "h": 2, "w": 2, "c": 2},
-            "output_dims": {"n": 1, "h": 30, "w": 30, "c": 2},
-            "conv_params": {"input_offset": 0, "output_offset": 0, "stride_w": 1, "stride_h": 1, "dilation_w": 2, "dilation_h": 2, "pad_w": 0, "pad_h": 0, "activation_min": -32768, "activation_max": 32767},
-            "quant_params": {"per_channel": False, "multiplier": 1, "shift": 0},
-            "weights_array": "    1",
-            "biases_array": "    0",
-            "has_biases": True,
-            "input_data_array": "    0",
-            "expected_output_array": "    0",
-            "input_dtype": "int16_t",
-            "output_dtype": "int16_t",
-            "weight_dtype": "int8_t",
-            "bias_dtype": "int64_t",
-            "kernel_fn": "arm_convolve_wrapper_s16",
-            "kernel_get_buffer_size_fn": "arm_convolve_wrapper_s16_get_buffer_size",
-            "buffer_size_max": 1024,
-        },
-    )
-    conv_c = _render(
-        "ConvolutionFunctions/convolve/convolve.c.j2",
-        {
-            "name": "convolve_int16xint8xint32_case_04_s16",
-            "input_dims": {"n": 1, "h": 32, "w": 32, "c": 2},
-            "filter_dims": {"n": 2, "h": 2, "w": 2, "c": 2},
-            "output_dims": {"n": 1, "h": 30, "w": 30, "c": 2},
-            "conv_params": {"input_offset": 0, "output_offset": 0, "stride_w": 1, "stride_h": 1, "dilation_w": 2, "dilation_h": 2, "pad_w": 0, "pad_h": 0, "activation_min": -32768, "activation_max": 32767},
-            "quant_params": {"per_channel": False, "multiplier": 1, "shift": 0},
-            "weights_array": "    1",
-            "biases_array": "    0",
-            "has_biases": True,
-            "input_data_array": "    0",
-            "expected_output_array": "    0",
-            "input_dtype": "int16_t",
-            "output_dtype": "int16_t",
-            "weight_dtype": "int8_t",
-            "bias_dtype": "int64_t",
-            "kernel_fn": "arm_convolve_wrapper_s16",
-            "kernel_get_buffer_size_fn": "arm_convolve_wrapper_s16_get_buffer_size",
-            "buffer_size_max": 1024,
-        },
-    )
+    conv_h, conv_c = render_convolve(convolve_context(
+        "arm_convolve_wrapper_s16", name="convolve_int16xint8xint32_case_04_s16",
+        input_dims={"n": 1, "h": 32, "w": 32, "c": 2}, filter_dims={"n": 2, "h": 2, "w": 2, "c": 2},
+        output_dims={"n": 1, "h": 30, "w": 30, "c": 2}, input_dtype="int16_t", output_dtype="int16_t",
+        weight_dtype="int8_t", bias_dtype="int64_t", weights_array="    1", biases_array="    0",
+    ), bias_is_struct=True)
     dw_h = _render(
         "ConvolutionFunctions/depthwise_conv/depthwise_conv.h.j2",
         {
