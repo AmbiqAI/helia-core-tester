@@ -25,10 +25,15 @@ def _environment(contracts: ContractSet) -> jinja2.Environment:
     return env
 
 
-def _context(kernel_fn: str, *, float_kernel: bool, has_biases: bool = True, needs_layout: bool = False) -> dict:
+def _context(kernel_fn: str, *, float_kernel: bool, has_biases: bool = True, needs_layout: bool = False,
+             entry_family: str | None = None) -> dict:
     dims = {"n": 1, "h": 2, "w": 2, "c": 4}
+    # The flags convolve.py derives: weight sums for the s8 wrapper and the direct
+    # arm_convolve_s8 family, which also takes an upscale_dims argument.
     context = {
         "name": "conv_case", "kernel_fn": kernel_fn, "kernel_get_buffer_size_fn": kernel_fn + "_get_buffer_size",
+        "entry_family": entry_family,
+        "conv_s8_weight_sum": kernel_fn == "arm_convolve_wrapper_s8" or entry_family == "convolve_s8",
         "float_kernel": float_kernel, "has_biases": has_biases, "kernel_needs_layout": needs_layout,
         "buffer_size_needs_layout": needs_layout, "kernel_layout": "ARM_NN_LAYOUT_NHWC",
         "buffer_size_max": 64, "output_dims": dims, "filter_dims": dims, "input_dims": dims,
@@ -94,6 +99,21 @@ def test_call_follows_the_prototype(contracts: ContractSet, kernel_fn: str, floa
                      "filter_data", "bias_dims", "bias_data", "output_dims", "output_data", "layout"]
          if n in {p.name for p in contracts.require(kernel_fn).params}]
     assert rendered.count(f"__typeof__({kernel_fn})") == 1, "one file-scope parity assert"
+
+
+@pytest.mark.parametrize("kernel_fn", ["arm_convolve_s8", "arm_convolve_s8_small_cin", "arm_convolve_s8_3x3_c16_s1"])
+def test_direct_s8_entries_get_weight_sums_and_a_null_upscale(contracts: ContractSet, kernel_fn: str) -> None:
+    if contracts.find(kernel_fn) is None:
+        pytest.skip(f"{kernel_fn} is not in this checkout's contract")
+    rendered = _environment(contracts).get_template(TEMPLATE).render(
+        **_context(kernel_fn, float_kernel=False, entry_family="convolve_s8"))
+    calls = _call_args(rendered, kernel_fn)
+    assert len(calls) == 2
+    assert calls[0] == ["&conv_case_ctx", "&conv_case_weight_sum_ctx", "&conv_case_conv_params",
+                        "&conv_case_quant_params", "&conv_case_input_dims", "input", "&conv_case_filter_dims",
+                        "conv_case_weights", "&conv_case_bias_dims", "conv_case_biases", "NULL",
+                        "&conv_case_output_dims", "output"]
+    assert "arm_convolve_weight_sum(" in rendered
 
 
 def test_no_bias_passes_null_for_both_bias_arguments(contracts: ContractSet) -> None:
