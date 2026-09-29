@@ -34,6 +34,7 @@ instead of only at hardware-run time.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 GENERATED_BLOCK_BEGIN = (
@@ -5216,14 +5217,28 @@ def generated_test_bridge_scalar_fields(function_name: str) -> tuple[str, ...]:
     raise KeyError(f"No FirmwareAdapterSpec registered with function_name={function_name!r}")
 
 
+# Setup calls TFLM runs once in Prepare.
+_SETUP_CALL = re.compile(r"_get(_reverse_conv)?_buffer_size$|^arm_convolve_weight_sum$|^arm_vector_sum_s8$")
+_KERNEL_CALL = re.compile(r"\b((?:arm|hct_dispatch)_[a-z0-9_]+)\s*\(")
+_C_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
+
+
+def timed_kernel_calls(source: str) -> list[str]:
+    """Every CMSIS-NN kernel `source` calls, minus the setup calls (scratch sizing,
+    weight and vector sums). The generated file routes each through `HCT_TIMED()`, so
+    a timed sample counts the kernel call and not the adapter work around it."""
+    names = set(_KERNEL_CALL.findall(_C_COMMENT.sub("", source)))
+    return sorted(name for name in names if not _SETUP_CALL.search(name))
+
+
 def render_generated_adapters_source() -> str:
     """Render `cmake/hardware/benchmark_server_adapters.gen.c` in full: the marker
-    banner, the includes and forward declarations the bodies rely on, every adapter's
-    C body (each wrapped in its `#ifndef {guard}` guard when one is set) and the
-    `hct_run_kernel_once()` dispatch switch built from every adapter's `kernel_ids`.
-    Written by `scripts/generate_hardware_adapters.py`.
+    banner, the includes and forward declarations the bodies rely on, the `HCT_TIMED()`
+    kernel-call macros, every adapter's C body (each wrapped in its `#ifndef {guard}`
+    guard when one is set) and the `hct_run_kernel_once()` dispatch switch built from
+    every adapter's `kernel_ids`. Written by `scripts/generate_hardware_adapters.py`.
     """
-    pieces: list[str] = [
+    header: list[str] = [
         GENERATED_BLOCK_BEGIN,
         "",
         '#include "benchmark_server_adapters.h"',
@@ -5246,6 +5261,7 @@ def render_generated_adapters_source() -> str:
         "static float quant_scale_from_bits(int32_t bits);",
         "#endif",
     ]
+    pieces: list[str] = []
     open_guard: str | None = None
     for adapter in FIRMWARE_ADAPTERS:
         if adapter.guard != open_guard:
@@ -5258,8 +5274,9 @@ def render_generated_adapters_source() -> str:
         pieces.append(adapter.c_body)
     if open_guard is not None:
         pieces.append("#endif")
-    pieces.extend(["", *_render_dispatch(), GENERATED_BLOCK_END])
-    return "\n".join(pieces) + "\n"
+    timed = [f"#define {name}(...) HCT_TIMED({name}(__VA_ARGS__))" for name in timed_kernel_calls("\n".join(pieces))]
+    header.extend(["", "/* Only these calls count in a sample. */", *timed])
+    return "\n".join([*header, *pieces, "", *_render_dispatch(), GENERATED_BLOCK_END]) + "\n"
 
 
 def _render_dispatch() -> list[str]:
