@@ -387,7 +387,7 @@ class FakeTargetTransport:
         if not self._pmu_present:
             return []
         ids = (counter.event_id for counter_pass in plan.passes for counter in counter_pass.counters)
-        # The module map matches the catalog.
+        # test_catalog_matches_the_synced_module guards this.
         return [event_id for event_id in ids if counter_by_event_id(event_id) is None]
 
     def _handle_frame(self, frame: Frame) -> None:

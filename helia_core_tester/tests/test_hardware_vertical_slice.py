@@ -26,7 +26,7 @@ from helia_core_tester.hardware.measurement import (
     plan_counter_passes,
     resolve_counter_selection,
 )
-from helia_core_tester.hardware.pmu_catalog import CPU_CYCLES_EVENT_ID, CounterDescriptor, counter_by_name, load_pmu_events
+from helia_core_tester.hardware.pmu_catalog import CPU_CYCLES_EVENT_ID, CounterDescriptor, counter_by_name
 from helia_core_tester.hardware.session import (
     MAX_CASE_ID_BYTES,
     HostSession,
@@ -327,12 +327,6 @@ def test_unmapped_event_id_fails_the_plan(tmp_path: Path) -> None:
     # The bundle schema is seeded by event id too, so the caller's "vendor" label never
     # becomes a dead column next to the populated placeholder.
     assert counter_names_for_passes((exotic,)) == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED", "event_0x0c00"]
-
-
-def test_fake_target_maps_every_catalog_id() -> None:
-    catalog = CounterPass("cpu", 0, load_pmu_events())
-    plan = SessionPlan(1, 1, 1, 1, 1, (catalog,), (PlannedCase("case_0", 1),))
-    assert FakeTargetTransport()._unmapped_ids(plan) == []
 
 
 def test_fake_target_rejects_session_plans_the_firmware_would_reject() -> None:
