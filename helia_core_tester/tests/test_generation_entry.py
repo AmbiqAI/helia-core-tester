@@ -64,8 +64,12 @@ def test_table_entries_refuse_scratch_overrides(field: dict) -> None:
 
 
 def test_operators_not_yet_bound_name_their_table_entries() -> None:
-    with pytest.raises(EntryError, match=r"Convolve does not yet bind its call.*known Convolve entries: \['arm_"):
-        _resolve("arm_fx_kernel_s16", operator="Convolve")
+    with pytest.raises(EntryError, match=r"DepthwiseConv does not yet bind its call.*known DepthwiseConv entries: \['arm_"):
+        _resolve("arm_fx_kernel_s16", operator="DepthwiseConv")
+
+
+def test_convolve_binds_its_call_from_the_contract() -> None:
+    assert "Convolve" in entry_module.CONTRACT_BOUND_OPERATORS
 
 
 def test_contract_entry_uses_its_own_sizer_per_cpu(bound) -> None:

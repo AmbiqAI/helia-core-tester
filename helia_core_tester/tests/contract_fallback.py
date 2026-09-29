@@ -1,5 +1,7 @@
 """Test-only kernel contract for rendering the Convolve template without an ns-cmsis-nn checkout.
 
+It holds every arm_convolve_* kernel and scratch-size query, since the template binds both.
+
 The Convolve template renders its kernel call from the ns-cmsis-nn kernel contract and refuses
 to render without one. The pure-Python pytest job has no checkout, so unit tests that render a
 Convolve case fall back to the committed fixture, but only when nothing better exists: a

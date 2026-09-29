@@ -66,6 +66,35 @@
       ]
     },
     {
+      "name": "arm_convolve_1_x_n_s4_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1638,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_1_x_n_s8",
       "header": "Include/arm_nnfunctions.h",
       "line": 1353,
@@ -135,6 +164,35 @@
       ]
     },
     {
+      "name": "arm_convolve_1_x_n_s8_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1616,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_1x1_out_s8",
       "header": "Include/arm_nnfunctions.h",
       "line": 1519,
@@ -200,6 +258,20 @@
           "direction": "out",
           "name": "output_data",
           "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_1x1_out_s8_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1550,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
         }
       ]
     },
@@ -396,6 +468,20 @@
       ]
     },
     {
+      "name": "arm_convolve_1x1_s4_fast_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1225,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_1x1_s8",
       "header": "Include/arm_nnfunctions.h",
       "line": 1285,
@@ -534,6 +620,20 @@
       ]
     },
     {
+      "name": "arm_convolve_1x1_s8_fast_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1236,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_even_s4",
       "header": "Include/arm_nnfunctions.h",
       "line": 499,
@@ -594,6 +694,25 @@
           "direction": "out",
           "name": "output_data",
           "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_even_s4_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 713,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
         }
       ]
     },
@@ -726,6 +845,25 @@
       ]
     },
     {
+      "name": "arm_convolve_s16_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 1065,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_s16_group_ch_mult_1",
       "header": "Include/arm_nnfunctions.h",
       "line": 368,
@@ -850,6 +988,25 @@
           "direction": "out",
           "name": "output_data",
           "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_s4_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 698,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
         }
       ]
     },
@@ -998,6 +1155,58 @@
           "direction": "out",
           "name": "output_data",
           "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_s8_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 729,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_s8_get_buffer_size_mve",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 278,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_s8_get_weights_sum_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 742,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
         }
       ]
     },
@@ -1184,6 +1393,93 @@
       ]
     },
     {
+      "name": "arm_convolve_wrapper_s16_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 398,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_wrapper_s16_get_buffer_size_dsp",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 412,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_wrapper_s16_get_buffer_size_mve",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 426,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_wrapper_s4",
       "header": "Include/arm_nnfunctions.h",
       "line": 97,
@@ -1244,6 +1540,93 @@
           "direction": "out",
           "name": "output_data",
           "type": "int8_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_wrapper_s4_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 133,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_wrapper_s4_get_buffer_size_dsp",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 164,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_wrapper_s4_get_buffer_size_mve",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 149,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
         }
       ]
     },
@@ -1317,6 +1700,93 @@
       ]
     },
     {
+      "name": "arm_convolve_wrapper_s8_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 264,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_wrapper_s8_get_buffer_size_dsp",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 305,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_wrapper_s8_get_buffer_size_mve",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 290,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_1_x_n_f16",
       "header": "Include/arm_nnfunctions_flt.h",
       "line": 2379,
@@ -1383,6 +1853,42 @@
       ]
     },
     {
+      "name": "arm_convolve_1_x_n_f16_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 2420,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params_f16 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "layout",
+          "type": "arm_nn_tensor_layout"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_1_x_n_f32",
       "header": "Include/arm_nnfunctions_flt.h",
       "line": 427,
@@ -1440,6 +1946,42 @@
           "direction": "out",
           "name": "output_data",
           "type": "float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "layout",
+          "type": "arm_nn_tensor_layout"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_1_x_n_f32_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 509,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params_f32 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
         },
         {
           "direction": "in",
@@ -1637,6 +2179,42 @@
       ]
     },
     {
+      "name": "arm_convolve_1x1_f16_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 2411,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params_f16 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "layout",
+          "type": "arm_nn_tensor_layout"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_1x1_f32",
       "header": "Include/arm_nnfunctions_flt.h",
       "line": 353,
@@ -1694,6 +2272,42 @@
           "direction": "out",
           "name": "output_data",
           "type": "float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "layout",
+          "type": "arm_nn_tensor_layout"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_1x1_f32_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 492,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params_f32 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
         },
         {
           "direction": "in",
@@ -1891,6 +2505,42 @@
       ]
     },
     {
+      "name": "arm_convolve_f16_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 2394,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params_f16 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "layout",
+          "type": "arm_nn_tensor_layout"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_f32",
       "header": "Include/arm_nnfunctions_flt.h",
       "line": 265,
@@ -1948,6 +2598,42 @@
           "direction": "out",
           "name": "output_data",
           "type": "float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "layout",
+          "type": "arm_nn_tensor_layout"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_f32_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 455,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params_f32 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
         },
         {
           "direction": "in",
@@ -2140,6 +2826,37 @@
       ]
     },
     {
+      "name": "arm_convolve_wrapper_f16_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 2403,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params_f16 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
+        }
+      ]
+    },
+    {
       "name": "arm_convolve_wrapper_f32",
       "header": "Include/arm_nnfunctions_flt.h",
       "line": 293,
@@ -2197,6 +2914,37 @@
           "direction": "out",
           "name": "output_data",
           "type": "float32_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_convolve_wrapper_f32_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 471,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "conv_params",
+          "type": "const cmsis_nn_conv_params_f32 *"
+        },
+        {
+          "direction": "in",
+          "name": "input_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "filter_dims",
+          "type": "const cmsis_nn_dims *"
+        },
+        {
+          "direction": "in",
+          "name": "output_dims",
+          "type": "const cmsis_nn_dims *"
         }
       ]
     }
