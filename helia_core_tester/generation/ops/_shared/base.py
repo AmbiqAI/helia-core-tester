@@ -1089,6 +1089,7 @@ class OperationBase(ABC):
         validation_key: str,
         label: str,
         sizer_fn: Any = "context",
+        sidecar: bool = False,
     ) -> None:
         """Write `includes/<name>_<stem>.h` and `<name>_<stem>.c` through the generic harness.
 
@@ -1117,6 +1118,10 @@ class OperationBase(ABC):
             contracts=contract_render.load_current_contracts(),
         )
         render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)
+        if sidecar:
+            payload = self._build_generation_sidecar(stem, render_context)
+            (output_dir / f"{name}_{stem}.sidecar.json").write_text(
+                json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n")
         render_context.update(harness=plan, header_name=f"{name}_{stem}.h", harness_label=label,
                               harness_output_count=pool.output_count, harness_benchmark=pool.benchmark)
         source = env.get_template(self.HARNESS_SOURCE).render(**render_context)

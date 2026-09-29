@@ -5,6 +5,68 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
+from helia_core_tester.generation.harness.faults import common_fault, struct_copy, with_fault
+
+# Kernels ns-cmsis-nn defines but declares in no public header, and the public kernel whose
+# prototype each shares.
+UNDECLARED_ALIASES = {
+    "arm_avg_pool_nhwc_f32": "arm_avg_pool_f32",
+    "arm_avg_pool_nhwc_f16": "arm_avg_pool_f16",
+    "arm_max_pool_nhwc_f32": "arm_max_pool_f32",
+    "arm_max_pool_nhwc_f16": "arm_max_pool_f16",
+}
+
+
+def pool_argument_pool(context: Dict) -> ArgumentPool:
+    """Every value a pooling case can pass to a public pooling kernel or its scratch query."""
+    n = context["name"]
+    float_kernel = bool(context.get("float_kernel"))
+    pp = context["pool_params"]
+
+    def dims(d: Dict) -> Dict:
+        return {"n": d["n"], "h": d["h"], "w": d["w"], "c": d["c"]}
+
+    act_min = context["pool_activation_min_literal"] if float_kernel else pp["activation_min"]
+    act_max = context["pool_activation_max_literal"] if float_kernel else pp["activation_max"]
+    header = [
+        Declaration(f"{n}_input_dims", "cmsis_nn_dims", dims(context["input_dims"]), comment="Input dimensions"),
+        Declaration(f"{n}_filter_dims", "cmsis_nn_dims", dims(context["filter_dims"]), comment="Filter dimensions"),
+        Declaration(f"{n}_output_dims", "cmsis_nn_dims", dims(context["output_dims"]), comment="Output dimensions"),
+        Declaration(f"{n}_pool_params", context["pool_params_type"],
+                    {"stride.w": pp["stride_w"], "stride.h": pp["stride_h"], "padding.w": pp["pad_w"],
+                     "padding.h": pp["pad_h"], "activation.min": act_min, "activation.max": act_max},
+                    comment="Pooling parameters"),
+        Declaration(f"{n}_input", context["input_dtype"], ArrayLiteral(context["input_data_array"]), array=True,
+                    comment="Input data (for testing)"),
+        Declaration(f"{n}_expected_output", context["output_dtype"], ArrayLiteral(context["expected_output_array"]),
+                    array=True, comment="Expected output (golden)"),
+    ]
+    values = {
+        "ctx": f"&{n}_ctx", "pool_params": f"&{n}_pool_params", "input_dims": f"&{n}_input_dims",
+        "filter_dims": f"&{n}_filter_dims", "output_dims": f"&{n}_output_dims",
+        "dim_dst_width": f"{n}_output_dims.w", "ch_src": f"{n}_input_dims.c",
+    }
+    output = context["output_dims"]
+    return ArgumentPool(
+        name=n, values=values, header=header, benchmark=False,
+        output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})",
+        scratch_buffer=int(context["buffer_size_max"]) > 0,
+        no_scratch=not context.get("kernel_get_buffer_size_fn"),
+        prototype_from=UNDECLARED_ALIASES.get(context["kernel_fn"]),
+    )
+
+
+def pool_fault(pool: ArgumentPool, kind: str, context: Dict) -> ArgumentPool:
+    """The pool of a pooling fault case: the passing pool with the faulted argument edited."""
+    n = context["name"]
+    edit = common_fault(pool, kind)
+    if edit is None and kind in ("zero_dim", "negative_dim"):
+        edit = struct_copy(pool, kind, "input_dims", "cmsis_nn_dims", f"{n}_input_dims",
+                           {"n": 0 if kind == "zero_dim" else -1})
+    if edit is None:
+        raise ValueError(f"{n}: no pooling fault edit for {kind!r}")
+    return with_fault(pool, edit)
 
 
 class PoolFamilyBase(OperationBase):
@@ -283,24 +345,23 @@ class PoolFamilyBase(OperationBase):
             context["pool_activation_min_literal"] = builder.format_float_literal(pool_params["activation_min"])
             context["pool_activation_max_literal"] = builder.format_float_literal(pool_params["activation_max"])
         context.update(nonfinite_context)
+        pool = pool_argument_pool(context)
         fault = self.fault_kind()
-        c_template = f"{self.TEMPLATE_DIR}/{self.TEMPLATE_SUFFIX}.c.j2"
+        # The validation rules are keyed by the former template path; a fault case's sidecar keeps
+        # the rules of the fault template it used to render from.
+        validation_key = f"{self.TEMPLATE_DIR}/{self.TEMPLATE_SUFFIX}.c.j2"
         if fault:
             self._check_fault_reachable(fault, float_kernel, kernel_info["kernel_fn"])
             context.update(self.fault_context())
-            c_template = f"{self.TEMPLATE_DIR}/{self.TEMPLATE_SUFFIX}_fault.c.j2"
+            pool = pool_fault(pool, fault, context)
+            validation_key = f"{self.TEMPLATE_DIR}/{self.TEMPLATE_SUFFIX}_fault.c.j2"
 
+        self.render_harness_files(output_dir, stem=self.TEMPLATE_SUFFIX, context=context, pool=pool,
+                                  validation_key=validation_key, label="Pooling", sidecar=True)
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', self.OPERATOR_NAME),
             'operator_name': self.TEMPLATE_SUFFIX,
         }
-        self._write_op_outputs(
-            output_dir,
-            self.TEMPLATE_SUFFIX,
-            f"{self.TEMPLATE_DIR}/{self.TEMPLATE_SUFFIX}.h.j2",
-            c_template,
-            context,
-            cmake_context,
-        )
+        (output_dir / "CMakeLists.txt").write_text(self.render_template("common/CMakeLists.txt.j2", cmake_context))
         

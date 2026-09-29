@@ -3,7 +3,7 @@ template prints: which providers the prototype needs, and the bound sizer and ke
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional, Sequence
 
 from helia_core_tester.contract.bind import bind, takes
@@ -46,6 +46,10 @@ class HarnessPlan:
     no_scratch: bool = False
     inputs: Sequence[tuple[str, str, str]] = ()
     context_setup: str = ""
+    uses_ctx: bool = True
+    scratch_buffer: bool = True
+    local_prototype: str = ""
+    prototype_from: str = ""
 
 
 def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str], scratch_bytes: Optional[int],
@@ -54,7 +58,24 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
     pool.validate()
     if (sizer_fn is None) == (scratch_bytes is None):
         raise HarnessError(f"{pool.name}: give either a scratch query or entry_scratch bytes, not both or neither")
-    kernel = require_bound_symbol(contracts, kernel_fn)
+    local_prototype = ""
+    if pool.prototype_from:
+        if contracts.find(kernel_fn) is not None:
+            raise HarnessError(f"{pool.name}: {kernel_fn} is public; bind it from the contract, not from "
+                               f"{pool.prototype_from}'s prototype")
+        kernel = replace(require_bound_symbol(contracts, pool.prototype_from), name=kernel_fn)
+        local_prototype = render_prototype(kernel)
+    else:
+        kernel = require_bound_symbol(contracts, kernel_fn)
+    uses_ctx = takes(kernel, "ctx")
+    if not pool.scratch_buffer:
+        if sizer_fn is not None or scratch_bytes:
+            raise HarnessError(f"{pool.name}: a case without a scratch buffer cannot query or claim scratch")
+        if uses_ctx and not pool.no_scratch:
+            raise HarnessError(f"{pool.name}: {kernel_fn} takes a context but the case has no scratch buffer; "
+                               "set no_scratch so the context is empty")
+    elif not uses_ctx:
+        raise HarnessError(f"{pool.name}: {kernel_fn} takes no context, so the case has no use for a scratch buffer")
     providers = [p for p in pool.providers if any(takes(kernel, name) for name in p.names)]
     values = dict(pool.values)
     values.update({name: p.expr for p in providers for name in p.names})
@@ -114,4 +135,19 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         no_scratch=bool(pool.no_scratch or (fault and fault.no_scratch)),
         inputs=[(i.local, i.ctype or "", i.array) for i in inputs],
         context_setup=pool.context_setup,
+        uses_ctx=uses_ctx,
+        scratch_buffer=pool.scratch_buffer,
+        local_prototype=local_prototype,
+        prototype_from=pool.prototype_from or "",
     )
+
+
+def render_prototype(decl) -> str:
+    """The C declaration of `decl` (a public function's prototype under another name)."""
+    def param(p) -> str:
+        c_type = p.c_type.strip()
+        joiner = "" if c_type.endswith("*") else " "
+        return f"{c_type}{joiner}{p.name}{p.extent or ''}"
+
+    params = ", ".join(param(p) for p in decl.params) or "void"
+    return f"{decl.returns} {decl.name}({params});"
