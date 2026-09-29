@@ -299,6 +299,7 @@ def stage_kernels(
     options: Optional["AppOptions"] = None,
     force_sync: bool = False,
     update_dependencies: bool = False,
+    repo_root: Optional[Path] = None,
 ) -> Path:
     """Render, lock, sync; return the kernel source."""
     from . import nsx_cli
@@ -307,7 +308,7 @@ def stage_kernels(
     options = options or AppOptions()
     app_dir = nsx_app_dir(build_dir)
     typer.echo(f"[hardware] Kernels: {options.summary()}")
-    render_app(board, options, app_dir, repo_root=tester_repo_root())
+    render_app(board, options, app_dir, repo_root=repo_root or tester_repo_root())
     # Kernel edits change the vendored hash.
     relock = update_dependencies or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
     if relock:

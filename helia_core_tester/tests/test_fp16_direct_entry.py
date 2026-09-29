@@ -105,3 +105,34 @@ def test_cases_without_an_entry_keep_the_layout_argument(name: str, tmp_path: Pa
     kernel = re.search(r"kernel_status = (\w+)\(|return (arm_\w+_f16)\(", source)
     fn = kernel.group(1) or kernel.group(2)
     assert "ARM_NN_LAYOUT_" in _call(source, fn)
+
+
+@pytest.mark.parametrize(
+    ("name", "entry"),
+    [
+        ("convolve_fault_entry_acc16_invalid_layout_f16", "arm_convolve_f16_acc16"),
+        ("convolve_fault_entry_1x1_acc16_invalid_layout_f16", "arm_convolve_1x1_f16_acc16"),
+        ("convolve_fault_entry_1xn_acc16_invalid_layout_f16", "arm_convolve_1_x_n_f16_acc16"),
+        ("depthwise_conv_fault_entry_acc16_invalid_layout_f16", "arm_depthwise_conv_f16_acc16"),
+        ("fully_connected_fault_entry_acc16_invalid_layout_f16", "arm_fully_connected_f16_acc16"),
+    ],
+)
+def test_invalid_layout_fault_calls_the_entry_with_a_bad_layout(name: str, entry: str, tmp_path: Path) -> None:
+    source = _source(name, tmp_path)
+
+    assert "(arm_nn_tensor_layout)(ARM_NN_LAYOUT_NHWC + 1)" in _call(source, entry)
+    assert "ARM_CMSIS_NN_ARG_ERROR" in source
+
+
+@pytest.mark.parametrize(
+    ("name", "fault"),
+    [
+        ("convolve_float_entry_nhwc_8x8_k3x3_f16", "invalid_layout"),
+        ("convolve_float_entry_acc16_8x8_k3x3_f16", "null_input"),
+    ],
+)
+def test_other_entry_faults_are_rejected(name: str, fault: str, tmp_path: Path) -> None:
+    desc = {**_descriptors()[name], "fault": fault, "expected_status": "ARM_CMSIS_NN_ARG_ERROR"}
+
+    with pytest.raises(ValueError, match="supports only fault: invalid_layout"):
+        generate_test(desc, str(tmp_path))

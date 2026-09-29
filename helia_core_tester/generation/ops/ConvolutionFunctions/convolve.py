@@ -13,7 +13,7 @@ from helia_core_tester.generation.ops._shared.bias_init import (
     bias_is_hoisted_by_lowering,
     inject_hoisted_dilation_bias,
 )
-from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel, resolve_direct_entry
+from helia_core_tester.generation.kernel_dispatch import check_entry_fault, resolve_convolve_kernel, resolve_direct_entry
 
 
 class OpConvolve(OperationBase):
@@ -314,9 +314,9 @@ class OpConvolve(OperationBase):
         variant = str(hint.get("kernel_variant", "")).lower()
         entry = self.desc.get("entry")
         if entry:
-            if variant or self.desc.get("fault"):
+            if variant:
                 raise ValueError(
-                    f"{self.desc.get('name')}: entry {entry!r} is not supported with a kernel_variant hint or fault"
+                    f"{self.desc.get('name')}: entry {entry!r} is not supported with a kernel_variant hint"
                 )
             info.update(
                 resolve_direct_entry(
@@ -326,6 +326,7 @@ class OpConvolve(OperationBase):
                     self.desc.get("weight_dtype", "S8"),
                 )
             )
+            check_entry_fault(self.desc, info)
             return info
         if not variant:
             return info
@@ -733,8 +734,12 @@ class OpConvolve(OperationBase):
         activation_dtype = self.desc.get('activation_dtype', 'S8')
         if float_kernel:
             element_size = np.dtype(float_dtype).itemsize
+            # The patch-GEMM sizers ask for 8 packed patch rows (ARM_NN_CONV_NHWC_PATCH_GEMM_F*_MAX_TILE_ROWS),
+            # which exceeds the tensor total for a long patch over a small input.
+            patch_tile = 8 * filter_dims['h'] * filter_dims['w'] * input_dims['c'] * element_size
             buffer_size_max = max(
                 1024,
+                patch_tile,
                 int(
                     (input_dims['n'] * input_dims['h'] * input_dims['w'] * input_dims['c']
                      + filter_dims['n'] * filter_dims['h'] * filter_dims['w'] * max(filter_dims['c'], 1)

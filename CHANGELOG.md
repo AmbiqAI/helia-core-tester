@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.5.0...v0.6.0) (2026-09-29)
+
+
+### Features
+
+* **hardware:** build the firmware through neuralspotx ([10fbcb5](https://github.com/AmbiqAI/helia-core-tester/commit/10fbcb59a871034a2dcb2b78cfbc70bac5813b14))
+
+
+### Bug Fixes
+
+* **conv:** size float scratch for long patches and cover long FP16 reductions ([#249](https://github.com/AmbiqAI/helia-core-tester/issues/249)) ([de3a89a](https://github.com/AmbiqAI/helia-core-tester/commit/de3a89a2738431e1b280bed54c5b93c01094b4ae)), closes [#248](https://github.com/AmbiqAI/helia-core-tester/issues/248)
+* **hardware:** drop dead RTT channel 0 buffers ([3028c07](https://github.com/AmbiqAI/helia-core-tester/commit/3028c07dd97795c5ac777bc824c0bfb9bdcf5de8))
+* **hardware:** drop dead RTT channel 0 buffers ([fb1a939](https://github.com/AmbiqAI/helia-core-tester/commit/fb1a939a8df0475d24a32b05b639c7e5728c8e66))
+
 ## [0.5.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.4.0...v0.5.0) (2026-09-29)
 
 
