@@ -119,9 +119,14 @@ def modules_present(app_dir: Path, board: str) -> bool:
     )
 
 
+def nsx_version() -> str:
+    """Installed neuralspotx version."""
+    return metadata.version("neuralspotx")
+
+
 def sync_stamp(app_dir: Path) -> str:
     """nsx.lock hash and neuralspotx version."""
-    return f"{hash_file(lock_path(app_dir))} {metadata.version('neuralspotx')}"
+    return f"{hash_file(lock_path(app_dir))} {nsx_version()}"
 
 
 def sync_app(

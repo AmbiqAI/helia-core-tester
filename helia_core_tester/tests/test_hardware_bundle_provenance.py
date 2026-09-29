@@ -10,8 +10,9 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.hardware import nsx_cli
-from helia_core_tester.hardware.firmware_build import BUILT_LOCK, SYNC_STAMP, nsx_app_dir
-from helia_core_tester.hardware.nsx_app import AppOptions, save_options
+from helia_core_tester.hardware import firmware_build
+from helia_core_tester.hardware.firmware_build import nsx_app_dir
+from helia_core_tester.hardware.nsx_app import AppOptions, kernel_dir, save_options
 from helia_core_tester.hardware.result_bundle import build_provenance, write_result_bundle
 from helia_core_tester.hardware.session import SessionResult
 
@@ -46,13 +47,13 @@ targets:
 def _fake_build(build_dir: Path, options: AppOptions) -> str:
     """Records a finished build leaves behind."""
     app_dir = nsx_app_dir(build_dir)
-    app_dir.mkdir(parents=True)
+    module = kernel_dir(app_dir, options)
+    (module / "Source").mkdir(parents=True)
+    (module / "Source" / "k.c").write_text("int k;\n", encoding="utf-8")
     (app_dir / "nsx.lock").write_text(LOCK, encoding="utf-8")
-    digest = nsx_cli.lock_digest(app_dir)
     save_options(app_dir, options)
-    (app_dir / BUILT_LOCK).write_text(json.dumps({"lock": digest, "kernels": "sha256:22"}), encoding="utf-8")
-    (app_dir / SYNC_STAMP).write_text(f"{digest} 0.8.1", encoding="utf-8")
-    return digest
+    firmware_build._record_built(app_dir, options)
+    return nsx_cli.lock_digest(app_dir)
 
 
 def _write_bundle(tmp_path: Path, build_dir: Path | None) -> Path:
@@ -76,37 +77,47 @@ def test_pinned_ref_build_is_stamped(tmp_path: Path) -> None:
     assert manifest["firmware_build_id"] == "abc123"
     assert manifest["session_id"] == "prov"
     build = manifest["build"]
+    tree = nsx_cli.tree_hash(kernel_dir(nsx_app_dir(build_dir), AppOptions()))
     assert build["kernels"] == {
-        "ref": "v7.35.1", "commit": COMMIT, "root": None, "root_head": None, "root_dirty": None, "tree_hash": "sha256:22",
+        "ref": "v7.35.1", "commit": COMMIT, "root": None, "root_head": None, "root_dirty": None, "tree_hash": tree,
     }
     assert build["options"]["requantize_inline_asm"] is False
     assert build["options"]["cmsis_nn_root"] is None
-    assert build["neuralspotx_version"] == "0.8.1"
+    assert build["neuralspotx_version"] == nsx_cli.nsx_version()
     assert build["nsx_lock_sha256"] == digest
     assert manifest["artifacts"]["nsx_lock"] == "nsx.lock"
     assert (bundle_root / "nsx.lock").read_text(encoding="utf-8") == LOCK
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
-def test_local_root_records_checkout(tmp_path: Path) -> None:
-    root = tmp_path / "ns-cmsis-nn"
-    root.mkdir()
-    (root / "a.c").write_text("int a;\n", encoding="utf-8")
+def _git_checkout(root: Path) -> str:
+    """One-commit checkout; returns HEAD."""
+    (root / "Source").mkdir(parents=True)
+    (root / "Source" / "k.c").write_text("int k;\n", encoding="utf-8")
+    (root / "README").write_text("r\n", encoding="utf-8")
     git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
     subprocess.run([*git, "init", "-q"], check=True)
-    subprocess.run([*git, "add", "a.c"], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
     subprocess.run([*git, "commit", "-qm", "init"], check=True)
-    head = subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
-    (root / "a.c").write_text("int b;\n", encoding="utf-8")
+    return subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+@pytest.mark.parametrize(("edit", "dirty"), [("README", False), ("Source/new.c", True)])
+def test_local_root_records_build_checkout(tmp_path: Path, edit: str, dirty: bool) -> None:
+    root = tmp_path / "ns-cmsis-nn"
+    head = _git_checkout(root)
+    (root / edit).write_text("edited\n", encoding="utf-8")
     build_dir = tmp_path / "build"
     _fake_build(build_dir, AppOptions(cmsis_nn_root=root))
+    # Later edits must not leak in.
+    (root / "Source" / "k.c").write_text("int later;\n", encoding="utf-8")
 
     kernels = build_provenance(build_dir)[0]["kernels"]
 
     assert kernels["ref"] is None
     assert kernels["root"] == str(root.resolve())
     assert kernels["root_head"] == head
-    assert kernels["root_dirty"] is True
+    assert kernels["root_dirty"] is dirty
 
 
 def test_relocked_app_drops_lock_fields(tmp_path: Path) -> None:
@@ -118,8 +129,8 @@ def test_relocked_app_drops_lock_fields(tmp_path: Path) -> None:
 
     assert lock_file is None
     assert provenance["kernels"]["commit"] is None
-    assert provenance["neuralspotx_version"] is None
     assert provenance["kernels"]["ref"] == "v7.35.1"
+    assert provenance["neuralspotx_version"] == nsx_cli.nsx_version()
 
 
 @pytest.mark.parametrize("with_dir", [False, True])
