@@ -7,12 +7,10 @@ missing rather than failing the whole doctor run.
 from __future__ import annotations
 
 import shutil
-import subprocess
 from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path
-from typing import Optional
 
-from .firmware_build import DOWNLOADS_DIR
 from .jlink_library import (
     SOURCE_PYLINK_DEFAULT,
     JLinkLibraryError,
@@ -68,21 +66,13 @@ def _jlink_exe_check() -> HardwareCheck:
     return HardwareCheck(label, True, found.describe())
 
 
-def _git_head(path: Path) -> Optional[str]:
+def _nsx_check() -> HardwareCheck:
+    """The neuralspotx package `hardware build` drives."""
+    label = "neuralspotx (firmware build)"
     try:
-        completed = subprocess.run(
-            ["git", "-C", str(path), "rev-parse", "HEAD"], capture_output=True, text=True, check=False, timeout=10
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return completed.stdout.strip() if completed.returncode == 0 else None
-
-
-def _checkout_check(label: str, path: Path) -> HardwareCheck:
-    if not path.is_dir():
-        return HardwareCheck(label, False, f"{path} missing (fetched lazily by `hardware build`)")
-    head = _git_head(path)
-    return HardwareCheck(label, True, f"{path} @ {head or 'unknown HEAD'}")
+        return HardwareCheck(label, True, metadata.version("neuralspotx"))
+    except metadata.PackageNotFoundError:
+        return HardwareCheck(label, False, "not installed")
 
 
 def _board_table_check() -> HardwareCheck:
@@ -96,15 +86,12 @@ def _board_table_check() -> HardwareCheck:
 
 
 def hardware_checks(repo_root: Path) -> list[HardwareCheck]:
-    from ..scripts.setup_dependencies import nsx_ambiq_sdk_dir
-
-    downloads = repo_root / DOWNLOADS_DIR
     return [
         _tool_check("arm-none-eabi-gcc", "arm-none-eabi-gcc (firmware cross-compiler)"),
         _tool_check("cmake", "cmake (firmware build)"),
+        _tool_check("ninja", "ninja (firmware build)"),
+        _nsx_check(),
         _jlink_dll_check(),
         _jlink_exe_check(),
-        _checkout_check("nsx-ambiq-sdk checkout", nsx_ambiq_sdk_dir(repo_root, downloads)),
-        _checkout_check("neuralspotx checkout", downloads / "neuralspotx"),
         _board_table_check(),
     ]

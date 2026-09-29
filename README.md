@@ -55,6 +55,30 @@ not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|s
 `hardware build`, `hardware flash [--force]`, `hardware stream` and
 `hardware memory-report`.
 
+The firmware builds as a neuralspotx (NSX) app rendered into
+`build/hardware/<board>/nsx_app`. Which kernels it builds:
+
+- Nested layout (the tester at `ns-cmsis-nn/Tests/helia-core-tester`): the
+  enclosing ns-cmsis-nn checkout, working-tree edits included, as the old CMake
+  path did.
+- Standalone clone: the pinned ns-cmsis-nn release (`v7.35.1`).
+- `--cmsis-nn-ref REF` builds another tag or commit; `--cmsis-nn-root PATH`
+  builds another local checkout.
+
+Edit kernels in the checkout. Every build recopies a local checkout's
+`Include/`, `Source/` and `cmake/` trees, plus `nsx/nsx-module.yaml` and
+`nsx/CMakeLists.txt`, into `nsx_app/modules/nsx-cmsis-nn`, so edits made
+there are overwritten. Other files under `nsx/` are not used.
+
+`hardware run` generates the tests from the same kernel tree: the local
+checkout, or for a ref the clone NSX syncs into `nsx_app/modules/ns-cmsis-nn`.
+
+`--no-inline-asm` builds requantize without inline assembly;
+`--update-dependencies` re-resolves the NSX modules into `nsx.lock`. Every build
+prints the kernel source and warns when the build options changed since the last
+build in that build dir. `hardware flash` and `hardware run` rebuild with their
+own flags, so pass the same kernel flags you built with.
+
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
 `hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or
 `mve`; `SELECTION` is `all`, `default`, or a comma-separated list of `ARM_PMU_*`
@@ -101,7 +125,7 @@ Identity resolution rules:
   `helia_core_tester doctor` prints which one resolved the library.
 
 `helia_core_tester doctor` reports the hardware toolchain (arm-none-eabi-gcc,
-cmake, the J-Link library, the fetched nsx-ambiq-sdk/neuralspotx checkouts) as
+cmake, ninja, the neuralspotx version, the J-Link library) as
 informational checks; missing hardware tools do not fail doctor.
 
 ## Suite-Based Runs
