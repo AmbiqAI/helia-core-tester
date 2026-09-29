@@ -718,11 +718,13 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
         description="Optimized depthwise kernels accept a NULL ctx->buf instead of returning ARG_ERROR",
         family="ConvolutionFunctions",
         edits=(
+            # arm_depthwise_conv_s8_opt reaches the guard through _channelwise; _planar, the
+            # other public s8 opt entry (ns-cmsis-nn #580), carries the same line.
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_depthwise_conv_s8_opt.c",
                 pattern="    if (ctx->buf == NULL && arm_depthwise_conv_s8_opt_get_buffer_size(input_dims, filter_dims) != 0)\n",
                 replacement="    if (0) /* MUTANT drop_depthwise_ctx_guard */\n",
-                count=1,
+                count=2,
             ),
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_depthwise_conv_fast_s16.c",

@@ -14,6 +14,7 @@ import yaml
 
 from helia_core_tester.core.discovery import find_descriptors_dir, find_generated_tests_dir, find_repo_root
 from helia_core_tester.core.cpu_targets import missing_required_capabilities, normalize_cpu
+from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, resolve_comparison, resolve_tensor_dtypes
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.core.path_layout import generation_report_dir
@@ -161,9 +162,16 @@ def _required_kernel_symbols(desc: Dict[str, Any]) -> list[str]:
     """
     raw = desc.get("required_kernel_symbols")
     if raw is None:
-        return []
+        raw = []
     if isinstance(raw, str):
         raw = [raw]
+    # A named entry, and the planar rule when the case checks it, must be declared too:
+    # the case is skipped on an ns-cmsis-nn checkout that does not have them yet.
+    raw = list(raw)
+    if desc.get("entry"):
+        raw.append(desc["entry"])
+    if desc.get("planar_supported") is not None:
+        raw.append(DEPTHWISE_CONV_S8_PLANAR_RULE)
     ordered: list[str] = []
     seen = set()
     for symbol in raw:

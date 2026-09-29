@@ -8,12 +8,12 @@
 # the run completes, merges the per-CPU coverage.info files into a single
 # LCOV report with JSON/MD/HTML summaries.
 #
-# Note: --coverage-mve-float (Cortex-M55 float MVE coverage paths) is
-# intentionally NOT enabled here, because the CLI only allows it when
-# --cpu is restricted to cortex-m55 alone (ConfigurationError otherwise).
-# Since this script targets all CPUs in one command, MVE float coverage is
-# out of scope; run a separate cortex-m55-only pass with --coverage-mve-float
-# if you need that data.
+# Note: --coverage-mve-float and --coverage-mve-int (Cortex-M55 float and
+# integer MVE coverage paths) are intentionally NOT enabled here, because the
+# CLI only allows them when --cpu is restricted to cortex-m55 alone
+# (ConfigurationError otherwise). Since this script targets all CPUs in one
+# command, MVE coverage is out of scope; run a separate cortex-m55-only pass
+# with --coverage-mve-float or --coverage-mve-int if you need that data.
 #
 # Intended to be run inside the Linux dev container (the build/FVP pipeline
 # is not supported on macOS).

@@ -85,6 +85,8 @@ class BuildStep(StepBase):
                 else:
                     cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F32=OFF"])
                     cmd.extend(["--cmake-def", "ARM_NN_ENABLE_F16=OFF"])
+                    if getattr(self.config, "coverage_mve_int", False):
+                        cmd.extend(["--cmake-def", "ENABLE_COVERAGE_MVE_INT=ON"])
 
                 if getattr(self.config, "coverage", False):
                     cmd.append("--coverage")
