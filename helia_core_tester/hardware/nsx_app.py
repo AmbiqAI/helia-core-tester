@@ -137,8 +137,27 @@ class AppOptions:
     @classmethod
     def from_json(cls, text: str) -> "AppOptions":
         data = json.loads(text)
-        names = {field.name for field in dataclasses.fields(cls)}
-        return cls(**{key: value for key, value in data.items() if key in names})
+        if not isinstance(data, dict):
+            raise TypeError("options record is not an object")
+        kept = {}
+        for field in dataclasses.fields(cls):
+            if field.name not in data:
+                continue
+            value = data[field.name]
+            # Reject wrong types as corrupt.
+            if not _field_type_ok(field.name, value):
+                raise TypeError(f"bad type for {field.name}")
+            kept[field.name] = value
+        return cls(**kept)
+
+
+def _field_type_ok(name: str, value: Any) -> bool:
+    """Match the JSON type to the field."""
+    if name == "cmsis_nn_ref":
+        return isinstance(value, str) and bool(value)
+    if name == "cmsis_nn_root":
+        return value is None or (isinstance(value, str) and bool(value))
+    return isinstance(value, bool)
 
 
 def _on_off(value: bool) -> str:

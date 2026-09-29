@@ -509,3 +509,26 @@ def test_failed_save_keeps_the_last_record(tmp_path: Path, monkeypatch) -> None:
         nsx_app.save_options(tmp_path, AppOptions())
     monkeypatch.undo()
     assert nsx_app.saved_options(tmp_path) == AppOptions(requantize_inline_asm=False)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        '{"requantize_inline_asm": "false"}',
+        '{"cmsis_nn_ref": 7}',
+        '{"cmsis_nn_ref": ""}',
+        '{"cmsis_nn_root": ["x"]}',
+        '{"enable_f16": 1}',
+        '["not", "an", "object"]',
+    ],
+)
+def test_malformed_saved_options_count_as_absent(tmp_path: Path, record: str) -> None:
+    """Wrong types never pick build settings."""
+    (tmp_path / nsx_app.OPTIONS_FILE).write_text(record, encoding="utf-8")
+    assert nsx_app.saved_options(tmp_path) is None
+
+
+def test_saved_options_round_trip(tmp_path: Path) -> None:
+    options = AppOptions(cmsis_nn_ref="v9", cmsis_nn_root=tmp_path, requantize_inline_asm=False)
+    nsx_app.save_options(tmp_path, options)
+    assert nsx_app.saved_options(tmp_path) == options
