@@ -4903,7 +4903,8 @@ def _build_data_movement_case(
 
 
 # Dispatch table: (family, operator) -> builder. Add new bridged ops here (and a matching
-# entry in assets/kernel_registry.yaml + a firmware handler) to extend hardware coverage.
+# registry row + adapter spec; see the header of assets/kernel_registry.yaml) to extend
+# hardware coverage.
 _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
     ("ConvolutionFunctions", "Convolve"): _build_convolve_case,
     ("ConvolutionFunctions", "DepthwiseConv"): _build_depthwise_conv_case,
