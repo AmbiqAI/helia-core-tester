@@ -94,6 +94,27 @@ static int drain_catalog_frames(hct_server_session_t *session)
     }
 }
 
+#ifdef HCT_HOST_PMU_STUB
+/* Match tests/fixtures/pmu_stub/pmu_stub.c readings. */
+#define STUB_CCNTR 1234u
+#define STUB_OVS 0x80000009u
+
+static uint32_t read_u32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/* Entry: empty name, event, value, flags. */
+static int check_stub_counter(const uint8_t *entry, int chained, uint32_t index)
+{
+    const uint16_t event_id = (uint16_t)entry[2] | ((uint16_t)entry[3] << 8);
+    const uint32_t slot = chained ? (2u * index + 1u) : index;
+    if (read_u32(&entry[4]) != event_id + (chained ? 0x10000u : 0u)) return 1;
+    if (entry[12] != ((STUB_OVS >> slot) & 1u)) return 2;
+    return entry[13] == 1u ? 0 : 3;
+}
+#endif
+
 int main(void)
 {
     static const int8_t kInput[] = {-12, -1, 0, 7, -99, 5, -8, 3, -4, 11, -2, 100};
@@ -104,6 +125,7 @@ int main(void)
     uint8_t outbound_payload[1024];
     size_t outbound_length = 0u;
     size_t offset = 0u;
+    size_t second_id_offset = 0u;
     uint32_t next_host_sequence = 0u;
     uint32_t blob_offset = 0u;
     uint32_t requested_offset = 0u;
@@ -135,6 +157,7 @@ int main(void)
     write_u8(inbound_payload, &offset, 1u);
     write_u8(inbound_payload, &offset, 2u);
     write_u16(inbound_payload, &offset, 0x0008u);
+    second_id_offset = offset;
     write_u16(inbound_payload, &offset, 0x0023u);
     write_text(inbound_payload, &offset, "mve_0");
     write_u8(inbound_payload, &offset, 0u);
@@ -142,6 +165,18 @@ int main(void)
     write_u16(inbound_payload, &offset, 0x0200u);
     write_text(inbound_payload, &offset, "abs_default_s8_stream_demo");
     write_u32(inbound_payload, &offset, 1u);
+#ifdef HCT_HOST_PMU_STUB
+    /* An id outside the module map fails. */
+    {
+        static hct_server_session_t probe;
+        memcpy(&probe, &session, sizeof(probe));
+        inbound_payload[second_id_offset] = 0x02u;
+        if (hct_server_session_accept_frame(&probe, inbound_frame, encode_frame(HCTP_MSG_SESSION_PLAN, probe.session_id, next_host_sequence, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_INVALID_ARGUMENT) return 43;
+        inbound_payload[second_id_offset] = 0x23u;
+    }
+#else
+    (void)second_id_offset;
+#endif
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_SESSION_PLAN, session.session_id, next_host_sequence++, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_OK) return 13;
     if (drain_single_message(&session, HCTP_MSG_REQUEST_CASE, outbound_payload, &outbound_length) != 0) return 14;
 
@@ -273,6 +308,9 @@ int main(void)
                 first_event = (uint16_t)p[pos + 2u] | ((uint16_t)p[pos + 3u] << 8);
                 first_supported = p[pos + 2u + 2u + 8u + 1u];
                 if (first_event != 0x0011u || first_supported != 1u) return 32;
+#ifdef HCT_HOST_PMU_STUB
+                if (read_u32(&p[pos + 4u]) != STUB_CCNTR || p[pos + 12u] != 1u) return 38;
+#endif
                 expected_counters = (strncmp(pass_name, "cpu_0", name_len) == 0) ? 3 : 2;
                 if (counter_count != expected_counters) return 33;
                 pos += 2u + 2u + 8u + 1u + 1u;
@@ -280,8 +318,13 @@ int main(void)
                     int index;
                     for (index = 1; index < counter_count; ++index)
                     {
+#ifdef HCT_HOST_PMU_STUB
+                        const int chained = strncmp(pass_name, "cpu_0", name_len) == 0;
+                        if (check_stub_counter(&p[pos], chained, (uint32_t)(index - 1)) != 0) return 39;
+#else
                         const uint8_t supported = p[pos + 2u + 2u + 8u + 1u];
                         if (supported != 0u) return 34;   /* no PMU on the host build */
+#endif
                         pos += 2u + 2u + 8u + 1u + 1u;
                     }
                 }
