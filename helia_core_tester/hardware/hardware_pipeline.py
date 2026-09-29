@@ -101,13 +101,11 @@ def parse_pmu_counters(values: Sequence[str]) -> PmuSelection:
     SESSION_PLAN (measurement.MAX_PASSES_PER_PLAN) -- all before any probe I/O.
     """
     selection: PmuSelection = {}
-    expanded: list[str] = []
+    if any(raw.strip().lower() == "all" for raw in values):
+        if len(values) > 1:
+            raise ValueError("--pmu-counters: bare 'all' already selects every group")
+        values = [f"{group}:all" for group in GROUPS]
     for raw in values:
-        if raw.strip().lower() == "all":
-            expanded.extend(f"{group}:all" for group in GROUPS)
-        else:
-            expanded.append(raw)
-    for raw in expanded:
         group, sep, spec = raw.partition(":")
         group = group.strip().lower()
         spec = spec.strip()

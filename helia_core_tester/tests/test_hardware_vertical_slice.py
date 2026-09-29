@@ -202,7 +202,7 @@ def test_every_group_all_runs_in_one_session_and_the_pass_limit_holds(tmp_path: 
     passes = counter_passes_for_selection({"cpu": "all", "memory": "all", "mve": "all"})
     assert len(passes) == 18 and MAX_PASSES_PER_PLAN == 32
     result = HostSession(FakeTargetTransport(), counter_passes=passes).run(bundle)
-    assert [s.pass_name for s in result.samples][::3] == [p.name for p in passes]
+    assert list(dict.fromkeys(s.pass_name for s in result.samples)) == [p.name for p in passes]
     assert len({c.name for s in result.samples for c in s.counters}) == 70
 
     # Firmware that advertises a lower max_passes (an older build) is refused at the

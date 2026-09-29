@@ -27,6 +27,7 @@ from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, load_case_bundle
 from helia_core_tester.hardware.fake_target import FakeTargetTransport
 from helia_core_tester.hardware.measurement import MAX_COUNTERS_PER_PASS, CounterPass, counter_passes_for_selection
+from helia_core_tester.hardware.pmu_catalog import counter_by_name
 from helia_core_tester.hardware.session import HostSession, SessionResult, TargetLimits
 from helia_core_tester.hardware.wire import CAP_PMU_ARMV8M, TargetInfo, session_plan_size
 
@@ -73,8 +74,8 @@ def test_host_constants_match_the_firmware_header() -> None:
 def test_run_case_bundles_refuses_more_passes_than_the_firmware_runs_before_opening_the_probe(tmp_path: Path, monkeypatch) -> None:
     # One pass over HCT_SERVER_MAX_PASSES: the runner must refuse before symbol
     # lookup / J-Link, naming the passes and the limit.
-    single = counter_passes_for_selection({"cpu": ["ARM_PMU_INST_RETIRED"]})[0].counters
-    passes = tuple(CounterPass("cpu", i, single) for i in range(measurement.MAX_PASSES_PER_PLAN + 1))
+    single = counter_by_name("ARM_PMU_INST_RETIRED")
+    passes = tuple(CounterPass("cpu", i, (single,)) for i in range(measurement.MAX_PASSES_PER_PLAN + 1))
     monkeypatch.setattr(session_runner, "open_rtt_session", lambda *a, **k: pytest.fail("probe opened"))
     with pytest.raises(ValueError, match=r"33 PMU passes planned \(cpu_0, .*cpu_32\) but the firmware runs at most 32 per SESSION_PLAN"):
         session_runner.run_case_bundles(

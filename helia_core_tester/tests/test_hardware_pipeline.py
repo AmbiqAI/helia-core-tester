@@ -140,8 +140,9 @@ def test_pmu_counters_parsing_and_deprecated_groups_alias() -> None:
     assert parse_pmu_counters(["cpu:all", "memory:all", "mve:all"]) == every
     assert parse_pmu_counters(["all"]) == parse_pmu_counters([" ALL "]) == every
     assert resolve_pmu_options(["all"], None) == every
-    with pytest.raises(ValueError, match="group 'cpu' given more than once"):
-        parse_pmu_counters(["all", "cpu:default"])
+    for mixed in (["all", "mve:default"], ["cpu:default", "all"]):
+        with pytest.raises(ValueError, match="bare 'all' already selects every group"):
+            parse_pmu_counters(mixed)
     # An empty or blank name list is rejected rather than silently timing cycles only.
     for empty in (["mve:,"], ["mve: , "], ["mve:ARM_PMU_MVE_STALL,"], ["mve:ARM_PMU_MVE_STALL,,ARM_PMU_MVE_PRED"]):
         with pytest.raises(ValueError, match=r"--pmu-counters: .* names an empty counter for group 'mve'"):
