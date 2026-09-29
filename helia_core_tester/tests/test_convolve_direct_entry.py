@@ -83,7 +83,7 @@ def test_cases_without_an_entry_render_no_entry_code(name: str, tmp_path: Path) 
 
 
 def test_entry_with_a_kernel_variant_hint_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="not supported with a kernel_variant hint or fault"):
+    with pytest.raises(ValueError, match="not supported with a kernel_variant hint"):
         _source("convolve_entry_small_cin3_8x8_k3x3_co16_s8", tmp_path, hint={"kernel_variant": "wrapper"})
 
 
