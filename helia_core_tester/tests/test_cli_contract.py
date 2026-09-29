@@ -405,3 +405,17 @@ def test_skip_flash_needs_a_saved_build(monkeypatch, tmp_path) -> None:
     result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash"])
     assert result.exit_code != 0 and not seen
     assert "needs a saved build" in _result_text(result)
+
+
+def test_skip_flash_refusal_is_one_line(monkeypatch, tmp_path) -> None:
+    """Refusals are errors, not tracebacks."""
+    from helia_core_tester.hardware import firmware_build, nsx_app
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_ref="v9"))
+    result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash"])
+    assert result.exit_code == 1
+    assert "Kernels changed since the build; rebuild first." in _result_text(result)
+    assert "Traceback" not in _result_text(result)

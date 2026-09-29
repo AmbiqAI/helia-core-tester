@@ -367,7 +367,9 @@ def run_hardware_pipeline(
         # Generate against the firmware's kernels.
         if skip_flash:
             if update_dependencies:
-                raise ValueError("--skip-flash cannot update dependencies.")
+                from .nsx_cli import HardwareBuildError
+
+                raise HardwareBuildError("--skip-flash cannot update dependencies.")
             # Board keeps the built image.
             kernel_root = built_kernels(board, resolved_build_dir, app_options)
         else:
