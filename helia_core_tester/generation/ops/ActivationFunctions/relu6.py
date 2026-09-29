@@ -7,6 +7,7 @@ import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase  
+from helia_core_tester.generation.harness.simple import tensor_case_pool
 
 
 class OpRelu6(OperationBase):
@@ -191,27 +192,9 @@ class OpRelu6(OperationBase):
         }
         
         # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("ActivationFunctions/relu6/relu6.h.j2", context)
-        h_path = includes_api_dir / f"{name}_relu6.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("ActivationFunctions/relu6/relu6.c.j2", context)
-        c_path = output_dir / f"{name}_relu6.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Relu6'),
-            'operator_name': 'relu6'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="relu6", context=context, pool=tensor_case_pool(context, {"input_offset": context["input_offset"], "output_offset": context["output_offset"], "output_multiplier": context["output_mult"], "output_shift": context["output_shift"], "act_min": context["act_min"], "act_max": context["act_max"], "output_size": context["output_size"]}),
+            validation_key="ActivationFunctions/relu6/relu6.c.j2", label="ReLU6", operator="Relu6",
+        )
         
         print(f"Generated C/H files and CMakeLists.txt for {name}")

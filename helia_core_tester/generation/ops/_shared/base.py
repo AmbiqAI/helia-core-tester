@@ -1127,6 +1127,25 @@ class OperationBase(ABC):
         source = env.get_template(self.HARNESS_SOURCE).render(**render_context)
         (output_dir / f"{name}_{stem}.c").write_text(source)
 
+    def render_harness_case(
+        self,
+        output_dir: Path,
+        *,
+        stem: str,
+        context: Dict[str, Any],
+        pool: Any,
+        validation_key: str,
+        label: str,
+        operator: str,
+        sidecar: bool = False,
+    ) -> None:
+        """render_harness_files plus the case's CMakeLists.txt, for the operators that used to
+        write their own template pair (and, with `sidecar`, the JSON sidecar)."""
+        self.render_harness_files(output_dir, stem=stem, context=context, pool=pool, validation_key=validation_key,
+                                  label=label, sidecar=sidecar)
+        cmake_context = {"name": context["name"], "operator": self.desc.get("operator", operator), "operator_name": stem}
+        (output_dir / "CMakeLists.txt").write_text(self.render_template("common/CMakeLists.txt.j2", cmake_context))
+
     def render_template(
         self, template_path: str, context: Dict[str, Any], return_context: bool = False
     ):
