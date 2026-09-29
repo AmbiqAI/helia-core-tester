@@ -89,6 +89,13 @@ def _steps(calls: list[tuple]) -> list[str]:
     return [call[0] for call in calls]
 
 
+def _cli(build_dir: Path, command: str, *flags: str) -> str:
+    serial = [] if command == "build" else ["--serial-no", str(SERIAL)]
+    result = runner.invoke(app, ["hardware", command, "--build-dir", str(build_dir), *serial, *flags])
+    assert result.exit_code == 0, result.output
+    return result.output
+
+
 def test_first_build_runs_every_step_in_order(tmp_path: Path, nsx: list[tuple]) -> None:
     elf = firmware_build.build_firmware(BOARD, build_dir=tmp_path, jobs=4)
     assert elf == firmware_build.elf_path(tmp_path)
@@ -197,25 +204,42 @@ def test_force_reconfigure_resyncs(tmp_path: Path, nsx: list[tuple]) -> None:
     assert _steps(nsx) == ["render", "sync", "configure", "build"]
 
 
-def test_changed_options_are_named(tmp_path: Path, nsx: list[tuple], capsys) -> None:
+def test_changed_options_are_named(tmp_path: Path, nsx: list[tuple]) -> None:
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert "Options changed" not in capsys.readouterr().out
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path, options=AppOptions(requantize_inline_asm=False))
-    out = capsys.readouterr().out
+    assert nsx_app.saved_options(firmware_build.nsx_app_dir(tmp_path)) == AppOptions()
+    out = _cli(tmp_path, "build")
+    assert "Options changed" not in out and "inline asm on" in out
+    out = _cli(tmp_path, "build", "--no-inline-asm")
     assert "Options changed, rebuilding: requantize inline asm on -> off" in out
     assert "Kernels: ns-cmsis-nn v7.35.1, inline asm off" in out
-    saved = nsx_app.saved_options(firmware_build.nsx_app_dir(tmp_path))
-    assert saved == AppOptions(requantize_inline_asm=False)
+    assert nsx_app.saved_options(firmware_build.nsx_app_dir(tmp_path)) == AppOptions(requantize_inline_asm=False)
 
 
-def test_template_edit_is_not_an_options_change(tmp_path: Path, nsx: list[tuple], capsys) -> None:
+def test_template_edit_is_not_an_options_change(tmp_path: Path, nsx: list[tuple]) -> None:
     """Values, not rendered text, are compared."""
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    _cli(tmp_path, "build")
     (firmware_build.nsx_app_dir(tmp_path) / "CMakeLists.txt").write_text("# older template\n", encoding="utf-8")
-    capsys.readouterr()
+    out = _cli(tmp_path, "build")
+    assert "Options changed" not in out and "No saved build options" not in out
+
+
+def test_failed_build_keeps_saved_options(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert "Options changed" not in capsys.readouterr().out
+
+    def broken(app_dir, **kwargs):
+        raise RuntimeError("compile error")
+
+    monkeypatch.setattr(nsx_cli, "build_app", broken)
+    with pytest.raises(RuntimeError):
+        firmware_build.build_firmware(BOARD, build_dir=tmp_path, options=AppOptions(requantize_inline_asm=False))
+    assert nsx_app.saved_options(firmware_build.nsx_app_dir(tmp_path)) == AppOptions()
+
+
+def test_unsaved_build_dir_says_defaults(tmp_path: Path, nsx: list[tuple]) -> None:
+    """Build dirs from before saved options."""
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    (firmware_build.nsx_app_dir(tmp_path) / nsx_app.OPTIONS_FILE).unlink()
+    assert "No saved build options; using defaults." in _cli(tmp_path, "build")
 
 
 def test_options_round_trip_json(tmp_path: Path) -> None:
@@ -393,12 +417,6 @@ def test_kernel_ref_and_root_are_exclusive(tmp_path: Path) -> None:
 # --- saved options: flash what was built --------------------------------------------
 
 
-def _save(build_dir: Path, options: AppOptions) -> None:
-    app_dir = firmware_build.nsx_app_dir(build_dir)
-    app_dir.mkdir(parents=True, exist_ok=True)
-    (app_dir / nsx_app.OPTIONS_FILE).write_text(options.to_json(), encoding="utf-8")
-
-
 @pytest.fixture
 def bench(tmp_path: Path, nsx: list[tuple], monkeypatch) -> dict:
     """Fake image per render; fake board."""
@@ -426,13 +444,6 @@ def bench(tmp_path: Path, nsx: list[tuple], monkeypatch) -> dict:
     return board
 
 
-def _cli(build_dir: Path, command: str, *flags: str) -> str:
-    serial = [] if command == "build" else ["--serial-no", str(SERIAL)]
-    result = runner.invoke(app, ["hardware", command, "--build-dir", str(build_dir), *serial, *flags])
-    assert result.exit_code == 0, result.output
-    return result.output
-
-
 def test_bare_flash_flashes_what_was_built(tmp_path: Path, nsx: list[tuple], bench: dict) -> None:
     build_dir = tmp_path / "build"
     _cli(build_dir, "build", "--no-inline-asm")
@@ -457,7 +468,8 @@ def test_bare_flash_flashes_what_was_built(tmp_path: Path, nsx: list[tuple], ben
 def test_flags_override_saved_options(tmp_path: Path) -> None:
     app_dir = firmware_build.nsx_app_dir(tmp_path)
     kernels = make_checkout(tmp_path / "kernels")
-    _save(tmp_path, AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False))
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False))
     resolve = lambda **flags: nsx_app.resolve_options(app_dir, tmp_path, **flags)  # noqa: E731
     assert resolve() == AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False)
     assert resolve(cmsis_nn_ref="v2") == AppOptions(cmsis_nn_ref="v2", requantize_inline_asm=False)
@@ -477,7 +489,9 @@ def test_no_saved_options_use_defaults(tmp_path: Path) -> None:
 
 
 def test_missing_saved_root_fails_clearly(tmp_path: Path) -> None:
-    _save(tmp_path, AppOptions(cmsis_nn_root=tmp_path / "moved"))
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, AppOptions(cmsis_nn_root=tmp_path / "moved"))
     result = runner.invoke(app, ["hardware", "build", "--build-dir", str(tmp_path)])
     assert result.exit_code == 1
     assert "kernel root is gone" in result.output and "--cmsis-nn-root" in result.output

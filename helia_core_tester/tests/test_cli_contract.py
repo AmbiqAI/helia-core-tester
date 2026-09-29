@@ -11,6 +11,14 @@ from helia_core_tester.cli import app
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _no_saved_options(monkeypatch, tmp_path) -> None:
+    """Keep the real build dir out."""
+    from helia_core_tester.hardware import cli as hardware_cli
+
+    monkeypatch.setattr(hardware_cli, "repo_root", lambda: tmp_path / "repo")
+
+
 def _result_text(result) -> str:
     text = ""
     for attr in ("output", "stdout", "stderr"):
@@ -321,10 +329,27 @@ def test_inline_asm_flag_is_tri_state(monkeypatch, tmp_path, command) -> None:
     monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _capture)
     app_dir = firmware_build.nsx_app_dir(tmp_path)
     app_dir.mkdir(parents=True)
-    (app_dir / nsx_app.OPTIONS_FILE).write_text(
-        nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=False).to_json(), encoding="utf-8",
-    )
+    nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=False))
     base = ["hardware", command, "--build-dir", str(tmp_path)]
     for flags, inline_asm in (([], False), (["--inline-asm"], True), (["--no-inline-asm"], False)):
         runner.invoke(app, base + flags)
         assert seen["options"] == nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=inline_asm), flags
+
+
+def test_stream_only_run_skips_option_resolution(monkeypatch, tmp_path) -> None:
+    """A gone kernel root cannot block streaming."""
+    from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    seen: dict = {}
+
+    def _pipeline(*args, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _pipeline)
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_root=tmp_path / "moved", requantize_inline_asm=False))
+    result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-generate", "--skip-flash"])
+    assert seen["app_options"] is None and "inline asm off" in _result_text(result)

@@ -353,7 +353,7 @@ def run_hardware_pipeline(
     if skip_flash and force_flash:
         raise ValueError("--skip-flash and --force-flash cannot be combined.")
     resolved_build_dir = resolve_build_dir(repo_root, board, build_dir)
-    if app_options is None:
+    if app_options is None and not (skip_generate and skip_flash):
         from .nsx_app import resolve_options
 
         # Same resolution as the CLI.

@@ -55,9 +55,10 @@ CHECKOUT_DIRS = ("Include", "Source")
 CHECKOUT_FILES = ("nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
 KERNEL_SHIM = "# Shim: delegates to the native ns-cmsis-nn NSX build.\nadd_subdirectory(nsx)\n"
 
-# Options the last staged build used.
+# Options the last successful build used.
 OPTIONS_FILE = ".hct-options.json"
 
+# Holds one flush burst; rarely blocks.
 RTT_BUFFER_SIZE_UP = 8192
 RTT_BUFFER_SIZE_DOWN = 512
 
@@ -130,9 +131,7 @@ class AppOptions:
         return changes
 
     def to_json(self) -> str:
-        data = dataclasses.asdict(self)
-        data["cmsis_nn_root"] = self.cmsis_nn_root and str(self.cmsis_nn_root)
-        return json.dumps(data, indent=2) + "\n"
+        return json.dumps(dataclasses.asdict(self), indent=2, default=str) + "\n"
 
     @classmethod
     def from_json(cls, text: str) -> "AppOptions":
@@ -141,8 +140,8 @@ class AppOptions:
         return cls(**{key: value for key, value in data.items() if key in names})
 
 
-def _on_off(value: Any) -> str:
-    return ("on" if value else "off") if isinstance(value, bool) else str(value)
+def _on_off(value: bool) -> str:
+    return "on" if value else "off"
 
 
 def saved_options(app_dir: Path) -> Optional[AppOptions]:
@@ -151,6 +150,10 @@ def saved_options(app_dir: Path) -> Optional[AppOptions]:
         return AppOptions.from_json((app_dir / OPTIONS_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError, AttributeError):
         return None
+
+
+def save_options(app_dir: Path, options: AppOptions) -> None:
+    (app_dir / OPTIONS_FILE).write_text(options.to_json(), encoding="utf-8")
 
 
 def resolve_options(

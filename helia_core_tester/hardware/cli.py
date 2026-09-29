@@ -149,17 +149,34 @@ _INLINE_ASM_HELP = (
 def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
     """Kernel flags over the build dir's saved options."""
     from .firmware_build import nsx_app_dir
-    from .nsx_app import AppRenderError, resolve_options
+    from .nsx_app import AppRenderError, resolve_options, saved_options
 
     if cmsis_nn_ref and cmsis_nn_root:
         _fail("Pass --cmsis-nn-ref or --cmsis-nn-root, not both.")
+    app_dir = nsx_app_dir(build_dir)
     try:
-        return resolve_options(
-            nsx_app_dir(build_dir), repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root,
-            inline_asm=inline_asm,
+        options = resolve_options(
+            app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
         )
     except AppRenderError as exc:
         _fail(f"{exc}; pass --cmsis-nn-root or --cmsis-nn-ref.")
+    saved = saved_options(app_dir)
+    # Compare values: templates embed paths.
+    changes = options.changes_from(saved) if saved else []
+    if changes:
+        typer.echo(f"[hardware] Options changed, rebuilding: {'; '.join(changes)}", err=True)
+    elif saved is None and (app_dir / "nsx.yml").is_file():
+        typer.echo("[hardware] No saved build options; using defaults.", err=True)
+    return options
+
+
+def _saved_kernels(build_dir: Path, echo) -> None:
+    """Print the kernels the build dir built."""
+    from .firmware_build import nsx_app_dir
+    from .nsx_app import saved_options
+
+    saved = saved_options(nsx_app_dir(build_dir))
+    echo(f"[hardware] Kernels: {saved.summary() if saved else 'unknown, no saved options'}")
 
 
 # --- boards / probes ---------------------------------------------------------------
@@ -396,9 +413,8 @@ def stream(
     buffer), each batch run over its own fresh reset-on-open RTT session and merged into
     one result bundle.
     """
-    from .firmware_build import nsx_app_dir, resolve_build_dir
+    from .firmware_build import resolve_build_dir
     from .hardware_pipeline import finalize_timing, stream_generated_tests
-    from .nsx_app import saved_options
 
     # Options first, probe last: a bad flag combination must fail with its own
     # message, not with whatever probe enumeration happens to hit.
@@ -407,9 +423,7 @@ def stream(
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
-    # Stream measures the saved build.
-    saved = saved_options(nsx_app_dir(build_dir))
-    echo(f"[hardware] Kernels: {saved.summary() if saved else 'unknown, no saved options'}")
+    _saved_kernels(build_dir, echo)
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
         outcome = stream_generated_tests(
             repo_root(), spec, serial, build_dir=build_dir,
@@ -457,9 +471,13 @@ def run(
     spec = _board(board)
     options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
-    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
+    # Neither builds nor generates: nothing to resolve.
+    streams_only = skip_generate and skip_flash
+    app_options = None if streams_only else _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
+    if streams_only:
+        _saved_kernels(build_dir, echo)
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
         outcome = run_hardware_pipeline(
             repo_root(), spec, serial, options=options, build_dir=build_dir,

@@ -299,16 +299,11 @@ def stage_kernels(
 ) -> Path:
     """Render, lock, sync; return the kernel source."""
     from . import nsx_cli
-    from .nsx_app import OPTIONS_FILE, AppOptions, kernel_dir, render_app, saved_options
+    from .nsx_app import AppOptions, kernel_dir, render_app
 
     options = options or AppOptions()
     app_dir = nsx_app_dir(build_dir)
     typer.echo(f"[hardware] Kernels: {options.summary()}")
-    saved = saved_options(app_dir)
-    # Compare values: templates embed paths.
-    changes = options.changes_from(saved) if saved else []
-    if changes:
-        typer.echo(f"[hardware] Options changed, rebuilding: {'; '.join(changes)}")
     render_app(board, options, app_dir, repo_root=tester_repo_root())
     # Kernel edits change the vendored hash.
     relock = update_dependencies or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
@@ -330,7 +325,6 @@ def stage_kernels(
         stamp.write_text(nsx_cli.sync_stamp(app_dir), encoding="utf-8")
     else:
         typer.echo("[hardware] NSX modules unchanged; skipping lock and sync.")
-    (app_dir / OPTIONS_FILE).write_text(options.to_json(), encoding="utf-8")
     # Generation needs Tests/, absent when vendored.
     return options.cmsis_nn_root or kernel_dir(app_dir, options)
 
@@ -351,6 +345,7 @@ def build_firmware(
 ) -> Path:
     """Build hct_benchmark_server through NSX; returns the ELF path."""
     from . import nsx_cli
+    from .nsx_app import AppOptions, save_options
 
     ensure_build_tools(tester_repo_root())
     stage_kernels(
@@ -366,6 +361,8 @@ def build_firmware(
         typer.echo(f"[hardware] Reusing configured build dir: {build_dir}")
     # Ninja's default, not NSX's fixed 8.
     nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=_jobs(jobs), frozen=True)
+    # Record only what actually built.
+    save_options(app_dir, options or AppOptions())
     return elf_path(build_dir)
 
 

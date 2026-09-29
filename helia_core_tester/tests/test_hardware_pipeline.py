@@ -545,7 +545,7 @@ def test_run_generates_from_the_saved_kernels(tmp_path: Path, monkeypatch) -> No
     saved = nsx_app.AppOptions(cmsis_nn_root=make_checkout(tmp_path / "kernels"), requantize_inline_asm=False)
     app_dir = firmware_build.nsx_app_dir(build_dir)
     app_dir.mkdir(parents=True)
-    (app_dir / nsx_app.OPTIONS_FILE).write_text(saved.to_json(), encoding="utf-8")
+    nsx_app.save_options(app_dir, saved)
     seen: dict = {}
 
     def _stage(spec, *, options, **kwargs):
