@@ -81,6 +81,11 @@ def render_parity_assert(decl: FunctionDecl) -> str:
     )
 
 
+def load_current_contracts() -> ContractSet:
+    """The kernel contract of the resolved ns-cmsis-nn checkout (`absent` when it has none)."""
+    return load_contract_set(resolve_cmsis_nn_root())
+
+
 def contract_globals(loader: Optional[Callable[[], ContractSet]] = None) -> dict[str, Callable]:
     """Jinja globals bound to a lazily loaded contract set (default: the resolved
     ns-cmsis-nn checkout). Loading happens on first use so templates that never call
@@ -89,7 +94,7 @@ def contract_globals(loader: Optional[Callable[[], ContractSet]] = None) -> dict
 
     def contracts() -> ContractSet:
         if "set" not in cache:
-            cache["set"] = loader() if loader is not None else load_contract_set(resolve_cmsis_nn_root())
+            cache["set"] = loader() if loader is not None else load_current_contracts()
         return cache["set"]
 
     def require(symbol: str) -> FunctionDecl:

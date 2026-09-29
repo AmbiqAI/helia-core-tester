@@ -7,7 +7,8 @@ import numpy as np
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
-from helia_core_tester.generation.kernel_dispatch import resolve_direct_entry, resolve_fully_connected_kernel
+from helia_core_tester.generation.entry import resolve_entry
+from helia_core_tester.generation.kernel_dispatch import resolve_fully_connected_kernel
 from helia_core_tester.core.cpu_targets import get_cpu_profile
 import keras
 from pathlib import Path
@@ -238,11 +239,13 @@ class OpFullyConnected(OperationBase):
             if self.desc.get("fault"):
                 raise ValueError(f"{self.desc.get('name')}: entry {entry!r} is not supported with fault")
             info.update(
-                resolve_direct_entry(
+                resolve_entry(
                     "FullyConnected",
                     str(entry),
-                    self.desc.get("activation_dtype", "S8"),
-                    self.desc.get("weight_dtype", "S8"),
+                    activation_dtype=self.desc.get("activation_dtype", "S8"),
+                    weight_dtype=self.desc.get("weight_dtype", "S8"),
+                    cpu=self.target_cpu,
+                    desc=self.desc,
                 )
             )
         return info

@@ -13,7 +13,8 @@ from helia_core_tester.generation.ops._shared.bias_init import (
     bias_is_hoisted_by_lowering,
     inject_hoisted_dilation_bias,
 )
-from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel, resolve_direct_entry
+from helia_core_tester.generation.entry import resolve_entry
+from helia_core_tester.generation.kernel_dispatch import resolve_convolve_kernel
 
 
 class OpConvolve(OperationBase):
@@ -319,11 +320,13 @@ class OpConvolve(OperationBase):
                     f"{self.desc.get('name')}: entry {entry!r} is not supported with a kernel_variant hint or fault"
                 )
             info.update(
-                resolve_direct_entry(
+                resolve_entry(
                     "Convolve",
                     str(entry),
-                    self.desc.get("activation_dtype", "S8"),
-                    self.desc.get("weight_dtype", "S8"),
+                    activation_dtype=self.desc.get("activation_dtype", "S8"),
+                    weight_dtype=self.desc.get("weight_dtype", "S8"),
+                    cpu=self.target_cpu,
+                    desc=self.desc,
                 )
             )
             return info

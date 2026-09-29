@@ -170,6 +170,8 @@ def _required_kernel_symbols(desc: Dict[str, Any]) -> list[str]:
     raw = list(raw)
     if desc.get("entry"):
         raw.append(desc["entry"])
+    if desc.get("entry_sizer"):
+        raw.append(desc["entry_sizer"])
     if desc.get("planar_supported") is not None:
         raw.append(DEPTHWISE_CONV_S8_PLANAR_RULE)
     ordered: list[str] = []
