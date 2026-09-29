@@ -79,17 +79,17 @@ def test_committed_adapters_c_matches_fresh_render() -> None:
 
 
 def test_only_kernel_calls_count_in_a_sample() -> None:
-    """Setup calls stay outside the timed window; every kernel call, including the
-    hand-written s8 convolve dispatch, is routed through HCT_TIMED()."""
-    timed = timed_kernel_calls("\n".join(spec.c_body for spec in FIRMWARE_ADAPTERS))
+    """Setup calls stay outside the timed window; every kernel call the rendered
+    adapters make is routed through HCT_TIMED()."""
+    text = ADAPTERS_C_PATH.read_text(encoding="utf-8")
+    timed = timed_kernel_calls(text)
     for setup in ("arm_convolve_weight_sum", "arm_vector_sum_s8", "arm_convolve_s8_get_buffer_size",
                   "arm_transpose_conv_s8_get_reverse_conv_buffer_size"):
         assert setup not in timed
-    for kernel in ("hct_dispatch_convolve_s8", "arm_fully_connected_wrapper_s8", "arm_transpose_conv_wrapper_s8",
+    for kernel in ("arm_convolve_s8", "arm_fully_connected_wrapper_s8", "arm_transpose_conv_wrapper_s8",
                    "arm_concatenation_s8_x"):
         assert kernel in timed
-    assert "arm_convolve_s8" not in timed, "names in comments are not calls"
-    text = ADAPTERS_C_PATH.read_text(encoding="utf-8")
+    assert timed_kernel_calls("/* arm_relu_s8(x) */ arm_relu_s16(y);") == ["arm_relu_s16"]
     for name in timed:
         assert f"#define {name}(...) HCT_TIMED({name}(__VA_ARGS__))" in text
 

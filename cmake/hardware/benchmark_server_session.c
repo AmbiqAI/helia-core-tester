@@ -393,9 +393,6 @@ static hctp_status_t pump_correctness_output(hct_server_session_t *session)
 
 hct_window_t hct_window;
 
-/* Set by pmu_pass_program(); zero without PMU. */
-static uint32_t s_pass_mask;
-
 #ifdef HELIA_HARDWARE_BUILD
 static void enable_dwt(void)
 {
@@ -422,14 +419,12 @@ static void window_arm(void)
     hct_window.dwt_off = ctrl & ~DWT_CTRL_CYCCNTENA_Msk;
     DWT->CTRL = hct_window.dwt_off;
 #endif
-    hct_window.pmu_mask = s_pass_mask;
     hct_window.armed = true;
 }
 
 static void window_disarm(void)
 {
     hct_window.armed = false;
-    hct_window.pmu_mask = 0u;
 #ifdef HELIA_HARDWARE_BUILD
     DWT->CTRL = hct_window.dwt_on;
 #endif
@@ -483,7 +478,7 @@ static void pmu_pass_program(const hct_pmu_pass_t *pass)
     /* SESSION_PLAN checks make this succeed. */
     (void)nsx_pmu_init(&s_pmu_cfg);
     /* The module allocates slots from 0. */
-    s_pass_mask = HCT_PMU_CCNTR_BIT | ((1u << (pass->chained ? 2u * pass->count : pass->count)) - 1u);
+    hct_window.pmu_mask = HCT_PMU_CCNTR_BIT | ((1u << (pass->chained ? 2u * pass->count : pass->count)) - 1u);
     /* Its overflow IRQ handler clears OVS. */
     ARM_PMU_Set_CNTR_IRQ_Disable(0xFFFFFFFFu);
     ARM_PMU_Disable();
@@ -493,7 +488,7 @@ static void pmu_pass_program(const hct_pmu_pass_t *pass)
 static void pmu_sample_start(void)
 {
     nsx_pmu_reset_counters();
-    ARM_PMU_CNTR_Disable(s_pass_mask);
+    ARM_PMU_CNTR_Disable(hct_window.pmu_mask);
     ARM_PMU_Enable();
 }
 
@@ -772,20 +767,16 @@ arm_cmsis_nn_status hct_run_abs_once(hct_server_session_t *session)
                                      (int32_t)(input->byte_length / sizeof(int16_t))));
 #endif
     }
-    {
-        hct_abs_s8_request_t request;
-        request.input = (const int8_t *)blob_ptr(session, input);
-        request.input_offset = session->input_offset;
-        request.output = (int8_t *)hct_output_ptr(session);
-        request.output_offset = session->output_offset;
-        request.output_multiplier = session->out_mult;
-        request.output_shift = session->out_shift;
-        request.activation_min = session->activation_min;
-        request.activation_max = session->activation_max;
-        request.block_size = (int32_t)input->byte_length;
-        request.needs_rescale = (uint8_t)(session->needs_rescale != 0);
-        return HCT_TIMED(hct_dispatch_abs_s8(&request));
-    }
+    return HCT_TIMED(arm_abs_s8((const int8_t *)blob_ptr(session, input),
+                                session->input_offset,
+                                (int8_t *)hct_output_ptr(session),
+                                session->output_offset,
+                                session->out_mult,
+                                session->out_shift,
+                                session->needs_rescale != 0,
+                                session->activation_min,
+                                session->activation_max,
+                                (int32_t)input->byte_length));
 }
 
 #ifdef HCT_HOST_ABS_ONLY
@@ -1200,8 +1191,8 @@ __attribute__((noinline)) static bool time_one_sample(hct_server_session_t *sess
     uint32_t iter;
     uint32_t start;
     uint32_t end;
-    pmu_sample_start();
     window_arm();
+    pmu_sample_start();
     start = dwt_cycles();
     /* resolve_iterations never returns 0. */
     iter = 0u;
@@ -1217,8 +1208,8 @@ __attribute__((noinline)) static bool time_one_sample(hct_server_session_t *sess
         }
     } while (++iter < iterations);
     end = dwt_cycles();
-    window_disarm();
     pmu_sample_stop(pass, end - start, out);
+    window_disarm();
     *elapsed = end - start;
     return true;
 }

@@ -60,6 +60,7 @@ static float quant_scale_from_bits(int32_t bits);
 #define arm_concatenation_s8_z(...) HCT_TIMED(arm_concatenation_s8_z(__VA_ARGS__))
 #define arm_convolve_f16(...) HCT_TIMED(arm_convolve_f16(__VA_ARGS__))
 #define arm_convolve_f32(...) HCT_TIMED(arm_convolve_f32(__VA_ARGS__))
+#define arm_convolve_s8(...) HCT_TIMED(arm_convolve_s8(__VA_ARGS__))
 #define arm_convolve_wrapper_s16(...) HCT_TIMED(arm_convolve_wrapper_s16(__VA_ARGS__))
 #define arm_convolve_wrapper_s4(...) HCT_TIMED(arm_convolve_wrapper_s4(__VA_ARGS__))
 #define arm_depth_to_space_s16(...) HCT_TIMED(arm_depth_to_space_s16(__VA_ARGS__))
@@ -198,7 +199,6 @@ static float quant_scale_from_bits(int32_t bits);
 #define arm_transpose_s8(...) HCT_TIMED(arm_transpose_s8(__VA_ARGS__))
 #define arm_where_s16(...) HCT_TIMED(arm_where_s16(__VA_ARGS__))
 #define arm_where_s8(...) HCT_TIMED(arm_where_s8(__VA_ARGS__))
-#define hct_dispatch_convolve_s8(...) HCT_TIMED(hct_dispatch_convolve_s8(__VA_ARGS__))
 #ifndef HCT_HOST_ABS_ONLY
 
 static hctp_status_t compute_convolve_output_dims(const hct_server_session_t *session,
@@ -466,7 +466,6 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
          * (via arm_convolve_weight_sum()) placed in its own scratch region, distinct from
          * the general im2col-style `ctx` scratch above. */
         cmsis_nn_context weight_sum_ctx;
-        hct_convolve_s8_request_t request;
         int32_t required_scratch;
         uint32_t weight_sum_relative_offset;
         uint32_t weight_sum_bytes;
@@ -514,20 +513,19 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        request.ctx = &ctx;
-        request.weight_sum_ctx = &weight_sum_ctx;
-        request.conv_params = &conv_params;
-        request.quant_params = &quant_params;
-        request.input_dims = &input_dims;
-        request.input_data = (const int8_t *)blob_ptr(session, input);
-        request.filter_dims = &filter_dims;
-        request.filter_data = (const int8_t *)blob_ptr(session, weights);
-        request.bias_dims = &bias_dims;
-        request.bias_data = (const int32_t *)blob_ptr(session, bias);
-        request.upscale_dims = NULL;
-        request.output_dims = &output_dims;
-        request.output_data = (int8_t *)hct_output_ptr(session);
-        return hct_dispatch_convolve_s8(&request);
+        return arm_convolve_s8(&ctx,
+                               &weight_sum_ctx,
+                               &conv_params,
+                               &quant_params,
+                               &input_dims,
+                               (const int8_t *)blob_ptr(session, input),
+                               &filter_dims,
+                               (const int8_t *)blob_ptr(session, weights),
+                               &bias_dims,
+                               (const int32_t *)blob_ptr(session, bias),
+                               NULL,
+                               &output_dims,
+                               (int8_t *)hct_output_ptr(session));
     }
 }
 
