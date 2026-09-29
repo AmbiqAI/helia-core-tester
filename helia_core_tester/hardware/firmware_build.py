@@ -296,6 +296,7 @@ def stage_kernels(
     options: Optional["AppOptions"] = None,
     force_sync: bool = False,
     update_dependencies: bool = False,
+    repo_root: Optional[Path] = None,
 ) -> Path:
     """Render, lock, sync; return the kernel source."""
     from . import nsx_cli
@@ -305,7 +306,7 @@ def stage_kernels(
     app_dir = nsx_app_dir(build_dir)
     asm = "on" if options.requantize_inline_asm else "off"
     typer.echo(f"[hardware] Kernels: {options.kernel_source()}, inline asm {asm}")
-    rendered = render_app(board, options, app_dir, repo_root=tester_repo_root())
+    rendered = render_app(board, options, app_dir, repo_root=repo_root or tester_repo_root())
     if rendered.changed:
         names = ", ".join(rendered.changed)
         typer.echo(f"[hardware] WARNING: build options changed since the last build ({names}).", err=True)
