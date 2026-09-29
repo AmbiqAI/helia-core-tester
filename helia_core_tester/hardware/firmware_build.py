@@ -27,7 +27,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Iterator, Optional
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional
 
 import typer
 
@@ -290,6 +290,8 @@ def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
 SYNC_STAMP = ".hct-sync"
 # Last good build: lock, kernel tree.
 BUILT_LOCK = ".hct-built-lock"
+# Last good build: NSX version, checkout.
+BUILT_INFO = ".hct-built-info"
 
 
 def stage_kernels(
@@ -383,11 +385,50 @@ def _built_record(app_dir: Path, options: "AppOptions") -> dict[str, str]:
     }
 
 
+def _checkout_state(root: Optional[Path]) -> dict[str, Any]:
+    """Kernel checkout HEAD and dirty flag."""
+    from ..generation.reuse import _git_output, _is_git_toplevel
+    from .nsx_app import KERNEL_TREES
+
+    if root is None or not _is_git_toplevel(root):
+        return {"root_head": None, "root_dirty": None}
+    head = _git_output(root, "rev-parse", "HEAD")
+    # Only the copied trees matter.
+    status = _git_output(root, "status", "--porcelain", "--", *KERNEL_TREES, "nsx")
+    return {
+        "root_head": head.strip() if head else None,
+        "root_dirty": None if status is None else bool(status.strip()),
+    }
+
+
+def _replace_json(path: Path, data: dict[str, Any]) -> None:
+    """Replace a record atomically."""
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def _record_built(app_dir: Path, options: "AppOptions") -> None:
-    """Replace the record atomically."""
-    tmp = app_dir / f"{BUILT_LOCK}.tmp"
-    tmp.write_text(json.dumps(_built_record(app_dir, options)), encoding="utf-8")
-    os.replace(tmp, app_dir / BUILT_LOCK)
+    """Record what the build used."""
+    from . import nsx_cli
+
+    _replace_json(app_dir / BUILT_LOCK, _built_record(app_dir, options))
+    info = {"nsx_version": nsx_cli.nsx_version(), **_checkout_state(options.cmsis_nn_root)}
+    _replace_json(app_dir / BUILT_INFO, info)
+
+
+def _read_record(path: Path) -> dict[str, Any]:
+    """A JSON record, or empty."""
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
+def built_record(app_dir: Path) -> dict[str, Any]:
+    """Everything the last build recorded."""
+    return {**_read_record(app_dir / BUILT_INFO), **_read_record(app_dir / BUILT_LOCK)}
 
 
 def built_kernels(board: BoardSpec, build_dir: Path, options: "AppOptions") -> Path:
@@ -396,14 +437,10 @@ def built_kernels(board: BoardSpec, build_dir: Path, options: "AppOptions") -> P
     from .nsx_app import kernel_dir, kernels_match
 
     app_dir = nsx_app_dir(build_dir)
-    try:
-        built = json.loads((app_dir / BUILT_LOCK).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        built = None
+    built = _read_record(app_dir / BUILT_LOCK)
     # Relock, resync, or hand edits.
     if (
-        not isinstance(built, dict)
-        or not built.get("lock")
+        not built.get("lock")
         or built != _built_record(app_dir, options)
         or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
     ):
