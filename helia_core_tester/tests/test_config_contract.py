@@ -219,3 +219,59 @@ def test_coverage_mve_float_allowed_for_m55_float_coverage(tmp_path: Path) -> No
     )
 
     assert cfg.coverage_mve_float is True
+
+
+def test_coverage_mve_int_requires_coverage(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+
+    with pytest.raises(ConfigurationError, match="--coverage-mve-int requires --coverage"):
+        Config(
+            project_root=root,
+            cpu="cortex-m55",
+            suite="int",
+            coverage_mve_int=True,
+            _explicit_overrides={"project_root", "cpu", "suite", "coverage_mve_int"},
+        )
+
+
+def test_coverage_mve_int_requires_int_suite(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+
+    with pytest.raises(ConfigurationError, match="--coverage-mve-int requires --suite int"):
+        Config(
+            project_root=root,
+            cpu="cortex-m55",
+            suite="float",
+            coverage=True,
+            coverage_mve_int=True,
+            _explicit_overrides={"project_root", "cpu", "suite", "coverage", "coverage_mve_int"},
+        )
+
+
+def test_coverage_mve_int_requires_cortex_m55(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+
+    with pytest.raises(ConfigurationError, match="--coverage-mve-int is only supported for cortex-m55"):
+        Config(
+            project_root=root,
+            cpu="cortex-m4",
+            suite="int",
+            coverage=True,
+            coverage_mve_int=True,
+            _explicit_overrides={"project_root", "cpu", "suite", "coverage", "coverage_mve_int"},
+        )
+
+
+def test_coverage_mve_int_allowed_for_m55_int_coverage(tmp_path: Path) -> None:
+    root = _init_repo_root(tmp_path)
+
+    cfg = Config(
+        project_root=root,
+        cpu="cortex-m55",
+        suite="both",
+        coverage=True,
+        coverage_mve_int=True,
+        _explicit_overrides={"project_root", "cpu", "suite", "coverage", "coverage_mve_int"},
+    )
+
+    assert cfg.coverage_mve_int is True

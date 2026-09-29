@@ -13,6 +13,7 @@ set(NEURALSPOTX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../neuralspotx" CACHE PA
 set(TARGET_CPU "" CACHE STRING "Target CPU override (e.g. cortex-m55)")
 option(ENABLE_COVERAGE "Enable GCC freestanding coverage for ns-cmsis-nn" OFF)
 option(ENABLE_COVERAGE_MVE_FLOAT "Enable float MVE paths during coverage builds" OFF)
+option(ENABLE_COVERAGE_MVE_INT "Enable integer MVE paths during coverage builds" OFF)
 option(HELIA_BUILD_GENERATED_TESTS "Build descriptor-generated standalone test executables" ON)
 option(HELIA_BUILD_UNIVERSAL_SIZE_PROBE "Build the phase-0 universal firmware size probe" OFF)
 option(HELIA_BUILD_HARDWARE_BENCHMARK_SERVER "Build the streaming benchmark-server firmware skeleton" OFF)
@@ -224,39 +225,30 @@ if(ENABLE_COVERAGE)
   if(NOT TARGET cmsis-nn)
     message(FATAL_ERROR "ENABLE_COVERAGE requested but target cmsis-nn was not created")
   endif()
-  if(ENABLE_COVERAGE_MVE_FLOAT AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^cortex-m55(\\+|$)")
-    message(FATAL_ERROR "ENABLE_COVERAGE_MVE_FLOAT is only supported for cortex-m55")
-  endif()
+  foreach(_mve_opt ENABLE_COVERAGE_MVE_FLOAT ENABLE_COVERAGE_MVE_INT)
+    if(${_mve_opt} AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^cortex-m55(\\+|$)")
+      message(FATAL_ERROR "${_mve_opt} is only supported for cortex-m55")
+    endif()
+  endforeach()
   # Instrument ns-cmsis-nn only; keep harness sources uninstrumented.
   # Cached coverage objects can embed another build directory's gcda paths.
   set_property(TARGET cmsis-nn PROPERTY C_COMPILER_LAUNCHER "")
   target_compile_options(cmsis-nn PRIVATE --coverage -fprofile-info-section -O0 -g)
-  if(NOT ENABLE_COVERAGE_MVE_FLOAT)
+  if(NOT ENABLE_COVERAGE_MVE_FLOAT AND NOT ENABLE_COVERAGE_MVE_INT)
     # Avoid inline MVE asm paths that can fail register allocation under gcov instrumentation.
     target_compile_definitions(cmsis-nn PRIVATE ARM_MATH_AUTOVECTORIZE)
   else()
-    # Float MVE coverage requested. ARM_MATH_AUTOVECTORIZE keeps ARM_MATH_MVEI defined
-    # (integer inline asm with a C fallback) but suppresses ARM_MATH_MVEF, so a
-    # target-wide define would erase the float MVE paths we want to measure. Scope the
-    # define to the non-float (integer) sources only: their register-heavy inline asm
-    # falls back to C (avoiding gcov register-allocation failures), while the float
-    # sources keep ARM_MATH_MVEF and compile their real MVE paths for coverage.
+    # Scope the define per source (cmake/coverage_autovectorize.cmake).
     if(CMAKE_VERSION VERSION_LESS "3.18")
       message(FATAL_ERROR
-        "ENABLE_COVERAGE_MVE_FLOAT requires CMake >= 3.18 "
+        "ENABLE_COVERAGE_MVE_FLOAT and ENABLE_COVERAGE_MVE_INT require CMake >= 3.18 "
         "(set_source_files_properties TARGET_DIRECTORY); found ${CMAKE_VERSION}")
     endif()
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/coverage_autovectorize.cmake")
     get_target_property(_nn_srcs cmsis-nn SOURCES)
-    set(_nn_int_srcs "")
-    foreach(_s IN LISTS _nn_srcs)
-      # Classify by filename suffix; anchor to end so float-output integer-input
-      # files (e.g. arm_dequantize_s8_f32.c) are correctly treated as float.
-      if(NOT _s MATCHES "_(f16|f32|fp16|flt)\\.c$")
-        list(APPEND _nn_int_srcs "${_s}")
-      endif()
-    endforeach()
-    if(_nn_int_srcs)
-      set_source_files_properties(${_nn_int_srcs}
+    helia_coverage_autovectorize_sources(_nn_autovectorize_srcs ${_nn_srcs})
+    if(_nn_autovectorize_srcs)
+      set_source_files_properties(${_nn_autovectorize_srcs}
         TARGET_DIRECTORY cmsis-nn
         PROPERTIES COMPILE_DEFINITIONS ARM_MATH_AUTOVECTORIZE)
     endif()
@@ -455,6 +447,11 @@ add_library(helia_test_runtime STATIC src/test_runtime/helia_test_runtime.c)
 target_include_directories(helia_test_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_definitions(helia_test_runtime PRIVATE $<IF:$<BOOL:${HELIA_HARDWARE_BUILD}>,HELIA_HARDWARE_BUILD,USING_FVP_CORSTONE_300>)
 target_link_libraries(helia_test_runtime PRIVATE cmsis-nn)
+if(ENABLE_COVERAGE AND NOT ENABLE_COVERAGE_MVE_INT)
+  # This build gives ns-cmsis-nn's integer sources ARM_MATH_AUTOVECTORIZE, which compiles out their
+  # MVE integer paths; a harness whose entry lives only on those paths expects it to decline.
+  target_compile_definitions(helia_test_runtime PUBLIC HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
+endif()
 
 # ---------- Helpers ----------
 function(_normalize_target_name out_var in_path)
