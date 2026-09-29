@@ -95,7 +95,7 @@ def convolve_argument_pool(context: Dict[str, Any], *, has_biases: bool, bias_is
         declarations=(Declaration(f"{n}_weight_sum_ctx", "cmsis_nn_context", storage="static",
                                   comment="Weight sum context (precomputed input-offset/bias fold)"),),
         buffers=(GuardedBuffer(f"{n}_weight_sum_buffer", "uint8_t", f"{upper}_WEIGHT_SUM_BUFFER_SIZE",
-                               f"({context['output_dims']['c']} * sizeof(int32_t))", label="weight_sum"),),
+                               count_value=f"({context['output_dims']['c']} * sizeof(int32_t))", label="weight_sum"),),
         setup=(f"    // Initialize weight sum context and buffer\n"
                f"    {n}_weight_sum_ctx.buf = {n}_weight_sum_buffer;\n"
                f"    {n}_weight_sum_ctx.size = {upper}_WEIGHT_SUM_BUFFER_SIZE;\n\n"

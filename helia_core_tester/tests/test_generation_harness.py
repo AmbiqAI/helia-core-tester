@@ -15,6 +15,7 @@ from helia_core_tester.generation.harness import (
     GuardedBuffer,
     HarnessError,
     Provider,
+    RuleCheck,
     plan_harness,
     render_declaration,
 )
@@ -25,14 +26,15 @@ def _decl(name: str, *params: str, returns: str = "arm_cmsis_nn_status") -> Func
                         params=tuple(ParamDecl(p, "const int8_t *", "in") for p in params))
 
 
+RULE = _decl("arm_fx_rule", "input_dims", returns="int32_t")
 KERNEL = _decl("arm_fx_kernel_s8", "ctx", "weight_sum_ctx", "input_dims", "input_data", "output_data")
 PLAIN = _decl("arm_fx_plain_s8", "ctx", "input_data", "output")
 SIZER = _decl("arm_fx_kernel_s8_get_buffer_size", "input_dims", returns="int32_t")
 CONTRACTS = ContractSet(status=STATUS_PRESENT, root=None, path=None,
-                        functions={d.name: d for d in (KERNEL, PLAIN, SIZER)})
+                        functions={d.name: d for d in (KERNEL, PLAIN, SIZER, RULE)})
 WEIGHT_SUM = Provider(param="weight_sum_ctx", expr="&c_ws_ctx",
                       declarations=(Declaration("c_ws_ctx", "cmsis_nn_context", storage="static"),),
-                      buffers=(GuardedBuffer("c_ws_buffer", "uint8_t", "C_WS_SIZE", "(4 * sizeof(int32_t))", "weight_sum"),),
+                      buffers=(GuardedBuffer("c_ws_buffer", "uint8_t", "C_WS_SIZE", count_value="(4 * sizeof(int32_t))", label="weight_sum"),),
                       setup="    c_ws_ctx.buf = c_ws_buffer;")
 
 
@@ -59,6 +61,20 @@ def test_providers_appear_only_when_the_prototype_takes_them() -> None:
     plan = plan_harness(_pool(), kernel_fn="arm_fx_plain_s8", sizer_fn=None, scratch_bytes=0, contracts=CONTRACTS)
     assert plan.providers == [] and plan.sizer_call is None and plan.scratch_bytes == 0
     assert "output /* output */" in plan.run_call  # the output_data value answers to its alias
+
+
+def test_rule_checks_bind_from_the_pool() -> None:
+    plan = plan_harness(_pool(checks=(RuleCheck("arm_fx_rule", 0, "rule_ok"),)), kernel_fn="arm_fx_plain_s8",
+                        sizer_fn=None, scratch_bytes=0, contracts=CONTRACTS, indent="    ")
+    assert plan.checks == [("rule_ok", "arm_fx_rule(\n    &c_in_dims /* input_dims */\n)", "arm_fx_rule", 0)]
+    assert plan_harness(_pool(), kernel_fn="arm_fx_plain_s8", sizer_fn=None, scratch_bytes=0,
+                        contracts=CONTRACTS).checks == []
+
+
+def test_a_rule_the_pool_cannot_feed_is_refused() -> None:
+    with pytest.raises(ContractBindError, match=r"cannot supply \['input_dims"):
+        plan_harness(_pool(values={"ctx": "&c_ctx"}, checks=(RuleCheck("arm_fx_rule", 1, "r"),)),
+                     kernel_fn="arm_fx_plain_s8", sizer_fn=None, scratch_bytes=0, contracts=CONTRACTS)
 
 
 @pytest.mark.parametrize("sizer, scratch, message", [
@@ -94,6 +110,8 @@ def test_plan_fails_closed_on_the_contract() -> None:
     ({"values": {"weight_sum_ctx": "&x"}}, "both a pool value and a provider"),
     ({"values": {"input_data": "x"}}, "supplied per call site"),
     ({"values": {"ctx": "  "}}, "pool value 'ctx' is empty"),
+    ({"checks": (RuleCheck("arm_fx_rule", 1, "2bad"),)}, "rule check variable '2bad' is not a free C identifier"),
+    ({"checks": (RuleCheck("arm_fx_rule", 1, "c_in_dims"),)}, "rule check variable 'c_in_dims'"),
 ])
 def test_pool_validation(overrides: dict, message: str) -> None:
     with pytest.raises(HarnessError, match=message):

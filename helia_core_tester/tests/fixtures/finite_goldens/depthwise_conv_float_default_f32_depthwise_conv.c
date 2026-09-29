@@ -5,6 +5,7 @@
 #include "test_runtime/helia_test_runtime.h"
 
 
+
 // The kernel this harness links must have the prototype the ns-cmsis-nn export records.
 _Static_assert(__builtin_types_compatible_p(__typeof__(arm_depthwise_conv_f32), arm_cmsis_nn_status (const cmsis_nn_context *, const cmsis_nn_dw_conv_params_f32 *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, float32_t *, arm_nn_tensor_layout)),
                "arm_depthwise_conv_f32: prototype differs from the kernel contract export; rerun `python3 scripts/check_kernel_contract.py export` in ns-cmsis-nn and regenerate");
@@ -13,7 +14,6 @@ _Static_assert(__builtin_types_compatible_p(__typeof__(arm_depthwise_conv_f32), 
 static cmsis_nn_context depthwise_conv_float_default_f32_ctx;
 
 // Runtime scratch buffer (max upper bound; actual size queried at runtime)
-// Buffer size calculated conservatively to handle MVE and DSP implementations
 #define DEPTHWISE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX 1024
 static struct {
     uint8_t head[HELIA_GUARD_BYTES];
@@ -33,16 +33,17 @@ static struct {
 
 // Bias dimensions: bias shape is [1, 1, 1, C_OUT]
 static const cmsis_nn_dims depthwise_conv_float_default_f32_bias_dims = {
-    .n = 1, .h = 1,
-    .w = 1, .c = 3
+    .n = 1,
+    .h = 1,
+    .w = 1,
+    .c = 3
 };
 
 int32_t depthwise_conv_float_default_f32_run(
     const float* __restrict input,
     float* __restrict output
 ) {
-    
-    // Calculate required buffer size
+        // Calculate required buffer size
     int32_t required_buffer_size = arm_depthwise_conv_f32_get_buffer_size(
         &depthwise_conv_float_default_f32_dw_conv_params, /* dw_conv_params */
         &depthwise_conv_float_default_f32_input_dims, /* input_dims */
@@ -55,28 +56,19 @@ int32_t depthwise_conv_float_default_f32_run(
     // report a fabricated breach instead of the real sizer error (#68).
     HELIA_GUARD_ARM(depthwise_conv_float_default_f32_buffer, true /* pure scratch: poison to catch read-before-write */);
     HELIA_GUARD_STAMP_SLACK(depthwise_conv_float_default_f32_buffer, 0u);
-    // The slack is stamped as wholly unused here so that an early return from the
-    // capacity check below leaves every canary in a checked state; it is re-stamped
-    // with the real size once the context is populated (#68).
 
-
-    // The sizer's answer is checked before it becomes a context size (#133). A negative
-    // answer is the documented out-of-range sentinel and never a usable size; an answer
-    // above this case's static means our generation-time bound and the shipped kernel
-    // disagree. They are separate failures because they have separate owners.
+    // The sizer's answer is checked before it becomes a context size (#133): a negative
+    // answer is the documented out-of-range sentinel, and one above this case's static bound
+    // means the generation-time bound and the shipped kernel disagree.
     HELIA_VALIDATE_SIZER("arm_depthwise_conv_f32_get_buffer_size", required_buffer_size);
     HELIA_VALIDATE_SIZER_FITS("arm_depthwise_conv_f32_get_buffer_size", required_buffer_size, DEPTHWISE_CONV_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
 
     // Initialize context buffer
-    // Armed unconditionally: force_no_scratch bypasses depthwise_conv_float_default_f32_buffer entirely,
-    // but guarding/poisoning it here regardless is harmless either way.
     depthwise_conv_float_default_f32_ctx.buf = depthwise_conv_float_default_f32_buffer;
     depthwise_conv_float_default_f32_ctx.size = required_buffer_size;
     HELIA_GUARD_STAMP_SLACK(depthwise_conv_float_default_f32_buffer, depthwise_conv_float_default_f32_ctx.buf == depthwise_conv_float_default_f32_buffer ? (size_t)depthwise_conv_float_default_f32_ctx.size : 0u);
 
-
-    // Call depthwise convolution kernel
-    arm_cmsis_nn_status kernel_status = arm_depthwise_conv_f32(
+    return arm_depthwise_conv_f32(
         &depthwise_conv_float_default_f32_ctx, /* ctx */
         &depthwise_conv_float_default_f32_dw_conv_params, /* dw_conv_params */
         &depthwise_conv_float_default_f32_input_dims, /* input_dims */
@@ -89,9 +81,8 @@ int32_t depthwise_conv_float_default_f32_run(
         output, /* output */
         ARM_NN_LAYOUT_NHWC /* layout */
     );
-
-    return kernel_status;
 }
+
 
 int32_t depthwise_conv_float_default_f32_test_case_run(void)
 {

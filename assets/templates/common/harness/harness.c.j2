@@ -11,9 +11,11 @@
 {% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 {% from "common/standalone/validation.j2" import validation_outputs with context %}
 
+{% if harness_benchmark %}
 {% include "common/standalone/benchmark.j2" %}
 
 {% set supports_benchmark = true %}
+{% endif %}
 {% set label = validation_label | default(harness_label) %}
 
 // The kernel this harness links must have the prototype the ns-cmsis-nn export records.
@@ -31,8 +33,10 @@ static cmsis_nn_context {{ name }}_ctx;
 {{ declaration }}
 {% endfor %}
 {% for buffer in block.buffers %}
-#define {{ buffer.count_macro }} {{ buffer.count_value }}
-{{ helia_guard_declare(buffer.ctype, buffer.name, buffer.count_macro) }}
+{% if buffer.count_value %}
+#define {{ buffer.count }} {{ buffer.count_value }}
+{% endif %}
+{{ helia_guard_declare(buffer.ctype, buffer.name, buffer.count) }}
 {% endfor %}
 {% endfor %}
 
@@ -75,8 +79,14 @@ static cmsis_nn_context {{ name }}_ctx;
     {% endif %}
 
     // Initialize context buffer
+    {% if force_no_scratch | default(false) %}
+    // force_no_scratch: the kernel gets no scratch buffer ({{ name }}_buffer stays armed and unused).
+    {{ name }}_ctx.buf = NULL;
+    {{ name }}_ctx.size = 0;
+    {% else %}
     {{ name }}_ctx.buf = {{ name }}_buffer;
     {{ name }}_ctx.size = required_buffer_size;
+    {% endif %}
     HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
     {% for block in harness.providers %}
 
@@ -91,6 +101,7 @@ int32_t {{ name }}_run(
     return {{ harness.run_call }};
 }
 
+{% if harness_benchmark %}
 #ifdef HELIA_BENCHMARK_MODE
 // --benchmark support: {{name}}_bench_init() is the one-time buffer/context/provider set-up
 // (untimed); {{name}}_bench_op() is only the kernel call (timed; see common/standalone/benchmark.j2).
@@ -130,6 +141,7 @@ static int32_t {{ name }}_benchmark_run(void)
 }
 {% endif %}
 #endif // HELIA_BENCHMARK_MODE
+{% endif %}
 
 int32_t {{ name }}_test_case_run(void)
 {
@@ -146,6 +158,13 @@ int32_t {{ name }}_test_case_run(void)
     {% endif %}
     int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
     int failures = 0;
+    {% for result_var, call, fn, expected in harness.checks %}
+    int32_t {{ result_var }} = {{ call }};
+    if ({{ result_var }} != {{ expected }}) {
+        printf("{{ fn }} returned %ld, expected {{ expected }}\r\n", (long){{ result_var }});
+        ++failures;
+    }
+    {% endfor %}
     HELIA_GUARD_CHECK({{ name }}_buffer, "{{ label }} scratch", failures);
     HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ label }} scratch slack", {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u, failures);
     {% for block in harness.providers %}
