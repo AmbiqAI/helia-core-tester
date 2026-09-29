@@ -83,6 +83,17 @@ def lock_is_current(app_dir: Path, board: str) -> bool:
     )
 
 
+def lock_digest(app_dir: Path) -> Optional[str]:
+    """sha256 of nsx.lock, if present."""
+    path = lock_path(app_dir)
+    return hash_file(path) if path.is_file() else None
+
+
+def tree_hash(root: Path) -> str:
+    """NSX's content hash of a tree."""
+    return hash_tree(root)
+
+
 def modules_present(app_dir: Path, board: str) -> bool:
     """Every locked module is on disk."""
     try:

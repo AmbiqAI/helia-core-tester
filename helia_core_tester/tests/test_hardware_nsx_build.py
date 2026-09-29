@@ -5,6 +5,7 @@ Every nsx_cli step is monkeypatched; nothing here runs NSX or CMake.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 from pathlib import Path
@@ -86,6 +87,13 @@ def _use_jlink(monkeypatch, path: str | None) -> None:
 
 def _steps(calls: list[tuple]) -> list[str]:
     return [call[0] for call in calls]
+
+
+def _cli(build_dir: Path, command: str, *flags: str) -> str:
+    serial = [] if command == "build" else ["--serial-no", str(SERIAL)]
+    result = runner.invoke(app, ["hardware", command, "--build-dir", str(build_dir), *serial, *flags])
+    assert result.exit_code == 0, result.output
+    return result.output
 
 
 def test_first_build_runs_every_step_in_order(tmp_path: Path, nsx: list[tuple]) -> None:
@@ -196,15 +204,53 @@ def test_force_reconfigure_resyncs(tmp_path: Path, nsx: list[tuple]) -> None:
     assert _steps(nsx) == ["render", "sync", "configure", "build"]
 
 
-def test_changed_options_warn(tmp_path: Path, nsx: list[tuple], capsys) -> None:
+def test_changed_options_are_named(tmp_path: Path, nsx: list[tuple]) -> None:
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert "WARNING" not in capsys.readouterr().err
+    assert nsx_app.saved_options(firmware_build.nsx_app_dir(tmp_path)) == AppOptions()
+    out = _cli(tmp_path, "build")
+    assert "Options changed" not in out and "inline asm on" in out
+    out = _cli(tmp_path, "build", "--no-inline-asm")
+    assert "Options changed, rebuilding: requantize inline asm on -> off" in out
+    assert "Kernels: ns-cmsis-nn v7.35.1, inline asm off" in out
+    assert nsx_app.saved_options(firmware_build.nsx_app_dir(tmp_path)) == AppOptions(requantize_inline_asm=False)
+
+
+def test_template_edit_is_not_an_options_change(tmp_path: Path, nsx: list[tuple]) -> None:
+    """Values, not rendered text, are compared."""
+    _cli(tmp_path, "build")
+    (firmware_build.nsx_app_dir(tmp_path) / "CMakeLists.txt").write_text("# older template\n", encoding="utf-8")
+    out = _cli(tmp_path, "build")
+    assert "Options changed" not in out and "No saved build options" not in out
+
+
+def test_failed_build_keeps_saved_options(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
     firmware_build.build_firmware(BOARD, build_dir=tmp_path)
-    assert "WARNING" not in capsys.readouterr().err
-    firmware_build.build_firmware(BOARD, build_dir=tmp_path, options=AppOptions(requantize_inline_asm=False))
-    out = capsys.readouterr()
-    assert "build options changed since the last build (CMakeLists.txt)" in out.err
-    assert "inline asm off" in out.out
+
+    def broken(app_dir, **kwargs):
+        raise RuntimeError("compile error")
+
+    monkeypatch.setattr(nsx_cli, "build_app", broken)
+    stamp = firmware_build.nsx_app_dir(tmp_path) / firmware_build.BUILT_LOCK
+    built = stamp.read_text(encoding="utf-8")
+    monkeypatch.setattr(nsx_cli, "lock_digest", lambda _app: "relocked")
+    with pytest.raises(RuntimeError):
+        firmware_build.build_firmware(BOARD, build_dir=tmp_path, options=AppOptions(requantize_inline_asm=False))
+    assert nsx_app.saved_options(firmware_build.nsx_app_dir(tmp_path)) == AppOptions()
+    # Only a finished build moves it.
+    assert stamp.read_text(encoding="utf-8") == built
+
+
+def test_unsaved_build_dir_says_defaults(tmp_path: Path, nsx: list[tuple]) -> None:
+    """Build dirs from before saved options."""
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    (firmware_build.nsx_app_dir(tmp_path) / nsx_app.OPTIONS_FILE).unlink()
+    assert "No saved build options; using defaults." in _cli(tmp_path, "build")
+
+
+def test_options_round_trip_json(tmp_path: Path) -> None:
+    options = AppOptions(cmsis_nn_root=make_checkout(tmp_path / "k"), requantize_inline_asm=False)
+    assert AppOptions.from_json(options.to_json()) == options
+    assert AppOptions.from_json(AppOptions().to_json()) == AppOptions()
 
 
 def test_old_path_cache_is_dropped(tmp_path: Path, nsx: list[tuple]) -> None:
@@ -328,7 +374,7 @@ def test_build_flags_reach_app_options(tmp_path: Path, monkeypatch) -> None:
     assert seen["update_dependencies"] is True and seen["force_reconfigure"] is True and seen["jobs"] == 3
 
 
-def test_run_flags_reach_the_pipeline(monkeypatch) -> None:
+def test_run_flags_reach_the_pipeline(tmp_path: Path, monkeypatch) -> None:
     seen: dict = {}
 
     def _pipeline(*args, **kwargs):
@@ -337,7 +383,9 @@ def test_run_flags_reach_the_pipeline(monkeypatch) -> None:
 
     monkeypatch.setenv("HPX_JLINK_SERIAL", str(SERIAL))
     monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _pipeline)
-    result = runner.invoke(app, ["hardware", "run", "--skip-generate", "--cmsis-nn-ref", "v1.0.0"])
+    result = runner.invoke(app, [
+        "hardware", "run", "--skip-generate", "--cmsis-nn-ref", "v1.0.0", "--build-dir", str(tmp_path),
+    ])
     assert result.exit_code == 1
     assert seen["app_options"] == AppOptions(cmsis_nn_ref="v1.0.0")
     assert seen["update_dependencies"] is False
@@ -369,3 +417,135 @@ def test_kernel_ref_and_root_are_exclusive(tmp_path: Path) -> None:
     result = runner.invoke(app, ["hardware", "build", "--cmsis-nn-ref", "v1", "--cmsis-nn-root", str(tmp_path)])
     assert result.exit_code == 1
     assert "not both" in result.output
+
+
+# --- saved options: flash what was built --------------------------------------------
+
+
+@pytest.fixture
+def bench(tmp_path: Path, nsx: list[tuple], monkeypatch) -> dict:
+    """Fake image per render; fake board."""
+    board: dict = {}
+
+    def build_app(app_dir, *, board, build_dir, jobs=None, frozen=False):
+        nsx.append(("build", jobs, frozen))
+        image = (app_dir / "CMakeLists.txt").read_bytes()
+        firmware_build.elf_path(build_dir).parent.mkdir(parents=True, exist_ok=True)
+        firmware_build.elf_path(build_dir).write_bytes(image)
+        firmware_build.build_id_path(build_dir).write_text(f"hct-{hashlib.sha256(image).hexdigest()[:8]}\n", encoding="utf-8")
+
+    def flash_app(app_dir, *, build_dir, **kwargs):
+        board["id"] = firmware_build.read_build_id(build_dir)
+
+    def reader(spec, serial, build_dir):
+        return board["id"]
+
+    real_flash = firmware_build.flash_firmware
+    monkeypatch.setattr(nsx_cli, "build_app", build_app)
+    monkeypatch.setattr(nsx_cli, "flash_app", flash_app)
+    monkeypatch.setattr(
+        firmware_build, "flash_firmware", lambda *a, **k: real_flash(*a, board_build_id_reader=reader, **k),
+    )
+    return board
+
+
+def test_bare_flash_flashes_what_was_built(tmp_path: Path, nsx: list[tuple], bench: dict) -> None:
+    build_dir = tmp_path / "build"
+    _cli(build_dir, "build", "--no-inline-asm")
+    built = firmware_build.read_build_id(build_dir)
+
+    nsx.clear()
+    out = _cli(build_dir, "flash")
+    assert "inline asm off" in out and "Options changed" not in out
+    assert "Firmware flashed successfully" in out and bench["id"] == built
+    # No relock, resync or reconfigure.
+    assert _steps(nsx) == ["render", "build"] and nsx[0][1].requantize_inline_asm is False
+
+    out = _cli(build_dir, "flash")
+    assert f"board confirmed build id {built}" in out and "already up to date" in out
+
+    out = _cli(build_dir, "flash", "--inline-asm")
+    assert "Options changed, rebuilding: requantize inline asm off -> on" in out
+    assert "Firmware flashed successfully" in out and bench["id"] != built
+    assert nsx_app.saved_options(firmware_build.nsx_app_dir(build_dir)).requantize_inline_asm is True
+
+
+def test_flags_override_saved_options(tmp_path: Path) -> None:
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    kernels = make_checkout(tmp_path / "kernels")
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False))
+    resolve = lambda **flags: nsx_app.resolve_options(app_dir, tmp_path, **flags)  # noqa: E731
+    assert resolve() == AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False)
+    assert resolve(cmsis_nn_ref="v2") == AppOptions(cmsis_nn_ref="v2", requantize_inline_asm=False)
+    assert resolve(inline_asm=True) == AppOptions(cmsis_nn_root=kernels)
+
+
+def test_no_saved_options_use_defaults(tmp_path: Path) -> None:
+    kernels, tester = _nested_layout(tmp_path)
+    app_dir = firmware_build.nsx_app_dir(tmp_path / "build")
+    assert nsx_app.resolve_options(app_dir, tester) == AppOptions(cmsis_nn_root=kernels.resolve())
+    # A corrupt file counts as absent.
+    app_dir.mkdir(parents=True)
+    (app_dir / nsx_app.OPTIONS_FILE).write_text("{not json", encoding="utf-8")
+    assert nsx_app.resolve_options(app_dir, tester, inline_asm=False) == AppOptions(
+        cmsis_nn_root=kernels.resolve(), requantize_inline_asm=False,
+    )
+
+
+def test_missing_saved_root_fails_clearly(tmp_path: Path) -> None:
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, AppOptions(cmsis_nn_root=tmp_path / "moved"))
+    result = runner.invoke(app, ["hardware", "build", "--build-dir", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "kernel root is gone" in result.output and "--cmsis-nn-root" in result.output
+
+
+def test_failed_save_keeps_the_last_record(tmp_path: Path, monkeypatch) -> None:
+    """A torn write never replaces it."""
+    nsx_app.save_options(tmp_path, AppOptions(requantize_inline_asm=False))
+
+    def _torn(self, text, encoding=None):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", _torn)
+    with pytest.raises(OSError):
+        nsx_app.save_options(tmp_path, AppOptions())
+    monkeypatch.undo()
+    assert nsx_app.saved_options(tmp_path) == AppOptions(requantize_inline_asm=False)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        '{"requantize_inline_asm": "false"}',
+        '{"cmsis_nn_ref": 7}',
+        '{"cmsis_nn_ref": ""}',
+        '{"cmsis_nn_root": ["x"]}',
+        '{"enable_f16": 1}',
+        '["not", "an", "object"]',
+    ],
+)
+def test_malformed_saved_options_count_as_absent(tmp_path: Path, record: str) -> None:
+    """Wrong types never pick build settings."""
+    (tmp_path / nsx_app.OPTIONS_FILE).write_text(record, encoding="utf-8")
+    assert nsx_app.saved_options(tmp_path) is None
+
+
+def test_saved_options_round_trip(tmp_path: Path) -> None:
+    options = AppOptions(cmsis_nn_ref="v9", cmsis_nn_root=tmp_path, requantize_inline_asm=False)
+    nsx_app.save_options(tmp_path, options)
+    assert nsx_app.saved_options(tmp_path) == options
+
+
+def test_build_records_the_lock_and_kernels(tmp_path: Path, nsx: list[tuple], monkeypatch) -> None:
+    import json
+
+    monkeypatch.setattr(nsx_cli, "lock_digest", lambda _app: "abc123")
+    monkeypatch.setattr(nsx_cli, "tree_hash", lambda _root: "tree456")
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    nsx_app.kernel_dir(app_dir, AppOptions()).mkdir(parents=True)
+    firmware_build.build_firmware(BOARD, build_dir=tmp_path)
+    stamp = app_dir / firmware_build.BUILT_LOCK
+    assert json.loads(stamp.read_text(encoding="utf-8")) == {"lock": "abc123", "kernels": "tree456"}

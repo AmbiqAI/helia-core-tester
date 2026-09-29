@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from helia_core_tester.hardware.nsx_cli import HardwareBuildError
 from helia_core_tester.hardware import firmware_build, nsx_cli
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, load_case_bundle
@@ -536,6 +537,37 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
         )
 
 
+def test_run_generates_from_the_saved_kernels(tmp_path: Path, monkeypatch) -> None:
+    """Generator and firmware use one resolution."""
+    from helia_core_tester.hardware import hardware_pipeline, nsx_app
+    from helia_core_tester.tests.test_hardware_nsx_app import make_checkout
+
+    build_dir = tmp_path / "bd"
+    saved = nsx_app.AppOptions(cmsis_nn_root=make_checkout(tmp_path / "kernels"), requantize_inline_asm=False)
+    app_dir = firmware_build.nsx_app_dir(build_dir)
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, saved)
+    seen: dict = {}
+
+    def _stage(spec, *, options, **kwargs):
+        seen["stage"] = options
+        return options.cmsis_nn_root
+
+    def _flash(spec, serial, *, options, **kwargs):
+        seen["flash"] = options
+        return FlashDecision(False, "abc", "test")
+
+    monkeypatch.setattr(hardware_pipeline, "generate_tests_for_board", lambda *a, cmsis_nn_root, **k: seen.update(generate=cmsis_nn_root))
+    monkeypatch.setattr(hardware_pipeline, "stage_kernels", _stage)
+    monkeypatch.setattr(hardware_pipeline, "flash_firmware", _flash)
+    monkeypatch.setattr(
+        hardware_pipeline, "stream_generated_tests",
+        lambda *a, **k: hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[]),
+    )
+    run_hardware_pipeline(tmp_path, BOARD, SERIAL, options=StreamOptions(), build_dir=build_dir, echo=lambda _msg: None)
+    assert seen == {"stage": saved, "generate": saved.cmsis_nn_root, "flash": saved}
+
+
 def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeypatch) -> None:
     from helia_core_tester.hardware import hardware_pipeline
 
@@ -617,3 +649,102 @@ def test_stdout_to_stderr_covers_python_and_subprocess_output(capfd) -> None:
     assert "python-line" in err and "child-line" in err
     assert "python-line" not in out and "child-line" not in out
     assert "after-line" in out
+
+
+def _skip_flash_run(tmp_path: Path, monkeypatch, build_dir: Path, **kwargs) -> dict:
+    """Run --skip-flash; capture what generation saw."""
+    from helia_core_tester.hardware import hardware_pipeline
+
+    seen: dict = {}
+
+    def _no_stage(*args, **kwargs):
+        raise AssertionError("--skip-flash must not restage kernels")
+
+    monkeypatch.setattr(hardware_pipeline, "stage_kernels", _no_stage)
+    monkeypatch.setattr(hardware_pipeline, "generate_tests_for_board", lambda *a, cmsis_nn_root, **k: seen.update(generate=cmsis_nn_root))
+    monkeypatch.setattr(
+        hardware_pipeline, "stream_generated_tests",
+        lambda *a, **k: hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[]),
+    )
+    run_hardware_pipeline(
+        tmp_path, BOARD, SERIAL, options=StreamOptions(), build_dir=build_dir, skip_flash=True, echo=lambda _msg: None, **kwargs,
+    )
+    return seen
+
+
+def _built_app(tmp_path: Path, monkeypatch, *, digest: str = "d1", current: bool = True):
+    from helia_core_tester.hardware import firmware_build, nsx_cli
+
+    build_dir = tmp_path / "bd"
+    app_dir = firmware_build.nsx_app_dir(build_dir)
+    app_dir.mkdir(parents=True)
+    (app_dir / firmware_build.BUILT_LOCK).write_text('{"lock": "d1", "kernels": "k1"}', encoding="utf-8")
+    monkeypatch.setattr(nsx_cli, "lock_digest", lambda _app: digest)
+    monkeypatch.setattr(nsx_cli, "lock_is_current", lambda _app, _board: current)
+    monkeypatch.setattr(nsx_cli, "tree_hash", lambda _root: "k1")
+    return build_dir, app_dir
+
+
+def test_skip_flash_generates_from_the_built_pinned_kernels(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.hardware import nsx_app
+
+    build_dir, app_dir = _built_app(tmp_path, monkeypatch)
+    options = nsx_app.AppOptions(cmsis_nn_ref="v9")
+    nsx_app.kernel_dir(app_dir, options).mkdir(parents=True)
+    seen = _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=options)
+    assert seen["generate"] == nsx_app.kernel_dir(app_dir, options)
+
+
+def test_skip_flash_refuses_edits_in_the_synced_kernels(tmp_path: Path, monkeypatch) -> None:
+    """Hand edits under modules/ are caught."""
+    from helia_core_tester.hardware import nsx_app, nsx_cli
+
+    build_dir, app_dir = _built_app(tmp_path, monkeypatch)
+    options = nsx_app.AppOptions(cmsis_nn_ref="v9")
+    nsx_app.kernel_dir(app_dir, options).mkdir(parents=True)
+    monkeypatch.setattr(nsx_cli, "tree_hash", lambda _root: "k2")
+    with pytest.raises(HardwareBuildError, match="Kernels changed since the build"):
+        _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=options)
+
+
+@pytest.mark.parametrize("digest, current", [("d2", True), ("d1", False), (None, True)])
+def test_skip_flash_refuses_a_moved_lock(tmp_path: Path, monkeypatch, digest, current) -> None:
+    """A relock or resync after the build."""
+    from helia_core_tester.hardware import nsx_app
+
+    build_dir, _ = _built_app(tmp_path, monkeypatch, digest=digest, current=current)
+    with pytest.raises(HardwareBuildError, match="Kernels changed since the build"):
+        _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=nsx_app.AppOptions())
+
+
+def test_skip_flash_refuses_an_edited_checkout(tmp_path: Path, monkeypatch) -> None:
+    """Edits after the build never reach the firmware."""
+    import json
+
+    from helia_core_tester.hardware import firmware_build, nsx_app, nsx_cli
+    from helia_core_tester.tests.test_hardware_nsx_app import make_checkout
+
+    from neuralspotx.nsx_lock import hash_tree
+
+    build_dir, app_dir = _built_app(tmp_path, monkeypatch)
+    root = make_checkout(tmp_path / "kernels")
+    options = nsx_app.AppOptions(cmsis_nn_root=root)
+    module = nsx_app.kernel_dir(app_dir, options)
+    nsx_app.write_kernels(root, module)
+    # Real hashes: the checkout comparison needs them.
+    monkeypatch.setattr(nsx_cli, "tree_hash", hash_tree)
+    record = json.dumps({"lock": "d1", "kernels": hash_tree(module)})
+    (app_dir / firmware_build.BUILT_LOCK).write_text(record, encoding="utf-8")
+    assert _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=options)["generate"] == options.cmsis_nn_root
+    edited = next(path for path in (root / "Source").rglob("*") if path.is_file())
+    edited.write_text(edited.read_text(encoding="utf-8") + "\n// edit\n", encoding="utf-8")
+    with pytest.raises(HardwareBuildError, match="Kernel checkout edited since the build"):
+        _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=options)
+
+
+def test_skip_flash_refuses_dependency_updates(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.hardware import nsx_app
+
+    build_dir, _ = _built_app(tmp_path, monkeypatch)
+    with pytest.raises(HardwareBuildError, match="cannot update dependencies"):
+        _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=nsx_app.AppOptions(), update_dependencies=True)

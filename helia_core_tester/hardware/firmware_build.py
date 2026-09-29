@@ -19,6 +19,7 @@ RTT session to read it.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -287,6 +288,8 @@ def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
 
 # Written after a sync that finished.
 SYNC_STAMP = ".hct-sync"
+# Last good build: lock, kernel tree.
+BUILT_LOCK = ".hct-built-lock"
 
 
 def stage_kernels(
@@ -304,12 +307,8 @@ def stage_kernels(
 
     options = options or AppOptions()
     app_dir = nsx_app_dir(build_dir)
-    asm = "on" if options.requantize_inline_asm else "off"
-    typer.echo(f"[hardware] Kernels: {options.kernel_source()}, inline asm {asm}")
-    rendered = render_app(board, options, app_dir, repo_root=repo_root or tester_repo_root())
-    if rendered.changed:
-        names = ", ".join(rendered.changed)
-        typer.echo(f"[hardware] WARNING: build options changed since the last build ({names}).", err=True)
+    typer.echo(f"[hardware] Kernels: {options.summary()}")
+    render_app(board, options, app_dir, repo_root=repo_root or tester_repo_root())
     # Kernel edits change the vendored hash.
     relock = update_dependencies or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
     if relock:
@@ -350,6 +349,7 @@ def build_firmware(
 ) -> Path:
     """Build hct_benchmark_server through NSX; returns the ELF path."""
     from . import nsx_cli
+    from .nsx_app import AppOptions, save_options
 
     ensure_build_tools(tester_repo_root())
     stage_kernels(
@@ -365,7 +365,55 @@ def build_firmware(
         typer.echo(f"[hardware] Reusing configured build dir: {build_dir}")
     # Ninja's default, not NSX's fixed 8.
     nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=_jobs(jobs), frozen=True)
+    # Record only what actually built.
+    save_options(app_dir, options or AppOptions())
+    _record_built(app_dir, options or AppOptions())
     return elf_path(build_dir)
+
+
+def _built_record(app_dir: Path, options: "AppOptions") -> dict[str, str]:
+    """Lock digest and kernel tree hash."""
+    from . import nsx_cli
+    from .nsx_app import kernel_dir
+
+    module = kernel_dir(app_dir, options)
+    return {
+        "lock": nsx_cli.lock_digest(app_dir) or "",
+        "kernels": nsx_cli.tree_hash(module) if module.is_dir() else "",
+    }
+
+
+def _record_built(app_dir: Path, options: "AppOptions") -> None:
+    """Replace the record atomically."""
+    tmp = app_dir / f"{BUILT_LOCK}.tmp"
+    tmp.write_text(json.dumps(_built_record(app_dir, options)), encoding="utf-8")
+    os.replace(tmp, app_dir / BUILT_LOCK)
+
+
+def built_kernels(board: BoardSpec, build_dir: Path, options: "AppOptions") -> Path:
+    """Kernels the last build used, unchanged."""
+    from . import nsx_cli
+    from .nsx_app import kernel_dir, kernels_match
+
+    app_dir = nsx_app_dir(build_dir)
+    try:
+        built = json.loads((app_dir / BUILT_LOCK).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        built = None
+    # Relock, resync, or hand edits.
+    if (
+        not isinstance(built, dict)
+        or not built.get("lock")
+        or built != _built_record(app_dir, options)
+        or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
+    ):
+        raise nsx_cli.HardwareBuildError("Kernels changed since the build; rebuild first.")
+    module = kernel_dir(app_dir, options)
+    if options.cmsis_nn_root is None:
+        return module
+    if not kernels_match(options.cmsis_nn_root, module):
+        raise nsx_cli.HardwareBuildError("Kernel checkout edited since the build; rebuild first.")
+    return options.cmsis_nn_root
 
 
 def flash_firmware(

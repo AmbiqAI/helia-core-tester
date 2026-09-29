@@ -133,28 +133,75 @@ def _serial(explicit: Optional[int]) -> int:
 
 _CMSIS_NN_REF_HELP = "ns-cmsis-nn tag or commit to build (default: see --cmsis-nn-root)."
 _CMSIS_NN_ROOT_HELP = (
-    "Local ns-cmsis-nn checkout to build. Default: the enclosing checkout when the "
-    "tester sits at ns-cmsis-nn/Tests/helia-core-tester, else the pinned release. "
+    "Local ns-cmsis-nn checkout to build. Default: the last build's kernels in this "
+    "build dir, else the enclosing checkout when the tester sits at "
+    "ns-cmsis-nn/Tests/helia-core-tester, else the pinned release. "
     "Copies its Include/, Source/, cmake/ and nsx/ into the app."
 )
 _JOBS_HELP = "Parallel build jobs (default: CPU count + 2, like ninja)."
 _UPDATE_DEPS_HELP = "Re-resolve NSX modules and rewrite nsx.lock before building."
-_NO_INLINE_ASM_HELP = "Build requantize without inline assembly (the old path's kernels)."
+_INLINE_ASM_HELP = (
+    "Build requantize with or without inline assembly (default: the last "
+    "build's setting in this build dir, else on)."
+)
 
 
-def _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm):
-    """Firmware build flags as NSX app options."""
-    from .nsx_app import AppOptions, nested_kernel_root
+def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
+    """Kernel flags over the build dir's saved options."""
+    from .firmware_build import nsx_app_dir
+    from .nsx_app import AppRenderError, resolve_options, saved_options
 
     if cmsis_nn_ref and cmsis_nn_root:
         _fail("Pass --cmsis-nn-ref or --cmsis-nn-root, not both.")
-    # Nested layout builds the enclosing checkout.
-    if cmsis_nn_root:
-        cmsis_nn_root = cmsis_nn_root.expanduser().resolve()
-    elif not cmsis_nn_ref:
-        cmsis_nn_root = nested_kernel_root(repo_root())
-    ref = {"cmsis_nn_ref": cmsis_nn_ref} if cmsis_nn_ref else {}
-    return AppOptions(cmsis_nn_root=cmsis_nn_root, requantize_inline_asm=not no_inline_asm, **ref)
+    app_dir = nsx_app_dir(build_dir)
+    try:
+        options = resolve_options(
+            app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
+        )
+    except AppRenderError as exc:
+        _fail(f"{exc}; pass --cmsis-nn-root or --cmsis-nn-ref.")
+    saved = saved_options(app_dir)
+    # Compare values: templates embed paths.
+    changes = options.changes_from(saved) if saved else []
+    if changes:
+        typer.echo(f"[hardware] Options changed, rebuilding: {'; '.join(changes)}", err=True)
+    elif saved is None and (app_dir / "nsx.yml").is_file():
+        typer.echo("[hardware] No saved build options; using defaults.", err=True)
+    return options
+
+
+def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
+    """The flashed build's options, unchanged."""
+    from .firmware_build import nsx_app_dir
+    from .nsx_app import AppRenderError, resolve_options, saved_options
+
+    if cmsis_nn_ref and cmsis_nn_root:
+        _fail("Pass --cmsis-nn-ref or --cmsis-nn-root, not both.")
+    app_dir = nsx_app_dir(build_dir)
+    saved = saved_options(app_dir)
+    if saved is None:
+        _fail("--skip-flash needs a saved build; run hardware build.")
+    try:
+        wanted = resolve_options(
+            app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
+        )
+    except AppRenderError as exc:
+        _fail(f"{exc}; pass --skip-generate to stream only.")
+    # Generation must match the flashed firmware.
+    changes = wanted.changes_from(saved)
+    if changes:
+        _fail(f"--skip-flash keeps the built kernels: {'; '.join(changes)}")
+    typer.echo(f"[hardware] Kernels: {saved.summary()}", err=True)
+    return saved
+
+
+def _saved_kernels(build_dir: Path, echo) -> None:
+    """Print the kernels the build dir built."""
+    from .firmware_build import nsx_app_dir
+    from .nsx_app import saved_options
+
+    saved = saved_options(nsx_app_dir(build_dir))
+    echo(f"[hardware] Kernels: {saved.summary() if saved else 'unknown, no saved options'}")
 
 
 # --- boards / probes ---------------------------------------------------------------
@@ -211,7 +258,7 @@ def build(
     force_reconfigure: bool = typer.Option(False, "--force-reconfigure", help="Reconfigure even if the build dir already exists."),
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
-    no_inline_asm: bool = typer.Option(False, "--no-inline-asm", help=_NO_INLINE_ASM_HELP),
+    inline_asm: Optional[bool] = typer.Option(None, "--inline-asm/--no-inline-asm", help=_INLINE_ASM_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -219,10 +266,11 @@ def build(
     from .firmware_build import build_firmware, resolve_build_dir
 
     spec = _board(board)
-    app_options = _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm)
+    build_dir = resolve_build_dir(repo_root(), spec, build_dir)
+    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
     with _pipeline_errors(_verbosity(verbosity)):
         elf = build_firmware(
-            spec, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs,
+            spec, build_dir=build_dir, jobs=jobs,
             force_reconfigure=force_reconfigure, options=app_options, update_dependencies=update_dependencies,
         )
     typer.echo(f"✓ Firmware build completed successfully: {elf}")
@@ -238,7 +286,7 @@ def flash(
     force: bool = typer.Option(False, "--force", help=_FORCE_FLASH_HELP),
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
-    no_inline_asm: bool = typer.Option(False, "--no-inline-asm", help=_NO_INLINE_ASM_HELP),
+    inline_asm: Optional[bool] = typer.Option(None, "--inline-asm/--no-inline-asm", help=_INLINE_ASM_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -248,11 +296,12 @@ def flash(
     from .firmware_build import flash_firmware, resolve_build_dir
 
     spec = _board(board)
-    app_options = _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm)
+    build_dir = resolve_build_dir(repo_root(), spec, build_dir)
+    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
     serial = _serial(serial_no)
     with _pipeline_errors(_verbosity(verbosity)):
         decision = flash_firmware(
-            spec, serial, build_dir=resolve_build_dir(repo_root(), spec, build_dir), jobs=jobs,
+            spec, serial, build_dir=build_dir, jobs=jobs,
             force_reconfigure=force_reconfigure, force=force, options=app_options,
             update_dependencies=update_dependencies,
         )
@@ -398,9 +447,11 @@ def stream(
     options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
+    build_dir = resolve_build_dir(repo_root(), spec, build_dir)
+    _saved_kernels(build_dir, echo)
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
         outcome = stream_generated_tests(
-            repo_root(), spec, serial, build_dir=resolve_build_dir(repo_root(), spec, build_dir),
+            repo_root(), spec, serial, build_dir=build_dir,
             options=options, echo=echo, progress_to_stderr=as_json, allow_unverified_firmware=allow_unverified_firmware,
         )
         finalize_timing(outcome, echo=echo)
@@ -430,22 +481,33 @@ def run(
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
-    no_inline_asm: bool = typer.Option(False, "--no-inline-asm", help=_NO_INLINE_ASM_HELP),
+    inline_asm: Optional[bool] = typer.Option(None, "--inline-asm/--no-inline-asm", help=_INLINE_ASM_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
     """The whole hardware pipeline: generate tests for the board's CPU, build the
     firmware, flash it unless the board already runs this exact build, stream the
     suite, write the result bundle, and print the summary."""
+    from .firmware_build import resolve_build_dir
     from .hardware_pipeline import run_hardware_pipeline
 
     if skip_flash and force_flash:
         _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
     options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
-    app_options = _app_options(cmsis_nn_ref, cmsis_nn_root, no_inline_asm)
+    build_dir = resolve_build_dir(repo_root(), spec, build_dir)
+    # Neither builds nor generates: nothing to resolve.
+    streams_only = skip_generate and skip_flash
+    if streams_only:
+        app_options = None
+    elif skip_flash:
+        app_options = _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
+    else:
+        app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
+    if streams_only:
+        _saved_kernels(build_dir, echo)
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
         outcome = run_hardware_pipeline(
             repo_root(), spec, serial, options=options, build_dir=build_dir,

@@ -14,7 +14,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Union
 
 from .boards import BoardSpec, default_session_id
-from .firmware_build import FlashDecision, build_id_path, flash_firmware, read_build_id, resolve_build_dir, stage_kernels
+from .firmware_build import (
+    FlashDecision,
+    build_id_path,
+    built_kernels,
+    flash_firmware,
+    nsx_app_dir,
+    read_build_id,
+    resolve_build_dir,
+    stage_kernels,
+)
 from .measurement import (
     TooManyPassesError,
     UnsupportedCounterError,
@@ -345,21 +354,29 @@ def run_hardware_pipeline(
     if skip_flash and force_flash:
         raise ValueError("--skip-flash and --force-flash cannot be combined.")
     resolved_build_dir = resolve_build_dir(repo_root, board, build_dir)
-    if app_options is None:
-        from .nsx_app import AppOptions, nested_kernel_root
+    if app_options is None and not (skip_generate and skip_flash):
+        from .nsx_app import resolve_options
 
-        # Same default as the CLI.
-        app_options = AppOptions(cmsis_nn_root=nested_kernel_root(repo_root))
+        # Same resolution as the CLI.
+        app_options = resolve_options(nsx_app_dir(resolved_build_dir), repo_root)
 
     generate_s = 0.0
     if skip_generate:
         echo("[hardware] --skip-generate set; reusing existing artifacts/generated_tests.")
     else:
         # Generate against the firmware's kernels.
-        kernel_root = stage_kernels(
-            board, build_dir=resolved_build_dir, options=app_options, force_sync=force_reconfigure,
-            update_dependencies=update_dependencies,
-        )
+        if skip_flash:
+            if update_dependencies:
+                from .nsx_cli import HardwareBuildError
+
+                raise HardwareBuildError("--skip-flash cannot update dependencies.")
+            # Board keeps the built image.
+            kernel_root = built_kernels(board, resolved_build_dir, app_options)
+        else:
+            kernel_root = stage_kernels(
+                board, build_dir=resolved_build_dir, options=app_options, force_sync=force_reconfigure,
+                update_dependencies=update_dependencies,
+            )
         # Staging did the forced work.
         force_reconfigure = update_dependencies = False
         precision_note = f" float_precision={options.float_precision}" if options.float_precision else ""

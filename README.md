@@ -71,11 +71,14 @@ there are overwritten. Other files under `nsx/` are not used.
 `hardware run` generates the tests from the same kernel tree: the local
 checkout, or for a ref the clone NSX syncs into `nsx_app/modules/ns-cmsis-nn`.
 
-`--no-inline-asm` builds requantize without inline assembly;
-`--update-dependencies` re-resolves the NSX modules into `nsx.lock`. Every build
-prints the kernel source and warns when the build options changed since the last
-build in that build dir. `hardware flash` and `hardware run` rebuild with their
-own flags, so pass the same kernel flags you built with.
+`--no-inline-asm` builds requantize without inline assembly (`--inline-asm`
+turns it back on); `--update-dependencies` re-resolves the NSX modules into
+`nsx.lock`. Each build saves its kernel options in `nsx_app/.hct-options.json`.
+`hardware build`, `flash` and `run` reuse them for any kernel flag you leave out,
+so a bare `hardware flash` flashes what `hardware build` built. A flag that
+differs from the saved options rebuilds and prints one line naming the change.
+Every build, flash, run and stream prints the kernel source and inline asm
+setting.
 
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
 `hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or
