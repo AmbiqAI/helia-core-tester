@@ -109,4 +109,16 @@ def contract_globals(loader: Optional[Callable[[], ContractSet]] = None) -> dict
     def contract_parity_assert(symbol: str) -> str:
         return render_parity_assert(require(symbol))
 
-    return {"contract_call": contract_call, "contract_parity_assert": contract_parity_assert}
+    def contract_bind(symbol: str, pool: Mapping[str, str], indent: str = "        ") -> str:
+        from helia_core_tester.contract.bind import bind
+
+        decl = require(symbol)
+        return render_call(decl, bind(decl, pool), indent=indent)
+
+    def contract_takes(symbol: str, name: str) -> bool:
+        from helia_core_tester.contract.bind import takes
+
+        return takes(require(symbol), name)
+
+    return {"contract_call": contract_call, "contract_parity_assert": contract_parity_assert,
+            "contract_bind": contract_bind, "contract_takes": contract_takes}
