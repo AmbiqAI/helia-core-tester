@@ -97,6 +97,12 @@ def takes(decl: FunctionDecl, name: str) -> bool:
     return bool(names & set(_GROUP_OF.get(name, (name,))))
 
 
+def param_type(decl: FunctionDecl, name: str) -> str:
+    """The C type of `name` (any spelling of its alias group) in `decl`, or '' when absent."""
+    group = set(_GROUP_OF.get(name, (name,)))
+    return next((param.c_type for param in decl.params if param.name in group), "")
+
+
 def check_types(decl: FunctionDecl, roles: Mapping[str, str]) -> None:
     """Fail when a tensor pointer's element type does not match the descriptor dtype for its
     role (input, output, filter, bias). Struct-typed and untyped parameters are not compared."""

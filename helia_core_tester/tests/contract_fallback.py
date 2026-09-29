@@ -1,10 +1,11 @@
-"""Test-only kernel contract for rendering the Convolve template without an ns-cmsis-nn checkout.
+"""Test-only kernel contract for rendering contract-bound templates without an ns-cmsis-nn checkout.
 
-It holds every arm_convolve_* kernel and scratch-size query, since the template binds both.
+It holds every function of the operators whose templates bind their calls from the contract
+(BOUND_PREFIXES), kernels and scratch-size queries alike, since the templates bind both.
 
-The Convolve template renders its kernel call from the ns-cmsis-nn kernel contract and refuses
+Those templates render their kernel calls from the ns-cmsis-nn kernel contract and refuse
 to render without one. The pure-Python pytest job has no checkout, so unit tests that render a
-Convolve case fall back to the committed fixture, but only when nothing better exists: a
+contract-bound case fall back to the committed fixture, but only when nothing better exists: a
 checkout that ships the export always wins, and a test that points CMSIS_NN_ROOT at a real
 directory keeps that directory's behaviour, including refusing to render.
 """
@@ -17,7 +18,8 @@ from typing import Callable, Optional
 
 from helia_core_tester.contract.ir import load_contract_set
 
-FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "contract" / "convolve_pilot"
+FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "contract" / "bound_operators"
+BOUND_PREFIXES = ("arm_convolve_", "arm_depthwise_")
 
 
 def fallback_resolver(resolve: Callable[[], Optional[Path]]) -> Callable[[], Optional[Path]]:

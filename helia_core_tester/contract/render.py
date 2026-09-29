@@ -125,5 +125,11 @@ def contract_globals(loader: Optional[Callable[[], ContractSet]] = None) -> dict
 
         return takes(require(symbol), name)
 
+    def contract_param_type(symbol: str, name: str) -> str:
+        from helia_core_tester.contract.bind import param_type
+
+        return param_type(require(symbol), name)
+
     return {"contract_call": contract_call, "contract_parity_assert": contract_parity_assert,
-            "contract_bind": contract_bind, "contract_takes": contract_takes}
+            "contract_bind": contract_bind, "contract_takes": contract_takes,
+            "contract_param_type": contract_param_type}

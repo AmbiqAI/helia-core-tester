@@ -13,13 +13,14 @@ import pytest
 from helia_core_tester.contract.ir import CONTRACT_RELPATH, load_contract_set
 from helia_core_tester.contract.render import ContractRenderError, contract_globals
 from helia_core_tester.generation.utils.temp_sizer_probe import resolve_cmsis_nn_root
-from helia_core_tester.tests.contract_fallback import FIXTURE_ROOT, fallback_resolver
+from helia_core_tester.tests.contract_fallback import BOUND_PREFIXES, FIXTURE_ROOT, fallback_resolver
 
 
-def test_fixture_is_a_loadable_contract_of_convolve_kernels() -> None:
+def test_fixture_is_a_loadable_contract_of_the_bound_operators() -> None:
     contracts = load_contract_set(FIXTURE_ROOT)
     assert contracts.present
-    assert contracts.functions and all(name.startswith("arm_convolve_") for name in contracts.functions)
+    assert contracts.functions and all(name.startswith(BOUND_PREFIXES) for name in contracts.functions)
+    assert {"arm_depthwise_conv_s16", "arm_depthwise_conv_wrapper_s8_get_buffer_size"} <= set(contracts.functions)
     assert {"arm_convolve_wrapper_s8_get_buffer_size_mve", "arm_convolve_s8_get_buffer_size"} <= set(contracts.functions)
     assert {"arm_convolve_wrapper_s8", "arm_convolve_s8", "arm_convolve_f32", "arm_convolve_wrapper_f16"} <= set(contracts.functions)
 
@@ -58,7 +59,7 @@ def test_a_corrupt_export_in_a_real_checkout_is_not_masked(tmp_path: Path, monke
         fallback_resolver(lambda: real)()
 
 
-def test_convolve_contract_fixture_matches_the_real_tree() -> None:
+def test_bound_operator_fixture_matches_the_real_tree() -> None:
     root = resolve_cmsis_nn_root()
     real = load_contract_set(root)
     if not real.present:
@@ -66,7 +67,7 @@ def test_convolve_contract_fixture_matches_the_real_tree() -> None:
             pytest.fail(f"HELIA_CORE_TESTER_REQUIRE_CONTRACT is set but {root} has no kernel contract")
         pytest.skip("no ns-cmsis-nn checkout with a kernel contract")
     fixture = load_contract_set(FIXTURE_ROOT)
-    kernels = {name for name in real.functions if name.startswith("arm_convolve_")}
+    kernels = {name for name in real.functions if name.startswith(BOUND_PREFIXES)}
     assert set(fixture.functions) == kernels, (
         f"refresh {FIXTURE_ROOT} from {real.path}: missing {sorted(kernels - set(fixture.functions))}, "
         f"extra {sorted(set(fixture.functions) - kernels)}")

@@ -2659,3 +2659,62 @@ use_bias: true
 depth_multiplier: 1
 fault: channel_mismatch
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# Entries resolved from the kernel contract (iteration 1b): public depthwise kernels outside
+# kernel_dispatch.DIRECT_ENTRIES, called directly instead of through their wrapper.
+# arm_depthwise_conv_s16 and arm_depthwise_conv_s4 use no scratch and deliberately have no
+# sizer (entry_scratch: none); arm_depthwise_conv_fast_s16 sizes its own; arm_depthwise_conv_s4
+# spells its tensors input/kernel/bias/output.
+operator: DepthwiseConv
+name: depthwise_conv_entry_contract_s16_chmult2_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s16
+entry_scratch: none
+hint:
+  call_style: per_tensor
+input_shape: [1, 5, 9, 4]
+filter_shape: [3, 3, 4, 2]
+strides: [1, 2]
+padding: SAME
+use_bias: true
+depth_multiplier: 2
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_contract_fast_s16_6x7_c8_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_fast_s16
+hint:
+  call_style: per_tensor
+input_shape: [1, 6, 7, 8]
+filter_shape: [3, 3, 8, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_contract_generic_s4
+activation_dtype: S8
+weight_dtype: S4
+activation: NONE
+entry: arm_depthwise_conv_s4
+entry_scratch: none
+hint:
+  call_style: per_tensor
+  extras:
+    input_scale: 4.0
+    input_zero_point: 3
+    weight_scale: 1.0
+    output_scale: 4.0
+    output_zero_point: 0
+    per_channel: true
+input_shape: [1, 5, 5, 6]
+filter_shape: [3, 3, 6, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 1
