@@ -29,9 +29,35 @@ class OpConvolve(OperationBase):
         "invalid_layout",
     )
 
+    _S16_BIAS_C_TYPES = {"S32": "int32_t", "S64": "int64_t"}
+
     def _hint(self) -> Dict[str, Any]:
         hint = self.desc.get("hint", {})
         return hint if isinstance(hint, dict) else {}
+
+    def _pinned_bias_c_type(self) -> Optional[str]:
+        """C type a descriptor pins with ``bias_dtype``, or None for the dispatch default.
+
+        Only S16 x S8 takes the field: arm_convolve_wrapper_s16 accepts either an
+        int32 or an int64 bias, and the int32 form reaches MVE paths the default
+        int64 corpus never does. The golden has to be converted with the same bias
+        width, because TFLite requantizes an int64 accumulator with a reduced
+        multiplier and would not match the kernel's int32 rounding.
+        """
+        value = self.desc.get("bias_dtype")
+        if value is None:
+            return None
+        name = self.desc.get("name")
+        act = str(self.desc.get("activation_dtype", "S8")).upper()
+        weight = str(self.desc.get("weight_dtype", "S8")).upper()
+        if (act, weight) != ("S16", "S8"):
+            raise ValueError(f"{name}: bias_dtype is only supported for S16 x S8 Convolve, got {act} x {weight}")
+        key = str(value).upper()
+        if key not in self._S16_BIAS_C_TYPES:
+            raise ValueError(
+                f"{name}: unsupported bias_dtype {value!r}; expected one of {sorted(self._S16_BIAS_C_TYPES)}"
+            )
+        return self._S16_BIAS_C_TYPES[key]
 
     def _check_fault_reachable(self, kind: str, context: Dict[str, Any]) -> None:
         kernel_fn = context["kernel_fn"]
@@ -198,6 +224,7 @@ class OpConvolve(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        pinned_bias_c_type = self._pinned_bias_c_type()
         weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
         if weight_dtype == "S4":
             from helia_core_tester.generation.utils.litert_builder import build_conv2d_s4_op
@@ -263,6 +290,8 @@ class OpConvolve(OperationBase):
             ]
             converter.inference_input_type = tf.int16
             converter.inference_output_type = tf.int16
+            if pinned_bias_c_type == "int32_t":
+                converter._experimental_full_integer_quantization_bias_type = tf.int32
         elif activation_dtype == 'FP16':
             converter.optimizations = []
             converter.target_spec.supported_types = [tf.float16]
@@ -306,6 +335,9 @@ class OpConvolve(OperationBase):
             weight_dtype=self.desc.get("weight_dtype", "S8"),
             cpu=self.target_cpu,
         )
+        pinned_bias_c_type = self._pinned_bias_c_type()
+        if pinned_bias_c_type is not None:
+            info["bias_c_type"] = pinned_bias_c_type
         info.setdefault("kernel_needs_layout", info["input_c_type"] in {"float", "float16_t"})
         info.setdefault("buffer_size_needs_layout", info["input_c_type"] in {"float", "float16_t"})
 
@@ -696,6 +728,11 @@ class OpConvolve(OperationBase):
         # Bias handling (S16 wrapper expects int64 bias)
         has_biases = biases is not None and getattr(biases, "size", 0) > 0
         bias_dtype = kernel_info["bias_c_type"]
+        if has_biases and self.desc.get("bias_dtype") is not None and biases.dtype != np.dtype(bias_dtype[:-2]):
+            # A silent cast would hand the kernel a bias the golden was not computed with.
+            raise ValueError(
+                f"{name}: bias_dtype pins {bias_dtype} but the converted model carries a {biases.dtype} bias"
+            )
         if has_biases:
             if float_kernel and biases.dtype != float_dtype:
                 biases = biases.astype(float_dtype)

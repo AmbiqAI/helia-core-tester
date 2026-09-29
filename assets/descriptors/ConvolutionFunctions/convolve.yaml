@@ -2983,3 +2983,191 @@ strides: [2, 2]
 padding: SAME
 use_bias: true
 expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+# int32-bias S16 cases. The default S16 corpus passes an int64 bias, which never
+# reaches the int32-only MVE paths below. bias_dtype S32 converts the golden with
+# an int32 bias as well, so both sides requantize the same int32 accumulator.
+#
+# arm_convolve_1x1_s16_ns_np_nd keeps the input pixel in registers when
+# in_ch is 8, 16, 24 or 32 (ns-cmsis-nn#541). Output channels go four at a
+# time plus a scalar tail, so out_ch covers tail 3 / 0 / 1 / 3-only.
+operator: Convolve
+name: convolve_int32_bias_1x1_in8_out7_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 3, 5, 8]
+filter_shape: [1, 1, 8, 7]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+bias_dtype: S32
+---
+operator: Convolve
+name: convolve_int32_bias_1x1_in16_out12_batch2_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [2, 2, 3, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+bias_dtype: S32
+---
+operator: Convolve
+name: convolve_int32_bias_1x1_in24_out5_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 1, 9, 24]
+filter_shape: [1, 1, 24, 5]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+bias_dtype: S32
+---
+operator: Convolve
+name: convolve_int32_bias_1x1_in32_out33_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 1, 9, 32]
+filter_shape: [1, 1, 32, 33]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+bias_dtype: S32
+---
+operator: Convolve
+name: convolve_int32_bias_1x1_in8_out3_single_pixel_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 1, 1, 8]
+filter_shape: [1, 1, 8, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+bias_dtype: S32
+---
+# One past the resident limit (40) and a non-multiple of 8 (12): both must fall
+# back to arm_nn_mat_mult_nt_t_s16 with the same int32 bias.
+operator: Convolve
+name: convolve_int32_bias_1x1_in40_out6_fallback_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 2, 3, 40]
+filter_shape: [1, 1, 40, 6]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+bias_dtype: S32
+---
+operator: Convolve
+name: convolve_int32_bias_1x1_in12_out6_fallback_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 2, 3, 12]
+filter_shape: [1, 1, 12, 6]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+bias_dtype: S32
+---
+# arm_convolve_s16_group_ch_mult_1 batches four output columns per requantize
+# on its int32-bias MVE path (ns-cmsis-nn#540). The batched loop stops at
+# output_x - 1, so these pick output_x - 1 = 9, 7, 6, 3, 4 and 16 to cover
+# remainders 1/3/2, no full batch, an exact batch, and rhs_cols 16 (4x4).
+operator: Convolve
+name: convolve_int32_bias_group_ch_mult1_k3x3_w12_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 6, 12, 8]
+filter_shape: [3, 3, 8, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+bias_dtype: S32
+groups: 8
+---
+operator: Convolve
+name: convolve_int32_bias_group_ch_mult1_k2x2_w9_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 5, 9, 5]
+filter_shape: [2, 2, 5, 5]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+bias_dtype: S32
+groups: 5
+---
+operator: Convolve
+name: convolve_int32_bias_group_ch_mult1_k1x3_stride2_batch2_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [2, 4, 15, 4]
+filter_shape: [1, 3, 4, 4]
+strides: [1, 2]
+padding: VALID
+use_bias: true
+bias_dtype: S32
+groups: 4
+---
+operator: Convolve
+name: convolve_int32_bias_group_ch_mult1_k2x2_w5_no_batch_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 4, 5, 3]
+filter_shape: [2, 2, 3, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+bias_dtype: S32
+groups: 3
+---
+operator: Convolve
+name: convolve_int32_bias_group_ch_mult1_k3x3_w7_exact_batch_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 5, 7, 6]
+filter_shape: [3, 3, 6, 6]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+bias_dtype: S32
+groups: 6
+---
+operator: Convolve
+name: convolve_int32_bias_group_ch_mult1_k4x4_w20_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint: {call_style: per_tensor}
+input_shape: [1, 6, 20, 4]
+filter_shape: [4, 4, 4, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+bias_dtype: S32
+groups: 4
