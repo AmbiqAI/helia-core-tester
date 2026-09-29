@@ -153,3 +153,25 @@ def test_inconsistent_artifacts_stay_skipped(tmp_path: Path) -> None:
             build_case_bundle_from_generated_test(PROJECT_ROOT, case, output_root=tmp_path, require_fvp_pass=False)
     finally:
         header_path.write_text(original_text)
+
+
+@pytest.mark.parametrize("precision", ["f16", "f32"])
+def test_float_any_rank_concatenation_is_skipped(precision: str) -> None:
+    # Firmware lacks the any-rank float dispatch.
+    name = f"concatenation_any_rank_axis_w_{precision}"
+    cases = discover_or_skip(PROJECT_ROOT, family="ConcatenationFunctions", name_filter=name, suite="float")
+    with pytest.raises(UnsupportedGeneratedTestError, match="any-rank concatenation"):
+        build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], require_fvp_pass=False)
+
+
+def test_float_axis_concatenation_still_bridges(tmp_path: Path) -> None:
+    cases = discover_or_skip(PROJECT_ROOT, family="ConcatenationFunctions", name_filter="concatenation_axis_w_f16", suite="float")
+    manifest = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False).manifest
+    assert manifest["required_target_capabilities"] == ["arm_concatenation_f16_w"]
+
+
+@pytest.mark.parametrize("name", ["split_float_rank5_axis4_v_f16", "split_float_zero_slice_v_f16"])
+def test_split_f16_outside_adapter_limits_is_skipped(name: str) -> None:
+    cases = discover_or_skip(PROJECT_ROOT, family="ConcatenationFunctions", name_filter=name, suite="float")
+    with pytest.raises(UnsupportedGeneratedTestError, match="SPLIT_F16 firmware"):
+        build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], require_fvp_pass=False)
