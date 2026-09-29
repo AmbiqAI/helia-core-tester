@@ -82,12 +82,13 @@ def collect_literals(paths: Iterable[Path]) -> dict[str, Literal]:
 
 
 def gated_symbols_from_descriptors(descriptors: Iterable[Mapping]) -> frozenset[str]:
+    """Every symbol generation gates a descriptor on, by the pipeline's own derivation:
+    required_kernel_symbols plus a named `entry:` and the planar rule it implies."""
+    from helia_core_tester.generation.test_ops import _required_kernel_symbols
+
     gated: set[str] = set()
     for descriptor in descriptors:
-        raw = descriptor.get("required_kernel_symbols") or []
-        if isinstance(raw, str):
-            raw = [raw]
-        gated.update(str(symbol).strip() for symbol in raw if str(symbol).strip())
+        gated.update(_required_kernel_symbols(dict(descriptor)))
     return frozenset(gated)
 
 
