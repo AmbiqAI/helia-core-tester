@@ -28,6 +28,7 @@ from .boards import DEFAULT_BOARD_ID, BoardSpec, repo_root, resolve_board
 from .firmware_build import (
     SERVER_TARGET,
     _drop_foreign_cache,
+    _jobs,
     bin_path,
     elf_path,
     ensure_build_tools,
@@ -302,7 +303,7 @@ def build_size_probe(board: BoardSpec, variant: SizeProbeVariant, *, project_roo
     build_dir = probe_root / "build"
     # Same kernel default as hardware build.
     options = AppOptions(
-        cmsis_nn_root=nested_kernel_root(repo_root()),
+        cmsis_nn_root=nested_kernel_root(project_root),
         enable_f32=variant.enable_f32,
         enable_f16=variant.enable_f16,
         build_size_probe=True,
@@ -313,7 +314,9 @@ def build_size_probe(board: BoardSpec, variant: SizeProbeVariant, *, project_roo
     # Pre-NSX probe caches name the repo.
     _drop_foreign_cache(build_dir, app_dir)
     nsx_cli.configure_app(app_dir, board.nsx_board, build_dir=build_dir, frozen=True)
-    nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, target=SIZE_PROBE_TARGET, frozen=True)
+    nsx_cli.build_app(
+        app_dir, board=board.nsx_board, build_dir=build_dir, target=SIZE_PROBE_TARGET, jobs=_jobs(None), frozen=True,
+    )
 
     out_dir = build_dir / "probe"
     elf = out_dir / f"{SIZE_PROBE_TARGET}.elf"

@@ -171,7 +171,7 @@ def test_size_probe_builds_the_nsx_app(report_env: Path, monkeypatch, variant) -
     def _stage(board, *, build_dir, options):
         calls["stage"] = (build_dir, options)
 
-    def _build(app_dir, *, board, build_dir, target, frozen):
+    def _build(app_dir, *, board, build_dir, target, jobs, frozen):
         calls["build"] = (app_dir, build_dir, target)
         elf = build_dir / "probe" / f"{SIZE_PROBE_TARGET}.elf"
         elf.parent.mkdir(parents=True, exist_ok=True)

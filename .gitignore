@@ -65,6 +65,10 @@ artifacts/downloads/*
 modules/*
 !modules/README.md
 
+# Stale symlinks from the old SDK setup.
+boards/
+cmake/socs
+
 # Temporary files
 *.tmp
 *.bak
