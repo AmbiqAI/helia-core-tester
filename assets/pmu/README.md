@@ -12,9 +12,11 @@ registry locks for the hardware app. heliaPROFILER syncs the same file the same 
 Loaded by `helia_core_tester/hardware/pmu_catalog.py`, which records the tag as
 `PMU_MODULE_REF`.
 
-To re-sync after a module bump, run `hardware build` so NSX syncs the module, then:
+To re-sync after a module bump, re-resolve the app's modules (a plain build reuses a
+current `nsx.lock`), then copy the file:
 
 ```bash
+uv run helia_core_tester hardware build --board apollo510_evb --update-dependencies
 uv run python scripts/sync_pmu_catalog.py   # or pass the source path
 ```
 

@@ -67,6 +67,7 @@ def test_catalog_matches_the_synced_module() -> None:
     copies = synced_module_catalogs()
     if not copies:
         pytest.skip("no synced nsx-pmu-armv8m module; run hardware build")
-    vendored = json.loads(CATALOG.read_text())
+    # Byte-for-byte, like the sync script.
+    vendored = CATALOG.read_bytes()
     for copy in copies:
-        assert json.loads(copy.read_text()) == vendored, f"{copy} differs; run scripts/sync_pmu_catalog.py"
+        assert copy.read_bytes() == vendored, f"{copy} differs; run scripts/sync_pmu_catalog.py"
