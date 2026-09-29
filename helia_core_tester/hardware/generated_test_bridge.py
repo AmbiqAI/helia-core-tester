@@ -911,7 +911,6 @@ def _build_convolve_case(
         tensor_name="input",
         context=f"input_shape={input_shape}",
     )
-    weights_data = weights_flat[:expected_weight_bytes]
 
     if activation_dtype in ("FP32", "FP16"):
         input_offset = 0
@@ -951,9 +950,8 @@ def _build_convolve_case(
         else "ARM_NN_WEIGHT_FORMAT_STANDARD"
     )
     is_packed_weights = weight_format_name == "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"
-    if is_packed_weights:
-        # Packing pads output channels; send all.
-        weights_data = weights_flat
+    # Packing pads output channels; send all.
+    weights_data = weights_flat if is_packed_weights else weights_flat[:expected_weight_bytes]
 
     if expected_flat.size < _shape_product(output_shape):
         raise UnsupportedGeneratedTestError(
@@ -3541,8 +3539,8 @@ def _require_flat_operands(
     output_dims: dict,
 ) -> None:
     """Refuse operands the flat kernels cannot take."""
-    output_count = int(np.prod([output_dims[k] for k in ("n", "h", "w", "c")]))
-    if int(np.prod(input1_shape)) != output_count or int(np.prod(input2_shape)) != output_count:
+    output_count = _shape_product(_dims_dict_to_shape(output_dims))
+    if _shape_product(input1_shape) != output_count or _shape_product(input2_shape) != output_count:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: firmware has no float broadcast dispatch yet "
             f"(input shapes {input1_shape} and {input2_shape}, output {output_count} elements)."
@@ -4614,10 +4612,10 @@ def _build_data_movement_case(
         split_dims = _extract_array(header_text, f"{prefix}_split_dims")
         call_args = _extract_call_args(source_text, cmsis_function, expected_count=7)
         axis = int(call_args[3])
-        if activation_dtype == "FP16" and not (len(input_shape) <= 4 and len(split_dims) <= 4 and min(split_dims) > 0):
-            # Mirror the SPLIT_F16 adapter's limits.
+        if not expects_status and not (len(input_shape) <= 4 and len(split_dims) <= 4 and min(split_dims) > 0):
+            # Mirror the SPLIT adapters' limits.
             raise UnsupportedGeneratedTestError(
-                f"{generated_test.name}: SPLIT_F16 firmware takes rank <= 4, <= 4 nonempty splits "
+                f"{generated_test.name}: SPLIT firmware takes rank <= 4, <= 4 nonempty splits "
                 f"(got rank {len(input_shape)}, splits {list(split_dims)})."
             )
         input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)

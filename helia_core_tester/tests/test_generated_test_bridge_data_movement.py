@@ -173,5 +173,5 @@ def test_float_axis_concatenation_still_bridges(tmp_path: Path) -> None:
 @pytest.mark.parametrize("name", ["split_float_rank5_axis4_v_f16", "split_float_zero_slice_v_f16"])
 def test_split_f16_outside_adapter_limits_is_skipped(name: str) -> None:
     cases = discover_or_skip(PROJECT_ROOT, family="ConcatenationFunctions", name_filter=name, suite="float")
-    with pytest.raises(UnsupportedGeneratedTestError, match="SPLIT_F16 firmware"):
+    with pytest.raises(UnsupportedGeneratedTestError, match="SPLIT firmware"):
         build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], require_fvp_pass=False)

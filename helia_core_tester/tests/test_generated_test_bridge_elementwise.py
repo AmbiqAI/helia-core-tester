@@ -19,7 +19,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from helia_core_tester.hardware.generated_test_bridge import (
+    UnsupportedGeneratedTestError,
     build_case_bundle_from_generated_test,
 )
 from helia_core_tester.hardware.case_bundle import load_case_bundle
@@ -132,3 +135,17 @@ def test_minimum_dual_case_bridges(tmp_path: Path) -> None:
 def test_maximum_batch_broadcast_case_bridges(tmp_path: Path) -> None:
     manifest = _bridge(tmp_path, "maximum_batch_broadcast_s8")
     assert manifest["serialized_scalar_parameters"]["output_n"] == 2
+
+
+@pytest.mark.parametrize("name", ["add_float_bcast_channel_f16", "mul_float_bcast_batch_scalar_right_f32"])
+def test_float_compact_broadcast_is_skipped(name: str) -> None:
+    # Firmware runs only flat float kernels.
+    cases = discover_or_skip(PROJECT_ROOT, suite="float", family="BasicMathFunctions", name_filter=name)
+    with pytest.raises(UnsupportedGeneratedTestError, match="broadcast dispatch"):
+        build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], require_fvp_pass=False)
+
+
+def test_float_pretiled_broadcast_still_bridges(tmp_path: Path) -> None:
+    cases = discover_or_skip(PROJECT_ROOT, suite="float", family="BasicMathFunctions", name_filter="add_float_scalar_broadcast_f32")
+    manifest = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False).manifest
+    assert manifest["required_target_capabilities"] == ["arm_elementwise_add_f32"]
