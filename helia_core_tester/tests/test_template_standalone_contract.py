@@ -10,8 +10,10 @@ from helia_core_tester.generation.utils.template_context import TemplateContextB
 from helia_core_tester.tests.harness_render import (
     convolve_context,
     depthwise_context,
+    render_batch_matmul,
     render_convolve,
     render_depthwise,
+    render_fully_connected,
 )
 
 
@@ -297,9 +299,7 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
         "arm_convolve_wrapper_f32", float_kernel=True, name="convolve_float_default_f32",
         weights_array="    0.0f", biases_array="    0.0f", input_data_array="    0.0f", expected_output_array="    0.0f",
     ))
-    fc_h = _render(
-        "FullyConnectedFunctions/fully_connected/fully_connected.h.j2",
-        {
+    fc_h, fc_c = render_fully_connected({
             "name": "fully_connected_float_default_f32",
             "input_dims": {"n": 1, "h": 1, "w": 1, "c": 12},
             "filter_dims": {"n": 12, "h": 1, "w": 1, "c": 5},
@@ -323,39 +323,8 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
             "fc_params_type": "cmsis_nn_fc_params_f32",
             "fc_activation_min_literal": "-1.0e+30f",
             "fc_activation_max_literal": "1.0e+30f",
-        },
-    )
-    fc_c = _render(
-        "FullyConnectedFunctions/fully_connected/fully_connected.c.j2",
-        {
-            "name": "fully_connected_float_default_f32",
-            "input_dims": {"n": 1, "h": 1, "w": 1, "c": 12},
-            "filter_dims": {"n": 12, "h": 1, "w": 1, "c": 5},
-            "output_dims": {"n": 1, "h": 1, "w": 1, "c": 5},
-            "fc_params": {},
-            "weights_array": "    0.0f",
-            "biases_array": "    0.0f",
-            "has_biases": True,
-            "input_data_array": "    0.0f",
-            "expected_output_array": "    0.0f",
-            "input_dtype": "float",
-            "output_dtype": "float",
-            "weight_dtype": "float",
-            "bias_dtype": "float",
-            "kernel_fn": "arm_fully_connected_f32",
-            "kernel_get_buffer_size_fn": "arm_fully_connected_f32_get_buffer_size",
-            "buffer_size_max": 1024,
-            "has_weight_sum": False,
-            "weight_sum_array": "",
-            "float_kernel": True,
-            "fc_params_type": "cmsis_nn_fc_params_f32",
-            "fc_activation_min_literal": "-1.0e+30f",
-            "fc_activation_max_literal": "1.0e+30f",
-        },
-    )
-    bmm_c = _render(
-        "FullyConnectedFunctions/batch_matmul/batch_matmul.c.j2",
-        {
+        },)
+    _, bmm_c = render_batch_matmul({
             "name": "batch_matmul_float_default_f32",
             "input_lhs_dims": {"n": 1, "h": 1, "w": 4, "c": 3},
             "input_rhs_dims": {"n": 1, "h": 1, "w": 3, "c": 2},
@@ -374,8 +343,7 @@ def test_complex_float_templates_render_public_f32_signatures() -> None:
             "bmm_params_type": "cmsis_nn_bmm_params_f32",
             "bmm_activation_min_literal": "-1.0e+30f",
             "bmm_activation_max_literal": "1.0e+30f",
-        },
-    )
+        },)
     tconv_c = _render(
         "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2",
         {

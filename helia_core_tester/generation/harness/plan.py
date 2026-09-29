@@ -43,6 +43,8 @@ class HarnessPlan:
     fault_declarations: Sequence[str] = ()
     fault_setup: str = ""
     no_scratch: bool = False
+    inputs: Sequence[tuple[str, str, str]] = ()
+    context_setup: str = ""
 
 
 def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str], scratch_bytes: Optional[int],
@@ -62,8 +64,11 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
             if not takes(kernel, param):
                 raise HarnessError(f"{pool.name}: fault {fault.kind!r} edits {param!r}, which {kernel.name} does not take")
 
-    def call(input_expr: str, output_expr: str) -> str:
-        site = {**values, pool.input_param: input_expr, pool.output_param: output_expr}
+    inputs = pool.harness_inputs
+
+    def call(bench: bool) -> str:
+        site = {**values, pool.output_param: f"{pool.name}_output" if bench else "output"}
+        site.update({i.param: i.array if bench else i.local for i in inputs})
         if fault is not None:
             site.update(fault.values)
         return render_call(kernel, bind(kernel, site), indent=indent)
@@ -87,11 +92,13 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         sizer_fn=sizer_fn,
         sizer_call=sizer_call,
         scratch_bytes=int(scratch_bytes or 0),
-        run_call=call("input", "output"),
-        bench_call=call(f"{pool.name}_input", f"{pool.name}_output"),
+        run_call=call(False),
+        bench_call=call(True),
         checks=checks,
         fault_kind=fault.kind if fault else None,
         fault_declarations=[render_declaration(d) for d in fault.declarations] if fault else [],
         fault_setup=fault.setup if fault else "",
-        no_scratch=bool(fault and fault.no_scratch),
+        no_scratch=bool(pool.no_scratch or (fault and fault.no_scratch)),
+        inputs=[(i.local, i.ctype or "", i.array) for i in inputs],
+        context_setup=pool.context_setup,
     )

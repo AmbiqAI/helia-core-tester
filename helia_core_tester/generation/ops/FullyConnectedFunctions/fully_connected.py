@@ -8,10 +8,147 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
 from helia_core_tester.generation.entry import resolve_entry
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
+from helia_core_tester.generation.harness.faults import common_fault, struct_copy, with_fault
 from helia_core_tester.generation.kernel_dispatch import resolve_fully_connected_kernel
 from helia_core_tester.core.cpu_targets import get_cpu_profile
 import keras
 from pathlib import Path
+
+
+FC_VALIDATION_KEY = "FullyConnectedFunctions/fully_connected/fully_connected.c.j2"
+PER_CHANNEL_S16_SIZER = "arm_fully_connected_per_channel_s16_get_buffer_size"
+
+
+def fc_quant_argument(context: Dict[str, Any]) -> str:
+    """The quant_params argument the kernel's prototype asks for: the wrappers take the generic
+    cmsis_nn_quant_params, the others the per-tensor or per-channel struct the header carries."""
+    from helia_core_tester.contract.bind import param_type
+    from helia_core_tester.contract.render import load_current_contracts, require_bound_symbol
+
+    n, kernel_fn = context["name"], context["kernel_fn"]
+    per_channel = bool(context["quant_params"].get("per_channel"))
+    ctype = param_type(require_bound_symbol(load_current_contracts(), kernel_fn), "quant_params")
+    if "cmsis_nn_quant_params" in ctype:
+        return f"&{n}_quant_params_wrapper"
+    if ("per_channel" in ctype) != per_channel:
+        raise ValueError(f"{n}: {kernel_fn} takes {ctype.strip()}, but this case's quantization is "
+                         f"{'per-channel' if per_channel else 'per-tensor'}")
+    return f"&{n}_quant_params"
+
+
+def fc_sizer(context: Dict[str, Any]) -> Optional[str]:
+    """The scratch query the case calls: none for s4, the per-channel s16 one for the s16
+    wrapper with per-channel quantization, otherwise the dispatch's."""
+    if context.get("float_kernel"):
+        return context["kernel_get_buffer_size_fn"]
+    if context["kernel_fn"] == "arm_fully_connected_s4":
+        return None
+    if (context["kernel_fn"] == "arm_fully_connected_wrapper_s16" and context["quant_params"].get("per_channel")
+            and context["output_dtype"] == "int16_t"):
+        return PER_CHANNEL_S16_SIZER
+    return context["kernel_get_buffer_size_fn"]
+
+
+def fc_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
+    """Every value a FullyConnected case can pass to a public FC kernel or its scratch query."""
+    n = context["name"]
+    float_kernel = bool(context.get("float_kernel"))
+    fc = context["fc_params"]
+
+    def dims(d: Dict[str, Any]) -> Dict[str, Any]:
+        return {"n": d["n"], "h": d["h"], "w": d["w"], "c": d["c"]}
+
+    if float_kernel:
+        params_init = {"activation": {"min": context["fc_activation_min_literal"],
+                                      "max": context["fc_activation_max_literal"]},
+                       "weight_format": "ARM_NN_WEIGHT_FORMAT_STANDARD"}
+    else:
+        params_init = {"input_offset": fc["input_offset"], "filter_offset": fc["filter_offset"],
+                       "output_offset": fc["output_offset"],
+                       "activation": {"min": fc["activation_min"], "max": fc["activation_max"]}}
+    out_c = context["filter_dims"]["c"]
+    header = [
+        Declaration(f"{n}_input_dims", "cmsis_nn_dims", dims(context["input_dims"]), comment="Input dimensions"),
+        Declaration(f"{n}_filter_dims", "cmsis_nn_dims", dims(context["filter_dims"]), comment="Filter dimensions"),
+        Declaration(f"{n}_bias_dims", "cmsis_nn_dims", {"n": 1, "h": 1, "w": 1, "c": out_c}, comment="Bias dimensions"),
+        Declaration(f"{n}_output_dims", "cmsis_nn_dims", dims(context["output_dims"]), comment="Output dimensions"),
+        Declaration(f"{n}_fc_params", context.get("fc_params_type") or "cmsis_nn_fc_params", params_init,
+                    comment="Fully connected parameters"),
+    ]
+    values = {
+        "ctx": f"&{n}_ctx", "fc_params": f"&{n}_fc_params", "input_dims": f"&{n}_input_dims",
+        "filter_dims": f"&{n}_filter_dims", "filter_data": f"{n}_weights", "bias_dims": f"&{n}_bias_dims",
+        "bias_data": f"{n}_biases" if context["has_biases"] else "NULL", "output_dims": f"&{n}_output_dims",
+        "layout": context.get("kernel_layout") or "ARM_NN_LAYOUT_NHWC",
+    }
+    source = []
+    if not float_kernel:
+        quant = context["quant_params"]
+        if quant.get("per_channel"):
+            header += [
+                Declaration(f"{n}_multiplier", "int32_t", ArrayLiteral(quant["multiplier_array"]), storage="static",
+                            array=True, comment="Per-channel quantization"),
+                Declaration(f"{n}_shift", "int32_t", ArrayLiteral(quant["shift_array"]), storage="static", array=True),
+                Declaration(f"{n}_quant_params", "cmsis_nn_per_channel_quant_params",
+                            {"multiplier": f"{n}_multiplier", "shift": f"{n}_shift"}),
+            ]
+            wrapper = {"multiplier": f"(int32_t*){n}_multiplier", "shift": f"(int32_t*){n}_shift", "is_per_channel": "1"}
+        else:
+            header += [
+                Declaration(f"{n}_multiplier_val", "int32_t", str(quant["multiplier"]), storage="static",
+                            comment="Per-tensor quantization"),
+                Declaration(f"{n}_shift_val", "int32_t", str(quant["shift"]), storage="static"),
+                Declaration(f"{n}_quant_params", "cmsis_nn_per_tensor_quant_params",
+                            {"multiplier": str(quant["multiplier"]), "shift": str(quant["shift"])}),
+            ]
+            wrapper = {"multiplier": f"(int32_t*)&{n}_multiplier_val", "shift": f"(int32_t*)&{n}_shift_val",
+                       "is_per_channel": "0"}
+        values["quant_params"] = fc_quant_argument(context)
+        if values["quant_params"].endswith("_wrapper"):
+            source.append(Declaration(f"{n}_quant_params_wrapper", "cmsis_nn_quant_params", wrapper,
+                                      comment="The wrappers take per-channel and per-tensor parameters alike"))
+    bias_ctype = context["bias_dtype"]
+    header.append(Declaration(f"{n}_weights", context.get("weight_dtype") or "int8_t",
+                              ArrayLiteral(context["weights_array"]), array=True, comment="Weights"))
+    if context.get("has_bias_array", context["has_biases"]):
+        header.append(Declaration(f"{n}_biases", bias_ctype, ArrayLiteral(context["biases_array"]), array=True,
+                                  comment="Biases"))
+    else:
+        header.append(Declaration(f"{n}_biases", f"{bias_ctype}*", "NULL", comment="No biases"))
+    context_setup = ""
+    if context.get("has_weight_sum"):
+        header.append(Declaration(f"{n}_weight_sum", "int32_t", ArrayLiteral(context["weight_sum_array"]), array=True,
+                                  extent=str(out_c), comment="Precomputed weight sum for s8 fully connected"))
+        context_setup = (f"    // The context carries the precomputed kernel sums, not scratch.\n"
+                         f"    {n}_ctx.buf = (uint8_t *){n}_weight_sum;\n"
+                         f"    {n}_ctx.size = {out_c} * 4;  // sizeof(int32_t) = 4")
+    header += [
+        Declaration(f"{n}_input", context["input_dtype"], ArrayLiteral(context["input_data_array"]), array=True,
+                    comment="Input data (for testing)"),
+        Declaration(f"{n}_expected_output", context["output_dtype"], ArrayLiteral(context["expected_output_array"]),
+                    array=True, comment="Expected output (golden)"),
+    ]
+    output = context["output_dims"]
+    return ArgumentPool(
+        name=n, values=values, header=header, source=source,
+        output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})", benchmark=False,
+        no_scratch=not float_kernel and context["kernel_fn"] == "arm_fully_connected_s4",
+        context_setup=context_setup,
+    )
+
+
+def fc_fault(pool: ArgumentPool, kind: str, context: Dict[str, Any]) -> ArgumentPool:
+    """The pool of a FullyConnected fault case: the passing pool with the faulted argument edited."""
+    n = context["name"]
+    edit = common_fault(pool, kind, layout=context.get("kernel_layout"))
+    if edit is None and kind == "filter_n_mismatch":
+        d = context["input_dims"]
+        edit = struct_copy(pool, kind, "filter_dims", "cmsis_nn_dims", f"{n}_filter_dims",
+                           {"n": int(d["h"]) * int(d["w"]) * int(d["c"]) + 1})
+    if edit is None:
+        raise ValueError(f"{n}: no FullyConnected fault edit for {kind!r}")
+    return with_fault(pool, edit)
 
 
 class OpFullyConnected(OperationBase):
@@ -48,6 +185,16 @@ class OpFullyConnected(OperationBase):
             raise self.fault_unreachable(
                 kind, f"{kernel_fn} only checks ctx->buf under ARM_MATH_MVEI; add required_capabilities: [mve]"
             )
+
+    def _render_fully_connected(self, output_dir: Path, context: Dict[str, Any]) -> None:
+        pool = fc_argument_pool(context)
+        fault = self.fault_kind()
+        if fault:
+            self._check_fault_reachable(fault, context)
+            context.update(self.fault_context())
+            pool = fc_fault(pool, fault, context)
+        self.render_harness_files(output_dir, stem="fully_connected", context=context, pool=pool,
+                                  validation_key=FC_VALIDATION_KEY, label="Fully connected", sizer_fn=fc_sizer(context))
 
     def needs_keras_model(self) -> bool:
         return str(self.desc.get("weight_dtype", "S8")).upper() != "S4"
@@ -730,25 +877,7 @@ class OpFullyConnected(OperationBase):
                 'validation_mode': 'float',
             }
             context.update(nonfinite_context)
-            fault = self.fault_kind()
-            c_template = "FullyConnectedFunctions/fully_connected/fully_connected.c.j2"
-            if fault:
-                self._check_fault_reachable(fault, context)
-                context.update(self.fault_context())
-                c_template = "FullyConnectedFunctions/fully_connected/fully_connected_fault.c.j2"
-
-            includes_api_dir = output_dir / "includes"
-            includes_api_dir.mkdir(parents=True, exist_ok=True)
-            
-            h_content = self.render_template("FullyConnectedFunctions/fully_connected/fully_connected.h.j2", context)
-            h_path = includes_api_dir / f"{name}_fully_connected.h"
-            with open(h_path, 'w') as f:
-                f.write(h_content)
-            
-            c_content = self.render_template(c_template, context)
-            c_path = output_dir / f"{name}_fully_connected.c"
-            with open(c_path, 'w') as f:
-                f.write(c_content)
+            self._render_fully_connected(output_dir, context)
             
             cmake_context = {
                 'name': name,
@@ -1068,27 +1197,8 @@ class OpFullyConnected(OperationBase):
             'weight_sum_array': weight_sum_array_str,
             'has_weight_sum': has_weight_sum,
         }
-        fault = self.fault_kind()
-        c_template = "FullyConnectedFunctions/fully_connected/fully_connected.c.j2"
-        if fault:
-            self._check_fault_reachable(fault, context)
-            context.update(self.fault_context())
-            c_template = "FullyConnectedFunctions/fully_connected/fully_connected_fault.c.j2"
+        self._render_fully_connected(output_dir, context)
 
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("FullyConnectedFunctions/fully_connected/fully_connected.h.j2", context)
-        h_path = includes_api_dir / f"{name}_fully_connected.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template(c_template, context)
-        c_path = output_dir / f"{name}_fully_connected.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'FullyConnected'),

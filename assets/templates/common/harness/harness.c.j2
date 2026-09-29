@@ -65,7 +65,7 @@ static cmsis_nn_context {{ name }}_ctx;
     {% if harness.sizer_call %}
     // Calculate required buffer size
     int32_t required_buffer_size = {{ harness.sizer_call }};
-    {% else %}
+    {% elif not (force_no_scratch | default(false) or harness.no_scratch) %}
     // The entry takes no scratch query (entry_scratch in the descriptor).
     int32_t required_buffer_size = {{ harness.scratch_bytes }};
     {% endif %}
@@ -97,6 +97,8 @@ static cmsis_nn_context {{ name }}_ctx;
     // No scratch for the kernel ({{ name }}_buffer stays armed and unused).
     {{ name }}_ctx.buf = NULL;
     {{ name }}_ctx.size = 0;
+    {% elif harness.context_setup %}
+{{ harness.context_setup }}
     {% else %}
     {{ name }}_ctx.buf = {{ name }}_buffer;
     {{ name }}_ctx.size = required_buffer_size;
@@ -109,10 +111,13 @@ static cmsis_nn_context {{ name }}_ctx;
     {% if harness.fault_setup %}
 
 {{ harness.fault_setup }}
+    HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
     {% endif %}
 {% endmacro %}
 int32_t {{ name }}_run(
-    const {{ input_dtype }}* __restrict input,
+    {% for local, ctype, array in harness.inputs %}
+    const {{ ctype or input_dtype }}* __restrict {{ local }},
+    {% endfor %}
     {{ output_dtype }}* __restrict output
 ) {
     {{ harness_init() }}
@@ -174,7 +179,7 @@ int32_t {{ name }}_test_case_run(void)
     {% else %}
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     {% endif %}
-    int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
+    int32_t status = {{ name }}_run({% for local, ctype, array in harness.inputs %}{{ array }}, {% endfor %}{{ name }}_output);
     int failures = 0;
     {% for result_var, call, fn, expected in harness.checks %}
     int32_t {{ result_var }} = {{ call }};

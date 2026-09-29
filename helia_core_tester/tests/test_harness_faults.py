@@ -56,8 +56,9 @@ def test_a_fault_edits_the_kernel_call_but_not_the_sizer() -> None:
     assert "&c_fault_params, /* params */" in plan.run_call and "&c_fault_params" in plan.bench_call
     assert "&c_params /* params */" not in plan.run_call
     assert plan.sizer_call.startswith("arm_fx_kernel_s8_get_buffer_size(\n    &c_params, /* params */")
-    assert plan.fault_kind == "zero_stride" and plan.fault_declarations == ["static cmsis_nn_conv_params c_fault_params;"]
-    assert plan.fault_setup.splitlines()[1:] == ["    c_fault_params = c_params;", "    c_fault_params.stride.w = 0;"]
+    assert plan.fault_kind == "zero_stride" and plan.fault_declarations == []
+    assert plan.fault_setup.splitlines()[1:] == ["    cmsis_nn_conv_params c_fault_params = c_params;",
+                                                 "    c_fault_params.stride.w = 0;"]
     assert pool.benchmark is False
 
 

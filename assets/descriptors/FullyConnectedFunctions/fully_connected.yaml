@@ -546,3 +546,31 @@ filter_shape: [4, 8]
 use_bias: true
 fault: small_ctx_size
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# Contract entries (entry:): a public kernel the wrappers route to, called directly and bound
+# from the kernel contract. Per-tensor quantization, since both take the per-tensor struct.
+operator: FullyConnected
+name: fully_connected_entry_contract_s8_k23_n9_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_s8
+hint:
+  call_style: per_tensor
+  force_per_tensor: true
+input_shape: [2, 23]
+filter_shape: [9, 23]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_entry_contract_s16_k19_n7_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_s16
+hint:
+  call_style: per_tensor
+  force_per_tensor: true
+input_shape: [3, 19]
+filter_shape: [7, 19]
+use_bias: true

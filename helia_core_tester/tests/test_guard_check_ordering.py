@@ -150,7 +150,10 @@ def _template_id(path: Path) -> str:
 
 
 def test_inventory_covers_every_template() -> None:
-    assert len(_all_templates()) > 80
+    # Operators migrate onto the generic harness and delete their templates, so the count
+    # falls over time; the harness itself must always be in the inventory.
+    templates = _all_templates()
+    assert TEMPLATES_ROOT / "common" / "harness" / "harness.c.j2" in templates and len(templates) > 1
 
 
 @pytest.mark.parametrize("template", _all_templates(), ids=_template_id)

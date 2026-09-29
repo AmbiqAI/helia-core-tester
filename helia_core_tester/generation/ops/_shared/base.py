@@ -1088,13 +1088,15 @@ class OperationBase(ABC):
         pool: Any,
         validation_key: str,
         label: str,
+        sizer_fn: Any = "context",
     ) -> None:
         """Write `includes/<name>_<stem>.h` and `<name>_<stem>.c` through the generic harness.
 
         The header carries the pool's data; the source binds `context['kernel_fn']` and its
         scratch query from the pool against the kernel contract. `validation_key` is the
         operator's former template path, still the key of TemplateContextBuilder's validation
-        rules. A fault case is the same render from a pool carrying a FaultEdit.
+        rules. A fault case is the same render from a pool carrying a FaultEdit. `sizer_fn`
+        overrides `context['kernel_get_buffer_size_fn']` (None: the case calls no sizer).
         """
         from helia_core_tester.contract import render as contract_render
         from helia_core_tester.generation.harness import plan_harness, render_declaration
@@ -1106,7 +1108,7 @@ class OperationBase(ABC):
         header = env.get_template(self.HARNESS_HEADER).render(
             name=name, header_declarations=[render_declaration(d) for d in pool.header])
         (includes_dir / f"{name}_{stem}.h").write_text(header)
-        sizer = context.get("kernel_get_buffer_size_fn")
+        sizer = context.get("kernel_get_buffer_size_fn") if sizer_fn == "context" else sizer_fn
         plan = plan_harness(
             pool,
             kernel_fn=context["kernel_fn"],

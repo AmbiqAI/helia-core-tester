@@ -6,6 +6,82 @@ import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, HarnessInput
+from helia_core_tester.generation.harness.faults import common_fault, struct_copy, with_fault
+
+BMM_VALIDATION_KEY = "FullyConnectedFunctions/batch_matmul/batch_matmul.c.j2"
+
+
+def bmm_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
+    """Every value a BatchMatMul case can pass to a public batch-matmul kernel or its scratch query."""
+    n = context["name"]
+    float_kernel = bool(context.get("float_kernel"))
+    bmm = context["bmm_params"]
+
+    def dims(d: Dict[str, Any]) -> Dict[str, Any]:
+        return {"n": d["n"], "h": d["h"], "w": d["w"], "c": d["c"]}
+
+    params_init: Dict[str, Any] = {"adj_x": str(bmm["adj_x"]).lower(), "adj_y": str(bmm["adj_y"]).lower()}
+    if float_kernel:
+        params_init["activation"] = {"min": context["bmm_activation_min_literal"],
+                                     "max": context["bmm_activation_max_literal"]}
+        params_init["rhs_format"] = "ARM_NN_WEIGHT_FORMAT_STANDARD"
+    else:
+        fc = bmm["fc_params"]
+        params_init["fc_params"] = {"input_offset": fc["input_offset"], "filter_offset": fc["filter_offset"],
+                                    "output_offset": fc["output_offset"],
+                                    "activation": {"min": fc["activation_min"], "max": fc["activation_max"]}}
+    header = [
+        Declaration(f"{n}_input_lhs_dims", "cmsis_nn_dims", dims(context["input_lhs_dims"]), comment="Input LHS dimensions"),
+        Declaration(f"{n}_input_rhs_dims", "cmsis_nn_dims", dims(context["input_rhs_dims"]), comment="Input RHS dimensions"),
+        Declaration(f"{n}_output_dims", "cmsis_nn_dims", dims(context["output_dims"]), comment="Output dimensions"),
+        Declaration(f"{n}_bmm_params", context.get("bmm_params_type") or "cmsis_nn_bmm_params", params_init,
+                    comment="Batch matmul parameters"),
+    ]
+    values = {"ctx": f"&{n}_ctx", "bmm_params": f"&{n}_bmm_params", "input_lhs_dims": f"&{n}_input_lhs_dims",
+              "input_rhs_dims": f"&{n}_input_rhs_dims", "output_dims": f"&{n}_output_dims"}
+    source = []
+    if not float_kernel:
+        quant = context["quant_params"]
+        header.append(Declaration(f"{n}_quant_params", "cmsis_nn_per_tensor_quant_params",
+                                  {"multiplier": str(quant["multiplier"]), "shift": str(quant["shift"])},
+                                  comment="Quantization parameters (per-tensor)"))
+        values["quant_params"] = f"&{n}_quant_params"
+        rhs = context["input_rhs_dims"]
+        # The int sizer is the fully-connected one: RHS [batch, K, N] read as filter dims n=K, c=N.
+        source.append(Declaration(f"{n}_filter_dims_for_buffer", "cmsis_nn_dims",
+                                  {"n": rhs["c"], "h": 1, "w": 1, "c": rhs["w"]},
+                                  comment="RHS dimensions as the scratch query reads them"))
+        values["filter_dims"] = f"&{n}_filter_dims_for_buffer"
+    header += [
+        Declaration(f"{n}_input_lhs", context["input_dtype"], ArrayLiteral(context["input_lhs_array"]), array=True,
+                    comment="Input LHS data (for testing)"),
+        Declaration(f"{n}_input_rhs", context["input_dtype"], ArrayLiteral(context["input_rhs_array"]), array=True,
+                    comment="Input RHS data (for testing)"),
+        Declaration(f"{n}_expected_output", context["output_dtype"], ArrayLiteral(context["expected_output_array"]),
+                    array=True, comment="Expected output (golden)"),
+    ]
+    output = context["output_dims"]
+    return ArgumentPool(
+        name=n, values=values, header=header, source=source, output_param="output",
+        inputs=(HarnessInput("input_lhs", "input_lhs", f"{n}_input_lhs"),
+                HarnessInput("input_rhs", "input_rhs", f"{n}_input_rhs")),
+        output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})", benchmark=False,
+    )
+
+
+def bmm_fault(pool: ArgumentPool, kind: str, context: Dict[str, Any]) -> ArgumentPool:
+    """The pool of a BatchMatMul fault case: the passing pool with the faulted argument edited."""
+    n = context["name"]
+    edit = common_fault(pool, kind)
+    if edit is None and kind == "negative_dim":
+        edit = struct_copy(pool, kind, "input_rhs_dims", "cmsis_nn_dims", f"{n}_input_rhs_dims", {"w": -1})
+    elif edit is None and kind == "packed_rhs_adjoint":
+        edit = struct_copy(pool, kind, "bmm_params", context.get("bmm_params_type") or "cmsis_nn_bmm_params",
+                           f"{n}_bmm_params", {"rhs_format": "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"})
+    if edit is None:
+        raise ValueError(f"{n}: no BatchMatMul fault edit for {kind!r}")
+    return with_fault(pool, edit)
 
 
 class OpBatchMatMul(OperationBase):
@@ -19,6 +95,16 @@ class OpBatchMatMul(OperationBase):
         "null_output",
         "packed_rhs_adjoint",
     )
+
+    def _render_batch_matmul(self, output_dir: Path, context: Dict[str, Any]) -> None:
+        pool = bmm_argument_pool(context)
+        fault = self.fault_kind()
+        if fault:
+            self._check_fault_reachable(fault, context)
+            context.update(self.fault_context())
+            pool = bmm_fault(pool, fault, context)
+        self.render_harness_files(output_dir, stem="batch_matmul", context=context, pool=pool,
+                                  validation_key=BMM_VALIDATION_KEY, label="Batch matmul")
 
     def _check_fault_reachable(self, kind: str, context: Dict[str, Any]) -> None:
         """Reject fault kinds the selected batch-matmul kernel does not diagnose."""
@@ -387,24 +473,7 @@ class OpBatchMatMul(OperationBase):
                 'validation_mode': 'float',
             }
             context.update(nonfinite_context)
-            fault = self.fault_kind()
-            c_template = "FullyConnectedFunctions/batch_matmul/batch_matmul.c.j2"
-            if fault:
-                self._check_fault_reachable(fault, context)
-                context.update(self.fault_context())
-                c_template = "FullyConnectedFunctions/batch_matmul/batch_matmul_fault.c.j2"
-            includes_api_dir = output_dir / "includes"
-            includes_api_dir.mkdir(parents=True, exist_ok=True)
-            
-            h_content = self.render_template("FullyConnectedFunctions/batch_matmul/batch_matmul.h.j2", context)
-            h_path = includes_api_dir / f"{name}_batch_matmul.h"
-            with open(h_path, 'w') as f:
-                f.write(h_content)
-            
-            c_content = self.render_template(c_template, context)
-            c_path = output_dir / f"{name}_batch_matmul.c"
-            with open(c_path, 'w') as f:
-                f.write(c_content)
+            self._render_batch_matmul(output_dir, context)
             
             cmake_context = {
                 'name': name,
@@ -521,27 +590,8 @@ class OpBatchMatMul(OperationBase):
             'kernel_get_buffer_size_fn': kernel_info["kernel_get_buffer_size_fn"],
             'buffer_size_max': buffer_size_max,
         }
-        fault = self.fault_kind()
-        c_template = "FullyConnectedFunctions/batch_matmul/batch_matmul.c.j2"
-        if fault:
-            self._check_fault_reachable(fault, context)
-            context.update(self.fault_context())
-            c_template = "FullyConnectedFunctions/batch_matmul/batch_matmul_fault.c.j2"
+        self._render_batch_matmul(output_dir, context)
 
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("FullyConnectedFunctions/batch_matmul/batch_matmul.h.j2", context)
-        h_path = includes_api_dir / f"{name}_batch_matmul.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template(c_template, context)
-        c_path = output_dir / f"{name}_batch_matmul.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
         cmake_context = {
             'name': name,
             'operator': self.desc.get('operator', 'BatchMatMul'),
