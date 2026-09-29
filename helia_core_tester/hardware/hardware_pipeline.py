@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Union
 
 from .boards import BoardSpec, default_session_id
-from .firmware_build import FlashDecision, build_id_path, flash_firmware, read_build_id, resolve_build_dir, stage_kernels
+from .firmware_build import (
+    FlashDecision,
+    build_id_path,
+    flash_firmware,
+    nsx_app_dir,
+    read_build_id,
+    resolve_build_dir,
+    stage_kernels,
+)
 from .measurement import (
     TooManyPassesError,
     UnsupportedCounterError,
@@ -346,10 +354,10 @@ def run_hardware_pipeline(
         raise ValueError("--skip-flash and --force-flash cannot be combined.")
     resolved_build_dir = resolve_build_dir(repo_root, board, build_dir)
     if app_options is None:
-        from .nsx_app import AppOptions, nested_kernel_root
+        from .nsx_app import resolve_options
 
-        # Same default as the CLI.
-        app_options = AppOptions(cmsis_nn_root=nested_kernel_root(repo_root))
+        # Same resolution as the CLI.
+        app_options = resolve_options(nsx_app_dir(resolved_build_dir), repo_root)
 
     generate_s = 0.0
     if skip_generate:

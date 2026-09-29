@@ -299,16 +299,17 @@ def stage_kernels(
 ) -> Path:
     """Render, lock, sync; return the kernel source."""
     from . import nsx_cli
-    from .nsx_app import AppOptions, kernel_dir, render_app
+    from .nsx_app import OPTIONS_FILE, AppOptions, kernel_dir, render_app, saved_options
 
     options = options or AppOptions()
     app_dir = nsx_app_dir(build_dir)
-    asm = "on" if options.requantize_inline_asm else "off"
-    typer.echo(f"[hardware] Kernels: {options.kernel_source()}, inline asm {asm}")
-    rendered = render_app(board, options, app_dir, repo_root=tester_repo_root())
-    if rendered.changed:
-        names = ", ".join(rendered.changed)
-        typer.echo(f"[hardware] WARNING: build options changed since the last build ({names}).", err=True)
+    typer.echo(f"[hardware] Kernels: {options.summary()}")
+    saved = saved_options(app_dir)
+    # Compare values: templates embed paths.
+    changes = options.changes_from(saved) if saved else []
+    if changes:
+        typer.echo(f"[hardware] Options changed, rebuilding: {'; '.join(changes)}")
+    render_app(board, options, app_dir, repo_root=tester_repo_root())
     # Kernel edits change the vendored hash.
     relock = update_dependencies or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
     if relock:
@@ -329,6 +330,7 @@ def stage_kernels(
         stamp.write_text(nsx_cli.sync_stamp(app_dir), encoding="utf-8")
     else:
         typer.echo("[hardware] NSX modules unchanged; skipping lock and sync.")
+    (app_dir / OPTIONS_FILE).write_text(options.to_json(), encoding="utf-8")
     # Generation needs Tests/, absent when vendored.
     return options.cmsis_nn_root or kernel_dir(app_dir, options)
 

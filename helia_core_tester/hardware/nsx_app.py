@@ -11,7 +11,9 @@ out of its own wheel on every lock and sync, so the app never ships them.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import json
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +54,9 @@ KERNEL_TREES = ("Include", "Source", "cmake")
 CHECKOUT_DIRS = ("Include", "Source")
 CHECKOUT_FILES = ("nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
 KERNEL_SHIM = "# Shim: delegates to the native ns-cmsis-nn NSX build.\nadd_subdirectory(nsx)\n"
+
+# Options the last staged build used.
+OPTIONS_FILE = ".hct-options.json"
 
 RTT_BUFFER_SIZE_UP = 8192
 RTT_BUFFER_SIZE_DOWN = 512
@@ -107,6 +112,66 @@ class AppOptions:
         }
         return {name: "ON" if on else "OFF" for name, on in switches.items()}
 
+    def summary(self) -> str:
+        """Kernel source and inline asm, as printed."""
+        return f"{self.kernel_source()}, inline asm {_on_off(self.requantize_inline_asm)}"
+
+    def changes_from(self, old: "AppOptions") -> list[str]:
+        """What differs from old, as printed."""
+        changes = []
+        if old.kernel_source() != self.kernel_source():
+            changes.append(f"kernels {old.kernel_source()} -> {self.kernel_source()}")
+        for field in dataclasses.fields(self):
+            before, after = getattr(old, field.name), getattr(self, field.name)
+            if field.name.startswith("cmsis_nn_") or before == after:
+                continue
+            label = field.name.replace("_", " ")
+            changes.append(f"{label} {_on_off(before)} -> {_on_off(after)}")
+        return changes
+
+    def to_json(self) -> str:
+        data = dataclasses.asdict(self)
+        data["cmsis_nn_root"] = self.cmsis_nn_root and str(self.cmsis_nn_root)
+        return json.dumps(data, indent=2) + "\n"
+
+    @classmethod
+    def from_json(cls, text: str) -> "AppOptions":
+        data = json.loads(text)
+        names = {field.name for field in dataclasses.fields(cls)}
+        return cls(**{key: value for key, value in data.items() if key in names})
+
+
+def _on_off(value: Any) -> str:
+    return ("on" if value else "off") if isinstance(value, bool) else str(value)
+
+
+def saved_options(app_dir: Path) -> Optional[AppOptions]:
+    """Options the last build used, if readable."""
+    try:
+        return AppOptions.from_json((app_dir / OPTIONS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def resolve_options(
+    app_dir: Path,
+    repo_root: Path,
+    *,
+    cmsis_nn_ref: Optional[str] = None,
+    cmsis_nn_root: Optional[Path] = None,
+    inline_asm: Optional[bool] = None,
+) -> AppOptions:
+    """Given flags win, then saved, then defaults."""
+    saved = saved_options(app_dir)
+    base = saved or AppOptions(cmsis_nn_root=nested_kernel_root(repo_root))
+    if cmsis_nn_ref or cmsis_nn_root:
+        base = dataclasses.replace(base, cmsis_nn_ref=cmsis_nn_ref or CMSIS_NN_REF, cmsis_nn_root=cmsis_nn_root)
+    elif saved and saved.cmsis_nn_root and not saved.cmsis_nn_root.is_dir():
+        raise AppRenderError(f"Last build's kernel root is gone: {saved.cmsis_nn_root}")
+    if inline_asm is not None:
+        base = dataclasses.replace(base, requantize_inline_asm=inline_asm)
+    return base
+
 
 @dataclass(frozen=True)
 class AppRender:
@@ -117,8 +182,6 @@ class AppRender:
     nsx_yml: str
     modules_cmake: str
     cmakelists: str
-    # Existing files this render rewrote.
-    changed: tuple[str, ...] = ()
 
 
 def module_names(board: BoardSpec, profile: dict[str, Any]) -> list[str]:
@@ -173,17 +236,15 @@ def _write_if_absent(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _write_if_changed(path: Path, text: str) -> bool:
-    """Skip unchanged files; True if rewritten."""
-    existed = path.exists()
+def _write_if_changed(path: Path, text: str) -> None:
+    """Skip unchanged files: keeps mtimes."""
     try:
         if path.read_text(encoding="utf-8") == text:
-            return False
+            return
     except (OSError, UnicodeDecodeError):
         pass
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
-    return existed
 
 
 def _check_no_overlap(root: Path, module_dir: Path) -> None:
@@ -275,9 +336,7 @@ def render_app(
 
     if options.cmsis_nn_root is not None:
         write_kernels(options.cmsis_nn_root, kernel_dir(app_dir, options))
-    changed = tuple(
-        name for name, text in (("nsx.yml", nsx_yml), ("CMakeLists.txt", cmakelists))
-        if _write_if_changed(app_dir / name, text)
-    )
+    _write_if_changed(app_dir / "nsx.yml", nsx_yml)
+    _write_if_changed(app_dir / "CMakeLists.txt", cmakelists)
     _write_if_absent(app_dir / "cmake" / "nsx" / "modules.cmake", modules_cmake)
-    return AppRender(app_dir, tuple(modules), nsx_yml, modules_cmake, cmakelists, changed)
+    return AppRender(app_dir, tuple(modules), nsx_yml, modules_cmake, cmakelists)

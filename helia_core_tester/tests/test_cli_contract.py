@@ -302,3 +302,29 @@ def test_stream_requires_the_build_id_stamp_unless_allowed(monkeypatch, tmp_path
     monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _stream)
     runner.invoke(app, ["hardware", "run", "--skip-generate", "--skip-flash", "--allow-unverified-firmware"])
     assert seen["allow_unverified_firmware"] is True
+
+
+@pytest.mark.parametrize("command", ["build", "flash", "run"])
+def test_inline_asm_flag_is_tri_state(monkeypatch, tmp_path, command) -> None:
+    """Unset reuses the build dir's saved setting."""
+    from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    seen: dict = {}
+
+    def _capture(*args, **kwargs):
+        seen["options"] = kwargs.get("app_options") or kwargs.get("options")
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(firmware_build, "build_firmware", _capture)
+    monkeypatch.setattr(firmware_build, "flash_firmware", _capture)
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _capture)
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    (app_dir / nsx_app.OPTIONS_FILE).write_text(
+        nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=False).to_json(), encoding="utf-8",
+    )
+    base = ["hardware", command, "--build-dir", str(tmp_path)]
+    for flags, inline_asm in (([], False), (["--inline-asm"], True), (["--no-inline-asm"], False)):
+        runner.invoke(app, base + flags)
+        assert seen["options"] == nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=inline_asm), flags

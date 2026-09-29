@@ -536,6 +536,37 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
         )
 
 
+def test_run_generates_from_the_saved_kernels(tmp_path: Path, monkeypatch) -> None:
+    """Generator and firmware use one resolution."""
+    from helia_core_tester.hardware import hardware_pipeline, nsx_app
+    from helia_core_tester.tests.test_hardware_nsx_app import make_checkout
+
+    build_dir = tmp_path / "bd"
+    saved = nsx_app.AppOptions(cmsis_nn_root=make_checkout(tmp_path / "kernels"), requantize_inline_asm=False)
+    app_dir = firmware_build.nsx_app_dir(build_dir)
+    app_dir.mkdir(parents=True)
+    (app_dir / nsx_app.OPTIONS_FILE).write_text(saved.to_json(), encoding="utf-8")
+    seen: dict = {}
+
+    def _stage(spec, *, options, **kwargs):
+        seen["stage"] = options
+        return options.cmsis_nn_root
+
+    def _flash(spec, serial, *, options, **kwargs):
+        seen["flash"] = options
+        return FlashDecision(False, "abc", "test")
+
+    monkeypatch.setattr(hardware_pipeline, "generate_tests_for_board", lambda *a, cmsis_nn_root, **k: seen.update(generate=cmsis_nn_root))
+    monkeypatch.setattr(hardware_pipeline, "stage_kernels", _stage)
+    monkeypatch.setattr(hardware_pipeline, "flash_firmware", _flash)
+    monkeypatch.setattr(
+        hardware_pipeline, "stream_generated_tests",
+        lambda *a, **k: hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[]),
+    )
+    run_hardware_pipeline(tmp_path, BOARD, SERIAL, options=StreamOptions(), build_dir=build_dir, echo=lambda _msg: None)
+    assert seen == {"stage": saved, "generate": saved.cmsis_nn_root, "flash": saved}
+
+
 def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeypatch) -> None:
     from helia_core_tester.hardware import hardware_pipeline
 
