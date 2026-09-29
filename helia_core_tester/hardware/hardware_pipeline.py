@@ -11,10 +11,10 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Union
 
 from .boards import BoardSpec, default_session_id
-from .firmware_build import FlashDecision, build_id_path, flash_firmware, read_build_id, resolve_build_dir
+from .firmware_build import FlashDecision, build_id_path, flash_firmware, read_build_id, resolve_build_dir, stage_kernels
 from .measurement import (
     TooManyPassesError,
     UnsupportedCounterError,
@@ -25,6 +25,9 @@ from .measurement import (
 from .pmu_catalog import GROUPS, default_selection
 from .result_bundle import write_timing
 from .run_summary import make_live_progress_printer
+
+if TYPE_CHECKING:
+    from .nsx_app import AppOptions
 
 PRECISION_SUFFIX = {"fp16": "_f16", "fp32": "_f32"}
 # `--precision` value -> Config.float_precision value for the generate step.
@@ -147,11 +150,18 @@ def resolve_pmu_options(pmu_counters: Sequence[str], pmu_groups: Optional[str], 
     return default_selection()
 
 
-def generate_tests_for_board(repo_root: Path, board: BoardSpec, suite: str, float_precision: Optional[str] = None) -> None:
+def generate_tests_for_board(
+    repo_root: Path,
+    board: BoardSpec,
+    suite: str,
+    float_precision: Optional[str] = None,
+    cmsis_nn_root: Optional[Path] = None,
+) -> None:
     """Run the generate step for the board's CPU and the requested suite, exactly as
     `helia_core_tester generate --cpu <board.cpu> --suite <suite>
     [--float-precision <float_precision>]` would. `float_precision` (f16/f32/both)
-    is an explicit override when given; otherwise the TOML/env/default applies."""
+    is an explicit override when given; otherwise the TOML/env/default applies.
+    `cmsis_nn_root` is the kernel tree the firmware compiles."""
     from ..core.config import Config
     from ..core.logging import setup_logger
     from ..core.steps import GenerateStep
@@ -161,6 +171,9 @@ def generate_tests_for_board(repo_root: Path, board: BoardSpec, suite: str, floa
     if float_precision is not None:
         kwargs["float_precision"] = float_precision
         overrides.add("float_precision")
+    if cmsis_nn_root is not None:
+        kwargs["cmsis_nn_root"] = cmsis_nn_root
+        overrides.add("cmsis_nn_root")
     config = Config(
         project_root=repo_root,
         cpu=board.cpu,
@@ -325,20 +338,36 @@ def run_hardware_pipeline(
     echo: Callable[[str], None],
     progress_to_stderr: bool = False,
     allow_unverified_firmware: bool = False,
+    app_options: Optional["AppOptions"] = None,
+    update_dependencies: bool = False,
 ) -> HardwareRunOutcome:
-    """generate (board cpu) -> build -> flash unless the board already runs this build -> stream -> bundle."""
+    """stage kernels -> generate (board cpu) -> build -> flash unless the board already runs this build -> stream -> bundle."""
     if skip_flash and force_flash:
         raise ValueError("--skip-flash and --force-flash cannot be combined.")
     resolved_build_dir = resolve_build_dir(repo_root, board, build_dir)
+    if app_options is None:
+        from .nsx_app import AppOptions, nested_kernel_root
+
+        # Same default as the CLI.
+        app_options = AppOptions(cmsis_nn_root=nested_kernel_root(repo_root))
 
     generate_s = 0.0
     if skip_generate:
         echo("[hardware] --skip-generate set; reusing existing artifacts/generated_tests.")
     else:
+        # Generate against the firmware's kernels.
+        kernel_root = stage_kernels(
+            board, build_dir=resolved_build_dir, options=app_options, force_sync=force_reconfigure,
+            update_dependencies=update_dependencies,
+        )
+        # Staging did the forced work.
+        force_reconfigure = update_dependencies = False
         precision_note = f" float_precision={options.float_precision}" if options.float_precision else ""
-        echo(f"[hardware] Generating tests (cpu={board.cpu} suite={options.suite}{precision_note})...")
+        echo(f"[hardware] Generating tests (cpu={board.cpu} suite={options.suite}{precision_note} kernels={kernel_root})...")
         generate_started = time.monotonic()
-        generate_tests_for_board(repo_root, board, options.suite, float_precision=options.float_precision)
+        generate_tests_for_board(
+            repo_root, board, options.suite, float_precision=options.float_precision, cmsis_nn_root=kernel_root,
+        )
         generate_s = time.monotonic() - generate_started
 
     flash: Optional[FlashDecision] = None
@@ -347,6 +376,7 @@ def run_hardware_pipeline(
     else:
         flash = flash_firmware(
             board, serial_no, build_dir=resolved_build_dir, jobs=jobs, force_reconfigure=force_reconfigure, force=force_flash,
+            options=app_options, update_dependencies=update_dependencies,
         )
 
     outcome = stream_generated_tests(

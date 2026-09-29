@@ -27,8 +27,8 @@ The CMake flash target (`nsx_add_segger_targets()` in cmake/nsx/nsx_helpers.cmak
 runs the `JLinkExe` *binary*, not the library. `find_jlink_exe()` resolves it in
 the same spirit so `doctor`, probe enumeration, RTT and flashing all agree on
 one install: `JLINK_PATH` (the binary or its directory), then the directory of
-the resolved library, then `JLinkExe` on PATH. `firmware_build.configure()`
-forwards the result as `-DNSX_JLINK_EXE=`.
+the resolved library, then `JLinkExe` on PATH. `hardware build` exports the
+result as `$JLINK_PATH`, which NSX bakes into the flash target.
 
 The environment variable names are shared with hpx so one runner configuration
 serves both tools; do not rename them.
