@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.4.0...v0.5.0) (2026-09-29)
+
+
+### Features
+
+* **conv:** call the int8 convolve direct entries from a descriptor ([#243](https://github.com/AmbiqAI/helia-core-tester/issues/243)) ([68adad5](https://github.com/AmbiqAI/helia-core-tester/commit/68adad587049a74be7178da253a86f3e200782d6)), closes [#241](https://github.com/AmbiqAI/helia-core-tester/issues/241)
+* **entries:** call the FP16 _acc16 and layout-free entries from a descriptor ([#247](https://github.com/AmbiqAI/helia-core-tester/issues/247)) ([fa4b379](https://github.com/AmbiqAI/helia-core-tester/commit/fa4b379b230fbeddbe1d580f41f29f9c1c597f4b)), closes [#242](https://github.com/AmbiqAI/helia-core-tester/issues/242)
+
 ## [0.4.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.3.3...v0.4.0) (2026-09-28)
 
 
