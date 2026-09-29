@@ -89,6 +89,16 @@ def lock_digest(app_dir: Path) -> Optional[str]:
     return hash_file(path) if path.is_file() else None
 
 
+def locked_commit(app_dir: Path, module: str) -> Optional[str]:
+    """A module's locked git commit, if any."""
+    try:
+        lock = read_lock(app_dir)
+    except (NSXError, ValueError):
+        return None
+    entry = lock.modules.get(module) if lock else None
+    return entry.commit if entry else None
+
+
 def tree_hash(root: Path) -> str:
     """NSX's content hash of a tree."""
     return hash_tree(root)

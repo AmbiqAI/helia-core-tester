@@ -239,6 +239,7 @@ def run_case_bundles(
         target_info=board.target_info(),
         host_log_text=host_log,
         target_log_text=target_log,
+        build_dir=build_dir,
     )
     return merged_result, bundle_root
 

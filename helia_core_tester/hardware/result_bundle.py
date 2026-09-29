@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
+import subprocess
 from pathlib import Path
+from typing import Any
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
 from .measurement import compute_counter_medians, counter_names_for_passes
@@ -44,6 +47,73 @@ def _split_protocol_trace_entry(entry: str) -> tuple[int | None, str, str]:
 
 
 
+def _read_json(path: Path) -> Any:
+    """Parsed JSON, or None."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _git_state(root: Path) -> tuple[str | None, bool | None]:
+    """HEAD and dirty flag of a checkout."""
+
+    def git(*args: str) -> str | None:
+        try:
+            done = subprocess.run(
+                ["git", "-C", str(root), *args], capture_output=True, text=True, timeout=10, check=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout.strip()
+
+    head = git("rev-parse", "HEAD")
+    status = git("status", "--porcelain", "--untracked-files=no") if head else None
+    return head, None if status is None else bool(status)
+
+
+def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
+    """What the last build used, plus nsx.lock."""
+    # Saved records, not flags; missing means null.
+    from . import nsx_cli
+    from .firmware_build import BUILT_LOCK, SYNC_STAMP, nsx_app_dir
+    from .nsx_app import CMSIS_NN_MODULE, saved_options
+
+    kernels: dict[str, Any] = dict.fromkeys(("ref", "commit", "root", "root_head", "root_dirty", "tree_hash"))
+    provenance: dict[str, Any] = {"options": None, "kernels": kernels, "neuralspotx_version": None, "nsx_lock_sha256": None}
+    if build_dir is None:
+        return provenance, None
+    app_dir = nsx_app_dir(build_dir)
+    built = _read_json(app_dir / BUILT_LOCK)
+    built = built if isinstance(built, dict) else {}
+    built_lock = built.get("lock") or None
+    kernels["tree_hash"] = built.get("kernels") or None
+    provenance["nsx_lock_sha256"] = built_lock
+
+    options = saved_options(app_dir)
+    if options is not None:
+        provenance["options"] = json.loads(options.to_json())
+        if options.cmsis_nn_root is None:
+            kernels["ref"] = options.cmsis_nn_ref
+        else:
+            kernels["root"] = str(options.cmsis_nn_root)
+            kernels["root_head"], kernels["root_dirty"] = _git_state(options.cmsis_nn_root)
+
+    # Trust nsx.lock only if it built.
+    if built_lock is None or nsx_cli.lock_digest(app_dir) != built_lock:
+        return provenance, None
+    kernels["commit"] = nsx_cli.locked_commit(app_dir, CMSIS_NN_MODULE)
+    try:
+        stamp = (app_dir / SYNC_STAMP).read_text(encoding="utf-8").strip()
+    except OSError:
+        stamp = ""
+    # Stamp reads "<lock sha256> <nsx version>".
+    lock_hash, _, version = stamp.partition(" ")
+    if lock_hash == built_lock and version:
+        provenance["neuralspotx_version"] = version
+    return provenance, app_dir / "nsx.lock"
+
+
 def write_timing(bundle_root: Path, timing: dict) -> Path:
     """Merge wall-clock `timing` into an existing bundle's session_summary.json.
 
@@ -68,6 +138,7 @@ def write_result_bundle(
     host_log_text: str = "session completed\n",
     target_log_text: str = "no physical target log captured\n",
     timing: dict | None = None,
+    build_dir: Path | None = None,
 ) -> Path:
     for case in result.cases:
         if len(case.samples) != len(case.normalized_samples):
@@ -92,7 +163,13 @@ def write_result_bundle(
             "protocol_trace": "protocol_trace.jsonl",
             "junit": "junit.xml",
         },
+        # Board-reported TARGET_INFO build id.
+        "firmware_build_id": result.build_id,
     }
+    session_manifest["build"], lock_file = build_provenance(build_dir)
+    if lock_file is not None:
+        shutil.copyfile(lock_file, bundle_root / "nsx.lock")
+        session_manifest["artifacts"]["nsx_lock"] = "nsx.lock"
     write_text_lf(bundle_root / "session_manifest.json", json.dumps(session_manifest, indent=2))
 
     case_rows = []
