@@ -112,9 +112,9 @@ Identity resolution rules:
   `hardware memory-report` measures against all come from the row in
   `assets/hardware_boards.yaml` (`helia_core_tester boards` lists it). Default:
   `$HPX_BOARD`, else `apollo510_evb`.
-- Boards: `apollo510_evb` and `apollo330mP_evb`. The apollo330mP J-Link device
-  `Apollo330P_510L` is an Ambiq-supplied entry, not in SEGGER's stock database;
-  install it under `~/.config/SEGGER/JLinkDevices/` (NSX flashes through it too).
+- The apollo330mP_evb J-Link device `Apollo330P_510L` is an Ambiq-supplied entry,
+  not in SEGGER's stock database; install it under `~/.config/SEGGER/JLinkDevices/`
+  (NSX flashes through it too).
 - Session sizing comes from the target: every RTT session starts with the firmware's
   `TARGET_INFO` (cases and PMU passes per plan, receive-buffer bytes, PMU width) and
   the host batches the bridged cases from it, so a board with different firmware

@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from neuralspotx.board_descriptors import load_board
 
+from helia_core_tester.hardware import nsx_cli
 from helia_core_tester.hardware.boards import (
     BoardSpec,
     UnknownBoardError,
@@ -56,10 +58,7 @@ def test_board_table_has_apollo330mP_evb() -> None:
 @pytest.mark.parametrize("spec", load_board_table(), ids=lambda spec: spec.id)
 def test_board_row_matches_nsx(spec: BoardSpec) -> None:
     # NSX owns board, SoC and CPU facts.
-    descriptors = pytest.importorskip("neuralspotx.board_descriptors")
-    from helia_core_tester.hardware import nsx_cli
-
-    descriptor = descriptors.load_board(spec.nsx_board)
+    descriptor = load_board(spec.nsx_board)
     assert descriptor is not None, f"NSX has no board {spec.nsx_board}"
     assert nsx_cli.starter_profile(spec.nsx_board) is not None
     assert (descriptor.soc, descriptor.cpu.core) == (spec.soc, spec.cpu)
