@@ -230,6 +230,33 @@ def test_memory_report_fails_closed_when_a_board_region_is_missing(tmp_path: Pat
     assert usage["flash_gate_pass"] is True and usage["tcm_gate_pass"] is True
 
 
+def test_memory_regions_skip_block_comments(tmp_path: Path) -> None:
+    # NSX scripts comment out whole rows.
+    script = tmp_path / "fw.ld"
+    script.write_text(
+        "MEMORY\n{\n"
+        "    MCU_TCM (rwx) : ORIGIN = 0x20000000, LENGTH = 245760\n"
+        "    /* STACK (rw) : ORIGIN = 0x2007D000, LENGTH = 12288\n"
+        "    HEAP (rw) : ORIGIN = 0x2007C000, LENGTH = 4096 */\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    assert report.parse_memory_regions(script) == [{"name": "MCU_TCM", "origin": 0x20000000, "capacity": 245760}]
+
+
+def test_tcm_code_counts_in_flash_and_tcm(tmp_path: Path, report_env: Path, monkeypatch) -> None:
+    # apollo330P puts TCM code in .dtcm_text.
+    sizes = ".dtcm_text 28 0\n.text 1000 0\n.stack 16 0\n.data 4 0\n.bss 8 0\n"
+    monkeypatch.setattr(
+        report, "_probe_binary", lambda tool, args, project_root=None: sizes if args[0] == "-A" else "",
+    )
+    elf = tmp_path / "fw.elf"
+    elf.write_bytes(b"elf")
+    usage = report.analyze_elf(elf, resolve_board("apollo330mP_evb"), tmp_path / "fw.ld", report_env).usage
+    assert usage["flash_image_bytes"] == 28 + 1000 + 4
+    assert usage["tcm_static_bytes"] == 28 + 16 + 4 + 8
+
+
 def test_write_text_lf_writes_lf(tmp_path: Path) -> None:
     # Bundle artifacts are byte-compared across hosts, so the helper must pin LF
     # regardless of the platform's os.linesep.
