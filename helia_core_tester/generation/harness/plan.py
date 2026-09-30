@@ -4,7 +4,7 @@ template prints: which providers the prototype needs, and the bound sizer and ke
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 from helia_core_tester.contract.bind import bind, takes
 from helia_core_tester.contract.ir import ContractSet
@@ -51,6 +51,7 @@ class HarnessPlan:
     local_prototype: str = ""
     prototype_from: str = ""
     void_return: bool = False
+    run_calls: Sequence[str] = ()
 
 
 def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str], scratch_bytes: Optional[int],
@@ -93,12 +94,23 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
     if kernel.returns.strip() == "void" and (fault is not None or pool.checks):
         raise HarnessError(f"{pool.name}: {kernel.name} returns void, so a fault edit or rule check has no status "
                            "to assert")
+    if pool.calls and kernel.returns.strip() == "void":
+        raise HarnessError(f"{pool.name}: a call list needs a status to stop on, but {kernel.name} returns void")
 
-    def call(bench: bool) -> str:
+    def call(bench: bool, overrides: Mapping[str, str] = {}) -> str:
         site = {**values, pool.output_param: f"{pool.name}_output" if bench else "output"}
         site.update({i.param: i.array if bench else i.local for i in inputs})
         if fault is not None:
             site.update(fault.values)
+        exact = {p.name for p in kernel.params}
+        for param in overrides:
+            if param not in exact:
+                # bind prefers the kernel's own spelling, so an alias-spelled override would be
+                # silently shadowed by the call-site value.
+                hint = " under that name" if takes(kernel, param) else ""
+                raise HarnessError(f"{pool.name}: a call overrides {param!r}, which {kernel.name} does not take"
+                                   f"{hint}; spell overrides as the kernel's parameters {sorted(exact)}")
+        site.update(overrides)
         return render_call(kernel, bind(kernel, site), indent=indent)
 
     checks = []
@@ -146,6 +158,7 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         local_prototype=local_prototype,
         prototype_from=pool.prototype_from or "",
         void_return=kernel.returns.strip() == "void",
+        run_calls=[call(False, overrides) for overrides in pool.calls or ()],
     )
 
 

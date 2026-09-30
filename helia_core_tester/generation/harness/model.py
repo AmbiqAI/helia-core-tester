@@ -147,6 +147,10 @@ class ArgumentPool:
     guarded: Sequence[GuardedBuffer] = ()
     output_capacity: Optional[str] = None
     output_ctype: Optional[str] = None
+    # An ordered list of kernel calls, each a mapping of parameter name to a C expression in terms
+    # of the _run locals that replaces the call-site value for that call; the run returns the first
+    # failing status. Benchmarks and fault edits are not defined over a call list.
+    calls: Optional[Sequence[Mapping[str, str]]] = None
 
     @property
     def harness_inputs(self) -> Sequence[HarnessInput]:
@@ -205,6 +209,15 @@ class ArgumentPool:
         for param, expr in self.values.items():
             if not isinstance(expr, str) or not expr.strip():
                 raise HarnessError(f"{self.name}: pool value {param!r} is empty")
+        if self.calls is not None:
+            if not self.calls:
+                raise HarnessError(f"{self.name}: a call list needs at least one call")
+            if self.benchmark or self.fault is not None:
+                raise HarnessError(f"{self.name}: a call list has no benchmark or fault form")
+            for index, call in enumerate(self.calls):
+                for param, expr in call.items():
+                    if not isinstance(expr, str) or not expr.strip():
+                        raise HarnessError(f"{self.name}: call {index} gives {param!r} an empty expression")
         if self.fault is not None:
             fault = self.fault
             if not (fault.values or fault.setup.strip() or fault.no_scratch):

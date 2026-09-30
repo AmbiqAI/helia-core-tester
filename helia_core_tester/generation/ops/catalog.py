@@ -84,7 +84,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "prelu_scalar",
         "OpPReLUScalar",
         "ActivationFunctions/prelu_scalar.yaml",
-        "ActivationFunctions/prelu_scalar",
+        None,
     ),
     "Clamp": _spec("Clamp", "ActivationFunctions", "clamp", "OpClamp", "ActivationFunctions/clamp.yaml", None),
     "NNActivationS16": _spec(

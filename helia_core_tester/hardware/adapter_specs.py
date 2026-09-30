@@ -966,7 +966,7 @@ _RUN_PRELU_ONCE = '''\
  * activations above), out_mult/out_shift (the "identity" branch), and out_mult_alpha/
  * out_shift_alpha (reused from LeakyRelu's alpha branch -- identical semantics). alpha_offset
  * is the one new quantized scalar. PReLUScalar's `scalar_is_input` argument is always `true`
- * in every real generated test (see prelu_scalar.c.j2's hardcoded call), so it's hardcoded
+ * in every real generated test (see prelu_scalar_argument_pool in generation/ops/ActivationFunctions/prelu_scalar.py), so it's hardcoded
  * here rather than added as a session field. */
 static arm_cmsis_nn_status run_prelu_once(hct_server_session_t *session)
 {
