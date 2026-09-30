@@ -8,13 +8,14 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
-from helia_core_tester.generation.kernel_dispatch import DIRECT_ENTRIES, resolve_direct_entry
+from helia_core_tester.contract.bind import takes
+from helia_core_tester.contract.render import load_current_contracts
+from helia_core_tester.generation.entry import EntryError, resolve_entry
 from helia_core_tester.generation.test_ops import _required_kernel_symbols, generate_test
 from helia_core_tester.generation.entry import CONTRACT_BOUND_OPERATORS
 from helia_core_tester.generation.utils.temp_sizer_probe import probe_header_symbols
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_FP16_ENTRIES = {name: spec for name, spec in DIRECT_ENTRIES.items() if spec.activation_dtype == "FP16"}
 
 
 def _descriptors() -> dict:
@@ -33,24 +34,42 @@ def _call(source: str, fn: str) -> str:
     return match.group(1)
 
 
-def test_every_fp16_entry_has_a_case() -> None:
-    called = {d.get("entry") for d in _descriptors().values()}
+def test_every_fp16_entry_case_names_its_family_sizer() -> None:
+    fp16 = {name: d for name, d in _descriptors().items() if d.get("entry") and str(d["entry"]).endswith(("f16", "acc16"))}
+    assert len(fp16) >= 17
+    for name, desc in fp16.items():
+        assert desc.get("entry_sizer", "").endswith("_f16_get_buffer_size"), f"{name} declares no f16 family sizer"
 
-    assert set(_FP16_ENTRIES) <= called
+
+def test_fp16_entries_take_their_layout_from_the_prototype() -> None:
+    contracts = load_current_contracts()
+    resolved = resolve_entry("Convolve", "arm_convolve_nhwc_f16", activation_dtype="FP16", weight_dtype="FP16",
+                             cpu="cortex-m55", desc={"name": "x", "entry_sizer": "arm_convolve_f16_get_buffer_size"},
+                             contracts=contracts)
+    assert resolved == {"kernel_fn": "arm_convolve_nhwc_f16", "entry_family": "contract",
+                        "kernel_get_buffer_size_fn": "arm_convolve_f16_get_buffer_size"}
+    # The nhwc entry takes no layout while its family's sizer does: the harness binds each by name.
+    assert not takes(contracts.require("arm_convolve_nhwc_f16"), "layout")
+    assert takes(contracts.require("arm_convolve_f16_get_buffer_size"), "layout")
+    with pytest.raises(EntryError, match="input_data"):
+        resolve_entry("Convolve", "arm_convolve_nhwc_f16", activation_dtype="S8", weight_dtype="S8",
+                      cpu="cortex-m55", desc={"name": "x", "entry_sizer": "arm_convolve_f16_get_buffer_size"},
+                      contracts=contracts)
 
 
-def test_fp16_entries_resolve_with_their_layout_flags() -> None:
-    resolved = resolve_direct_entry("Convolve", "arm_convolve_nhwc_f16_acc16", "FP16", "FP16")
-
-    assert resolved["kernel_needs_layout"] is False
-    assert resolved["buffer_size_needs_layout"] is True
-    with pytest.raises(ValueError, match="fp16 convolve entry"):
-        resolve_direct_entry("Convolve", "arm_convolve_nhwc_f16_acc16", "S8", "S8")
+def test_an_entry_the_checkout_lacks_gates_the_case_before_it_resolves() -> None:
+    # The acc16 entries are not in the current export: the case is skipped by its required
+    # symbols and never reaches resolve_entry, which would refuse the unknown kernel.
+    desc = _descriptors()["convolve_float_entry_acc16_8x8_k3x3_f16"]
+    assert _required_kernel_symbols(desc) == ["arm_convolve_f16_acc16", "arm_convolve_f16_get_buffer_size"]
+    with pytest.raises(EntryError, match="is not a public function"):
+        resolve_entry("Convolve", desc["entry"], activation_dtype="FP16", weight_dtype="FP16", cpu="cortex-m55",
+                      desc=desc, contracts=load_current_contracts())
 
 
 def test_acc16_case_is_gated_on_the_checkout() -> None:
     assert _required_kernel_symbols(_descriptors()["fully_connected_float_entry_nhwc_acc16_k24_n17_f16"]) == [
-        "arm_fully_connected_nhwc_f16_acc16"
+        "arm_fully_connected_nhwc_f16_acc16", "arm_fully_connected_f16_get_buffer_size"
     ]
 
 

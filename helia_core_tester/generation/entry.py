@@ -1,11 +1,12 @@
 """Resolve a descriptor's `entry:` (the public ns-cmsis-nn function a case calls).
 
-Entries listed in kernel_dispatch.DIRECT_ENTRIES keep the table's resolution unchanged. Any
-other public kernel is resolved from the kernel contract, for operators whose template binds
-its call from the contract (CONTRACT_BOUND_OPERATORS): the entry must be a declared kernel,
-its tensor pointers must match the descriptor's dtypes, and its scratch comes from
+Every entry is resolved from the kernel contract, for operators whose pool binds its call from
+the contract (CONTRACT_BOUND_OPERATORS): the entry must be a declared kernel, its tensor
+pointers must match the descriptor's dtypes, and its scratch comes from
 `<entry>_get_buffer_size[_mve|_dsp]`, from `entry_sizer`, or is declared absent with
-`entry_scratch`. Every other case fails at generation, naming what is missing.
+`entry_scratch`. Every other case fails at generation, naming what is missing. Whether an
+entry takes weight sums, a struct-typed bias or a layout follows from its prototype, so no
+per-entry table exists any more.
 """
 
 from __future__ import annotations
@@ -15,7 +16,6 @@ from typing import Any, Dict, Mapping, Optional
 from helia_core_tester.contract import render
 from helia_core_tester.contract.bind import ContractBindError, check_types
 from helia_core_tester.contract.ir import ContractSet
-from helia_core_tester.generation.kernel_dispatch import DIRECT_ENTRIES, resolve_direct_entry
 
 # Operators whose template renders its kernel and sizer calls by binding from the contract.
 CONTRACT_BOUND_OPERATORS: frozenset[str] = frozenset({"Convolve", "DepthwiseConv", "FullyConnected", "TransposeConv"})
@@ -53,16 +53,9 @@ def resolve_entry(
     if sizer is not None and scratch is not None:
         raise EntryError(f"{where}: set entry_sizer or entry_scratch, not both")
 
-    if entry in DIRECT_ENTRIES:
-        if sizer is not None or scratch is not None:
-            raise EntryError(f"{where} is a kernel_dispatch.DIRECT_ENTRIES entry, whose scratch query "
-                             "is fixed there; drop entry_sizer and entry_scratch")
-        return resolve_direct_entry(operator, entry, activation_dtype, weight_dtype)
-
     if operator not in CONTRACT_BOUND_OPERATORS:
-        known = sorted(name for name, spec in DIRECT_ENTRIES.items() if spec.operator == operator)
-        raise EntryError(f"{where} is not in kernel_dispatch.DIRECT_ENTRIES, and {operator} does not yet "
-                         f"bind its call from the kernel contract; known {operator} entries: {known}")
+        raise EntryError(f"{where}: {operator} does not resolve entries from the kernel contract; the operators "
+                         f"that do are {sorted(CONTRACT_BOUND_OPERATORS)}")
 
     contracts = contracts if contracts is not None else render.load_current_contracts()
     if not contracts.present:

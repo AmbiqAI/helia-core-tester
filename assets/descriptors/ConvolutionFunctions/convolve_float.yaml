@@ -1852,6 +1852,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: Convolve
 name: convolve_float_entry_acc16_8x8_k3x3_f16
 entry: arm_convolve_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1866,6 +1867,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_nhwc_8x8_k3x3_f16
 entry: arm_convolve_nhwc_f16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1880,6 +1882,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_nhwc_acc16_8x8_k3x3_f16
 entry: arm_convolve_nhwc_f16_acc16
+entry_sizer: arm_convolve_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1894,6 +1897,7 @@ comparison: {atol: 0.002, rtol: 0.002}
 operator: Convolve
 name: convolve_float_entry_wrapper_acc16_6x6_k3x3_f16
 entry: arm_convolve_wrapper_f16_acc16
+entry_sizer: arm_convolve_wrapper_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1907,6 +1911,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_entry_1x1_acc16_8x8_c16_f16
 entry: arm_convolve_1x1_f16_acc16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1920,6 +1925,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_entry_1x1_nhwc_8x8_c16_f16
 entry: arm_convolve_1x1_nhwc_f16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1933,6 +1939,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_entry_1x1_nhwc_acc16_8x8_c16_f16
 entry: arm_convolve_1x1_nhwc_f16_acc16
+entry_sizer: arm_convolve_1x1_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1946,6 +1953,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_k5_oc4_f16
 entry: arm_convolve_1_x_n_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1959,6 +1967,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_entry_1xn_nhwc_k5_oc4_f16
 entry: arm_convolve_1_x_n_nhwc_f16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -1972,6 +1981,7 @@ use_bias: true
 operator: Convolve
 name: convolve_float_entry_1xn_nhwc_acc16_k5_oc4_f16
 entry: arm_convolve_1_x_n_nhwc_f16_acc16
+entry_sizer: arm_convolve_1_x_n_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16

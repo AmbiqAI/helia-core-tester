@@ -813,6 +813,7 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_acc16_5x5_c4_f16
 entry: arm_depthwise_conv_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -827,6 +828,7 @@ depth_multiplier: 1
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_acc16_chmult2_f16
 entry: arm_depthwise_conv_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -841,6 +843,7 @@ depth_multiplier: 2
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_nhwc_5x5_c4_f16
 entry: arm_depthwise_nhwc_conv_f16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -855,6 +858,7 @@ depth_multiplier: 1
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_nhwc_acc16_5x5_c4_f16
 entry: arm_depthwise_nhwc_conv_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -869,6 +873,7 @@ depth_multiplier: 1
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_nhwc_acc16_chmult2_f16
 entry: arm_depthwise_nhwc_conv_f16_acc16
+entry_sizer: arm_depthwise_conv_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
@@ -883,6 +888,7 @@ depth_multiplier: 2
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_wrapper_acc16_6x6_c3_f16
 entry: arm_depthwise_conv_wrapper_f16_acc16
+entry_sizer: arm_depthwise_conv_wrapper_f16_get_buffer_size
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16
