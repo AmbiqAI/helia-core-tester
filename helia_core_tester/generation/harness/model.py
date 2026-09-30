@@ -205,7 +205,7 @@ class ArgumentPool:
                 raise HarnessError(f"{self.name}: {param} is supplied per call site, not as a pool value")
         if len(set(call_site)) != len(call_site):
             raise HarnessError(f"{self.name}: call-site parameters {call_site} repeat")
-        locals_ = [i.local for i in self.harness_inputs] + ["output"]
+        locals_ = [i.local for i in self.harness_inputs] + ([] if self.outputs else ["output"])
         if len(set(locals_)) != len(locals_) or not all(_IDENT_RE.match(n) for n in locals_):
             raise HarnessError(f"{self.name}: _run argument names {locals_} must be distinct C identifiers")
         if self.no_scratch and self.context_setup.strip():
@@ -231,6 +231,9 @@ class ArgumentPool:
             slots = [slot.name for slot in self.outputs]
             if len(set(slots)) != len(slots) or not all(_IDENT_RE.match(n) for n in slots):
                 raise HarnessError(f"{self.name}: output slots {slots} must be distinct C identifiers")
+            for slot in slots:
+                if f"{slot}_output" in names:
+                    raise HarnessError(f"{self.name}: output slot {slot} collides with the declaration {slot}_output")
             if any(slot.count < 0 for slot in self.outputs):
                 raise HarnessError(f"{self.name}: an output slot cannot hold a negative element count")
         if self.calls is not None:

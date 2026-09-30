@@ -57,7 +57,8 @@ def test_a_zero_extent_slice_keeps_one_element_and_must_stay_untouched() -> None
     assert "#define SP_OUT_1_OUTPUT_SIZE (0)" in source
     assert "HELIA_GUARD_ARM(sp_out_1_output, true /* zero-extent slice must not be written: poison */);" in source
     assert 'HELIA_GUARD_CHECK_UNTOUCHED(sp_out_1_output, "Split sp_out_1 output", failures);' in source
-    assert re.search(r"sp_out_1_output_body\[1\]|int8_t body\[1\]", source.replace("\n", " ")) or "body[1]" in source
+    assert re.search(r"int8_t body\[1\];[^}]*\} sp_out_1_output_guard;", source)
+    assert re.search(r"int8_t body\[SP_OUT_0_OUTPUT_SIZE\];[^}]*\} sp_out_0_output_guard;", source)
     # The empty slot is still validated over zero elements, as the template did.
     assert source.count("HELIA_VALIDATE_OUTPUTS(") == 2
 
@@ -94,6 +95,31 @@ def test_output_slots_are_validated(fields: dict, message: str) -> None:
                                                                      "outputs": (OutputSlot("a", 1),), **fields})
     with pytest.raises(HarnessError, match=message):
         pool.validate()
+
+
+def test_an_output_slot_cannot_collide_with_a_pool_declaration() -> None:
+    from helia_core_tester.generation.harness import Declaration
+
+    pool = ArgumentPool(name="x", values={"output_data": "x_ptrs"}, scratch_buffer=False, benchmark=False,
+                        outputs=(OutputSlot("a", 1),), header=(Declaration("a_output", "int8_t", "0"),))
+    with pytest.raises(HarnessError, match="output slot a collides with the declaration a_output"):
+        pool.validate()
+
+
+@pytest.mark.parametrize("overrides, message", [
+    ({"expected_status": "ARM_CMSIS_NN_ARG_ERROR"}, "expected_status ARM_CMSIS_NN_ARG_ERROR is not supported"),
+    ({"autovectorize_declines": True}, "do not support an autovectorize decline"),
+    ({"nonfinite_mask_array_str": "    1"}, "do not support a nonfinite mask"),
+])
+def test_output_slots_refuse_contexts_they_cannot_validate(overrides: dict, message: str, tmp_path) -> None:
+    from helia_core_tester.generation.ops.ConcatenationFunctions.split import OpSplit
+
+    op = OpSplit({"operator": "Split", "name": "sp", "activation_dtype": "S8",
+                  "tensor_dtypes": {"input": "S8", "output": "S8"}}, seed=0, target_cpu="cortex-m55")
+    context = split_context(**overrides)
+    with pytest.raises(HarnessError, match=message):
+        op.render_harness_files(tmp_path, stem="split", context=context, pool=split_argument_pool(context),
+                                validation_key="ConcatenationFunctions/split/split.c.j2", label="Split")
 
 
 def test_output_slots_let_the_pool_supply_the_output_pointer_array() -> None:

@@ -1140,6 +1140,14 @@ class OperationBase(ABC):
         if plan.void_return and expected != "ARM_CMSIS_NN_SUCCESS":
             raise HarnessError(f"{context['name']}: {context['kernel_fn']} returns void, so expected_status "
                                f"{expected} can never be observed")
+        if plan.outputs:
+            for key, why in (("autovectorize_declines", "an autovectorize decline"),
+                             ("nonfinite_mask_array_str", "a nonfinite mask")):
+                if context.get(key):
+                    raise HarnessError(f"{context['name']}: output slots do not support {why}")
+            if expected != "ARM_CMSIS_NN_SUCCESS":
+                raise HarnessError(f"{context['name']}: output slots validate every slice, so expected_status "
+                                   f"{expected} is not supported")
         includes_dir = output_dir / "includes"
         includes_dir.mkdir(parents=True, exist_ok=True)
         header = env.get_template(self.HARNESS_HEADER).render(
