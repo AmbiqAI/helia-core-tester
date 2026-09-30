@@ -150,7 +150,7 @@ def test_a_void_kernel_benchmarks_as_a_statement() -> None:
     assert re.search(r"\n    arm_softmax_s8\([^;]*sm_output /\* output \*/\n    \);\n    return ARM_CMSIS_NN_SUCCESS;", bench)
 
 
-def test_a_void_kernel_refuses_a_fault_a_rule_check_and_an_expected_error() -> None:
+def test_a_void_kernel_refuses_a_fault_a_rule_check_and_an_expected_error(tmp_path: Path) -> None:
     from helia_core_tester.generation.harness import FaultEdit, HarnessError, RuleCheck
 
     decl = _decl("arm_fx_void", "void")
@@ -165,6 +165,6 @@ def test_a_void_kernel_refuses_a_fault_a_rule_check_and_an_expected_error() -> N
                     "tensor_dtypes": {"input": "S8", "output": "S8"}}, seed=0, target_cpu="cortex-m55")
     context = softmax_context(expected_status="ARM_CMSIS_NN_ARG_ERROR")
     with pytest.raises(HarnessError, match="returns void, so expected_status ARM_CMSIS_NN_ARG_ERROR can never"):
-        op.render_harness_files(Path(__file__).parent, stem="softmax", context=context,
-                                pool=softmax_argument_pool(context),
+        op.render_harness_files(tmp_path, stem="softmax", context=context, pool=softmax_argument_pool(context),
                                 validation_key="SoftmaxFunctions/softmax/softmax.c.j2", label="Softmax")
+    assert list(tmp_path.iterdir()) == [], "a refused case must leave nothing behind"
