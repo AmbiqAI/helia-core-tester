@@ -158,7 +158,16 @@ int32_t {{ name }}_run(
     {{ output_dtype }}* __restrict output
 ) {
     {{ harness_init() }}
-    {% if harness.void_return %}
+    {% if harness.run_calls %}
+    arm_cmsis_nn_status kernel_status = ARM_CMSIS_NN_SUCCESS;
+    {% for call in harness.run_calls %}
+    kernel_status = {{ call }};
+    if (kernel_status != ARM_CMSIS_NN_SUCCESS) {
+        return kernel_status;
+    }
+    {% endfor %}
+    return kernel_status;
+    {% elif harness.void_return %}
     {{ harness.run_call }};
     return ARM_CMSIS_NN_SUCCESS;
     {% else %}
