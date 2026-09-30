@@ -10,7 +10,13 @@ from helia_core_tester.generation.harness.simple import dims_count, tensor_case_
 
 
 def copy_argument_pool(context: Mapping[str, Any]) -> ArgumentPool:
-    total = int(context["total_size"])
+    n, total = context["name"], int(context["total_size"])
     if total < 0:
-        raise ValueError(f"{context['name']}: a copy cannot have a negative element count")
-    return tensor_case_pool(context, {"total_size": str(total)}, output_count=dims_count(context["output_dims"]))
+        raise ValueError(f"{n}: a copy cannot have a negative element count")
+    dims = context["output_dims"]
+    elements = int(dims["n"]) * int(dims["h"]) * int(dims["w"]) * int(dims["c"])
+    if total != elements:
+        raise ValueError(f"{n}: the copy moves {total} elements but the output holds {elements}")
+    # An empty copy compares nothing; one element of storage keeps the guard a real array.
+    return tensor_case_pool(context, {"total_size": str(total)}, output_count=dims_count(dims),
+                            output_capacity="1" if total == 0 else None)

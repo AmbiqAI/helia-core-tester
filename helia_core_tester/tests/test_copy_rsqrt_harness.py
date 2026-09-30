@@ -88,7 +88,19 @@ def test_float_copy_binds_the_float_kernel() -> None:
     assert _call(source, "arm_reshape_f32") == ["input", "output", "6"]
 
 
-def test_an_empty_copy_is_allowed_but_a_negative_one_is_not() -> None:
-    assert copy_argument_pool(copy_context(total=0)).values["total_size"] == "0"
-    with pytest.raises(ValueError, match="negative element count"):
-        copy_argument_pool(copy_context(total=-1))
+def test_an_empty_copy_keeps_one_element_of_storage_and_compares_nothing() -> None:
+    context = copy_context(total=0, output_dims={"n": 1, "h": 1, "w": 0, "c": 1}, input_dims={"n": 1, "h": 0, "w": 1, "c": 1})
+    pool = copy_argument_pool(context)
+    assert pool.values["total_size"] == "0" and pool.output_capacity == "1"
+    _, source = render_pool(context, pool, stem="reshape", validation_key="ReshapeFunctions/reshape/reshape.c.j2",
+                            label="Reshape")
+    assert "#define CP_OUTPUT_SIZE (1 * 1 * 0 * 1)" in source
+    assert re.search(r"int8_t body\[1\];[^}]*\} cp_output_guard;", source)
+    assert _call(source, "arm_reshape_s8") == ["input", "output", "0"]
+
+
+@pytest.mark.parametrize("total, message", [(-1, "negative element count"),
+                                            (5, "the copy moves 5 elements but the output holds 6")])
+def test_a_copy_that_disagrees_with_its_output_is_refused(total: int, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        copy_argument_pool(copy_context(total=total))
