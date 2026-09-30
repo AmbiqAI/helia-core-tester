@@ -720,11 +720,16 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
         edits=(
             # arm_depthwise_conv_s8_opt reaches the guard through _channelwise; _planar, the
             # other public s8 opt entry (ns-cmsis-nn #580), carries the same line.
+            # Drop only the NULL clause, pre- and post-#611.
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_depthwise_conv_s8_opt.c",
-                pattern="    if (ctx->buf == NULL && arm_depthwise_conv_s8_opt_get_buffer_size(input_dims, filter_dims) != 0)\n",
-                replacement="    if (0) /* MUTANT drop_depthwise_ctx_guard */\n",
+                pattern=(
+                    r"\(ctx->buf == NULL && "
+                    r"(?:arm_depthwise_conv_s8_opt_get_buffer_size\(input_dims, filter_dims\)|buf_size) != 0\)"
+                ),
+                replacement="(0 /* MUTANT drop_depthwise_ctx_guard */)",
                 count=2,
+                regex=True,
             ),
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_depthwise_conv_fast_s16.c",
@@ -943,19 +948,12 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             # three wrapper entry points its generation CPU selected
             # (arm_convolve_wrapper_s8_get_buffer_size on a plain target, _dsp on
             # cortex-m4, _mve on cortex-m55), so all three bodies have to answer
-            # -1 for the mutant to be reachable on every target. The dispatch
-            # line is what makes the anchor exact: `(void)output_dims;` alone
-            # matches five times in this file, and the two extra sites --
-            # arm_convolve_s8_get_weights_sum_size and the non-MVE leg of
-            # arm_convolve_1_x_n_s8_get_buffer_size -- are deliberately left alone.
+            # -1 for the mutant to be reachable on every target. The 1x1
+            # dispatch line opens exactly those three bodies.
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_convolve_get_buffer_sizes_s8.c",
-                pattern=(
-                    "    (void)output_dims;\n"
-                    "    if (arm_nn_is_convolve_1x1(conv_params, input_dims, filter_dims))\n"
-                ),
+                pattern="    if (arm_nn_is_convolve_1x1(conv_params, input_dims, filter_dims))\n",
                 replacement=(
-                    "    (void)output_dims;\n"
                     "    return -1; /* MUTANT conv_sizer_negative */\n"
                     "    if (arm_nn_is_convolve_1x1(conv_params, input_dims, filter_dims))\n"
                 ),
@@ -986,12 +984,8 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             # attributable to the capacity check rather than the sign check.
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_convolve_get_buffer_sizes_s8.c",
-                pattern=(
-                    "    (void)output_dims;\n"
-                    "    if (arm_nn_is_convolve_1x1(conv_params, input_dims, filter_dims))\n"
-                ),
+                pattern="    if (arm_nn_is_convolve_1x1(conv_params, input_dims, filter_dims))\n",
                 replacement=(
-                    "    (void)output_dims;\n"
                     "    return 0x40000000; /* MUTANT conv_sizer_over_capacity */\n"
                     "    if (arm_nn_is_convolve_1x1(conv_params, input_dims, filter_dims))\n"
                 ),

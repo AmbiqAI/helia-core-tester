@@ -59,9 +59,8 @@ The firmware builds as a neuralspotx (NSX) app rendered into
 `build/hardware/<board>/nsx_app`. Which kernels it builds:
 
 - Nested layout (the tester at `ns-cmsis-nn/Tests/helia-core-tester`): the
-  enclosing ns-cmsis-nn checkout, working-tree edits included, as the old CMake
-  path did.
-- Standalone clone: the pinned ns-cmsis-nn release (`v7.35.1`).
+  enclosing ns-cmsis-nn checkout, working-tree edits included.
+- Standalone clone: the pinned ns-cmsis-nn release (`v7.38.0`).
 - `--cmsis-nn-ref REF` builds another tag or commit; `--cmsis-nn-root PATH`
   builds another local checkout.
 
@@ -73,11 +72,15 @@ there are overwritten. Other files under `nsx/` are not used.
 `hardware run` generates the tests from the same kernel tree: the local
 checkout, or for a ref the clone NSX syncs into `nsx_app/modules/ns-cmsis-nn`.
 
-`--no-inline-asm` builds requantize without inline assembly;
-`--update-dependencies` re-resolves the NSX modules into `nsx.lock`. Every build
-prints the kernel source and warns when the build options changed since the last
-build in that build dir. `hardware flash` and `hardware run` rebuild with their
-own flags, so pass the same kernel flags you built with.
+`--no-inline-asm` builds requantize without inline assembly (`--inline-asm`
+turns it back on); `--update-dependencies` re-resolves the NSX modules into
+`nsx.lock`. Each build saves its kernel options in `nsx_app/.hct-options.json`.
+`hardware build`, `flash` and `run` reuse them for any kernel flag you leave
+out, so a bare `hardware flash` flashes what `hardware build` built. A flag that
+differs from the saved options rebuilds and prints one line naming the change. A
+saved ref you did not pass with `--cmsis-nn-ref` follows the pinned release, so
+a pin bump rebuilds those build dirs the same way. Every build, flash, run and
+stream prints the kernel source and inline asm setting.
 
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
 `hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or
@@ -92,11 +95,12 @@ uv run helia_core_tester hardware stream --pmu-counters mve:ARM_PMU_MVE_STALL,AR
 
 The default is every group at its default selection. Each group runs in passes of
 up to four chained 32-bit event counters (the Cortex-M55 PMU has eight 16-bit slots),
-so `mve:all` costs nine passes per case, and one run takes at most 16 passes (the
-firmware's `HCT_SERVER_MAX_PASSES`; `cpu:all memory:all mve:all` would be 18 and is
-refused before anything is built or flashed); `ARM_PMU_CPU_CYCLES` is always reported
-from the PMU cycle counter alongside the DWT cycles. `case_summary.csv` gets one column per
-counter (median per invocation) plus `overflow_detected` and `valid_for_regression`;
+so `mve:all` costs nine passes per case. One run takes up to 32 passes (the firmware's
+`HCT_SERVER_MAX_PASSES`), so the full catalog (`--pmu-counters all`, i.e.
+`cpu:all memory:all mve:all`, 18 passes) fits one run and one bundle.
+`ARM_PMU_CPU_CYCLES` is always reported from the PMU cycle counter alongside the DWT
+cycles. `case_summary.csv` gets one column per counter (median per invocation) plus
+`overflow_detected` and `valid_for_regression`;
 `session_summary.json` records the passes, counters and per-stage/per-case timing.
 `--pmu-groups a,b` still works as a deprecated alias for `--pmu-counters a:default
 --pmu-counters b:default`.

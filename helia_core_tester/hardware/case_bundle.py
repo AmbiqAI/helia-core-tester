@@ -241,8 +241,8 @@ def _write_manifest(case_root: Path, manifest: dict[str, Any]) -> Path:
 
 
 
-def _case_root(bundle_root: Path, family: str, case_id: str) -> Path:
-    return bundle_root / "artifacts" / "stream_cases" / "int" / "cortex-m55" / family / case_id
+def _case_root(bundle_root: Path, family: str, case_id: str, *, suite: str = "int") -> Path:
+    return bundle_root / "artifacts" / "stream_cases" / suite / "cortex-m55" / family / case_id
 
 
 

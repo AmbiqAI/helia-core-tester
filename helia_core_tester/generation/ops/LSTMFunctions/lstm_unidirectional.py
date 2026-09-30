@@ -21,7 +21,7 @@ def lstm_schema_path() -> Path:
     file's parents[6] is ns-cmsis-nn (the old parents[4] guess was the tester
     repo itself). Deliberately not require_cmsis_nn_root(): generate_lstm_data()
     falls back to the validated unit-test data when flatc or the schema is
-    unavailable, and the pure-Python CI suite (no checkout) relies on that.
+    unavailable, and runs without an ns-cmsis-nn checkout rely on that.
     """
     cmsis_nn_root = resolve_cmsis_nn_root() or Path(__file__).resolve().parents[6]
     return cmsis_nn_root / "Tests" / "UnitTest" / "RefactoredTestGen" / "schema.fbs"

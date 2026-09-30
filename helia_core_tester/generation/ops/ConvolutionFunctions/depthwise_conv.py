@@ -11,7 +11,7 @@ from helia_core_tester.generation.ops._shared.bias_init import (
     bias_is_hoisted_by_lowering,
     inject_hoisted_dilation_bias,
 )
-from helia_core_tester.generation.entry import resolve_entry
+from helia_core_tester.generation.entry import check_entry_fault, resolve_entry
 from helia_core_tester.generation.harness import (
     ArgumentPool,
     ArrayLiteral,
@@ -495,8 +495,6 @@ class OpDepthwiseConv(OperationBase):
         info.setdefault("buffer_size_needs_layout", info["input_c_type"] in {"float", "float16_t"})
         entry = self.desc.get("entry")
         if entry:
-            if self.desc.get("fault"):
-                raise ValueError(f"{self.desc.get('name')}: fault cases call the wrapper; entry {entry!r} is not supported with fault")
             info.update(
                 resolve_entry(
                     "DepthwiseConv",
@@ -507,6 +505,7 @@ class OpDepthwiseConv(OperationBase):
                     desc=self.desc,
                 )
             )
+            check_entry_fault(self.desc, info)
 
         variant = str(self._hint().get("kernel_variant", "")).lower()
         if not variant:

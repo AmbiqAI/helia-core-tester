@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any, Dict, Mapping, Optional
 
 from helia_core_tester.contract import render
-from helia_core_tester.contract.bind import ContractBindError, check_types
+from helia_core_tester.contract.bind import ContractBindError, check_types, takes
 from helia_core_tester.contract.ir import ContractSet
 
 # Operators whose template renders its kernel and sizer calls by binding from the contract.
@@ -72,7 +72,8 @@ def resolve_entry(
     except ContractBindError as error:
         raise EntryError(f"{where}: {error}") from None
 
-    resolved: Dict[str, Any] = {"kernel_fn": entry, "entry_family": "contract"}
+    resolved: Dict[str, Any] = {"kernel_fn": entry, "entry_family": "contract",
+                                "kernel_needs_layout": takes(decl, "layout"), "buffer_size_needs_layout": False}
     if scratch is not None:
         resolved["kernel_get_buffer_size_fn"] = None
         resolved["entry_scratch_bytes"] = entry_scratch_bytes(scratch, where)
@@ -84,10 +85,29 @@ def resolve_entry(
         if sizer_decl.kind != "sizer":
             raise EntryError(f"{where}: entry_sizer {sizer!r} is a {sizer_decl.kind}, not a scratch-size query")
         resolved["kernel_get_buffer_size_fn"] = sizer_decl.name
+        resolved["buffer_size_needs_layout"] = takes(sizer_decl, "layout")
         return resolved
     found = contracts.sizer_for(entry, cpu)
     if found is None:
         raise EntryError(f"{where}: this checkout declares no {entry}_get_buffer_size; set entry_sizer to the "
                          "public query that sizes its scratch, or entry_scratch: none when it takes none")
     resolved["kernel_get_buffer_size_fn"] = found
+    resolved["buffer_size_needs_layout"] = takes(contracts.find(found), "layout")
     return resolved
+
+
+FLOAT_DTYPES = frozenset({"FP32", "FP16"})
+
+
+def check_entry_fault(desc: Mapping[str, Any], resolved: Mapping[str, Any]) -> None:
+    """Reject a fault on an entry case, except an invalid layout for a float entry that takes one."""
+    fault = desc.get("fault")
+    if not fault:
+        return
+    is_float = str(desc.get("activation_dtype", "S8")).upper() in FLOAT_DTYPES
+    if fault == "invalid_layout" and is_float and resolved.get("kernel_needs_layout"):
+        return
+    raise EntryError(
+        f"{desc.get('name')}: entry {resolved['kernel_fn']!r} supports only fault: invalid_layout, "
+        f"and only as a float entry that takes a layout argument; got fault {fault!r}"
+    )

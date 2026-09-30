@@ -36,6 +36,8 @@ def test_convolve_s8_entries_resolve_from_the_contract_with_the_family_sizer() -
             "kernel_fn": entry,
             "kernel_get_buffer_size_fn": "arm_convolve_s8_get_buffer_size",
             "entry_family": "contract",
+            "kernel_needs_layout": False,
+            "buffer_size_needs_layout": False,
         }
 
 
@@ -96,7 +98,7 @@ def test_cases_without_an_entry_render_no_entry_code(name: str, tmp_path: Path) 
 
 
 def test_entry_with_a_kernel_variant_hint_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="not supported with a kernel_variant hint or fault"):
+    with pytest.raises(ValueError, match="not supported with a kernel_variant hint"):
         _source("convolve_entry_small_cin3_8x8_k3x3_co16_s8", tmp_path, hint={"kernel_variant": "wrapper"})
 
 

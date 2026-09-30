@@ -14,7 +14,20 @@ CMSIS_NN_ROOT = Path(os.environ.get("CMSIS_NN_ROOT") or PROJECT_ROOT.parent.pare
 
 
 
-def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path) -> None:
+# Stubbed nsx-pmu-armv8m API and PMU registers.
+PMU_STUB_DIR = PROJECT_ROOT / "helia_core_tester" / "tests" / "fixtures" / "pmu_stub"
+PMU_STUB_FLAGS = [
+    "-DHCT_HOST_PMU_STUB",
+    "-D__PMU_PRESENT=1",
+    "-D__PMU_NUM_EVENTCNT=8",
+    "-I",
+    str(PMU_STUB_DIR),
+    str(PMU_STUB_DIR / "pmu_stub.c"),
+]
+
+
+@pytest.mark.parametrize("pmu", [False, True], ids=["dwt-only", "pmu-stub"])
+def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path, pmu: bool) -> None:
     cc = shutil.which("cc")
     if cc is None:
         pytest.skip("host C compiler not available")
@@ -30,6 +43,7 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path) -
             "-Wextra",
             "-Werror",
             "-DHCT_HOST_ABS_ONLY",
+            *(PMU_STUB_FLAGS if pmu else []),
             "-I",
             str(PROJECT_ROOT / "cmake" / "hardware"),
             "-I",
@@ -48,13 +62,19 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path) -
         cwd=PROJECT_ROOT,
     )
 
-    result = subprocess.run([str(binary)], check=True, capture_output=True, text=True)
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    assert result.returncode == 0, f"harness exit {result.returncode}"
     assert "chunks=" in result.stdout
     assert "bytes=12" in result.stdout
     # v2: the harness continues through CORRECTNESS_ACK/RUN_PERFORMANCE with two PMU
-    # passes (3 samples each) and checks every SAMPLE_RESULT leads with the CCNTR entry
-    # and reports the event counters unsupported on this PMU-less host build.
+    # passes (3 samples each) and checks every SAMPLE_RESULT leads with the CCNTR entry.
+    # DWT-only: event counters come back unsupported. PMU stub: the harness also checks
+    # an unmapped event id fails SESSION_PLAN, chained vs 16-bit setup, CCNTR/OVS read
+    # before the module's read resets them, and each counter's overflow slot.
     assert "samples=6 passes=2" in result.stdout
+    # Refusals end one case; the next runs.
+    for line in ("rejected correctness samples_dropped=0", "rejected warmup samples_dropped=0", "rejected sampling samples_dropped=3"):
+        assert line in result.stdout
 
 
 def test_shared_c_validation_rejects_range_and_shape_overflow(tmp_path: Path) -> None:
