@@ -154,6 +154,13 @@ records the case as failed and rejected in the result bundle (`cases.json`
 non-zero. Frames the target cannot decode or accept still get `ERROR`, which
 ends the run without a bundle.
 
+The target sends nothing during `RUN_PERFORMANCE` until every pass has run
+(`passes x (warmups + samples x iterations)` kernel calls), so the host waits one
+RTT read timeout (10 s) per pass for the first `SAMPLE_RESULT`. That bounds one
+kernel call at about 10 s x f_cpu / (warmups + samples x iterations): at the
+generated plan (2 + 5 x 4 = 22 calls per pass) and the ~96 MHz the Apollo510
+firmware measures, about 43M cycles, whatever the pass count.
+
 `TARGET_INFO` (target -> host): `text build_id`, 32-byte catalog SHA-256,
 `u32 max_frame_payload`, `u32 runtime_arena_capacity`, `u8 transfer_mode`,
 `u8 output_mode`, `text board_id`, `text target_cpu`, `u8 transport_kind`,

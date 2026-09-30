@@ -565,9 +565,15 @@ class HostSession:
         self._send(MessageType.BLOB_CHUNK, encode_blob_chunk(BlobChunk(blob_id=request.blob_id, offset=request.offset, data=chunk)))
 
     def _recv_any(self) -> Frame:
+        # Sampling is silent until every pass ends.
+        sampling = self._last_sent_message_type == MessageType.RUN_PERFORMANCE.name
+        reads_left = max(1, len(self._counter_passes)) if sampling else 1
         while not self._frames:
             chunk = self._transport.read()
             if not chunk:
+                reads_left -= 1
+                if reads_left > 0:
+                    continue
                 raise RuntimeError(
                     "Transport stalled without a complete frame. "
                     f"Last message sent to target: {self._last_sent_message_type or '<none>'}. "

@@ -3,7 +3,8 @@
 The firmware answers a kernel error with CASE_COMPLETE (performance_ran=0 plus the
 kernel status) and moves on to the next case; the host records that case as
 rejected and still writes the result bundle. A broken session (ERROR frame,
-stalled transport) keeps failing loudly.
+stalled transport) keeps failing loudly. Sampling sends nothing until every
+PMU pass has run, so the host waits one read timeout per pass there.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from helia_core_tester.hardware import session_runner, wire
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
 from helia_core_tester.hardware.fake_target import FakeTargetTransport
+from helia_core_tester.hardware.hctp import MessageType
 from helia_core_tester.hardware.measurement import CounterPass, counter_passes_for_selection
 from helia_core_tester.hardware.pmu_catalog import CounterDescriptor
 from helia_core_tester.hardware.session import HostSession
@@ -139,3 +141,35 @@ def test_broken_session_still_fails_without_a_bundle(tmp_path: Path, monkeypatch
             tmp_path, _bundles(tmp_path), board=resolve_board("apollo510_evb"), serial_no=1,
             counter_passes=passes, session_id="broken", build_dir=tmp_path,
         )
+
+
+
+class _SilentSampling(FakeTargetTransport):
+    """Answers RUN_PERFORMANCE after `silent` empty reads."""
+
+    def __init__(self, silent: int) -> None:
+        super().__init__()
+        self._silent = silent
+        self._left = 0
+
+    def _handle_frame(self, frame) -> None:
+        super()._handle_frame(frame)
+        if frame.header.message_type == MessageType.RUN_PERFORMANCE:
+            self._left = self._silent
+
+    def read(self, max_bytes: int = 4096) -> bytes:
+        if self._left > 0:
+            self._left -= 1
+            return b""
+        return super().read(max_bytes)
+
+
+def test_sampling_waits_one_read_timeout_per_pass(tmp_path: Path) -> None:
+    # Firmware flushes samples only after every pass.
+    passes = counter_passes_for_selection({"cpu": "all"})
+    assert len(passes) > 2
+    bundle = _bundles(tmp_path)[:1]
+    result = HostSession(_SilentSampling(silent=len(passes) - 1), counter_passes=passes).run_many(bundle)
+    assert result.cases[0].statistics.sample_count > 0
+    with pytest.raises(RuntimeError, match="Last message sent to target: RUN_PERFORMANCE"):
+        HostSession(_SilentSampling(silent=len(passes)), counter_passes=passes).run_many(bundle)

@@ -107,7 +107,7 @@ def open_rtt_session(
         speed_khz=board.swd_speed_khz,
         rtt_address=rtt_address,
         reset_on_open=True,
-        # Also bounds the silent sampling phase.
+        # Sampling waits this long per pass.
         read_timeout_s=10.0,
     )
     return HostSession(transport, counter_passes=counter_passes), transport, rtt_address
