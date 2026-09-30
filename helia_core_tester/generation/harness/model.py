@@ -71,6 +71,17 @@ class RuleCheck:
 
 
 @dataclass(frozen=True)
+class SizeQuery:
+    """A provider's own scratch query: bound from the pool like the main sizer, its answer is
+    held in `result_var` and checked (negative sentinel, then against `capacity`) with the
+    main sizer's answer, before any context is populated."""
+
+    fn: str
+    result_var: str
+    capacity: str
+
+
+@dataclass(frozen=True)
 class Provider:
     """A value that needs set-up (weight sums, vector sums, LUTs). Emitted only when the bound
     prototype takes `param`: its declarations and buffers at file scope, its `setup` statements
@@ -81,6 +92,12 @@ class Provider:
     declarations: Sequence[Declaration] = ()
     buffers: Sequence[GuardedBuffer] = ()
     setup: str = ""
+    aliases: Sequence[str] = ()
+    size_query: Optional[SizeQuery] = None
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return (self.param, *self.aliases)
 
 
 @dataclass(frozen=True)
@@ -137,9 +154,16 @@ class ArgumentPool:
             names.add(buffer.name)
         params = set(self.values)
         for provider in self.providers:
-            if provider.param in params:
-                raise HarnessError(f"{self.name}: {provider.param} is both a pool value and a provider")
-            params.add(provider.param)
+            for param in provider.names:
+                if param in params:
+                    raise HarnessError(f"{self.name}: {param} is both a pool value and a provider")
+                params.add(param)
+            query = provider.size_query
+            if query is not None and (not _IDENT_RE.match(query.result_var) or query.result_var in names
+                                      or query.result_var == "required_buffer_size"):
+                raise HarnessError(f"{self.name}: size query variable {query.result_var!r} is not a free C identifier")
+            if query is not None:
+                names.add(query.result_var)
         call_site = [i.param for i in self.harness_inputs] + [self.output_param]
         for param in call_site:
             if param in self.values:
@@ -171,6 +195,7 @@ class ArgumentPool:
         for check in self.checks:
             if not _IDENT_RE.match(check.result_var) or check.result_var in names:
                 raise HarnessError(f"{self.name}: rule check variable {check.result_var!r} is not a free C identifier")
+            names.add(check.result_var)
 
 
 def _render_init(value: Initializer, depth: int = 0) -> str:

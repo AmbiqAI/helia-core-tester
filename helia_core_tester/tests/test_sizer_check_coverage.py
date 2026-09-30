@@ -27,7 +27,6 @@ MAX_POOL_DTYPES = ["S8", "S16", "FP32", "FP16"]
 # max_pool is deliberately absent; see test_max_pool_still_has_no_sizer_to_check.
 SIZER_TEMPLATES = [
     "common/harness/harness.c.j2",
-    "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2",
     "PoolingFunctions/avg_pool/avg_pool.c.j2",
     "SVDFunctions/svdf/svdf.c.j2",
     "SVDFunctions/svdf/svdf_f32.c.j2",

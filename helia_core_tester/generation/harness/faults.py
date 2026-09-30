@@ -45,7 +45,11 @@ def common_fault(pool: ArgumentPool, kind: str, *, layout: Optional[str] = None)
 
 
 def null_context_buffer(pool: ArgumentPool, kind: str, param: str, context_var: str) -> FaultEdit:
-    """Hand the kernel, through `param`, a context whose buffer is NULL (the pointer stays valid)."""
+    """Hand the kernel, through `param`, a context whose buffer is NULL (the pointer stays valid).
+    The context must come from a provider: a plain pool value (NULL when the case computes no
+    sums) declares no `context_var` for the setup to clear."""
+    if not any(param in provider.names for provider in pool.providers):
+        raise HarnessError(f"{pool.name}: fault {kind!r} clears {context_var}, but no provider supplies {param!r}")
     return FaultEdit(kind=kind, requires=(param,), setup=(f"    // Fault {kind}: {context_var} carries no buffer.\n"
                                        f"    {context_var}.buf = NULL;\n    {context_var}.size = 0;"))
 

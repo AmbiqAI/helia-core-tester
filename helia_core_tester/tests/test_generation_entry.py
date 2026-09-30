@@ -69,7 +69,7 @@ def test_operators_not_yet_bound_name_their_table_entries() -> None:
 
 
 def test_convolve_binds_its_call_from_the_contract() -> None:
-    assert {"Convolve", "DepthwiseConv", "FullyConnected"} <= entry_module.CONTRACT_BOUND_OPERATORS
+    assert {"Convolve", "DepthwiseConv", "FullyConnected", "TransposeConv"} <= entry_module.CONTRACT_BOUND_OPERATORS
 
 
 def test_contract_entry_uses_its_own_sizer_per_cpu(bound) -> None:

@@ -13,6 +13,10 @@ from helia_core_tester.generation.harness import plan_harness, render_declaratio
 from helia_core_tester.generation.harness import ArgumentPool
 from helia_core_tester.generation.ops.ConvolutionFunctions.convolve import convolve_argument_pool
 from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import depthwise_argument_pool
+from helia_core_tester.generation.ops.ConvolutionFunctions.transpose_conv import (
+    TRANSPOSE_CONV_VALIDATION_KEY,
+    transpose_conv_argument_pool,
+)
 from helia_core_tester.generation.ops.FullyConnectedFunctions.batch_matmul import BMM_VALIDATION_KEY, bmm_argument_pool
 from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import (
     FC_VALIDATION_KEY,
@@ -116,3 +120,8 @@ def render_fully_connected(context: dict, *, contracts: Optional[ContractSet] = 
 def render_batch_matmul(context: dict, *, contracts: Optional[ContractSet] = None) -> tuple[str, str]:
     return render_pool(context, bmm_argument_pool(context), stem="batch_matmul", validation_key=BMM_VALIDATION_KEY,
                        label="Batch matmul", contracts=contracts)
+
+
+def render_transpose_conv(context: dict, *, contracts: Optional[ContractSet] = None) -> tuple[str, str]:
+    return render_pool(context, transpose_conv_argument_pool(context), stem="transpose_conv",
+                       validation_key=TRANSPOSE_CONV_VALIDATION_KEY, label="Transpose convolution", contracts=contracts)

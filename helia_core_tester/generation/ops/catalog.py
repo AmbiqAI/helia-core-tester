@@ -277,7 +277,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "transpose_conv",
         "OpTransposeConv",
         descriptor_relpaths=("ConvolutionFunctions/transpose_conv.yaml", "ConvolutionFunctions/transpose_conv_float.yaml"),
-        template_relpath="ConvolutionFunctions/transpose_conv",
+        template_relpath=None,  # rendered by common/harness
     ),
     "FullyConnected": _spec(
         "FullyConnected",
