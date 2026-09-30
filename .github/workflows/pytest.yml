@@ -14,7 +14,11 @@ name: Pytest
 # harness tests compile against its headers and skip without it.
 
 on:
+  # Draft PRs skip the job (see its `if`). `ready_for_review` runs it when a
+  # draft is marked ready; `converted_to_draft` replaces a ready PR's result
+  # with a skipped run instead of leaving it showing. Neither is a default type.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     branches:
       - main
       - 'dev/**'
@@ -39,6 +43,7 @@ concurrency:
 
 jobs:
   pytest:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
 
     steps:

@@ -15,7 +15,11 @@ name: Self-Validate Against ns-cmsis-nn
 # pointer is bumped).
 
 on:
+  # Draft PRs skip every job (see each job's `if`). `ready_for_review` runs
+  # them when a draft is marked ready; `converted_to_draft` replaces a ready
+  # PR's result with a skipped run. Neither is a default type.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     branches:
       - main
       - 'dev/**'
@@ -43,6 +47,7 @@ jobs:
   # checkout can show that a pattern or its replacement count has drifted, so
   # this job applies every catalogued mutant to one.
   mutation-catalog:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
 
     steps:
@@ -73,6 +78,7 @@ jobs:
             --no-header -rs
 
   generate-and-compile:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
