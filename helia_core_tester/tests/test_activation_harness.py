@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.contract.bind import ContractBindError
-from helia_core_tester.generation.harness import ArgumentPool, HarnessError, HarnessInput
+from helia_core_tester.generation.harness import ArgumentPool, FaultEdit, HarnessError, HarnessInput
 from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool
 from helia_core_tester.generation.ops._shared.hard_swish_base import hard_swish_values
 from helia_core_tester.generation.ops.ActivationFunctions.leaky_relu import leaky_relu_values
@@ -210,6 +210,7 @@ def _bare_pool(**fields) -> ArgumentPool:
     ({"calls": ()}, "needs at least one call"),
     ({"calls": ({"output": "output + 1"},), "benchmark": True}, "no benchmark or fault form"),
     ({"calls": ({"output": ""},)}, "call 0 gives 'output' an empty expression"),
+    ({"calls": ({"output": "output + 1"},), "fault": FaultEdit("x", setup="    x;")}, "no benchmark or fault form"),
 ])
 def test_call_lists_are_validated(fields: dict, message: str) -> None:
     pool = ArgumentPool(name="x", values={}, scratch_buffer=False, **{"benchmark": False, **fields})
@@ -233,6 +234,12 @@ def test_a_call_may_only_override_parameters_the_kernel_takes() -> None:
     with pytest.raises(HarnessError, match="overrides 'stride', which arm_fx_s8 does not take"):
         plan_harness(_bare_pool(calls=({"stride": "1"},)), kernel_fn="arm_fx_s8", sizer_fn=None, scratch_bytes=0,
                      contracts=contracts)
+    # An alias spelling passes `takes` but bind prefers the kernel's own name, so the override
+    # would be shadowed by the call-site value: refused, naming the spellings that work.
+    for alias in ("input_data", "output_data"):
+        with pytest.raises(HarnessError, match=f"overrides '{alias}', which arm_fx_s8 does not take under that name"):
+            plan_harness(_bare_pool(calls=({alias: "output + 1"},)), kernel_fn="arm_fx_s8", sizer_fn=None,
+                         scratch_bytes=0, contracts=contracts)
     with pytest.raises(HarnessError, match="arm_fx_void returns void"):
         plan_harness(_bare_pool(calls=({"output": "output"},)), kernel_fn="arm_fx_void", sizer_fn=None, scratch_bytes=0,
                      contracts=contracts)

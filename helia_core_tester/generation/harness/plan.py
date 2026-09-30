@@ -102,9 +102,14 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         site.update({i.param: i.array if bench else i.local for i in inputs})
         if fault is not None:
             site.update(fault.values)
+        exact = {p.name for p in kernel.params}
         for param in overrides:
-            if not takes(kernel, param):
-                raise HarnessError(f"{pool.name}: a call overrides {param!r}, which {kernel.name} does not take")
+            if param not in exact:
+                # bind prefers the kernel's own spelling, so an alias-spelled override would be
+                # silently shadowed by the call-site value.
+                hint = " under that name" if takes(kernel, param) else ""
+                raise HarnessError(f"{pool.name}: a call overrides {param!r}, which {kernel.name} does not take"
+                                   f"{hint}; spell overrides as the kernel's parameters {sorted(exact)}")
         site.update(overrides)
         return render_call(kernel, bind(kernel, site), indent=indent)
 
