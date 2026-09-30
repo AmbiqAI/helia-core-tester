@@ -15,8 +15,10 @@ from helia_core_tester.tests.harness_render import (
     render_depthwise,
     render_fully_connected,
     render_pooling,
+    render_pool,
     render_transpose_conv,
 )
+from helia_core_tester.generation.harness.simple import tensor_case_pool
 
 
 def _repo_root() -> Path:
@@ -87,21 +89,24 @@ def test_all_c_templates_keep_inline_validation_out_of_templates() -> None:
         assert "if (status !=" not in test_case_run, path
 
 
+def _render_simple(context: dict, values: dict, *, stem: str, validation_key: str, label: str) -> str:
+    context = {"input_data_array": "    0", "expected_output_array": "    0", "use_batch_harness": False, **context}
+    return render_pool(context, tensor_case_pool(context, values, dims=()), stem=stem, validation_key=validation_key,
+                       label=label)[1]
+
+
 def test_rendered_templates_use_shared_validation_helpers() -> None:
     rendered = {
-        "relu": _render(
-            "ActivationFunctions/relu/relu.c.j2",
+        "relu": _render_simple(
             {
                 "name": "relu_smoke",
                 "input_dtype": "int8_t",
                 "output_dtype": "int8_t",
                 "output_size": 4,
-                "input_offset": 0,
-                "output_offset": 0,
-                "output_mult": 1,
-                "output_shift": 0,
                 "kernel_fn": "arm_relu_s8",
             },
+            {"input_offset": 0, "output_offset": 0, "output_multiplier": 1, "output_shift": 0, "output_size": 4},
+            stem="relu", validation_key="ActivationFunctions/relu/relu.c.j2", label="ReLU",
         ),
         "comparison": _render(
             "ComparisonFunctions/comparison/comparison.c.j2",
@@ -213,17 +218,17 @@ def test_basic_math_float_templates_render_preformatted_activation_literals() ->
             "output_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
         },
     )
-    activation_text = _render(
-        "ActivationFunctions/nn_activation_float/nn_activation_float.c.j2",
+    activation_text = _render_simple(
         {
             "name": "nn_activation_float_leaky_relu_f32",
             "input_dtype": "float",
             "output_dtype": "float",
             "kernel_fn": "arm_nn_activation_f32",
-            "size": 4,
-            "activation_symbol": "ARM_NN_FLT_ACT_LEAKY_RELU",
-            "act_param_literal": "0.125f",
+            "output_size": 4,
         },
+        {"size": 4, "type": "ARM_NN_FLT_ACT_LEAKY_RELU", "act_param": "0.125f"},
+        stem="nn_activation_float", validation_key="ActivationFunctions/nn_activation_float/nn_activation_float.c.j2",
+        label="NNActivationFloat",
     )
 
     for text in (add_text, mul_text):

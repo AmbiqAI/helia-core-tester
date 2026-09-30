@@ -1,4 +1,4 @@
-/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_transpose_conv_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*)
+/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_transpose_conv_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*)
  * from ns-cmsis-nn arm_nnfunctions.h; the fallback contract for unit tests without a checkout.
  * test_bound_operator_fixture_matches_the_real_tree keeps it equal to the export. */
 
@@ -55,6 +55,18 @@ int32_t arm_batch_matmul_s8_get_buffer_size(const cmsis_nn_dims *input_rhs_dims)
 int32_t arm_batch_matmul_s8_get_buffer_size_dsp(const cmsis_nn_dims *input_rhs_dims);
 
 int32_t arm_batch_matmul_s8_get_buffer_size_mve(const cmsis_nn_dims *input_rhs_dims);
+
+arm_cmsis_nn_status arm_clamp_s16(const int16_t *input,
+                                  const int16_t act_min,
+                                  const int16_t act_max,
+                                  int16_t *output,
+                                  const int32_t output_size);
+
+arm_cmsis_nn_status arm_clamp_s8(const int8_t *input,
+                                 const int8_t act_min,
+                                 const int8_t act_max,
+                                 int8_t *output,
+                                 const int32_t output_size);
 
 arm_cmsis_nn_status arm_convolve_1_x_n_s4(const cmsis_nn_context *ctx,
                                           const cmsis_nn_conv_params *conv_params,
@@ -720,6 +732,64 @@ arm_cmsis_nn_status arm_fully_connected_wrapper_s8(const cmsis_nn_context *ctx,
                                                    const cmsis_nn_dims *output_dims,
                                                    int8_t *output_data);
 
+arm_cmsis_nn_status arm_hard_swish_compat_s8(const int8_t *input,
+                                             const int32_t input_offset,
+                                             const int32_t output_offset,
+                                             const int32_t output_multiplier_fp,
+                                             const int32_t output_multiplier_exp,
+                                             const int32_t relu_multiplier_fp,
+                                             const int32_t relu_multiplier_exp,
+                                             int8_t *output,
+                                             const int32_t output_size);
+
+arm_cmsis_nn_status arm_hard_swish_precise_s16(const int16_t *input,
+                                               const int32_t input_offset,
+                                               const int32_t output_offset,
+                                               const int32_t output_multiplier,
+                                               const int32_t output_shift,
+                                               const int32_t relu_q3,
+                                               const int32_t relu_q6,
+                                               const int32_t prescale,
+                                               int16_t *output,
+                                               const int32_t output_size);
+
+arm_cmsis_nn_status arm_hard_swish_precise_s8(const int8_t *input,
+                                              const int32_t input_offset,
+                                              const int32_t output_offset,
+                                              const int32_t output_multiplier,
+                                              const int32_t output_shift,
+                                              const int32_t relu_q3,
+                                              const int32_t relu_q6,
+                                              const int32_t prescale,
+                                              int8_t *output,
+                                              const int32_t output_size);
+
+arm_cmsis_nn_status arm_leaky_relu_s16(const int16_t *input,
+                                       const int32_t input_offset,
+                                       const int32_t output_offset,
+                                       const int32_t output_multiplier_alpha,
+                                       const int32_t output_shift_alpha,
+                                       const int32_t output_multiplier_identity,
+                                       const int32_t output_shift_identity,
+                                       int16_t *output,
+                                       const int32_t output_size);
+
+arm_cmsis_nn_status arm_leaky_relu_s8(const int8_t *input,
+                                      const int32_t input_offset,
+                                      const int32_t output_offset,
+                                      const int32_t output_multiplier_alpha,
+                                      const int32_t output_shift_alpha,
+                                      const int32_t output_multiplier_identity,
+                                      const int32_t output_shift_identity,
+                                      int8_t *output,
+                                      const int32_t output_size);
+
+arm_cmsis_nn_status arm_logistic_s16(const int16_t *input,
+                                     int16_t *output,
+                                     const int32_t input_size,
+                                     int32_t input_multiplier,
+                                     int32_t input_left_shift);
+
 arm_cmsis_nn_status arm_max_pool_s16(const cmsis_nn_context *ctx,
                                      const cmsis_nn_pool_params *pool_params,
                                      const cmsis_nn_dims *input_dims,
@@ -735,6 +805,114 @@ arm_cmsis_nn_status arm_max_pool_s8(const cmsis_nn_context *ctx,
                                     const cmsis_nn_dims *filter_dims,
                                     const cmsis_nn_dims *output_dims,
                                     int8_t *output_data);
+
+arm_cmsis_nn_status arm_nn_activation_s16(const int16_t *input,
+                                          int16_t *output,
+                                          const int32_t size,
+                                          const int32_t left_shift,
+                                          const arm_nn_activation_type type);
+
+arm_cmsis_nn_status arm_prelu_s16(const cmsis_nn_dims *input_dims,
+                                  const int16_t *input,
+                                  const cmsis_nn_dims *alpha_dims,
+                                  const int16_t *alpha,
+                                  const int32_t input_offset,
+                                  const int32_t alpha_offset,
+                                  const int32_t output_offset,
+                                  const int32_t output_multiplier_identity,
+                                  const int32_t output_shift_identity,
+                                  const int32_t output_multiplier_alpha,
+                                  const int32_t output_shift_alpha,
+                                  const cmsis_nn_dims *output_dims,
+                                  int16_t *output);
+
+arm_cmsis_nn_status arm_prelu_s8(const cmsis_nn_dims *input_dims,
+                                 const int8_t *input,
+                                 const cmsis_nn_dims *alpha_dims,
+                                 const int8_t *alpha,
+                                 const int32_t input_offset,
+                                 const int32_t alpha_offset,
+                                 const int32_t output_offset,
+                                 const int32_t output_multiplier_identity,
+                                 const int32_t output_shift_identity,
+                                 const int32_t output_multiplier_alpha,
+                                 const int32_t output_shift_alpha,
+                                 const cmsis_nn_dims *output_dims,
+                                 int8_t *output);
+
+arm_cmsis_nn_status arm_prelu_scalar_s16(const int16_t *scalar_vect,
+                                         const int16_t *non_scalar_vect,
+                                         const bool scalar_is_input,
+                                         const int32_t input_offset,
+                                         const int32_t alpha_offset,
+                                         const int32_t output_offset,
+                                         const int32_t output_multiplier_identity,
+                                         const int32_t output_shift_identity,
+                                         const int32_t output_multiplier_alpha,
+                                         const int32_t output_shift_alpha,
+                                         int16_t *output,
+                                         const int32_t block_size);
+
+arm_cmsis_nn_status arm_prelu_scalar_s8(const int8_t *scalar_vect,
+                                        const int8_t *non_scalar_vect,
+                                        const bool scalar_is_input,
+                                        const int32_t input_offset,
+                                        const int32_t alpha_offset,
+                                        const int32_t output_offset,
+                                        const int32_t output_multiplier_identity,
+                                        const int32_t output_shift_identity,
+                                        const int32_t output_multiplier_alpha,
+                                        const int32_t output_shift_alpha,
+                                        int8_t *output,
+                                        const int32_t block_size);
+
+void arm_relu6_q7(int8_t *data, uint16_t size);
+
+arm_cmsis_nn_status arm_relu_generic_s16(const int16_t *input,
+                                         const int32_t input_offset,
+                                         const int32_t output_offset,
+                                         const int32_t output_multiplier,
+                                         const int32_t output_shift,
+                                         const int32_t act_min,
+                                         const int32_t act_max,
+                                         int16_t *output,
+                                         const int32_t output_size);
+
+arm_cmsis_nn_status arm_relu_generic_s8(const int8_t *input,
+                                        const int32_t input_offset,
+                                        const int32_t output_offset,
+                                        const int32_t output_multiplier,
+                                        const int32_t output_shift,
+                                        const int32_t act_min,
+                                        const int32_t act_max,
+                                        int8_t *output,
+                                        const int32_t output_size);
+
+void arm_relu_q15(int16_t *data, uint16_t size);
+
+void arm_relu_q7(int8_t *data, uint16_t size);
+
+arm_cmsis_nn_status arm_relu_s16(const int16_t *input,
+                                 const int32_t input_offset,
+                                 const int32_t output_offset,
+                                 const int32_t output_multiplier,
+                                 const int32_t output_shift,
+                                 int16_t *output,
+                                 const int32_t output_size);
+
+arm_cmsis_nn_status arm_relu_s8(const int8_t *input,
+                                const int32_t input_offset,
+                                const int32_t output_offset,
+                                const int32_t output_multiplier,
+                                const int32_t output_shift,
+                                int8_t *output,
+                                const int32_t output_size);
+
+arm_cmsis_nn_status arm_tanh_s16(const int16_t *input,
+                                 int16_t *output,
+                                 const int32_t input_size,
+                                 int32_t input_multiplier,
+                                 int32_t input_left_shift);
 
 arm_cmsis_nn_status arm_transpose_conv_s8(const cmsis_nn_context *ctx,
                                           const cmsis_nn_context *output_ctx,

@@ -7,6 +7,7 @@ import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase  
+from helia_core_tester.generation.harness.simple import tensor_case_pool
 
 
 class OpRelu(OperationBase):
@@ -141,10 +142,11 @@ class OpRelu(OperationBase):
             'kernel_fn': kernel_info["kernel_fn"],
         }
         
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Relu'),
-            'operator_name': 'relu',
-        }
-        self._write_op_outputs(output_dir, "relu", "ActivationFunctions/relu/relu.h.j2", "ActivationFunctions/relu/relu.c.j2", context, cmake_context)
+        self.render_harness_case(
+            output_dir, stem="relu", context=context,
+            pool=tensor_case_pool(context, {"input_offset": context["input_offset"], "output_offset": context["output_offset"],
+                                            "output_multiplier": context["output_mult"], "output_shift": context["output_shift"],
+                                            "output_size": context["output_size"]}),
+            validation_key="ActivationFunctions/relu/relu.c.j2", label="ReLU", operator="Relu", sidecar=True,
+        )
         print(f"Generated C/H files and CMakeLists.txt for {name}")

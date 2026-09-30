@@ -1,4 +1,4 @@
-/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_transpose_conv_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*)
+/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_transpose_conv_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*)
  * from ns-cmsis-nn arm_nnfunctions_flt.h; the fallback contract for unit tests without a checkout.
  * test_bound_operator_fixture_matches_the_real_tree keeps it equal to the export. */
 
@@ -202,6 +202,8 @@ arm_cmsis_nn_status arm_fully_connected_nhwc_f16(const cmsis_nn_context *ctx,
                                                  const cmsis_nn_dims *output_dims,
                                                  float16_t *output);
 
+arm_cmsis_nn_status arm_hard_swish_f16(const float16_t *input, float16_t *output, int32_t size);
+
 arm_cmsis_nn_status arm_max_pool_f16(const cmsis_nn_context *ctx,
                                      const cmsis_nn_pool_params_f16 *pool_params,
                                      const cmsis_nn_dims *input_dims,
@@ -209,6 +211,19 @@ arm_cmsis_nn_status arm_max_pool_f16(const cmsis_nn_context *ctx,
                                      const cmsis_nn_dims *filter_dims,
                                      const cmsis_nn_dims *output_dims,
                                      float16_t *dst);
+
+arm_cmsis_nn_status arm_nn_activation_f16(const float16_t *input,
+                                          float16_t *output,
+                                          int32_t size,
+                                          arm_nn_activation_type_flt type,
+                                          float16_t act_param);
+
+arm_cmsis_nn_status arm_prelu_f16(const cmsis_nn_dims *input_dims,
+                                  const float16_t *input,
+                                  const cmsis_nn_dims *alpha_dims,
+                                  const float16_t *alpha,
+                                  const cmsis_nn_dims *output_dims,
+                                  float16_t *output);
 
 arm_cmsis_nn_status arm_transpose_conv_f16(const cmsis_nn_context *ctx,
                                            const cmsis_nn_context *output_ctx,
@@ -460,6 +475,8 @@ arm_cmsis_nn_status arm_fully_connected_nhwc_f32(const cmsis_nn_context *ctx,
                                                  const cmsis_nn_dims *output_dims,
                                                  float32_t *output);
 
+arm_cmsis_nn_status arm_hard_swish_f32(const float32_t *input, float32_t *output, int32_t size);
+
 arm_cmsis_nn_status arm_max_pool_f32(const cmsis_nn_context *ctx,
                                      const cmsis_nn_pool_params_f32 *pool_params,
                                      const cmsis_nn_dims *input_dims,
@@ -467,6 +484,19 @@ arm_cmsis_nn_status arm_max_pool_f32(const cmsis_nn_context *ctx,
                                      const cmsis_nn_dims *filter_dims,
                                      const cmsis_nn_dims *output_dims,
                                      float32_t *dst);
+
+arm_cmsis_nn_status arm_nn_activation_f32(const float32_t *input,
+                                          float32_t *output,
+                                          int32_t size,
+                                          arm_nn_activation_type_flt type,
+                                          float32_t act_param);
+
+arm_cmsis_nn_status arm_prelu_f32(const cmsis_nn_dims *input_dims,
+                                  const float32_t *input,
+                                  const cmsis_nn_dims *alpha_dims,
+                                  const float32_t *alpha,
+                                  const cmsis_nn_dims *output_dims,
+                                  float32_t *output);
 
 arm_cmsis_nn_status arm_transpose_conv_f32(const cmsis_nn_context *ctx,
                                            const cmsis_nn_context *output_ctx,

@@ -7,6 +7,7 @@ import tensorflow as tf
 
 from helia_core_tester.core.cpu_targets import get_cpu_profile
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.harness.simple import tensor_case_pool
 
 
 _ACTIVATION_LAYERS = {
@@ -183,16 +184,10 @@ class OpNNActivationFloat(OperationBase):
             "kernel_fn": kernel_fn,
         }
 
-        cmake_context = {
-            "name": name,
-            "operator": self.desc.get("operator", "NNActivationFloat"),
-            "operator_name": "nn_activation_float",
-        }
-        self._write_op_outputs(
-            output_dir,
-            "nn_activation_float",
-            "ActivationFunctions/nn_activation_float/nn_activation_float.h.j2",
-            "ActivationFunctions/nn_activation_float/nn_activation_float.c.j2",
-            context,
-            cmake_context,
+        self.render_harness_case(
+            output_dir, stem="nn_activation_float", context=context,
+            pool=tensor_case_pool(context, {"size": context["size"], "type": context["activation_symbol"],
+                                            "act_param": context["act_param_literal"]}, dims=(), output_count=str(context["size"])),
+            validation_key="ActivationFunctions/nn_activation_float/nn_activation_float.c.j2", label="NNActivationFloat",
+            operator="NNActivationFloat", sidecar=True,
         )
