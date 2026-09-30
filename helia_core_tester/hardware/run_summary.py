@@ -48,7 +48,9 @@ def _format_case_line(case, *, id_width: int = 0) -> str:
         f"  {case.case_bundle.case_id:<{id_width}}  {status}  "
         f"median_cycles={case.statistics.median_cycles:>10.1f}"
     )
-    if not passed:
+    if case.rejection is not None:
+        line += f"  {case.rejection.reason}"
+    elif not passed:
         line += f"  mismatches={case.comparison.mismatch_count}"
     return line
 

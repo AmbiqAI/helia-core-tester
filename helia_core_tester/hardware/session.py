@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -87,6 +87,18 @@ def check_case_ids_unique(case_ids: Sequence[str]) -> None:
 
 
 @dataclass(frozen=True)
+class CaseRejection:
+    """The kernel refused the case on the target."""
+
+    kernel_status: int
+    stage: str  # "correctness" or "performance"
+
+    @property
+    def reason(self) -> str:
+        return f"kernel returned {self.kernel_status} in {self.stage} run"
+
+
+@dataclass(frozen=True)
 class CaseRunResult:
     case_bundle: CaseBundle
     comparison: ComparisonResult
@@ -94,6 +106,7 @@ class CaseRunResult:
     samples: tuple[RawSample, ...]
     normalized_samples: tuple[NormalizedSample, ...]
     statistics: SampleStatistics
+    rejection: CaseRejection | None = None
 
 
 @dataclass(frozen=True)
@@ -480,18 +493,30 @@ class HostSession:
             elif message_type == MessageType.SAMPLE_RESULT:
                 samples.append(decode_sample_result(frame.payload))
             elif message_type == MessageType.CASE_COMPLETE:
-                if current_case_id is None or comparison_result is None:
+                complete = decode_case_complete(frame.payload)
+                # Only a correctness-stage rejection skips the comparison.
+                if current_case_id is None or (comparison_result is None and (complete.correctness_ran or complete.performance_ran)):
                     raise RuntimeError("CASE_COMPLETE arrived before correctness finished.")
-                decode_case_complete(frame.payload)
+                bundle = case_map[current_case_id]
+                rejection = None
+                if not complete.performance_ran:
+                    stage = "performance" if complete.correctness_ran else "correctness"
+                    rejection = CaseRejection(kernel_status=complete.kernel_status, stage=stage)
+                    # Drop samples from a partial measurement.
+                    samples = []
+                    comparison_result = replace(comparison_result, passed=False) if comparison_result else ComparisonResult(
+                        passed=False, mismatch_count=0, max_abs_diff=float("nan"), mode=str(bundle.comparison["mode"])
+                    )
                 raw_samples = tuple(samples)
                 normalized_samples = tuple(normalize_samples(raw_samples))
                 case_result = CaseRunResult(
-                    case_bundle=case_map[current_case_id],
+                    case_bundle=bundle,
                     comparison=comparison_result,
                     output_bytes=bytes(actual_output_bytes),
                     samples=raw_samples,
                     normalized_samples=normalized_samples,
                     statistics=compute_sample_statistics(normalized_samples),
+                    rejection=rejection,
                 )
                 results[current_case_id] = case_result
                 if on_case_complete is not None:
@@ -547,9 +572,15 @@ class HostSession:
         self._send(MessageType.BLOB_CHUNK, encode_blob_chunk(BlobChunk(blob_id=request.blob_id, offset=request.offset, data=chunk)))
 
     def _recv_any(self) -> Frame:
+        # Sampling is silent until every pass ends.
+        sampling = self._trace[-1:] == ["TX:RUN_PERFORMANCE"]
+        reads_left = max(1, len(self._counter_passes)) if sampling else 1
         while not self._frames:
             chunk = self._transport.read()
             if not chunk:
+                reads_left -= 1
+                if reads_left > 0:
+                    continue
                 raise RuntimeError(
                     "Transport stalled without a complete frame. "
                     f"Last message sent to target: {self._last_sent_message_type or '<none>'}. "

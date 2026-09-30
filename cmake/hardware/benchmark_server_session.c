@@ -575,14 +575,19 @@ static hctp_status_t queue_sample_result(hct_server_session_t *session,
     return queue_frame(session, HCTP_MSG_SAMPLE_RESULT, payload, offset);
 }
 
-static hctp_status_t queue_case_complete(hct_server_session_t *session)
+/* Rejected cases append the kernel status. */
+static hctp_status_t queue_case_complete(hct_server_session_t *session, uint8_t correctness_ran, uint8_t performance_ran)
 {
     uint8_t payload[128];
     size_t offset = 0u;
     write_text(payload, sizeof(payload), &offset, session->current_case_id);
-    write_u8(payload, sizeof(payload), &offset, 1u);
-    write_u8(payload, sizeof(payload), &offset, 1u);
+    write_u8(payload, sizeof(payload), &offset, correctness_ran);
+    write_u8(payload, sizeof(payload), &offset, performance_ran);
     write_u32(payload, sizeof(payload), &offset, session->workspace_used_bytes);
+    if (performance_ran == 0u)
+    {
+        write_i32(payload, sizeof(payload), &offset, session->last_kernel_status);
+    }
     return queue_frame(session, HCTP_MSG_CASE_COMPLETE, payload, offset);
 }
 
@@ -783,8 +788,15 @@ arm_cmsis_nn_status hct_run_abs_once(hct_server_session_t *session)
 /* The host harness compiles without benchmark_server_adapters.gen.c (there is no
  * CMSIS-NN library to link against), so only the hand-written abs adapter is
  * reachable; the real firmware's dispatch is the generated hct_run_kernel_once(). */
+/* Host tests: Nth call fails; 0 disables. */
+uint32_t hct_host_fail_call;
+
 arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
 {
+    if (hct_host_fail_call != 0u && --hct_host_fail_call == 0u)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
     switch (session->expected_kernel_id)
     {
         case HCT_KERNEL_ID_ABS_S8:
@@ -836,9 +848,9 @@ static uint32_t resolve_iterations(hct_server_session_t *session)
     return iterations;
 }
 
-static hctp_status_t finish_case(hct_server_session_t *session)
+static hctp_status_t finish_case(hct_server_session_t *session, uint8_t correctness_ran, uint8_t performance_ran)
 {
-    if (queue_case_complete(session) != HCTP_STATUS_OK)
+    if (queue_case_complete(session, correctness_ran, performance_ran) != HCTP_STATUS_OK)
     {
         return HCTP_STATUS_TRUNCATED_FRAME;
     }
@@ -1168,7 +1180,7 @@ static hctp_status_t handle_run_correctness(hct_server_session_t *session)
     session->last_kernel_status = status;
     if (kernel_status_is_fatal(session, status))
     {
-        return HCTP_STATUS_INVALID_ARGUMENT;
+        return finish_case(session, 0u, 0u);
     }
     if (expects_exact_status(session))
     {
@@ -1232,7 +1244,7 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
             session->last_kernel_status = status;
             if (kernel_status_is_fatal(session, status))
             {
-                return HCTP_STATUS_INVALID_ARGUMENT;
+                return finish_case(session, 1u, 0u);
             }
         }
         for (sample_index = 0u; sample_index < session->planned_samples; ++sample_index)
@@ -1241,7 +1253,7 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
             uint32_t elapsed;
             if (!time_one_sample(session, pass, iterations, &sample, &elapsed))
             {
-                return HCTP_STATUS_INVALID_ARGUMENT;
+                return finish_case(session, 1u, 0u);
             }
             if (queue_sample_result(session, (uint16_t)sample_index, iterations, (uint64_t)elapsed, pass, &sample) != HCTP_STATUS_OK)
             {
@@ -1250,7 +1262,7 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
         }
     }
 
-    return finish_case(session);
+    return finish_case(session, 1u, 1u);
 }
 
 void hct_server_session_init(hct_server_session_t *session,

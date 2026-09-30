@@ -194,8 +194,10 @@ def test_sample_result_round_trip_resolves_names_from_catalog() -> None:
 def test_case_and_session_complete_round_trip() -> None:
     complete = wire.CaseComplete(case_id="abs_default_s8_hw_generated", workspace_used_bytes=4096)
     assert wire.decode_case_complete(wire.encode_case_complete(complete)) == complete
-    partial = wire.CaseComplete("c", 0, correctness_ran=True, performance_ran=False)
+    partial = wire.CaseComplete("c", 0, correctness_ran=True, performance_ran=False, kernel_status=-1)
     assert wire.decode_case_complete(wire.encode_case_complete(partial)) == partial
+    # Only a rejection carries the i32 status.
+    assert len(wire.encode_case_complete(partial)) == len(wire.encode_case_complete(wire.CaseComplete("c", 0))) + 4
     session = wire.SessionComplete(case_count=32)
     assert wire.decode_session_complete(wire.encode_session_complete(session)) == session
 

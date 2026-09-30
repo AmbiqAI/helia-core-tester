@@ -87,6 +87,14 @@ def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
     return provenance, app_dir / "nsx.lock"
 
 
+def _rejection_record(case) -> dict | None:
+    """The case's rejection, as bundle JSON."""
+    rejection = case.rejection
+    if rejection is None:
+        return None
+    return {"kernel_status": rejection.kernel_status, "stage": rejection.stage, "reason": rejection.reason}
+
+
 def write_timing(bundle_root: Path, timing: dict) -> Path:
     """Merge wall-clock `timing` into an existing bundle's session_summary.json.
 
@@ -162,6 +170,7 @@ def write_result_bundle(
     passed = 0
     for case in result.cases:
         passed += 1 if case.comparison.passed else 0
+        rejection = _rejection_record(case)
         counter_medians = compute_counter_medians(case.normalized_samples)
         for sample in case.samples:
             if sample.pass_name not in pass_names:
@@ -189,6 +198,7 @@ def write_result_bundle(
                 "counters": counter_medians,
                 "overflow_detected": case.statistics.overflow_detected,
                 "valid_for_regression": case.statistics.valid_for_regression,
+                "rejection": rejection,
             }
         )
         summary_row = {
@@ -216,6 +226,7 @@ def write_result_bundle(
                     "passed": case.comparison.passed,
                     "mismatch_count": case.comparison.mismatch_count,
                     "comparison": case.case_bundle.comparison,
+                    "rejection": rejection,
                 },
                 indent=2,
             ),
@@ -249,6 +260,7 @@ def write_result_bundle(
         "counters": counter_names,
         "passes": pass_names,
         "cases_with_overflow": [row["case_id"] for row in case_rows if row["overflow_detected"]],
+        "rejected_cases": [row["case_id"] for row in case_rows if row["rejection"]],
     }
     if timing is not None:
         session_summary["timing"] = timing
@@ -292,7 +304,10 @@ def write_result_bundle(
     testsuite = Element("testsuite", name="hardware", tests=str(len(result.cases)), failures=str(len(result.cases) - passed))
     for case in result.cases:
         testcase = SubElement(testsuite, "testcase", name=case.case_bundle.case_id, classname="hardware")
-        if not case.comparison.passed:
+        if case.rejection is not None:
+            failure = SubElement(testcase, "failure", message="kernel rejected case")
+            failure.text = case.rejection.reason
+        elif not case.comparison.passed:
             failure = SubElement(testcase, "failure", message="correctness mismatch")
             failure.text = f"mismatch_count={case.comparison.mismatch_count}"
     ElementTree(testsuite).write(bundle_root / "junit.xml", encoding="utf-8", xml_declaration=True)

@@ -9,7 +9,7 @@ disagree about a payload layout without a round-trip test noticing.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -243,8 +243,11 @@ class FakeTargetTransport:
         max_rx_payload: int = FAKE_MAX_RX_PAYLOAD,
         max_cases_per_session: int = MAX_CASES_PER_PLAN,
         max_passes: int = MAX_PASSES_PER_PLAN,
+        rejections: Mapping[str, tuple[str, int]] | None = None,
     ) -> None:
         self.build_id = build_id
+        # case_id -> (stage, kernel status) to refuse.
+        self._rejections = dict(rejections or {})
         self._session_id = 0xC0DE1234
         self._pmu_present = pmu_present
         self._pmu_counter_slots = pmu_counter_slots if pmu_present else 0
@@ -421,6 +424,10 @@ class FakeTargetTransport:
             self._handle_blob_chunk(frame.payload)
             return
         if frame.header.message_type == MessageType.RUN_CORRECTNESS:
+            status = self._rejected_status("correctness")
+            if status is not None:
+                self._finish_case(correctness_ran=False, status=status)
+                return
             self._run_correctness()
             self._state = _TargetState.WAIT_CORRECTNESS_ACK
             return
@@ -555,6 +562,10 @@ class FakeTargetTransport:
             counter_passes=passes,
         )
         self._last_iterations = iterations
+        status = self._rejected_status("performance")
+        if status is not None:
+            # Like firmware: queued samples precede the refusal.
+            samples = samples[: len(samples) // 2]
         for sample in samples:
             reported = RawSample(
                 sample_index=sample.sample_index,
@@ -564,7 +575,25 @@ class FakeTargetTransport:
                 pass_name=sample.pass_name,
             )
             self._queue(MessageType.SAMPLE_RESULT, encode_sample_result(reported))
-        complete = CaseComplete(case_id=self._case_meta.case_id, workspace_used_bytes=self._arena.used_bytes)
+        self._finish_case(correctness_ran=True, status=status)
+
+    def _rejected_status(self, stage: str) -> int | None:
+        """Kernel status when this stage refuses."""
+        assert self._case_meta is not None
+        rejection = self._rejections.get(self._case_meta.case_id)
+        return rejection[1] if rejection is not None and rejection[0] == stage else None
+
+    def _finish_case(self, *, correctness_ran: bool, status: int | None) -> None:
+        """CASE_COMPLETE, then the next case, like finish_case()."""
+        assert self._plan is not None
+        assert self._case_meta is not None
+        complete = CaseComplete(
+            case_id=self._case_meta.case_id,
+            workspace_used_bytes=self._arena.used_bytes,
+            correctness_ran=correctness_ran,
+            performance_ran=status is None,
+            kernel_status=status or 0,
+        )
         self._queue(MessageType.CASE_COMPLETE, encode_case_complete(complete))
         self._case_workspace_history.append(self._arena.used_bytes)
         self._arena.rewind()
