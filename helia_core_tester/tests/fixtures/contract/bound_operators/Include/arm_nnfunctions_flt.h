@@ -1,8 +1,14 @@
-/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_transpose_conv_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*)
+/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_transpose_conv_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*)
  * from ns-cmsis-nn arm_nnfunctions_flt.h; the fallback contract for unit tests without a checkout.
  * test_bound_operator_fixture_matches_the_real_tree keeps it equal to the export. */
 
 #if ARM_NN_ENABLE_F16
+arm_cmsis_nn_status
+arm_argmax_f16(const float16_t *input_data, const cmsis_nn_dims *input_dims, int32_t axis, int32_t *output_data);
+
+arm_cmsis_nn_status
+arm_argmin_f16(const float16_t *input_data, const cmsis_nn_dims *input_dims, int32_t axis, int32_t *output_data);
+
 arm_cmsis_nn_status arm_avg_pool_f16(const cmsis_nn_context *ctx,
                                      const cmsis_nn_pool_params_f16 *pool_params,
                                      const cmsis_nn_dims *input_dims,
@@ -173,6 +179,66 @@ arm_cmsis_nn_status arm_depthwise_nhwc_conv_f16(const cmsis_nn_context *ctx,
                                                 const cmsis_nn_dims *output_dims,
                                                 float16_t *output);
 
+arm_cmsis_nn_status arm_elementwise_add_broadcast_f16(const float16_t *input_1_data,
+                                                      const cmsis_nn_dims *input_1_dims,
+                                                      const float16_t *input_2_data,
+                                                      const cmsis_nn_dims *input_2_dims,
+                                                      float16_t *output_data,
+                                                      const cmsis_nn_dims *output_dims,
+                                                      float16_t out_activation_min,
+                                                      float16_t out_activation_max);
+
+arm_cmsis_nn_status arm_elementwise_add_f16(const float16_t *input_1_vect,
+                                            const float16_t *input_2_vect,
+                                            float16_t *output,
+                                            float16_t out_activation_min,
+                                            float16_t out_activation_max,
+                                            int32_t block_size);
+
+arm_cmsis_nn_status arm_elementwise_add_fp16(const float16_t *input_1_vect,
+                                             const float16_t *input_2_vect,
+                                             float16_t *output,
+                                             const float16_t out_activation_min,
+                                             const float16_t out_activation_max,
+                                             const int32_t block_size);
+
+arm_cmsis_nn_status arm_elementwise_mul_broadcast_f16(const float16_t *input_1_data,
+                                                      const cmsis_nn_dims *input_1_dims,
+                                                      const float16_t *input_2_data,
+                                                      const cmsis_nn_dims *input_2_dims,
+                                                      float16_t *output_data,
+                                                      const cmsis_nn_dims *output_dims,
+                                                      float16_t out_activation_min,
+                                                      float16_t out_activation_max);
+
+arm_cmsis_nn_status arm_elementwise_mul_f16(const float16_t *input_1_vect,
+                                            const float16_t *input_2_vect,
+                                            float16_t *output,
+                                            float16_t out_activation_min,
+                                            float16_t out_activation_max,
+                                            int32_t block_size);
+
+arm_cmsis_nn_status arm_elementwise_squared_difference_f16(const float16_t *input_1_vect,
+                                                           const float16_t *input_2_vect,
+                                                           float16_t *output,
+                                                           int32_t block_size);
+
+arm_cmsis_nn_status arm_elementwise_sub_broadcast_f16(const float16_t *input_1_data,
+                                                      const cmsis_nn_dims *input_1_dims,
+                                                      const float16_t *input_2_data,
+                                                      const cmsis_nn_dims *input_2_dims,
+                                                      float16_t *output_data,
+                                                      const cmsis_nn_dims *output_dims,
+                                                      float16_t out_activation_min,
+                                                      float16_t out_activation_max);
+
+arm_cmsis_nn_status arm_elementwise_sub_f16(const float16_t *input_1_vect,
+                                            const float16_t *input_2_vect,
+                                            float16_t *output,
+                                            float16_t out_activation_min,
+                                            float16_t out_activation_max,
+                                            int32_t block_size);
+
 arm_cmsis_nn_status arm_fully_connected_f16(const cmsis_nn_context *ctx,
                                             const cmsis_nn_fc_params_f16 *fc_params,
                                             const cmsis_nn_dims *input_dims,
@@ -212,11 +278,37 @@ arm_cmsis_nn_status arm_max_pool_f16(const cmsis_nn_context *ctx,
                                      const cmsis_nn_dims *output_dims,
                                      float16_t *dst);
 
+arm_cmsis_nn_status arm_maximum_f16(const cmsis_nn_context *ctx,
+                                    const float16_t *input_1_data,
+                                    const cmsis_nn_dims *input_1_dims,
+                                    const float16_t *input_2_data,
+                                    const cmsis_nn_dims *input_2_dims,
+                                    float16_t *output_data,
+                                    const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_minimum_f16(const cmsis_nn_context *ctx,
+                                    const float16_t *input_1_data,
+                                    const cmsis_nn_dims *input_1_dims,
+                                    const float16_t *input_2_data,
+                                    const cmsis_nn_dims *input_2_dims,
+                                    float16_t *output_data,
+                                    const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_nn_abs_f16(const float16_t *input, float16_t *output, int32_t block_size);
+
 arm_cmsis_nn_status arm_nn_activation_f16(const float16_t *input,
                                           float16_t *output,
                                           int32_t size,
                                           arm_nn_activation_type_flt type,
                                           float16_t act_param);
+
+arm_cmsis_nn_status arm_nn_fill_f16(float16_t value, float16_t *output, int32_t block_size);
+
+arm_cmsis_nn_status arm_nn_mean_f16(const float16_t *input_data,
+                                    const cmsis_nn_dims *input_dims,
+                                    const cmsis_nn_dims *axis_dims,
+                                    float16_t *output_data,
+                                    const cmsis_nn_dims *output_dims);
 
 arm_cmsis_nn_status arm_prelu_f16(const cmsis_nn_dims *input_dims,
                                   const float16_t *input,
@@ -224,6 +316,24 @@ arm_cmsis_nn_status arm_prelu_f16(const cmsis_nn_dims *input_dims,
                                   const float16_t *alpha,
                                   const cmsis_nn_dims *output_dims,
                                   float16_t *output);
+
+arm_cmsis_nn_status arm_reduce_max_f16(const float16_t *input_data,
+                                       const cmsis_nn_dims *input_dims,
+                                       const cmsis_nn_dims *axis_dims,
+                                       float16_t *output_data,
+                                       const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_reduce_min_f16(const float16_t *input_data,
+                                       const cmsis_nn_dims *input_dims,
+                                       const cmsis_nn_dims *axis_dims,
+                                       float16_t *output_data,
+                                       const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_reduce_sum_f16(const float16_t *input_data,
+                                       const cmsis_nn_dims *input_dims,
+                                       const cmsis_nn_dims *axis_dims,
+                                       float16_t *output_data,
+                                       const cmsis_nn_dims *output_dims);
 
 arm_cmsis_nn_status arm_transpose_conv_f16(const cmsis_nn_context *ctx,
                                            const cmsis_nn_context *output_ctx,
@@ -276,6 +386,12 @@ arm_cmsis_nn_status arm_transpose_conv_wrapper_f16(const cmsis_nn_context *ctx,
 #endif
 
 #if ARM_NN_ENABLE_F32
+arm_cmsis_nn_status
+arm_argmax_f32(const float32_t *input_data, const cmsis_nn_dims *input_dims, int32_t axis, int32_t *output_data);
+
+arm_cmsis_nn_status
+arm_argmin_f32(const float32_t *input_data, const cmsis_nn_dims *input_dims, int32_t axis, int32_t *output_data);
+
 arm_cmsis_nn_status arm_avg_pool_f32(const cmsis_nn_context *ctx,
                                      const cmsis_nn_pool_params_f32 *pool_params,
                                      const cmsis_nn_dims *input_dims,
@@ -446,6 +562,54 @@ arm_cmsis_nn_status arm_depthwise_nhwc_conv_f32(const cmsis_nn_context *ctx,
                                                 const cmsis_nn_dims *output_dims,
                                                 float32_t *output);
 
+arm_cmsis_nn_status arm_elementwise_add_broadcast_f32(const float32_t *input_1_data,
+                                                      const cmsis_nn_dims *input_1_dims,
+                                                      const float32_t *input_2_data,
+                                                      const cmsis_nn_dims *input_2_dims,
+                                                      float32_t *output_data,
+                                                      const cmsis_nn_dims *output_dims,
+                                                      float32_t out_activation_min,
+                                                      float32_t out_activation_max);
+
+arm_cmsis_nn_status arm_elementwise_add_f32(const float32_t *input_1_vect,
+                                            const float32_t *input_2_vect,
+                                            float32_t *output,
+                                            float32_t out_activation_min,
+                                            float32_t out_activation_max,
+                                            int32_t block_size);
+
+arm_cmsis_nn_status arm_elementwise_mul_broadcast_f32(const float32_t *input_1_data,
+                                                      const cmsis_nn_dims *input_1_dims,
+                                                      const float32_t *input_2_data,
+                                                      const cmsis_nn_dims *input_2_dims,
+                                                      float32_t *output_data,
+                                                      const cmsis_nn_dims *output_dims,
+                                                      float32_t out_activation_min,
+                                                      float32_t out_activation_max);
+
+arm_cmsis_nn_status arm_elementwise_mul_f32(const float32_t *input_1_vect,
+                                            const float32_t *input_2_vect,
+                                            float32_t *output,
+                                            float32_t out_activation_min,
+                                            float32_t out_activation_max,
+                                            int32_t block_size);
+
+arm_cmsis_nn_status arm_elementwise_sub_broadcast_f32(const float32_t *input_1_data,
+                                                      const cmsis_nn_dims *input_1_dims,
+                                                      const float32_t *input_2_data,
+                                                      const cmsis_nn_dims *input_2_dims,
+                                                      float32_t *output_data,
+                                                      const cmsis_nn_dims *output_dims,
+                                                      float32_t out_activation_min,
+                                                      float32_t out_activation_max);
+
+arm_cmsis_nn_status arm_elementwise_sub_f32(const float32_t *input_1_vect,
+                                            const float32_t *input_2_vect,
+                                            float32_t *output,
+                                            float32_t out_activation_min,
+                                            float32_t out_activation_max,
+                                            int32_t block_size);
+
 arm_cmsis_nn_status arm_fully_connected_f32(const cmsis_nn_context *ctx,
                                             const cmsis_nn_fc_params_f32 *fc_params,
                                             const cmsis_nn_dims *input_dims,
@@ -485,11 +649,37 @@ arm_cmsis_nn_status arm_max_pool_f32(const cmsis_nn_context *ctx,
                                      const cmsis_nn_dims *output_dims,
                                      float32_t *dst);
 
+arm_cmsis_nn_status arm_maximum_f32(const cmsis_nn_context *ctx,
+                                    const float32_t *input_1_data,
+                                    const cmsis_nn_dims *input_1_dims,
+                                    const float32_t *input_2_data,
+                                    const cmsis_nn_dims *input_2_dims,
+                                    float32_t *output_data,
+                                    const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_minimum_f32(const cmsis_nn_context *ctx,
+                                    const float32_t *input_1_data,
+                                    const cmsis_nn_dims *input_1_dims,
+                                    const float32_t *input_2_data,
+                                    const cmsis_nn_dims *input_2_dims,
+                                    float32_t *output_data,
+                                    const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_nn_abs_f32(const float32_t *input, float32_t *output, int32_t block_size);
+
 arm_cmsis_nn_status arm_nn_activation_f32(const float32_t *input,
                                           float32_t *output,
                                           int32_t size,
                                           arm_nn_activation_type_flt type,
                                           float32_t act_param);
+
+arm_cmsis_nn_status arm_nn_fill_f32(float32_t value, float32_t *output, int32_t block_size);
+
+arm_cmsis_nn_status arm_nn_mean_f32(const float32_t *input_data,
+                                    const cmsis_nn_dims *input_dims,
+                                    const cmsis_nn_dims *axis_dims,
+                                    float32_t *output_data,
+                                    const cmsis_nn_dims *output_dims);
 
 arm_cmsis_nn_status arm_prelu_f32(const cmsis_nn_dims *input_dims,
                                   const float32_t *input,
@@ -497,6 +687,24 @@ arm_cmsis_nn_status arm_prelu_f32(const cmsis_nn_dims *input_dims,
                                   const float32_t *alpha,
                                   const cmsis_nn_dims *output_dims,
                                   float32_t *output);
+
+arm_cmsis_nn_status arm_reduce_max_f32(const float32_t *input_data,
+                                       const cmsis_nn_dims *input_dims,
+                                       const cmsis_nn_dims *axis_dims,
+                                       float32_t *output_data,
+                                       const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_reduce_min_f32(const float32_t *input_data,
+                                       const cmsis_nn_dims *input_dims,
+                                       const cmsis_nn_dims *axis_dims,
+                                       float32_t *output_data,
+                                       const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_reduce_sum_f32(const float32_t *input_data,
+                                       const cmsis_nn_dims *input_dims,
+                                       const cmsis_nn_dims *axis_dims,
+                                       float32_t *output_data,
+                                       const cmsis_nn_dims *output_dims);
 
 arm_cmsis_nn_status arm_transpose_conv_f32(const cmsis_nn_context *ctx,
                                            const cmsis_nn_context *output_ctx,

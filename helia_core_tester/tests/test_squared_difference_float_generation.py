@@ -47,11 +47,11 @@ NONFINITE_CASES = (
 )
 # (name, fault kind, source marker the fault must plant)
 FAULT_CASES = (
-    ("squared_difference_float_fault_null_input_1_f16", "null_input_1", "*input1_arg = NULL"),
-    ("squared_difference_float_fault_null_input_2_f16", "null_input_2", "*input2_arg = NULL"),
-    ("squared_difference_float_fault_null_output_f16", "null_output", "*output_arg = NULL"),
-    ("squared_difference_float_fault_zero_block_f16", "zero_block", "block_size = 0;"),
-    ("squared_difference_float_fault_negative_block_f16", "negative_block", "block_size = -1;"),
+    ("squared_difference_float_fault_null_input_1_f16", "null_input_1", "NULL, /* input_1_vect */"),
+    ("squared_difference_float_fault_null_input_2_f16", "null_input_2", "NULL, /* input_2_vect */"),
+    ("squared_difference_float_fault_null_output_f16", "null_output", "NULL, /* output */"),
+    ("squared_difference_float_fault_zero_block_f16", "zero_block", "0 /* block_size */"),
+    ("squared_difference_float_fault_negative_block_f16", "negative_block", "-1 /* block_size */"),
 )
 
 
@@ -254,7 +254,7 @@ def test_float_case_renders_flat_call_and_float_validation(tmp_path: Path, monke
 
     call = re.search(r"arm_elementwise_squared_difference_f16\((.*?)\);", c_text, re.DOTALL)
     assert call is not None
-    args = [line.split("//")[0].strip().rstrip(",") for line in call.group(1).strip().splitlines()]
+    args = [re.sub(r"/\*.*?\*/", "", line).strip().rstrip(",") for line in call.group(1).strip().splitlines()]
     assert args == ["input1", "input2", "output", "9"]
     assert "input1_offset" not in c_text
     assert "HELIA_VALIDATE_OUTPUTS(\n        FLOAT," in c_text
@@ -419,10 +419,10 @@ def test_fault_cases_render_a_status_only_harness(
     assert "HELIA_VALIDATE_OUTPUTS(" not in c_text and "HELIA_VALIDATE_FLOATS" not in c_text
     assert c_text.count(f"{KERNEL}(") == 1
     if kind == "null_output":
-        # No output buffer is passed, so none is declared (-Wunused-variable).
-        assert "_output_guard" not in c_text and "HELIA_GUARD_CHECK_UNTOUCHED(" not in c_text
+        # The kernel gets NULL; the harness still declares the output, poisons it and checks it untouched.
+        assert "HELIA_GUARD_CHECK_UNTOUCHED(" in c_text and "true /* a declined call must not write it" in c_text
     else:
-        assert "HELIA_GUARD_ARM(" in c_text and "true /* poison" in c_text
+        assert "HELIA_GUARD_ARM(" in c_text and "true /* a declined call must not write it: poison" in c_text
         assert "HELIA_GUARD_CHECK_UNTOUCHED(" in c_text
     assert sidecar["scalars"]["fault"] == kind
     assert sidecar["scalars"]["expected_status"] == "ARM_CMSIS_NN_ARG_ERROR"

@@ -330,3 +330,9 @@ class OpAdd(BinaryBasicMathBase):
         s = s + int(out_offset)
         s = np.clip(s, int(out_activation_min), int(out_activation_max))
         return s.astype(out_dtype)
+
+
+from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402
+from helia_core_tester.generation.harness.simple import binary_case_pool  # noqa: E402
+
+harness_pool("BasicMathFunctions/add/add.c.j2", label="Add")(binary_case_pool)

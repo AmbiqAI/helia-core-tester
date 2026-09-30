@@ -7,6 +7,9 @@
 #}
 #include "{{ header_name }}"
 #include "arm_nnfunctions.h"
+{% for include in pool.includes %}
+#include {{ include }}
+{% endfor %}
 {% include "common/standalone/runtime_common.j2" %}
 {% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
 {% from "common/standalone/validation.j2" import validation_outputs with context %}
@@ -17,6 +20,7 @@
 {% set supports_benchmark = true %}
 {% endif %}
 {% set label = validation_label | default(harness_label) %}
+{% set output_dtype = pool.output_ctype or output_dtype %}
 
 {% if harness.local_prototype %}
 // {{ kernel_fn }} is defined by ns-cmsis-nn but declared in no public header; it takes
@@ -58,7 +62,13 @@ static cmsis_nn_context {{ name }}_ctx;
 {% endfor %}
 
 #define {{ name|upper }}_OUTPUT_SIZE {{ harness_output_count }}
-{{ helia_guard_declare(output_dtype, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
+{{ helia_guard_declare(output_dtype, name ~ "_output", pool.output_capacity or name|upper ~ "_OUTPUT_SIZE") }}
+{% for buffer in pool.guarded %}
+{% if buffer.count_value %}
+#define {{ buffer.count }} {{ buffer.count_value }}
+{% endif %}
+{{ helia_guard_declare(buffer.ctype, buffer.name, buffer.count) }}
+{% endfor %}
 
 {% for declaration in harness.source_declarations %}
 {{ declaration }}
@@ -195,6 +205,9 @@ static int32_t {{ name }}_benchmark_run(void)
 
 int32_t {{ name }}_test_case_run(void)
 {
+    {% if pool.test_prologue %}
+{{ pool.test_prologue }}
+    {% endif %}
     {% if autovectorize_declines %}
 #if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
     HELIA_GUARD_ARM({{ name }}_output, true /* the entry declines on this build: poison */);
@@ -203,6 +216,8 @@ int32_t {{ name }}_test_case_run(void)
 #endif
     {% elif expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
     HELIA_GUARD_ARM({{ name }}_output, true /* a declined call must not write it: poison */);
+    {% elif pool.output_poison %}
+    HELIA_GUARD_ARM({{ name }}_output, true /* poisoned: the kernel must write every element it owns */);
     {% else %}
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     {% endif %}
@@ -225,6 +240,12 @@ int32_t {{ name }}_test_case_run(void)
     {% endfor %}
     {% endfor %}
     HELIA_GUARD_CHECK({{ name }}_output, "{{ label }} output", failures);
+    {% if pool.output_untouched %}
+    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ label }} output", failures);
+    {% endif %}
+    {% if pool.extra_checks %}
+{{ pool.extra_checks }}
+    {% endif %}
     {% if autovectorize_declines %}
 #if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
     HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ label }} output", failures);
@@ -248,7 +269,11 @@ int32_t {{ name }}_test_case_run(void)
     {% else %}
     HELIA_VALIDATE_STATUS("{{ label }}", status);
 
+    {% if pool.validation is not none %}
+{{ pool.validation }}
+    {% else %}
 {{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
+    {% endif %}
     {% endif %}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }

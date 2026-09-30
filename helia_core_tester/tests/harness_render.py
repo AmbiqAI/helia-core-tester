@@ -96,7 +96,9 @@ def render_pool(context: dict, pool: ArgumentPool, *, stem: str, validation_key:
                         scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
                         contracts=contracts)
     render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context))
-    render_context.update(harness=plan, header_name=f"{context['name']}_{stem}.h", harness_label=label,
+    from helia_core_tester.generation.ops._shared.base import _render_pool_snippets
+
+    render_context.update(harness=plan, pool=_render_pool_snippets(env, pool, render_context), header_name=f"{context['name']}_{stem}.h", harness_label=label,
                           harness_output_count=pool.output_count, harness_benchmark=pool.benchmark)
     return header, env.get_template(OperationBase.HARNESS_SOURCE).render(**render_context)
 

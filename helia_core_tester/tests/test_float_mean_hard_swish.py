@@ -340,8 +340,8 @@ def test_mean_float_generates_reduce_sum_shaped_call_and_mean_golden(
     assert "FLOAT" in c_text  # float validation mode, never TOLERANT_INT
     assert f"&{name}_axis_dims" in c_text
     # Axis mask marks h and w; output dims keep reduced axes at 1.
-    assert ".n = 0, .h = 1,\n    .w = 1, .c = 0" in h_text
-    assert ".n = 1, .h = 1,\n    .w = 1, .c = 5" in h_text
+    assert ".n = 0,\n    .h = 1,\n    .w = 1,\n    .c = 0" in h_text
+    assert ".n = 1,\n    .h = 1,\n    .w = 1,\n    .c = 5" in h_text
 
     input_values = _parse_c_float_array(h_text, f"{name}_input")
     expected_values = _parse_c_float_array(h_text, f"{name}_expected_output")

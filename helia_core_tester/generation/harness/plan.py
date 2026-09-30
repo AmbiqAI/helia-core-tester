@@ -67,7 +67,9 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         local_prototype = render_prototype(kernel)
     else:
         kernel = require_bound_symbol(contracts, kernel_fn)
-    uses_ctx = takes(kernel, "ctx")
+    # A pool that owns its context (it passes NULL, or a context of its own) keeps the harness
+    # from declaring and populating one.
+    uses_ctx = takes(kernel, "ctx") and not pool.owns_ctx
     if not pool.scratch_buffer:
         if sizer_fn is not None or scratch_bytes:
             raise HarnessError(f"{pool.name}: a case without a scratch buffer cannot query or claim scratch")

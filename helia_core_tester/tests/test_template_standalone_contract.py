@@ -19,6 +19,7 @@ from helia_core_tester.tests.harness_render import (
     render_transpose_conv,
 )
 from helia_core_tester.generation.harness.simple import tensor_case_pool
+from helia_core_tester.generation.ops.BroadcastFunctions.broadcast_to import broadcast_to_argument_pool
 
 
 def _repo_root() -> Path:
@@ -89,6 +90,20 @@ def test_all_c_templates_keep_inline_validation_out_of_templates() -> None:
         assert "if (status !=" not in test_case_run, path
 
 
+def _render_registered(template: str, context: dict) -> str:
+    """Render `context` through the harness pool registered for its former template."""
+    from helia_core_tester.generation.harness import registry
+    import helia_core_tester.generation.ops.BasicMathFunctions.add  # noqa: F401
+    import helia_core_tester.generation.ops.BasicMathFunctions.argmax  # noqa: F401
+    import helia_core_tester.generation.ops.BasicMathFunctions.mul  # noqa: F401
+    import helia_core_tester.generation.ops.ComparisonFunctions.comparison  # noqa: F401
+
+    context = {"expected_output_array": "    0", "input_data_array": "    0", "use_batch_harness": False, **context}
+    builder, label = registry.lookup(template)
+    stem = template.rsplit("/", 1)[1].removesuffix(".c.j2")
+    return render_pool(context, builder(context), stem=stem, validation_key=template, label=label)[1]
+
+
 def _render_simple(context: dict, values: dict, *, stem: str, validation_key: str, label: str) -> str:
     context = {"input_data_array": "    0", "expected_output_array": "    0", "use_batch_harness": False, **context}
     return render_pool(context, tensor_case_pool(context, values, dims=()), stem=stem, validation_key=validation_key,
@@ -108,7 +123,7 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
             {"input_offset": 0, "output_offset": 0, "output_multiplier": 1, "output_shift": 0, "output_size": 4},
             stem="relu", validation_key="ActivationFunctions/relu/relu.c.j2", label="ReLU",
         ),
-        "comparison": _render(
+        "comparison": _render_registered(
             "ComparisonFunctions/comparison/comparison.c.j2",
             {
                 "name": "comparison_smoke",
@@ -122,9 +137,11 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
                 "input_2_mult": 1,
                 "input_2_shift": 0,
                 "left_shift": 0,
+                "input_1_dims": {"n": 1, "h": 1, "w": 1, "c": 4}, "input_2_dims": {"n": 1, "h": 1, "w": 1, "c": 4}, "output_dims": {"n": 1, "h": 1, "w": 1, "c": 4},
+                "input_1_data_array": "    0", "input_2_data_array": "    0",
             },
         ),
-        "argmax": _render(
+        "argmax": _render_registered(
             "BasicMathFunctions/argmax/argmax.c.j2",
             {
                 "name": "argmax_smoke",
@@ -132,6 +149,8 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
                 "output_dtype": "int32_t",
                 "output_size": 4,
                 "kernel_fn": "arm_argmax_s8",
+                "axis": 3,
+                "input_dims": {"n": 1, "h": 1, "w": 1, "c": 4},
             },
         ),
         "dequantize": _render(
@@ -190,7 +209,7 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
 
 
 def test_basic_math_float_templates_render_preformatted_activation_literals() -> None:
-    add_text = _render(
+    add_text = _render_registered(
         "BasicMathFunctions/add/add.c.j2",
         {
             "name": "add_float_default_f32",
@@ -202,9 +221,13 @@ def test_basic_math_float_templates_render_preformatted_activation_literals() ->
             "out_activation_min_literal": "-1.0e+30f",
             "out_activation_max_literal": "1.0e+30f",
             "output_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+            "input1_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+            "input2_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+            "input1_data_array": "    0.0f",
+            "input2_data_array": "    0.0f",
         },
     )
-    mul_text = _render(
+    mul_text = _render_registered(
         "BasicMathFunctions/mul/mul.c.j2",
         {
             "name": "mul_float_default_f32",
@@ -216,6 +239,10 @@ def test_basic_math_float_templates_render_preformatted_activation_literals() ->
             "out_activation_min_literal": "-1.0e+30f",
             "out_activation_max_literal": "1.0e+30f",
             "output_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+            "input1_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+            "input2_dims": {"n": 1, "h": 4, "w": 4, "c": 8},
+            "input1_data_array": "    0.0f",
+            "input2_data_array": "    0.0f",
         },
     )
     activation_text = _render_simple(
@@ -533,19 +560,20 @@ def test_rsqrt_invalid_status_render_uses_expected_status_helper() -> None:
 
 
 def test_broadcast_to_invalid_status_render_uses_expected_status_helper() -> None:
-    text = _render(
-        "BroadcastFunctions/broadcast_to/broadcast_to.c.j2",
-        {
-            "name": "broadcast_invalid_smoke",
-            "c_type": "int8_t",
-            "kernel_fn": "arm_broadcast_to_s8",
-            "output_size": 4,
-            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
-            "input_arg": "NULL",
-            "params_arg": "&broadcast_invalid_smoke_params",
-            "output_arg": "broadcast_invalid_smoke_output",
-        },
-    )
+    context = {
+        "name": "broadcast_invalid_smoke",
+        "c_type": "int8_t",
+        "kernel_fn": "arm_broadcast_to_s8",
+        "output_size": 4,
+        "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+        "input_arg": "NULL",
+        "params_arg": "&broadcast_invalid_smoke_params",
+        "output_arg": "broadcast_invalid_smoke_output",
+        "rank": 1, "input_shape": [1], "output_shape": [4],
+        "input_data_array": "    0", "expected_output_array": "    0", "use_batch_harness": False,
+    }
+    text = render_pool(context, broadcast_to_argument_pool(context), stem="broadcast_to",
+                       validation_key="BroadcastFunctions/broadcast_to/broadcast_to.c.j2", label="BroadcastTo")[1]
 
     assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
     assert "ARM_CMSIS_NN_ARG_ERROR" in text

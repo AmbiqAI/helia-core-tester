@@ -652,3 +652,44 @@ class OpSquaredDifference(BinaryBasicMathBase):
         diff = diff + int(out_offset)
         diff = np.clip(diff, int(out_activation_min), int(out_activation_max))
         return diff.astype(out_dtype)
+
+
+from helia_core_tester.generation.harness import FaultEdit  # noqa: E402
+from helia_core_tester.generation.harness.faults import with_fault  # noqa: E402
+from helia_core_tester.generation.harness.model import Declaration as _Declaration, ArrayLiteral as _ArrayLiteral  # noqa: E402
+from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402
+from helia_core_tester.generation.harness.simple import binary_case_pool  # noqa: E402
+
+# Pinned boundary cases compare storage bits: the tolerance validator cannot tell -0 from +0.
+_BIT_EXACT_VALIDATION = """    for (int i = 0; i < {{ name|upper }}_OUTPUT_SIZE; ++i) {
+        uint16_t actual;
+        memcpy(&actual, &{{ name }}_output[i], sizeof(actual));
+        HELIA_VALIDATE_FLOAT_BITS(actual, {{ name }}_expected_bits[i], 0x7c00u, 0, i,
+                                  {{ validation_report_limit | default(20) }}, failures);
+    }"""
+
+_SQUARED_DIFFERENCE_FAULTS = {
+    "null_input_1": {"input_1_data": "NULL"},
+    "null_input_2": {"input_2_data": "NULL"},
+    "null_output": {"output_data": "NULL"},
+    "zero_block": {"block_size": "0"},
+    "negative_block": {"block_size": "-1"},
+}
+
+
+@harness_pool("BasicMathFunctions/squared_difference/squared_difference.c.j2", label="SquaredDifference")
+def squared_difference_argument_pool(context):
+    if context.get("bit_exact"):
+        bits = _Declaration(f"{context['name']}_expected_bits", "uint16_t", _ArrayLiteral(context["expected_bits_array"]),
+                            array=True)
+        return binary_case_pool(context, validation=_BIT_EXACT_VALIDATION, extra_header=(bits,), includes=("<string.h>",))
+    return binary_case_pool(context, includes=("<string.h>",))
+
+
+@harness_pool("BasicMathFunctions/squared_difference/squared_difference_fault.c.j2", label="SquaredDifference")
+def squared_difference_fault_pool(context):
+    kind = context["fault"]
+    if kind not in _SQUARED_DIFFERENCE_FAULTS:
+        raise ValueError(f"{context['name']}: no SquaredDifference fault edit for {kind!r}")
+    return with_fault(squared_difference_argument_pool(context),
+                      FaultEdit(kind=kind, values=_SQUARED_DIFFERENCE_FAULTS[kind]))
