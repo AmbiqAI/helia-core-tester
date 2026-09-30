@@ -31,7 +31,7 @@ on:
       ns_cmsis_nn_ref:
         description: ns-cmsis-nn ref (branch, tag, or SHA) to test against.
         required: false
-        default: main
+        default: dev/kernel-contracts
         type: string
 
 concurrency:
@@ -54,7 +54,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: AmbiqAI/ns-cmsis-nn
-          ref: ${{ github.event.inputs.ns_cmsis_nn_ref || 'main' }}
+          # The contract-bound templates refuse to render without the kernel
+          # contract export, which on ns-cmsis-nn lives on dev/kernel-contracts
+          # (the same ref self-validate.yml uses); with this checkout set as
+          # CMSIS_NN_ROOT the test-only fallback contract is bypassed by design.
+          ref: ${{ github.event.inputs.ns_cmsis_nn_ref || 'dev/kernel-contracts' }}
           path: ns-cmsis-nn-scratch
 
       - name: Install uv
