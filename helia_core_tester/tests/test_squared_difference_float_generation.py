@@ -437,7 +437,7 @@ def test_fault_kinds_are_rejected_on_the_int_kernels(tmp_path: Path, monkeypatch
             "fault": "null_input_1", "expected_status": "ARM_CMSIS_NN_ARG_ERROR"}
     op = OpSquaredDifference(desc, seed=1, target_cpu=CPU)
     op.convert_to_tflite(None, str(tmp_path / "int_fault.tflite"), 1)
-    with pytest.raises(ValueError, match="not covered by the float fault template"):
+    with pytest.raises(ValueError, match="not covered by the float fault edits"):
         op.generate_c_files(tmp_path)
 
 
