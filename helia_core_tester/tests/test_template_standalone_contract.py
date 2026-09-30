@@ -631,7 +631,7 @@ def test_lstm_and_svdf_keep_specialized_shared_validation_contracts() -> None:
         _templates_root()
         / "LSTMFunctions"
         / "lstm_unidirectional"
-        / "lstm_unidirectional.c.j2"
+        / "lstm_unidirectional.fragment.j2"
     ).read_text()
     svdf = (_templates_root() / "SVDFunctions" / "svdf" / "svdf.fragment.j2").read_text()
 
@@ -654,13 +654,13 @@ def test_single_shot_recurrent_float_templates_validate_the_whole_output() -> No
         _templates_root()
         / "LSTMFunctions"
         / "lstm_unidirectional"
-        / "lstm_unidirectional_f32.c.j2"
+        / "lstm_unidirectional_f32.fragment.j2"
     ).read_text()
     gru = (
         _templates_root()
         / "LSTMFunctions"
         / "gru_unidirectional"
-        / "gru_unidirectional.c.j2"
+        / "gru_unidirectional.fragment.j2"
     ).read_text()
 
     call_site = (

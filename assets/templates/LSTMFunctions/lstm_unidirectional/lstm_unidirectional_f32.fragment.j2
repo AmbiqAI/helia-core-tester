@@ -1,8 +1,70 @@
-#include "{{ name }}_lstm_unidirectional.h"
-{% from "common/standalone/validation.j2" import validation_outputs with context %}
-{% include "common/standalone/runtime_common.j2" %}
+{#
+  LSTM body fragment for the generic harness: `header`, `file_scope` and `test_body` are imported
+  by the recurrent pool; the kernel is called through <name>_run, which the harness binds from
+  the kernel contract.
+#}
 {% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
+{% from "common/standalone/validation.j2" import validation_outputs with context %}
+{% macro header() %}
+static const {{ data_dtype }} {{ name }}_input_tensor[] = {
+{{ input_tensor_array }}
+};
 
+static const {{ data_dtype }} {{ name }}_expected_output[] = {
+{{ output_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_forget_gate_input_weights[] = {
+{{ forget_gate_input_weights_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_input_gate_input_weights[] = {
+{{ input_gate_input_weights_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_cell_gate_input_weights[] = {
+{{ cell_gate_input_weights_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_output_gate_input_weights[] = {
+{{ output_gate_input_weights_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_forget_gate_hidden_weights[] = {
+{{ forget_gate_hidden_weights_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_input_gate_hidden_weights[] = {
+{{ input_gate_hidden_weights_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_cell_gate_hidden_weights[] = {
+{{ cell_gate_hidden_weights_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_output_gate_hidden_weights[] = {
+{{ output_gate_hidden_weights_array }}
+};
+
+{% if use_bias | default(true) %}
+static const {{ data_dtype }} {{ name }}_forget_gate_bias[] = {
+{{ forget_gate_bias_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_input_gate_bias[] = {
+{{ input_gate_bias_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_cell_gate_bias[] = {
+{{ cell_gate_bias_array }}
+};
+
+static const {{ data_dtype }} {{ name }}_output_gate_bias[] = {
+{{ output_gate_bias_array }}
+};
+{% endif %}
+{% endmacro %}
+{% macro file_scope() %}
 {% if temp_sizers_available %}
 /*
  * ns-cmsis-nn temp-buffer sizer detection: DETECTED at generation time --
@@ -111,11 +173,10 @@ static int32_t run_lstm(void)
         .cell_state = {{ name }}_cell_state,
     };
 
-    return {{ kernel_fn }}({{ name }}_input_tensor, {{ name }}_output, &params, &buffers);
+    return {{ name }}_run({{ name }}_input_tensor, {{ name }}_output, &params, &buffers);
 }
-
-int32_t {{ name }}_test_case_run(void)
-{
+{% endmacro %}
+{% macro test_body() %}
 {% if temp_sizers_available %}
     int sizer_failures = {{ name }}_check_temp_sizers();
     if (sizer_failures != 0)
@@ -135,7 +196,4 @@ int32_t {{ name }}_test_case_run(void)
     HELIA_VALIDATE_STATUS("{{ validation_label | default("LSTM") }}", status);
 
 {{ validation_outputs(validation_mode_token | default("FLOAT"), validation_tolerance | default(1), dst_size, validation_report_limit | default(8)) }}
-    HELIA_VALIDATE_RETURN_FAILURES(failures);
-}
-
-{% include "common/standalone/main.j2" %}
+{% endmacro %}

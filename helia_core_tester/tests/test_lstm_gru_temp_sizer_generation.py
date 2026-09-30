@@ -215,21 +215,21 @@ _TEMPLATES = "LSTMFunctions/lstm_unidirectional/lstm_unidirectional{suffix}.c.j2
 
 
 def _render(template_relpath: str, context: dict) -> str:
-    from helia_core_tester.generation.ops._shared.base import OperationBase
+    """The case source as the generic harness renders it: `template_relpath` is the validation key
+    (the former template path), whose body now lives in the matching fragment."""
+    from helia_core_tester.generation.ops._shared.recurrent_pool import recurrent_argument_pool
+    from helia_core_tester.tests.harness_render import render_pool
 
-    class _Renderer(OperationBase):
-        def build_keras_model(self):  # pragma: no cover - never called
-            raise NotImplementedError
+    from dataclasses import replace
 
-    renderer = _Renderer.__new__(_Renderer)
-    is_float = "gru" in template_relpath or "_f32" in template_relpath
-    renderer.desc = {
-        "operator": "GRUUnidirectional" if "gru" in template_relpath else "LSTMUnidirectional",
-        "tensor_dtypes": (
-            {"input": "FP32", "output": "FP32"} if is_float else {"input": "S8", "output": "S8"}
-        ),
-    }
-    return renderer.render_template(template_relpath, context)
+    body = template_relpath.replace(".c.j2", ".fragment.j2")
+    context = {"use_batch_harness": False, **context}
+    context.setdefault("kernel_fn", f"arm_lstm_unidirectional_{context.get('dtype', 's8')}")
+    # Only the source is inspected here, and these contexts carry no header data.
+    pool = replace(recurrent_argument_pool(context, body=body, header=body,
+                                           ctype=context.get("data_dtype") or context["output_dtype"]), header_text="")
+    stem = "gru_unidirectional" if "gru" in template_relpath else "lstm_unidirectional"
+    return render_pool(context, pool, stem=stem, validation_key=template_relpath, label=stem)[1]
 
 
 def _int_lstm_context(**overrides) -> dict:

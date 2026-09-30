@@ -1,11 +1,12 @@
-#ifndef LSTM_UNIDIRECTIONAL_FLOAT_STREAM_F32_LSTM_UNIDIRECTIONAL_H
-#define LSTM_UNIDIRECTIONAL_FLOAT_STREAM_F32_LSTM_UNIDIRECTIONAL_H
+#ifndef LSTM_UNIDIRECTIONAL_FLOAT_STREAM_F32_HARNESS_H
+#define LSTM_UNIDIRECTIONAL_FLOAT_STREAM_F32_HARNESS_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
+#include "arm_nn_types.h"
 
 static const float lstm_unidirectional_float_stream_f32_input_tensor[] = {
     -0.780473351f, -0.076173268f, -0.979150891f, 0.598568618f, 0.588701367f, 0.203874439f, -0.757103324f, 0.502486229f, -0.160482883f, 0.683489919f, -0.549579918f, 0.790302634f
@@ -62,5 +63,6 @@ static const float lstm_unidirectional_float_stream_f32_cell_gate_bias[] = {
 static const float lstm_unidirectional_float_stream_f32_output_gate_bias[] = {
     -0.076597005f, -0.127822027f, 0.223839059f, -0.159131557f
 };
+
 
 #endif
