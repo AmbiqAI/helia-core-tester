@@ -10,6 +10,7 @@ from pathlib import Path
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, HarnessInput
+from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift, requantize_np
 
 
 def prelu_scalar_argument_pool(context: dict) -> ArgumentPool:
@@ -38,7 +39,6 @@ def prelu_scalar_argument_pool(context: dict) -> ArgumentPool:
         inputs=(HarnessInput("scalar_vect", "scalar_input", f"{n}_scalar_input"),
                 HarnessInput("non_scalar_vect", "alpha", f"{n}_alpha")),
     )
-from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift, requantize_np
 
 # Per-dtype quantization parameters: C type name, numpy dtype, and clamp range.
 _DTYPE_INFO = {
