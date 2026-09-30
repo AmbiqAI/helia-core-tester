@@ -175,7 +175,12 @@ int32_t {{ name }}_run(
     {% if pool.pre_call %}
 {{ pool.pre_call }}
     {% endif %}
-    {% if harness.run_calls %}
+    {% if harness.run_calls and harness.void_return %}
+    {% for call in harness.run_calls %}
+    {{ call }};
+    {% endfor %}
+    return ARM_CMSIS_NN_SUCCESS;
+    {% elif harness.run_calls %}
     arm_cmsis_nn_status kernel_status = ARM_CMSIS_NN_SUCCESS;
     {% for call in harness.run_calls %}
     kernel_status = {{ call }};

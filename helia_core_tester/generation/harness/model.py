@@ -159,7 +159,8 @@ class ArgumentPool:
     output_ctype: Optional[str] = None
     # An ordered list of kernel calls, each a mapping of parameter name to a C expression in terms
     # of the _run locals that replaces the call-site value for that call; the run returns the first
-    # failing status. Benchmarks and fault edits are not defined over a call list.
+    # failing status (a void kernel is called as statements and the run reports success).
+    # Benchmarks and fault edits are not defined over a call list.
     calls: Optional[Sequence[Mapping[str, str]]] = None
     # Several outputs the kernel reaches through a pointer array the pool declares: the harness
     # then has no `output` local and guards, checks and validates each slot in turn.

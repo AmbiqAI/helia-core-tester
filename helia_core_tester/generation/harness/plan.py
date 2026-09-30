@@ -95,9 +95,8 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
     if kernel.returns.strip() == "void" and (fault is not None or pool.checks):
         raise HarnessError(f"{pool.name}: {kernel.name} returns void, so a fault edit or rule check has no status "
                            "to assert")
-    if (pool.calls or pool.post_call.strip()) and kernel.returns.strip() == "void":
-        raise HarnessError(f"{pool.name}: a call list or post-pass needs a status to stop on, but {kernel.name} "
-                           "returns void")
+    if pool.post_call.strip() and kernel.returns.strip() == "void":
+        raise HarnessError(f"{pool.name}: a post-pass needs a status to stop on, but {kernel.name} returns void")
 
     def call(bench: bool, overrides: Mapping[str, str] = {}) -> str:
         site = dict(values)
@@ -147,8 +146,8 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         sizer_fn=sizer_fn,
         sizer_call=sizer_call,
         scratch_bytes=int(scratch_bytes or 0),
-        run_call=call(False),
-        bench_call=call(True),
+        run_call=call(False) if not pool.calls else "",
+        bench_call=call(True) if not pool.calls else "",
         checks=checks,
         size_queries=size_queries,
         fault_kind=fault.kind if fault else None,

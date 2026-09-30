@@ -1,4 +1,4 @@
-/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*, arm_batch_to_space_*, arm_space_to_batch_*, arm_depth_to_space_*, arm_space_to_depth_*, arm_strided_slice_*, arm_pad_*, arm_transpose_*, arm_gather_*, arm_resize_nearest_neighbor_*, arm_pack_*, arm_mirror_pad_*, arm_tile_*, arm_reverse_sequence_*, arm_select_v2_*, arm_scatter_nd_*, arm_dynamic_update_slice_*, arm_where_*, arm_requantize_*, arm_batch_norm_*, arm_softmax_*, arm_split_*, arm_unpack_*, arm_quantize_*, arm_dequantize_*)
+/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*, arm_batch_to_space_*, arm_space_to_batch_*, arm_depth_to_space_*, arm_space_to_depth_*, arm_strided_slice_*, arm_pad_*, arm_transpose_*, arm_gather_*, arm_resize_nearest_neighbor_*, arm_pack_*, arm_mirror_pad_*, arm_tile_*, arm_reverse_sequence_*, arm_select_v2_*, arm_scatter_nd_*, arm_dynamic_update_slice_*, arm_where_*, arm_requantize_*, arm_batch_norm_*, arm_softmax_*, arm_split_*, arm_unpack_*, arm_quantize_*, arm_dequantize_*, arm_concatenation_*)
  * from ns-cmsis-nn arm_nnfunctions.h; the fallback contract for unit tests without a checkout.
  * test_bound_operator_fixture_matches_the_real_tree keeps it equal to the export. */
 
@@ -225,6 +225,65 @@ arm_cmsis_nn_status arm_comparison_s8(const cmsis_nn_context *ctx,
                                       const int32_t input_2_shift,
                                       const int32_t left_shift,
                                       arm_nn_compare_operation operation);
+
+arm_cmsis_nn_status arm_concatenation_s16(const int16_t *const *input_data,
+                                          const int32_t inputs_count,
+                                          const int32_t *input_concat_dims,
+                                          const int32_t axis,
+                                          int16_t *output_data,
+                                          const int32_t output_dims,
+                                          const int32_t *output_shape);
+
+arm_cmsis_nn_status arm_concatenation_s32(const int32_t *const *input_data,
+                                          const int32_t inputs_count,
+                                          const int32_t *input_concat_dims,
+                                          const int32_t axis,
+                                          int32_t *output_data,
+                                          const int32_t output_dims,
+                                          const int32_t *output_shape);
+
+arm_cmsis_nn_status arm_concatenation_s8(const int8_t *const *input_data,
+                                         const int32_t inputs_count,
+                                         const int32_t *input_concat_dims,
+                                         const int32_t axis,
+                                         int8_t *output_data,
+                                         const int32_t output_dims,
+                                         const int32_t *output_shape);
+
+void arm_concatenation_s8_w(const int8_t *input,
+                            const uint16_t input_x,
+                            const uint16_t input_y,
+                            const uint16_t input_z,
+                            const uint16_t input_w,
+                            int8_t *output,
+                            const uint32_t offset_w);
+
+void arm_concatenation_s8_x(const int8_t *input,
+                            const uint16_t input_x,
+                            const uint16_t input_y,
+                            const uint16_t input_z,
+                            const uint16_t input_w,
+                            int8_t *output,
+                            const uint16_t output_x,
+                            const uint32_t offset_x);
+
+void arm_concatenation_s8_y(const int8_t *input,
+                            const uint16_t input_x,
+                            const uint16_t input_y,
+                            const uint16_t input_z,
+                            const uint16_t input_w,
+                            int8_t *output,
+                            const uint16_t output_y,
+                            const uint32_t offset_y);
+
+void arm_concatenation_s8_z(const int8_t *input,
+                            const uint16_t input_x,
+                            const uint16_t input_y,
+                            const uint16_t input_z,
+                            const uint16_t input_w,
+                            int8_t *output,
+                            const uint16_t output_z,
+                            const uint32_t offset_z);
 
 arm_cmsis_nn_status arm_convolve_1_x_n_s4(const cmsis_nn_context *ctx,
                                           const cmsis_nn_conv_params *conv_params,

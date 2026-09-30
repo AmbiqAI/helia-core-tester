@@ -6,6 +6,7 @@ from typing import Dict, Any, List
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops.ConcatenationFunctions.concat_pool import concatenation_argument_pool
 
 
 class OpConcatenation(OperationBase):
@@ -349,27 +350,9 @@ class OpConcatenation(OperationBase):
         if kernel_info["output_c_type"] in {"float", "float16_t"}:
             context["validation_mode"] = "float"
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("ConcatenationFunctions/concatenation/concatenation.h.j2", context)
-        h_path = includes_api_dir / f"{name}_concatenation.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("ConcatenationFunctions/concatenation/concatenation.c.j2", context)
-        c_path = output_dir / f"{name}_concatenation.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Concatenation'),
-            'operator_name': 'concatenation'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="concatenation", context=context, pool=concatenation_argument_pool(context),
+            validation_key="ConcatenationFunctions/concatenation/concatenation.c.j2", label="Concatenation",
+            operator="Concatenation",
+        )
         
