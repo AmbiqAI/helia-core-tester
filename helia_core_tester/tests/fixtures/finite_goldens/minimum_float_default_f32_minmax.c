@@ -5,8 +5,12 @@
 #include "test_runtime/helia_test_runtime.h"
 
 
-// Context for buffer allocation (min/max operations don't need a buffer, but API requires ctx)
-static cmsis_nn_context minimum_float_default_f32_ctx = { .buf = NULL, .size = 0 };
+
+// The kernel this harness links must have the prototype the ns-cmsis-nn export records.
+_Static_assert(__builtin_types_compatible_p(__typeof__(arm_minimum_f32), arm_cmsis_nn_status (const cmsis_nn_context *, const float32_t *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, float32_t *, const cmsis_nn_dims *)),
+               "arm_minimum_f32: prototype differs from the kernel contract export; rerun `python3 scripts/check_kernel_contract.py export` in ns-cmsis-nn and regenerate");
+
+
 
 #define MINIMUM_FLOAT_DEFAULT_F32_OUTPUT_SIZE (1 * 4 * 4 * 8)
 static struct {
@@ -16,24 +20,36 @@ static struct {
 } minimum_float_default_f32_output_guard;
 #define minimum_float_default_f32_output (minimum_float_default_f32_output_guard.body)
 
+static cmsis_nn_context minimum_float_default_f32_ctx = {
+    .buf = NULL,
+    .size = 0
+};
+
 int32_t minimum_float_default_f32_run(
     const float* __restrict input1,
     const float* __restrict input2,
     float* __restrict output
 ) {
-    // Call min/max kernel (ctx can be NULL or empty for min/max operations)
-    arm_cmsis_nn_status kernel_status = arm_minimum_f32(
-        &minimum_float_default_f32_ctx,
-        input1,
-        &minimum_float_default_f32_input1_dims,
-        input2,
-        &minimum_float_default_f32_input2_dims,
-        output,
-        &minimum_float_default_f32_output_dims
+        // Armed before the capacity check below: an early return there would otherwise leave
+    // these canaries unstamped, and the unconditional check in _test_case_run would
+    // report a fabricated breach instead of the real sizer error (#68).
+
+    // The sizer's answer is checked before it becomes a context size (#133): a negative
+    // answer is the documented out-of-range sentinel, and one above this case's static bound
+    // means the generation-time bound and the shipped kernel disagree.
+
+
+    return arm_minimum_f32(
+        &minimum_float_default_f32_ctx, /* ctx */
+        input1, /* input_1_data */
+        &minimum_float_default_f32_input1_dims, /* input_1_dims */
+        input2, /* input_2_data */
+        &minimum_float_default_f32_input2_dims, /* input_2_dims */
+        output, /* output_data */
+        &minimum_float_default_f32_output_dims /* output_dims */
     );
-    
-    return kernel_status;
 }
+
 
 int32_t minimum_float_default_f32_test_case_run(void)
 {

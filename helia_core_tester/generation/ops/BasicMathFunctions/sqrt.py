@@ -7,6 +7,17 @@ from typing import Any, Dict
 import numpy as np
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.harness import ArrayLiteral, Declaration
+from helia_core_tester.generation.harness.simple import tensor_case_pool
+
+
+def sqrt_argument_pool(context):
+    """Sqrt reads a lookup table the case carries as the file-scope `sqrt_lut`."""
+    lut = context["sqrt_lut"]
+    rows = "\n".join(", ".join(str(v) for v in lut[i:i + 8]) + "," for i in range(0, len(lut), 8))
+    table = Declaration("sqrt_lut", context["lut_c_type"], ArrayLiteral(rows), storage="static", array=True,
+                        extent=str(context["lut_size"]))
+    return tensor_case_pool(context, {"sqrt_lut": "sqrt_lut"}, dims=("input_dims",), extra_header=(table,))
 from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
 from helia_core_tester.generation.utils.litert_utils import (
     get_operator_tensors_from_litert,
@@ -279,27 +290,8 @@ class OpSqrt(OperationBase):
             context["validation_mode"] = "tolerant_int"
             context["comparison_tolerance"] = int(comparison.get("tolerance", 1))
         
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("BasicMathFunctions/sqrt/sqrt.h.j2", context)
-        h_path = includes_api_dir / f"{name}_sqrt.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("BasicMathFunctions/sqrt/sqrt.c.j2", context)
-        c_path = output_dir / f"{name}_sqrt.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Sqrt'),
-            'operator_name': 'sqrt'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="sqrt", context=context, pool=sqrt_argument_pool(context),
+            validation_key="BasicMathFunctions/sqrt/sqrt.c.j2", label="Sqrt", operator="Sqrt",
+        )
         

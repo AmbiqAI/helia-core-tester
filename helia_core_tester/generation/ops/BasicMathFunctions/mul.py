@@ -266,3 +266,9 @@ class OpMul(BinaryBasicMathBase):
         prod = prod + int(out_offset)
         prod = np.clip(prod, int(out_activation_min), int(out_activation_max))
         return prod.astype(out_dtype)
+
+
+from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402
+from helia_core_tester.generation.harness.simple import binary_case_pool  # noqa: E402
+
+harness_pool("BasicMathFunctions/mul/mul.c.j2", label="Mul")(binary_case_pool)

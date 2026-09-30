@@ -4,6 +4,35 @@ from typing import Dict
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, FaultEdit, HarnessInput
+from helia_core_tester.generation.harness.faults import with_fault
+
+
+def broadcast_to_argument_pool(context):
+    """BroadcastTo reads its shapes from a params struct; an argument-error case hands the kernel NULL
+    for the input, the params or the output."""
+    n, ctype = context["name"], context["c_type"]
+    shapes = lambda key: "{ " + ", ".join(str(int(v)) for v in context[key]) + " }"
+    header = [
+        Declaration(f"{n}_input_shape", "int32_t", shapes("input_shape"), array=True),
+        Declaration(f"{n}_output_shape", "int32_t", shapes("output_shape"), array=True),
+        Declaration(f"{n}_params", "cmsis_nn_broadcast_to_params",
+                    {"rank": str(context["rank"]), "input_shape": f"{n}_input_shape",
+                     "output_shape": f"{n}_output_shape"}),
+        Declaration(f"{n}_input", ctype, ArrayLiteral(context["input_data_array"]), array=True),
+        Declaration(f"{n}_expected_output", ctype, ArrayLiteral(context["expected_output_array"]), array=True),
+    ]
+    pool = ArgumentPool(
+        name=n, values={"params": context["params_arg"]}, header=header, benchmark=False, scratch_buffer=False,
+        output_count=str(context["output_size"]), output_ctype=ctype,
+        inputs=(HarnessInput("input_data", "input", f"{n}_input", ctype),),
+    )
+    nulls = {}
+    if context["input_arg"] == "NULL":
+        nulls["input_data"] = "NULL"
+    if context["output_arg"] == "NULL":
+        nulls["output_data"] = "NULL"
+    return with_fault(pool, FaultEdit(kind="arg_error", values=nulls)) if nulls else pool
 
 
 class OpBroadcastTo(OperationBase):
@@ -148,16 +177,7 @@ class OpBroadcastTo(OperationBase):
             'output_arg': 'NULL' if arg_error_case == 'output' else f'{name}_output',
         }
 
-        includes_dir = output_dir / "includes"
-        includes_dir.mkdir(parents=True, exist_ok=True)
-
-        h_content = self.render_template("BroadcastFunctions/broadcast_to/broadcast_to.h.j2", context)
-        (includes_dir / f"{name}_broadcast_to.h").write_text(h_content)
-
-        c_content = self.render_template("BroadcastFunctions/broadcast_to/broadcast_to.c.j2", context)
-        (output_dir / f"{name}_broadcast_to.c").write_text(c_content)
-
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", {
-            'name': name, 'operator': 'BroadcastTo', 'operator_name': 'broadcast_to'
-        })
-        (output_dir / "CMakeLists.txt").write_text(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="broadcast_to", context=context, pool=broadcast_to_argument_pool(context),
+            validation_key="BroadcastFunctions/broadcast_to/broadcast_to.c.j2", label="BroadcastTo", operator="BroadcastTo",
+        )

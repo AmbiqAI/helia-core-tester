@@ -20,9 +20,13 @@ from helia_core_tester.contract.ir import load_contract_set
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "contract" / "bound_operators"
 BOUND_PREFIXES = ("arm_convolve_", "arm_depthwise_", "arm_fully_connected_", "arm_batch_matmul_",
-                  "arm_transpose_conv_", "arm_avgpool_", "arm_avg_pool_", "arm_max_pool_",
-                  "arm_relu", "arm_clamp_", "arm_hard_swish_", "arm_leaky_relu_", "arm_logistic_", "arm_tanh_",
-                  "arm_nn_activation_", "arm_prelu_")
+                  "arm_transpose_conv_", "arm_avgpool_", "arm_avg_pool_", "arm_max_pool_", "arm_relu",
+                  "arm_clamp_", "arm_hard_swish_", "arm_leaky_relu_", "arm_logistic_", "arm_tanh_",
+                  "arm_nn_activation_", "arm_prelu_", "arm_abs_", "arm_nn_abs_", "arm_mean_", "arm_nn_mean_",
+                  "arm_reduce_", "arm_add_", "arm_sub_", "arm_mul_", "arm_elementwise_",
+                  "arm_squared_difference_", "arm_maximum_", "arm_minimum_", "arm_argmax_", "arm_argmin_",
+                  "arm_nn_fill_", "arm_sqrt_", "arm_equal_", "arm_not_equal_", "arm_greater_", "arm_less_",
+                  "arm_comparison_", "arm_broadcast_to_")
 
 
 def fallback_resolver(resolve: Callable[[], Optional[Path]]) -> Callable[[], Optional[Path]]:
@@ -33,3 +37,15 @@ def fallback_resolver(resolve: Callable[[], Optional[Path]]) -> Callable[[], Opt
         return FIXTURE_ROOT
 
     return resolver
+
+
+def subprocess_contract_env() -> dict:
+    """The environment for a generation subprocess: it gets no session fixture, so point
+    CMSIS_NN_ROOT at the fallback contract when no checkout with an export is configured."""
+    from helia_core_tester.contract import render
+
+    env = dict(os.environ)
+    root = fallback_resolver(render.resolve_cmsis_nn_root)()
+    if root == FIXTURE_ROOT:
+        env["CMSIS_NN_ROOT"] = str(FIXTURE_ROOT)
+    return env

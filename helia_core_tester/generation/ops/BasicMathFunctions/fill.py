@@ -118,3 +118,25 @@ class OpFill(OperationBase):
             context,
             cmake_context,
         )
+
+
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration  # noqa: E402
+from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402
+
+
+@harness_pool("BasicMathFunctions/fill/fill.c.j2", label="Fill")
+def fill_argument_pool(context):
+    """Fill writes `value` into `block_size` elements and reads no input; block_size 0 is a no-op
+    that must leave its one element of storage untouched."""
+    n, block = context["name"], int(context["block_size"])
+    header = [
+        Declaration(f"{n}_fill_value", context["output_dtype"], ArrayLiteral(context["fill_value_array"]), array=True,
+                    extent="1", comment=f"Fill value ({context['fill_value_repr']}), held in a static initializer"),
+        Declaration(f"{n}_expected_output", context["output_dtype"], ArrayLiteral(context["expected_output_array"]),
+                    array=True, comment="Expected output (golden)"),
+    ]
+    return ArgumentPool(
+        name=n, values={"value": f"{n}_fill_value[0]", "block_size": str(block)}, header=header, inputs=(),
+        output_count=f"({block})", benchmark=False, scratch_buffer=False,
+        output_capacity=None if block > 0 else "1", output_poison=block == 0, output_untouched=block == 0,
+    )

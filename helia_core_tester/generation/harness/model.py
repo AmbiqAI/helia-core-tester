@@ -132,15 +132,27 @@ class ArgumentPool:
     output_count: str = "0"
     benchmark: bool = True
     fault: Optional[FaultEdit] = None
-    inputs: Sequence[HarnessInput] = ()
+    inputs: Optional[Sequence[HarnessInput]] = None
     no_scratch: bool = False
     context_setup: str = ""
     scratch_buffer: bool = True
     prototype_from: Optional[str] = None
+    test_prologue: str = ""
+    extra_checks: str = ""
+    validation: Optional[str] = None
+    output_poison: bool = False
+    output_untouched: bool = False
+    owns_ctx: bool = False
+    includes: Sequence[str] = ()
+    guarded: Sequence[GuardedBuffer] = ()
+    output_capacity: Optional[str] = None
+    output_ctype: Optional[str] = None
 
     @property
     def harness_inputs(self) -> Sequence[HarnessInput]:
-        return tuple(self.inputs) or (HarnessInput(self.input_param, "input", f"{self.name}_input"),)
+        if self.inputs is None:
+            return (HarnessInput(self.input_param, "input", f"{self.name}_input"),)
+        return tuple(self.inputs)
 
     def validate(self) -> None:
         names: set[str] = set()
@@ -150,7 +162,11 @@ class ArgumentPool:
             if decl.name in names:
                 raise HarnessError(f"{self.name}: {decl.name} is declared twice")
             names.add(decl.name)
-        for buffer in (b for p in self.providers for b in p.buffers):
+        harness_owned = [f"{self.name}_output"] + ([f"{self.name}_buffer"] if self.scratch_buffer else [])
+        for buffer in self.guarded:
+            if buffer.name in harness_owned:
+                raise HarnessError(f"{self.name}: guarded buffer {buffer.name} is the harness's own buffer")
+        for buffer in (*self.guarded, *(b for p in self.providers for b in p.buffers)):
             if buffer.name in names:
                 raise HarnessError(f"{self.name}: {buffer.name} is declared twice")
             names.add(buffer.name)
@@ -177,6 +193,13 @@ class ArgumentPool:
             raise HarnessError(f"{self.name}: _run argument names {locals_} must be distinct C identifiers")
         if self.no_scratch and self.context_setup.strip():
             raise HarnessError(f"{self.name}: no_scratch and context_setup both set the context")
+        for include in self.includes:
+            if not re.fullmatch(r'<[\w./]+>|"[\w./]+"', include):
+                raise HarnessError(f"{self.name}: include {include!r} is not <header> or \"header\"")
+        if self.owns_ctx and "ctx" not in self.values:
+            raise HarnessError(f"{self.name}: owns_ctx needs the pool to supply ctx")
+        if self.output_untouched and not self.output_poison:
+            raise HarnessError(f"{self.name}: an untouched-output check needs the output poisoned first")
         if not self.scratch_buffer and self.context_setup.strip():
             raise HarnessError(f"{self.name}: context_setup needs the scratch buffer it replaces")
         for param, expr in self.values.items():

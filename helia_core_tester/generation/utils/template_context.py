@@ -115,6 +115,7 @@ class TemplateContextBuilder:
     _VALIDATION_LABEL_OVERRIDES = {
         "ActivationFunctions/nn_activation/nn_activation.c.j2": "NN activation",
         "ActivationFunctions/prelu/prelu.c.j2": "PReLU",
+        "BroadcastFunctions/broadcast_to/broadcast_to.c.j2": "BroadcastTo",
         "ConvolutionFunctions/transpose_conv/transpose_conv.c.j2": "TransposeConv",
         "ReshapeFunctions/depth_to_space/depth_to_space.c.j2": "DepthToSpace",
         "ReshapeFunctions/resize_nearest_neighbor/resize_nearest_neighbor.c.j2": "ResizeNearestNeighbor",

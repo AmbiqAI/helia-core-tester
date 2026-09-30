@@ -79,6 +79,19 @@ def _is_json_serializable(value: Any) -> bool:
         return False
 
 
+def _render_pool_snippets(env, pool, render_context):
+    """A pool's C snippets (test prologue, extra checks, validation) may use the validation
+    context (validation_report_limit, ...); render them against it before the harness does."""
+    from dataclasses import replace
+
+    fields = {}
+    for field in ("test_prologue", "extra_checks", "validation"):
+        text = getattr(pool, field)
+        if text and "{{" in text:
+            fields[field] = env.from_string(text).render(**render_context)
+    return replace(pool, **fields) if fields else pool
+
+
 class OperationBase(ABC):
     """
     Base class for all CMSIS-NN operations.
@@ -1017,6 +1030,15 @@ class OperationBase(ABC):
         call args, and tensor roles/tolerance structurally rather than
         re-parsing generated C source.
         """
+        from helia_core_tester.generation.harness import registry
+
+        routed = registry.lookup(c_tpl)
+        if routed is not None:
+            builder, label = routed
+            self.render_harness_case(output_dir, stem=op_suffix, context=context, pool=builder(context),
+                                     validation_key=c_tpl, label=label, operator=cmake_context["operator"],
+                                     sidecar=True)
+            return
         includes_api_dir = output_dir / "includes"
         includes_api_dir.mkdir(parents=True, exist_ok=True)
         name = context["name"]
@@ -1122,7 +1144,7 @@ class OperationBase(ABC):
             payload = self._build_generation_sidecar(stem, render_context)
             (output_dir / f"{name}_{stem}.sidecar.json").write_text(
                 json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n")
-        render_context.update(harness=plan, header_name=f"{name}_{stem}.h", harness_label=label,
+        render_context.update(harness=plan, pool=_render_pool_snippets(env, pool, render_context), header_name=f"{name}_{stem}.h", harness_label=label,
                               harness_output_count=pool.output_count, harness_benchmark=pool.benchmark)
         source = env.get_template(self.HARNESS_SOURCE).render(**render_context)
         (output_dir / f"{name}_{stem}.c").write_text(source)

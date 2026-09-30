@@ -358,3 +358,21 @@ class OpMean(OperationBase):
             context,
             cmake_context,
         )
+
+
+from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool  # noqa: E402
+
+_REDUCE_DIMS = ("input_dims", "output_dims", "axis_dims")
+
+
+@harness_pool("BasicMathFunctions/mean/mean.c.j2", label="Mean")
+def mean_argument_pool(context):
+    return tensor_case_pool(context, {"input_offset": context["input_offset"], "out_offset": context["out_offset"],
+                                      "out_mult": context["out_mult"], "out_shift": context["out_shift"]},
+                            dims=_REDUCE_DIMS, output_count=dims_count(context["output_dims"]))
+
+
+@harness_pool("BasicMathFunctions/mean/mean_float.c.j2", label="Mean")
+def mean_float_argument_pool(context):
+    return tensor_case_pool(context, {}, dims=_REDUCE_DIMS, output_count=dims_count(context["output_dims"]))

@@ -117,7 +117,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "abs",
         "OpAbs",
         descriptor_relpaths=("BasicMathFunctions/abs.yaml", "BasicMathFunctions/abs_float.yaml"),
-        template_relpath="BasicMathFunctions/abs",
+        template_relpath=None,
     ),
     "Add": _spec(
         "Add",
@@ -125,7 +125,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "add",
         "OpAdd",
         descriptor_relpaths=("BasicMathFunctions/add.yaml", "BasicMathFunctions/add_float.yaml"),
-        template_relpath="BasicMathFunctions/add",
+        template_relpath=None,
     ),
     "Sub": _spec(
         "Sub",
@@ -133,7 +133,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "sub",
         "OpSub",
         descriptor_relpaths=("BasicMathFunctions/sub.yaml", "BasicMathFunctions/sub_float.yaml"),
-        template_relpath="BasicMathFunctions/sub",
+        template_relpath=None,
     ),
     "Mul": _spec(
         "Mul",
@@ -141,7 +141,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "mul",
         "OpMul",
         descriptor_relpaths=("BasicMathFunctions/mul.yaml", "BasicMathFunctions/mul_float.yaml"),
-        template_relpath="BasicMathFunctions/mul",
+        template_relpath=None,
     ),
     "Fill": _spec(
         "Fill",
@@ -149,7 +149,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "fill",
         "OpFill",
         "BasicMathFunctions/fill_float.yaml",
-        "BasicMathFunctions/fill",
+        None,
         rationale=(
             "arm_nn_fill_f32/f16 (ns-cmsis-nn#475) ship under Source/BasicMathFunctions; "
             "Fill was a tester-only extension with no generated templates before them."
@@ -174,7 +174,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "minmax",
         "OpMinMax",
         descriptor_relpaths=("BasicMathFunctions/maximum.yaml", "BasicMathFunctions/maximum_float.yaml"),
-        template_relpath="BasicMathFunctions/minmax",
+        template_relpath=None,
     ),
     "Minimum": _spec(
         "Minimum",
@@ -182,7 +182,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "minmax",
         "OpMinMax",
         descriptor_relpaths=("BasicMathFunctions/minimum.yaml", "BasicMathFunctions/minimum_float.yaml"),
-        template_relpath="BasicMathFunctions/minmax",
+        template_relpath=None,
     ),
     "Mean": _spec(
         "Mean",
@@ -190,12 +190,12 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "mean",
         "OpMean",
         descriptor_relpaths=("BasicMathFunctions/mean.yaml", "BasicMathFunctions/mean_float.yaml"),
-        template_relpath="BasicMathFunctions/mean",
+        template_relpath=None,
     ),
     "ReduceMax": _spec(
         "ReduceMax", "BasicMathFunctions", "reduce_max", "OpReduceMax",
         descriptor_relpaths=("BasicMathFunctions/reduce_max.yaml", "BasicMathFunctions/reduce_max_float.yaml"),
-        template_relpath="BasicMathFunctions/reduce_max",
+        template_relpath=None,
     ),
     "ReduceSum": _spec(
         "ReduceSum",
@@ -203,26 +203,26 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "reduce_sum",
         "OpReduceSum",
         "BasicMathFunctions/reduce_sum_float.yaml",
-        "BasicMathFunctions/reduce_sum",
+        None,
     ),
     "ReduceMin": _spec(
         "ReduceMin", "BasicMathFunctions", "reduce_min", "OpReduceMin",
         descriptor_relpaths=("BasicMathFunctions/reduce_min.yaml", "BasicMathFunctions/reduce_min_float.yaml"),
-        template_relpath="BasicMathFunctions/reduce_min",
+        template_relpath=None,
     ),
     "ArgMax": _spec(
         "ArgMax", "BasicMathFunctions", "argmax", "OpArgMax",
         descriptor_relpaths=("BasicMathFunctions/argmax.yaml", "BasicMathFunctions/argmax_float.yaml"),
-        template_relpath="BasicMathFunctions/argmax",
+        template_relpath=None,
     ),
     "ArgMin": _spec(
         "ArgMin", "BasicMathFunctions", "argmin", "OpArgMin",
         descriptor_relpaths=("BasicMathFunctions/argmin.yaml", "BasicMathFunctions/argmin_float.yaml"),
-        template_relpath="BasicMathFunctions/argmin",
+        template_relpath=None,
     ),
-    "Sqrt": _spec("Sqrt", "BasicMathFunctions", "sqrt", "OpSqrt", template_relpath="BasicMathFunctions/sqrt", descriptor_relpaths=("BasicMathFunctions/sqrt.yaml", "BasicMathFunctions/sqrt_float.yaml")),
+    "Sqrt": _spec("Sqrt", "BasicMathFunctions", "sqrt", "OpSqrt", template_relpath=None, descriptor_relpaths=("BasicMathFunctions/sqrt.yaml", "BasicMathFunctions/sqrt_float.yaml")),
     "Rsqrt": _spec("Rsqrt", "BasicMathFunctions", "rsqrt", "OpRsqrt", template_relpath="BasicMathFunctions/rsqrt", descriptor_relpaths=("BasicMathFunctions/rsqrt.yaml", "BasicMathFunctions/rsqrt_float.yaml")),
-    "Comparison": _spec("Comparison", "ComparisonFunctions", "comparison", "OpComparison", "ComparisonFunctions/comparison.yaml", "ComparisonFunctions/comparison"),
+    "Comparison": _spec("Comparison", "ComparisonFunctions", "comparison", "OpComparison", "ComparisonFunctions/comparison.yaml", None),
     "Concatenation": _spec(
         "Concatenation",
         "ConcatenationFunctions",
@@ -407,7 +407,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
             "BasicMathFunctions/squared_difference.yaml",
             "BasicMathFunctions/squared_difference_float.yaml",
         ),
-        template_relpath="BasicMathFunctions/squared_difference",
+        template_relpath=None,
     ),
     "SpaceToDepth": _spec("SpaceToDepth", "ReshapeFunctions", "space_to_depth", "OpSpaceToDepth", "ReshapeFunctions/space_to_depth.yaml", "ReshapeFunctions/space_to_depth"),
     "DepthToSpace": _spec("DepthToSpace", "ReshapeFunctions", "depth_to_space", "OpDepthToSpace", "ReshapeFunctions/depth_to_space.yaml", "ReshapeFunctions/depth_to_space"),
@@ -474,7 +474,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         rationale="Tester-only stateful op kept public but isolated from CMSIS parity families.",
     ),
     "Tile": _spec("Tile", "TileFunctions", "tile", "OpTile", "TileFunctions/tile.yaml", "TileFunctions/tile"),
-    "BroadcastTo": _spec("BroadcastTo", "BroadcastFunctions", "broadcast_to", "OpBroadcastTo", "BroadcastFunctions/broadcast_to.yaml", "BroadcastFunctions/broadcast_to"),
+    "BroadcastTo": _spec("BroadcastTo", "BroadcastFunctions", "broadcast_to", "OpBroadcastTo", "BroadcastFunctions/broadcast_to.yaml", None),
     "ScatterNd": _spec("ScatterNd", "ScatterFunctions", "scatter_nd", "OpScatterNd", "ScatterFunctions/scatter_nd.yaml", "ScatterFunctions/scatter_nd"),
     "MirrorPad": _spec("MirrorPad", "PadFunctions", "mirror_pad", "OpMirrorPad", "PadFunctions/mirror_pad.yaml", "PadFunctions/mirror_pad"),
     "SelectV2": _spec("SelectV2", "SelectFunctions", "select_v2", "OpSelectV2", "SelectFunctions/select_v2.yaml", "SelectFunctions/select_v2"),
