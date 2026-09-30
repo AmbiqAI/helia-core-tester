@@ -424,8 +424,9 @@ class FakeTargetTransport:
             self._handle_blob_chunk(frame.payload)
             return
         if frame.header.message_type == MessageType.RUN_CORRECTNESS:
-            if self._rejected_status("correctness") is not None:
-                self._finish_case(correctness_ran=False)
+            status = self._rejected_status("correctness")
+            if status is not None:
+                self._finish_case(correctness_ran=False, status=status)
                 return
             self._run_correctness()
             self._state = _TargetState.WAIT_CORRECTNESS_ACK
@@ -434,6 +435,10 @@ class FakeTargetTransport:
             self._state = _TargetState.WAIT_RUN_PERFORMANCE
             return
         if frame.header.message_type == MessageType.RUN_PERFORMANCE:
+            status = self._rejected_status("performance")
+            if status is not None:
+                self._finish_case(correctness_ran=True, status=status)
+                return
             self._run_performance()
             return
         raise ValueError(f"Unsupported fake-target message: {frame.header.message_type}")
@@ -570,7 +575,7 @@ class FakeTargetTransport:
                 pass_name=sample.pass_name,
             )
             self._queue(MessageType.SAMPLE_RESULT, encode_sample_result(reported))
-        self._finish_case(correctness_ran=True)
+        self._finish_case(correctness_ran=True, status=None)
 
     def _rejected_status(self, stage: str) -> int | None:
         """Kernel status when this stage refuses."""
@@ -578,11 +583,10 @@ class FakeTargetTransport:
         rejection = self._rejections.get(self._case_meta.case_id)
         return rejection[1] if rejection is not None and rejection[0] == stage else None
 
-    def _finish_case(self, *, correctness_ran: bool) -> None:
+    def _finish_case(self, *, correctness_ran: bool, status: int | None) -> None:
         """CASE_COMPLETE, then the next case, like finish_case()."""
         assert self._plan is not None
         assert self._case_meta is not None
-        status = self._rejected_status("correctness" if not correctness_ran else "performance")
         complete = CaseComplete(
             case_id=self._case_meta.case_id,
             workspace_used_bytes=self._arena.used_bytes,

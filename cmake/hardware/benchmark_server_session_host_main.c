@@ -95,15 +95,15 @@ static int drain_catalog_frames(hct_server_session_t *session)
     }
 }
 
-#ifdef HCT_HOST_PMU_STUB
-/* Match tests/fixtures/pmu_stub/pmu_stub.c readings. */
-#define STUB_CCNTR 1234u
-#define STUB_OVS 0x80000009u
-
 static uint32_t read_u32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
+
+#ifdef HCT_HOST_PMU_STUB
+/* Match tests/fixtures/pmu_stub/pmu_stub.c readings. */
+#define STUB_CCNTR 1234u
+#define STUB_OVS 0x80000009u
 
 /* Entry: empty name, event, value, flags. */
 static int check_stub_counter(const uint8_t *entry, int chained, uint32_t index)
@@ -250,7 +250,6 @@ int main(void)
         static hct_server_session_t probe;
         static uint8_t probe_workspace[sizeof(workspace)];
         const size_t id_length = strlen(session.current_case_id);
-        const uint8_t *status;
         memcpy(&probe, &session, sizeof(probe));
         memcpy(probe_workspace, workspace, sizeof(workspace));
         probe.workspace = probe_workspace;
@@ -260,8 +259,7 @@ int main(void)
         /* id, ran flags 0/0, workspace, status. */
         if (outbound_length != 2u + id_length + 1u + 1u + 4u + 4u) return 52;
         if (outbound_payload[2u + id_length] != 0u || outbound_payload[3u + id_length] != 0u) return 53;
-        status = &outbound_payload[outbound_length - 4u];
-        if ((int32_t)((uint32_t)status[0] | ((uint32_t)status[1] << 8) | ((uint32_t)status[2] << 16) | ((uint32_t)status[3] << 24)) != ARM_CMSIS_NN_ARG_ERROR) return 54;
+        if ((int32_t)read_u32(&outbound_payload[outbound_length - 4u]) != ARM_CMSIS_NN_ARG_ERROR) return 54;
         if (drain_single_message(&probe, HCTP_MSG_SESSION_COMPLETE, outbound_payload, &outbound_length) != 0) return 55;
         if (probe.state != HCT_SERVER_STATE_COMPLETE) return 56;
         printf("rejected status=%d state=%d\n", (int)ARM_CMSIS_NN_ARG_ERROR, (int)probe.state);

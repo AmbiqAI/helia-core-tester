@@ -28,7 +28,6 @@ from .wire import (
     COMPARISON_MODE_CODES,
     BlobChunk,
     BlobDescriptor,
-    CaseComplete,
     CaseMeta,
     CatalogEntry,
     CorrectnessAck,
@@ -498,19 +497,27 @@ class HostSession:
                 # Only a correctness-stage rejection skips the comparison.
                 if current_case_id is None or (comparison_result is None and (complete.correctness_ran or complete.performance_ran)):
                     raise RuntimeError("CASE_COMPLETE arrived before correctness finished.")
+                bundle = case_map[current_case_id]
+                rejection = None
                 if not complete.performance_ran:
-                    case_result = rejected_case(case_map[current_case_id], complete, comparison_result, bytes(actual_output_bytes))
-                else:
-                    raw_samples = tuple(samples)
-                    normalized_samples = tuple(normalize_samples(raw_samples))
-                    case_result = CaseRunResult(
-                        case_bundle=case_map[current_case_id],
-                        comparison=comparison_result,
-                        output_bytes=bytes(actual_output_bytes),
-                        samples=raw_samples,
-                        normalized_samples=normalized_samples,
-                        statistics=compute_sample_statistics(normalized_samples),
+                    stage = "performance" if complete.correctness_ran else "correctness"
+                    rejection = CaseRejection(kernel_status=complete.kernel_status, stage=stage)
+                    # Drop samples from a partial measurement.
+                    samples = []
+                    comparison_result = replace(comparison_result, passed=False) if comparison_result else ComparisonResult(
+                        passed=False, mismatch_count=0, max_abs_diff=float("nan"), mode=str(bundle.comparison["mode"])
                     )
+                raw_samples = tuple(samples)
+                normalized_samples = tuple(normalize_samples(raw_samples))
+                case_result = CaseRunResult(
+                    case_bundle=bundle,
+                    comparison=comparison_result,
+                    output_bytes=bytes(actual_output_bytes),
+                    samples=raw_samples,
+                    normalized_samples=normalized_samples,
+                    statistics=compute_sample_statistics(normalized_samples),
+                    rejection=rejection,
+                )
                 results[current_case_id] = case_result
                 if on_case_complete is not None:
                     on_case_complete(case_result)
@@ -566,7 +573,7 @@ class HostSession:
 
     def _recv_any(self) -> Frame:
         # Sampling is silent until every pass ends.
-        sampling = self._last_sent_message_type == MessageType.RUN_PERFORMANCE.name
+        sampling = self._trace[-1:] == ["TX:RUN_PERFORMANCE"]
         reads_left = max(1, len(self._counter_passes)) if sampling else 1
         while not self._frames:
             chunk = self._transport.read()
@@ -643,28 +650,6 @@ def read_target_info(transport: Transport) -> TargetInfo:
             if frame.header.message_type != MessageType.TARGET_INFO:
                 raise RuntimeError(f"Expected TARGET_INFO, got {frame.header.message_type.name}")
             return decode_target_info(frame.payload)
-
-
-def rejected_case(
-    bundle: CaseBundle,
-    complete: CaseComplete,
-    comparison: ComparisonResult | None,
-    output_bytes: bytes,
-) -> CaseRunResult:
-    """Failed result for a kernel-refused case."""
-    if comparison is None:
-        comparison = ComparisonResult(passed=False, mismatch_count=0, max_abs_diff=float("nan"), mode=str(bundle.comparison["mode"]))
-    rejection = CaseRejection(kernel_status=complete.kernel_status, stage="performance" if complete.correctness_ran else "correctness")
-    # Drop samples from a partial measurement.
-    return CaseRunResult(
-        case_bundle=bundle,
-        comparison=replace(comparison, passed=False),
-        output_bytes=output_bytes,
-        samples=(),
-        normalized_samples=(),
-        statistics=compute_sample_statistics(()),
-        rejection=rejection,
-    )
 
 
 def _compare_output_bytes(case_id: str, actual_output_bytes: bytes, bundle: CaseBundle) -> ComparisonResult:

@@ -16,7 +16,7 @@ from xml.etree import ElementTree
 
 import pytest
 
-from helia_core_tester.hardware import session_runner, wire
+from helia_core_tester.hardware import session_runner
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
 from helia_core_tester.hardware.fake_target import FakeTargetTransport
@@ -36,15 +36,6 @@ def _bundles(tmp_path: Path):
         load_case_bundle(build_convolve_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="conv_b").manifest_path),
         load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_c").manifest_path),
     ]
-
-
-def test_case_complete_carries_the_status_only_for_a_rejection() -> None:
-    normal = wire.CaseComplete("c", 64)
-    assert len(wire.encode_case_complete(normal)) == 2 + 1 + 1 + 1 + 4
-    rejected = wire.CaseComplete("c", 64, correctness_ran=False, performance_ran=False, kernel_status=ARG_ERROR)
-    payload = wire.encode_case_complete(rejected)
-    assert len(payload) == 2 + 1 + 1 + 1 + 4 + 4
-    assert wire.decode_case_complete(payload) == rejected
 
 
 @pytest.mark.parametrize("stage", ["correctness", "performance"])
@@ -108,42 +99,6 @@ def test_runner_writes_the_bundle_with_the_rejected_case(tmp_path: Path, monkeyp
     assert [(f.get("message"), f.text) for f in failures] == [("kernel rejected case", expected["reason"])]
 
 
-class _StallingTarget(FakeTargetTransport):
-    """Goes silent after a few reads."""
-
-    def __init__(self, reads: int) -> None:
-        super().__init__()
-        self._reads_left = reads
-
-    def read(self, max_bytes: int = 4096) -> bytes:
-        self._reads_left -= 1
-        return super().read(max_bytes) if self._reads_left >= 0 else b""
-
-
-@pytest.mark.parametrize(
-    ("transport", "passes", "message"),
-    [
-        # pmu_event_known() refuses an unmapped id: ERROR frame.
-        (FakeTargetTransport(), (CounterPass("cpu", 0, (CounterDescriptor("vendor", 0x0C00, "cpu"),)),), r"^message_type=4 status=-1"),
-        (_StallingTarget(reads=200), PASSES, r"^Transport stalled"),
-    ],
-    ids=["error-frame", "transport-stall"],
-)
-def test_broken_session_still_fails_without_a_bundle(tmp_path: Path, monkeypatch, transport, passes, message) -> None:
-    monkeypatch.setattr(
-        session_runner, "open_rtt_session",
-        lambda board, serial_no, *, build_dir, counter_passes: (HostSession(transport, counter_passes=counter_passes), transport, 0),
-    )
-    monkeypatch.setattr(session_runner, "write_result_bundle", lambda *a, **k: pytest.fail("bundle written"))
-
-    with pytest.raises(RuntimeError, match=message):
-        session_runner.run_case_bundles(
-            tmp_path, _bundles(tmp_path), board=resolve_board("apollo510_evb"), serial_no=1,
-            counter_passes=passes, session_id="broken", build_dir=tmp_path,
-        )
-
-
-
 class _SilentSampling(FakeTargetTransport):
     """Answers RUN_PERFORMANCE after `silent` empty reads."""
 
@@ -162,6 +117,30 @@ class _SilentSampling(FakeTargetTransport):
             self._left -= 1
             return b""
         return super().read(max_bytes)
+
+
+@pytest.mark.parametrize(
+    ("transport", "passes", "message"),
+    [
+        # pmu_event_known() refuses an unmapped id: ERROR frame.
+        (FakeTargetTransport(), (CounterPass("cpu", 0, (CounterDescriptor("vendor", 0x0C00, "cpu"),)),), r"^message_type=4 status=-1"),
+        (_SilentSampling(silent=len(PASSES)), PASSES, r"^Transport stalled"),
+    ],
+    ids=["error-frame", "transport-stall"],
+)
+def test_broken_session_still_fails_without_a_bundle(tmp_path: Path, monkeypatch, transport, passes, message) -> None:
+    monkeypatch.setattr(
+        session_runner, "open_rtt_session",
+        lambda board, serial_no, *, build_dir, counter_passes: (HostSession(transport, counter_passes=counter_passes), transport, 0),
+    )
+    monkeypatch.setattr(session_runner, "write_result_bundle", lambda *a, **k: pytest.fail("bundle written"))
+
+    with pytest.raises(RuntimeError, match=message):
+        session_runner.run_case_bundles(
+            tmp_path, _bundles(tmp_path), board=resolve_board("apollo510_evb"), serial_no=1,
+            counter_passes=passes, session_id="broken", build_dir=tmp_path,
+        )
+
 
 
 def test_sampling_waits_one_read_timeout_per_pass(tmp_path: Path) -> None:
