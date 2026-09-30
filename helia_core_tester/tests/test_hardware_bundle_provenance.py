@@ -12,7 +12,7 @@ import pytest
 from helia_core_tester.hardware import nsx_cli
 from helia_core_tester.hardware import firmware_build
 from helia_core_tester.hardware.firmware_build import nsx_app_dir
-from helia_core_tester.hardware.nsx_app import AppOptions, kernel_dir, save_options
+from helia_core_tester.hardware.nsx_app import CMSIS_NN_REF, AppOptions, kernel_dir, save_options
 from helia_core_tester.hardware.result_bundle import build_provenance, write_result_bundle
 from helia_core_tester.hardware.session import SessionResult
 
@@ -79,7 +79,7 @@ def test_pinned_ref_build_is_stamped(tmp_path: Path) -> None:
     build = manifest["build"]
     tree = nsx_cli.tree_hash(kernel_dir(nsx_app_dir(build_dir), AppOptions()))
     assert build["kernels"] == {
-        "ref": "v7.35.1", "commit": COMMIT, "root": None, "root_head": None, "root_dirty": None, "tree_hash": tree,
+        "ref": CMSIS_NN_REF, "commit": COMMIT, "root": None, "root_head": None, "root_dirty": None, "tree_hash": tree,
     }
     assert build["options"]["requantize_inline_asm"] is False
     assert build["options"]["cmsis_nn_root"] is None
@@ -129,7 +129,7 @@ def test_relocked_app_drops_lock_fields(tmp_path: Path) -> None:
 
     assert lock_file is None
     assert provenance["kernels"]["commit"] is None
-    assert provenance["kernels"]["ref"] == "v7.35.1"
+    assert provenance["kernels"]["ref"] == CMSIS_NN_REF
     assert provenance["neuralspotx_version"] == nsx_cli.nsx_version()
 
 

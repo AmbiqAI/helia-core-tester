@@ -59,7 +59,7 @@ The firmware builds as a neuralspotx (NSX) app rendered into
 
 - Nested layout (the tester at `ns-cmsis-nn/Tests/helia-core-tester`): the
   enclosing ns-cmsis-nn checkout, working-tree edits included.
-- Standalone clone: the pinned ns-cmsis-nn release (`v7.35.1`).
+- Standalone clone: the pinned ns-cmsis-nn release (`v7.38.0`).
 - `--cmsis-nn-ref REF` builds another tag or commit; `--cmsis-nn-root PATH`
   builds another local checkout.
 
@@ -77,7 +77,8 @@ turns it back on); `--update-dependencies` re-resolves the NSX modules into
 `hardware build`, `flash` and `run` reuse them for any kernel flag you leave out,
 so a bare `hardware flash` flashes what `hardware build` built. A flag that
 differs from the saved options rebuilds and prints one line naming the change.
-Every build, flash, run and stream prints the kernel source and inline asm
+A saved ref you did not pass with `--cmsis-nn-ref` follows the pinned
+release, so a pin bump rebuilds those build dirs the same way. Every build, flash, run and stream prints the kernel source and inline asm
 setting.
 
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on

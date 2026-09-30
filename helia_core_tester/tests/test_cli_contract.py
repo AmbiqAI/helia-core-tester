@@ -384,6 +384,20 @@ def test_skip_flash_generates_from_the_built_kernels(monkeypatch, tmp_path) -> N
     assert seen["app_options"] == built
 
 
+def test_skip_flash_keeps_a_defaulted_ref(monkeypatch, tmp_path) -> None:
+    """A pin bump never refuses --skip-flash."""
+    from helia_core_tester.hardware import firmware_build, nsx_app
+
+    seen: dict = {}
+    _capture_run(monkeypatch, seen)
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    built = nsx_app.AppOptions(cmsis_nn_ref="v0.old", cmsis_nn_ref_explicit=False)
+    nsx_app.save_options(app_dir, built)
+    runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash"])
+    assert seen["app_options"] == built
+
+
 @pytest.mark.parametrize("flags", [["--cmsis-nn-ref", "v10"], ["--inline-asm"]])
 def test_skip_flash_refuses_new_kernel_flags(monkeypatch, tmp_path, flags) -> None:
     """New flags would not reach the firmware."""
