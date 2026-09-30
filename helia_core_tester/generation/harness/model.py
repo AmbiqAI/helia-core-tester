@@ -25,6 +25,15 @@ Initializer = Union[str, ArrayLiteral, Mapping[str, "Initializer"]]
 
 
 @dataclass(frozen=True)
+class Define:
+    """A header macro the case's arrays are sized by: `#define NAME value`."""
+
+    name: str
+    value: str
+    comment: str = ""
+
+
+@dataclass(frozen=True)
 class Declaration:
     """A file-scope C declaration: `storage ctype name[] = init;`."""
 
@@ -169,6 +178,14 @@ class ArgumentPool:
     # declarations) and after every call succeeded; a post-pass forces the status-checked form.
     pre_call: str = ""
     post_call: str = ""
+    # A property case: the pool supplies the whole body of the test function (arming, the
+    # `<name>_run(...)` calls, checks, validation; it declares `int failures`) and every guarded
+    # buffer, so the harness contributes the bound kernel call, the parity assert and the frame.
+    # `run_params` are extra scalar `_run` parameters, (local, ctype), a value may name.
+    test_body: Optional[str] = None
+    run_params: Sequence[tuple[str, str]] = ()
+    # Raw file-scope C (helpers the test body calls), emitted after the declarations.
+    file_scope: str = ""
 
     @property
     def harness_inputs(self) -> Sequence[HarnessInput]:
@@ -184,7 +201,8 @@ class ArgumentPool:
             if decl.name in names:
                 raise HarnessError(f"{self.name}: {decl.name} is declared twice")
             names.add(decl.name)
-        harness_owned = [f"{self.name}_output"] + ([f"{self.name}_buffer"] if self.scratch_buffer else [])
+        harness_owned = (([] if self.test_body is not None else [f"{self.name}_output"])
+                         + ([f"{self.name}_buffer"] if self.scratch_buffer else []))
         for buffer in self.guarded:
             if buffer.name in harness_owned:
                 raise HarnessError(f"{self.name}: guarded buffer {buffer.name} is the harness's own buffer")
@@ -210,7 +228,8 @@ class ArgumentPool:
                 raise HarnessError(f"{self.name}: {param} is supplied per call site, not as a pool value")
         if len(set(call_site)) != len(call_site):
             raise HarnessError(f"{self.name}: call-site parameters {call_site} repeat")
-        locals_ = [i.local for i in self.harness_inputs] + ([] if self.outputs else ["output"])
+        locals_ = ([i.local for i in self.harness_inputs] + ([] if self.outputs else ["output"])
+                   + [local for local, _ in self.run_params])
         if len(set(locals_)) != len(locals_) or not all(_IDENT_RE.match(n) for n in locals_):
             raise HarnessError(f"{self.name}: _run argument names {locals_} must be distinct C identifiers")
         if self.no_scratch and self.context_setup.strip():
@@ -227,6 +246,21 @@ class ArgumentPool:
         for param, expr in self.values.items():
             if not isinstance(expr, str) or not expr.strip():
                 raise HarnessError(f"{self.name}: pool value {param!r} is empty")
+        if self.test_body is not None:
+            if not self.test_body.strip():
+                raise HarnessError(f"{self.name}: a property case needs a test body")
+            if self.benchmark or self.fault is not None or self.outputs:
+                raise HarnessError(f"{self.name}: a property case has no benchmark, fault or output-slot form")
+            for field in ("output_poison", "output_untouched", "output_capacity", "validation", "test_prologue",
+                          "extra_checks"):
+                if getattr(self, field):
+                    raise HarnessError(f"{self.name}: {field} belongs to the harness's own test body, which the "
+                                       "property case replaces")
+        elif self.run_params:
+            raise HarnessError(f"{self.name}: run_params need a test body to pass them")
+        for local, ctype in self.run_params:
+            if not ctype.strip():
+                raise HarnessError(f"{self.name}: run parameter {local!r} has no C type")
         if self.outputs:
             if self.benchmark or self.fault is not None or self.calls is not None:
                 raise HarnessError(f"{self.name}: output slots have no benchmark, fault or call-list form")
@@ -285,7 +319,9 @@ def _render_init(value: Initializer, depth: int = 0) -> str:
     return str(value)
 
 
-def render_declaration(decl: Declaration) -> str:
+def render_declaration(decl: Union[Declaration, Define]) -> str:
+    if isinstance(decl, Define):
+        return (f"// {decl.comment}\n" if decl.comment else "") + f"#define {decl.name} {decl.value}"
     suffix = f"[{decl.extent or ''}]" if decl.array else ""
     head = " ".join(part for part in (decl.storage, decl.ctype, decl.name + suffix) if part)
     text = head + ";" if decl.init is None else f"{head} = {_render_init(decl.init)};"

@@ -165,11 +165,13 @@ def test_generated_validator_detects_planted_faults(
     op = (OpRsqrt if reciprocal else OpSqrt)(desc, seed=500, target_cpu="cortex-m55")
     op.generate_c_files(tmp_path)
     (tmp_path / "arm_nnfunctions.h").write_text(
-        "#pragma once\n#include <stdint.h>\ntypedef _Float16 float16_t;\n"
+        "#pragma once\n#include <stdint.h>\ntypedef _Float16 float16_t;\ntypedef float float32_t;\n"
         "typedef int arm_cmsis_nn_status;\n#define ARM_CMSIS_NN_SUCCESS 0\n"
         "#define ARM_CMSIS_NN_ARG_ERROR -1\n"
         f"int {kernel}(const {ctype} *, {ctype} *, int32_t);\n"
     )
+    # The harness header also pulls in the types header; the stub prototypes live in one place.
+    (tmp_path / "arm_nn_types.h").write_text('#include "arm_nnfunctions.h"\n')
     (tmp_path / "arm_nnfunctions_flt.h").write_text(
         f'#include "arm_nnfunctions.h"\nint {kernel}(const {ctype} *, {ctype} *, int32_t);\n'
     )

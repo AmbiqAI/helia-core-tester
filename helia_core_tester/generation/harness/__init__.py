@@ -6,6 +6,7 @@ from helia_core_tester.generation.harness.model import (
     ArgumentPool,
     ArrayLiteral,
     Declaration,
+    Define,
     FaultEdit,
     GuardedBuffer,
     OutputSlot,
@@ -19,6 +20,6 @@ from helia_core_tester.generation.harness.model import (
 from helia_core_tester.generation.harness.plan import HarnessPlan, plan_harness
 
 __all__ = [
-    "ArgumentPool", "ArrayLiteral", "Declaration", "FaultEdit", "GuardedBuffer", "HarnessError", "HarnessInput", "HarnessPlan", "OutputSlot", "Provider", "RuleCheck", "SizeQuery",
+    "ArgumentPool", "ArrayLiteral", "Declaration", "Define", "FaultEdit", "GuardedBuffer", "HarnessError", "HarnessInput", "HarnessPlan", "OutputSlot", "Provider", "RuleCheck", "SizeQuery",
     "plan_harness", "render_declaration",
 ]
