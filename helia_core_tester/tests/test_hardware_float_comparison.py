@@ -110,6 +110,8 @@ def _bridge(case, tmp_path):
     bundle = build_case_bundle_from_generated_test(
         ROOT, case, output_root=tmp_path, fvp_gate="off"
     )
+    # Float cases stage under the float suite.
+    assert bundle.manifest_path.relative_to(tmp_path).parts[:3] == ("artifacts", "stream_cases", "float")
     loaded = load_case_bundle(bundle.manifest_path)
     assert loaded.comparison == bundle.comparison
     return loaded

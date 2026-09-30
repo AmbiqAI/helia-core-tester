@@ -990,7 +990,7 @@ def _build_convolve_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id)
+    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1147,7 +1147,7 @@ def _build_nn_activation_float_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1217,7 +1217,7 @@ def _build_reduce_sum_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
     arrays = [
@@ -1303,7 +1303,7 @@ def _build_batch_norm_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
     arrays = [
@@ -1488,7 +1488,7 @@ def _build_depthwise_conv_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id)
+    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1720,7 +1720,7 @@ def _build_transpose_conv_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id)
+    case_root = _case_root(bundle_root, "ConvolutionFunctions", case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1873,7 +1873,7 @@ def _build_pooling_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "PoolingFunctions", case_id)
+    case_root = _case_root(bundle_root, "PoolingFunctions", case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2013,7 +2013,7 @@ def _build_pooling_float_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "PoolingFunctions", case_id)
+    case_root = _case_root(bundle_root, "PoolingFunctions", case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2210,7 +2210,7 @@ def _build_activation_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "ActivationFunctions", case_id)
+    case_root = _case_root(bundle_root, "ActivationFunctions", case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2341,7 +2341,7 @@ def _build_quantize_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "QuantizationFunctions", case_id)
+    case_root = _case_root(bundle_root, "QuantizationFunctions", case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2461,7 +2461,7 @@ def _build_dequantize_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "QuantizationFunctions", case_id)
+    case_root = _case_root(bundle_root, "QuantizationFunctions", case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2542,7 +2542,7 @@ def _build_requantize_case(
     expected_output = expected_flat.reshape(input_shape)
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2643,7 +2643,7 @@ def _build_comparison_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2778,7 +2778,7 @@ def _build_prelu_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "ActivationFunctions", case_id)
+    case_root = _case_root(bundle_root, "ActivationFunctions", case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2890,7 +2890,7 @@ def _build_prelu_scalar_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "ActivationFunctions", case_id)
+    case_root = _case_root(bundle_root, "ActivationFunctions", case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3022,7 +3022,7 @@ def _build_softmax_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "SoftmaxFunctions", case_id)
+    case_root = _case_root(bundle_root, "SoftmaxFunctions", case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3141,7 +3141,7 @@ def _build_abs_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3292,7 +3292,7 @@ def _build_basic_math_reduction_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3405,7 +3405,7 @@ def _build_basic_math_lut_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3569,7 +3569,7 @@ def _write_elementwise_binary_bundle(
     descriptor = generated_test.descriptor
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -4104,7 +4104,7 @@ def _build_fully_connected_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "FullyConnectedFunctions", case_id)
+    case_root = _case_root(bundle_root, "FullyConnectedFunctions", case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -4272,7 +4272,7 @@ def _build_batch_matmul_case(
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, "FullyConnectedFunctions", case_id)
+    case_root = _case_root(bundle_root, "FullyConnectedFunctions", case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -4352,7 +4352,7 @@ def _build_data_movement_bundle(
 ) -> CaseBundle:
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, generated_test.family, case_id)
+    case_root = _case_root(bundle_root, generated_test.family, case_id, suite=generated_test.suite)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
 
