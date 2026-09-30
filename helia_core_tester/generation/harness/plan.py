@@ -90,6 +90,9 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
                 raise HarnessError(f"{pool.name}: fault {fault.kind!r} edits {param!r}, which {kernel.name} does not take")
 
     inputs = pool.harness_inputs
+    if kernel.returns.strip() == "void" and (fault is not None or pool.checks):
+        raise HarnessError(f"{pool.name}: {kernel.name} returns void, so a fault edit or rule check has no status "
+                           "to assert")
 
     def call(bench: bool) -> str:
         site = {**values, pool.output_param: f"{pool.name}_output" if bench else "output"}

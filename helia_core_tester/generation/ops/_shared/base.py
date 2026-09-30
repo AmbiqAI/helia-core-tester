@@ -1122,6 +1122,7 @@ class OperationBase(ABC):
         overrides `context['kernel_get_buffer_size_fn']` (None: the case calls no sizer).
         """
         from helia_core_tester.contract import render as contract_render
+        from helia_core_tester.generation.harness import HarnessError
         from helia_core_tester.generation.harness import plan_harness, render_declaration
 
         name = context["name"]
@@ -1139,6 +1140,10 @@ class OperationBase(ABC):
             scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
             contracts=contract_render.load_current_contracts(),
         )
+        expected = str(context.get("expected_status") or "ARM_CMSIS_NN_SUCCESS")
+        if plan.void_return and expected != "ARM_CMSIS_NN_SUCCESS":
+            raise HarnessError(f"{context['name']}: {context['kernel_fn']} returns void, so expected_status "
+                               f"{expected} can never be observed")
         render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)
         if sidecar:
             payload = self._build_generation_sidecar(stem, render_context)

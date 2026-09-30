@@ -475,19 +475,16 @@ class OpSoftmax(OperationBase):
         if float_kernel:
             kernel_fn = kernel_info["kernel_fn"]
             output_c_type = kernel_info["output_c_type"]
-            returns_status = True
             uses_lut = False
             float_kernel = True
         elif is_s8_s16:
             kernel_fn = "arm_softmax_s8_s16"
             output_c_type = "int16_t"
-            returns_status = False
             uses_lut = False
             float_kernel = False
         else:
             kernel_fn = kernel_info["kernel_fn"]
             output_c_type = kernel_info["output_c_type"]
-            returns_status = kernel_info["input_c_type"] == "int16_t"
             uses_lut = kernel_info["input_c_type"] == "int16_t"
             float_kernel = False
 
@@ -505,7 +502,6 @@ class OpSoftmax(OperationBase):
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': output_c_type,
             'kernel_fn': kernel_fn,
-            'returns_status': returns_status,
             'uses_lut': uses_lut,
             'float_kernel': float_kernel,
         }
