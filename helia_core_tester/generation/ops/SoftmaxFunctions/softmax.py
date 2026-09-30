@@ -7,7 +7,26 @@ from typing import Dict, Any, Tuple
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
-from helia_core_tester.generation.ops._shared.base import OperationBase  
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
+from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool
+from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops.SoftmaxFunctions.softmax_luts import EXP_LUT, ONE_BY_ONE_LUT
+
+
+def softmax_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
+    """The s8 kernels return void and take diff_min; the s16 kernel takes the LUT pair instead."""
+    n = context["name"]
+    luts: tuple = ()
+    values: Dict[str, Any] = {"num_rows": context["num_rows"], "row_size": context["row_size"]}
+    if not context["float_kernel"]:
+        values.update(mult=context["mult"], shift=context["shift"], diff_min=context["diff_min"])
+    if context["uses_lut"]:
+        luts = (Declaration(f"{n}_exp_lut", "int16_t", ArrayLiteral(EXP_LUT), array=True, extent="513"),
+                Declaration(f"{n}_one_by_one_lut", "int16_t", ArrayLiteral(ONE_BY_ONE_LUT), array=True, extent="513"),
+                Declaration(f"{n}_softmax_params", "cmsis_nn_softmax_lut_s16",
+                            {"exp_lut": f"{n}_exp_lut", "one_by_one_lut": f"{n}_one_by_one_lut"}))
+        values["softmax_params"] = f"&{n}_softmax_params"
+    return tensor_case_pool(context, values, extra_header=luts, output_count=dims_count(context["output_dims"]))
 
 
 class OpSoftmax(OperationBase):
@@ -492,27 +511,8 @@ class OpSoftmax(OperationBase):
         }
         context.update(nonfinite_context)
 
-        # Render templates
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-        
-        h_content = self.render_template("SoftmaxFunctions/softmax/softmax.h.j2", context)
-        h_path = includes_api_dir / f"{name}_softmax.h"
-        with open(h_path, 'w') as f:
-            f.write(h_content)
-        
-        c_content = self.render_template("SoftmaxFunctions/softmax/softmax.c.j2", context)
-        c_path = output_dir / f"{name}_softmax.c"
-        with open(c_path, 'w') as f:
-            f.write(c_content)
-        
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Softmax'),
-            'operator_name': 'softmax'
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, 'w') as f:
-            f.write(cmake_content)
+        self.render_harness_case(
+            output_dir, stem="softmax", context=context, pool=softmax_argument_pool(context),
+            validation_key="SoftmaxFunctions/softmax/softmax.c.j2", label="Softmax", operator="Softmax",
+        )
         

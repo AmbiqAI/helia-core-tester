@@ -50,6 +50,7 @@ class HarnessPlan:
     scratch_buffer: bool = True
     local_prototype: str = ""
     prototype_from: str = ""
+    void_return: bool = False
 
 
 def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str], scratch_bytes: Optional[int],
@@ -141,6 +142,7 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         scratch_buffer=pool.scratch_buffer,
         local_prototype=local_prototype,
         prototype_from=pool.prototype_from or "",
+        void_return=kernel.returns.strip() == "void",
     )
 
 

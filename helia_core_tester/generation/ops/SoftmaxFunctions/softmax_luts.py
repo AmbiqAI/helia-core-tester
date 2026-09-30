@@ -1,39 +1,7 @@
-#ifndef {{ name|upper }}_SOFTMAX_H
-#define {{ name|upper }}_SOFTMAX_H
+"""The s16 softmax lookup tables (exp and 1/(1+x), 513 entries each) every s16 case passes
+through `cmsis_nn_softmax_lut_s16`, verbatim from the tables the kernel's unit tests use."""
 
-#include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
-#include <math.h>
-#include "arm_nnfunctions.h"
-#include "arm_nn_types.h"
-
-// Input dimensions
-static const cmsis_nn_dims {{ name }}_input_dims = {
-    .n = {{ input_dims.n }}, .h = {{ input_dims.h }},
-    .w = {{ input_dims.w }}, .c = {{ input_dims.c }}
-};
-
-// Output dimensions
-static const cmsis_nn_dims {{ name }}_output_dims = {
-    .n = {{ output_dims.n }}, .h = {{ output_dims.h }},
-    .w = {{ output_dims.w }}, .c = {{ output_dims.c }}
-};
-
-// Input data (for testing)
-static const {{ input_dtype }} {{ name }}_input[] = {
-{{ input_data_array }}
-};
-
-// Expected output (golden)
-static const {{ output_dtype }} {{ name }}_expected_output[] = {
-{{ expected_output_array }}
-};
-
-{% if uses_lut %}
-// LUTs for s16 softmax (from CMSIS-NN TestCases/Common/Softmax/)
-// Lookup table for exp(x), where x uniform distributed between [-10.0 , 0.0].
-static const int16_t {{ name }}_exp_lut[513] = {
+EXP_LUT = """\
     2,     2,     2,     2,     2,     2,     2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
     2,     2,     2,     2,     2,     2,     2,     2,     2,     2,     2,     3,     3,     3,     3,     3,
     3,     3,     3,     3,     3,     3,     3,     3,     3,     3,     3,     3,     4,     4,     4,     4,
@@ -66,10 +34,9 @@ static const int16_t {{ name }}_exp_lut[513] = {
     12831, 13085, 13342, 13606, 13874, 14148, 14427, 14711, 15002, 15297, 15599, 15907, 16221, 16541, 16867, 17199,
     17539, 17884, 18237, 18597, 18964, 19338, 19719, 20108, 20505, 20909, 21322, 21742, 22171, 22608, 23054, 23509,
     23973, 24445, 24928, 25419, 25921, 26432, 26953, 27485, 28027, 28580, 29143, 29718, 30304, 30902, 31512, 32133,
-    32767
-};
-// Lookup table for 1 / (1 + x), where x uniform distributed between [0.0 , 1.0].
-static const int16_t {{ name }}_one_by_one_lut[513] = {
+    32767"""
+
+ONE_BY_ONE_LUT = """\
     32767, 32704, 32640, 32578, 32514, 32451, 32388, 32326, 32264, 32202, 32141, 32079, 32018, 31957, 31896, 31835,
     31775, 31715, 31655, 31596, 31537, 31476, 31418, 31359, 31301, 31242, 31184, 31127, 31069, 31011, 30954, 30897,
     30840, 30784, 30727, 30671, 30615, 30560, 30504, 30449, 30394, 30339, 30283, 30229, 30175, 30121, 30067, 30013,
@@ -102,12 +69,4 @@ static const int16_t {{ name }}_one_by_one_lut[513] = {
     17190, 17172, 17155, 17137, 17120, 17102, 17085, 17067, 17050, 17033, 17015, 16999, 16981, 16964, 16947, 16930,
     16913, 16895, 16878, 16862, 16845, 16828, 16810, 16794, 16777, 16760, 16743, 16727, 16710, 16693, 16677, 16660,
     16644, 16627, 16611, 16594, 16578, 16562, 16545, 16529, 16513, 16497, 16480, 16464, 16448, 16432, 16416, 16400,
-    16384
-};
-static const cmsis_nn_softmax_lut_s16 {{ name }}_softmax_params = {
-    .exp_lut = {{ name }}_exp_lut,
-    .one_by_one_lut = {{ name }}_one_by_one_lut
-};
-{% endif %}
-
-#endif
+    16384"""

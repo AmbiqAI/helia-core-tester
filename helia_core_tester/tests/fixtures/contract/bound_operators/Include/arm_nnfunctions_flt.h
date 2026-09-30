@@ -1,4 +1,4 @@
-/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*, arm_batch_to_space_*, arm_space_to_batch_*, arm_depth_to_space_*, arm_space_to_depth_*, arm_strided_slice_*, arm_pad_*, arm_transpose_*, arm_gather_*, arm_resize_nearest_neighbor_*, arm_pack_*, arm_mirror_pad_*, arm_tile_*, arm_reverse_sequence_*, arm_select_v2_*, arm_scatter_nd_*, arm_dynamic_update_slice_*, arm_where_*)
+/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*, arm_batch_to_space_*, arm_space_to_batch_*, arm_depth_to_space_*, arm_space_to_depth_*, arm_strided_slice_*, arm_pad_*, arm_transpose_*, arm_gather_*, arm_resize_nearest_neighbor_*, arm_pack_*, arm_mirror_pad_*, arm_tile_*, arm_reverse_sequence_*, arm_select_v2_*, arm_scatter_nd_*, arm_dynamic_update_slice_*, arm_where_*, arm_requantize_*, arm_batch_norm_*, arm_softmax_*)
  * from ns-cmsis-nn arm_nnfunctions_flt.h; the fallback contract for unit tests without a checkout.
  * test_bound_operator_fixture_matches_the_real_tree keeps it equal to the export. */
 
@@ -30,6 +30,13 @@ int32_t arm_batch_matmul_f16_get_buffer_size(const cmsis_nn_bmm_params_f16 *bmm_
                                              const cmsis_nn_dims *input_lhs_dims,
                                              const cmsis_nn_dims *input_rhs_dims,
                                              const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_batch_norm_f16(const float16_t *input,
+                                       float16_t *output,
+                                       const float16_t *scale,
+                                       const float16_t *bias,
+                                       const cmsis_nn_dims *input_dims,
+                                       arm_nn_tensor_layout layout);
 
 arm_cmsis_nn_status arm_convolve_1_x_n_f16(const cmsis_nn_context *ctx,
                                            const cmsis_nn_conv_params_f16 *conv_params,
@@ -376,6 +383,8 @@ arm_cmsis_nn_status arm_resize_nearest_neighbor_f16(const cmsis_nn_context *ctx,
 
 int32_t arm_resize_nearest_neighbor_f16_get_buffer_size(const cmsis_nn_dims *output_dims);
 
+arm_cmsis_nn_status arm_softmax_f16(const float16_t *input, int32_t num_rows, int32_t row_size, float16_t *output);
+
 arm_cmsis_nn_status arm_strided_slice_f16(const float16_t *input_data,
                                           float16_t *output_data,
                                           const cmsis_nn_dims *const input_dims,
@@ -468,6 +477,13 @@ int32_t arm_batch_matmul_f32_get_buffer_size(const cmsis_nn_bmm_params_f32 *bmm_
                                              const cmsis_nn_dims *input_lhs_dims,
                                              const cmsis_nn_dims *input_rhs_dims,
                                              const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_batch_norm_f32(const float32_t *input,
+                                       float32_t *output,
+                                       const float32_t *scale,
+                                       const float32_t *bias,
+                                       const cmsis_nn_dims *input_dims,
+                                       arm_nn_tensor_layout layout);
 
 arm_cmsis_nn_status arm_convolve_1_x_n_f32(const cmsis_nn_context *ctx,
                                            const cmsis_nn_conv_params_f32 *conv_params,
@@ -801,6 +817,8 @@ arm_cmsis_nn_status arm_resize_nearest_neighbor_f32(const cmsis_nn_context *ctx,
                                                     float32_t *output_data);
 
 int32_t arm_resize_nearest_neighbor_f32_get_buffer_size(const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_softmax_f32(const float32_t *input, int32_t num_rows, int32_t row_size, float32_t *output);
 
 arm_cmsis_nn_status arm_strided_slice_f32(const float32_t *input_data,
                                           float32_t *output_data,
