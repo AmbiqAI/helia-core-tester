@@ -26,7 +26,7 @@ from .measurement import (
     RawSample,
     auto_calibrate_iterations,
 )
-from .pmu_catalog import CPU_CYCLES_EVENT_ID, CPU_CYCLES_NAME
+from .pmu_catalog import CPU_CYCLES_EVENT_ID, CPU_CYCLES_NAME, counter_by_event_id
 from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLargeError
 from .wire import (
     CAP_ABS_S8,
@@ -81,6 +81,7 @@ FAKE_MAX_RX_PAYLOAD = FAKE_RX_BUFFER_BYTES - HEADER_SIZE
 EVENT_COUNTER_MASK = 0xFFFF  # one 16-bit slot
 CHAINED_COUNTER_MASK = 0xFFFFFFFF  # two slots chained
 CCNTR_MASK = 0xFFFFFFFF
+HCTP_STATUS_INVALID_ARGUMENT = -1  # hctp_protocol.h
 
 
 class _TargetState(str, Enum):
@@ -141,10 +142,8 @@ class FakeKernelAdapter:
                     )
                 ]
                 for counter in counter_pass.counters:
-                    # A PMU-present target counts whatever event id it was programmed with
-                    # and reports it supported=1, catalog-known or not; only the fake's
-                    # deliberately unsupported groups (and DWT-only targets) clear it.
-                    supported = counter.group in self.supported_groups or counter.group == "unknown"
+                    # Only unsupported groups clear the flag.
+                    supported = counter.group in self.supported_groups
                     value = self._counter_value(counter, blobs, iterations, sample_index)
                     # Honour the real counter widths so tests can provoke an overflow:
                     # a 16-bit slot wraps unless the pass chains slot pairs into 32 bits.
@@ -382,6 +381,15 @@ class FakeTargetTransport:
                 raise ValueError(f"SESSION_PLAN case id {case.case_id!r} does not fit the fake target's {FAKE_MAX_CASE_ID}-byte case-id storage (with NUL).")
         return plan
 
+    def _unmapped_ids(self, plan: SessionPlan) -> list[int]:
+        """Plan ids the firmware's PMU map lacks."""
+        # DWT-only firmware accepts any id.
+        if not self._pmu_present:
+            return []
+        ids = (counter.event_id for counter_pass in plan.passes for counter in counter_pass.counters)
+        # test_catalog_matches_the_synced_module guards this.
+        return [event_id for event_id in ids if counter_by_event_id(event_id) is None]
+
     def _handle_frame(self, frame: Frame) -> None:
         if frame.header.message_type == MessageType.TARGET_INFO_ACK:
             self._state = _TargetState.WAIT_PLAN
@@ -389,6 +397,10 @@ class FakeTargetTransport:
             return
         if frame.header.message_type == MessageType.SESSION_PLAN:
             self._plan = self._admit_session_plan(frame.payload)
+            if self._unmapped_ids(self._plan):
+                # Same ERROR frame as queue_error_frame().
+                self._queue_error(f"message_type={int(MessageType.SESSION_PLAN)} status={HCTP_STATUS_INVALID_ARGUMENT}")
+                return
             self._state = _TargetState.WAIT_CASE_META
             self._request_case()
             return

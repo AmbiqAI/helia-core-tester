@@ -26,7 +26,7 @@ from helia_core_tester.hardware.measurement import (
     plan_counter_passes,
     resolve_counter_selection,
 )
-from helia_core_tester.hardware.pmu_catalog import CPU_CYCLES_EVENT_ID, counter_by_name
+from helia_core_tester.hardware.pmu_catalog import CPU_CYCLES_EVENT_ID, CounterDescriptor, counter_by_name
 from helia_core_tester.hardware.session import (
     MAX_CASE_ID_BYTES,
     HostSession,
@@ -312,15 +312,18 @@ def test_session_plan_over_target_rx_buffer_is_refused_before_sending(tmp_path: 
     HostSession(FakeTargetTransport(max_rx_payload=fits_everything), counter_passes=passes).run(bundle)
 
 
-def test_unknown_event_ids_are_reported_with_placeholder_names(tmp_path: Path) -> None:
+def test_unmapped_event_id_fails_the_plan(tmp_path: Path) -> None:
     bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_unknown").manifest_path)
-    exotic = CounterPass("cpu", 0, (counter_by_name("ARM_PMU_INST_RETIRED"), type(counter_by_name("ARM_PMU_INST_RETIRED"))("vendor", 0x0C00, "cpu")))
-    result = HostSession(FakeTargetTransport(), counter_passes=(exotic,)).run(bundle)
-    assert [c.name for c in result.samples[0].counters] == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED", "event_0x0c00"]
-    # A PMU-present target counts whatever it was programmed with: the fake reports the
-    # unknown id supported, exactly like firmware, rather than zeroing it.
-    unknown = [c for c in result.samples[0].counters if c.name == "event_0x0c00"][0]
-    assert unknown.supported is True
+    exotic = CounterPass("cpu", 0, (counter_by_name("ARM_PMU_INST_RETIRED"), CounterDescriptor("vendor", 0x0C00, "cpu")))
+    # pmu_event_known() rejects ids outside the module map.
+    session = HostSession(FakeTargetTransport(), counter_passes=(exotic,))
+    with pytest.raises(RuntimeError, match=r"^message_type=4 status=-1$"):
+        session.run(bundle)
+    assert session._trace[-2:] == ["TX:SESSION_PLAN", "RX:ERROR"]
+    # DWT-only firmware skips the map check.
+    plan = SessionPlan(1, 1, 1, 1, 1, (exotic,), (PlannedCase("case_0", 1),))
+    assert FakeTargetTransport()._unmapped_ids(plan) == [0x0C00]
+    assert FakeTargetTransport(pmu_present=False)._unmapped_ids(plan) == []
     # The bundle schema is seeded by event id too, so the caller's "vendor" label never
     # becomes a dead column next to the populated placeholder.
     assert counter_names_for_passes((exotic,)) == ["ARM_PMU_CPU_CYCLES", "ARM_PMU_INST_RETIRED", "event_0x0c00"]
