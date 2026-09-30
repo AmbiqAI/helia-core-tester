@@ -133,8 +133,8 @@ def _serial(explicit: Optional[int]) -> int:
 
 _CMSIS_NN_REF_HELP = "ns-cmsis-nn tag or commit to build (default: see --cmsis-nn-root)."
 _CMSIS_NN_ROOT_HELP = (
-    "Local ns-cmsis-nn checkout to build. Default: the last build's kernels in this "
-    "build dir, else the enclosing checkout when the tester sits at "
+    "Local ns-cmsis-nn checkout to build. Default: the last build's checkout or "
+    "--cmsis-nn-ref in this build dir, else the enclosing checkout when the tester sits at "
     "ns-cmsis-nn/Tests/helia-core-tester, else the pinned release. "
     "Copies its Include/, Source/, cmake/ and nsx/ into the app."
 )
@@ -184,6 +184,7 @@ def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
     try:
         wanted = resolve_options(
             app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
+            follow_pin=False,
         )
     except AppRenderError as exc:
         _fail(f"{exc}; pass --skip-generate to stream only.")

@@ -5,6 +5,7 @@ Every nsx_cli step is monkeypatched; nothing here runs NSX or CMake.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import os
 import shutil
@@ -211,7 +212,7 @@ def test_changed_options_are_named(tmp_path: Path, nsx: list[tuple]) -> None:
     assert "Options changed" not in out and "inline asm on" in out
     out = _cli(tmp_path, "build", "--no-inline-asm")
     assert "Options changed, rebuilding: requantize inline asm on -> off" in out
-    assert "Kernels: ns-cmsis-nn v7.35.1, inline asm off" in out
+    assert f"Kernels: ns-cmsis-nn {nsx_app.CMSIS_NN_REF}, inline asm off" in out
     assert nsx_app.saved_options(firmware_build.nsx_app_dir(tmp_path)) == AppOptions(requantize_inline_asm=False)
 
 
@@ -387,7 +388,7 @@ def test_run_flags_reach_the_pipeline(tmp_path: Path, monkeypatch) -> None:
         "hardware", "run", "--skip-generate", "--cmsis-nn-ref", "v1.0.0", "--build-dir", str(tmp_path),
     ])
     assert result.exit_code == 1
-    assert seen["app_options"] == AppOptions(cmsis_nn_ref="v1.0.0")
+    assert seen["app_options"] == AppOptions(cmsis_nn_ref="v1.0.0", cmsis_nn_ref_explicit=True)
     assert seen["update_dependencies"] is False
 
 
@@ -410,7 +411,7 @@ def test_default_kernels_follow_layout(tmp_path: Path, monkeypatch, nested: bool
     assert seen["options"] == AppOptions(cmsis_nn_root=kernels.resolve() if nested else None)
     # An explicit ref still wins.
     runner.invoke(app, ["hardware", "build", "--build-dir", str(tmp_path / "b"), "--cmsis-nn-ref", "v1"])
-    assert seen["options"] == AppOptions(cmsis_nn_ref="v1")
+    assert seen["options"] == AppOptions(cmsis_nn_ref="v1", cmsis_nn_ref_explicit=True)
 
 
 def test_kernel_ref_and_root_are_exclusive(tmp_path: Path) -> None:
@@ -477,8 +478,40 @@ def test_flags_override_saved_options(tmp_path: Path) -> None:
     nsx_app.save_options(app_dir, AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False))
     resolve = lambda **flags: nsx_app.resolve_options(app_dir, tmp_path, **flags)  # noqa: E731
     assert resolve() == AppOptions(cmsis_nn_root=kernels, requantize_inline_asm=False)
-    assert resolve(cmsis_nn_ref="v2") == AppOptions(cmsis_nn_ref="v2", requantize_inline_asm=False)
+    assert resolve(cmsis_nn_ref="v2") == AppOptions(
+        cmsis_nn_ref="v2", cmsis_nn_ref_explicit=True, requantize_inline_asm=False,
+    )
     assert resolve(inline_asm=True) == AppOptions(cmsis_nn_root=kernels)
+
+
+def test_defaulted_ref_follows_the_pin(tmp_path: Path, nsx: list[tuple]) -> None:
+    """A pin bump rebuilds default build dirs."""
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    # Written before refs were marked explicit.
+    (app_dir / nsx_app.OPTIONS_FILE).write_text('{"cmsis_nn_ref": "v7.35.1"}', encoding="utf-8")
+    out = _cli(tmp_path, "build")
+    pin = nsx_app.CMSIS_NN_REF
+    assert f"Options changed, rebuilding: kernels ns-cmsis-nn v7.35.1 -> ns-cmsis-nn {pin}" in out
+    assert nsx_app.saved_options(app_dir) == AppOptions()
+
+
+def test_passed_ref_stays_after_pin_bump(tmp_path: Path) -> None:
+    """Even the pin itself, once passed."""
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    resolve = lambda **flags: nsx_app.resolve_options(app_dir, tmp_path, **flags)  # noqa: E731
+    passed = resolve(cmsis_nn_ref=nsx_app.CMSIS_NN_REF)
+    assert passed.cmsis_nn_ref_explicit is True
+    nsx_app.save_options(app_dir, dataclasses.replace(passed, cmsis_nn_ref="v0.old"))
+    assert resolve().cmsis_nn_ref == "v0.old"
+    # Older records kept any non-pin ref.
+    (app_dir / nsx_app.OPTIONS_FILE).write_text('{"cmsis_nn_ref": "abc123"}', encoding="utf-8")
+    assert resolve().cmsis_nn_ref == "abc123"
+    # A defaulted ref stays only when asked.
+    nsx_app.save_options(app_dir, AppOptions(cmsis_nn_ref="v0.old"))
+    assert resolve().cmsis_nn_ref == nsx_app.CMSIS_NN_REF
+    assert resolve(follow_pin=False).cmsis_nn_ref == "v0.old"
 
 
 def test_no_saved_options_use_defaults(tmp_path: Path) -> None:

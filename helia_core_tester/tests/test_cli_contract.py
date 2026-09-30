@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import subprocess
 
 import pytest
@@ -329,11 +330,12 @@ def test_inline_asm_flag_is_tri_state(monkeypatch, tmp_path, command) -> None:
     monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _capture)
     app_dir = firmware_build.nsx_app_dir(tmp_path)
     app_dir.mkdir(parents=True)
-    nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=False))
+    built = nsx_app.AppOptions(cmsis_nn_ref="v9", cmsis_nn_ref_explicit=True, requantize_inline_asm=False)
+    nsx_app.save_options(app_dir, built)
     base = ["hardware", command, "--build-dir", str(tmp_path)]
     for flags, inline_asm in (([], False), (["--inline-asm"], True), (["--no-inline-asm"], False)):
         runner.invoke(app, base + flags)
-        assert seen["options"] == nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=inline_asm), flags
+        assert seen["options"] == dataclasses.replace(built, requantize_inline_asm=inline_asm), flags
 
 
 def test_stream_only_run_skips_option_resolution(monkeypatch, tmp_path) -> None:
@@ -374,6 +376,7 @@ def test_skip_flash_generates_from_the_built_kernels(monkeypatch, tmp_path) -> N
     _capture_run(monkeypatch, seen)
     app_dir = firmware_build.nsx_app_dir(tmp_path)
     app_dir.mkdir(parents=True)
+    # Defaulted, off the pin: still kept.
     built = nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=False)
     nsx_app.save_options(app_dir, built)
     base = ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash"]

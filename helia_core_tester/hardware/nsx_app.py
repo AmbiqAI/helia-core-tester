@@ -38,7 +38,9 @@ TOOLCHAIN = "arm-none-eabi-gcc"
 CMSIS_NN_MODULE = "nsx-cmsis-nn"
 CMSIS_NN_PROJECT = "ns-cmsis-nn"
 CMSIS_NN_METADATA = "modules/ns-cmsis-nn/nsx/nsx-module.yaml"
-CMSIS_NN_REF = "v7.35.1"
+CMSIS_NN_REF = "v7.38.0"
+# The pin while records lacked the flag.
+_PRE_FLAG_PIN = "v7.35.1"
 
 # Not in the registry yet; declared inline.
 SEGGER_RTT_MODULE = "nsx-segger-rtt"
@@ -84,6 +86,8 @@ class AppOptions:
     """Kernel source, kernel switches, target choice."""
 
     cmsis_nn_ref: str = CMSIS_NN_REF
+    # False: the ref follows a pin bump.
+    cmsis_nn_ref_explicit: bool = False
     cmsis_nn_root: Optional[Path] = None
     # ON matches hpx and shipping builds.
     requantize_inline_asm: bool = True
@@ -147,6 +151,9 @@ class AppOptions:
             if not _field_type_ok(field.name, value):
                 raise TypeError(f"bad type for {field.name}")
             kept[field.name] = value
+        # Older records: only the old pin defaulted.
+        ref = kept.get("cmsis_nn_ref")
+        kept.setdefault("cmsis_nn_ref_explicit", ref is not None and ref != _PRE_FLAG_PIN)
         return cls(**kept)
 
 
@@ -185,14 +192,21 @@ def resolve_options(
     cmsis_nn_ref: Optional[str] = None,
     cmsis_nn_root: Optional[Path] = None,
     inline_asm: Optional[bool] = None,
+    follow_pin: bool = True,
 ) -> AppOptions:
     """Given flags win, then saved, then defaults."""
     saved = saved_options(app_dir)
     base = saved or AppOptions(cmsis_nn_root=nested_kernel_root(repo_root))
     if cmsis_nn_ref or cmsis_nn_root:
-        base = dataclasses.replace(base, cmsis_nn_ref=cmsis_nn_ref or CMSIS_NN_REF, cmsis_nn_root=cmsis_nn_root)
+        base = dataclasses.replace(
+            base, cmsis_nn_ref=cmsis_nn_ref or CMSIS_NN_REF, cmsis_nn_ref_explicit=bool(cmsis_nn_ref),
+            cmsis_nn_root=cmsis_nn_root,
+        )
     elif saved and saved.cmsis_nn_root and not saved.cmsis_nn_root.is_dir():
         raise AppRenderError(f"Last build's kernel root is gone: {saved.cmsis_nn_root}")
+    # Unpassed refs follow a pin bump.
+    elif follow_pin and not base.cmsis_nn_ref_explicit:
+        base = dataclasses.replace(base, cmsis_nn_ref=CMSIS_NN_REF)
     if inline_asm is not None:
         base = dataclasses.replace(base, requantize_inline_asm=inline_asm)
     return base
