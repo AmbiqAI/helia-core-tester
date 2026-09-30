@@ -32,7 +32,7 @@ BOUND_PREFIXES = ("arm_convolve_", "arm_depthwise_", "arm_fully_connected_", "ar
                   "arm_reverse_sequence_", "arm_select_v2_", "arm_scatter_nd_", "arm_dynamic_update_slice_",
                   "arm_where_", "arm_requantize_", "arm_batch_norm_", "arm_softmax_",
                   "arm_split_", "arm_unpack_", "arm_quantize_", "arm_dequantize_",
-                  "arm_concatenation_")
+                  "arm_concatenation_", "arm_rsqrt_", "arm_reshape_")
 
 
 def fallback_resolver(resolve: Callable[[], Optional[Path]]) -> Callable[[], Optional[Path]]:
