@@ -162,6 +162,8 @@ class ArgumentPool:
             if query is not None and (not _IDENT_RE.match(query.result_var) or query.result_var in names
                                       or query.result_var == "required_buffer_size"):
                 raise HarnessError(f"{self.name}: size query variable {query.result_var!r} is not a free C identifier")
+            if query is not None:
+                names.add(query.result_var)
         call_site = [i.param for i in self.harness_inputs] + [self.output_param]
         for param in call_site:
             if param in self.values:
@@ -193,6 +195,7 @@ class ArgumentPool:
         for check in self.checks:
             if not _IDENT_RE.match(check.result_var) or check.result_var in names:
                 raise HarnessError(f"{self.name}: rule check variable {check.result_var!r} is not a free C identifier")
+            names.add(check.result_var)
 
 
 def _render_init(value: Initializer, depth: int = 0) -> str:

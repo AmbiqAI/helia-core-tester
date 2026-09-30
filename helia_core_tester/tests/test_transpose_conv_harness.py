@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.contract.ir import STATUS_PRESENT, ContractSet, FunctionDecl, ParamDecl
-from helia_core_tester.generation.harness import ArgumentPool, HarnessError, Provider, SizeQuery, plan_harness
+from helia_core_tester.generation.harness import ArgumentPool, HarnessError, Provider, RuleCheck, SizeQuery, plan_harness
 from helia_core_tester.generation.ops.ConvolutionFunctions.transpose_conv import (
     transpose_conv_argument_pool,
     transpose_conv_fault,
@@ -105,6 +105,9 @@ def test_fault_without_an_edit_or_its_context_is_refused() -> None:
     context = tc_context()
     with pytest.raises(ValueError, match="no TransposeConv fault edit for 'zero_stride'"):
         transpose_conv_fault(transpose_conv_argument_pool(context), "zero_stride", context)
+    no_sums = tc_context(weight_sum=False)
+    with pytest.raises(HarnessError, match="clears tc_case_weight_sum_ctx, but no provider supplies 'weight_sum_ctx'"):
+        transpose_conv_fault(transpose_conv_argument_pool(no_sums), "null_weight_sum_ctx", no_sums)
     direct = tc_context("arm_transpose_conv_s8")
     pool = transpose_conv_fault(transpose_conv_argument_pool(direct), "null_weight_sum_ctx", direct)
     with pytest.raises(HarnessError, match="edits 'weight_sum_ctx', which arm_transpose_conv_s8 does not take"):
@@ -144,6 +147,8 @@ def test_a_provider_answers_to_its_aliases_and_runs_its_size_query() -> None:
     (SizeQuery("arm_fx_other_get_buffer_size", "required_buffer_size", "M"), {}, HarnessError, "not a free C identifier"),
     (SizeQuery("arm_fx_other_get_buffer_size", "2q", "M"), {}, HarnessError, "not a free C identifier"),
     (None, {"values": {"ctx": "&x_ctx", "other_ctx": "&y"}}, HarnessError, "other_ctx is both a pool value and a provider"),
+    (SizeQuery("arm_fx_other_get_buffer_size", "q", "M"), {"checks": (RuleCheck("arm_fx_rule", 1, "q"),)}, HarnessError,
+     "rule check variable 'q' is not a free C identifier"),
 ])
 def test_size_query_and_alias_validation(query, overrides, error, message) -> None:
     with pytest.raises(error, match=message):

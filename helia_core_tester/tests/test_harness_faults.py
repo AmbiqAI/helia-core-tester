@@ -9,7 +9,6 @@ import re
 import pytest
 
 from helia_core_tester.contract.ir import STATUS_PRESENT, ContractSet, FunctionDecl, ParamDecl
-from helia_core_tester.contract.render import load_current_contracts
 from helia_core_tester.generation.harness import ArgumentPool, Declaration, FaultEdit, HarnessError, plan_harness
 from helia_core_tester.generation.harness.faults import common_fault, null_context_buffer, struct_copy, with_fault
 from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE
@@ -90,9 +89,8 @@ def test_a_fault_the_kernel_cannot_receive_is_refused() -> None:
     pool = _pool()
     with pytest.raises(HarnessError, match="edits 'params', which arm_fx_plain_s8 does not take"):
         _plan(with_fault(pool, FaultEdit("x", values={"params": "NULL"})), kernel="arm_fx_plain_s8", sizer=None)
-    with pytest.raises(HarnessError, match="edits 'weight_sum_ctx', which arm_fx_plain_s8 does not take"):
-        _plan(with_fault(pool, null_context_buffer(pool, "null_weight_sum_ctx", "weight_sum_ctx", "c_ws_ctx")),
-              kernel="arm_fx_plain_s8", sizer=None)
+    with pytest.raises(HarnessError, match="clears c_ws_ctx, but no provider supplies 'weight_sum_ctx'"):
+        null_context_buffer(pool, "null_weight_sum_ctx", "weight_sum_ctx", "c_ws_ctx")
     with pytest.raises(HarnessError, match="copies c_params without changing a field"):
         struct_copy(pool, "zero_stride", "params", "cmsis_nn_conv_params", "c_params", {})
     with pytest.raises(HarnessError, match="needs the case's layout"):
@@ -174,7 +172,5 @@ def test_depthwise_fault_keeps_the_planar_rule_on_the_unedited_values() -> None:
 
 def test_null_weight_sum_fault_on_a_kernel_without_weight_sums_is_refused() -> None:
     context = depthwise_context("arm_depthwise_conv_s16", None, scratch=0, bias_dtype="int64_t")
-    pool = depthwise_fault(depthwise_argument_pool(context), "null_weight_sum_ctx", context)
-    with pytest.raises(HarnessError, match="edits 'weight_sum_ctx', which arm_depthwise_conv_s16 does not take"):
-        render_pool(context, pool, stem="depthwise_conv", validation_key=DEPTHWISE_VALIDATION_KEY,
-                    label="Depthwise convolution", contracts=load_current_contracts())
+    with pytest.raises(HarnessError, match="no provider supplies 'weight_sum_ctx'"):
+        depthwise_fault(depthwise_argument_pool(context), "null_weight_sum_ctx", context)
