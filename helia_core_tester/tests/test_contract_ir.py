@@ -16,6 +16,7 @@ from helia_core_tester.contract.ir import (
     STATUS_PRESENT,
     ContractError,
     ContractSchemaError,
+    clear_contract_cache,
     load_contract_set,
 )
 
@@ -189,3 +190,53 @@ def test_fixture_is_canonical_against_the_exporter_shape() -> None:
         assert list(record) == ["name", "header", "line", "guards", "returns", "params"]
         for param in record["params"]:
             assert "extent" not in param or param["extent"]
+
+
+def test_a_present_contract_is_loaded_once_per_checkout(checkout: Path) -> None:
+    clear_contract_cache()
+    first = load_contract_set(checkout)
+    assert first.status == STATUS_PRESENT
+    assert load_contract_set(checkout) is first
+    assert load_contract_set(Path(str(checkout))) is first
+
+
+def test_the_cache_reloads_when_the_export_changes(checkout: Path) -> None:
+    clear_contract_cache()
+    first = load_contract_set(checkout)
+    _rewrite(checkout, lambda doc: doc["functions"].pop())
+    path = checkout / CONTRACT_RELPATH
+    os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 1_000_000))
+    second = load_contract_set(checkout)
+    assert second is not first and len(second.functions) == len(first.functions) - 1
+
+
+def test_the_cache_reloads_when_a_public_header_changes(checkout: Path) -> None:
+    clear_contract_cache()
+    first = load_contract_set(checkout)
+    header = checkout / "Include" / "arm_nnfunctions.h"
+    header.write_text(header.read_text().replace("arm_fx_pool_s8_get_buffer_size_mve(", "arm_fx_pool_s8_gone_mve("))
+    os.utime(header, ns=(header.stat().st_atime_ns, header.stat().st_mtime_ns + 1_000_000))
+    with pytest.raises(ContractError, match="not declared in Include/arm_nnfunctions.h"):
+        load_contract_set(checkout)
+
+
+def test_a_failed_load_is_not_cached(checkout: Path) -> None:
+    clear_contract_cache()
+    _rewrite(checkout, lambda doc: doc.update(schema="ns-cmsis-nn/kernel-contracts/0"))
+    with pytest.raises(ContractSchemaError):
+        load_contract_set(checkout)
+    _rewrite(checkout, lambda doc: doc.update(schema="ns-cmsis-nn/kernel-contracts/1"))
+    path = checkout / CONTRACT_RELPATH
+    os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 2_000_000))
+    assert load_contract_set(checkout).status == STATUS_PRESENT
+
+
+def test_absent_and_other_checkouts_do_not_share_the_cache(checkout: Path, tmp_path: Path) -> None:
+    clear_contract_cache()
+    present = load_contract_set(checkout)
+    assert load_contract_set(tmp_path / "empty").status == STATUS_ABSENT
+    assert load_contract_set(None).status == STATUS_ABSENT
+    other = tmp_path / "other"
+    shutil.copytree(checkout, other)
+    assert load_contract_set(other) is not present
+    assert load_contract_set(other).functions.keys() == present.functions.keys()
