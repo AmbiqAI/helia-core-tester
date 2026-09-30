@@ -80,13 +80,14 @@ def _is_json_serializable(value: Any) -> bool:
 
 
 def _render_pool_snippets(env, pool, render_context):
-    """A pool's C snippets (test prologue, extra checks, validation, pre- and post-passes) may use
-    the validation context (validation_report_limit, ...): a snippet containing `{{` is rendered
-    against it before the harness does; any other snippet is printed verbatim."""
+    """A pool's C snippets (test prologue, extra checks, validation, pre- and post-passes, a
+    property case's test body and file-scope helpers) may use the validation context
+    (validation_report_limit, ...): a snippet containing `{{` is rendered against it before the
+    harness does; any other snippet is printed verbatim."""
     from dataclasses import replace
 
     fields = {}
-    for field in ("test_prologue", "extra_checks", "validation", "pre_call", "post_call"):
+    for field in ("test_prologue", "extra_checks", "validation", "pre_call", "post_call", "test_body", "file_scope"):
         text = getattr(pool, field)
         if text and "{{" in text:
             fields[field] = env.from_string(text).render(**render_context)

@@ -41,6 +41,7 @@ import numpy as np
 from pathlib import Path
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, Define, GuardedBuffer, HarnessInput
 
 # Kernel selection: (kernel, activation_dtype) -> call info.
 #   call_style "addsub": per-input requantization + left_shift + block_size
@@ -238,6 +239,96 @@ _SIGN_SEED_INPUT_1 = (-100, -1, 5, 60, -128, 127, -3, 3)
 _SIGN_SEED_INPUT_2 = (-7, 3, -80, 20, 127, -128, 5, -5)
 
 
+_TEST_BODY = """\
+    HELIA_GUARD_ARM(__N___output_full, false /* real output, not scratch: don't poison */);
+    HELIA_GUARD_ARM(__N___output_chunked, false /* real output, not scratch: don't poison */);
+
+    // (a) Reference: one full-length call over all elements.
+    int32_t status = __N___run(
+        __INPUTS__(0)
+        __N___output_full, __U___ELEMENT_COUNT);
+    int failures = 0;
+    HELIA_GUARD_CHECK(__N___output_full, "{{ validation_label }} output_full", failures);
+    HELIA_VALIDATE_STATUS("{{ validation_label }} full", status);
+
+    // (b) Same data, processed as consecutive slices with varied block sizes.
+    int32_t offset = 0;
+    for (int32_t chunk = 0; chunk < __U___CHUNK_COUNT; ++chunk)
+    {
+        const int32_t chunk_size = __N___chunk_sizes[chunk];
+        status = __N___run(
+            __INPUTS__(offset)
+            __N___output_chunked + offset, chunk_size);
+        HELIA_GUARD_CHECK(__N___output_chunked, "{{ validation_label }} output_chunked", failures);
+        HELIA_VALIDATE_STATUS("{{ validation_label }} chunk", status);
+        offset += chunk_size;
+    }
+
+    // (a) and (b) must agree bit-exactly on every element.
+    HELIA_VALIDATE_OUTPUTS(
+        {{ validation_mode_token | default("EXACT_INT") }},
+        __N___output_chunked,
+        __N___output_full,
+        __U___ELEMENT_COUNT,
+        {{ validation_tolerance | default(0) }},
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
+        {{ validation_report_limit | default(20) }},
+        failures
+    );"""
+
+# The min/max kernels slice by dims, not by a block size. Identical dims on both inputs and the
+# output keep the walk in Include/Internal/arm_nn_broadcast_walk.h on its no-broadcast path, the
+# one holding the vector loop; any difference would route the chunked pass through a scalar
+# broadcast helper instead.
+_MINMAX_DIMS = ("    const cmsis_nn_context ctx = {NULL, 0};\n"
+                "    const cmsis_nn_dims dims = {1, 1, 1, block_size};")
+
+
+def chunked_equivalence_argument_pool(context: Dict[str, Any], quant: Dict[str, int]) -> ArgumentPool:
+    """A block-size invariance property case: one full-length call is the reference for the same
+    data processed as consecutive chunks, so `_run` takes the block size and no golden exists."""
+    n, upper, ctype = context["name"], context["name"].upper(), context["input_dtype"]
+    style, operands = context["call_style"], int(context["operand_count"])
+    if style not in _OPERAND_COUNT or operands != _OPERAND_COUNT[style]:
+        raise ValueError(f"{n}: call_style {style!r} does not take {operands} operand(s)")
+    header: List[Any] = [
+        Define(f"{upper}_ELEMENT_COUNT", f"({context['element_count']})",
+               comment="Total number of elements processed by the full-length reference call"),
+        Define(f"{upper}_CHUNK_COUNT", f"({context['chunk_count']})",
+               comment="Chunk sizes for the sliced pass; they sum to the element count"),
+        Declaration(f"{n}_chunk_sizes", "int32_t", ArrayLiteral("    " + context["chunk_sizes_array"]), array=True,
+                    extent=f"{upper}_CHUNK_COUNT"),
+    ]
+    inputs = []
+    for index in range(1, operands + 1):
+        header.append(Declaration(f"{n}_input{index}", ctype, ArrayLiteral(context[f"input{index}_data_array"]),
+                                  array=True, extent=f"{upper}_ELEMENT_COUNT",
+                                  comment=f"Input {index} data (sign-diverse post-offset inside the packed region)"))
+        param = f"input_{index}_data" if operands == 2 else "input_data"
+        inputs.append(HarnessInput(param, f"input{index}", f"{n}_input{index}", ctype))
+    values = {key: str(value) for key, value in quant.items()}
+    fields: Dict[str, Any] = {}
+    if style == "minmax":
+        values.update(ctx="&ctx", input_1_dims="&dims", input_2_dims="&dims", output_dims="&dims")
+        fields.update(owns_ctx=True, pre_call=_MINMAX_DIMS)
+    else:
+        values["size" if style == "requantize" else "block_size"] = "block_size"
+
+    def arguments(offset: str) -> str:
+        suffix = "" if offset == "0" else f" + {offset}"
+        return " ".join(f"{n}_input{index}{suffix}," for index in range(1, operands + 1))
+
+    body = _TEST_BODY.replace("__INPUTS__(0)", arguments("0")).replace("__INPUTS__(offset)", arguments("offset"))
+    return ArgumentPool(
+        name=n, values=values, header=header,
+        guarded=tuple(GuardedBuffer(f"{n}_output_{kind}", context["output_dtype"], f"{upper}_ELEMENT_COUNT")
+                      for kind in ("full", "chunked")),
+        inputs=tuple(inputs), run_params=(("block_size", "int32_t"),), output_ctype=context["output_dtype"],
+        test_body=body.replace("__N__", n).replace("__U__", upper), benchmark=False, scratch_buffer=False, **fields,
+    )
+
+
 class OpChunkedEquivalence(OperationBase):
     """
     Block-size invariance ("chunked equivalence") case for sliceable int
@@ -424,16 +515,9 @@ class OpChunkedEquivalence(OperationBase):
         if operand_count == 2:
             context["input2_data_array"] = builder.format_array_as_c_literal(operands[1])
 
-        cmake_context = {
-            "name": name,
-            "operator": self.desc.get("operator", "ChunkedEquivalence"),
-            "operator_name": "chunked_equivalence",
-        }
-        self._write_op_outputs(
-            output_dir,
-            "chunked_equivalence",
-            "BasicMathFunctions/chunked_equivalence/chunked_equivalence.h.j2",
-            "BasicMathFunctions/chunked_equivalence/chunked_equivalence.c.j2",
-            context,
-            cmake_context,
+        self.render_harness_case(
+            output_dir, stem="chunked_equivalence", context=context,
+            pool=chunked_equivalence_argument_pool(context, quant),
+            validation_key="BasicMathFunctions/chunked_equivalence/chunked_equivalence.c.j2",
+            label="ChunkedEquivalence", operator="ChunkedEquivalence", sidecar=True,
         )

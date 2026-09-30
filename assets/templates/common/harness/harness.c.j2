@@ -71,7 +71,7 @@ static cmsis_nn_context {{ name }}_ctx;
 {{ helia_guard_declare(output_dtype, slot.name ~ "_output", 1) }}
 {% endif %}
 {% endfor %}
-{% else %}
+{% elif pool.test_body is none %}
 #define {{ name|upper }}_OUTPUT_SIZE {{ harness_output_count }}
 {{ helia_guard_declare(output_dtype, name ~ "_output", pool.output_capacity or name|upper ~ "_OUTPUT_SIZE") }}
 {% endif %}
@@ -88,6 +88,10 @@ static cmsis_nn_context {{ name }}_ctx;
 {% for declaration in harness.fault_declarations %}
 {{ declaration }}
 {% endfor %}
+{% if pool.file_scope %}
+
+{{ pool.file_scope }}
+{% endif %}
 
 {#
   Shared by the correctness path ({{name}}_run) and the benchmark path ({{name}}_bench_init /
@@ -168,8 +172,11 @@ int32_t {{ name }}_run(
     const {{ ctype or input_dtype }}* __restrict {{ local }}{{ "," if not (loop.last and harness.outputs) }}
     {% endfor %}
     {% if not harness.outputs %}
-    {{ output_dtype }}* __restrict output
+    {{ output_dtype }}* __restrict output{{ "," if pool.run_params }}
     {% endif %}
+    {% for local, ctype in pool.run_params %}
+    {{ ctype }} {{ local }}{{ "," if not loop.last }}
+    {% endfor %}
 ) {
     {{ harness_init() }}
     {% if pool.pre_call %}
@@ -247,6 +254,13 @@ static int32_t {{ name }}_benchmark_run(void)
 #endif // HELIA_BENCHMARK_MODE
 {% endif %}
 
+{% if pool.test_body is not none %}
+int32_t {{ name }}_test_case_run(void)
+{
+{{ pool.test_body }}
+    HELIA_VALIDATE_RETURN_FAILURES(failures);
+}
+{% else %}
 int32_t {{ name }}_test_case_run(void)
 {
     {% if pool.test_prologue %}
@@ -352,5 +366,6 @@ int32_t {{ name }}_test_case_run(void)
     {% endif %}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
+{% endif %}
 
 {% include "common/standalone/main.j2" %}
