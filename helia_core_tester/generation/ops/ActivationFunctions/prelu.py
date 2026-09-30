@@ -13,7 +13,7 @@ from helia_core_tester.generation.harness.simple import dims_count, tensor_case_
 def prelu_argument_pool(context):
     """Every value a PReLU case can pass to a public PReLU kernel."""
     n = context["name"]
-    alpha = Declaration(f"{n}_alpha", context.get("alpha_dtype") or "int8_t", ArrayLiteral(context["alpha_array"]),
+    alpha = Declaration(f"{n}_alpha", context["alpha_dtype"], ArrayLiteral(context["alpha_array"]),
                         array=True, comment="Alpha")
     values = {"alpha": f"{n}_alpha", "input_offset": context["input_offset"], "alpha_offset": context["alpha_offset"],
               "output_offset": context["output_offset"],

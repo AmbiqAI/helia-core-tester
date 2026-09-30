@@ -191,7 +191,6 @@ class OpRelu6(OperationBase):
             'kernel_fn': kernel_info["kernel_fn"],
         }
         
-        # Render templates
         self.render_harness_case(
             output_dir, stem="relu6", context=context, pool=tensor_case_pool(context, {"input_offset": context["input_offset"], "output_offset": context["output_offset"], "output_multiplier": context["output_mult"], "output_shift": context["output_shift"], "act_min": context["act_min"], "act_max": context["act_max"], "output_size": context["output_size"]}),
             validation_key="ActivationFunctions/relu6/relu6.c.j2", label="ReLU6", operator="Relu6",

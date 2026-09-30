@@ -179,7 +179,6 @@ class OpLeakyRelu(OperationBase):
             'kernel_fn': kernel_info["kernel_fn"],
         }
         
-        # Render templates
         self.render_harness_case(
             output_dir, stem="leaky_relu", context=context,
             pool=tensor_case_pool(context, {"input_offset": context["input_offset"], "output_offset": context["output_offset"], "output_multiplier_alpha": context["output_mult_alpha"], "output_shift_alpha": context["output_shift_alpha"], "output_multiplier_identity": context["output_mult_identity"], "output_shift_identity": context["output_shift_identity"], "output_size": context["output_size"]}),

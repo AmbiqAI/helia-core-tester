@@ -112,6 +112,35 @@ def test_prelu_float_ignores_the_integer_scalars() -> None:
                                               "&act_case_output_dims", "output"]
 
 
+def test_prelu_needs_the_alpha_dtype() -> None:
+    context = prelu_context()
+    del context["alpha_dtype"]
+    with pytest.raises(KeyError, match="alpha_dtype"):
+        prelu_argument_pool(context)
+
+
+# Same-typed scalar pairs that a swapped context key would silently exchange: each op's
+# context-to-parameter map is pinned with distinct sentinels in prototype order.
+@pytest.mark.parametrize("kernel_fn, values, expected", [
+    ("arm_leaky_relu_s8", {"input_offset": 11, "output_offset": 12, "output_multiplier_alpha": 13,
+                           "output_shift_alpha": 14, "output_multiplier_identity": 15, "output_shift_identity": 16,
+                           "output_size": 24},
+     ["input", "11", "12", "13", "14", "15", "16", "output", "24"]),
+    ("arm_relu_generic_s8", {"input_offset": 11, "output_offset": 12, "output_multiplier": 13, "output_shift": 14,
+                      "act_min": 15, "act_max": 16, "output_size": 24},
+     ["input", "11", "12", "13", "14", "15", "16", "output", "24"]),
+    ("arm_hard_swish_precise_s8", {"input_offset": 11, "output_offset": 12, "output_multiplier": 13, "output_shift": 14,
+                                   "relu_q3": 15, "relu_q6": 16, "prescale": 17, "output_size": 24},
+     ["input", "11", "12", "13", "14", "15", "16", "17", "output", "24"]),
+    ("arm_hard_swish_compat_s8", {"input_offset": 11, "output_offset": 12, "output_multiplier_fp": 13,
+                                  "output_multiplier_exp": 14, "relu_multiplier_fp": 15, "relu_multiplier_exp": 16,
+                                  "output_size": 24},
+     ["input", "11", "12", "13", "14", "15", "16", "output", "24"]),
+])
+def test_same_typed_scalar_pairs_bind_in_prototype_order(kernel_fn: str, values: dict, expected: list[str]) -> None:
+    assert _call(_source(act_context(kernel_fn), values), kernel_fn) == expected
+
+
 def test_prelu_arg_error_case_checks_status_and_an_untouched_output() -> None:
     context = prelu_context(expected_status="ARM_CMSIS_NN_ARG_ERROR")
     _, source = render_pool(context, prelu_argument_pool(context), stem="prelu",

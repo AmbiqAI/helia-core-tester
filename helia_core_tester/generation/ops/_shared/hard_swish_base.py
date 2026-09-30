@@ -514,9 +514,9 @@ class HardSwishFamilyBase(OperationBase):
                 'relu_multiplier_exp': int(compat_relu_exp),
             })
         
-        template = "ActivationFunctions/hard_swish/hard_swish.c.j2"
+        validation_key = "ActivationFunctions/hard_swish/hard_swish.c.j2"
         if variant == "compat":
-            template = "ActivationFunctions/hard_swish/hard_swish_compat.c.j2"
+            validation_key = "ActivationFunctions/hard_swish/hard_swish_compat.c.j2"
         
         if variant == "compat":
             values = {"input_offset": context["input_offset"], "output_offset": context["output_offset"],
@@ -530,7 +530,7 @@ class HardSwishFamilyBase(OperationBase):
                       "output_size": context["output_size"]}
         self.render_harness_case(
             output_dir, stem="hard_swish", context=context, pool=tensor_case_pool(context, values),
-            validation_key=template, label="HardSwish", operator=self.OPERATOR_NAME, sidecar=True,
+            validation_key=validation_key, label="HardSwish", operator=self.OPERATOR_NAME, sidecar=True,
         )
         
 

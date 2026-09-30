@@ -245,7 +245,6 @@ class OpTanh(OperationBase):
             'kernel_fn': kernel_info["kernel_fn"],
         }
         
-        # Render templates
         self.render_harness_case(
             output_dir, stem="tanh", context=context,
             pool=tensor_case_pool(context, {"input_size": context["output_size"], "input_multiplier": context["input_multiplier"], "input_left_shift": context["input_left_shift"]}, output_count=dims_count(context["output_dims"])),
