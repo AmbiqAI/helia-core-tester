@@ -14,6 +14,7 @@ from helia_core_tester.tests.harness_render import (
     render_convolve,
     render_depthwise,
     render_fully_connected,
+    render_pooling,
     render_transpose_conv,
 )
 
@@ -235,9 +236,7 @@ def test_basic_math_float_templates_render_preformatted_activation_literals() ->
 
 
 def test_pooling_float_header_templates_render_public_float_params() -> None:
-    avg_text = _render(
-        "PoolingFunctions/avg_pool/avg_pool.h.j2",
-        {
+    avg_text, _ = render_pooling({
             "name": "avg_pool_float_default_f32",
             "input_dtype": "float",
             "output_dtype": "float",
@@ -258,11 +257,12 @@ def test_pooling_float_header_templates_render_public_float_params() -> None:
             "output_dims": {"n": 1, "h": 3, "w": 3, "c": 3},
             "input_data_array": "    0.0f",
             "expected_output_array": "    0.0f",
-        },
-    )
-    max_text = _render(
-        "PoolingFunctions/max_pool/max_pool.h.j2",
-        {
+            "kernel_fn": "arm_avg_pool_f32",
+            "kernel_get_buffer_size_fn": None,
+            "buffer_size_max": 0,
+            "use_batch_harness": False,
+        }, suffix="avg_pool")
+    max_text, _ = render_pooling({
             "name": "max_pool_float_default_f32",
             "input_dtype": "float",
             "output_dtype": "float",
@@ -283,8 +283,11 @@ def test_pooling_float_header_templates_render_public_float_params() -> None:
             "output_dims": {"n": 1, "h": 3, "w": 3, "c": 3},
             "input_data_array": "    0.0f",
             "expected_output_array": "    0.0f",
-        },
-    )
+            "kernel_fn": "arm_max_pool_f32",
+            "kernel_get_buffer_size_fn": None,
+            "buffer_size_max": 0,
+            "use_batch_harness": False,
+        }, suffix="max_pool")
 
     assert "cmsis_nn_pool_params_f32" in avg_text
     assert "cmsis_nn_pool_params_f32" in max_text

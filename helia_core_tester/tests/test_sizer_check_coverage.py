@@ -27,7 +27,6 @@ MAX_POOL_DTYPES = ["S8", "S16", "FP32", "FP16"]
 # max_pool is deliberately absent; see test_max_pool_still_has_no_sizer_to_check.
 SIZER_TEMPLATES = [
     "common/harness/harness.c.j2",
-    "PoolingFunctions/avg_pool/avg_pool.c.j2",
     "SVDFunctions/svdf/svdf.c.j2",
     "SVDFunctions/svdf/svdf_f32.c.j2",
 ]
@@ -35,16 +34,11 @@ SIZER_TEMPLATES = [
 
 @pytest.mark.parametrize("activation_dtype", MAX_POOL_DTYPES)
 def test_max_pool_still_has_no_sizer_to_check(activation_dtype: str) -> None:
-    """max_pool.c.j2's sizer block is inert only while this holds.
+    """Max pooling renders through the generic harness with no scratch buffer at all.
 
-    That template still carries the pre-#133 shape: a bare `required_buffer_size >
-    ..._BUFFER_SIZE_MAX` comparison, which cannot catch the negative out-of-range sentinel
-    and would let it become ctx.size unremarked. It was left alone because the block never
-    renders -- every max pooling dtype resolves its sizer to None -- and because the
-    capacity constant there is zero, so the FITS check would reject any positive answer.
-
-    If anyone ever gives max pooling a sizer, this test fails first and points them at the
-    block, instead of the defect #133 removed coming back silently.
+    Its generation-time capacity is zero, so its pool declares no scratch buffer, and the
+    harness refuses a case that queries scratch without one. If anyone ever gives max
+    pooling a sizer, this test fails first and points them at the capacity it needs.
     """
     from helia_core_tester.generation.ops.PoolingFunctions.max_pool import OpMaxPool
 
@@ -58,9 +52,9 @@ def test_max_pool_still_has_no_sizer_to_check(activation_dtype: str) -> None:
     kernel_info = op._select_cmsis_pooling_kernel()
     assert kernel_info["kernel_get_buffer_size_fn"] is None, (
         f"max pooling {activation_dtype} now has a sizer "
-        f"({kernel_info['kernel_get_buffer_size_fn']}), so max_pool.c.j2's sizer block is "
-        f"live. Convert it to HELIA_VALIDATE_SIZER/HELIA_VALIDATE_SIZER_FITS and give it a "
-        f"real capacity constant before removing this assertion."
+        f"({kernel_info['kernel_get_buffer_size_fn']}); give max pooling a scratch capacity "
+        f"(calculate_pooling_buffer_size_max) so its pool declares a scratch buffer, then "
+        f"remove this assertion."
     )
 
 

@@ -146,7 +146,7 @@ def test_depthwise_fault_kind_without_an_edit_is_refused() -> None:
 def test_null_ctx_buf_needs_a_kernel_that_takes_a_context() -> None:
     bare = _decl("arm_fx_bare_s8", "input_data", "output_data")
     contracts = ContractSet(status=STATUS_PRESENT, root=None, path=None, functions={bare.name: bare})
-    pool = with_fault(_pool(), common_fault(_pool(), "null_ctx_buf"))
+    pool = with_fault(_pool(scratch_buffer=False), common_fault(_pool(), "null_ctx_buf"))
     with pytest.raises(HarnessError, match="fault 'null_ctx_buf' edits 'ctx', which arm_fx_bare_s8 does not take"):
         plan_harness(pool, kernel_fn="arm_fx_bare_s8", sizer_fn=None, scratch_bytes=0, contracts=contracts, indent="    ")
 

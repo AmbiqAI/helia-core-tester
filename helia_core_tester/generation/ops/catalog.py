@@ -356,7 +356,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "avg_pool",
         "OpAvgPool",
         descriptor_relpaths=("PoolingFunctions/avg_pool.yaml", "PoolingFunctions/avg_pool_float.yaml"),
-        template_relpath="PoolingFunctions/avg_pool",
+        template_relpath=None,
     ),
     "MaxPool": _spec(
         "MaxPool",
@@ -364,7 +364,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "max_pool",
         "OpMaxPool",
         descriptor_relpaths=("PoolingFunctions/max_pool.yaml", "PoolingFunctions/max_pool_float.yaml"),
-        template_relpath="PoolingFunctions/max_pool",
+        template_relpath=None,
     ),
     "Quantize": _spec(
         "Quantize",

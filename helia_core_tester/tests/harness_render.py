@@ -17,6 +17,7 @@ from helia_core_tester.generation.ops.ConvolutionFunctions.transpose_conv import
     TRANSPOSE_CONV_VALIDATION_KEY,
     transpose_conv_argument_pool,
 )
+from helia_core_tester.generation.ops._shared.pool_base import pool_argument_pool
 from helia_core_tester.generation.ops.FullyConnectedFunctions.batch_matmul import BMM_VALIDATION_KEY, bmm_argument_pool
 from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import (
     FC_VALIDATION_KEY,
@@ -125,3 +126,8 @@ def render_batch_matmul(context: dict, *, contracts: Optional[ContractSet] = Non
 def render_transpose_conv(context: dict, *, contracts: Optional[ContractSet] = None) -> tuple[str, str]:
     return render_pool(context, transpose_conv_argument_pool(context), stem="transpose_conv",
                        validation_key=TRANSPOSE_CONV_VALIDATION_KEY, label="Transpose convolution", contracts=contracts)
+
+
+def render_pooling(context: dict, *, suffix: str = "avg_pool", contracts: Optional[ContractSet] = None) -> tuple[str, str]:
+    return render_pool(context, pool_argument_pool(context), stem=suffix,
+                       validation_key=f"PoolingFunctions/{suffix}/{suffix}.c.j2", label="Pooling", contracts=contracts)

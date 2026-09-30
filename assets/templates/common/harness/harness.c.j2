@@ -18,8 +18,14 @@
 {% endif %}
 {% set label = validation_label | default(harness_label) %}
 
+{% if harness.local_prototype %}
+// {{ kernel_fn }} is defined by ns-cmsis-nn but declared in no public header; it takes
+// {{ harness.prototype_from }}'s prototype, which the ns-cmsis-nn export records.
+{{ harness.local_prototype }}
+{% else %}
 // The kernel this harness links must have the prototype the ns-cmsis-nn export records.
 {{ contract_parity_assert(kernel_fn) }}
+{% endif %}
 {% if harness.fault_kind %}
 
 /*
@@ -28,12 +34,16 @@
  */
 {% endif %}
 
+{% if harness.uses_ctx %}
 // Context for buffer allocation
 static cmsis_nn_context {{ name }}_ctx;
+{% endif %}
+{% if harness.scratch_buffer %}
 
 // Runtime scratch buffer (max upper bound; actual size queried at runtime)
 #define {{ name|upper }}_BUFFER_SIZE_MAX {{ buffer_size_max }}
 {{ helia_guard_declare("uint8_t", name ~ "_buffer", name|upper ~ "_BUFFER_SIZE_MAX") }}
+{% endif %}
 
 {% for block in harness.providers %}
 {% for declaration in block.declarations %}
@@ -65,7 +75,7 @@ static cmsis_nn_context {{ name }}_ctx;
     {% if harness.sizer_call %}
     // Calculate required buffer size
     int32_t required_buffer_size = {{ harness.sizer_call }};
-    {% elif not (force_no_scratch | default(false) or harness.no_scratch or harness.context_setup) %}
+    {% elif harness.scratch_buffer and not (force_no_scratch | default(false) or harness.no_scratch or harness.context_setup) %}
     // The entry takes no scratch query (entry_scratch in the descriptor).
     int32_t required_buffer_size = {{ harness.scratch_bytes }};
     {% endif %}
@@ -75,13 +85,17 @@ static cmsis_nn_context {{ name }}_ctx;
     // Armed before the capacity check below: an early return there would otherwise leave
     // these canaries unstamped, and the unconditional check in _test_case_run would
     // report a fabricated breach instead of the real sizer error (#68).
+    {% if harness.scratch_buffer %}
     HELIA_GUARD_ARM({{ name }}_buffer, true /* pure scratch: poison to catch read-before-write */);
+    {% endif %}
     {% for block in harness.providers %}
     {% for buffer in block.buffers %}
     HELIA_GUARD_ARM({{ buffer.name }}, true /* fully recomputed below: poison-safe */);
     {% endfor %}
     {% endfor %}
+    {% if harness.scratch_buffer %}
     HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, 0u);
+    {% endif %}
 
     // The sizer's answer is checked before it becomes a context size (#133): a negative
     // answer is the documented out-of-range sentinel, and one above this case's static bound
@@ -95,13 +109,14 @@ static cmsis_nn_context {{ name }}_ctx;
     HELIA_VALIDATE_SIZER_FITS("{{ fn }}", {{ var }}, {{ capacity }});
     {% endfor %}
 
+    {% if harness.uses_ctx %}
     // Initialize context buffer
     {% if force_no_scratch | default(false) %}
     // force_no_scratch: the kernel gets no scratch buffer ({{ name }}_buffer stays armed and unused).
     {{ name }}_ctx.buf = NULL;
     {{ name }}_ctx.size = 0;
     {% elif harness.no_scratch %}
-    // No scratch for the kernel ({{ name }}_buffer stays armed and unused).
+    // The kernel gets no scratch buffer.
     {{ name }}_ctx.buf = NULL;
     {{ name }}_ctx.size = 0;
     {% elif harness.context_setup %}
@@ -110,7 +125,10 @@ static cmsis_nn_context {{ name }}_ctx;
     {{ name }}_ctx.buf = {{ name }}_buffer;
     {{ name }}_ctx.size = required_buffer_size;
     {% endif %}
+    {% endif %}
+    {% if harness.scratch_buffer %}
     HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
+    {% endif %}
     {% for block in harness.providers %}
 
 {{ block.setup }}
@@ -118,7 +136,9 @@ static cmsis_nn_context {{ name }}_ctx;
     {% if harness.fault_setup %}
 
 {{ harness.fault_setup }}
+    {% if harness.scratch_buffer %}
     HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u);
+    {% endif %}
     {% endif %}
 {% endmacro %}
 int32_t {{ name }}_run(
@@ -195,8 +215,10 @@ int32_t {{ name }}_test_case_run(void)
         ++failures;
     }
     {% endfor %}
+    {% if harness.scratch_buffer %}
     HELIA_GUARD_CHECK({{ name }}_buffer, "{{ label }} scratch", failures);
     HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ label }} scratch slack", {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u, failures);
+    {% endif %}
     {% for block in harness.providers %}
     {% for buffer in block.buffers %}
     HELIA_GUARD_CHECK({{ buffer.name }}, "{{ label }} {{ buffer.label }}", failures);

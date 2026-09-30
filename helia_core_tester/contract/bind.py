@@ -22,8 +22,8 @@ from helia_core_tester.contract.ir import FunctionDecl
 from helia_core_tester.contract.render import ContractRenderError
 
 ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
-    ("input_data", "input"),
-    ("output_data", "output"),
+    ("input_data", "input", "src"),
+    ("output_data", "output", "dst"),
     ("filter_data", "kernel"),
     ("bias_data", "bias"),
     ("input_1_data", "input_1_vect", "input1_data"),

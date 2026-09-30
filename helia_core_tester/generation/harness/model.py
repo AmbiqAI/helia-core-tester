@@ -135,6 +135,8 @@ class ArgumentPool:
     inputs: Sequence[HarnessInput] = ()
     no_scratch: bool = False
     context_setup: str = ""
+    scratch_buffer: bool = True
+    prototype_from: Optional[str] = None
 
     @property
     def harness_inputs(self) -> Sequence[HarnessInput]:
@@ -175,6 +177,8 @@ class ArgumentPool:
             raise HarnessError(f"{self.name}: _run argument names {locals_} must be distinct C identifiers")
         if self.no_scratch and self.context_setup.strip():
             raise HarnessError(f"{self.name}: no_scratch and context_setup both set the context")
+        if not self.scratch_buffer and self.context_setup.strip():
+            raise HarnessError(f"{self.name}: context_setup needs the scratch buffer it replaces")
         for param, expr in self.values.items():
             if not isinstance(expr, str) or not expr.strip():
                 raise HarnessError(f"{self.name}: pool value {param!r} is empty")

@@ -59,10 +59,10 @@ FAULT_CASES = [
     ("batch_matmul_fault_packed_rhs_adjoint_f16", "batch_matmul", "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"),
     ("avg_pool_fault_zero_dim_s8", "avg_pool", "input_dims.n = 0"),
     ("avg_pool_fault_negative_dim_s16", "avg_pool", "input_dims.n = -1"),
-    ("avg_pool_fault_null_input_f32", "avg_pool", "*input_arg = NULL"),
+    ("avg_pool_fault_null_input_f32", "avg_pool", "NULL, /* src */"),
     ("max_pool_fault_zero_dim_s16", "max_pool", "input_dims.n = 0"),
     ("max_pool_fault_negative_dim_f16", "max_pool", "input_dims.n = -1"),
-    ("max_pool_fault_null_output_f32", "max_pool", "*output_arg = NULL"),
+    ("max_pool_fault_null_output_f32", "max_pool", "NULL /* dst */"),
     ("svdf_fault_null_ctx_buf_s8", "svdf", ".buf = NULL"),
     ("svdf_fault_null_input_ctx_buf_s8", "svdf", ".buf = NULL"),
     ("svdf_fault_state_s16_null_output_ctx_buf_s8", "svdf", ".buf = NULL"),
@@ -74,7 +74,7 @@ FAULT_CASES = [
 # Families rendered by the generic harness: a fault is an edit of the passing case's pool,
 # so the buffers are armed in _run and checked in test_case_run, and a NULL-substituted
 # output is still declared, poisoned and checked untouched.
-HARNESS_SUFFIXES = {"convolve", "depthwise_conv", "fully_connected", "batch_matmul", "transpose_conv"}
+HARNESS_SUFFIXES = {"convolve", "depthwise_conv", "fully_connected", "batch_matmul", "transpose_conv", "avg_pool", "max_pool"}
 
 GRU_LSTM_CASES = [
     ("gru_unidirectional_error_null_input_f32", "gru_unidirectional", "null_input"),
