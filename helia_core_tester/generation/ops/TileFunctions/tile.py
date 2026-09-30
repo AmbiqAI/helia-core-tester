@@ -107,16 +107,18 @@ class OpTile(OperationBase):
             'kernel_fn': ki['kernel_fn'],
         }
 
-        includes_dir = output_dir / "includes"
-        includes_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="tile", context=context, pool=tile_argument_pool(context),
+            validation_key="TileFunctions/tile/tile.c.j2", label="Tile", operator="Tile",
+        )
 
-        h_content = self.render_template("TileFunctions/tile/tile.h.j2", context)
-        (includes_dir / f"{name}_tile.h").write_text(h_content)
 
-        c_content = self.render_template("TileFunctions/tile/tile.c.j2", context)
-        (output_dir / f"{name}_tile.c").write_text(c_content)
+from helia_core_tester.generation.harness.simple import shaped_case_pool  # noqa: E402
 
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", {
-            'name': name, 'operator': 'Tile', 'operator_name': 'tile'
-        })
-        (output_dir / "CMakeLists.txt").write_text(cmake_content)
+
+def tile_argument_pool(context):
+    n = context["name"]
+    return shaped_case_pool(
+        context, shapes=(("input_shape", "input_shape"), ("multiples", "multiples")), params_type="cmsis_nn_tile_params",
+        params={"rank": context["rank"], "input_shape": f"{n}_input_shape", "multiples": f"{n}_multiples"},
+        inputs=(("input", "input", "input_data_array"),), output_count=str(context["output_size"]))

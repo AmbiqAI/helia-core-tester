@@ -159,19 +159,38 @@ class OpResizeNearestNeighbor(OperationBase):
             'buffer_size': int(out_h + out_w),
         }
 
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="resize_nearest_neighbor", context=context, pool=resize_nearest_neighbor_argument_pool(context),
+            validation_key="ReshapeFunctions/resize_nearest_neighbor/resize_nearest_neighbor.c.j2", label="ResizeNearestNeighbor", operator="ResizeNearestNeighbor",
+        )
 
-        h_content = self.render_template("ReshapeFunctions/resize_nearest_neighbor/resize_nearest_neighbor.h.j2", context)
-        (includes_api_dir / f"{name}_resize_nearest_neighbor.h").write_text(h_content)
-        c_content = self.render_template("ReshapeFunctions/resize_nearest_neighbor/resize_nearest_neighbor.c.j2", context)
-        (output_dir / f"{name}_resize_nearest_neighbor.c").write_text(c_content)
 
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'ResizeNearestNeighbor'),
-            'operator_name': 'resize_nearest_neighbor',
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        (output_dir / "CMakeLists.txt").write_text(cmake_content)
 
+from helia_core_tester.generation.harness import ArrayLiteral, Declaration, GuardedBuffer  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_declaration, tensor_case_pool  # noqa: E402
+
+
+def resize_nearest_neighbor_argument_pool(context):
+    """The resize kernels take a context whose guarded int32 buffer the case owns."""
+    n = context["name"]
+    extra = (dims_declaration(f"{n}_output_size_dims", context["output_size_dims"]),
+             Declaration(f"{n}_output_size_data", "int32_t", ArrayLiteral(context["output_size_array"]), array=True))
+    source = (Declaration(f"{n}_ctx", "cmsis_nn_context", {"buf": f"{n}_buffer", "size": f"sizeof({n}_buffer)"},
+                          storage="static"),
+              Declaration(f"{n}_params", "cmsis_nn_resize_params",
+                          {"align_corners": str(context["align_corners"]),
+                           "half_pixel_centers": str(context["half_pixel_centers"])}, storage="static"))
+    label = '{{ validation_label | default("ResizeNearestNeighbor") }}'
+    pool = tensor_case_pool(
+        context,
+        {"ctx": f"&{n}_ctx", "resize_params": f"&{n}_params", "input_shape": f"&{n}_input_dims",
+         "output_size_shape": f"&{n}_output_size_dims", "output_size_data": f"{n}_output_size_data",
+         "output_shape": f"&{n}_output_dims"},
+        extra_header=extra, output_count=f"({context['output_size']})", owns_ctx=True,
+        guarded=(GuardedBuffer(f"{n}_buffer", "int32_t", str(context["buffer_size"])),),
+        test_prologue=f"    HELIA_GUARD_ARM({n}_buffer, true /* pure scratch: poison to catch read-before-write */);",
+        extra_checks=f'    HELIA_GUARD_CHECK({n}_buffer, "{label} scratch", failures);',
+    )
+    from dataclasses import replace
+
+    return replace(pool, source=source)

@@ -1,4 +1,5 @@
 """DynamicUpdateSlice operation implementation."""
+from pathlib import Path
 
 from typing import Dict
 import numpy as np
@@ -166,16 +167,33 @@ class OpDynamicUpdateSlice(OperationBase):
             "output_arg": "NULL" if arg_error_case == "output" else f"{name}_output",
         }
 
-        includes_dir = output_dir / "includes"
-        includes_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="dynamic_update_slice", context=context, pool=dynamic_update_slice_argument_pool(context),
+            validation_key="DynamicUpdateSliceFunctions/dynamic_update_slice/dynamic_update_slice.c.j2", label="DynamicUpdateSlice", operator="DynamicUpdateSlice",
+        )
 
-        h_content = self.render_template("DynamicUpdateSliceFunctions/dynamic_update_slice/dynamic_update_slice.h.j2", context)
-        (includes_dir / f"{name}_dynamic_update_slice.h").write_text(h_content)
 
-        c_content = self.render_template("DynamicUpdateSliceFunctions/dynamic_update_slice/dynamic_update_slice.c.j2", context)
-        (output_dir / f"{name}_dynamic_update_slice.c").write_text(c_content)
+from helia_core_tester.generation.harness import FaultEdit  # noqa: E402
+from helia_core_tester.generation.harness.faults import with_fault  # noqa: E402
+from helia_core_tester.generation.harness.simple import shaped_case_pool  # noqa: E402
 
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", {
-            "name": name, "operator": "DynamicUpdateSlice", "operator_name": "dynamic_update_slice"
-        })
-        (output_dir / "CMakeLists.txt").write_text(cmake_content)
+
+def dynamic_update_slice_argument_pool(context):
+    """An argument-error case hands the kernel NULL for one argument: a pool edit."""
+    n = context["name"]
+    pool = shaped_case_pool(
+        context, shapes=(("operand_shape", "operand_shape"), ("update_shape", "update_shape"),
+                         ("operand_strides", "operand_strides")),
+        params_type="cmsis_nn_dynamic_update_slice_params",
+        params={"rank": context["rank"], "operand_shape": f"{n}_operand_shape", "update_shape": f"{n}_update_shape",
+                "operand_size": context["operand_size"], "update_size": context["update_size"],
+                "operand_strides": f"{n}_operand_strides"},
+        inputs=(("operand", "operand", "operand_data_array"), ("update", "update", "update_data_array"),
+                ("start_indices", "start_indices", "start_indices_array")),
+        start_indices_ctype="int32_t", output_count=str(context["operand_size"]))
+    edits = {param: "NULL" for param, key in (("operand", "operand_arg"), ("update", "update_arg"),
+                                               ("start_indices", "start_indices_arg"), ("output_data", "output_arg"))
+             if context.get(key) == "NULL"}
+    if context.get("params_arg") == "NULL":
+        edits["params"] = "NULL"
+    return with_fault(pool, FaultEdit(kind="arg_error", values=edits)) if edits else pool

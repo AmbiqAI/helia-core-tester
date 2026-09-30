@@ -4,7 +4,7 @@ the operator supplies the kernel's scalar arguments by parameter name."""
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from helia_core_tester.generation.harness.model import ArgumentPool, ArrayLiteral, Declaration, HarnessInput
 
@@ -90,3 +90,29 @@ def binary_case_pool(context: Mapping[str, Any], *, validation: Optional[str] = 
         inputs=(HarnessInput("input_1_data", "input1", f"{n}_input1"), HarnessInput("input_2_data", "input2", f"{n}_input2")),
         **pool_fields,
     )
+
+
+def int_list(values: Sequence[Any]) -> str:
+    """A one-line C initializer of integers: `{ 1, 2, 3 }`."""
+    return "{ " + ", ".join(str(int(v)) for v in values) + " }"
+
+
+def shaped_case_pool(context: Mapping[str, Any], *, shapes: Sequence[Tuple[str, str]], params_type: str,
+                     params: Mapping[str, Any], inputs: Sequence[Tuple[str, str, str]], output_count: str,
+                     **pool_fields: Any) -> ArgumentPool:
+    """The pool of a case described by int32 shape arrays and a params struct (the TFLite-shaped
+    kernels): `shapes` are (array name suffix, context key), `inputs` are (kernel parameter,
+    header array suffix, context array key), all typed `c_type` unless the key names another."""
+    n, ctype = context["name"], context["c_type"]
+    header = [Declaration(f"{n}_{suffix}", "int32_t", int_list(context[key]), array=True) for suffix, key in shapes]
+    header.append(Declaration(f"{n}_params", params_type, dict(params)))
+    harness_inputs = []
+    for param, suffix, key in inputs:
+        element = pool_fields.pop(f"{param}_ctype", ctype)
+        header.append(Declaration(f"{n}_{suffix}", element, ArrayLiteral(context[key]), array=True))
+        harness_inputs.append(HarnessInput(param, suffix, f"{n}_{suffix}", element))
+    header.append(Declaration(f"{n}_expected_output", pool_fields.pop("output_ctype", ctype),
+                              ArrayLiteral(context["expected_output_array"]), array=True))
+    values = {"params": f"&{n}_params", **pool_fields.pop("values", {})}
+    return ArgumentPool(name=n, values=values, header=header, inputs=tuple(harness_inputs), output_count=output_count,
+                        output_ctype=header[-1].ctype, benchmark=False, scratch_buffer=False, **pool_fields)

@@ -1,4 +1,5 @@
 """MirrorPad operation implementation."""
+from pathlib import Path
 
 from typing import Dict
 import numpy as np
@@ -109,16 +110,20 @@ class OpMirrorPad(OperationBase):
             "kernel_fn": ki["kernel_fn"],
         }
 
-        includes_dir = output_dir / "includes"
-        includes_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="mirror_pad", context=context, pool=mirror_pad_argument_pool(context),
+            validation_key="PadFunctions/mirror_pad/mirror_pad.c.j2", label="MirrorPad", operator="MirrorPad",
+        )
 
-        h_content = self.render_template("PadFunctions/mirror_pad/mirror_pad.h.j2", context)
-        (includes_dir / f"{name}_mirror_pad.h").write_text(h_content)
 
-        c_content = self.render_template("PadFunctions/mirror_pad/mirror_pad.c.j2", context)
-        (output_dir / f"{name}_mirror_pad.c").write_text(c_content)
+from helia_core_tester.generation.harness.simple import shaped_case_pool  # noqa: E402
 
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", {
-            "name": name, "operator": "MirrorPad", "operator_name": "mirror_pad"
-        })
-        (output_dir / "CMakeLists.txt").write_text(cmake_content)
+
+def mirror_pad_argument_pool(context):
+    n = context["name"]
+    return shaped_case_pool(
+        context, shapes=(("input_shape", "input_shape"), ("output_shape", "output_shape"), ("pad_before", "pad_before")),
+        params_type="cmsis_nn_mirror_pad_params",
+        params={"rank": context["rank"], "input_shape": f"{n}_input_shape", "output_shape": f"{n}_output_shape",
+                "pad_before": f"{n}_pad_before", "mode": context["mode"]},
+        inputs=(("input", "input", "input_data_array"),), output_count=str(context["output_size"]))

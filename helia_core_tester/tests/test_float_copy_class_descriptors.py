@@ -47,7 +47,7 @@ COPY_CLASS_SYMBOLS = {
 # helper, so they emit no sidecar. That is pre-existing and unchanged here -- the
 # flag records which is which instead of asserting a file that never existed.
 REPRESENTATIVE_CASES = [
-    ("pack_float_rank0_n8_f16", "pack", ["arm_pack_f16(", "NULL,", "0,   // input_dims"], True),
+    ("pack_float_rank0_n8_f16", "pack", ["arm_pack_f16(", "NULL,", "0, /* input_dims */"], True),
     ("unpack_float_rank5_axis4_f32", "unpack", ["arm_unpack_f32(", "5,   // input_dims", "_out_1_output,"], True),
     (
         "split_float_zero_slice_v_f32",

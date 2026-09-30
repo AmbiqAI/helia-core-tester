@@ -1,4 +1,4 @@
-/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_transpose_conv_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*)
+/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*, arm_batch_to_space_*, arm_space_to_batch_*, arm_depth_to_space_*, arm_space_to_depth_*, arm_strided_slice_*, arm_pad_*, arm_transpose_*, arm_gather_*, arm_resize_nearest_neighbor_*, arm_pack_*, arm_mirror_pad_*, arm_tile_*, arm_reverse_sequence_*, arm_select_v2_*, arm_scatter_nd_*, arm_dynamic_update_slice_*, arm_where_*)
  * from ns-cmsis-nn arm_nnfunctions.h; the fallback contract for unit tests without a checkout.
  * test_bound_operator_fixture_matches_the_real_tree keeps it equal to the export. */
 
@@ -161,6 +161,20 @@ int32_t arm_batch_matmul_s8_get_buffer_size(const cmsis_nn_dims *input_rhs_dims)
 int32_t arm_batch_matmul_s8_get_buffer_size_dsp(const cmsis_nn_dims *input_rhs_dims);
 
 int32_t arm_batch_matmul_s8_get_buffer_size_mve(const cmsis_nn_dims *input_rhs_dims);
+
+arm_cmsis_nn_status arm_batch_to_space_nd_s16(const int16_t *input_data,
+                                              const cmsis_nn_dims *input_dims,
+                                              const cmsis_nn_tile *block_shape,
+                                              const cmsis_nn_dims *crop, // n->top, h->left, w->bottom, c->right
+                                              int16_t *output_data,
+                                              const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_batch_to_space_nd_s8(const int8_t *input_data,
+                                             const cmsis_nn_dims *input_dims,
+                                             const cmsis_nn_tile *block_shape,
+                                             const cmsis_nn_dims *crop, // n->top, h->left, w->bottom, c->right
+                                             int8_t *output_data,
+                                             const cmsis_nn_dims *output_dims);
 
 arm_cmsis_nn_status
 arm_broadcast_to_s16(const int16_t *input, const cmsis_nn_broadcast_to_params *params, int16_t *output);
@@ -532,6 +546,18 @@ int32_t arm_convolve_wrapper_s8_get_buffer_size_mve(const cmsis_nn_conv_params *
                                                     const cmsis_nn_dims *filter_dims,
                                                     const cmsis_nn_dims *output_dims);
 
+arm_cmsis_nn_status arm_depth_to_space_s16(const int16_t *input_data,
+                                           const cmsis_nn_dims *input_dims,
+                                           const int32_t block_size,
+                                           int16_t *output_data,
+                                           const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_depth_to_space_s8(const int8_t *input_data,
+                                          const cmsis_nn_dims *input_dims,
+                                          const int32_t block_size,
+                                          int8_t *output_data,
+                                          const cmsis_nn_dims *output_dims);
+
 arm_cmsis_nn_status arm_depthwise_conv_3x3_s8(const cmsis_nn_context *ctx,
                                               const cmsis_nn_dw_conv_params *dw_conv_params,
                                               const cmsis_nn_per_channel_quant_params *quant_params,
@@ -773,6 +799,18 @@ arm_cmsis_nn_status arm_depthwise_convolve_weight_sum(int32_t *vector_sum_buf,
                                                       const cmsis_nn_dims *output_dims,
                                                       const int32_t lhs_offset,
                                                       const int32_t *bias_data);
+
+arm_cmsis_nn_status arm_dynamic_update_slice_s16(const int16_t *operand,
+                                                 const int16_t *update,
+                                                 const int32_t *start_indices,
+                                                 const cmsis_nn_dynamic_update_slice_params *params,
+                                                 int16_t *output);
+
+arm_cmsis_nn_status arm_dynamic_update_slice_s8(const int8_t *operand,
+                                                const int8_t *update,
+                                                const int32_t *start_indices,
+                                                const cmsis_nn_dynamic_update_slice_params *params,
+                                                int8_t *output);
 
 arm_cmsis_nn_status arm_elementwise_add_s16(const int16_t *input_1_vect,
                                             const int16_t *input_2_vect,
@@ -1056,6 +1094,38 @@ arm_cmsis_nn_status arm_fully_connected_wrapper_s8(const cmsis_nn_context *ctx,
                                                    const cmsis_nn_dims *output_dims,
                                                    int8_t *output_data);
 
+arm_cmsis_nn_status arm_gather_nd_s16(const int16_t *params_data,
+                                      const cmsis_nn_dims *params_dims,
+                                      const int32_t *indices_data,
+                                      const cmsis_nn_dims *indices_dims,
+                                      const cmsis_nn_gather_nd_params *params,
+                                      int16_t *output_data,
+                                      const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_gather_nd_s8(const int8_t *params_data,
+                                     const cmsis_nn_dims *params_dims,
+                                     const int32_t *indices_data,
+                                     const cmsis_nn_dims *indices_dims,
+                                     const cmsis_nn_gather_nd_params *params,
+                                     int8_t *output_data,
+                                     const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_gather_s16(const int16_t *input_data,
+                                   const cmsis_nn_dims *input_dims,
+                                   const int32_t *indices_data,
+                                   const cmsis_nn_dims *indices_dims,
+                                   const cmsis_nn_gather_params *params,
+                                   int16_t *output_data,
+                                   const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_gather_s8(const int8_t *input_data,
+                                  const cmsis_nn_dims *input_dims,
+                                  const int32_t *indices_data,
+                                  const cmsis_nn_dims *indices_dims,
+                                  const cmsis_nn_gather_params *params,
+                                  int8_t *output_data,
+                                  const cmsis_nn_dims *output_dims);
+
 arm_cmsis_nn_status arm_greater_equal_s16(const cmsis_nn_context *ctx,
                                           const int16_t *input_1_data,
                                           const cmsis_nn_dims *input_1_dims,
@@ -1302,6 +1372,10 @@ arm_cmsis_nn_status arm_minimum_s8(const cmsis_nn_context *ctx,
                                    int8_t *output_data,
                                    const cmsis_nn_dims *output_dims);
 
+arm_cmsis_nn_status arm_mirror_pad_s16(const int16_t *input, const cmsis_nn_mirror_pad_params *params, int16_t *output);
+
+arm_cmsis_nn_status arm_mirror_pad_s8(const int8_t *input, const cmsis_nn_mirror_pad_params *params, int8_t *output);
+
 arm_cmsis_nn_status arm_mul_s16(const int16_t *input1_data,
                                 const cmsis_nn_dims *input1_dims,
                                 const int16_t *input2_data,
@@ -1389,6 +1463,20 @@ arm_cmsis_nn_status arm_not_equal_s8(const cmsis_nn_context *ctx,
                                      const int32_t input_2_mult,
                                      const int32_t input_2_shift,
                                      const int32_t left_shift);
+
+arm_cmsis_nn_status arm_pad_s16(const int16_t *input,
+                                int16_t *output,
+                                const int16_t pad_value,
+                                const cmsis_nn_dims *input_size,
+                                const cmsis_nn_dims *pre_pad,
+                                const cmsis_nn_dims *post_pad);
+
+arm_cmsis_nn_status arm_pad_s8(const int8_t *input,
+                               int8_t *output,
+                               const int8_t pad_value,
+                               const cmsis_nn_dims *input_size,
+                               const cmsis_nn_dims *pre_pad,
+                               const cmsis_nn_dims *post_pad);
 
 arm_cmsis_nn_status arm_prelu_s16(const cmsis_nn_dims *input_dims,
                                   const int16_t *input,
@@ -1510,6 +1598,84 @@ arm_cmsis_nn_status arm_relu_s8(const int8_t *input,
                                 int8_t *output,
                                 const int32_t output_size);
 
+arm_cmsis_nn_status arm_resize_nearest_neighbor_s16(const cmsis_nn_context *ctx,
+                                                    const cmsis_nn_resize_params *resize_params,
+                                                    const cmsis_nn_dims *input_shape,
+                                                    const int16_t *input_data,
+                                                    const cmsis_nn_dims *output_size_shape,
+                                                    const int32_t *output_size_data,
+                                                    const cmsis_nn_dims *output_shape,
+                                                    int16_t *output_data);
+
+arm_cmsis_nn_status arm_resize_nearest_neighbor_s8(const cmsis_nn_context *ctx,
+                                                   const cmsis_nn_resize_params *resize_params,
+                                                   const cmsis_nn_dims *input_shape,
+                                                   const int8_t *input_data,
+                                                   const cmsis_nn_dims *output_size_shape,
+                                                   const int32_t *output_size_data,
+                                                   const cmsis_nn_dims *output_shape,
+                                                   int8_t *output_data);
+
+arm_cmsis_nn_status arm_reverse_sequence_s16(const int16_t *input,
+                                             const int32_t *seq_lengths,
+                                             const cmsis_nn_reverse_sequence_params *params,
+                                             int16_t *output);
+
+arm_cmsis_nn_status arm_reverse_sequence_s8(const int8_t *input,
+                                            const int32_t *seq_lengths,
+                                            const cmsis_nn_reverse_sequence_params *params,
+                                            int8_t *output);
+
+arm_cmsis_nn_status arm_scatter_nd_s16(const int32_t *indices,
+                                       const int16_t *updates,
+                                       const cmsis_nn_scatter_nd_params *params,
+                                       int16_t *output);
+
+arm_cmsis_nn_status arm_scatter_nd_s8(const int32_t *indices,
+                                      const int8_t *updates,
+                                      const cmsis_nn_scatter_nd_params *params,
+                                      int8_t *output);
+
+arm_cmsis_nn_status arm_select_v2_s16(const bool *condition,
+                                      const int16_t *x,
+                                      const int16_t *y,
+                                      const cmsis_nn_select_v2_params *params,
+                                      int16_t *output);
+
+arm_cmsis_nn_status arm_select_v2_s8(const bool *condition,
+                                     const int8_t *x,
+                                     const int8_t *y,
+                                     const cmsis_nn_select_v2_params *params,
+                                     int8_t *output);
+
+arm_cmsis_nn_status arm_space_to_batch_nd_s16(const int16_t *input_data,
+                                              const cmsis_nn_dims *input_dims,
+                                              const cmsis_nn_tile *block_shape,
+                                              const cmsis_nn_dims *pad, // n->top, h->left, w->bottom, c->right
+                                              int16_t *output_data,
+                                              const cmsis_nn_dims *output_dims,
+                                              const int32_t output_offset);
+
+arm_cmsis_nn_status arm_space_to_batch_nd_s8(const int8_t *input_data,
+                                             const cmsis_nn_dims *input_dims,
+                                             const cmsis_nn_tile *block_shape,
+                                             const cmsis_nn_dims *pad, // n->top, h->left, w->bottom, c->right
+                                             int8_t *output_data,
+                                             const cmsis_nn_dims *output_dims,
+                                             const int32_t output_offset);
+
+arm_cmsis_nn_status arm_space_to_depth_s16(const int16_t *input_data,
+                                           const cmsis_nn_dims *input_dims,
+                                           const int32_t block_size,
+                                           int16_t *output_data,
+                                           const cmsis_nn_dims *output_dims);
+
+arm_cmsis_nn_status arm_space_to_depth_s8(const int8_t *input_data,
+                                          const cmsis_nn_dims *input_dims,
+                                          const int32_t block_size,
+                                          int8_t *output_data,
+                                          const cmsis_nn_dims *output_dims);
+
 arm_cmsis_nn_status
 arm_sqrt_s16(const int16_t *input, const cmsis_nn_dims *input_dims, int16_t *output, const int16_t *sqrt_lut);
 
@@ -1587,6 +1753,27 @@ arm_cmsis_nn_status arm_squared_difference_scalar_s8(const int8_t *input_1_vect,
                                                      const int32_t out_activation_min,
                                                      const int32_t out_activation_max,
                                                      const int32_t block_size);
+
+arm_cmsis_nn_status arm_strided_slice_s16(const int16_t *input_data,
+                                          int16_t *output_data,
+                                          const cmsis_nn_dims *const input_dims,
+                                          const cmsis_nn_dims *const begin_dims,
+                                          const cmsis_nn_dims *const stride_dims,
+                                          const cmsis_nn_dims *const output_dims);
+
+arm_cmsis_nn_status arm_strided_slice_s32(const int32_t *input_data,
+                                          int32_t *output_data,
+                                          const cmsis_nn_dims *const input_dims,
+                                          const cmsis_nn_dims *const begin_dims,
+                                          const cmsis_nn_dims *const stride_dims,
+                                          const cmsis_nn_dims *const output_dims);
+
+arm_cmsis_nn_status arm_strided_slice_s8(const int8_t *input_data,
+                                         int8_t *output_data,
+                                         const cmsis_nn_dims *const input_dims,
+                                         const cmsis_nn_dims *const begin_dims,
+                                         const cmsis_nn_dims *const stride_dims,
+                                         const cmsis_nn_dims *const output_dims);
 
 arm_cmsis_nn_status arm_sub_s16(const int16_t *input1_data,
                                 const cmsis_nn_dims *input1_dims,
@@ -1666,6 +1853,10 @@ arm_cmsis_nn_status arm_tanh_s16(const int16_t *input,
                                  int32_t input_multiplier,
                                  int32_t input_left_shift);
 
+arm_cmsis_nn_status arm_tile_s16(const int16_t *input, const cmsis_nn_tile_params *params, int16_t *output);
+
+arm_cmsis_nn_status arm_tile_s8(const int8_t *input, const cmsis_nn_tile_params *params, int8_t *output);
+
 arm_cmsis_nn_status arm_transpose_conv_s8(const cmsis_nn_context *ctx,
                                           const cmsis_nn_context *output_ctx,
                                           const cmsis_nn_transpose_conv_params *transpose_conv_params,
@@ -1706,4 +1897,22 @@ arm_cmsis_nn_status arm_transpose_conv_wrapper_s8(const cmsis_nn_context *ctx,
                                                   const int32_t *bias_data,
                                                   const cmsis_nn_dims *output_dims,
                                                   int8_t *output_data);
+
+arm_cmsis_nn_status arm_transpose_s16(const int16_t *input_data,
+                                      int16_t *const output_data,
+                                      const cmsis_nn_dims *const input_dims,
+                                      const cmsis_nn_dims *const output_dims,
+                                      const cmsis_nn_transpose_params *const transpose_params);
+
+arm_cmsis_nn_status arm_transpose_s8(const int8_t *input_data,
+                                     int8_t *const output_data,
+                                     const cmsis_nn_dims *const input_dims,
+                                     const cmsis_nn_dims *const output_dims,
+                                     const cmsis_nn_transpose_params *const transpose_params);
+
+arm_cmsis_nn_status
+arm_where_s16(const int16_t *condition, const cmsis_nn_where_params *params, int64_t *output, int32_t *num_true);
+
+arm_cmsis_nn_status
+arm_where_s8(const int8_t *condition, const cmsis_nn_where_params *params, int64_t *output, int32_t *num_true);
 

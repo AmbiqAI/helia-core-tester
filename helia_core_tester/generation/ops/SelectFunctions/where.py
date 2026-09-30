@@ -1,4 +1,5 @@
 """Where operation implementation."""
+from pathlib import Path
 
 from typing import Dict
 import numpy as np
@@ -103,16 +104,42 @@ class OpWhere(OperationBase):
             "kernel_fn": ki["kernel_fn"],
         }
 
-        includes_dir = output_dir / "includes"
-        includes_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="where", context=context, pool=where_argument_pool(context),
+            validation_key="SelectFunctions/where/where.c.j2", label="Where", operator="Where",
+        )
 
-        h_content = self.render_template("SelectFunctions/where/where.h.j2", context)
-        (includes_dir / f"{name}_where.h").write_text(h_content)
 
-        c_content = self.render_template("SelectFunctions/where/where.c.j2", context)
-        (output_dir / f"{name}_where.c").write_text(c_content)
+from dataclasses import replace as _replace  # noqa: E402
 
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", {
-            "name": name, "operator": "Where", "operator_name": "where"
-        })
-        (output_dir / "CMakeLists.txt").write_text(cmake_content)
+from helia_core_tester.generation.harness import Declaration  # noqa: E402
+from helia_core_tester.generation.harness.simple import shaped_case_pool  # noqa: E402
+
+_WHERE_VALIDATION = """    /* Validate num_true matches expected */
+    HELIA_VALIDATE_SCALAR_EQ_INT("Where", "num_true", {{ num_true }}, {{ name }}_num_true);
+
+    int output_count = {{ name }}_num_true * {{ rank }};
+    HELIA_VALIDATE_OUTPUTS(
+        {{ validation_mode_token | default("TOLERANT_INT") }},
+        {{ name }}_output,
+        {{ name }}_expected_output,
+        output_count,
+        {{ validation_tolerance | default(0) }},
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
+        {{ validation_report_limit | default(20) }},
+        failures
+    );"""
+
+
+def where_argument_pool(context):
+    """Where writes a variable number of coordinates and reports the count through num_true."""
+    n = context["name"]
+    pool = shaped_case_pool(
+        {**context, "c_type": context["cond_c_type"]}, shapes=(("shape", "input_shape"),),
+        params_type="cmsis_nn_where_params", params={"rank": context["rank"], "shape": f"{n}_shape"},
+        inputs=(("condition", "condition", "condition_array"),), output_ctype=context["output_c_type"],
+        output_count=str(context["max_output_size"]), values={"num_true": f"&{n}_num_true"},
+        validation=_WHERE_VALIDATION)
+    count = Declaration(f"{n}_num_true", "int32_t", "0", storage="static")
+    return _replace(pool, source=(count,))

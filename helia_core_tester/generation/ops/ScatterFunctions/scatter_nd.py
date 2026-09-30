@@ -1,4 +1,5 @@
 """ScatterNd operation implementation."""
+from pathlib import Path
 
 from typing import Dict
 import numpy as np
@@ -132,16 +133,23 @@ class OpScatterNd(OperationBase):
             "kernel_fn": ki["kernel_fn"],
         }
 
-        includes_dir = output_dir / "includes"
-        includes_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="scatter_nd", context=context, pool=scatter_nd_argument_pool(context),
+            validation_key="ScatterFunctions/scatter_nd/scatter_nd.c.j2", label="ScatterNd", operator="ScatterNd",
+        )
 
-        h_content = self.render_template("ScatterFunctions/scatter_nd/scatter_nd.h.j2", context)
-        (includes_dir / f"{name}_scatter_nd.h").write_text(h_content)
 
-        c_content = self.render_template("ScatterFunctions/scatter_nd/scatter_nd.c.j2", context)
-        (output_dir / f"{name}_scatter_nd.c").write_text(c_content)
+from helia_core_tester.generation.harness.simple import shaped_case_pool  # noqa: E402
 
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", {
-            "name": name, "operator": "ScatterNd", "operator_name": "scatter_nd"
-        })
-        (output_dir / "CMakeLists.txt").write_text(cmake_content)
+
+def scatter_nd_argument_pool(context):
+    """ScatterND accumulates into its output, so the case zero-seeds it before the call."""
+    n = context["name"]
+    return shaped_case_pool(
+        context, shapes=(("output_strides", "output_strides"),), params_type="cmsis_nn_scatter_nd_params",
+        params={"num_updates": context["num_updates"], "index_depth": context["index_depth"],
+                "slice_size": context["slice_size"], "output_size": context["output_size"],
+                "output_strides": f"{n}_output_strides"},
+        inputs=(("indices", "indices", "indices_array"), ("updates", "updates", "updates_array")),
+        indices_ctype="int32_t", output_count=str(context["output_size"]), includes=("<string.h>",),
+        test_prologue=f"    memset({n}_output, 0, sizeof({n}_output));")

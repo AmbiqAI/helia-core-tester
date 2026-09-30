@@ -104,6 +104,14 @@ def _render_registered(template: str, context: dict) -> str:
     return render_pool(context, builder(context), stem=stem, validation_key=template, label=label)[1]
 
 
+def _render_transpose(context: dict) -> tuple[str, str]:
+    from helia_core_tester.generation.ops.TransposeFunctions.transpose import transpose_argument_pool
+
+    context = {"input_data_array": "    0", "expected_output_array": "    0", "use_batch_harness": False, **context}
+    return render_pool(context, transpose_argument_pool(context), stem="transpose",
+                       validation_key="TransposeFunctions/transpose/transpose.c.j2", label="Transpose")
+
+
 def _render_simple(context: dict, values: dict, *, stem: str, validation_key: str, label: str) -> str:
     context = {"input_data_array": "    0", "expected_output_array": "    0", "use_batch_harness": False, **context}
     return render_pool(context, tensor_case_pool(context, values, dims=()), stem=stem, validation_key=validation_key,
@@ -445,20 +453,18 @@ def test_s16_conv_templates_render_int8_weights_for_public_wrapper_signatures() 
 
 
 def test_gather_nd_invalid_status_render_uses_expected_status_helper() -> None:
-    text = _render(
-        "GatherFunctions/gather_nd/gather_nd.c.j2",
-        {
-            "name": "gather_nd_invalid_smoke",
-            "input_dtype": "int8_t",
-            "output_dtype": "int8_t",
-            "kernel_fn": "arm_gather_nd_s8",
-            "params_rank_test": 3,
-            "indices_rank_test": 2,
-            "batch_dims_test": 0,
-            "output_size": 4,
-            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
-        },
-    )
+    from helia_core_tester.generation.ops.GatherFunctions.gather_nd import gather_nd_argument_pool
+
+    context = {
+        "name": "gather_nd_invalid_smoke", "input_dtype": "int8_t", "output_dtype": "int8_t",
+        "kernel_fn": "arm_gather_nd_s8", "params_rank_test": 3, "indices_rank_test": 2, "batch_dims_test": 0,
+        "output_size": 4, "expected_status": "ARM_CMSIS_NN_ARG_ERROR", "params_dims": {"n": 1, "h": 1, "w": 1, "c": 4}, "indices_dims": {"n": 1, "h": 1, "w": 1, "c": 4},
+        "output_dims": {"n": 1, "h": 1, "w": 1, "c": 4}, "params_shape_array": "    4", "indices_shape_array": "    4", "output_shape_array": "    4",
+        "params_data_array": "    0", "indices_data_array": "    0", "expected_output_array": "    0",
+        "use_batch_harness": False,
+    }
+    text = render_pool(context, gather_nd_argument_pool(context), stem="gather_nd",
+                       validation_key="GatherFunctions/gather_nd/gather_nd.c.j2", label="GatherND")[1]
 
     assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
     assert "ARM_CMSIS_NN_ARG_ERROR" in text
@@ -466,20 +472,18 @@ def test_gather_nd_invalid_status_render_uses_expected_status_helper() -> None:
 
 
 def test_transpose_invalid_status_render_uses_expected_status_helper() -> None:
-    text = _render(
-        "TransposeFunctions/transpose/transpose.c.j2",
-        {
-            "name": "transpose_invalid_smoke",
-            "input_dtype": "int8_t",
-            "output_dtype": "int8_t",
-            "kernel_fn": "arm_transpose_s8",
-            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
-            "input_dims": {"n": 2, "h": 4, "w": 3, "c": 1},
-            "output_dims": {"n": 2, "h": 4, "w": 3, "c": 1},
-            "num_dims": 3,
-            "permutation_array": "    0, 1, 3",
-        },
-    )
+    text = _render_transpose({
+        "name": "transpose_invalid_smoke",
+        "input_dtype": "int8_t",
+        "output_dtype": "int8_t",
+        "kernel_fn": "arm_transpose_s8",
+        "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+        "input_dims": {"n": 2, "h": 4, "w": 3, "c": 1},
+        "output_dims": {"n": 2, "h": 4, "w": 3, "c": 1},
+        "num_dims": 3,
+        "permutation_array": "    0, 1, 3",
+        "transpose_params_type": "cmsis_nn_transpose_params",
+    })[1]
 
     assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
     assert "ARM_CMSIS_NN_ARG_ERROR" in text
@@ -487,9 +491,7 @@ def test_transpose_invalid_status_render_uses_expected_status_helper() -> None:
 
 
 def test_transpose_header_float_uses_inline_perm_array() -> None:
-    text = _render(
-        "TransposeFunctions/transpose/transpose.h.j2",
-        {
+    text = _render_transpose({
             "name": "transpose_float_smoke",
             "input_dims": {"n": 1, "h": 2, "w": 3, "c": 4},
             "output_dims": {"n": 1, "h": 3, "w": 2, "c": 4},
@@ -501,8 +503,8 @@ def test_transpose_header_float_uses_inline_perm_array() -> None:
             "output_dtype": "float",
             "transpose_params_type": "cmsis_nn_transpose_params_f32",
             "float_kernel": True,
-        },
-    )
+            "kernel_fn": "arm_transpose_f32",
+        })[0]
 
     assert "static const int32_t transpose_float_smoke_perm[]" in text
     assert ".perm = {" in text
@@ -510,9 +512,7 @@ def test_transpose_header_float_uses_inline_perm_array() -> None:
 
 
 def test_transpose_header_int_uses_permutations_pointer() -> None:
-    text = _render(
-        "TransposeFunctions/transpose/transpose.h.j2",
-        {
+    text = _render_transpose({
             "name": "transpose_int_smoke",
             "input_dims": {"n": 1, "h": 2, "w": 3, "c": 4},
             "output_dims": {"n": 1, "h": 3, "w": 2, "c": 4},
@@ -524,8 +524,8 @@ def test_transpose_header_int_uses_permutations_pointer() -> None:
             "output_dtype": "int8_t",
             "transpose_params_type": "cmsis_nn_transpose_params",
             "float_kernel": False,
-        },
-    )
+            "kernel_fn": "arm_transpose_s8",
+        })[0]
 
     assert "static const uint32_t transpose_int_smoke_permutations[]" in text
     assert ".permutations = transpose_int_smoke_permutations" in text
@@ -582,21 +582,23 @@ def test_broadcast_to_invalid_status_render_uses_expected_status_helper() -> Non
 
 
 def test_dynamic_update_slice_invalid_status_render_uses_expected_status_helper() -> None:
-    text = _render(
-        "DynamicUpdateSliceFunctions/dynamic_update_slice/dynamic_update_slice.c.j2",
-        {
-            "name": "dynamic_update_slice_invalid_smoke",
-            "c_type": "int8_t",
-            "kernel_fn": "arm_dynamic_update_slice_s8",
-            "operand_size": 20,
-            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
-            "operand_arg": "dynamic_update_slice_invalid_smoke_operand",
-            "update_arg": "dynamic_update_slice_invalid_smoke_update",
-            "start_indices_arg": "NULL",
-            "params_arg": "&dynamic_update_slice_invalid_smoke_params",
-            "output_arg": "dynamic_update_slice_invalid_smoke_output",
-        },
+    from helia_core_tester.generation.ops.DynamicUpdateSliceFunctions.dynamic_update_slice import (
+        dynamic_update_slice_argument_pool,
     )
+
+    context = {
+        "name": "dynamic_update_slice_invalid_smoke", "c_type": "int8_t", "kernel_fn": "arm_dynamic_update_slice_s8",
+        "operand_size": 20, "update_size": 4, "rank": 1, "operand_shape": [20], "update_shape": [4],
+        "operand_strides": [1], "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+        "operand_arg": "dynamic_update_slice_invalid_smoke_operand", "update_arg": "dynamic_update_slice_invalid_smoke_update",
+        "start_indices_arg": "NULL", "params_arg": "&dynamic_update_slice_invalid_smoke_params",
+        "output_arg": "dynamic_update_slice_invalid_smoke_output", "operand_data_array": "    0",
+        "update_data_array": "    0", "start_indices_array": "    0", "expected_output_array": "    0",
+        "use_batch_harness": False,
+    }
+    text = render_pool(context, dynamic_update_slice_argument_pool(context), stem="dynamic_update_slice",
+                       validation_key="DynamicUpdateSliceFunctions/dynamic_update_slice/dynamic_update_slice.c.j2",
+                       label="DynamicUpdateSlice")[1]
 
     assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
     assert "ARM_CMSIS_NN_ARG_ERROR" in text

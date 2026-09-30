@@ -245,7 +245,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "pack",
         "OpPack",
         "ConcatenationFunctions/pack_float.yaml",
-        "ConcatenationFunctions/pack",
+        None,
     ),
     "Unpack": _spec(
         "Unpack",
@@ -300,7 +300,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "GatherFunctions",
         "gather",
         "OpGather",
-        template_relpath="GatherFunctions/gather",
+        template_relpath=None,
         descriptor_relpaths=(
             "GatherFunctions/gather.yaml",
             "GatherFunctions/gather_float.yaml",
@@ -311,7 +311,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "GatherFunctions",
         "gather_nd",
         "OpGatherND",
-        template_relpath="GatherFunctions/gather_nd",
+        template_relpath=None,
         descriptor_relpaths=(
             "GatherFunctions/gather_nd.yaml",
             "GatherFunctions/gather_nd_float.yaml",
@@ -348,7 +348,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "pad",
         "OpPad",
         descriptor_relpaths=("PadFunctions/pad.yaml", "PadFunctions/pad_float.yaml"),
-        template_relpath="PadFunctions/pad",
+        template_relpath=None,
     ),
     "AvgPool": _spec(
         "AvgPool",
@@ -396,7 +396,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "resize_nearest_neighbor",
         "OpResizeNearestNeighbor",
         "ReshapeFunctions/resize_nearest_neighbor.yaml",
-        "ReshapeFunctions/resize_nearest_neighbor",
+        None,
     ),
     "SquaredDifference": _spec(
         "SquaredDifference",
@@ -409,10 +409,10 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         ),
         template_relpath=None,
     ),
-    "SpaceToDepth": _spec("SpaceToDepth", "ReshapeFunctions", "space_to_depth", "OpSpaceToDepth", "ReshapeFunctions/space_to_depth.yaml", "ReshapeFunctions/space_to_depth"),
-    "DepthToSpace": _spec("DepthToSpace", "ReshapeFunctions", "depth_to_space", "OpDepthToSpace", "ReshapeFunctions/depth_to_space.yaml", "ReshapeFunctions/depth_to_space"),
-    "SpaceToBatchND": _spec("SpaceToBatchND", "ReshapeFunctions", "space_to_batch_nd", "OpSpaceToBatchND", "ReshapeFunctions/space_to_batch_nd.yaml", "ReshapeFunctions/space_to_batch_nd"),
-    "BatchToSpaceND": _spec("BatchToSpaceND", "ReshapeFunctions", "batch_to_space_nd", "OpBatchToSpaceND", "ReshapeFunctions/batch_to_space_nd.yaml", "ReshapeFunctions/batch_to_space_nd"),
+    "SpaceToDepth": _spec("SpaceToDepth", "ReshapeFunctions", "space_to_depth", "OpSpaceToDepth", "ReshapeFunctions/space_to_depth.yaml", None),
+    "DepthToSpace": _spec("DepthToSpace", "ReshapeFunctions", "depth_to_space", "OpDepthToSpace", "ReshapeFunctions/depth_to_space.yaml", None),
+    "SpaceToBatchND": _spec("SpaceToBatchND", "ReshapeFunctions", "space_to_batch_nd", "OpSpaceToBatchND", "ReshapeFunctions/space_to_batch_nd.yaml", None),
+    "BatchToSpaceND": _spec("BatchToSpaceND", "ReshapeFunctions", "batch_to_space_nd", "OpBatchToSpaceND", "ReshapeFunctions/batch_to_space_nd.yaml", None),
     "SVDF": _spec(
         "SVDF",
         "SVDFunctions",
@@ -435,7 +435,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "strided_slice",
         "OpStridedSlice",
         descriptor_relpaths=("StridedSliceFunctions/strided_slice.yaml", "StridedSliceFunctions/strided_slice_float.yaml"),
-        template_relpath="StridedSliceFunctions/strided_slice",
+        template_relpath=None,
     ),
     "Transpose": _spec(
         "Transpose",
@@ -443,7 +443,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "transpose",
         "OpTranspose",
         descriptor_relpaths=("TransposeFunctions/transpose.yaml", "TransposeFunctions/transpose_float.yaml"),
-        template_relpath="TransposeFunctions/transpose",
+        template_relpath=None,
     ),
     "NNActivationFloat": _spec(
         "NNActivationFloat",
@@ -473,14 +473,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         parity_kind="extension",
         rationale="Tester-only stateful op kept public but isolated from CMSIS parity families.",
     ),
-    "Tile": _spec("Tile", "TileFunctions", "tile", "OpTile", "TileFunctions/tile.yaml", "TileFunctions/tile"),
+    "Tile": _spec("Tile", "TileFunctions", "tile", "OpTile", "TileFunctions/tile.yaml", None),
     "BroadcastTo": _spec("BroadcastTo", "BroadcastFunctions", "broadcast_to", "OpBroadcastTo", "BroadcastFunctions/broadcast_to.yaml", None),
-    "ScatterNd": _spec("ScatterNd", "ScatterFunctions", "scatter_nd", "OpScatterNd", "ScatterFunctions/scatter_nd.yaml", "ScatterFunctions/scatter_nd"),
-    "MirrorPad": _spec("MirrorPad", "PadFunctions", "mirror_pad", "OpMirrorPad", "PadFunctions/mirror_pad.yaml", "PadFunctions/mirror_pad"),
-    "SelectV2": _spec("SelectV2", "SelectFunctions", "select_v2", "OpSelectV2", "SelectFunctions/select_v2.yaml", "SelectFunctions/select_v2"),
-    "Where": _spec("Where", "SelectFunctions", "where", "OpWhere", "SelectFunctions/where.yaml", "SelectFunctions/where"),
-    "ReverseSequence": _spec("ReverseSequence", "ReverseSequenceFunctions", "reverse_sequence", "OpReverseSequence", "ReverseSequenceFunctions/reverse_sequence.yaml", "ReverseSequenceFunctions/reverse_sequence"),
-    "DynamicUpdateSlice": _spec("DynamicUpdateSlice", "DynamicUpdateSliceFunctions", "dynamic_update_slice", "OpDynamicUpdateSlice", "DynamicUpdateSliceFunctions/dynamic_update_slice.yaml", "DynamicUpdateSliceFunctions/dynamic_update_slice"),
+    "ScatterNd": _spec("ScatterNd", "ScatterFunctions", "scatter_nd", "OpScatterNd", "ScatterFunctions/scatter_nd.yaml", None),
+    "MirrorPad": _spec("MirrorPad", "PadFunctions", "mirror_pad", "OpMirrorPad", "PadFunctions/mirror_pad.yaml", None),
+    "SelectV2": _spec("SelectV2", "SelectFunctions", "select_v2", "OpSelectV2", "SelectFunctions/select_v2.yaml", None),
+    "Where": _spec("Where", "SelectFunctions", "where", "OpWhere", "SelectFunctions/where.yaml", None),
+    "ReverseSequence": _spec("ReverseSequence", "ReverseSequenceFunctions", "reverse_sequence", "OpReverseSequence", "ReverseSequenceFunctions/reverse_sequence.yaml", None),
+    "DynamicUpdateSlice": _spec("DynamicUpdateSlice", "DynamicUpdateSliceFunctions", "dynamic_update_slice", "OpDynamicUpdateSlice", "DynamicUpdateSliceFunctions/dynamic_update_slice.yaml", None),
 }
 
 
