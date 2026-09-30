@@ -205,16 +205,16 @@
       "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$"
     },
     "entry": {
-      "description": "Public ns-cmsis-nn entry the generated case calls instead of the wrapper its dispatch selects: an entry in kernel_dispatch.DIRECT_ENTRIES, or, for an operator whose template binds its call from the kernel contract, any public kernel of matching precision. The case is skipped when the ns-cmsis-nn checkout does not declare the entry.",
+      "description": "Public ns-cmsis-nn entry the generated case calls instead of the wrapper its dispatch selects: for an operator whose pool binds its call from the kernel contract, any public kernel of matching precision; whether it takes weight sums, a struct-typed bias or a layout follows from its prototype. The case is skipped when the ns-cmsis-nn checkout does not declare the entry.",
       "type": "string"
     },
     "entry_sizer": {
-      "description": "Public ns-cmsis-nn scratch-size query for an entry outside kernel_dispatch.DIRECT_ENTRIES that has no <entry>_get_buffer_size of its own. Mutually exclusive with entry_scratch; the case is skipped when the checkout does not declare it.",
+      "description": "Public ns-cmsis-nn scratch-size query for an entry that has no <entry>_get_buffer_size of its own (a variant sized by its family's query). Mutually exclusive with entry_scratch; the case is skipped when the checkout does not declare it.",
       "type": "string",
       "pattern": "^arm_[a-z0-9_]+$"
     },
     "entry_scratch": {
-      "description": "Scratch for an entry outside kernel_dispatch.DIRECT_ENTRIES that takes no sizer: 'none', or a fixed byte count. Mutually exclusive with entry_sizer.",
+      "description": "Scratch for an entry that takes no sizer: 'none', or a fixed byte count. Mutually exclusive with entry_sizer.",
       "oneOf": [
         {"type": "string", "enum": ["none"]},
         {"type": "integer", "minimum": 0}

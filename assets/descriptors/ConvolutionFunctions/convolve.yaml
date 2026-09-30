@@ -2752,6 +2752,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 49, 10, 1]
 filter_shape: [10, 4, 1, 64]
@@ -2767,6 +2768,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 12, 12, 3]
 filter_shape: [3, 3, 3, 8]
@@ -2782,6 +2784,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 8, 8, 3]
 filter_shape: [3, 3, 3, 16]
@@ -2797,6 +2800,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 1, 64, 1]
 filter_shape: [1, 9, 1, 4]
@@ -2812,6 +2816,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 6, 6, 1]
 filter_shape: [4, 4, 1, 4]
@@ -2827,6 +2832,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 6, 6, 3]
 filter_shape: [4, 4, 3, 4]
@@ -2842,6 +2848,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 5, 5, 2]
 filter_shape: [3, 3, 2, 12]
@@ -2857,6 +2864,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [2, 6, 6, 3]
 filter_shape: [3, 3, 3, 8]
@@ -2872,6 +2880,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 2, 2, 1]
 filter_shape: [3, 3, 1, 4]
@@ -2887,6 +2896,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 6, 6, 2]
 filter_shape: [3, 3, 2, 8]
@@ -2902,6 +2912,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_small_cin
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 8, 8, 4]
 filter_shape: [3, 3, 4, 16]
@@ -2916,6 +2927,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_3x3_c16_s1
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 16, 16, 16]
 filter_shape: [3, 3, 16, 16]
@@ -2931,6 +2943,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_3x3_c16_s1
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 7, 9, 16]
 filter_shape: [3, 3, 16, 32]
@@ -2946,6 +2959,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_3x3_c16_s1
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 6, 6, 16]
 filter_shape: [3, 3, 16, 16]
@@ -2961,6 +2975,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_3x3_c16_s1
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [2, 5, 5, 16]
 filter_shape: [3, 3, 16, 16]
@@ -2976,6 +2991,7 @@ activation_dtype: S8
 weight_dtype: S8
 activation: NONE
 entry: arm_convolve_s8_3x3_c16_s1
+entry_sizer: arm_convolve_s8_get_buffer_size
 hint: {call_style: per_tensor}
 input_shape: [1, 8, 8, 16]
 filter_shape: [3, 3, 16, 16]

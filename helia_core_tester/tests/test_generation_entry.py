@@ -1,5 +1,6 @@
-"""resolve_entry: `entry:` from kernel_dispatch.DIRECT_ENTRIES unchanged, anything else from the
-kernel contract, only for operators that bind their call from it."""
+"""resolve_entry: every `entry:` resolves from the kernel contract, only for operators that bind
+their call from it; the shipped descriptors name their scratch query explicitly where the entry
+has none of its own."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ import pytest
 from helia_core_tester.contract.ir import STATUS_ABSENT, STATUS_PRESENT, ContractSet, FunctionDecl, ParamDecl
 from helia_core_tester.generation import entry as entry_module
 from helia_core_tester.generation.entry import EntryError, entry_scratch_bytes, resolve_entry
-from helia_core_tester.generation.kernel_dispatch import DIRECT_ENTRIES, resolve_direct_entry
+from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.test_ops import _required_kernel_symbols
 
 
@@ -41,30 +42,34 @@ def _resolve(entry: str, desc: dict | None = None, *, operator: str = "FxOp", ac
                          desc={"name": "fx_case", **(desc or {})}, contracts=contracts)
 
 
-def test_every_table_entry_resolves_exactly_as_before() -> None:
-    for name, spec in DIRECT_ENTRIES.items():
-        got = resolve_entry(spec.operator, name, activation_dtype=spec.activation_dtype,
-                            weight_dtype=spec.weight_dtype, cpu="cortex-m55", desc={"name": "x"})
-        assert got == resolve_direct_entry(spec.operator, name, spec.activation_dtype, spec.weight_dtype), name
+def test_every_shipped_entry_resolves_from_the_contract_with_its_declared_scratch() -> None:
+    """No per-entry table remains: each descriptor's entry is a public kernel of the contract,
+    and one without a same-named sizer names its family's query as entry_sizer."""
+    from pathlib import Path
+
+    from helia_core_tester.contract.render import load_current_contracts
+
+    contracts = load_current_contracts()
+    root = Path(__file__).resolve().parents[2] / "assets" / "descriptors"
+    entries = [d for d in load_all_descriptors(str(root)) if d.get("entry")]
+    assert len(entries) >= 50
+    for desc in entries:
+        entry, sizer = desc["entry"], desc.get("entry_sizer")
+        own = contracts.sizer_for(entry, "cortex-m55")
+        assert own is not None or sizer is not None or desc.get("entry_scratch") is not None, (
+            f"{desc['name']}: {entry} has no sizer of its own and declares none")
+        if contracts.find(entry) is None:
+            continue  # gated on the checkout, which the pure-Python fixture may not carry
+        got = resolve_entry(desc["operator"], entry, activation_dtype=desc.get("activation_dtype", "S8"),
+                            weight_dtype=desc.get("weight_dtype", "S8"), cpu="cortex-m55", desc=desc,
+                            contracts=contracts)
+        assert got["kernel_fn"] == entry and got["entry_family"] == "contract"
+        if sizer is not None:
+            assert got["kernel_get_buffer_size_fn"] == sizer
 
 
-def test_table_entries_keep_their_own_errors() -> None:
-    name, spec = next(iter(DIRECT_ENTRIES.items()))
-    with pytest.raises(ValueError, match="Unknown Convolve entry|entry"):
-        resolve_entry("Pooling", name, activation_dtype=spec.activation_dtype, weight_dtype=spec.weight_dtype,
-                      cpu="cortex-m55", desc={"name": "x"})
-
-
-@pytest.mark.parametrize("field", [{"entry_sizer": "arm_fx_other_get_buffer_size"}, {"entry_scratch": "none"}])
-def test_table_entries_refuse_scratch_overrides(field: dict) -> None:
-    name, spec = next(iter(DIRECT_ENTRIES.items()))
-    with pytest.raises(EntryError, match="drop entry_sizer and entry_scratch"):
-        resolve_entry(spec.operator, name, activation_dtype=spec.activation_dtype, weight_dtype=spec.weight_dtype,
-                      cpu="cortex-m55", desc={"name": "x", **field})
-
-
-def test_operators_not_yet_bound_name_their_table_entries() -> None:
-    with pytest.raises(EntryError, match=r"AvgPool does not yet bind its call.*known AvgPool entries: \[\]"):
+def test_operators_outside_the_contract_path_are_refused() -> None:
+    with pytest.raises(EntryError, match=r"AvgPool does not resolve entries from the kernel contract"):
         _resolve("arm_fx_kernel_s16", operator="AvgPool")
 
 

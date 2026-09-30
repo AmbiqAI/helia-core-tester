@@ -8,14 +8,14 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
-from helia_core_tester.generation.kernel_dispatch import (
-    DEPTHWISE_CONV_S8_DIRECT_ENTRIES,
-    DEPTHWISE_CONV_S8_PLANAR_RULE,
-    resolve_depthwise_conv_entry,
-)
+from helia_core_tester.generation.entry import EntryError, resolve_entry
+from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE
+
 from helia_core_tester.generation.test_ops import _required_kernel_symbols, generate_test
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEPTHWISE_CONV_S8_ENTRIES = ("arm_depthwise_conv_s8_opt_3x3", "arm_depthwise_conv_s8_opt_3x3_c64_s1",
+                             "arm_depthwise_conv_s8_opt_planar", "arm_depthwise_conv_s8_opt_channelwise")
 
 
 def _descriptor(name: str) -> dict:
@@ -28,30 +28,37 @@ def _source(name: str, tmp_path: Path, **overrides) -> str:
     return "".join(p.read_text() for p in case_dir.glob("*.c"))
 
 
-def test_entries_resolve_to_themselves_with_the_opt_scratch_query() -> None:
-    for entry in DEPTHWISE_CONV_S8_DIRECT_ENTRIES:
-        assert resolve_depthwise_conv_entry(entry, "S8", "S8") == {
+def _resolve(entry: str, act: str = "S8", weight: str = "S8", **desc) -> dict:
+    return resolve_entry("DepthwiseConv", entry, activation_dtype=act, weight_dtype=weight, cpu="cortex-m55",
+                         desc={"name": "x", **desc})
+
+
+def test_entries_resolve_from_the_contract_with_the_opt_scratch_query() -> None:
+    for entry in DEPTHWISE_CONV_S8_ENTRIES:
+        assert _resolve(entry, entry_sizer="arm_depthwise_conv_s8_opt_get_buffer_size") == {
             "kernel_fn": entry,
             "kernel_get_buffer_size_fn": "arm_depthwise_conv_s8_opt_get_buffer_size",
+            "entry_family": "contract",
         }
 
 
 @pytest.mark.parametrize(
-    ("entry", "act", "weight", "message"),
+    ("entry", "act", "message"),
     [
-        ("arm_depthwise_conv_s8_opt_3x4", "S8", "S8", "Unknown DepthwiseConv entry"),
-        ("arm_depthwise_conv_s8_opt_3x3", "S16", "S8", "s8 depthwise entry"),
+        ("arm_depthwise_conv_s8_opt_3x4", "S8", "is not a public function"),
+        ("arm_depthwise_conv_s8_opt_3x3", "S16", "input_data"),
     ],
 )
-def test_unknown_or_mismatched_entries_are_rejected(entry, act, weight, message) -> None:
-    with pytest.raises(ValueError, match=message):
-        resolve_depthwise_conv_entry(entry, act, weight)
+def test_unknown_or_mismatched_entries_are_rejected(entry, act, message) -> None:
+    with pytest.raises(EntryError, match=message):
+        _resolve(entry, act, entry_sizer="arm_depthwise_conv_s8_opt_get_buffer_size")
 
 
 def test_entry_and_planar_rule_gate_the_case_on_the_checkout() -> None:
     desc = _descriptor("depthwise_conv_entry_planar_48x48_c8_s8")
 
-    assert _required_kernel_symbols(desc) == ["arm_depthwise_conv_s8_opt_planar", DEPTHWISE_CONV_S8_PLANAR_RULE]
+    assert _required_kernel_symbols(desc) == ["arm_depthwise_conv_s8_opt_planar", "arm_depthwise_conv_s8_opt_get_buffer_size",
+                                              DEPTHWISE_CONV_S8_PLANAR_RULE]
     assert _required_kernel_symbols(_descriptor("depthwise_conv_dilated_1d_k7_d2_c24_s8")) == []
 
 

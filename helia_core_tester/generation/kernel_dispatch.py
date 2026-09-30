@@ -4,7 +4,6 @@ CPU-aware kernel dispatch for generated CMSIS-NN calls.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Dict
 
 from helia_core_tester.core.cpu_targets import get_cpu_profile
@@ -19,120 +18,7 @@ def _cpu_buffer_api(base: str, cpu: str) -> str:
     return base
 
 
-@dataclass(frozen=True)
-class DirectEntry:
-    """A public ns-cmsis-nn entry that a descriptor can call through `entry:`."""
-
-    operator: str
-    activation_dtype: str
-    weight_dtype: str
-    # The prototype the operator's template renders the call for. An entry of an existing
-    # family takes one row below plus its cases; a new family also needs a template branch.
-    family: str
-    # Scratch query. s8 families call it with (input_dims, filter_dims); float entries call it
-    # like their default entry, with (params, input_dims, filter_dims, output_dims[, layout]).
-    buffer_size_fn: str
-    # Float entries: whether the call and the scratch query take a trailing layout argument.
-    kernel_needs_layout: bool = False
-    buffer_size_needs_layout: bool = False
-
-
-# Public entries that no wrapper routes to. The depthwise_s8 family takes
-# arm_depthwise_conv_wrapper_s8's arguments; convolve_s8 takes arm_convolve_s8's
-# (upscale_dims passed as NULL, as arm_convolve_wrapper_s8 does). Both take weight sums.
-DIRECT_ENTRIES: Dict[str, DirectEntry] = {
-    "arm_depthwise_conv_s8_opt_3x3": DirectEntry(
-        "DepthwiseConv", "S8", "S8", "depthwise_s8", "arm_depthwise_conv_s8_opt_get_buffer_size"
-    ),
-    "arm_depthwise_conv_s8_opt_3x3_c64_s1": DirectEntry(
-        "DepthwiseConv", "S8", "S8", "depthwise_s8", "arm_depthwise_conv_s8_opt_get_buffer_size"
-    ),
-    "arm_depthwise_conv_s8_opt_planar": DirectEntry(
-        "DepthwiseConv", "S8", "S8", "depthwise_s8", "arm_depthwise_conv_s8_opt_get_buffer_size"
-    ),
-    "arm_depthwise_conv_s8_opt_channelwise": DirectEntry(
-        "DepthwiseConv", "S8", "S8", "depthwise_s8", "arm_depthwise_conv_s8_opt_get_buffer_size"
-    ),
-    "arm_convolve_s8_small_cin": DirectEntry(
-        "Convolve", "S8", "S8", "convolve_s8", "arm_convolve_s8_get_buffer_size"
-    ),
-    "arm_convolve_s8_3x3_c16_s1": DirectEntry(
-        "Convolve", "S8", "S8", "convolve_s8", "arm_convolve_s8_get_buffer_size"
-    ),
-}
-
-
-def _fp16(operator: str, buffer_size_fn: str, kernel_needs_layout: bool, buffer_size_needs_layout: bool) -> DirectEntry:
-    return DirectEntry(
-        operator, "FP16", "FP16", "float", buffer_size_fn, kernel_needs_layout, buffer_size_needs_layout
-    )
-
-
-# FP16 entries take their default entry's float call. The _nhwc_ entries have no layout
-# argument and size scratch with the layout-taking query at ARM_NN_LAYOUT_NHWC; the wrappers
-# keep their own query. The _acc16 entries keep float16 lane accumulation (heliaAOT fast mode).
-DIRECT_ENTRIES.update(
-    {
-        "arm_convolve_f16_acc16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", True, True),
-        "arm_convolve_nhwc_f16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
-        "arm_convolve_nhwc_f16_acc16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
-        "arm_convolve_wrapper_f16_acc16": _fp16("Convolve", "arm_convolve_wrapper_f16_get_buffer_size", False, False),
-        "arm_convolve_1x1_f16_acc16": _fp16("Convolve", "arm_convolve_1x1_f16_get_buffer_size", True, True),
-        "arm_convolve_1x1_nhwc_f16": _fp16("Convolve", "arm_convolve_1x1_f16_get_buffer_size", False, True),
-        "arm_convolve_1x1_nhwc_f16_acc16": _fp16("Convolve", "arm_convolve_1x1_f16_get_buffer_size", False, True),
-        "arm_convolve_1_x_n_f16_acc16": _fp16("Convolve", "arm_convolve_1_x_n_f16_get_buffer_size", True, True),
-        "arm_convolve_1_x_n_nhwc_f16": _fp16("Convolve", "arm_convolve_1_x_n_f16_get_buffer_size", False, True),
-        "arm_convolve_1_x_n_nhwc_f16_acc16": _fp16("Convolve", "arm_convolve_1_x_n_f16_get_buffer_size", False, True),
-        "arm_fully_connected_f16_acc16": _fp16("FullyConnected", "arm_fully_connected_f16_get_buffer_size", True, True),
-        "arm_fully_connected_nhwc_f16": _fp16("FullyConnected", "arm_fully_connected_f16_get_buffer_size", False, True),
-        "arm_fully_connected_nhwc_f16_acc16": _fp16(
-            "FullyConnected", "arm_fully_connected_f16_get_buffer_size", False, True
-        ),
-        "arm_depthwise_conv_f16_acc16": _fp16("DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", True, True),
-        "arm_depthwise_nhwc_conv_f16": _fp16("DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True),
-        "arm_depthwise_nhwc_conv_f16_acc16": _fp16(
-            "DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True
-        ),
-        "arm_depthwise_conv_wrapper_f16_acc16": _fp16(
-            "DepthwiseConv", "arm_depthwise_conv_wrapper_f16_get_buffer_size", False, False
-        ),
-    }
-)
-DEPTHWISE_CONV_S8_DIRECT_ENTRIES = tuple(
-    name for name, spec in DIRECT_ENTRIES.items() if spec.operator == "DepthwiseConv" and spec.activation_dtype == "S8"
-)
 DEPTHWISE_CONV_S8_PLANAR_RULE = "arm_depthwise_conv_s8_opt_planar_supported"
-
-_OPERATOR_LABELS = {"DepthwiseConv": "depthwise", "Convolve": "convolve", "FullyConnected": "fully connected"}
-
-
-def resolve_direct_entry(operator: str, entry: str, activation_dtype: str, weight_dtype: str) -> Dict[str, str]:
-    """Kernel-info overrides for an `operator` descriptor that calls the named entry."""
-    spec = DIRECT_ENTRIES.get(entry)
-    if spec is None or spec.operator != operator:
-        known = [name for name, candidate in DIRECT_ENTRIES.items() if candidate.operator == operator]
-        raise ValueError(f"Unknown {operator} entry {entry!r}; known entries are {known}")
-    if (str(activation_dtype).upper(), str(weight_dtype).upper()) != (spec.activation_dtype, spec.weight_dtype):
-        raise ValueError(
-            f"entry {entry!r} is an {spec.activation_dtype.lower()} {_OPERATOR_LABELS.get(operator, operator)} "
-            f"entry; the descriptor is {activation_dtype} x {weight_dtype}"
-        )
-    resolved = {
-        "kernel_fn": entry,
-        "kernel_get_buffer_size_fn": spec.buffer_size_fn,
-        "entry_family": spec.family,
-    }
-    if spec.family == "float":
-        resolved["kernel_needs_layout"] = spec.kernel_needs_layout
-        resolved["buffer_size_needs_layout"] = spec.buffer_size_needs_layout
-    return resolved
-
-
-def resolve_depthwise_conv_entry(entry: str, activation_dtype: str, weight_dtype: str) -> Dict[str, str]:
-    """Kernel-info overrides for a descriptor that calls a named depthwise entry."""
-    resolved = resolve_direct_entry("DepthwiseConv", entry, activation_dtype, weight_dtype)
-    return {key: resolved[key] for key in ("kernel_fn", "kernel_get_buffer_size_fn")}
-
 
 def resolve_convolve_kernel(activation_dtype: str, weight_dtype: str, cpu: str) -> Dict[str, str]:
     act = str(activation_dtype).upper()

@@ -871,9 +871,8 @@ class OpConvolve(OperationBase):
         if entry_scratch_bytes is not None:
             buffer_size_max = max(buffer_size_max, int(entry_scratch_bytes))
 
-        # A contract entry (entry: outside DIRECT_ENTRIES) gets the weight-sum pre-pass and the
-        # struct-typed bias exactly when its prototype takes them; the table's kernels keep
-        # the rules they always had.
+        # An entry gets the weight-sum pre-pass and the struct-typed bias exactly when its
+        # prototype takes them; the wrappers keep the rules they always had.
         contract_decl = None
         if kernel_info.get("entry_family") == "contract":
             from helia_core_tester.contract import render as contract_render
@@ -920,11 +919,8 @@ class OpConvolve(OperationBase):
             # silicon). No CLI flag exists yet for this -- set via env var so
             # benchmarking scripts can select it without deeper Config/CLI plumbing.
             'benchmark_target': os.environ.get("HELIA_BENCH_TARGET", "fvp"),
-            # Direct entries (entry:) of the convolve_s8 family take arm_convolve_s8's arguments,
-            # weight sums included, and size scratch from the input and filter dims alone.
             'entry_family': kernel_info.get("entry_family"),
             'conv_s8_weight_sum': kernel_info["kernel_fn"] == "arm_convolve_wrapper_s8"
-            or kernel_info.get("entry_family") == "convolve_s8"
             or (contract_decl is not None and takes(contract_decl, "weight_sum_ctx")),
             'bias_is_struct': bias_is_struct,
             'entry_scratch_bytes': entry_scratch_bytes,

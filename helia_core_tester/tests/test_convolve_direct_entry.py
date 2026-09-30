@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
-from helia_core_tester.generation.kernel_dispatch import DIRECT_ENTRIES, resolve_direct_entry
+from helia_core_tester.generation.entry import EntryError, resolve_entry
 from helia_core_tester.generation.test_ops import _required_kernel_symbols, generate_test
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_CONVOLVE_ENTRIES = [name for name, spec in DIRECT_ENTRIES.items() if spec.family == "convolve_s8"]
+_CONVOLVE_ENTRIES = ["arm_convolve_s8_small_cin", "arm_convolve_s8_3x3_c16_s1"]
 
 
 def _descriptor(name: str) -> dict:
@@ -25,31 +25,41 @@ def _source(name: str, tmp_path: Path, **overrides) -> str:
     return "".join(p.read_text() for p in case_dir.glob("*.c"))
 
 
-def test_convolve_entries_resolve_to_the_arm_convolve_s8_family() -> None:
-    assert _CONVOLVE_ENTRIES
+def _resolve(entry: str, act: str = "S8", **desc) -> dict:
+    return resolve_entry("Convolve", entry, activation_dtype=act, weight_dtype="S8", cpu="cortex-m55",
+                         desc={"name": "x", **desc})
+
+
+def test_convolve_s8_entries_resolve_from_the_contract_with_the_family_sizer() -> None:
     for entry in _CONVOLVE_ENTRIES:
-        assert resolve_direct_entry("Convolve", entry, "S8", "S8") == {
+        assert _resolve(entry, entry_sizer="arm_convolve_s8_get_buffer_size") == {
             "kernel_fn": entry,
             "kernel_get_buffer_size_fn": "arm_convolve_s8_get_buffer_size",
-            "entry_family": "convolve_s8",
+            "entry_family": "contract",
         }
 
 
-@pytest.mark.parametrize(
-    ("operator", "entry", "act", "message"),
-    [
-        ("Convolve", "arm_depthwise_conv_s8_opt_3x3", "S8", "Unknown Convolve entry"),
-        ("Convolve", "arm_convolve_s8_small_cin", "S16", "s8 convolve entry"),
-    ],
-)
-def test_entries_of_another_operator_or_dtype_are_rejected(operator, entry, act, message) -> None:
-    with pytest.raises(ValueError, match=message):
-        resolve_direct_entry(operator, entry, act, "S8")
+def test_an_entry_without_a_sizer_of_its_own_must_declare_one() -> None:
+    with pytest.raises(EntryError, match="declares no arm_convolve_s8_small_cin_get_buffer_size; set entry_sizer"):
+        _resolve("arm_convolve_s8_small_cin")
+
+
+def test_an_entry_of_another_precision_is_rejected() -> None:
+    with pytest.raises(EntryError, match="input_data"):
+        _resolve("arm_convolve_s8_small_cin", act="S16", entry_sizer="arm_convolve_s8_get_buffer_size")
+
+
+def test_an_entry_of_another_operator_fails_to_bind(tmp_path: Path) -> None:
+    from helia_core_tester.contract.bind import ContractBindError
+
+    with pytest.raises((ContractBindError, RuntimeError, ValueError), match="dw_conv_params|cannot supply"):
+        _source("convolve_entry_small_cin3_8x8_k3x3_co16_s8", tmp_path, entry="arm_depthwise_conv_s8_opt_3x3",
+                entry_sizer="arm_depthwise_conv_s8_opt_get_buffer_size")
 
 
 def test_entry_gates_the_case_on_the_checkout() -> None:
     assert _required_kernel_symbols(_descriptor("convolve_entry_small_cin3_8x8_k3x3_co16_s8")) == [
-        "arm_convolve_s8_small_cin"
+        "arm_convolve_s8_small_cin", "arm_convolve_s8_get_buffer_size"
     ]
 
 
