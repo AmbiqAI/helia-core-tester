@@ -632,10 +632,14 @@ def check_build_id(actual: str, expected: str | None) -> None:
     )
 
 
+class BootFailure(RuntimeError):
+    """nsx_system_init() failed on the target."""
+
+
 def check_boot_status(info: TargetInfo) -> None:
     """Refuse failed nsx_system_init(); old firmware passes."""
     if info.boot_status:
-        raise RuntimeError(f"Board init failed: nsx_system_init {info.boot_line}.")
+        raise BootFailure(f"Board init failed: nsx_system_init {info.boot_line}.")
 
 
 def boot_record(info: TargetInfo | None) -> dict:

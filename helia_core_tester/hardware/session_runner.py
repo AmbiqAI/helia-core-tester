@@ -29,7 +29,9 @@ from .measurement import CounterPass, check_pass_count, counter_passes_for_selec
 from .memory_report import generate_memory_report
 from .pmu_catalog import default_selection
 from .result_bundle import write_result_bundle
-from .session import CaseRunResult, HostSession, SessionResult, TargetLimits, check_case_id_length, check_case_ids_unique
+from .session import (
+    BootFailure, CaseRunResult, HostSession, SessionResult, TargetLimits, check_case_id_length, check_case_ids_unique,
+)
 from .transport import JLinkRttTransport, Transport, symbol_address_from_elf
 from .wire import TargetInfo, session_plan_size
 from ..core.config import VALID_SUITE_MODES
@@ -194,6 +196,8 @@ def run_case_bundles(
             limits = session.limits
             batch = take_batch(remaining, counter_passes, limits)
             result = session.run_many(batch, on_case_complete=on_case_complete)
+        except BootFailure:
+            raise  # board-wide, not batch-specific
         except (RuntimeError, ValueError) as exc:
             # ValueError: take_batch() found a case that cannot fit the target's advertised
             # plan size on its own. Re-wrap so the CLI's one-line hardware error covers it.

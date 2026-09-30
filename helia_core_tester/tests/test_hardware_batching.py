@@ -352,6 +352,18 @@ def test_consistency_check_covers_boot_health() -> None:
         session_runner.check_target_info_consistent(first, replace(first, core_clock_hz=96_000_000), batch_index=1)
 
 
+def test_boot_failure_skips_batch_context(tmp_path: Path, monkeypatch) -> None:
+    def _open(board, serial_no, *, build_dir, counter_passes):
+        return HostSession(FakeTargetTransport(boot_status=7, core_clock_hz=96_000_000)), _FakeTransport(), 0
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    with pytest.raises(RuntimeError, match=r"^Board init failed: nsx_system_init status 7, core 96 MHz\.$"):
+        session_runner.run_case_bundles(
+            tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
+            board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
+        )
+
+
 def test_run_case_bundles_refuses_to_merge_sessions_from_different_firmware(tmp_path: Path, monkeypatch) -> None:
     # A board reflashed mid-run (or a second host on the probe) announces a different
     # TARGET_INFO on a later batch; the runner must fail fast instead of merging results
