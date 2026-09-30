@@ -26,10 +26,20 @@ from helia_core_tester.hardware import measurement, session, session_runner
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, load_case_bundle
 from helia_core_tester.hardware.fake_target import FakeTargetTransport
-from helia_core_tester.hardware.measurement import MAX_COUNTERS_PER_PASS, CounterPass, counter_passes_for_selection
-from helia_core_tester.hardware.pmu_catalog import counter_by_name
+from helia_core_tester.hardware.hctp import HEADER_SIZE
+from helia_core_tester.hardware.measurement import (
+    MAX_COUNTERS_PER_PASS,
+    CounterPass,
+    OutboxOverflowError,
+    RawCounterValue,
+    RawSample,
+    check_outbox_fits,
+    counter_passes_for_selection,
+    sample_frame_bytes,
+)
+from helia_core_tester.hardware.pmu_catalog import CPU_CYCLES_EVENT_ID, counter_by_name
 from helia_core_tester.hardware.session import HostSession, SessionResult, TargetLimits
-from helia_core_tester.hardware.wire import CAP_PMU_ARMV8M, TargetInfo, session_plan_size
+from helia_core_tester.hardware.wire import CAP_PMU_ARMV8M, TargetInfo, encode_sample_result, session_plan_size
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PASSES = counter_passes_for_selection({"cpu": "default", "memory": "default", "mve": "default"})
@@ -66,6 +76,8 @@ def test_host_constants_match_the_firmware_header() -> None:
     assert session.MAX_CASE_ID_BYTES == 96 - 1
     assert re.search(r"#define HCT_SERVER_MAX_CASE_ID 96u", header)
     assert re.search(r"#define HCT_SERVER_RX_BUFFER_BYTES 2048u", header)
+    assert measurement.MAX_OUTBOX_BYTES == 32768
+    assert re.search(r"#define HCT_SERVER_MAX_OUTBOX_BYTES 32768u", header)
     # The fake target advertises the same limits by default.
     info = FakeTargetTransport()
     assert (info._max_cases_per_session, info._max_passes) == (measurement.MAX_CASES_PER_PLAN, measurement.MAX_PASSES_PER_PLAN)
@@ -82,6 +94,33 @@ def test_run_case_bundles_refuses_more_passes_than_the_firmware_runs_before_open
             tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
             board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=passes, build_dir=tmp_path,
         )
+
+
+def test_outbox_check_sizes_real_sample_frames_and_refuses_overflow() -> None:
+    # The sizing matches the encoder, cycles entry included.
+    passes = counter_passes_for_selection({"cpu": "all", "memory": "all", "mve": "all"})
+    for counter_pass in passes:
+        counters = [RawCounterValue("", CPU_CYCLES_EVENT_ID, 0)] + [RawCounterValue("", c.event_id, 0) for c in counter_pass.counters]
+        sample = RawSample(sample_index=0, iterations=1, cycles=1, counters=tuple(counters), pass_name=counter_pass.name)
+        assert sample_frame_bytes(counter_pass) == HEADER_SIZE + len(encode_sample_result(sample))
+    assert max(sample_frame_bytes(counter_pass) for counter_pass in passes) == 127
+
+    # The full catalog at the bridge's 5 samples fits with a 95-byte case id.
+    case_id = "c" * session.MAX_CASE_ID_BYTES
+    check_outbox_fits(passes, 5, case_id)
+    # Find the largest sample count that fits.
+    fits = max(n for n in range(1, 64) if _outbox_fits(passes, n, case_id))
+    assert fits >= 5
+    with pytest.raises(OutboxOverflowError, match=rf"Case '{case_id}' results need \d+ B \({fits + 1} samples x 18 passes\); outbox holds 32768 B"):
+        check_outbox_fits(passes, fits + 1, case_id)
+
+
+def _outbox_fits(passes, samples: int, case_id: str) -> bool:
+    try:
+        check_outbox_fits(passes, samples, case_id)
+    except OutboxOverflowError:
+        return False
+    return True
 
 
 class _FakeSession:

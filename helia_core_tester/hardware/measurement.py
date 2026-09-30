@@ -22,6 +22,7 @@ from .pmu_catalog import (  # noqa: F401 -- CounterDescriptor is re-exported for
     counter_name_for_event_id,
     counters_in_group,
 )
+from .hctp import HEADER_SIZE
 
 # Cortex-M55 has 8 PMU event counters, each 16 bits wide. Chaining an even/odd pair
 # (odd slot programmed with ARM_PMU_CHAIN) yields one 32-bit counter, so four chained
@@ -38,6 +39,8 @@ MAX_COUNTERS_PER_PASS = 4
 MAX_PASSES_PER_PLAN = 32
 # Firmware admits 1..HCT_SERVER_MAX_CASES cases per SESSION_PLAN (benchmark_server_session.h).
 MAX_CASES_PER_PLAN = 32
+# HCT_SERVER_MAX_OUTBOX_BYTES, benchmark_server_session.h.
+MAX_OUTBOX_BYTES = 32768
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,40 @@ def check_pass_count(passes: Iterable[CounterPass], *, limit: int = MAX_PASSES_P
         f"{limit} per SESSION_PLAN (HCT_SERVER_MAX_PASSES). Select fewer counters: each group "
         f"is measured in passes of up to {MAX_COUNTERS_PER_PASS} counters, so the pass count "
         "is the sum over groups of ceil(counters / 4)."
+    )
+
+
+class OutboxOverflowError(RuntimeError):
+    """One case's performance frames overflow the firmware outbox."""
+
+
+def sample_frame_bytes(counter_pass: CounterPass) -> int:
+    """SAMPLE_RESULT frame size for one pass (queue_sample_result)."""
+    # Name, event id, value, overflow, supported.
+    counter_bytes = 2 + 2 + 8 + 1 + 1
+    # CPU cycles always leads the counters.
+    counters = 1 + len(counter_pass.counters)
+    name = 2 + len(counter_pass.name.encode("utf-8"))
+    return HEADER_SIZE + 2 + 4 + 8 + name + 1 + counters * counter_bytes
+
+
+def check_outbox_fits(passes: Iterable[CounterPass], samples: int, case_id: str) -> None:
+    """Raise OutboxOverflowError when one case's frames overflow the outbox.
+
+    handle_run_performance() queues every SAMPLE_RESULT of a case, then CASE_COMPLETE
+    and REQUEST_CASE or SESSION_COMPLETE, before the host drains any of them; a full
+    outbox puts the firmware in its ERROR state mid-case.
+    """
+    materialized = list(passes)
+    sample_bytes = samples * sum(sample_frame_bytes(counter_pass) for counter_pass in materialized)
+    # CASE_COMPLETE, then a two-byte next frame.
+    tail_bytes = (HEADER_SIZE + 2 + len(case_id.encode("utf-8")) + 1 + 1 + 4) + (HEADER_SIZE + 2)
+    if sample_bytes + tail_bytes <= MAX_OUTBOX_BYTES:
+        return
+    raise OutboxOverflowError(
+        f"Case {case_id!r} results need {sample_bytes + tail_bytes} B "
+        f"({samples} samples x {len(materialized)} passes); outbox holds {MAX_OUTBOX_BYTES} B. "
+        "Select fewer counters."
     )
 
 

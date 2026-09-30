@@ -27,6 +27,7 @@ from .firmware_build import (
 from .measurement import (
     TooManyPassesError,
     UnsupportedCounterError,
+    check_outbox_fits,
     check_pass_count,
     counter_passes_for_selection,
     resolve_counter_selection,
@@ -280,6 +281,9 @@ def stream_generated_tests(
     # the first printed line instead of widening them as longer names show up mid-run.
     id_width = max(len(b.case_id) for b in bundles)
     counter_passes = counter_passes_for_selection(options.pmu_counters)
+    # Refuse results the outbox cannot hold.
+    for case_bundle in bundles:
+        check_outbox_fits(counter_passes, int(case_bundle.manifest["timing"]["samples"]), case_bundle.case_id)
     echo(
         f"[hardware] Streaming generated tests to {board.id} (serial {serial_no}, session {session_id}, "
         f"firmware build id {expected_build_id or 'unverified'}, "
