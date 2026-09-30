@@ -19,6 +19,186 @@ static bool hct_checked_dims_bytes(const cmsis_nn_dims *dims,
                                    uint32_t *output_bytes);
 static float quant_scale_from_bits(int32_t bits);
 #endif
+
+/* Only these calls count in a sample. */
+#define arm_add_s16(...) HCT_TIMED(arm_add_s16(__VA_ARGS__))
+#define arm_add_s8(...) HCT_TIMED(arm_add_s8(__VA_ARGS__))
+#define arm_argmax_s16(...) HCT_TIMED(arm_argmax_s16(__VA_ARGS__))
+#define arm_argmax_s8(...) HCT_TIMED(arm_argmax_s8(__VA_ARGS__))
+#define arm_argmin_s16(...) HCT_TIMED(arm_argmin_s16(__VA_ARGS__))
+#define arm_argmin_s8(...) HCT_TIMED(arm_argmin_s8(__VA_ARGS__))
+#define arm_avg_pool_f16(...) HCT_TIMED(arm_avg_pool_f16(__VA_ARGS__))
+#define arm_avg_pool_f32(...) HCT_TIMED(arm_avg_pool_f32(__VA_ARGS__))
+#define arm_avgpool_s16(...) HCT_TIMED(arm_avgpool_s16(__VA_ARGS__))
+#define arm_avgpool_s8(...) HCT_TIMED(arm_avgpool_s8(__VA_ARGS__))
+#define arm_batch_matmul_f16(...) HCT_TIMED(arm_batch_matmul_f16(__VA_ARGS__))
+#define arm_batch_matmul_f32(...) HCT_TIMED(arm_batch_matmul_f32(__VA_ARGS__))
+#define arm_batch_matmul_s16(...) HCT_TIMED(arm_batch_matmul_s16(__VA_ARGS__))
+#define arm_batch_matmul_s8(...) HCT_TIMED(arm_batch_matmul_s8(__VA_ARGS__))
+#define arm_batch_norm_f16(...) HCT_TIMED(arm_batch_norm_f16(__VA_ARGS__))
+#define arm_batch_norm_f32(...) HCT_TIMED(arm_batch_norm_f32(__VA_ARGS__))
+#define arm_batch_to_space_nd_s16(...) HCT_TIMED(arm_batch_to_space_nd_s16(__VA_ARGS__))
+#define arm_batch_to_space_nd_s8(...) HCT_TIMED(arm_batch_to_space_nd_s8(__VA_ARGS__))
+#define arm_broadcast_to_s16(...) HCT_TIMED(arm_broadcast_to_s16(__VA_ARGS__))
+#define arm_broadcast_to_s8(...) HCT_TIMED(arm_broadcast_to_s8(__VA_ARGS__))
+#define arm_clamp_s16(...) HCT_TIMED(arm_clamp_s16(__VA_ARGS__))
+#define arm_clamp_s8(...) HCT_TIMED(arm_clamp_s8(__VA_ARGS__))
+#define arm_concatenation_f16_w(...) HCT_TIMED(arm_concatenation_f16_w(__VA_ARGS__))
+#define arm_concatenation_f16_x(...) HCT_TIMED(arm_concatenation_f16_x(__VA_ARGS__))
+#define arm_concatenation_f16_y(...) HCT_TIMED(arm_concatenation_f16_y(__VA_ARGS__))
+#define arm_concatenation_f16_z(...) HCT_TIMED(arm_concatenation_f16_z(__VA_ARGS__))
+#define arm_concatenation_f32_w(...) HCT_TIMED(arm_concatenation_f32_w(__VA_ARGS__))
+#define arm_concatenation_f32_x(...) HCT_TIMED(arm_concatenation_f32_x(__VA_ARGS__))
+#define arm_concatenation_f32_y(...) HCT_TIMED(arm_concatenation_f32_y(__VA_ARGS__))
+#define arm_concatenation_f32_z(...) HCT_TIMED(arm_concatenation_f32_z(__VA_ARGS__))
+#define arm_concatenation_s16(...) HCT_TIMED(arm_concatenation_s16(__VA_ARGS__))
+#define arm_concatenation_s32(...) HCT_TIMED(arm_concatenation_s32(__VA_ARGS__))
+#define arm_concatenation_s8(...) HCT_TIMED(arm_concatenation_s8(__VA_ARGS__))
+#define arm_concatenation_s8_w(...) HCT_TIMED(arm_concatenation_s8_w(__VA_ARGS__))
+#define arm_concatenation_s8_x(...) HCT_TIMED(arm_concatenation_s8_x(__VA_ARGS__))
+#define arm_concatenation_s8_y(...) HCT_TIMED(arm_concatenation_s8_y(__VA_ARGS__))
+#define arm_concatenation_s8_z(...) HCT_TIMED(arm_concatenation_s8_z(__VA_ARGS__))
+#define arm_convolve_f16(...) HCT_TIMED(arm_convolve_f16(__VA_ARGS__))
+#define arm_convolve_f32(...) HCT_TIMED(arm_convolve_f32(__VA_ARGS__))
+#define arm_convolve_s8(...) HCT_TIMED(arm_convolve_s8(__VA_ARGS__))
+#define arm_convolve_wrapper_s16(...) HCT_TIMED(arm_convolve_wrapper_s16(__VA_ARGS__))
+#define arm_convolve_wrapper_s4(...) HCT_TIMED(arm_convolve_wrapper_s4(__VA_ARGS__))
+#define arm_depth_to_space_s16(...) HCT_TIMED(arm_depth_to_space_s16(__VA_ARGS__))
+#define arm_depth_to_space_s8(...) HCT_TIMED(arm_depth_to_space_s8(__VA_ARGS__))
+#define arm_depthwise_conv_f16(...) HCT_TIMED(arm_depthwise_conv_f16(__VA_ARGS__))
+#define arm_depthwise_conv_f32(...) HCT_TIMED(arm_depthwise_conv_f32(__VA_ARGS__))
+#define arm_depthwise_conv_s8(...) HCT_TIMED(arm_depthwise_conv_s8(__VA_ARGS__))
+#define arm_depthwise_conv_wrapper_s16(...) HCT_TIMED(arm_depthwise_conv_wrapper_s16(__VA_ARGS__))
+#define arm_depthwise_conv_wrapper_s4(...) HCT_TIMED(arm_depthwise_conv_wrapper_s4(__VA_ARGS__))
+#define arm_dequantize_s16_f32(...) HCT_TIMED(arm_dequantize_s16_f32(__VA_ARGS__))
+#define arm_dequantize_s8_f32(...) HCT_TIMED(arm_dequantize_s8_f32(__VA_ARGS__))
+#define arm_dynamic_update_slice_s16(...) HCT_TIMED(arm_dynamic_update_slice_s16(__VA_ARGS__))
+#define arm_dynamic_update_slice_s8(...) HCT_TIMED(arm_dynamic_update_slice_s8(__VA_ARGS__))
+#define arm_elementwise_add_f16(...) HCT_TIMED(arm_elementwise_add_f16(__VA_ARGS__))
+#define arm_elementwise_add_f32(...) HCT_TIMED(arm_elementwise_add_f32(__VA_ARGS__))
+#define arm_elementwise_mul_f16(...) HCT_TIMED(arm_elementwise_mul_f16(__VA_ARGS__))
+#define arm_elementwise_mul_f32(...) HCT_TIMED(arm_elementwise_mul_f32(__VA_ARGS__))
+#define arm_elementwise_sub_f16(...) HCT_TIMED(arm_elementwise_sub_f16(__VA_ARGS__))
+#define arm_elementwise_sub_f32(...) HCT_TIMED(arm_elementwise_sub_f32(__VA_ARGS__))
+#define arm_equal_s16(...) HCT_TIMED(arm_equal_s16(__VA_ARGS__))
+#define arm_equal_s8(...) HCT_TIMED(arm_equal_s8(__VA_ARGS__))
+#define arm_fully_connected_f16(...) HCT_TIMED(arm_fully_connected_f16(__VA_ARGS__))
+#define arm_fully_connected_f32(...) HCT_TIMED(arm_fully_connected_f32(__VA_ARGS__))
+#define arm_fully_connected_s4(...) HCT_TIMED(arm_fully_connected_s4(__VA_ARGS__))
+#define arm_fully_connected_wrapper_s16(...) HCT_TIMED(arm_fully_connected_wrapper_s16(__VA_ARGS__))
+#define arm_fully_connected_wrapper_s8(...) HCT_TIMED(arm_fully_connected_wrapper_s8(__VA_ARGS__))
+#define arm_gather_nd_s16(...) HCT_TIMED(arm_gather_nd_s16(__VA_ARGS__))
+#define arm_gather_nd_s8(...) HCT_TIMED(arm_gather_nd_s8(__VA_ARGS__))
+#define arm_gather_s16(...) HCT_TIMED(arm_gather_s16(__VA_ARGS__))
+#define arm_gather_s8(...) HCT_TIMED(arm_gather_s8(__VA_ARGS__))
+#define arm_greater_equal_s16(...) HCT_TIMED(arm_greater_equal_s16(__VA_ARGS__))
+#define arm_greater_equal_s8(...) HCT_TIMED(arm_greater_equal_s8(__VA_ARGS__))
+#define arm_greater_s16(...) HCT_TIMED(arm_greater_s16(__VA_ARGS__))
+#define arm_greater_s8(...) HCT_TIMED(arm_greater_s8(__VA_ARGS__))
+#define arm_hard_swish_compat_s8(...) HCT_TIMED(arm_hard_swish_compat_s8(__VA_ARGS__))
+#define arm_hard_swish_precise_s16(...) HCT_TIMED(arm_hard_swish_precise_s16(__VA_ARGS__))
+#define arm_hard_swish_precise_s8(...) HCT_TIMED(arm_hard_swish_precise_s8(__VA_ARGS__))
+#define arm_leaky_relu_s16(...) HCT_TIMED(arm_leaky_relu_s16(__VA_ARGS__))
+#define arm_leaky_relu_s8(...) HCT_TIMED(arm_leaky_relu_s8(__VA_ARGS__))
+#define arm_less_equal_s16(...) HCT_TIMED(arm_less_equal_s16(__VA_ARGS__))
+#define arm_less_equal_s8(...) HCT_TIMED(arm_less_equal_s8(__VA_ARGS__))
+#define arm_less_s16(...) HCT_TIMED(arm_less_s16(__VA_ARGS__))
+#define arm_less_s8(...) HCT_TIMED(arm_less_s8(__VA_ARGS__))
+#define arm_logistic_s16(...) HCT_TIMED(arm_logistic_s16(__VA_ARGS__))
+#define arm_max_pool_f16(...) HCT_TIMED(arm_max_pool_f16(__VA_ARGS__))
+#define arm_max_pool_f32(...) HCT_TIMED(arm_max_pool_f32(__VA_ARGS__))
+#define arm_max_pool_s16(...) HCT_TIMED(arm_max_pool_s16(__VA_ARGS__))
+#define arm_max_pool_s8(...) HCT_TIMED(arm_max_pool_s8(__VA_ARGS__))
+#define arm_maximum_f16(...) HCT_TIMED(arm_maximum_f16(__VA_ARGS__))
+#define arm_maximum_f32(...) HCT_TIMED(arm_maximum_f32(__VA_ARGS__))
+#define arm_maximum_s16(...) HCT_TIMED(arm_maximum_s16(__VA_ARGS__))
+#define arm_maximum_s8(...) HCT_TIMED(arm_maximum_s8(__VA_ARGS__))
+#define arm_mean_s16(...) HCT_TIMED(arm_mean_s16(__VA_ARGS__))
+#define arm_mean_s8(...) HCT_TIMED(arm_mean_s8(__VA_ARGS__))
+#define arm_minimum_f16(...) HCT_TIMED(arm_minimum_f16(__VA_ARGS__))
+#define arm_minimum_f32(...) HCT_TIMED(arm_minimum_f32(__VA_ARGS__))
+#define arm_minimum_s16(...) HCT_TIMED(arm_minimum_s16(__VA_ARGS__))
+#define arm_minimum_s8(...) HCT_TIMED(arm_minimum_s8(__VA_ARGS__))
+#define arm_mirror_pad_s16(...) HCT_TIMED(arm_mirror_pad_s16(__VA_ARGS__))
+#define arm_mirror_pad_s8(...) HCT_TIMED(arm_mirror_pad_s8(__VA_ARGS__))
+#define arm_mul_s16(...) HCT_TIMED(arm_mul_s16(__VA_ARGS__))
+#define arm_mul_s8(...) HCT_TIMED(arm_mul_s8(__VA_ARGS__))
+#define arm_nn_activation_f16(...) HCT_TIMED(arm_nn_activation_f16(__VA_ARGS__))
+#define arm_nn_activation_f32(...) HCT_TIMED(arm_nn_activation_f32(__VA_ARGS__))
+#define arm_not_equal_s16(...) HCT_TIMED(arm_not_equal_s16(__VA_ARGS__))
+#define arm_not_equal_s8(...) HCT_TIMED(arm_not_equal_s8(__VA_ARGS__))
+#define arm_pad_f16(...) HCT_TIMED(arm_pad_f16(__VA_ARGS__))
+#define arm_pad_f32(...) HCT_TIMED(arm_pad_f32(__VA_ARGS__))
+#define arm_pad_s16(...) HCT_TIMED(arm_pad_s16(__VA_ARGS__))
+#define arm_pad_s8(...) HCT_TIMED(arm_pad_s8(__VA_ARGS__))
+#define arm_prelu_f16(...) HCT_TIMED(arm_prelu_f16(__VA_ARGS__))
+#define arm_prelu_f32(...) HCT_TIMED(arm_prelu_f32(__VA_ARGS__))
+#define arm_prelu_s16(...) HCT_TIMED(arm_prelu_s16(__VA_ARGS__))
+#define arm_prelu_s8(...) HCT_TIMED(arm_prelu_s8(__VA_ARGS__))
+#define arm_prelu_scalar_s16(...) HCT_TIMED(arm_prelu_scalar_s16(__VA_ARGS__))
+#define arm_prelu_scalar_s8(...) HCT_TIMED(arm_prelu_scalar_s8(__VA_ARGS__))
+#define arm_quantize_f32_s16(...) HCT_TIMED(arm_quantize_f32_s16(__VA_ARGS__))
+#define arm_quantize_f32_s8(...) HCT_TIMED(arm_quantize_f32_s8(__VA_ARGS__))
+#define arm_reduce_max_s16(...) HCT_TIMED(arm_reduce_max_s16(__VA_ARGS__))
+#define arm_reduce_max_s8(...) HCT_TIMED(arm_reduce_max_s8(__VA_ARGS__))
+#define arm_reduce_min_s16(...) HCT_TIMED(arm_reduce_min_s16(__VA_ARGS__))
+#define arm_reduce_min_s8(...) HCT_TIMED(arm_reduce_min_s8(__VA_ARGS__))
+#define arm_reduce_sum_f16(...) HCT_TIMED(arm_reduce_sum_f16(__VA_ARGS__))
+#define arm_reduce_sum_f32(...) HCT_TIMED(arm_reduce_sum_f32(__VA_ARGS__))
+#define arm_relu_generic_s16(...) HCT_TIMED(arm_relu_generic_s16(__VA_ARGS__))
+#define arm_relu_generic_s8(...) HCT_TIMED(arm_relu_generic_s8(__VA_ARGS__))
+#define arm_relu_s16(...) HCT_TIMED(arm_relu_s16(__VA_ARGS__))
+#define arm_relu_s8(...) HCT_TIMED(arm_relu_s8(__VA_ARGS__))
+#define arm_requantize_s16_s16(...) HCT_TIMED(arm_requantize_s16_s16(__VA_ARGS__))
+#define arm_requantize_s8_s8(...) HCT_TIMED(arm_requantize_s8_s8(__VA_ARGS__))
+#define arm_reshape_f16(...) HCT_TIMED(arm_reshape_f16(__VA_ARGS__))
+#define arm_reshape_f32(...) HCT_TIMED(arm_reshape_f32(__VA_ARGS__))
+#define arm_reshape_s8(...) HCT_TIMED(arm_reshape_s8(__VA_ARGS__))
+#define arm_resize_nearest_neighbor_s16(...) HCT_TIMED(arm_resize_nearest_neighbor_s16(__VA_ARGS__))
+#define arm_resize_nearest_neighbor_s8(...) HCT_TIMED(arm_resize_nearest_neighbor_s8(__VA_ARGS__))
+#define arm_reverse_sequence_s16(...) HCT_TIMED(arm_reverse_sequence_s16(__VA_ARGS__))
+#define arm_reverse_sequence_s8(...) HCT_TIMED(arm_reverse_sequence_s8(__VA_ARGS__))
+#define arm_rsqrt_s16_per_op(...) HCT_TIMED(arm_rsqrt_s16_per_op(__VA_ARGS__))
+#define arm_rsqrt_s16_universal(...) HCT_TIMED(arm_rsqrt_s16_universal(__VA_ARGS__))
+#define arm_scatter_nd_s16(...) HCT_TIMED(arm_scatter_nd_s16(__VA_ARGS__))
+#define arm_scatter_nd_s8(...) HCT_TIMED(arm_scatter_nd_s8(__VA_ARGS__))
+#define arm_select_v2_s16(...) HCT_TIMED(arm_select_v2_s16(__VA_ARGS__))
+#define arm_select_v2_s8(...) HCT_TIMED(arm_select_v2_s8(__VA_ARGS__))
+#define arm_softmax_f16(...) HCT_TIMED(arm_softmax_f16(__VA_ARGS__))
+#define arm_softmax_f32(...) HCT_TIMED(arm_softmax_f32(__VA_ARGS__))
+#define arm_softmax_s16(...) HCT_TIMED(arm_softmax_s16(__VA_ARGS__))
+#define arm_softmax_s8(...) HCT_TIMED(arm_softmax_s8(__VA_ARGS__))
+#define arm_softmax_s8_s16(...) HCT_TIMED(arm_softmax_s8_s16(__VA_ARGS__))
+#define arm_space_to_batch_nd_s16(...) HCT_TIMED(arm_space_to_batch_nd_s16(__VA_ARGS__))
+#define arm_space_to_batch_nd_s8(...) HCT_TIMED(arm_space_to_batch_nd_s8(__VA_ARGS__))
+#define arm_space_to_depth_s16(...) HCT_TIMED(arm_space_to_depth_s16(__VA_ARGS__))
+#define arm_space_to_depth_s8(...) HCT_TIMED(arm_space_to_depth_s8(__VA_ARGS__))
+#define arm_split_f16(...) HCT_TIMED(arm_split_f16(__VA_ARGS__))
+#define arm_split_s16(...) HCT_TIMED(arm_split_s16(__VA_ARGS__))
+#define arm_split_s8(...) HCT_TIMED(arm_split_s8(__VA_ARGS__))
+#define arm_sqrt_s16(...) HCT_TIMED(arm_sqrt_s16(__VA_ARGS__))
+#define arm_sqrt_s8(...) HCT_TIMED(arm_sqrt_s8(__VA_ARGS__))
+#define arm_squared_difference_s16(...) HCT_TIMED(arm_squared_difference_s16(__VA_ARGS__))
+#define arm_squared_difference_s8(...) HCT_TIMED(arm_squared_difference_s8(__VA_ARGS__))
+#define arm_strided_slice_f16(...) HCT_TIMED(arm_strided_slice_f16(__VA_ARGS__))
+#define arm_strided_slice_f32(...) HCT_TIMED(arm_strided_slice_f32(__VA_ARGS__))
+#define arm_strided_slice_s16(...) HCT_TIMED(arm_strided_slice_s16(__VA_ARGS__))
+#define arm_strided_slice_s32(...) HCT_TIMED(arm_strided_slice_s32(__VA_ARGS__))
+#define arm_strided_slice_s8(...) HCT_TIMED(arm_strided_slice_s8(__VA_ARGS__))
+#define arm_sub_s16(...) HCT_TIMED(arm_sub_s16(__VA_ARGS__))
+#define arm_sub_s8(...) HCT_TIMED(arm_sub_s8(__VA_ARGS__))
+#define arm_tanh_s16(...) HCT_TIMED(arm_tanh_s16(__VA_ARGS__))
+#define arm_tile_s16(...) HCT_TIMED(arm_tile_s16(__VA_ARGS__))
+#define arm_tile_s8(...) HCT_TIMED(arm_tile_s8(__VA_ARGS__))
+#define arm_transpose_conv_f16(...) HCT_TIMED(arm_transpose_conv_f16(__VA_ARGS__))
+#define arm_transpose_conv_f32(...) HCT_TIMED(arm_transpose_conv_f32(__VA_ARGS__))
+#define arm_transpose_conv_wrapper_s8(...) HCT_TIMED(arm_transpose_conv_wrapper_s8(__VA_ARGS__))
+#define arm_transpose_f16(...) HCT_TIMED(arm_transpose_f16(__VA_ARGS__))
+#define arm_transpose_f32(...) HCT_TIMED(arm_transpose_f32(__VA_ARGS__))
+#define arm_transpose_s16(...) HCT_TIMED(arm_transpose_s16(__VA_ARGS__))
+#define arm_transpose_s8(...) HCT_TIMED(arm_transpose_s8(__VA_ARGS__))
+#define arm_where_s16(...) HCT_TIMED(arm_where_s16(__VA_ARGS__))
+#define arm_where_s8(...) HCT_TIMED(arm_where_s8(__VA_ARGS__))
 #ifndef HCT_HOST_ABS_ONLY
 
 static hctp_status_t compute_convolve_output_dims(const hct_server_session_t *session,
@@ -286,7 +466,6 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
          * (via arm_convolve_weight_sum()) placed in its own scratch region, distinct from
          * the general im2col-style `ctx` scratch above. */
         cmsis_nn_context weight_sum_ctx;
-        hct_convolve_s8_request_t request;
         int32_t required_scratch;
         uint32_t weight_sum_relative_offset;
         uint32_t weight_sum_bytes;
@@ -334,20 +513,19 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        request.ctx = &ctx;
-        request.weight_sum_ctx = &weight_sum_ctx;
-        request.conv_params = &conv_params;
-        request.quant_params = &quant_params;
-        request.input_dims = &input_dims;
-        request.input_data = (const int8_t *)blob_ptr(session, input);
-        request.filter_dims = &filter_dims;
-        request.filter_data = (const int8_t *)blob_ptr(session, weights);
-        request.bias_dims = &bias_dims;
-        request.bias_data = (const int32_t *)blob_ptr(session, bias);
-        request.upscale_dims = NULL;
-        request.output_dims = &output_dims;
-        request.output_data = (int8_t *)hct_output_ptr(session);
-        return hct_dispatch_convolve_s8(&request);
+        return arm_convolve_s8(&ctx,
+                               &weight_sum_ctx,
+                               &conv_params,
+                               &quant_params,
+                               &input_dims,
+                               (const int8_t *)blob_ptr(session, input),
+                               &filter_dims,
+                               (const int8_t *)blob_ptr(session, weights),
+                               &bias_dims,
+                               (const int32_t *)blob_ptr(session, bias),
+                               NULL,
+                               &output_dims,
+                               (int8_t *)hct_output_ptr(session));
     }
 }
 

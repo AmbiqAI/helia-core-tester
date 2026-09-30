@@ -44,14 +44,18 @@ uint32_t nsx_pmu_get_counters(nsx_pmu_config_t *cfg)
     return 0u;
 }
 
-/* Starting a sample "runs" it. */
-void ARM_PMU_Enable(void)
+void ARM_PMU_Enable(void) { s_ovs = STUB_OVS; }
+void ARM_PMU_Disable(void) {}
+
+/* Each timed kernel call "runs" STUB_CCNTR cycles. */
+void ARM_PMU_CNTR_Enable(uint32_t mask)
 {
-    s_ccntr = STUB_CCNTR;
-    s_ovs = STUB_OVS;
+    if ((mask & 0x80000000u) != 0u)
+    {
+        s_ccntr += STUB_CCNTR;
+    }
 }
 
-void ARM_PMU_Disable(void) {}
 void ARM_PMU_CNTR_Disable(uint32_t mask) { (void)mask; }
 void ARM_PMU_Set_CNTR_IRQ_Disable(uint32_t mask) { (void)mask; }
 uint32_t ARM_PMU_Get_CCNTR(void) { return s_ccntr; }

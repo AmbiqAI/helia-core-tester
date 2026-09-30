@@ -34,7 +34,10 @@ instead of only at hardware-run time.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+
+from helia_core_tester.generation.utils.temp_sizer_probe import _strip_comments
 
 GENERATED_BLOCK_BEGIN = (
     "/* >>> BEGIN GENERATED HARDWARE ADAPTERS -- see "
@@ -345,7 +348,6 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
          * (via arm_convolve_weight_sum()) placed in its own scratch region, distinct from
          * the general im2col-style `ctx` scratch above. */
         cmsis_nn_context weight_sum_ctx;
-        hct_convolve_s8_request_t request;
         int32_t required_scratch;
         uint32_t weight_sum_relative_offset;
         uint32_t weight_sum_bytes;
@@ -393,20 +395,19 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        request.ctx = &ctx;
-        request.weight_sum_ctx = &weight_sum_ctx;
-        request.conv_params = &conv_params;
-        request.quant_params = &quant_params;
-        request.input_dims = &input_dims;
-        request.input_data = (const int8_t *)blob_ptr(session, input);
-        request.filter_dims = &filter_dims;
-        request.filter_data = (const int8_t *)blob_ptr(session, weights);
-        request.bias_dims = &bias_dims;
-        request.bias_data = (const int32_t *)blob_ptr(session, bias);
-        request.upscale_dims = NULL;
-        request.output_dims = &output_dims;
-        request.output_data = (int8_t *)hct_output_ptr(session);
-        return hct_dispatch_convolve_s8(&request);
+        return arm_convolve_s8(&ctx,
+                               &weight_sum_ctx,
+                               &conv_params,
+                               &quant_params,
+                               &input_dims,
+                               (const int8_t *)blob_ptr(session, input),
+                               &filter_dims,
+                               (const int8_t *)blob_ptr(session, weights),
+                               &bias_dims,
+                               (const int32_t *)blob_ptr(session, bias),
+                               NULL,
+                               &output_dims,
+                               (int8_t *)hct_output_ptr(session));
     }
 }'''
 
@@ -5223,7 +5224,7 @@ def render_generated_adapters_source() -> str:
     `hct_run_kernel_once()` dispatch switch built from every adapter's `kernel_ids`.
     Written by `scripts/generate_hardware_adapters.py`.
     """
-    pieces: list[str] = [
+    header: list[str] = [
         GENERATED_BLOCK_BEGIN,
         "",
         '#include "benchmark_server_adapters.h"',
@@ -5246,6 +5247,7 @@ def render_generated_adapters_source() -> str:
         "static float quant_scale_from_bits(int32_t bits);",
         "#endif",
     ]
+    pieces: list[str] = []
     open_guard: str | None = None
     for adapter in FIRMWARE_ADAPTERS:
         if adapter.guard != open_guard:
@@ -5258,8 +5260,9 @@ def render_generated_adapters_source() -> str:
         pieces.append(adapter.c_body)
     if open_guard is not None:
         pieces.append("#endif")
-    pieces.extend(["", *_render_dispatch(), GENERATED_BLOCK_END])
-    return "\n".join(pieces) + "\n"
+    timed = [f"#define {name}(...) HCT_TIMED({name}(__VA_ARGS__))" for name in timed_kernel_calls("\n".join(pieces))]
+    header.extend(["", "/* Only these calls count in a sample. */", *timed])
+    return "\n".join([*header, *pieces, "", *_render_dispatch(), GENERATED_BLOCK_END]) + "\n"
 
 
 def _render_dispatch() -> list[str]:
@@ -5284,3 +5287,16 @@ def _render_dispatch() -> list[str]:
         "#endif",
     ])
     return lines
+
+
+# Setup calls TFLM runs once in Prepare.
+_SETUP_CALL = re.compile(r"_get_\w*size(?:_mve|_dsp)?$|^arm_convolve_weight_sum$|^arm_vector_sum_s8$")
+_KERNEL_CALL = re.compile(r"\b(arm_[a-z0-9_]+)\s*\(")
+
+
+def timed_kernel_calls(source: str) -> list[str]:
+    """Every CMSIS-NN kernel `source` calls, minus the setup calls (scratch sizing,
+    weight and vector sums). The generated file routes each through `HCT_TIMED()`, so
+    a timed sample counts the kernel call and not the adapter work around it."""
+    names = set(_KERNEL_CALL.findall(_strip_comments(source)))
+    return sorted(name for name in names if not _SETUP_CALL.search(name))

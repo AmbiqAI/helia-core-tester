@@ -13,21 +13,6 @@
 #include "benchmark_server_messages.h"
 #include "arm_nnfunctions.h"
 
-#ifdef HELIA_HARDWARE_BUILD
-#include "am_mcu_apollo.h"
-#endif
-
-/* The Armv8.1-M PMU (8 x 16-bit event counters + 32-bit CCNTR on Cortex-M55) is only
- * present when the device header says so; a Cortex-M4 hardware build or the host
- * harness compile take the DWT-only path below. */
-#if defined(__PMU_PRESENT) && (__PMU_PRESENT == 1)
-#include "nsx_pmu_map.h"
-#include "nsx_pmu_utils.h"
-#define HCT_PMU_AVAILABLE 1
-#else
-#define HCT_PMU_AVAILABLE 0
-#endif
-
 /* Wrap-proof: `offset + needed` can overflow size_t on the 32-bit target for a
  * hostile length (e.g. a BLOB_CHUNK declaring ~UINT32_MAX bytes), which would let the
  * check pass and hand that length to memcpy. Compare against the remaining bytes. */
@@ -406,6 +391,8 @@ static hctp_status_t pump_correctness_output(hct_server_session_t *session)
     return queue_frame(session, HCTP_MSG_OUTPUT_END, payload, offset);
 }
 
+hct_window_t hct_window;
+
 #ifdef HELIA_HARDWARE_BUILD
 static void enable_dwt(void)
 {
@@ -422,6 +409,26 @@ static uint32_t dwt_cycles(void)
 static void enable_dwt(void) {}
 static uint32_t dwt_cycles(void) { return 0u; }
 #endif
+
+/* Kernel calls reopen the paused counters. */
+static void window_arm(void)
+{
+#ifdef HELIA_HARDWARE_BUILD
+    const uint32_t ctrl = DWT->CTRL;
+    hct_window.dwt_on = ctrl | DWT_CTRL_CYCCNTENA_Msk;
+    hct_window.dwt_off = ctrl & ~DWT_CTRL_CYCCNTENA_Msk;
+    DWT->CTRL = hct_window.dwt_off;
+#endif
+    hct_window.armed = true;
+}
+
+static void window_disarm(void)
+{
+    hct_window.armed = false;
+#ifdef HELIA_HARDWARE_BUILD
+    DWT->CTRL = hct_window.dwt_on;
+#endif
+}
 
 /* One measured sample's PMU readings for a pass: the cycle counter plus one value per
  * requested event counter. `supported` is 0 on a DWT-only build, where only `ccntr`
@@ -470,19 +477,22 @@ static void pmu_pass_program(const hct_pmu_pass_t *pass)
     }
     /* SESSION_PLAN checks make this succeed. */
     (void)nsx_pmu_init(&s_pmu_cfg);
+    /* The module allocates slots from 0. */
+    hct_window.pmu_mask = HCT_PMU_CCNTR_BIT | ((1u << (pass->chained ? 2u * pass->count : pass->count)) - 1u);
     /* Its overflow IRQ handler clears OVS. */
     ARM_PMU_Set_CNTR_IRQ_Disable(0xFFFFFFFFu);
     ARM_PMU_Disable();
 }
 
-/* The enable store opens the window. */
+/* Counters stay parked until a kernel call. */
 static void pmu_sample_start(void)
 {
     nsx_pmu_reset_counters();
+    ARM_PMU_CNTR_Disable(hct_window.pmu_mask);
     ARM_PMU_Enable();
 }
 
-/* Inlined; one store closes the window. */
+/* Inlined; the last kernel call paused counting. */
 __attribute__((always_inline)) static inline void pmu_sample_stop(const hct_pmu_pass_t *pass, uint32_t dwt_elapsed, hct_pmu_sample_t *out)
 {
     uint32_t ovs;
@@ -723,9 +733,9 @@ arm_cmsis_nn_status hct_run_abs_once(hct_server_session_t *session)
     if (session->expected_kernel_id == HCT_KERNEL_ID_ABS_F32)
     {
 #ifndef HCT_HOST_ABS_ONLY
-        return arm_nn_abs_f32((const float *)blob_ptr(session, input),
-                              (float *)hct_output_ptr(session),
-                              session->block_size);
+        return HCT_TIMED(arm_nn_abs_f32((const float *)blob_ptr(session, input),
+                                        (float *)hct_output_ptr(session),
+                                        session->block_size));
 #else
         return ARM_CMSIS_NN_ARG_ERROR;
 #endif
@@ -733,9 +743,9 @@ arm_cmsis_nn_status hct_run_abs_once(hct_server_session_t *session)
     if (session->expected_kernel_id == HCT_KERNEL_ID_ABS_F16)
     {
 #ifndef HCT_HOST_ABS_ONLY
-        return arm_nn_abs_f16((const float16_t *)blob_ptr(session, input),
-                              (float16_t *)hct_output_ptr(session),
-                              session->block_size);
+        return HCT_TIMED(arm_nn_abs_f16((const float16_t *)blob_ptr(session, input),
+                                        (float16_t *)hct_output_ptr(session),
+                                        session->block_size));
 #else
         return ARM_CMSIS_NN_ARG_ERROR;
 #endif
@@ -745,32 +755,28 @@ arm_cmsis_nn_status hct_run_abs_once(hct_server_session_t *session)
 #ifdef HCT_HOST_ABS_ONLY
         return ARM_CMSIS_NN_ARG_ERROR;
 #else
-        return arm_abs_s16((const int16_t *)blob_ptr(session, input),
-                           session->input_offset,
-                           (int16_t *)hct_output_ptr(session),
-                           session->output_offset,
-                           session->out_mult,
-                           session->out_shift,
-                           session->needs_rescale != 0,
-                           session->activation_min,
-                           session->activation_max,
-                           (int32_t)(input->byte_length / sizeof(int16_t)));
+        return HCT_TIMED(arm_abs_s16((const int16_t *)blob_ptr(session, input),
+                                     session->input_offset,
+                                     (int16_t *)hct_output_ptr(session),
+                                     session->output_offset,
+                                     session->out_mult,
+                                     session->out_shift,
+                                     session->needs_rescale != 0,
+                                     session->activation_min,
+                                     session->activation_max,
+                                     (int32_t)(input->byte_length / sizeof(int16_t))));
 #endif
     }
-    {
-        hct_abs_s8_request_t request;
-        request.input = (const int8_t *)blob_ptr(session, input);
-        request.input_offset = session->input_offset;
-        request.output = (int8_t *)hct_output_ptr(session);
-        request.output_offset = session->output_offset;
-        request.output_multiplier = session->out_mult;
-        request.output_shift = session->out_shift;
-        request.activation_min = session->activation_min;
-        request.activation_max = session->activation_max;
-        request.block_size = (int32_t)input->byte_length;
-        request.needs_rescale = (uint8_t)(session->needs_rescale != 0);
-        return hct_dispatch_abs_s8(&request);
-    }
+    return HCT_TIMED(arm_abs_s8((const int8_t *)blob_ptr(session, input),
+                                session->input_offset,
+                                (int8_t *)hct_output_ptr(session),
+                                session->output_offset,
+                                session->out_mult,
+                                session->out_shift,
+                                session->needs_rescale != 0,
+                                session->activation_min,
+                                session->activation_max,
+                                (int32_t)input->byte_length));
 }
 
 #ifdef HCT_HOST_ABS_ONLY
@@ -1185,6 +1191,7 @@ __attribute__((noinline)) static bool time_one_sample(hct_server_session_t *sess
     uint32_t iter;
     uint32_t start;
     uint32_t end;
+    window_arm();
     pmu_sample_start();
     start = dwt_cycles();
     /* resolve_iterations never returns 0. */
@@ -1196,11 +1203,13 @@ __attribute__((noinline)) static bool time_one_sample(hct_server_session_t *sess
         if (kernel_status_is_fatal(session, status))
         {
             /* Next pass program parks the PMU. */
+            window_disarm();
             return false;
         }
     } while (++iter < iterations);
     end = dwt_cycles();
     pmu_sample_stop(pass, end - start, out);
+    window_disarm();
     *elapsed = end - start;
     return true;
 }

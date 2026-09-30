@@ -309,7 +309,8 @@ int main(void)
                 first_supported = p[pos + 2u + 2u + 8u + 1u];
                 if (first_event != 0x0011u || first_supported != 1u) return 32;
 #ifdef HCT_HOST_PMU_STUB
-                if (read_u32(&p[pos + 4u]) != STUB_CCNTR || p[pos + 12u] != 1u) return 38;
+                /* One window per iteration: 4 kernel calls. */
+                if (read_u32(&p[pos + 4u]) != 4u * STUB_CCNTR || p[pos + 12u] != 1u) return 38;
 #endif
                 expected_counters = (strncmp(pass_name, "cpu_0", name_len) == 0) ? 3 : 2;
                 if (counter_count != expected_counters) return 33;

@@ -45,6 +45,7 @@ void nsx_pmu_reset_config(nsx_pmu_config_t *cfg);
 /* The device header supplies these on target. */
 void ARM_PMU_Enable(void);
 void ARM_PMU_Disable(void);
+void ARM_PMU_CNTR_Enable(uint32_t mask);
 void ARM_PMU_CNTR_Disable(uint32_t mask);
 void ARM_PMU_Set_CNTR_IRQ_Disable(uint32_t mask);
 uint32_t ARM_PMU_Get_CCNTR(void);
