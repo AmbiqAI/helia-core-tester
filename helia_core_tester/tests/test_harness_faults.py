@@ -138,6 +138,20 @@ def test_convolve_fault_kind_without_an_edit_is_refused() -> None:
         convolve_fault(convolve_argument_pool(context, has_biases=True, bias_is_struct=False), "channel_mismatch", context)
 
 
+def test_depthwise_fault_kind_without_an_edit_is_refused() -> None:
+    context = depthwise_context("arm_depthwise_conv_wrapper_s8", "arm_depthwise_conv_wrapper_s8_get_buffer_size")
+    with pytest.raises(ValueError, match="no DepthwiseConv fault edit for 'zero_stride'"):
+        depthwise_fault(depthwise_argument_pool(context), "zero_stride", context)
+
+
+def test_null_ctx_buf_needs_a_kernel_that_takes_a_context() -> None:
+    bare = _decl("arm_fx_bare_s8", "input_data", "output_data")
+    contracts = ContractSet(status=STATUS_PRESENT, root=None, path=None, functions={bare.name: bare})
+    pool = with_fault(_pool(), common_fault(_pool(), "null_ctx_buf"))
+    with pytest.raises(HarnessError, match="fault 'null_ctx_buf' edits 'ctx', which arm_fx_bare_s8 does not take"):
+        plan_harness(pool, kernel_fn="arm_fx_bare_s8", sizer_fn=None, scratch_bytes=0, contracts=contracts, indent="    ")
+
+
 def test_depthwise_faults_render_as_status_only_cases() -> None:
     wrapper = ("arm_depthwise_conv_wrapper_s8", "arm_depthwise_conv_wrapper_s8_get_buffer_size")
     source = _depthwise("channel_mismatch", *wrapper, weight_sum=True)

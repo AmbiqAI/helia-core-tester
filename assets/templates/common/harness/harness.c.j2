@@ -89,7 +89,11 @@ static cmsis_nn_context {{ name }}_ctx;
     {% endif %}
 
     // Initialize context buffer
-    {% if force_no_scratch | default(false) or harness.no_scratch %}
+    {% if force_no_scratch | default(false) %}
+    // force_no_scratch: the kernel gets no scratch buffer ({{ name }}_buffer stays armed and unused).
+    {{ name }}_ctx.buf = NULL;
+    {{ name }}_ctx.size = 0;
+    {% elif harness.no_scratch %}
     // No scratch for the kernel ({{ name }}_buffer stays armed and unused).
     {{ name }}_ctx.buf = NULL;
     {{ name }}_ctx.size = 0;

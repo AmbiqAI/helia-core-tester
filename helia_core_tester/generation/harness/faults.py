@@ -28,7 +28,7 @@ def common_fault(pool: ArgumentPool, kind: str, *, layout: Optional[str] = None)
     if kind == "null_output":
         return FaultEdit(kind=kind, values={pool.output_param: "NULL"})
     if kind == "null_ctx_buf":
-        return FaultEdit(kind=kind, no_scratch=True)
+        return FaultEdit(kind=kind, no_scratch=True, requires=("ctx",))
     if kind == "invalid_layout":
         if not layout:
             raise HarnessError(f"{pool.name}: fault {kind!r} needs the case's layout")

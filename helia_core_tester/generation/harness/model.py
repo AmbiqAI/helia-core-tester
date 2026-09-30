@@ -76,8 +76,9 @@ class FaultEdit:
     """A fault case as an edit of the pool: `values` replace what the kernel call (only) is
     passed, `declarations` and `setup` build the replacements after the providers run, and
     `no_scratch` hands the kernel a NULL scratch buffer. `requires` names parameters the edit
-assumes the kernel takes (a provider whose context the setup touches). The sizer and rule checks still see
-    the unedited values, so the case differs from its passing sibling in the faulted argument."""
+    assumes the kernel takes (the context an edit clears, a provider whose context the setup
+    touches). The sizer and rule checks still see the unedited values, so the case differs from
+    its passing sibling in the faulted argument."""
 
     kind: str
     values: Mapping[str, str] = field(default_factory=dict)
