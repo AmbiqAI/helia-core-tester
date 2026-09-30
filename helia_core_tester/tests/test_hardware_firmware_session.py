@@ -72,6 +72,8 @@ def test_c_firmware_session_loop_executes_abs_correctness_flow(tmp_path: Path, p
     # an unmapped event id fails SESSION_PLAN, chained vs 16-bit setup, CCNTR/OVS read
     # before the module's read resets them, and each counter's overflow slot.
     assert "samples=6 passes=2" in result.stdout
+    # A refused case ends alone; the session continues.
+    assert "rejected status=-1 state=8" in result.stdout
 
 
 def test_shared_c_validation_rejects_range_and_shape_overflow(tmp_path: Path) -> None:

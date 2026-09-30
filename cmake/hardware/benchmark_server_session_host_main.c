@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "arm_nn_types.h"
 #include "benchmark_server_session.h"
 
 static void write_u8(uint8_t *buffer, size_t *offset, uint8_t value)
@@ -243,6 +244,28 @@ int main(void)
     }
 
     if (drain_single_message(&session, HCTP_MSG_CASE_READY, outbound_payload, &outbound_length) != 0) return 19;
+
+    /* A refused case ends alone, with its status. */
+    {
+        static hct_server_session_t probe;
+        static uint8_t probe_workspace[sizeof(workspace)];
+        const size_t id_length = strlen(session.current_case_id);
+        const uint8_t *status;
+        memcpy(&probe, &session, sizeof(probe));
+        memcpy(probe_workspace, workspace, sizeof(workspace));
+        probe.workspace = probe_workspace;
+        probe.output_capacity_bytes = 4u;
+        if (hct_server_session_accept_frame(&probe, inbound_frame, encode_frame(HCTP_MSG_RUN_CORRECTNESS, probe.session_id, next_host_sequence, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 50;
+        if (drain_single_message(&probe, HCTP_MSG_CASE_COMPLETE, outbound_payload, &outbound_length) != 0) return 51;
+        /* id, ran flags 0/0, workspace, status. */
+        if (outbound_length != 2u + id_length + 1u + 1u + 4u + 4u) return 52;
+        if (outbound_payload[2u + id_length] != 0u || outbound_payload[3u + id_length] != 0u) return 53;
+        status = &outbound_payload[outbound_length - 4u];
+        if ((int32_t)((uint32_t)status[0] | ((uint32_t)status[1] << 8) | ((uint32_t)status[2] << 16) | ((uint32_t)status[3] << 24)) != ARM_CMSIS_NN_ARG_ERROR) return 54;
+        if (drain_single_message(&probe, HCTP_MSG_SESSION_COMPLETE, outbound_payload, &outbound_length) != 0) return 55;
+        if (probe.state != HCT_SERVER_STATE_COMPLETE) return 56;
+        printf("rejected status=%d state=%d\n", (int)ARM_CMSIS_NN_ARG_ERROR, (int)probe.state);
+    }
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_RUN_CORRECTNESS, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 20;
 
     if (drain_single_message(&session, HCTP_MSG_CORRECTNESS_RESULT, outbound_payload, &outbound_length) != 0) return 21;

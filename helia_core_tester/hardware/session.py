@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -28,6 +28,7 @@ from .wire import (
     COMPARISON_MODE_CODES,
     BlobChunk,
     BlobDescriptor,
+    CaseComplete,
     CaseMeta,
     CatalogEntry,
     CorrectnessAck,
@@ -87,6 +88,18 @@ def check_case_ids_unique(case_ids: Sequence[str]) -> None:
 
 
 @dataclass(frozen=True)
+class CaseRejection:
+    """The kernel refused the case on the target."""
+
+    kernel_status: int
+    stage: str  # "correctness" or "performance"
+
+    @property
+    def reason(self) -> str:
+        return f"kernel returned {self.kernel_status} in {self.stage} run"
+
+
+@dataclass(frozen=True)
 class CaseRunResult:
     case_bundle: CaseBundle
     comparison: ComparisonResult
@@ -94,6 +107,7 @@ class CaseRunResult:
     samples: tuple[RawSample, ...]
     normalized_samples: tuple[NormalizedSample, ...]
     statistics: SampleStatistics
+    rejection: CaseRejection | None = None
 
 
 @dataclass(frozen=True)
@@ -480,19 +494,23 @@ class HostSession:
             elif message_type == MessageType.SAMPLE_RESULT:
                 samples.append(decode_sample_result(frame.payload))
             elif message_type == MessageType.CASE_COMPLETE:
-                if current_case_id is None or comparison_result is None:
+                complete = decode_case_complete(frame.payload)
+                # Only a correctness-stage rejection skips the comparison.
+                if current_case_id is None or (comparison_result is None and (complete.correctness_ran or complete.performance_ran)):
                     raise RuntimeError("CASE_COMPLETE arrived before correctness finished.")
-                decode_case_complete(frame.payload)
-                raw_samples = tuple(samples)
-                normalized_samples = tuple(normalize_samples(raw_samples))
-                case_result = CaseRunResult(
-                    case_bundle=case_map[current_case_id],
-                    comparison=comparison_result,
-                    output_bytes=bytes(actual_output_bytes),
-                    samples=raw_samples,
-                    normalized_samples=normalized_samples,
-                    statistics=compute_sample_statistics(normalized_samples),
-                )
+                if not complete.performance_ran:
+                    case_result = rejected_case(case_map[current_case_id], complete, comparison_result, bytes(actual_output_bytes))
+                else:
+                    raw_samples = tuple(samples)
+                    normalized_samples = tuple(normalize_samples(raw_samples))
+                    case_result = CaseRunResult(
+                        case_bundle=case_map[current_case_id],
+                        comparison=comparison_result,
+                        output_bytes=bytes(actual_output_bytes),
+                        samples=raw_samples,
+                        normalized_samples=normalized_samples,
+                        statistics=compute_sample_statistics(normalized_samples),
+                    )
                 results[current_case_id] = case_result
                 if on_case_complete is not None:
                     on_case_complete(case_result)
@@ -619,6 +637,28 @@ def read_target_info(transport: Transport) -> TargetInfo:
             if frame.header.message_type != MessageType.TARGET_INFO:
                 raise RuntimeError(f"Expected TARGET_INFO, got {frame.header.message_type.name}")
             return decode_target_info(frame.payload)
+
+
+def rejected_case(
+    bundle: CaseBundle,
+    complete: CaseComplete,
+    comparison: ComparisonResult | None,
+    output_bytes: bytes,
+) -> CaseRunResult:
+    """Failed result for a kernel-refused case."""
+    if comparison is None:
+        comparison = ComparisonResult(passed=False, mismatch_count=0, max_abs_diff=float("nan"), mode=str(bundle.comparison["mode"]))
+    rejection = CaseRejection(kernel_status=complete.kernel_status, stage="performance" if complete.correctness_ran else "correctness")
+    # Drop samples from a partial measurement.
+    return CaseRunResult(
+        case_bundle=bundle,
+        comparison=replace(comparison, passed=False),
+        output_bytes=output_bytes,
+        samples=(),
+        normalized_samples=(),
+        statistics=compute_sample_statistics(()),
+        rejection=rejection,
+    )
 
 
 def _compare_output_bytes(case_id: str, actual_output_bytes: bytes, bundle: CaseBundle) -> ComparisonResult:

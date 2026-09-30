@@ -139,12 +139,20 @@ firmware byte for byte.
 | 15 | `CORRECTNESS_ACK` | host -> target | `u8 passed` (informational) |
 | 16 | `RUN_PERFORMANCE` | host -> target | empty |
 | 17 | `SAMPLE_RESULT` | target -> host | one sample of one pass (below) |
-| 18 | `CASE_COMPLETE` | target -> host | `text case_id, u8, u8, u32 workspace_used_bytes` |
+| 18 | `CASE_COMPLETE` | target -> host | `text case_id, u8 correctness_ran, u8 performance_ran, u32 workspace_used_bytes`, then `i32 kernel_status` only when `performance_ran` is 0 |
 | 19 | `SESSION_COMPLETE` | target -> host | `u16 case_count` |
 | 20 | `ERROR` | target -> host | `text message` |
 
 All integers are little-endian; `text` is `u16 length + UTF-8 bytes`; `raw` is
 `u32 length + bytes`.
+
+A kernel error during the correctness run or sampling (an adapter refusing a
+shape, say) ends only that case: the target sends `CASE_COMPLETE` with
+`performance_ran = 0` and the kernel status, then requests the next case. The host
+records the case as failed and rejected in the result bundle (`cases.json`
+`rejection`, `session_summary.json` `rejected_cases`, junit) and the run exits
+non-zero. Frames the target cannot decode or accept still get `ERROR`, which
+ends the run without a bundle.
 
 `TARGET_INFO` (target -> host): `text build_id`, 32-byte catalog SHA-256,
 `u32 max_frame_payload`, `u32 runtime_arena_capacity`, `u8 transfer_mode`,
