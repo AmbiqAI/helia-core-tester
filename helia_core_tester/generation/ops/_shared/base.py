@@ -80,8 +80,9 @@ def _is_json_serializable(value: Any) -> bool:
 
 
 def _render_pool_snippets(env, pool, render_context):
-    """A pool's C snippets (test prologue, extra checks, validation) may use the validation
-    context (validation_report_limit, ...); render them against it before the harness does."""
+    """A pool's C snippets (test prologue, extra checks, validation, pre- and post-passes) may use
+    the validation context (validation_report_limit, ...): a snippet containing `{{` is rendered
+    against it before the harness does; any other snippet is printed verbatim."""
     from dataclasses import replace
 
     fields = {}

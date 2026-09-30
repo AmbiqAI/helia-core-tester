@@ -63,13 +63,18 @@ def test_plain_quantize_is_a_single_call() -> None:
     ("RELU", "arm_relu_q7", "q_activated_input[i] = (input[i] < 0.0f) ? 0.0f : input[i];"),
     ("RELU6", "arm_relu6_q7", "if (val > 6.0f) val = 6.0f;"),
     ("RELU6", None, "if (val > 6.0f) val = 6.0f;"),
+    ("RELU", "arm_relu_q15", "q_activated_input[i] = (input[i] < 0.0f) ? 0.0f : input[i];"),
 ])
 def test_quantize_activation_runs_before_the_call_on_a_guarded_copy(kind, probe, loop_line) -> None:
-    source = _quantize(q_context(has_activation=True, activation_type=kind, activation_kernel_fn=probe))
+    s16 = probe == "arm_relu_q15"
+    source = _quantize(q_context(has_activation=True, activation_type=kind, activation_kernel_fn=probe,
+                                 **({"kernel_fn": "arm_quantize_f32_s16", "output_dtype": "int16_t"} if s16 else {})))
+    if s16:
+        assert "int16_t body[5];" in source[source.index("q_activation_probe_guard") - 200:source.index("q_activation_probe_guard")]
     run = _run(source, "q")
     assert "float q_activated_input" in source or "q_activated_input_guard" in source
     assert loop_line in run
-    call = re.search(r"kernel_status = arm_quantize_f32_s8\((.*?)\);", run, flags=re.S).group(1)
+    call = re.search(r"kernel_status = arm_quantize_f32_s(8|16)\((.*?)\);", run, flags=re.S).group(2)
     assert _args(call)[0] == "q_activated_input"
     assert run.index("HELIA_GUARD_ARM(q_activated_input, false") < run.index("kernel_status = arm_quantize")
     assert 'HELIA_GUARD_CHECK(q_activated_input, "Quantize activated_input", failures);' in source
@@ -81,11 +86,14 @@ def test_quantize_activation_runs_before_the_call_on_a_guarded_copy(kind, probe,
         assert "activation_probe" not in source
 
 
-@pytest.mark.parametrize("kind, marker", [("RELU", "if (output[i] < 0.0f) output[i] = 0.0f;"),
-                                          ("RELU6", "if (output[i] > 6.0f) output[i] = 6.0f;")])
-def test_dequantize_activation_runs_after_a_successful_call(kind, marker) -> None:
-    run = _run(_dequantize(dq_context(has_activation=True, activation_type=kind)), "dq")
-    call = run.index("kernel_status = arm_dequantize_s8_f32(")
+@pytest.mark.parametrize("kind, marker, widen", [("RELU", "if (output[i] < 0.0f) output[i] = 0.0f;", False),
+                                                 ("RELU6", "if (output[i] > 6.0f) output[i] = 6.0f;", False),
+                                                 ("RELU6", "if (output[i] > 6.0f) output[i] = 6.0f;", True)])
+def test_dequantize_activation_runs_after_a_successful_call(kind, marker, widen) -> None:
+    overrides = ({"kernel_fn": "arm_dequantize_f16_f32", "kernel_style": "widen", "input_dtype": "float16_t",
+                  "output_dtype": "float32_t"} if widen else {})
+    run = _run(_dequantize(dq_context(has_activation=True, activation_type=kind, **overrides)), "dq")
+    call = run.index("kernel_status = arm_dequantize_f16_f32(" if widen else "kernel_status = arm_dequantize_s8_f32(")
     check = run.index("if (kernel_status != ARM_CMSIS_NN_SUCCESS) {\n        return kernel_status;")
     assert call < check < run.index(marker) < run.rindex("return kernel_status;")
 
@@ -106,9 +114,13 @@ def test_an_empty_block_is_refused(build, context) -> None:
         build(context)
 
 
-def test_an_unknown_activation_is_refused_by_name() -> None:
-    with pytest.raises(ValueError, match="fused activation 'TANH' is not one of"):
-        dequantize_argument_pool(dq_context(has_activation=True, activation_type="tanh"))
+@pytest.mark.parametrize("build, context, kind", [
+    (dequantize_argument_pool, dq_context(), "tanh"), (dequantize_argument_pool, dq_context(), "NONE"),
+    (quantize_argument_pool, q_context(), "tanh"), (quantize_argument_pool, q_context(), "NONE"),
+])
+def test_an_unknown_activation_is_refused_by_name(build, context, kind) -> None:
+    with pytest.raises(ValueError, match=f"fused activation '{kind.upper()}' is not one of"):
+        build({**context, "has_activation": True, "activation_type": kind})
 
 
 def test_passes_refuse_the_benchmark_form_and_void_kernels() -> None:
