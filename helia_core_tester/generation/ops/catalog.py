@@ -229,7 +229,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "concatenation",
         "OpConcatenation",
         descriptor_relpaths=("ConcatenationFunctions/concatenation.yaml", "ConcatenationFunctions/concatenation_float.yaml"),
-        template_relpath="ConcatenationFunctions/concatenation",
+        template_relpath=None,
     ),
     "Split": _spec(
         "Split",

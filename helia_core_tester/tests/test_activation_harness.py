@@ -242,6 +242,6 @@ def test_a_call_may_only_override_parameters_the_kernel_takes() -> None:
                                                         "name; spell overrides as the kernel's parameters ['input', 'output']")):
             plan_harness(_bare_pool(calls=({alias: "output + 1"},)), kernel_fn="arm_fx_s8", sizer_fn=None,
                          scratch_bytes=0, contracts=contracts)
-    with pytest.raises(HarnessError, match="arm_fx_void returns void"):
-        plan_harness(_bare_pool(calls=({"output": "output"},)), kernel_fn="arm_fx_void", sizer_fn=None, scratch_bytes=0,
-                     contracts=contracts)
+    void_plan = plan_harness(_bare_pool(calls=({"output": "output"}, {"output": "output + 1"})), kernel_fn="arm_fx_void",
+                             sizer_fn=None, scratch_bytes=0, contracts=contracts)
+    assert void_plan.void_return and len(void_plan.run_calls) == 2
