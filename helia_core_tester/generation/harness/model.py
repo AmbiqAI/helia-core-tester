@@ -61,6 +61,16 @@ class GuardedBuffer:
 
 
 @dataclass(frozen=True)
+class OutputSlot:
+    """One of several kernel outputs: `<name>_output` holds `count` elements (one element of
+    storage when zero), is compared with `<name>_expected_output`, and when empty must stay
+    untouched."""
+
+    name: str
+    count: int
+
+
+@dataclass(frozen=True)
 class RuleCheck:
     """A public predicate the case asserts before validating outputs (for example a planar
     rule): bound from the pool like the kernel, its answer must equal `expected`."""
@@ -151,6 +161,9 @@ class ArgumentPool:
     # of the _run locals that replaces the call-site value for that call; the run returns the first
     # failing status. Benchmarks and fault edits are not defined over a call list.
     calls: Optional[Sequence[Mapping[str, str]]] = None
+    # Several outputs the kernel reaches through a pointer array the pool declares: the harness
+    # then has no `output` local and guards, checks and validates each slot in turn.
+    outputs: Sequence[OutputSlot] = ()
 
     @property
     def harness_inputs(self) -> Sequence[HarnessInput]:
@@ -186,13 +199,13 @@ class ArgumentPool:
                 raise HarnessError(f"{self.name}: size query variable {query.result_var!r} is not a free C identifier")
             if query is not None:
                 names.add(query.result_var)
-        call_site = [i.param for i in self.harness_inputs] + [self.output_param]
+        call_site = [i.param for i in self.harness_inputs] + ([] if self.outputs else [self.output_param])
         for param in call_site:
             if param in self.values:
                 raise HarnessError(f"{self.name}: {param} is supplied per call site, not as a pool value")
         if len(set(call_site)) != len(call_site):
             raise HarnessError(f"{self.name}: call-site parameters {call_site} repeat")
-        locals_ = [i.local for i in self.harness_inputs] + ["output"]
+        locals_ = [i.local for i in self.harness_inputs] + ([] if self.outputs else ["output"])
         if len(set(locals_)) != len(locals_) or not all(_IDENT_RE.match(n) for n in locals_):
             raise HarnessError(f"{self.name}: _run argument names {locals_} must be distinct C identifiers")
         if self.no_scratch and self.context_setup.strip():
@@ -209,6 +222,20 @@ class ArgumentPool:
         for param, expr in self.values.items():
             if not isinstance(expr, str) or not expr.strip():
                 raise HarnessError(f"{self.name}: pool value {param!r} is empty")
+        if self.outputs:
+            if self.benchmark or self.fault is not None or self.calls is not None:
+                raise HarnessError(f"{self.name}: output slots have no benchmark, fault or call-list form")
+            for field in ("output_poison", "output_untouched", "output_capacity", "output_ctype", "validation"):
+                if getattr(self, field):
+                    raise HarnessError(f"{self.name}: {field} describes the single output, which output slots replace")
+            slots = [slot.name for slot in self.outputs]
+            if len(set(slots)) != len(slots) or not all(_IDENT_RE.match(n) for n in slots):
+                raise HarnessError(f"{self.name}: output slots {slots} must be distinct C identifiers")
+            for slot in slots:
+                if f"{slot}_output" in names:
+                    raise HarnessError(f"{self.name}: output slot {slot} collides with the declaration {slot}_output")
+            if any(slot.count < 0 for slot in self.outputs):
+                raise HarnessError(f"{self.name}: an output slot cannot hold a negative element count")
         if self.calls is not None:
             if not self.calls:
                 raise HarnessError(f"{self.name}: a call list needs at least one call")

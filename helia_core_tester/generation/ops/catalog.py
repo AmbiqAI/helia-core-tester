@@ -237,7 +237,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "split",
         "OpSplit",
         descriptor_relpaths=("ConcatenationFunctions/split.yaml", "ConcatenationFunctions/split_float.yaml"),
-        template_relpath="ConcatenationFunctions/split",
+        template_relpath=None,
     ),
     "Pack": _spec(
         "Pack",
@@ -253,7 +253,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "unpack",
         "OpUnpack",
         "ConcatenationFunctions/unpack_float.yaml",
-        "ConcatenationFunctions/unpack",
+        None,
     ),
     "Convolve": _spec(
         "Convolve",

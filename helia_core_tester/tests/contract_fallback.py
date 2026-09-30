@@ -30,7 +30,8 @@ BOUND_PREFIXES = ("arm_convolve_", "arm_depthwise_", "arm_fully_connected_", "ar
                   "arm_space_to_depth_", "arm_strided_slice_", "arm_pad_", "arm_transpose_", "arm_gather_",
                   "arm_resize_nearest_neighbor_", "arm_pack_", "arm_mirror_pad_", "arm_tile_",
                   "arm_reverse_sequence_", "arm_select_v2_", "arm_scatter_nd_", "arm_dynamic_update_slice_",
-                  "arm_where_", "arm_requantize_", "arm_batch_norm_", "arm_softmax_")
+                  "arm_where_", "arm_requantize_", "arm_batch_norm_", "arm_softmax_",
+                  "arm_split_", "arm_unpack_")
 
 
 def fallback_resolver(resolve: Callable[[], Optional[Path]]) -> Callable[[], Optional[Path]]:

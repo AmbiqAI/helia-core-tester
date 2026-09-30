@@ -52,6 +52,7 @@ class HarnessPlan:
     prototype_from: str = ""
     void_return: bool = False
     run_calls: Sequence[str] = ()
+    outputs: Sequence = ()
 
 
 def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str], scratch_bytes: Optional[int],
@@ -98,7 +99,9 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         raise HarnessError(f"{pool.name}: a call list needs a status to stop on, but {kernel.name} returns void")
 
     def call(bench: bool, overrides: Mapping[str, str] = {}) -> str:
-        site = {**values, pool.output_param: f"{pool.name}_output" if bench else "output"}
+        site = dict(values)
+        if not pool.outputs:
+            site[pool.output_param] = f"{pool.name}_output" if bench else "output"
         site.update({i.param: i.array if bench else i.local for i in inputs})
         if fault is not None:
             site.update(fault.values)
@@ -159,6 +162,7 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         prototype_from=pool.prototype_from or "",
         void_return=kernel.returns.strip() == "void",
         run_calls=[call(False, overrides) for overrides in pool.calls or ()],
+        outputs=tuple(pool.outputs),
     )
 
 
