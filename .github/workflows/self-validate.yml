@@ -40,9 +40,8 @@ concurrency:
 
 jobs:
   # The mutation catalog patches kernel source by literal text. Only a real
-  # checkout can show that a pattern or its replacement count has drifted, and
-  # this is the only workflow that has one, so the guarantee lives here rather
-  # than in the pure-Python pytest workflow.
+  # checkout can show that a pattern or its replacement count has drifted, so
+  # this job applies every catalogued mutant to one.
   mutation-catalog:
     runs-on: ubuntu-latest
 

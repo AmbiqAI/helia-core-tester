@@ -8,9 +8,10 @@ name: Pytest
 # remembered to run pytest locally before pushing.
 #
 # This is a separate, lighter workflow from self-validate.yml on purpose:
-# the pytest suite is pure Python (no ns-cmsis-nn checkout, no ARM
-# toolchain, no FVP), so it should report and fail fast on its own rather
-# than being bundled with the heavier generate+compile matrix.
+# the pytest suite needs no ARM toolchain and no FVP, so it should report
+# and fail fast on its own rather than being bundled with the heavier
+# generate+compile matrix. It does check out ns-cmsis-nn: the host C
+# harness tests compile against its headers and skip without it.
 
 on:
   pull_request:
@@ -22,6 +23,12 @@ on:
       - main
       - 'dev/**'
   workflow_dispatch:
+    inputs:
+      ns_cmsis_nn_ref:
+        description: ns-cmsis-nn ref (branch, tag, or SHA) to test against.
+        required: false
+        default: main
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,6 +45,13 @@ jobs:
       - name: Checkout helia-core-tester
         uses: actions/checkout@v4
 
+      - name: Checkout ns-cmsis-nn
+        uses: actions/checkout@v4
+        with:
+          repository: AmbiqAI/ns-cmsis-nn
+          ref: ${{ github.event.inputs.ns_cmsis_nn_ref || 'main' }}
+          path: ns-cmsis-nn-scratch
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -47,4 +61,6 @@ jobs:
         run: ./scripts/setup_ci.sh --skip-build-deps
 
       - name: Run pytest
-        run: uv run pytest helia_core_tester/tests -q
+        env:
+          CMSIS_NN_ROOT: ${{ github.workspace }}/ns-cmsis-nn-scratch
+        run: uv run pytest helia_core_tester/tests -q -rs
