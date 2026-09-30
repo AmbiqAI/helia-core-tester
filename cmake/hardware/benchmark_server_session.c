@@ -788,8 +788,15 @@ arm_cmsis_nn_status hct_run_abs_once(hct_server_session_t *session)
 /* The host harness compiles without benchmark_server_adapters.gen.c (there is no
  * CMSIS-NN library to link against), so only the hand-written abs adapter is
  * reachable; the real firmware's dispatch is the generated hct_run_kernel_once(). */
+/* Host tests: Nth call fails; 0 disables. */
+uint32_t hct_host_fail_call;
+
 arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
 {
+    if (hct_host_fail_call != 0u && --hct_host_fail_call == 0u)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
     switch (session->expected_kernel_id)
     {
         case HCT_KERNEL_ID_ABS_S8:

@@ -58,10 +58,13 @@ def test_rejected_case_fails_alone_and_the_session_continues(tmp_path: Path, sta
     for case in others:
         assert case.rejection is None and case.comparison.passed
         assert case.statistics.sample_count > 0 and case.statistics.median_cycles > 0
+    first_case = result.protocol_trace[: result.protocol_trace.index("RX:CASE_COMPLETE")]
     if stage == "correctness":
         # No output, ACK or sampling for the refused case.
-        first_case = result.protocol_trace[: result.protocol_trace.index("RX:CASE_COMPLETE")]
         assert "RX:OUTPUT_END" not in first_case and "TX:RUN_PERFORMANCE" not in first_case
+    else:
+        # Samples queued before the refusal are dropped.
+        assert first_case.count("RX:SAMPLE_RESULT") > 0
 
 
 def test_runner_writes_the_bundle_with_the_rejected_case(tmp_path: Path, monkeypatch) -> None:

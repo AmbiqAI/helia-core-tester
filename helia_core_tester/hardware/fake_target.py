@@ -435,10 +435,6 @@ class FakeTargetTransport:
             self._state = _TargetState.WAIT_RUN_PERFORMANCE
             return
         if frame.header.message_type == MessageType.RUN_PERFORMANCE:
-            status = self._rejected_status("performance")
-            if status is not None:
-                self._finish_case(correctness_ran=True, status=status)
-                return
             self._run_performance()
             return
         raise ValueError(f"Unsupported fake-target message: {frame.header.message_type}")
@@ -566,6 +562,10 @@ class FakeTargetTransport:
             counter_passes=passes,
         )
         self._last_iterations = iterations
+        status = self._rejected_status("performance")
+        if status is not None:
+            # Like firmware: queued samples precede the refusal.
+            samples = samples[: len(samples) // 2]
         for sample in samples:
             reported = RawSample(
                 sample_index=sample.sample_index,
@@ -575,7 +575,7 @@ class FakeTargetTransport:
                 pass_name=sample.pass_name,
             )
             self._queue(MessageType.SAMPLE_RESULT, encode_sample_result(reported))
-        self._finish_case(correctness_ran=True, status=None)
+        self._finish_case(correctness_ran=True, status=status)
 
     def _rejected_status(self, stage: str) -> int | None:
         """Kernel status when this stage refuses."""
