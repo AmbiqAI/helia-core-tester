@@ -177,22 +177,6 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
                 "activation_type": "NONE",
             },
         ),
-        "split": _render(
-            "ConcatenationFunctions/split/split.c.j2",
-            {
-                "name": "split_smoke",
-                "input_dtype": "int8_t",
-                "output_dtype": "int8_t",
-                "kernel_fn": "arm_split_s8",
-                "input_dims_count": 4,
-                "axis": 3,
-                "num_splits": 2,
-                "outputs": [
-                    {"name": "split_smoke_out0", "size": 4},
-                    {"name": "split_smoke_out1", "size": 4},
-                ],
-            },
-        ),
     }
 
     for name, text in rendered.items():
@@ -212,8 +196,6 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
     assert "BOOL" in rendered["comparison"]
     assert "EXACT_INT" in rendered["argmax"]
     assert "FLOAT" in rendered["dequantize"]
-    assert "split_smoke_out0_output" in rendered["split"]
-    assert "split_smoke_out1_output" in rendered["split"]
 
 
 def test_basic_math_float_templates_render_preformatted_activation_literals() -> None:

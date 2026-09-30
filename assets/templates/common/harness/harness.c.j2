@@ -61,8 +61,20 @@ static cmsis_nn_context {{ name }}_ctx;
 {% endfor %}
 {% endfor %}
 
+{% if harness.outputs %}
+{% for slot in harness.outputs %}
+#define {{ slot.name|upper }}_OUTPUT_SIZE ({{ slot.count }})
+{% if slot.count > 0 %}
+{{ helia_guard_declare(output_dtype, slot.name ~ "_output", slot.name|upper ~ "_OUTPUT_SIZE") }}
+{% else %}
+// zero-extent slice: storage only, nothing is compared
+{{ helia_guard_declare(output_dtype, slot.name ~ "_output", 1) }}
+{% endif %}
+{% endfor %}
+{% else %}
 #define {{ name|upper }}_OUTPUT_SIZE {{ harness_output_count }}
 {{ helia_guard_declare(output_dtype, name ~ "_output", pool.output_capacity or name|upper ~ "_OUTPUT_SIZE") }}
+{% endif %}
 {% for buffer in pool.guarded %}
 {% if buffer.count_value %}
 #define {{ buffer.count }} {{ buffer.count_value }}
@@ -153,9 +165,11 @@ static cmsis_nn_context {{ name }}_ctx;
 {% endmacro %}
 int32_t {{ name }}_run(
     {% for local, ctype, array in harness.inputs %}
-    const {{ ctype or input_dtype }}* __restrict {{ local }},
+    const {{ ctype or input_dtype }}* __restrict {{ local }}{{ "," if not (loop.last and harness.outputs) }}
     {% endfor %}
+    {% if not harness.outputs %}
     {{ output_dtype }}* __restrict output
+    {% endif %}
 ) {
     {{ harness_init() }}
     {% if harness.run_calls %}
@@ -227,7 +241,15 @@ int32_t {{ name }}_test_case_run(void)
     {% if pool.test_prologue %}
 {{ pool.test_prologue }}
     {% endif %}
-    {% if autovectorize_declines %}
+    {% if harness.outputs %}
+    {% for slot in harness.outputs %}
+    {% if slot.count > 0 %}
+    HELIA_GUARD_ARM({{ slot.name }}_output, false /* real output, not scratch: don't poison */);
+    {% else %}
+    HELIA_GUARD_ARM({{ slot.name }}_output, true /* zero-extent slice must not be written: poison */);
+    {% endif %}
+    {% endfor %}
+    {% elif autovectorize_declines %}
 #if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
     HELIA_GUARD_ARM({{ name }}_output, true /* the entry declines on this build: poison */);
 #else
@@ -240,7 +262,7 @@ int32_t {{ name }}_test_case_run(void)
     {% else %}
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
     {% endif %}
-    int32_t status = {{ name }}_run({% for local, ctype, array in harness.inputs %}{{ array }}, {% endfor %}{{ name }}_output);
+    int32_t status = {{ name }}_run({% for local, ctype, array in harness.inputs %}{{ array }}{{ ", " if not (loop.last and harness.outputs) }}{% endfor %}{% if not harness.outputs %}{{ name }}_output{% endif %});
     int failures = 0;
     {% for result_var, call, fn, expected in harness.checks %}
     int32_t {{ result_var }} = {{ call }};
@@ -258,14 +280,37 @@ int32_t {{ name }}_test_case_run(void)
     HELIA_GUARD_CHECK({{ buffer.name }}, "{{ label }} {{ buffer.label }}", failures);
     {% endfor %}
     {% endfor %}
+    {% for slot in harness.outputs %}
+    HELIA_GUARD_CHECK({{ slot.name }}_output, "{{ label }} {{ slot.name }} output", failures);
+    {% if slot.count == 0 %}
+    HELIA_GUARD_CHECK_UNTOUCHED({{ slot.name }}_output, "{{ label }} {{ slot.name }} output", failures);
+    {% endif %}
+    {% else %}
     HELIA_GUARD_CHECK({{ name }}_output, "{{ label }} output", failures);
     {% if pool.output_untouched %}
     HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ label }} output", failures);
     {% endif %}
+    {% endfor %}
     {% if pool.extra_checks %}
 {{ pool.extra_checks }}
     {% endif %}
-    {% if autovectorize_declines %}
+    {% if harness.outputs %}
+    HELIA_VALIDATE_STATUS("{{ label }}", status);
+
+    {% for slot in harness.outputs %}
+    HELIA_VALIDATE_OUTPUTS(
+        {{ validation_mode_token | default("TOLERANT_INT") }},
+        {{ slot.name }}_output,
+        {{ slot.name }}_expected_output,
+        {{ slot.name|upper }}_OUTPUT_SIZE,
+        {{ validation_tolerance | default(1) }},
+        {{ validation_atol }}f,
+        {{ validation_rtol }}f,
+        {{ validation_report_limit | default(20) }},
+        failures
+    );
+    {% endfor %}
+    {% elif autovectorize_declines %}
 #if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
     HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ label }} output", failures);
     HELIA_VALIDATE_EXPECTED_STATUS(

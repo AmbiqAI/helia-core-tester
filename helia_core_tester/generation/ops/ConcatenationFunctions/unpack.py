@@ -6,6 +6,7 @@ from typing import Dict
 import numpy as np
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops.ConcatenationFunctions.slices import unpack_argument_pool
 from helia_core_tester.generation.utils.litert_builder import build_unpack_op
 
 
@@ -94,12 +95,7 @@ class OpUnpack(OperationBase):
             "outputs": outputs,
             "validation_mode": "float",
         }
-        cmake_context = {"name": name, "operator": self.desc.get("operator", "Unpack"), "operator_name": "unpack"}
-        self._write_op_outputs(
-            output_dir,
-            "unpack",
-            "ConcatenationFunctions/unpack/unpack.h.j2",
-            "ConcatenationFunctions/unpack/unpack.c.j2",
-            context,
-            cmake_context,
+        self.render_harness_case(
+            output_dir, stem="unpack", context=context, pool=unpack_argument_pool(context),
+            validation_key="ConcatenationFunctions/unpack/unpack.c.j2", label="Unpack", operator="Unpack", sidecar=True,
         )
