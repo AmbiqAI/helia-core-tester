@@ -89,8 +89,6 @@ def render_pool(context: dict, pool: ArgumentPool, *, stem: str, validation_key:
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(str(find_tester_templates_dir())),
                              trim_blocks=True, lstrip_blocks=True)
     env.globals.update(contract_globals(lambda: contracts))
-    header = env.get_template(OperationBase.HARNESS_HEADER).render(
-        name=context["name"], header_declarations=[render_declaration(d) for d in pool.header])
     sizer = context.get("kernel_get_buffer_size_fn") if sizer_fn == "context" else sizer_fn
     plan = plan_harness(pool, kernel_fn=context["kernel_fn"], sizer_fn=sizer,
                         scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
@@ -98,8 +96,12 @@ def render_pool(context: dict, pool: ArgumentPool, *, stem: str, validation_key:
     render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context))
     from helia_core_tester.generation.ops._shared.base import _render_pool_snippets
 
-    render_context.update(harness=plan, pool=_render_pool_snippets(env, pool, render_context), header_name=f"{context['name']}_{stem}.h", harness_label=label,
-                          harness_output_count=pool.output_count, harness_benchmark=pool.benchmark)
+    rendered_pool = _render_pool_snippets(env, pool, render_context)
+    header = env.get_template(OperationBase.HARNESS_HEADER).render(
+        name=context["name"], header_declarations=[render_declaration(d) for d in pool.header],
+        header_text=rendered_pool.header_text)
+    render_context.update(harness=plan, pool=rendered_pool, header_name=f"{context['name']}_{stem}.h",
+                          harness_label=label, harness_output_count=pool.output_count, harness_benchmark=pool.benchmark)
     return header, env.get_template(OperationBase.HARNESS_SOURCE).render(**render_context)
 
 

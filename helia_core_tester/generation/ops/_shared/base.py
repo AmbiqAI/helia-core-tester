@@ -87,7 +87,8 @@ def _render_pool_snippets(env, pool, render_context):
     from dataclasses import replace
 
     fields = {}
-    for field in ("test_prologue", "extra_checks", "validation", "pre_call", "post_call", "test_body", "file_scope"):
+    for field in ("test_prologue", "extra_checks", "validation", "pre_call", "post_call", "test_body", "file_scope",
+                  "header_text"):
         text = getattr(pool, field)
         if text and "{{" in text:
             fields[field] = env.from_string(text).render(**render_context)
@@ -1150,17 +1151,19 @@ class OperationBase(ABC):
             if expected != "ARM_CMSIS_NN_SUCCESS":
                 raise HarnessError(f"{context['name']}: output slots validate every slice, so expected_status "
                                    f"{expected} is not supported")
+        render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)
+        rendered_pool = _render_pool_snippets(env, pool, render_context)
         includes_dir = output_dir / "includes"
         includes_dir.mkdir(parents=True, exist_ok=True)
         header = env.get_template(self.HARNESS_HEADER).render(
-            name=name, header_declarations=[render_declaration(d) for d in pool.header])
+            name=name, header_declarations=[render_declaration(d) for d in pool.header],
+            header_text=rendered_pool.header_text)
         (includes_dir / f"{name}_{stem}.h").write_text(header)
-        render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)
         if sidecar:
             payload = self._build_generation_sidecar(stem, render_context)
             (output_dir / f"{name}_{stem}.sidecar.json").write_text(
                 json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n")
-        render_context.update(harness=plan, pool=_render_pool_snippets(env, pool, render_context), header_name=f"{name}_{stem}.h", harness_label=label,
+        render_context.update(harness=plan, pool=rendered_pool, header_name=f"{name}_{stem}.h", harness_label=label,
                               harness_output_count=pool.output_count, harness_benchmark=pool.benchmark)
         source = env.get_template(self.HARNESS_SOURCE).render(**render_context)
         (output_dir / f"{name}_{stem}.c").write_text(source)

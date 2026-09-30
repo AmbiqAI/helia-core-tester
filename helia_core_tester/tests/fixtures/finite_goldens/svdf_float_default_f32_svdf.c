@@ -1,7 +1,56 @@
 #include "svdf_float_default_f32_svdf.h"
+#include "arm_nnfunctions.h"
 #include <stdio.h>
 #include <stdint.h>
 #include "test_runtime/helia_test_runtime.h"
+
+
+
+// The kernel this harness links must have the prototype the ns-cmsis-nn export records.
+_Static_assert(__builtin_types_compatible_p(__typeof__(arm_svdf_f32), arm_cmsis_nn_status (const cmsis_nn_context *, const cmsis_nn_context *, const cmsis_nn_context *, const cmsis_nn_svdf_params_f32 *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, float32_t *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, float32_t *)),
+               "arm_svdf_f32: prototype differs from the kernel contract export; rerun `python3 scripts/check_kernel_contract.py export` in ns-cmsis-nn and regenerate");
+
+
+
+
+
+int32_t svdf_float_default_f32_run(
+    const float* __restrict input,
+    float* __restrict output,
+    const cmsis_nn_context * ctx,
+    const cmsis_nn_context * input_ctx,
+    const cmsis_nn_context * output_ctx,
+    const cmsis_nn_svdf_params_f32 * svdf_params,
+    float * state_data
+) {
+        // Armed before the capacity check below: an early return there would otherwise leave
+    // these canaries unstamped, and the unconditional check in _test_case_run would
+    // report a fabricated breach instead of the real sizer error (#68).
+
+    // The sizer's answer is checked before it becomes a context size (#133): a negative
+    // answer is the documented out-of-range sentinel, and one above this case's static bound
+    // means the generation-time bound and the shipped kernel disagree.
+
+
+    return arm_svdf_f32(
+        ctx, /* ctx */
+        input_ctx, /* input_ctx */
+        output_ctx, /* output_ctx */
+        svdf_params, /* svdf_params */
+        &svdf_float_default_f32_input_dims, /* input_dims */
+        input, /* input_data */
+        &svdf_float_default_f32_state_dims, /* state_dims */
+        state_data, /* state_data */
+        &svdf_float_default_f32_weights_feature_dims, /* weights_feature_dims */
+        svdf_float_default_f32_weights_feature, /* weights_feature_data */
+        &svdf_float_default_f32_weights_time_dims, /* weights_time_dims */
+        svdf_float_default_f32_weights_time, /* weights_time_data */
+        &svdf_float_default_f32_bias_dims, /* bias_dims */
+        svdf_float_default_f32_bias, /* bias_data */
+        &svdf_float_default_f32_output_dims, /* output_dims */
+        output /* output_data */
+    );
+}
 
 
 static struct {
@@ -65,24 +114,8 @@ static int32_t run_svdf(void)
     for (int step = 0; step < 2; ++step)
     {
         const float *step_input = svdf_float_default_f32_input_sequence + (step * 4);
-        status = arm_svdf_f32(
-            &ctx,
-            &input_ctx,
-            &output_ctx,
-            &svdf_float_default_f32_svdf_params,
-            &svdf_float_default_f32_input_dims,
-            step_input,
-            &svdf_float_default_f32_state_dims,
-            svdf_float_default_f32_state,
-            &svdf_float_default_f32_weights_feature_dims,
-            svdf_float_default_f32_weights_feature,
-            &svdf_float_default_f32_weights_time_dims,
-            svdf_float_default_f32_weights_time,
-            &svdf_float_default_f32_bias_dims,
-svdf_float_default_f32_bias,
-            &svdf_float_default_f32_output_dims,
-            svdf_float_default_f32_output
-        );
+        status = svdf_float_default_f32_run(step_input, svdf_float_default_f32_output, &ctx, &input_ctx, &output_ctx, &svdf_float_default_f32_svdf_params,
+                                svdf_float_default_f32_state);
         if (status != ARM_CMSIS_NN_SUCCESS)
         {
             return status;
@@ -91,6 +124,7 @@ svdf_float_default_f32_bias,
 
     return ARM_CMSIS_NN_SUCCESS;
 }
+
 
 int32_t svdf_float_default_f32_test_case_run(void)
 {
@@ -119,6 +153,7 @@ int32_t svdf_float_default_f32_test_case_run(void)
         20,
         failures
     );
+
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 

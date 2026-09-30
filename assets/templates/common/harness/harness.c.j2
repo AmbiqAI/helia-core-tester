@@ -88,10 +88,6 @@ static cmsis_nn_context {{ name }}_ctx;
 {% for declaration in harness.fault_declarations %}
 {{ declaration }}
 {% endfor %}
-{% if pool.file_scope %}
-
-{{ pool.file_scope }}
-{% endif %}
 
 {#
   Shared by the correctness path ({{name}}_run) and the benchmark path ({{name}}_bench_init /
@@ -254,6 +250,10 @@ static int32_t {{ name }}_benchmark_run(void)
 #endif // HELIA_BENCHMARK_MODE
 {% endif %}
 
+{% if pool.file_scope %}
+{{ pool.file_scope }}
+
+{% endif %}
 {% if pool.test_body is not none %}
 int32_t {{ name }}_test_case_run(void)
 {

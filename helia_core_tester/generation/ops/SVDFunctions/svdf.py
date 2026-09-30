@@ -7,6 +7,46 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.harness import ArgumentPool, HarnessInput, fragment
+
+SVDF_VARIANTS = ("svdf", "svdf_fault", "svdf_f32", "svdf_f32_fault")
+
+
+def svdf_argument_pool(context: Dict[str, Any], variant: str) -> ArgumentPool:
+    """SVDF keeps its body as a fragment (scratch contexts sized by the kernel's own sizers, the
+    in-place state, the sizer probes); the kernel call goes through `_run`, which receives the
+    contexts, params and state the fragment built and binds the rest from the header."""
+    if variant not in SVDF_VARIANTS:
+        raise ValueError(f"{context['name']}: SVDF variant {variant!r} is not one of {SVDF_VARIANTS}")
+    n, float_kernel = context["name"], variant.startswith("svdf_f32")
+    path = f"SVDFunctions/svdf/{variant}.fragment.j2"
+    header = f"SVDFunctions/svdf/{'svdf_f32' if float_kernel else 'svdf'}.fragment.j2"
+    data = context["data_dtype"] if float_kernel else "int8_t"
+    state = context["data_dtype"] if float_kernel else context["state_dtype"]
+    params_type = context["svdf_params_type"] if float_kernel else "cmsis_nn_svdf_params"
+    takes_ctx = float_kernel or bool(context["has_ctx"])
+    run_params = [("ctx", "const cmsis_nn_context *")] if takes_ctx else []
+    run_params += [("input_ctx", "const cmsis_nn_context *"), ("output_ctx", "const cmsis_nn_context *"),
+                   ("svdf_params", f"const {params_type} *")]
+    if not float_kernel:
+        run_params += [("input_quant_params", "const cmsis_nn_per_tensor_quant_params *"),
+                       ("output_quant_params", "const cmsis_nn_per_tensor_quant_params *")]
+    run_params.append(("state_data", f"{state} *"))
+    values = {local: local for local, _ in run_params}
+    values.update({
+        "input_dims": f"&{n}_input_dims", "state_dims": f"&{n}_state_dims",
+        "weights_feature_dims": f"&{n}_weights_feature_dims", "weights_feature_data": f"{n}_weights_feature",
+        "weights_time_dims": f"&{n}_weights_time_dims", "weights_time_data": f"{n}_weights_time",
+        "bias_dims": f"&{n}_bias_dims", "bias_data": f"{n}_bias" if context["use_bias"] else "NULL",
+        "output_dims": f"&{n}_output_dims",
+    })
+    return ArgumentPool(
+        name=n, values=values, inputs=(HarnessInput("input_data", "input", f"{n}_input", data),),
+        output_ctype=data, run_params=tuple(run_params), owns_ctx=takes_ctx,
+        header_text=fragment(header, "header"), file_scope=fragment(path, "file_scope"),
+        test_body=fragment(path, "test_body"), includes=() if float_kernel else ("<string.h>",),
+        benchmark=False, scratch_buffer=False,
+    )
 
 
 class OpSVDF(OperationBase):
@@ -346,22 +386,14 @@ class OpSVDF(OperationBase):
             context.update(self._ctx_sizer_context(kernel_fn))
             context.update(nonfinite_context)
             fault = self.fault_kind()
-            c_template = "SVDFunctions/svdf/svdf_f32.c.j2"
+            variant = "svdf_f32"
             if fault:
                 self._check_fault_reachable(fault, kernel_fn, True)
                 context.update(self.fault_context())
-                c_template = "SVDFunctions/svdf/svdf_f32_fault.c.j2"
-            self._write_op_outputs(
-                output_dir,
-                "svdf",
-                "SVDFunctions/svdf/svdf_f32.h.j2",
-                c_template,
-                context,
-                {
-                    "name": name,
-                    "operator": self.desc.get("operator", "SVDF"),
-                    "operator_name": "svdf",
-                },
+                variant = "svdf_f32_fault"
+            self.render_harness_case(
+                output_dir, stem="svdf", context=context, pool=svdf_argument_pool(context, variant),
+                validation_key=f"SVDFunctions/svdf/{variant}.c.j2", label="SVDF", operator="SVDF", sidecar=True,
             )
             return
 
@@ -486,29 +518,13 @@ class OpSVDF(OperationBase):
         }
         context.update(self._ctx_sizer_context(kernel_fn))
         fault = self.fault_kind()
-        c_template = "SVDFunctions/svdf/svdf.c.j2"
+        variant = "svdf"
         if fault:
             self._check_fault_reachable(fault, kernel_fn, False)
             context.update(self.fault_context())
             context["needs_stdlib"] = False
-            c_template = "SVDFunctions/svdf/svdf_fault.c.j2"
-
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
-
-        h_content = self.render_template("SVDFunctions/svdf/svdf.h.j2", context)
-        h_path = includes_api_dir / f"{name}_svdf.h"
-        h_path.write_text(h_content)
-
-        c_content = self.render_template(c_template, context)
-        c_path = output_dir / f"{name}_svdf.c"
-        c_path.write_text(c_content)
-
-        cmake_context = {
-            "name": name,
-            "operator": self.desc.get("operator", "SVDF"),
-            "operator_name": "svdf",
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        cmake_path.write_text(cmake_content)
+            variant = "svdf_fault"
+        self.render_harness_case(
+            output_dir, stem="svdf", context=context, pool=svdf_argument_pool(context, variant),
+            validation_key=f"SVDFunctions/svdf/{variant}.c.j2", label="SVDF", operator="SVDF",
+        )
