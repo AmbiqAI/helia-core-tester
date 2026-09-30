@@ -6,12 +6,12 @@ order), DepthwiseConv's generated header already defines `filter_dims` in native
 `_build_depthwise_conv_case()` must NOT reorder them -- see the builder's docstring. These
 tests pin the extracted `cmsis_nn_dw_conv_params` scalars (including the DepthwiseConv-only
 `ch_mult` field) across a default case, a large-`ch_mult` case, and a dilated case. Shape-
-derived scalars are pinned; the quantization offsets depend on the generated data, so they are
-checked against the zero points of the case's own TFLite model.
+derived scalars are pinned; the quantization offsets depend on the generated data, so every
+bridged case's offsets are checked against the zero points of its own TFLite model.
 
-This test does not touch real hardware. Each test generates its case into `tmp_path` (seed
-500, the CLI default), so it needs no pre-generated corpus, bridges it, and asserts on the
-resulting CaseBundle manifest, including the larger output-buffer allowance and the S4-weight
+This test does not touch real hardware. Each test generates its case into `tmp_path` (the CLI
+default seed), so it needs no pre-generated corpus, bridges it, and asserts on the resulting
+CaseBundle manifest, including the larger output-buffer allowance and the S4-weight
 DepthwiseConv bridge's packed-weight handling.
 """
 
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from helia_core_tester.core.config import Config
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.test_ops import generate_test
 from helia_core_tester.hardware.generated_test_bridge import (
@@ -35,13 +36,18 @@ GENERATED_CPU_DIR = Path("artifacts", "generated_tests", "int", "cortex-m55")
 
 def _bridge(tmp_path: Path, name: str) -> dict[str, object]:
     desc = next(d for d in load_all_descriptors(str(PROJECT_ROOT / "assets" / "descriptors")) if d["name"] == name)
-    generate_test(desc, str(tmp_path / GENERATED_CPU_DIR), seed=500)
+    generate_test(desc, str(tmp_path / GENERATED_CPU_DIR), seed=Config.seed)
     cases = discover_generated_tests(tmp_path, family="ConvolutionFunctions", name_filter=name)
     assert [case.name for case in cases] == [name]
     bundle = build_case_bundle_from_generated_test(
         PROJECT_ROOT, cases[0], output_root=tmp_path / "bundle", require_fvp_pass=False
     )
-    return load_case_bundle(bundle.manifest_path).manifest
+    manifest = load_case_bundle(bundle.manifest_path).manifest
+    input_zero_point, output_zero_point = _model_zero_points(cases[0].directory)
+    scalars = manifest["serialized_scalar_parameters"]
+    assert scalars["input_offset"] == -input_zero_point
+    assert scalars["output_offset"] == output_zero_point
+    return manifest
 
 
 def _model_zero_points(case_dir: Path) -> tuple[int, int]:
@@ -65,11 +71,6 @@ def test_depthwise_conv_kernel_support_case_extracts_true_scalars_and_kernel_id(
     assert scalars["output_h"] == 4
     assert scalars["output_w"] == 4
     assert scalars["output_c"] == 2
-    input_zero_point, output_zero_point = _model_zero_points(
-        tmp_path / GENERATED_CPU_DIR / "ConvolutionFunctions" / "depthwise_conv_kernel_support_s8"
-    )
-    assert scalars["input_offset"] == -input_zero_point
-    assert scalars["output_offset"] == output_zero_point
     assert scalars["activation_min"] == -128
     assert scalars["activation_max"] == 127
     assert scalars["ch_mult"] == 1
