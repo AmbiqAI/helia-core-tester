@@ -153,6 +153,12 @@ def sample_frame_bytes(counter_pass: CounterPass) -> int:
     return HEADER_SIZE + 2 + 4 + 8 + name + 1 + counters * counter_bytes
 
 
+def case_tail_bytes(case_id: str) -> int:
+    """CASE_COMPLETE plus REQUEST_CASE or SESSION_COMPLETE."""
+    case_complete = HEADER_SIZE + 2 + len(case_id.encode("utf-8")) + 1 + 1 + 4
+    return case_complete + HEADER_SIZE + 2
+
+
 def check_outbox_fits(passes: Iterable[CounterPass], samples: int, case_id: str) -> None:
     """Raise OutboxOverflowError when one case's frames overflow the outbox.
 
@@ -160,14 +166,14 @@ def check_outbox_fits(passes: Iterable[CounterPass], samples: int, case_id: str)
     and REQUEST_CASE or SESSION_COMPLETE, before the host drains any of them; a full
     outbox puts the firmware in its ERROR state mid-case.
     """
-    materialized = list(passes)
+    # Firmware times an empty plan as cpu_0.
+    materialized = list(passes) or [CounterPass("cpu", 0, ())]
     sample_bytes = samples * sum(sample_frame_bytes(counter_pass) for counter_pass in materialized)
-    # CASE_COMPLETE, then a two-byte next frame.
-    tail_bytes = (HEADER_SIZE + 2 + len(case_id.encode("utf-8")) + 1 + 1 + 4) + (HEADER_SIZE + 2)
-    if sample_bytes + tail_bytes <= MAX_OUTBOX_BYTES:
+    total_bytes = sample_bytes + case_tail_bytes(case_id)
+    if total_bytes <= MAX_OUTBOX_BYTES:
         return
     raise OutboxOverflowError(
-        f"Case {case_id!r} results need {sample_bytes + tail_bytes} B "
+        f"Case {case_id!r} results need {total_bytes} B "
         f"({samples} samples x {len(materialized)} passes); outbox holds {MAX_OUTBOX_BYTES} B. "
         "Select fewer counters."
     )

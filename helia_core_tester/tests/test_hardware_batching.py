@@ -33,13 +33,23 @@ from helia_core_tester.hardware.measurement import (
     OutboxOverflowError,
     RawCounterValue,
     RawSample,
+    case_tail_bytes,
     check_outbox_fits,
     counter_passes_for_selection,
     sample_frame_bytes,
 )
 from helia_core_tester.hardware.pmu_catalog import CPU_CYCLES_EVENT_ID, counter_by_name
 from helia_core_tester.hardware.session import HostSession, SessionResult, TargetLimits
-from helia_core_tester.hardware.wire import CAP_PMU_ARMV8M, TargetInfo, encode_sample_result, session_plan_size
+from helia_core_tester.hardware.wire import (
+    CAP_PMU_ARMV8M,
+    CaseComplete,
+    RequestCase,
+    TargetInfo,
+    encode_case_complete,
+    encode_request_case,
+    encode_sample_result,
+    session_plan_size,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PASSES = counter_passes_for_selection({"cpu": "default", "memory": "default", "mve": "default"})
@@ -105,22 +115,19 @@ def test_outbox_check_sizes_real_sample_frames_and_refuses_overflow() -> None:
         assert sample_frame_bytes(counter_pass) == HEADER_SIZE + len(encode_sample_result(sample))
     assert max(sample_frame_bytes(counter_pass) for counter_pass in passes) == 127
 
-    # The full catalog at the bridge's 5 samples fits with a 95-byte case id.
+    # The tail matches the encoders too.
     case_id = "c" * session.MAX_CASE_ID_BYTES
-    check_outbox_fits(passes, 5, case_id)
-    # Find the largest sample count that fits.
-    fits = max(n for n in range(1, 64) if _outbox_fits(passes, n, case_id))
-    assert fits >= 5
-    with pytest.raises(OutboxOverflowError, match=rf"Case '{case_id}' results need \d+ B \({fits + 1} samples x 18 passes\); outbox holds 32768 B"):
-        check_outbox_fits(passes, fits + 1, case_id)
+    complete = encode_case_complete(CaseComplete(case_id=case_id, workspace_used_bytes=0))
+    assert case_tail_bytes(case_id) == 2 * HEADER_SIZE + len(complete) + len(encode_request_case(RequestCase(0)))
 
-
-def _outbox_fits(passes, samples: int, case_id: str) -> bool:
-    try:
-        check_outbox_fits(passes, samples, case_id)
-    except OutboxOverflowError:
-        return False
-    return True
+    # Full catalog: 14 samples fit, 15 overflow.
+    check_outbox_fits(passes, 14, case_id)
+    with pytest.raises(OutboxOverflowError, match=rf"Case '{case_id}' results need \d+ B \(15 samples x 18 passes\); outbox holds 32768 B"):
+        check_outbox_fits(passes, 15, case_id)
+    # An empty plan still costs one cpu_0 frame.
+    check_outbox_fits((), 480, "")
+    with pytest.raises(OutboxOverflowError, match=r"481 samples x 1 passes"):
+        check_outbox_fits((), 481, "")
 
 
 class _FakeSession:
