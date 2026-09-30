@@ -34,6 +34,7 @@ from .wire import (
     PlannedCase,
     SessionPlan,
     TargetInfo,
+    boot_line,
     decode_case_complete,
     decode_correctness_result,
     decode_error,
@@ -639,15 +640,7 @@ class BootFailure(RuntimeError):
 def check_boot_status(info: TargetInfo) -> None:
     """Refuse failed nsx_system_init(); old firmware passes."""
     if info.boot_status:
-        raise BootFailure(f"Board init failed: nsx_system_init {info.boot_line}.")
-
-
-def boot_record(info: TargetInfo | None) -> dict:
-    """Boot health for bundle and summary JSON."""
-    return {
-        "status": info.boot_status if info else None,
-        "core_clock_hz": info.core_clock_hz if info else None,
-    }
+        raise BootFailure(f"Board init failed: nsx_system_init {boot_line(info)}.")
 
 
 def read_target_info(transport: Transport) -> TargetInfo:

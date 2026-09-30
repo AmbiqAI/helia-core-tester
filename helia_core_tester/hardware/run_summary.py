@@ -11,6 +11,8 @@ from typing import Any, Callable, Iterator, Optional
 
 import typer
 
+from .wire import boot_line, boot_record
+
 
 @contextlib.contextmanager
 def stdout_to_stderr() -> Iterator[None]:
@@ -166,8 +168,7 @@ def print_skipped_summary(skipped: list[tuple], *, err: bool = False) -> None:
 
 def print_run_report(result, skipped: list[tuple], bundle: Path, *, err: bool = False) -> list[str]:
     """The human report for `hardware run`/`hardware stream`. Returns the failed case ids."""
-    info = result.target_info
-    typer.echo(f"\nTarget boot: {info.boot_line if info else 'not reported'}", err=err)
+    typer.echo(f"\nTarget boot: {boot_line(result.target_info)}", err=err)
     typer.echo("\nFinal per-case results:", err=err)
     passed_count, failed_case_ids = print_case_results(result.cases, err=err)
     if skipped:
@@ -205,8 +206,6 @@ def build_json_summary(
                 "skipped_reason": _clean_skip_reason(test.name, reason),
             }
         )
-    from .session import boot_record
-
     ran = len(result.cases)
     return {
         "session_id": session_id,

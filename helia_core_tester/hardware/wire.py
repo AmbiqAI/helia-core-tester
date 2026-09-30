@@ -87,13 +87,21 @@ class TargetInfo:
     def has_pmu(self) -> bool:
         return bool(self.capability_flags & CAP_PMU_ARMV8M)
 
-    @property
-    def boot_line(self) -> str:
-        """Boot health as one short phrase."""
-        if self.boot_status is None:
-            return "not reported"
-        clock = f"{self.core_clock_hz / 1e6:g} MHz" if self.core_clock_hz else "clock unknown"
-        return f"status {self.boot_status}, core {clock}"
+
+def boot_line(info: TargetInfo | None) -> str:
+    """Boot health as one short phrase."""
+    if info is None or info.boot_status is None:
+        return "not reported"
+    clock = f"{info.core_clock_hz / 1e6:g} MHz" if info.core_clock_hz else "clock unknown"
+    return f"status {info.boot_status}, core {clock}"
+
+
+def boot_record(info: TargetInfo | None) -> dict:
+    """Boot health for bundle and summary JSON."""
+    return {
+        "status": info.boot_status if info else None,
+        "core_clock_hz": info.core_clock_hz if info else None,
+    }
 
 
 def encode_target_info(info: TargetInfo) -> bytes:

@@ -10,7 +10,8 @@ from typing import Any
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
 from .measurement import compute_counter_medians, counter_names_for_passes
-from .session import SessionResult, boot_record
+from .session import SessionResult
+from .wire import boot_record
 from .pathutil import write_text_lf
 
 CASE_SUMMARY_BASE_FIELDS = [

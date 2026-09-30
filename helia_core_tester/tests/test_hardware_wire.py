@@ -66,12 +66,12 @@ def test_target_info_boot_tail() -> None:
     assert payload[: len(old)] == old
     assert payload[len(old):] == struct.pack("<iI", 7, 96_000_000)
     assert wire.decode_target_info(payload) == info
-    assert info.boot_line == "status 7, core 96 MHz"
-    assert _target_info(boot_status=0, core_clock_hz=0).boot_line == "status 0, core clock unknown"
+    assert wire.boot_line(info) == "status 7, core 96 MHz"
+    assert wire.boot_line(_target_info(boot_status=0, core_clock_hz=0)) == "status 0, core clock unknown"
     # Old firmware: no tail, fields None.
     legacy = wire.decode_target_info(old)
     assert legacy.boot_status is None and legacy.core_clock_hz is None
-    assert legacy.boot_line == "not reported"
+    assert wire.boot_line(legacy) == wire.boot_line(None) == "not reported"
     with pytest.raises(ValueError, match="Unexpected end of payload"):
         wire.decode_target_info(payload[:-1])
 
