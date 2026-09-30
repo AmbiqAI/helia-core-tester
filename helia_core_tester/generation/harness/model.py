@@ -184,8 +184,11 @@ class ArgumentPool:
     # `run_params` are extra scalar `_run` parameters, (local, ctype), a value may name.
     test_body: Optional[str] = None
     run_params: Sequence[tuple[str, str]] = ()
-    # Raw file-scope C (helpers the test body calls), emitted after the declarations.
+    # Raw file-scope C (helpers the test body calls), emitted after `_run` so a helper may call
+    # it, and raw header text emitted after the header declarations. Either may be a Jinja
+    # fragment (`fragment(...)`) rendered against the case's context.
     file_scope: str = ""
+    header_text: str = ""
 
     @property
     def harness_inputs(self) -> Sequence[HarnessInput]:
@@ -317,6 +320,14 @@ def _render_init(value: Initializer, depth: int = 0) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def fragment(path: str, macro: str) -> str:
+    """The text of a pool field taken from a macro of a Jinja fragment under assets/templates:
+    the bespoke part of a recurrent or property case, rendered against the case's context."""
+    if not re.fullmatch(r"[\w./-]+\.j2", path) or not _IDENT_RE.match(macro):
+        raise HarnessError(f"fragment {path!r}:{macro!r} is not a template path and a macro name")
+    return f'{{% from "{path}" import {macro} with context %}}{{{{ {macro}() }}}}'
 
 
 def render_declaration(decl: Union[Declaration, Define]) -> str:

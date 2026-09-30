@@ -633,7 +633,7 @@ def test_lstm_and_svdf_keep_specialized_shared_validation_contracts() -> None:
         / "lstm_unidirectional"
         / "lstm_unidirectional.c.j2"
     ).read_text()
-    svdf = (_templates_root() / "SVDFunctions" / "svdf" / "svdf.c.j2").read_text()
+    svdf = (_templates_root() / "SVDFunctions" / "svdf" / "svdf.fragment.j2").read_text()
 
     assert '{{ validation_report_limit | default(8) }}' in lstm
     assert "HELIA_VALIDATE_OUTPUTS(" in lstm
