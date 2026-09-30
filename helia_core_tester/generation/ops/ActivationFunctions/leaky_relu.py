@@ -10,6 +10,14 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness.simple import tensor_case_pool
 
 
+def leaky_relu_values(context: Dict[str, Any]) -> Dict[str, Any]:
+    """The kernel's scalars by parameter name: the alpha and identity requantisation pairs."""
+    return {"input_offset": context["input_offset"], "output_offset": context["output_offset"],
+            "output_multiplier_alpha": context["output_mult_alpha"], "output_shift_alpha": context["output_shift_alpha"],
+            "output_multiplier_identity": context["output_mult_identity"],
+            "output_shift_identity": context["output_shift_identity"], "output_size": context["output_size"]}
+
+
 class OpLeakyRelu(OperationBase):
     """
     LeakyRelu operation.
@@ -181,7 +189,7 @@ class OpLeakyRelu(OperationBase):
         
         self.render_harness_case(
             output_dir, stem="leaky_relu", context=context,
-            pool=tensor_case_pool(context, {"input_offset": context["input_offset"], "output_offset": context["output_offset"], "output_multiplier_alpha": context["output_mult_alpha"], "output_shift_alpha": context["output_shift_alpha"], "output_multiplier_identity": context["output_mult_identity"], "output_shift_identity": context["output_shift_identity"], "output_size": context["output_size"]}),
+            pool=tensor_case_pool(context, leaky_relu_values(context)),
             validation_key="ActivationFunctions/leaky_relu/leaky_relu.c.j2", label="LeakyReLU", operator="LeakyRelu",
         )
         

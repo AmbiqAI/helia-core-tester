@@ -8,6 +8,21 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.harness.simple import tensor_case_pool
 
 
+def hard_swish_values(context: Dict, variant: str) -> Dict:
+    """The kernel's scalars by parameter name: the compat kernel takes fixed-point/exponent pairs,
+    the precise and float kernels a requantisation plus the two ReLU thresholds and a prescale."""
+    if variant == "compat":
+        return {"input_offset": context["input_offset"], "output_offset": context["output_offset"],
+                "output_multiplier_fp": context["output_multiplier_fp"],
+                "output_multiplier_exp": context["output_multiplier_exp"],
+                "relu_multiplier_fp": context["relu_multiplier_fp"], "relu_multiplier_exp": context["relu_multiplier_exp"],
+                "output_size": context["output_size"]}
+    return {"input_offset": context["input_offset"], "output_offset": context["output_offset"],
+            "output_multiplier": context["output_mult"], "output_shift": context["output_shift"],
+            "relu_q3": context["relu_q3"], "relu_q6": context["relu_q6"], "prescale": context["prescale"],
+            "output_size": context["output_size"]}
+
+
 class HardSwishFamilyBase(OperationBase):
     """Shared implementation for precise and compat hard-swish generation."""
 
@@ -518,18 +533,8 @@ class HardSwishFamilyBase(OperationBase):
         if variant == "compat":
             validation_key = "ActivationFunctions/hard_swish/hard_swish_compat.c.j2"
         
-        if variant == "compat":
-            values = {"input_offset": context["input_offset"], "output_offset": context["output_offset"],
-                      "output_multiplier_fp": context["output_multiplier_fp"], "output_multiplier_exp": context["output_multiplier_exp"],
-                      "relu_multiplier_fp": context["relu_multiplier_fp"], "relu_multiplier_exp": context["relu_multiplier_exp"],
-                      "output_size": context["output_size"]}
-        else:
-            values = {"input_offset": context["input_offset"], "output_offset": context["output_offset"],
-                      "output_multiplier": context["output_mult"], "output_shift": context["output_shift"],
-                      "relu_q3": context["relu_q3"], "relu_q6": context["relu_q6"], "prescale": context["prescale"],
-                      "output_size": context["output_size"]}
         self.render_harness_case(
-            output_dir, stem="hard_swish", context=context, pool=tensor_case_pool(context, values),
+            output_dir, stem="hard_swish", context=context, pool=tensor_case_pool(context, hard_swish_values(context, variant)),
             validation_key=validation_key, label="HardSwish", operator=self.OPERATOR_NAME, sidecar=True,
         )
         
