@@ -231,13 +231,15 @@ def test_a_call_may_only_override_parameters_the_kernel_takes() -> None:
     plan = plan_harness(_bare_pool(calls=({"output": "output + 0"}, {"output": "output + 8"})), kernel_fn="arm_fx_s8",
                         sizer_fn=None, scratch_bytes=0, contracts=contracts)
     assert [c.split("\n")[-2].strip() for c in plan.run_calls] == ["output + 0 /* output */", "output + 8 /* output */"]
-    with pytest.raises(HarnessError, match="overrides 'stride', which arm_fx_s8 does not take"):
+    with pytest.raises(HarnessError, match=re.escape("overrides 'stride', which arm_fx_s8 does not take; spell overrides "
+                                                    "as the kernel's parameters ['input', 'output']")):
         plan_harness(_bare_pool(calls=({"stride": "1"},)), kernel_fn="arm_fx_s8", sizer_fn=None, scratch_bytes=0,
                      contracts=contracts)
     # An alias spelling passes `takes` but bind prefers the kernel's own name, so the override
     # would be shadowed by the call-site value: refused, naming the spellings that work.
     for alias in ("input_data", "output_data"):
-        with pytest.raises(HarnessError, match=f"overrides '{alias}', which arm_fx_s8 does not take under that name"):
+        with pytest.raises(HarnessError, match=re.escape(f"overrides '{alias}', which arm_fx_s8 does not take under that "
+                                                        "name; spell overrides as the kernel's parameters ['input', 'output']")):
             plan_harness(_bare_pool(calls=({alias: "output + 1"},)), kernel_fn="arm_fx_s8", sizer_fn=None,
                          scratch_bytes=0, contracts=contracts)
     with pytest.raises(HarnessError, match="arm_fx_void returns void"):
