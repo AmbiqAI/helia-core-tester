@@ -228,14 +228,52 @@ def _cross_check_headers(root: Path, path: Path, functions: Mapping[str, Functio
                               "(python3 scripts/check_kernel_contract.py export)")
 
 
+_CACHE: dict[tuple, ContractSet] = {}
+_HEADER_GLOB = "arm_nn*.h"
+
+
+def _cache_key(root: Path, path: Path) -> Optional[tuple]:
+    """Identity of everything a load reads: the export and the public headers it is checked
+    against, each by path, size and mtime. None when any of them cannot be stat'ed, so the
+    load runs uncached and reports the failure itself."""
+    try:
+        entries = [(str(path), path.stat().st_size, path.stat().st_mtime_ns)]
+        for header in sorted((root / "Include").glob(_HEADER_GLOB)):
+            stat = header.stat()
+            entries.append((str(header), stat.st_size, stat.st_mtime_ns))
+    except OSError:
+        return None
+    return tuple(entries)
+
+
+def clear_contract_cache() -> None:
+    _CACHE.clear()
+
+
 def load_contract_set(cmsis_nn_root: Optional[Path]) -> ContractSet:
-    """Load the checkout's kernel contract, or an ``absent`` set when it has none."""
+    """Load the checkout's kernel contract, or an ``absent`` set when it has none.
+
+    A present set is cached per checkout for the life of the process and reloaded when the
+    export or any public header changes on disk (size or mtime), so generating a suite
+    pays the header cross-check once instead of per case."""
     if cmsis_nn_root is None:
         return ContractSet(status=STATUS_ABSENT, root=None, path=None)
     root = Path(cmsis_nn_root)
     path = root / CONTRACT_RELPATH
     if not path.exists():
         return ContractSet(status=STATUS_ABSENT, root=root, path=path)
+    key = _cache_key(root, path)
+    cached = _CACHE.get(key) if key is not None else None
+    if cached is not None:
+        return cached
+    contracts = _load_contract_set(root, path)
+    if key is not None:
+        _CACHE.clear()
+        _CACHE[key] = contracts
+    return contracts
+
+
+def _load_contract_set(root: Path, path: Path) -> ContractSet:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except OSError as error:
