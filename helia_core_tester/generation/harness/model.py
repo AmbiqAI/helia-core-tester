@@ -164,6 +164,10 @@ class ArgumentPool:
     # Several outputs the kernel reaches through a pointer array the pool declares: the harness
     # then has no `output` local and guards, checks and validates each slot in turn.
     outputs: Sequence[OutputSlot] = ()
+    # C statements the run executes before the kernel call (over the _run locals and the pool's
+    # declarations) and after every call succeeded; a post-pass forces the status-checked form.
+    pre_call: str = ""
+    post_call: str = ""
 
     @property
     def harness_inputs(self) -> Sequence[HarnessInput]:
@@ -236,6 +240,8 @@ class ArgumentPool:
                     raise HarnessError(f"{self.name}: output slot {slot} collides with the declaration {slot}_output")
             if any(slot.count < 0 for slot in self.outputs):
                 raise HarnessError(f"{self.name}: an output slot cannot hold a negative element count")
+        if (self.pre_call.strip() or self.post_call.strip()) and (self.benchmark or self.fault is not None):
+            raise HarnessError(f"{self.name}: pre- and post-passes have no benchmark or fault form")
         if self.calls is not None:
             if not self.calls:
                 raise HarnessError(f"{self.name}: a call list needs at least one call")

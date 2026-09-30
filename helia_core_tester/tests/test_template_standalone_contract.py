@@ -161,22 +161,6 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
                 "input_dims": {"n": 1, "h": 1, "w": 1, "c": 4},
             },
         ),
-        "dequantize": _render(
-            "QuantizationFunctions/dequantize/dequantize.c.j2",
-            {
-                "name": "dequantize_smoke",
-                "input_size": 4,
-                "zero_point": 0,
-                "scale": 0.125,
-                "input_data_array": "    0",
-                "expected_output_array": "    0.000000f",
-                "input_dtype": "int8_t",
-                "output_dtype": "float",
-                "kernel_fn": "arm_dequantize_s8_f32",
-                "has_activation": False,
-                "activation_type": "NONE",
-            },
-        ),
     }
 
     for name, text in rendered.items():
@@ -195,7 +179,6 @@ def test_rendered_templates_use_shared_validation_helpers() -> None:
     assert "TOLERANT_INT" in rendered["relu"]
     assert "BOOL" in rendered["comparison"]
     assert "EXACT_INT" in rendered["argmax"]
-    assert "FLOAT" in rendered["dequantize"]
 
 
 def test_basic_math_float_templates_render_preformatted_activation_literals() -> None:
@@ -700,49 +683,34 @@ def test_single_shot_recurrent_float_templates_validate_the_whole_output() -> No
 
 
 def test_quantize_and_dequantize_render_only_requested_validation_helpers() -> None:
-    quantize = _render(
-        "QuantizationFunctions/quantize/quantize.c.j2",
-        {
-            "name": "quantize_smoke",
-            "input_size": 4,
-            "zero_point": 0,
-            "scale": 0.125,
-            "input_data_array": "    0.000000f",
-            "expected_output_array": "    0",
-            "input_dtype": "float",
-            "output_dtype": "int8_t",
-            "kernel_fn": "arm_quantize_f32_s8",
-            "has_activation": False,
-            "activation_kernel_fn": None,
-            "activation_type": "NONE",
-            "comparison_tolerance": 1,
-            "validation_helpers": ["tolerant_int"],
-        },
+    from helia_core_tester.generation.ops.QuantizationFunctions.pools import (
+        dequantize_argument_pool,
+        quantize_argument_pool,
     )
-    dequantize = _render(
-        "QuantizationFunctions/dequantize/dequantize.c.j2",
-        {
-            "name": "dequantize_smoke",
-            "input_size": 4,
-            "zero_point": 0,
-            "scale": 0.125,
-            "input_data_array": "    0",
-            "expected_output_array": "    0.000000f",
-            "input_dtype": "int8_t",
-            "output_dtype": "float",
-            "kernel_fn": "arm_dequantize_s8_f32",
-            "has_activation": False,
-            "activation_type": "NONE",
-            "comparison_atol": 1.0e-5,
-            "comparison_rtol": 1.0e-5,
-            "validation_helpers": ["float"],
-        },
-    )
+    from helia_core_tester.tests.harness_render import render_pool
+
+    quantize_context = {
+        "name": "quantize_smoke", "input_size": 4, "zero_point": 0, "scale": 0.125,
+        "input_data_array": "    0.000000f", "expected_output_array": "    0", "input_dtype": "float",
+        "output_dtype": "int8_t", "kernel_fn": "arm_quantize_f32_s8", "has_activation": False,
+        "activation_kernel_fn": None, "activation_type": "NONE", "comparison_tolerance": 1,
+        "validation_helpers": ["tolerant_int"], "use_batch_harness": False,
+    }
+    _, quantize = render_pool(quantize_context, quantize_argument_pool(quantize_context), stem="quantize",
+                              validation_key="QuantizationFunctions/quantize/quantize.c.j2", label="Quantize")
+    dequantize_context = {
+        "name": "dequantize_smoke", "input_size": 4, "zero_point": 0, "scale": 0.125, "input_data_array": "    0",
+        "expected_output_array": "    0.000000f", "input_dtype": "int8_t", "output_dtype": "float",
+        "kernel_fn": "arm_dequantize_s8_f32", "has_activation": False, "activation_type": "NONE",
+        "comparison_atol": 1.0e-5, "comparison_rtol": 1.0e-5, "validation_helpers": ["float"],
+        "use_batch_harness": False,
+    }
+    _, dequantize = render_pool(dequantize_context, dequantize_argument_pool(dequantize_context), stem="dequantize",
+                                validation_key="QuantizationFunctions/dequantize/dequantize.c.j2", label="Dequantize")
 
     # The HELIA_VALIDATE_* macro definitions themselves live once in the shared
     # helia_test_runtime header (see test_shared_runtime_header_defines_all_validators
-    # below), not in per-template rendered text. Templates only need to select the
-    # correct dispatch mode for their requested validation_helpers.
+    # below); the harness only selects the dispatch mode the validation context resolved.
     assert "TOLERANT_INT" in quantize
     assert "EXACT_INT" not in quantize
 

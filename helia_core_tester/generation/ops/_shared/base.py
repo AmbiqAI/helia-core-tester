@@ -85,7 +85,7 @@ def _render_pool_snippets(env, pool, render_context):
     from dataclasses import replace
 
     fields = {}
-    for field in ("test_prologue", "extra_checks", "validation"):
+    for field in ("test_prologue", "extra_checks", "validation", "pre_call", "post_call"):
         text = getattr(pool, field)
         if text and "{{" in text:
             fields[field] = env.from_string(text).render(**render_context)

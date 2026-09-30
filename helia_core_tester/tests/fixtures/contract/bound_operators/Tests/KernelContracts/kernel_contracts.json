@@ -4520,6 +4520,74 @@
       ]
     },
     {
+      "name": "arm_dequantize_s16_f32",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 7377,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const int16_t *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "float *"
+        },
+        {
+          "direction": "in",
+          "name": "size",
+          "type": "int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "zero_point",
+          "type": "int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "scale",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "name": "arm_dequantize_s8_f32",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 7364,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "float *"
+        },
+        {
+          "direction": "in",
+          "name": "size",
+          "type": "int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "zero_point",
+          "type": "int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "scale",
+          "type": "float"
+        }
+      ]
+    },
+    {
       "name": "arm_dynamic_update_slice_s16",
       "header": "Include/arm_nnfunctions.h",
       "line": 7834,
@@ -8480,6 +8548,74 @@
           "direction": "in",
           "name": "block_size",
           "type": "const int32_t"
+        }
+      ]
+    },
+    {
+      "name": "arm_quantize_f32_s16",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 7311,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const float *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "int16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "size",
+          "type": "int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "zero_point",
+          "type": "int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "scale",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "name": "arm_quantize_f32_s8",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 7291,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const float *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "size",
+          "type": "int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "zero_point",
+          "type": "int32_t"
+        },
+        {
+          "direction": "in",
+          "name": "scale",
+          "type": "float"
         }
       ]
     },
@@ -13153,6 +13289,32 @@
           "direction": "out",
           "name": "output",
           "type": "float32_t *"
+        }
+      ]
+    },
+    {
+      "name": "arm_dequantize_f16_f32",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 2667,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "block_size",
+          "type": "int32_t"
         }
       ]
     },

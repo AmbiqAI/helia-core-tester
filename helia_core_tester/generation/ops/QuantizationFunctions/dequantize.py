@@ -6,6 +6,7 @@ import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.quantization_base import QuantizationFamilyBase
+from helia_core_tester.generation.ops.QuantizationFunctions.pools import dequantize_argument_pool
 
 
 class OpDequantize(QuantizationFamilyBase):
@@ -262,10 +263,8 @@ class OpDequantize(QuantizationFamilyBase):
             'validation_helpers': ['float'],
         }
         
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'Dequantize'),
-            'operator_name': 'dequantize'
-        }
-        self._write_op_outputs(output_dir, "dequantize", "QuantizationFunctions/dequantize/dequantize.h.j2", "QuantizationFunctions/dequantize/dequantize.c.j2", context, cmake_context)
+        self.render_harness_case(
+            output_dir, stem="dequantize", context=context, pool=dequantize_argument_pool(context),
+            validation_key="QuantizationFunctions/dequantize/dequantize.c.j2", label="Dequantize", operator="Dequantize", sidecar=True,
+        )
         

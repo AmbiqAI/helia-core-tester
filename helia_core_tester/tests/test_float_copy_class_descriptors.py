@@ -62,7 +62,7 @@ REPRESENTATIVE_CASES = [
     ),
     ("concatenation_any_rank_rank1_f16", "concatenation", ["arm_concatenation_f16(", "1,                    // output_dims"], False),
     ("fill_float_nan_block17_f16", "fill", ["arm_nn_fill_f16(", "_fill_value[0],"], True),
-    ("dequantize_float_f16_widen_nonfinite_f32", "dequantize", ["arm_dequantize_f16_f32(", "40         // block_size"], True),
+    ("dequantize_float_f16_widen_nonfinite_f32", "dequantize", ["arm_dequantize_f16_f32(", "40 /* block_size */"], True),
 ]
 
 
