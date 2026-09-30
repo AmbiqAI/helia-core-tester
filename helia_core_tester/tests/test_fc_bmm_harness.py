@@ -140,6 +140,12 @@ def test_a_contract_entry_keeps_the_descriptors_own_scratch_query(kernel: str, s
     assert fc_sizer(context) == sizer
 
 
+def test_a_contract_s4_entry_keeps_the_scratch_its_descriptor_declares() -> None:
+    context = fc_context("arm_fully_connected_s4", None, entry_family="contract", entry_scratch_bytes=32)
+    _, source = render_fully_connected(context)
+    assert "int32_t required_buffer_size = 32;" in source and "fc_case_ctx.buf = fc_case_buffer;" in source
+
+
 def test_a_contract_entry_with_entry_scratch_claims_that_many_bytes() -> None:
     context = fc_context("arm_fully_connected_s8", None, entry_family="contract", entry_scratch_bytes=64)
     _, source = render_fully_connected(context)

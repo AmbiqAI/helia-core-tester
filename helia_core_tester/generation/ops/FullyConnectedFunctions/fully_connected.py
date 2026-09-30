@@ -134,7 +134,8 @@ def fc_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
     return ArgumentPool(
         name=n, values=values, header=header, source=source,
         output_count=f"({output['n']} * {output['h']} * {output['w']} * {output['c']})", benchmark=False,
-        no_scratch=not float_kernel and context["kernel_fn"] == "arm_fully_connected_s4",
+        no_scratch=(not float_kernel and context["kernel_fn"] == "arm_fully_connected_s4"
+                    and context.get("entry_family") != "contract"),
         context_setup=context_setup,
     )
 
