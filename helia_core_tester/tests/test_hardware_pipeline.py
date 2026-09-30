@@ -577,6 +577,7 @@ def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeyp
 
     class _Bundle:
         case_id = "abs_default_s8_hw_generated"
+        manifest = {"timing": {"samples": 5}}
 
     preview = ([_Bundle()], [("skipped-case", "reason")])
 
@@ -608,6 +609,7 @@ def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, 
 
     class _Bundle:
         case_id = "abs_default_s8_hw_generated"
+        manifest = {"timing": {"samples": 5}}
 
     seen: dict = {}
     monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
@@ -631,6 +633,25 @@ def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, 
     assert seen["expected_build_id"] is None
     assert any("WARNING" in line and "hct_build_id.txt" in line and "unverified" in line for line in echoed)
     assert any("firmware build id unverified" in line for line in echoed)
+
+
+def test_stream_refuses_results_over_the_outbox_before_the_probe(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.hardware import hardware_pipeline
+    from helia_core_tester.hardware.measurement import OutboxOverflowError
+
+    class _Bundle:
+        case_id = "abs_default_s8_hw_generated"
+        manifest = {"timing": {"samples": 64}}
+
+    monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([_Bundle()], []))
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.run_case_bundles", lambda *a, **k: pytest.fail("streamed"))
+
+    build_dir = tmp_path / "bd"
+    _write_elf(build_dir, b"fw", "hct-stream")
+    options = StreamOptions(pmu_counters={"cpu": "all", "memory": "all", "mve": "all"})
+    with pytest.raises(OutboxOverflowError, match=r"64 samples x 18 passes"):
+        hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=build_dir, options=options, echo=lambda _: None)
 
 
 # --- --json keeps stdout clean ----------------------------------------------------

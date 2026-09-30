@@ -295,8 +295,8 @@ def session_plan_size(case_ids: Sequence[str], counter_passes: Sequence[CounterP
 
 
 def _counter_for_event_id(event_id: int) -> CounterDescriptor:
-    """The catalog descriptor for an event id, or a placeholder for ids the catalog
-    does not know (the firmware programs and reports whatever it was asked for)."""
+    """The catalog descriptor for an event id, or a placeholder named by
+    counter_name_for_event_id() for ids the catalog does not know."""
     return counter_by_event_id(event_id) or CounterDescriptor(counter_name_for_event_id(event_id), event_id, "unknown")
 
 
