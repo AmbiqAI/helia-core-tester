@@ -82,7 +82,16 @@ def test_where_validates_the_count_before_the_variable_output() -> None:
     assert _call(source, "arm_where_s8") == ["condition", "&w_params", "output", "&w_num_true"]
     text = source[source.index("w_test_case_run"):]
     assert text.index('HELIA_VALIDATE_SCALAR_EQ_INT("Where", "num_true", 3, w_num_true);') < text.index("output_count,")
-    assert "int64_t body[W_OUTPUT_SIZE]" in source.replace("\n", " ") or "int64_t body[" in source
+    assert "#define W_OUTPUT_SIZE 8" in source and "int64_t body[W_OUTPUT_SIZE]" in source
+
+
+def test_where_with_nothing_true_compares_nothing() -> None:
+    context = {"name": "w", "cond_c_type": "bool", "output_c_type": "int64_t", "kernel_fn": "arm_where_s8",
+               "input_shape": [2, 2], "rank": 2, "condition_array": "    false", "expected_output_array": "    0",
+               "max_output_size": 8, "num_true": 0}
+    _, source = _render(context, where_argument_pool(context), "where", "SelectFunctions/where/where.c.j2")
+    assert 'HELIA_VALIDATE_SCALAR_EQ_INT("Where", "num_true", 0, w_num_true);' in source
+    assert "#define W_OUTPUT_SIZE 8" in source
 
 
 def test_scatter_zero_seeds_its_accumulator() -> None:
@@ -91,7 +100,19 @@ def test_scatter_zero_seeds_its_accumulator() -> None:
                "expected_output_array": "    5, 6, 0, 0"}
     _, source = _render(context, scatter_nd_argument_pool(context), "scatter_nd", "ScatterFunctions/scatter_nd/scatter_nd.c.j2")
     assert "memset(s_output, 0, sizeof(s_output));" in source and "#include <string.h>" in source
+    assert source.index("memset(s_output, 0, sizeof(s_output));") < source.index("int32_t status = s_run(")
     assert _call(source, "arm_scatter_nd_s8") == ["indices", "updates", "&s_params", "output"]
+
+
+def test_data_movement_operators_keep_their_log_labels() -> None:
+    context = {"name": "d", "c_type": "int8_t", "kernel_fn": "arm_dynamic_update_slice_s8", "rank": 1, "operand_shape": [4],
+               "update_shape": [2], "operand_strides": [1], "operand_size": 4, "update_size": 2,
+               "operand_data_array": "    0", "update_data_array": "    0", "start_indices_array": "    0",
+               "expected_output_array": "    0", "operand_arg": "d_operand", "update_arg": "d_update",
+               "start_indices_arg": "d_start_indices", "params_arg": "&d_params", "output_arg": "d_output"}
+    _, source = _render(context, dynamic_update_slice_argument_pool(context), "dynamic_update_slice",
+                        "DynamicUpdateSliceFunctions/dynamic_update_slice/dynamic_update_slice.c.j2")
+    assert 'HELIA_GUARD_CHECK(d_output, "DynamicUpdateSlice output", failures);' in source
 
 
 @pytest.mark.parametrize("arg, param", [("operand_arg", "operand"), ("start_indices_arg", "start_indices"),

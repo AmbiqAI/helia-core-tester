@@ -96,7 +96,7 @@ class OpPack(OperationBase):
         self._write_op_outputs(
             output_dir,
             "pack",
-            "ConcatenationFunctions/pack/pack.h.j2",
+            "",  # the registered pool renders the header; no header template exists
             "ConcatenationFunctions/pack/pack.c.j2",
             context,
             cmake_context,

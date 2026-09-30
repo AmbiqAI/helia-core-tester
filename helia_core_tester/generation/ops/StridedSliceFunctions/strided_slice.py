@@ -2,7 +2,7 @@
 StridedSlice operation implementation.
 """
 
-from typing import Dict, Any
+from typing import Dict
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
@@ -426,8 +426,7 @@ class OpStridedSlice(OperationBase):
         print(f"Generated C/H files and CMakeLists.txt for {name}")
 
 
-from helia_core_tester.generation.harness import ArrayLiteral, Declaration  # noqa: E402
-from helia_core_tester.generation.harness.simple import dims_count, dims_declaration, tensor_case_pool  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool  # noqa: E402
 
 
 def strided_slice_argument_pool(context):
