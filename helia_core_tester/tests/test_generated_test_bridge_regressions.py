@@ -116,3 +116,17 @@ def test_grouped_convolve_case_01_now_bridges_with_unified_tolerance(tmp_path: P
         PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False
     )
     assert bundle.manifest["correctness_comparison"] == {"mode": "tolerant_int", "tolerance": 1}
+
+
+@pytest.mark.parametrize(("name", "element_count", "item_bytes"), [
+    ("convolve_float_generic_oc3_valid_packed_f32", 288, 4),
+    ("convolve_float_generic_oc3_valid_packed_f16", 576, 2),
+])
+def test_packed_float_convolve_keeps_padded_weights(tmp_path: Path, name: str, element_count: int, item_bytes: int) -> None:
+    # Packing pads output channels 3 -> 4/8.
+    cases = discover_or_skip(PROJECT_ROOT, suite="float", family="ConvolutionFunctions", name_filter=name)
+    manifest = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False).manifest
+    weights = next(entry for entry in manifest["blob_roles"] if entry["role"] == "weights")
+    assert weights["dimensions"] == [3, 3, 8, 3]
+    assert weights["byte_length"] == element_count * item_bytes
+    assert manifest["serialized_scalar_parameters"]["weight_format_is_packed"] == 1

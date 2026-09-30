@@ -911,7 +911,6 @@ def _build_convolve_case(
         tensor_name="input",
         context=f"input_shape={input_shape}",
     )
-    weights_data = weights_flat[:expected_weight_bytes]
 
     if activation_dtype in ("FP32", "FP16"):
         input_offset = 0
@@ -951,6 +950,8 @@ def _build_convolve_case(
         else "ARM_NN_WEIGHT_FORMAT_STANDARD"
     )
     is_packed_weights = weight_format_name == "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"
+    # Packing pads output channels; send all.
+    weights_data = weights_flat if is_packed_weights else weights_flat[:expected_weight_bytes]
 
     if expected_flat.size < _shape_product(output_shape):
         raise UnsupportedGeneratedTestError(
@@ -3531,6 +3532,21 @@ def _extract_elementwise_binary_tensors(
     return input1_shape, input2_shape, input1_data, input2_data, expected_output, output_dims
 
 
+def _require_flat_operands(
+    generated_test: GeneratedTestCase,
+    input1_shape: tuple[int, ...],
+    input2_shape: tuple[int, ...],
+    output_dims: dict,
+) -> None:
+    """Refuse operands the flat kernels cannot take."""
+    output_count = _shape_product(_dims_dict_to_shape(output_dims))
+    if _shape_product(input1_shape) != output_count or _shape_product(input2_shape) != output_count:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: firmware has no float broadcast dispatch yet "
+            f"(input shapes {input1_shape} and {input2_shape}, output {output_count} elements)."
+        )
+
+
 def _write_elementwise_binary_bundle(
     project_root: Path,
     generated_test: GeneratedTestCase,
@@ -3625,6 +3641,8 @@ def _build_elementwise_binary_case(
         )
     )
 
+    if activation_dtype in {"FP32", "FP16"}:
+        _require_flat_operands(generated_test, input1_shape, input2_shape, output_dims)
     cmsis_function = _ELEMENTWISE_BINARY_CMSIS_FUNCTION[(operator, activation_dtype)]
     sidecar = _load_generation_sidecar(generated_test.directory)
     if sidecar is not None:
@@ -3730,6 +3748,8 @@ def _build_mul_case(
         )
     )
 
+    if activation_dtype in {"FP32", "FP16"}:
+        _require_flat_operands(generated_test, input1_shape, input2_shape, output_dims)
     cmsis_function = {"S8": "arm_mul_s8", "S16": "arm_mul_s16", "FP32": "arm_elementwise_mul_f32", "FP16": "arm_elementwise_mul_f16"}[activation_dtype]
     sidecar = _load_generation_sidecar(generated_test.directory)
     if sidecar is not None:
@@ -4375,7 +4395,7 @@ def _build_data_movement_case(
         )
     if activation_dtype in {"FP32", "FP16"} and operator == "Split" and activation_dtype != "FP16":
         raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: no arm_split_f32 entrypoint exists in the generated-test corpus -- only FP16 Split is bridgeable."
+            f"{generated_test.name}: firmware has no arm_split_f32 dispatch yet; only FP16 Split is bridgeable."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -4540,6 +4560,11 @@ def _build_data_movement_case(
         return _build_data_movement_bundle(project_root, generated_test, lookup_dtype=activation_dtype, cmsis_function=cmsis_function, arrays=arrays, tensor_dtypes=tensor_dtypes, comparison=comparison, scalar_parameters=scalar_parameters, output_root=output_root)
 
     if operator == "Concatenation":
+        if activation_dtype in {"FP32", "FP16"} and not cmsis_function.endswith(("_w", "_x", "_y", "_z")):
+            # Firmware dispatches per-axis float entry points only.
+            raise UnsupportedGeneratedTestError(
+                f"{generated_test.name}: firmware has no {cmsis_function} dispatch yet (float any-rank concatenation)."
+            )
         output_shape = tuple(_extract_array(header_text, f"{prefix}_output_shape"))
         input_x = _extract_array(header_text, f"{prefix}_input_x")
         input_y = _extract_array(header_text, f"{prefix}_input_y")
@@ -4587,6 +4612,12 @@ def _build_data_movement_case(
         split_dims = _extract_array(header_text, f"{prefix}_split_dims")
         call_args = _extract_call_args(source_text, cmsis_function, expected_count=7)
         axis = int(call_args[3])
+        if not expects_status and not (len(input_shape) <= 4 and len(split_dims) <= 4 and min(split_dims) > 0):
+            # Mirror the SPLIT adapters' limits.
+            raise UnsupportedGeneratedTestError(
+                f"{generated_test.name}: SPLIT firmware takes rank <= 4, <= 4 nonempty splits "
+                f"(got rank {len(input_shape)}, splits {list(split_dims)})."
+            )
         input_data = _extract_typed_array(header_text, f"{prefix}_input", activation_dtype).reshape(input_shape)
         expected_parts: list[np.ndarray] = []
         output_index = 0
