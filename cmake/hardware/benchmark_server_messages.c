@@ -109,6 +109,7 @@ hctp_status_t hct_build_target_info_frame(uint32_t session_id,
                                           uint32_t max_rx_payload,
                                           uint16_t max_cases_per_session,
                                           uint8_t max_passes,
+                                          const hct_boot_info_t *boot,
                                           uint8_t *frame_bytes,
                                           size_t frame_capacity,
                                           size_t *frame_length)
@@ -144,6 +145,10 @@ hctp_status_t hct_build_target_info_frame(uint32_t session_id,
     status = write_u16(payload, sizeof(payload), &offset, max_cases_per_session);
     if (status != HCTP_STATUS_OK) return status;
     status = write_u8(payload, sizeof(payload), &offset, max_passes);
+    if (status != HCTP_STATUS_OK) return status;
+    status = write_u32(payload, sizeof(payload), &offset, (uint32_t)boot->boot_status);
+    if (status != HCTP_STATUS_OK) return status;
+    status = write_u32(payload, sizeof(payload), &offset, boot->core_clock_hz);
     if (status != HCTP_STATUS_OK) return status;
 
     return wrap_frame(HCTP_MSG_TARGET_INFO, session_id, sequence_id, HCTP_FLAG_NONE, payload, offset, frame_bytes, frame_capacity, frame_length);

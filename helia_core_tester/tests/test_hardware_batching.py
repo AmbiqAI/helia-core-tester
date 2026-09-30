@@ -17,6 +17,7 @@ TARGET_INFO and stub the RTT session factory and result-bundle writer.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -343,6 +344,12 @@ def test_run_case_bundles_names_the_batch_when_a_session_fails(tmp_path: Path, m
             tmp_path, [_DummyCaseBundle("case_0"), _DummyCaseBundle("case_1")],  # type: ignore[arg-type]
             board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
         )
+
+
+def test_consistency_check_covers_boot_health() -> None:
+    first = _target_info(boot_status=0, core_clock_hz=250_000_000)
+    with pytest.raises(RuntimeError, match=r"core_clock_hz: 250000000 -> 96000000"):
+        session_runner.check_target_info_consistent(first, replace(first, core_clock_hz=96_000_000), batch_index=1)
 
 
 def test_run_case_bundles_refuses_to_merge_sessions_from_different_firmware(tmp_path: Path, monkeypatch) -> None:

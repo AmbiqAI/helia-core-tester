@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
 
 import pytest
 
@@ -55,6 +56,24 @@ def test_target_info_round_trip_and_layout() -> None:
     assert reader.remaining() == b""
     with pytest.raises(ValueError, match="catalog_hash"):
         wire.encode_target_info(_target_info(catalog_hash=b"short"))
+
+
+def test_target_info_boot_tail() -> None:
+    old = wire.encode_target_info(_target_info())
+    info = _target_info(boot_status=7, core_clock_hz=96_000_000)
+    payload = wire.encode_target_info(info)
+    # i32 boot_status, u32 core_clock_hz trail max_passes.
+    assert payload[: len(old)] == old
+    assert payload[len(old):] == struct.pack("<iI", 7, 96_000_000)
+    assert wire.decode_target_info(payload) == info
+    assert info.boot_line == "status 7, core 96 MHz"
+    assert _target_info(boot_status=0, core_clock_hz=0).boot_line == "status 0, core clock unknown"
+    # Old firmware: no tail, fields None.
+    legacy = wire.decode_target_info(old)
+    assert legacy.boot_status is None and legacy.core_clock_hz is None
+    assert legacy.boot_line == "not reported"
+    with pytest.raises(ValueError, match="Unexpected end of payload"):
+        wire.decode_target_info(payload[:-1])
 
 
 def test_kernel_catalog_round_trip_and_hash() -> None:
@@ -211,7 +230,7 @@ def test_error_round_trip() -> None:
 
 
 def test_every_decoder_rejects_trailing_bytes() -> None:
-    info = _target_info()
+    info = _target_info(boot_status=0, core_clock_hz=250_000_000)
     with pytest.raises(ValueError, match=r"TARGET_INFO payload carries 1 trailing byte"):
         wire.decode_target_info(wire.encode_target_info(info) + b"\x00")
     with pytest.raises(ValueError, match=r"REQUEST_CASE payload carries 2 trailing byte"):

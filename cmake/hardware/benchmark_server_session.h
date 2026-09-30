@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "benchmark_server_messages.h"
 #include "hctp_protocol.h"
 
 #ifdef __cplusplus
@@ -288,7 +289,8 @@ void hct_server_session_init(hct_server_session_t *session,
                              uint32_t session_id,
                              uint32_t max_frame_payload,
                              void *workspace,
-                             uint32_t workspace_bytes);
+                             uint32_t workspace_bytes,
+                             const hct_boot_info_t *boot);
 
 hctp_status_t hct_server_session_accept_frame(hct_server_session_t *session,
                                               const uint8_t *frame_bytes,

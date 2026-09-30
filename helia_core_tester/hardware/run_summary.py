@@ -166,6 +166,8 @@ def print_skipped_summary(skipped: list[tuple], *, err: bool = False) -> None:
 
 def print_run_report(result, skipped: list[tuple], bundle: Path, *, err: bool = False) -> list[str]:
     """The human report for `hardware run`/`hardware stream`. Returns the failed case ids."""
+    info = result.target_info
+    typer.echo(f"\nTarget boot: {info.boot_line if info else 'not reported'}", err=err)
     typer.echo("\nFinal per-case results:", err=err)
     passed_count, failed_case_ids = print_case_results(result.cases, err=err)
     if skipped:
@@ -203,10 +205,13 @@ def build_json_summary(
                 "skipped_reason": _clean_skip_reason(test.name, reason),
             }
         )
+    from .session import boot_record
+
     ran = len(result.cases)
     return {
         "session_id": session_id,
         "board": board_id,
+        "boot": boot_record(result.target_info),
         "bundle": str(bundle),
         "totals": {"ran": ran, "passed": passed, "failed": ran - passed, "skipped": len(skipped)},
         "timing": dict(timing or {}),

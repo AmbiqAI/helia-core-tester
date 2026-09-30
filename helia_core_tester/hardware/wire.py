@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
 
 from .hctp import ByteReader, ByteWriter
@@ -79,10 +79,21 @@ class TargetInfo:
     # the host batches cases and refuses over-long pass lists from these.
     max_cases_per_session: int
     max_passes: int
+    # Boot health; None from older firmware.
+    boot_status: int | None = None
+    core_clock_hz: int | None = None
 
     @property
     def has_pmu(self) -> bool:
         return bool(self.capability_flags & CAP_PMU_ARMV8M)
+
+    @property
+    def boot_line(self) -> str:
+        """Boot health as one short phrase."""
+        if self.boot_status is None:
+            return "not reported"
+        clock = f"{self.core_clock_hz / 1e6:g} MHz" if self.core_clock_hz else "clock unknown"
+        return f"status {self.boot_status}, core {clock}"
 
 
 def encode_target_info(info: TargetInfo) -> bytes:
@@ -103,12 +114,16 @@ def encode_target_info(info: TargetInfo) -> bytes:
     writer.u32(info.max_rx_payload)
     writer.u16(info.max_cases_per_session)
     writer.u8(info.max_passes)
+    if info.boot_status is not None:
+        writer.i32(info.boot_status)
+        writer.u32(info.core_clock_hz or 0)
     return writer.finish()
 
 
 def decode_target_info(payload: bytes) -> TargetInfo:
+    """Older firmware omits the boot tail."""
     reader = ByteReader(payload)
-    return _consumed(reader, "TARGET_INFO", TargetInfo(
+    info = TargetInfo(
         build_id=reader.text(),
         catalog_hash=reader.fixed(CATALOG_HASH_SIZE),
         max_frame_payload=reader.u32(),
@@ -123,7 +138,10 @@ def decode_target_info(payload: bytes) -> TargetInfo:
         max_rx_payload=reader.u32(),
         max_cases_per_session=reader.u16(),
         max_passes=reader.u8(),
-    ))
+    )
+    if reader.remaining():
+        info = replace(info, boot_status=reader.i32(), core_clock_hz=reader.u32())
+    return _consumed(reader, "TARGET_INFO", info)
 
 
 # --- KERNEL_CATALOG ------------------------------------------------------------------

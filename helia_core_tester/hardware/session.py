@@ -341,6 +341,7 @@ class HostSession:
         target_info = decode_target_info(target_info_frame.payload)
         self._target_info = target_info
         check_build_id(target_info.build_id, expected_build_id)
+        check_boot_status(target_info)
         self._session_id = target_info_frame.header.session_id
         self._incoming_validator = SessionFrameValidator(session_id=self._session_id, next_sequence_id=1)
         check_counter_passes(self._counter_passes, target_info)
@@ -629,6 +630,20 @@ def check_build_id(actual: str, expected: str | None) -> None:
         "stale); rerun with `hardware run --force-flash` / `hardware flash --force`, or "
         "point --build-dir at the build that is actually on the board."
     )
+
+
+def check_boot_status(info: TargetInfo) -> None:
+    """Refuse failed nsx_system_init(); old firmware passes."""
+    if info.boot_status:
+        raise RuntimeError(f"Board init failed: nsx_system_init {info.boot_line}.")
+
+
+def boot_record(info: TargetInfo | None) -> dict:
+    """Boot health for bundle and summary JSON."""
+    return {
+        "status": info.boot_status if info else None,
+        "core_clock_hz": info.core_clock_hz if info else None,
+    }
 
 
 def read_target_info(transport: Transport) -> TargetInfo:

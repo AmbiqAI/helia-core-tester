@@ -10,7 +10,7 @@ from typing import Any
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
 from .measurement import compute_counter_medians, counter_names_for_passes
-from .session import SessionResult
+from .session import SessionResult, boot_record
 from .pathutil import write_text_lf
 
 CASE_SUMMARY_BASE_FIELDS = [
@@ -146,6 +146,7 @@ def write_result_bundle(
         },
         # Board-reported TARGET_INFO build id.
         "firmware_build_id": result.build_id,
+        "boot": boot_record(result.target_info),
     }
     session_manifest["build"], lock_file = build_provenance(build_dir)
     if lock_file is not None:

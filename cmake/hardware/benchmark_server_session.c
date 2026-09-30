@@ -1269,7 +1269,8 @@ void hct_server_session_init(hct_server_session_t *session,
                              uint32_t session_id,
                              uint32_t max_frame_payload,
                              void *workspace,
-                             uint32_t workspace_bytes)
+                             uint32_t workspace_bytes,
+                             const hct_boot_info_t *boot)
 {
     size_t frame_length = 0u;
     memset(session, 0, sizeof(*session));
@@ -1286,6 +1287,7 @@ void hct_server_session_init(hct_server_session_t *session,
                                 HCT_SERVER_MAX_RX_PAYLOAD_BYTES,
                                 HCT_SERVER_MAX_CASES,
                                 HCT_SERVER_MAX_PASSES,
+                                boot,
                                 session->outbox,
                                 sizeof(session->outbox),
                                 &frame_length);

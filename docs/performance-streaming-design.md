@@ -165,7 +165,13 @@ firmware measures, about 43M cycles, whatever the pass count.
 `u32 max_frame_payload`, `u32 runtime_arena_capacity`, `u8 transfer_mode`,
 `u8 output_mode`, `text board_id`, `text target_cpu`, `u8 transport_kind`,
 `u32 capability_flags`, `u8 pmu_counter_slots`, `u32 max_rx_payload`,
-`u16 max_cases_per_session`, `u8 max_passes`.
+`u16 max_cases_per_session`, `u8 max_passes`, then an optional boot-health tail:
+`i32 boot_status` (the `nsx_system_init()` return) and `u32 core_clock_hz` (the clock
+the HAL reports: `am_hal_pwrctrl_mcu_mode_status()` mapped to Hz per part, or
+`am_hal_burst_mode_status()` on Apollo3; 0 on an unknown part). Firmware that predates
+the tail ends at `max_passes`; the host decodes it with both fields unset. The host
+refuses to stream when `boot_status` is non-zero, before `TARGET_INFO_ACK`, and stamps
+both fields in `session_manifest.json` (`boot`) and the run summary.
 `capability_flags` bit 6 is `HCT_CAP_PMU_ARMV8M`, set only when the firmware was
 built for a core whose device header declares `__PMU_PRESENT == 1`;
 `pmu_counter_slots` is `__PMU_NUM_EVENTCNT` (8 on Cortex-M55, 0 without a PMU).

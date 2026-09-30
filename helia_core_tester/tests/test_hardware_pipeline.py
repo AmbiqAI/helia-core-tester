@@ -37,7 +37,8 @@ from helia_core_tester.hardware.hardware_pipeline import (
     run_hardware_pipeline,
     validate_fvp_gate,
 )
-from helia_core_tester.hardware.run_summary import build_json_summary
+from helia_core_tester.hardware.result_bundle import write_result_bundle
+from helia_core_tester.hardware.run_summary import build_json_summary, print_run_report
 from helia_core_tester.hardware.session import HostSession, read_target_info
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -437,6 +438,31 @@ def test_session_verifies_target_info_build_id(tmp_path: Path) -> None:
         HostSession(FakeTargetTransport(build_id="hct-bbb")).run_many([bundle], expected_build_id="hct-aaa")
 
 
+def test_session_refuses_failed_boot_before_any_case(tmp_path: Path) -> None:
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_boot").manifest_path)
+    transport = FakeTargetTransport(boot_status=7, core_clock_hz=96_000_000)
+    with pytest.raises(RuntimeError, match=r"^Board init failed: nsx_system_init status 7, core 96 MHz\.$"):
+        HostSession(transport).run_many([bundle])
+    # No ACK sent, so no catalog.
+    assert transport.read() == b"" and transport.completed_case_count == 0
+
+
+@pytest.mark.parametrize(
+    "boot_status, expected",
+    [(0, {"status": 0, "core_clock_hz": 250_000_000}), (None, {"status": None, "core_clock_hz": None})],
+    ids=["healthy", "old-firmware"],
+)
+def test_boot_health_is_stamped_in_bundle(tmp_path: Path, boot_status, expected, capsys) -> None:
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_boot").manifest_path)
+    result = HostSession(FakeTargetTransport(boot_status=boot_status)).run_many([bundle])
+    assert result.cases[0].comparison.passed
+    bundle_root = write_result_bundle(result, session_id="boot", output_root=tmp_path, memory_report={}, kernel_catalog=[])
+    assert json.loads((bundle_root / "session_manifest.json").read_text())["boot"] == expected
+    print_run_report(result, [], bundle_root)
+    line = "status 0, core 250 MHz" if boot_status == 0 else "not reported"
+    assert f"Target boot: {line}" in capsys.readouterr().out
+
+
 def test_read_target_info_returns_the_full_payload_without_acknowledging() -> None:
     transport = FakeTargetTransport(build_id="hct-xyz")
     target_info = read_target_info(transport)
@@ -466,7 +492,8 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
     )
     encoded = json.loads(json.dumps(summary))  # must be JSON-serialisable as-is
 
-    assert set(encoded) == {"session_id", "board", "bundle", "totals", "timing", "cases"}
+    assert set(encoded) == {"session_id", "board", "boot", "bundle", "totals", "timing", "cases"}
+    assert encoded["boot"] == {"status": 0, "core_clock_hz": 250_000_000}
     assert encoded["session_id"] == "apollo510_evb-20260912T000000Z"
     assert encoded["board"] == "apollo510_evb"
     assert encoded["bundle"].endswith("apollo510_evb-20260912T000000Z")
