@@ -65,7 +65,7 @@ static cmsis_nn_context {{ name }}_ctx;
     {% if harness.sizer_call %}
     // Calculate required buffer size
     int32_t required_buffer_size = {{ harness.sizer_call }};
-    {% elif not (force_no_scratch | default(false) or harness.no_scratch) %}
+    {% elif not (force_no_scratch | default(false) or harness.no_scratch or harness.context_setup) %}
     // The entry takes no scratch query (entry_scratch in the descriptor).
     int32_t required_buffer_size = {{ harness.scratch_bytes }};
     {% endif %}

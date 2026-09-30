@@ -132,6 +132,27 @@ def test_fc_sizer(context: dict, sizer: str | None) -> None:
     assert fc_sizer(context) == sizer
 
 
+@pytest.mark.parametrize("kernel, sizer", [("arm_fully_connected_s4", "arm_fx_own_get_buffer_size"),
+                                           ("arm_fully_connected_s4", None),
+                                           ("arm_fully_connected_wrapper_s16", "arm_fx_own_get_buffer_size")])
+def test_a_contract_entry_keeps_the_descriptors_own_scratch_query(kernel: str, sizer: str | None) -> None:
+    context = fc_context(kernel, sizer, per_channel=True, entry_family="contract", output_dtype="int16_t")
+    assert fc_sizer(context) == sizer
+
+
+def test_a_contract_entry_with_entry_scratch_claims_that_many_bytes() -> None:
+    context = fc_context("arm_fully_connected_s8", None, entry_family="contract", entry_scratch_bytes=64)
+    _, source = render_fully_connected(context)
+    assert "int32_t required_buffer_size = 64;" in source and "fc_case_ctx.size = required_buffer_size;" in source
+    assert "HELIA_VALIDATE_SIZER" not in source
+
+
+def test_a_kernel_sum_context_without_a_sizer_declares_no_unused_size() -> None:
+    context = fc_context("arm_fully_connected_s8", None, weight_sum=True, entry_family="contract")
+    _, source = render_fully_connected(context)
+    assert "required_buffer_size" not in source and "fc_case_ctx.buf = (uint8_t *)fc_case_weight_sum;" in source
+
+
 def test_s4_has_no_scratch_query_and_no_unused_size() -> None:
     _, source = render_fully_connected(fc_context("arm_fully_connected_s4", None))
     assert "required_buffer_size" not in source and "HELIA_VALIDATE_SIZER" not in source

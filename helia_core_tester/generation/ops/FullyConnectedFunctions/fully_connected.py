@@ -38,9 +38,10 @@ def fc_quant_argument(context: Dict[str, Any]) -> str:
 
 
 def fc_sizer(context: Dict[str, Any]) -> Optional[str]:
-    """The scratch query the case calls: none for s4, the per-channel s16 one for the s16
-    wrapper with per-channel quantization, otherwise the dispatch's."""
-    if context.get("float_kernel"):
+    """The scratch query the case calls: the descriptor's own for a contract entry (entry_sizer,
+    or none with entry_scratch), none for s4, the per-channel s16 one for the s16 wrapper with
+    per-channel quantization, otherwise the dispatch's."""
+    if context.get("float_kernel") or context.get("entry_family") == "contract":
         return context["kernel_get_buffer_size_fn"]
     if context["kernel_fn"] == "arm_fully_connected_s4":
         return None
@@ -845,6 +846,9 @@ class OpFullyConnected(OperationBase):
                 ),
             )
 
+            entry_scratch_bytes = kernel_info.get("entry_scratch_bytes")
+            if entry_scratch_bytes is not None:
+                buffer_size_max = max(buffer_size_max, int(entry_scratch_bytes))
             context = {
                 'name': name,
                 'input_dims': input_dims,
@@ -870,8 +874,8 @@ class OpFullyConnected(OperationBase):
                 'float_kernel': True,
                 'fc_params_type': kernel_info.get("fc_params_type", 'cmsis_nn_fc_params_f32'),
                 'kernel_layout': kernel_info.get("layout", "ARM_NN_LAYOUT_NHWC"),
-                # A layout-free direct entry (entry:, e.g. arm_fully_connected_nhwc_f16) takes no layout.
-                'kernel_needs_layout': kernel_info.get("kernel_needs_layout", True),
+                'entry_family': kernel_info.get("entry_family"),
+                'entry_scratch_bytes': entry_scratch_bytes,
                 'fc_activation_min_literal': builder.format_float_literal(fc_params['activation_min']),
                 'fc_activation_max_literal': builder.format_float_literal(fc_params['activation_max']),
                 'validation_mode': 'float',
@@ -1172,10 +1176,15 @@ class OpFullyConnected(OperationBase):
                     filter_dims,
                     output_dtype=activation_dtype
                 )
-        
+        entry_scratch_bytes = kernel_info.get("entry_scratch_bytes")
+        if entry_scratch_bytes is not None:
+            buffer_size_max = max(buffer_size_max, int(entry_scratch_bytes))
+
         # Build template context
         context = {
             'name': name,
+            'entry_family': kernel_info.get("entry_family"),
+            'entry_scratch_bytes': entry_scratch_bytes,
             'input_dims': input_dims,
             'filter_dims': filter_dims,
             'output_dims': output_dims,
