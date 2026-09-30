@@ -39,6 +39,8 @@ CMSIS_NN_MODULE = "nsx-cmsis-nn"
 CMSIS_NN_PROJECT = "ns-cmsis-nn"
 CMSIS_NN_METADATA = "modules/ns-cmsis-nn/nsx/nsx-module.yaml"
 CMSIS_NN_REF = "v7.38.0"
+# The pin while records lacked the flag.
+_PRE_FLAG_PIN = "v7.35.1"
 
 # Not in the registry yet; declared inline.
 SEGGER_RTT_MODULE = "nsx-segger-rtt"
@@ -84,8 +86,8 @@ class AppOptions:
     """Kernel source, kernel switches, target choice."""
 
     cmsis_nn_ref: str = CMSIS_NN_REF
-    # Unset: any ref but the pin.
-    cmsis_nn_ref_explicit: Optional[bool] = None
+    # False: the ref follows a pin bump.
+    cmsis_nn_ref_explicit: bool = False
     cmsis_nn_root: Optional[Path] = None
     # ON matches hpx and shipping builds.
     requantize_inline_asm: bool = True
@@ -94,8 +96,6 @@ class AppOptions:
     build_size_probe: bool = False
 
     def __post_init__(self) -> None:
-        if self.cmsis_nn_ref_explicit is None:
-            object.__setattr__(self, "cmsis_nn_ref_explicit", self.cmsis_nn_ref != CMSIS_NN_REF)
         # One spelling per checkout.
         if self.cmsis_nn_root is not None:
             object.__setattr__(self, "cmsis_nn_root", Path(self.cmsis_nn_root).expanduser().resolve())
@@ -151,8 +151,9 @@ class AppOptions:
             if not _field_type_ok(field.name, value):
                 raise TypeError(f"bad type for {field.name}")
             kept[field.name] = value
-        # Older records: the ref was defaulted.
-        kept.setdefault("cmsis_nn_ref_explicit", False)
+        # Older records: only the old pin defaulted.
+        ref = kept.get("cmsis_nn_ref")
+        kept.setdefault("cmsis_nn_ref_explicit", ref is not None and ref != _PRE_FLAG_PIN)
         return cls(**kept)
 
 

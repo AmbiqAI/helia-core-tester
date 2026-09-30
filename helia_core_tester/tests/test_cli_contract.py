@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import subprocess
 
 import pytest
@@ -329,11 +330,12 @@ def test_inline_asm_flag_is_tri_state(monkeypatch, tmp_path, command) -> None:
     monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _capture)
     app_dir = firmware_build.nsx_app_dir(tmp_path)
     app_dir.mkdir(parents=True)
-    nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=False))
+    built = nsx_app.AppOptions(cmsis_nn_ref="v9", cmsis_nn_ref_explicit=True, requantize_inline_asm=False)
+    nsx_app.save_options(app_dir, built)
     base = ["hardware", command, "--build-dir", str(tmp_path)]
     for flags, inline_asm in (([], False), (["--inline-asm"], True), (["--no-inline-asm"], False)):
         runner.invoke(app, base + flags)
-        assert seen["options"] == nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=inline_asm), flags
+        assert seen["options"] == dataclasses.replace(built, requantize_inline_asm=inline_asm), flags
 
 
 def test_stream_only_run_skips_option_resolution(monkeypatch, tmp_path) -> None:
@@ -374,6 +376,7 @@ def test_skip_flash_generates_from_the_built_kernels(monkeypatch, tmp_path) -> N
     _capture_run(monkeypatch, seen)
     app_dir = firmware_build.nsx_app_dir(tmp_path)
     app_dir.mkdir(parents=True)
+    # Defaulted, off the pin: still kept.
     built = nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=False)
     nsx_app.save_options(app_dir, built)
     base = ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash"]
@@ -381,20 +384,6 @@ def test_skip_flash_generates_from_the_built_kernels(monkeypatch, tmp_path) -> N
     assert seen["app_options"] == built and "Options changed" not in _result_text(result)
     seen.clear()
     result = runner.invoke(app, base + ["--no-inline-asm", "--cmsis-nn-ref", "v9"])
-    assert seen["app_options"] == built
-
-
-def test_skip_flash_keeps_a_defaulted_ref(monkeypatch, tmp_path) -> None:
-    """A pin bump never refuses --skip-flash."""
-    from helia_core_tester.hardware import firmware_build, nsx_app
-
-    seen: dict = {}
-    _capture_run(monkeypatch, seen)
-    app_dir = firmware_build.nsx_app_dir(tmp_path)
-    app_dir.mkdir(parents=True)
-    built = nsx_app.AppOptions(cmsis_nn_ref="v0.old", cmsis_nn_ref_explicit=False)
-    nsx_app.save_options(app_dir, built)
-    runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash"])
     assert seen["app_options"] == built
 
 

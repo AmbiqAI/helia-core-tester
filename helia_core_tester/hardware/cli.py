@@ -133,8 +133,8 @@ def _serial(explicit: Optional[int]) -> int:
 
 _CMSIS_NN_REF_HELP = "ns-cmsis-nn tag or commit to build (default: see --cmsis-nn-root)."
 _CMSIS_NN_ROOT_HELP = (
-    "Local ns-cmsis-nn checkout to build. Default: the last build's kernels in this "
-    "build dir, else the enclosing checkout when the tester sits at "
+    "Local ns-cmsis-nn checkout to build. Default: the last build's checkout or "
+    "--cmsis-nn-ref in this build dir, else the enclosing checkout when the tester sits at "
     "ns-cmsis-nn/Tests/helia-core-tester, else the pinned release. "
     "Copies its Include/, Source/, cmake/ and nsx/ into the app."
 )
