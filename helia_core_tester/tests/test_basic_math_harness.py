@@ -156,6 +156,9 @@ CONTRACTS = ContractSet(status=STATUS_PRESENT, root=Path("."), path=None,
     ({"output_untouched": True}, "untouched-output check needs the output poisoned first"),
     ({"includes": ("string.h",)}, "is not <header> or"),
     ({"guarded": (GuardedBuffer("x_ctx", "int8_t", "4"),), "source": ()}, None),
+    ({"guarded": (GuardedBuffer("x_output", "int8_t", "4"),)}, "x_output is the harness's own buffer"),
+    ({"guarded": (GuardedBuffer("x_buffer", "int8_t", "4"),)}, "x_buffer is the harness's own buffer"),
+    ({"guarded": (GuardedBuffer("x_buffer", "int8_t", "4"),), "scratch_buffer": False}, None),
 ])
 def test_pool_validation_for_the_new_fields(overrides: dict, message) -> None:
     pool = ArgumentPool(name="x", values={}, **overrides)
@@ -181,3 +184,16 @@ def test_registry_refuses_a_second_builder_for_a_template() -> None:
     with pytest.raises(HarnessError, match="Fx/fx/fx.c.j2 already has a harness pool"):
         registry.harness_pool("Fx/fx/fx.c.j2", label="Fx")(minmax_argument_pool)
     assert registry.lookup("Fx/fx/fx.c.j2")[1] == "Fx" and registry.lookup("Fx/missing.c.j2") is None
+
+
+def test_broadcast_to_keeps_its_log_label() -> None:
+    from helia_core_tester.generation.ops.BroadcastFunctions.broadcast_to import broadcast_to_argument_pool
+    from helia_core_tester.tests.harness_render import render_pool
+
+    context = {"name": "bt", "c_type": "int8_t", "kernel_fn": "arm_broadcast_to_s8", "output_size": 4, "rank": 1,
+               "input_shape": [1], "output_shape": [4], "input_arg": "bt_input", "params_arg": "&bt_params",
+               "output_arg": "bt_output", "input_data_array": "    0", "expected_output_array": "    0",
+               "use_batch_harness": False}
+    _, source = render_pool(context, broadcast_to_argument_pool(context), stem="broadcast_to",
+                            validation_key="BroadcastFunctions/broadcast_to/broadcast_to.c.j2", label="BroadcastTo")
+    assert 'HELIA_GUARD_CHECK(bt_output, "BroadcastTo output", failures);' in source

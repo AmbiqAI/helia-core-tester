@@ -142,7 +142,7 @@ def _extract_call_args(source_text: str, function_name: str, *, expected_count: 
 
     Elementwise ops (unlike Convolve's `cmsis_nn_conv_params` struct) don't have a named
     scalar-params struct in the generated header -- their quant scalars are inlined directly
-    as call arguments (with `// name` comments) in the generated `.c` file. This is
+    as call arguments (with `// name` or `/* name */` comments) in the generated `.c` file. This is
     positional/fragile by nature (relies on the generator's fixed CMSIS-NN argument order),
     so callers must pass `expected_count` to fail loudly on any drift instead of silently
     misreading arguments.
@@ -151,7 +151,7 @@ def _extract_call_args(source_text: str, function_name: str, *, expected_count: 
     match = pattern.search(source_text)
     if match is None:
         raise UnsupportedGeneratedTestError(f"Could not find call to `{function_name}(...)` in generated source")
-    body = re.sub(r"//[^\n]*", "", match.group(1))
+    body = re.sub(r"/\*.*?\*/|//[^\n]*", "", match.group(1), flags=re.DOTALL)
     args = [a.strip() for a in body.split(",") if a.strip() != ""]
     if len(args) != expected_count:
         raise UnsupportedGeneratedTestError(
@@ -166,7 +166,7 @@ def _extract_array(header_text: str, array_name: str) -> list[int]:
     match = pattern.search(header_text)
     if match is None:
         raise UnsupportedGeneratedTestError(f"Could not find array `{array_name}` in generated header")
-    raw = re.sub(r"//[^\n]*", "", match.group(1))
+    raw = re.sub(r"/\*.*?\*/|//[^\n]*", "", match.group(1), flags=re.DOTALL)
     values = [v.strip() for v in raw.replace("\n", " ").split(",") if v.strip() != ""]
     return [int(v) for v in values]
 
@@ -180,7 +180,7 @@ def _extract_float_array(header_text: str, array_name: str) -> list[float]:
     match = pattern.search(header_text)
     if match is None:
         raise UnsupportedGeneratedTestError(f"Could not find array `{array_name}` in generated header")
-    raw = re.sub(r"//[^\n]*", "", match.group(1))
+    raw = re.sub(r"/\*.*?\*/|//[^\n]*", "", match.group(1), flags=re.DOTALL)
     raw = re.sub(r"\(\s*float16_t\s*\)", "", raw)
     values = [v.strip() for v in raw.replace("\n", " ").split(",") if v.strip() != ""]
     return [float(v.rstrip("fF")) for v in values]
@@ -191,7 +191,7 @@ def _extract_bool_array(header_text: str, array_name: str) -> list[bool]:
     match = pattern.search(header_text)
     if match is None:
         raise UnsupportedGeneratedTestError(f"Could not find array `{array_name}` in generated header")
-    raw = re.sub(r"//[^\n]*", "", match.group(1))
+    raw = re.sub(r"/\*.*?\*/|//[^\n]*", "", match.group(1), flags=re.DOTALL)
     values = [v.strip() for v in raw.replace("\n", " ").split(",") if v.strip() != ""]
     result: list[bool] = []
     for value in values:
@@ -237,7 +237,7 @@ def _extract_all_call_args(source_text: str, function_name: str, *, expected_cou
         raise UnsupportedGeneratedTestError(f"Could not find call to `{function_name}(...)` in generated source")
     parsed: list[list[str]] = []
     for match in matches:
-        body = re.sub(r"//[^\n]*", "", match.group(1))
+        body = re.sub(r"/\*.*?\*/|//[^\n]*", "", match.group(1), flags=re.DOTALL)
         args = [a.strip() for a in body.split(",") if a.strip() != ""]
         if len(args) != expected_count:
             continue
@@ -250,10 +250,12 @@ def _extract_all_call_args(source_text: str, function_name: str, *, expected_cou
 
 
 def _extract_first_cmsis_function_name(source_text: str) -> str:
-    match = re.search(r"\b(arm_[A-Za-z0-9_]+)\s*\(", source_text)
-    if match is None:
-        raise UnsupportedGeneratedTestError("Could not find a CMSIS-NN `arm_*` call in generated source")
-    return str(match.group(1))
+    """The first `arm_*(` call in the source. The harness's parity assert spells the return type
+    `arm_cmsis_nn_status (` ahead of any call, so the status type is not a candidate."""
+    for match in re.finditer(r"\b(arm_[A-Za-z0-9_]+)\s*\(", source_text):
+        if match.group(1) != "arm_cmsis_nn_status":
+            return str(match.group(1))
+    raise UnsupportedGeneratedTestError("Could not find a CMSIS-NN `arm_*` call in generated source")
 
 
 def _comparison_from_generated_source(source_text: str) -> dict[str, int | float | str]:

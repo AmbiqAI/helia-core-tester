@@ -162,6 +162,10 @@ class ArgumentPool:
             if decl.name in names:
                 raise HarnessError(f"{self.name}: {decl.name} is declared twice")
             names.add(decl.name)
+        harness_owned = [f"{self.name}_output"] + ([f"{self.name}_buffer"] if self.scratch_buffer else [])
+        for buffer in self.guarded:
+            if buffer.name in harness_owned:
+                raise HarnessError(f"{self.name}: guarded buffer {buffer.name} is the harness's own buffer")
         for buffer in (*self.guarded, *(b for p in self.providers for b in p.buffers)):
             if buffer.name in names:
                 raise HarnessError(f"{self.name}: {buffer.name} is declared twice")

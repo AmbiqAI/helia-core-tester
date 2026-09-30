@@ -233,7 +233,7 @@ class OpSquaredDifference(BinaryBasicMathBase):
     def _check_fault_reachable(self, kind: str, kernel_info: Dict[str, Any]) -> None:
         """Reject fault kinds the selected kernel does not diagnose.
 
-        The fault template drives the flat float entry point, whose guard is the
+        The fault edits target the flat float entry point, whose guard is the
         one `if` in the kernel: any NULL pointer or a block_size below 1 returns
         ARM_CMSIS_NN_ARG_ERROR. The int dims-taking kernels have their own guard
         shape (dims pointers and broadcast validity) and no block_size, and the
@@ -241,7 +241,7 @@ class OpSquaredDifference(BinaryBasicMathBase):
         """
         if not kernel_info["float_kernel"]:
             raise self.fault_unreachable(
-                kind, f"{kernel_info['kernel_fn']} is not covered by the float fault template"
+                kind, f"{kernel_info['kernel_fn']} is not covered by the float fault edits"
             )
 
     @staticmethod
