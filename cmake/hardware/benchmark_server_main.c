@@ -138,7 +138,8 @@ int main(void)
         .enable_cache = true,
         .enable_sram = false,
         .debug = {.transport = NSX_DEBUG_NONE},
-        .skip_bsp_init = true,
+        /* HP mode needs BSP SIMOBUCK init. */
+        .skip_bsp_init = false,
         .spot_mgr_profile = false,
     };
     const hct_transport_vtable_t *transport = hct_transport_rtt();
