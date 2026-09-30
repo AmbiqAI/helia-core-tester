@@ -99,7 +99,8 @@ def counter_by_event_id(event_id: int) -> Optional[CounterDescriptor]:
 
 def counter_name_for_event_id(event_id: int) -> str:
     """Catalog name for an event id, or a stable placeholder for ids the catalog does
-    not know (firmware reports whatever it was asked to count)."""
+    not know (PMU firmware rejects ids outside the nsx-pmu-armv8m map at SESSION_PLAN;
+    only DWT-only builds accept any id)."""
     counter = counter_by_event_id(event_id)
     return counter.name if counter is not None else f"event_0x{event_id:04x}"
 
