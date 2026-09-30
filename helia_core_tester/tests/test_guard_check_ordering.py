@@ -106,7 +106,8 @@ def _first_guard_precedes_first_returning_validator(text: str, label: str) -> No
 
 
 def _all_templates() -> list[Path]:
-    return sorted(TEMPLATES_ROOT.glob("**/*.c.j2"))
+    # The harness, plus the body fragments the recurrent and SVDF pools render through it.
+    return sorted([*TEMPLATES_ROOT.glob("**/*.c.j2"), *TEMPLATES_ROOT.glob("**/*.fragment.j2")])
 
 
 def _unguarded_writable_arrays(text: str) -> list[str]:
@@ -153,7 +154,9 @@ def test_inventory_covers_every_template() -> None:
     # Operators migrate onto the generic harness and delete their templates, so the count
     # falls over time; the harness itself must always be in the inventory.
     templates = _all_templates()
-    assert TEMPLATES_ROOT / "common" / "harness" / "harness.c.j2" in templates and len(templates) > 1
+    assert TEMPLATES_ROOT / "common" / "harness" / "harness.c.j2" in templates
+    fragments = [path for path in templates if path.name.endswith(".fragment.j2")]
+    assert len(fragments) >= 11, "the SVDF, LSTM and GRU body fragments must stay in the guard inventory"
 
 
 @pytest.mark.parametrize("template", _all_templates(), ids=_template_id)

@@ -1,4 +1,4 @@
-/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*, arm_batch_to_space_*, arm_space_to_batch_*, arm_depth_to_space_*, arm_space_to_depth_*, arm_strided_slice_*, arm_pad_*, arm_transpose_*, arm_gather_*, arm_resize_nearest_neighbor_*, arm_pack_*, arm_mirror_pad_*, arm_tile_*, arm_reverse_sequence_*, arm_select_v2_*, arm_scatter_nd_*, arm_dynamic_update_slice_*, arm_where_*, arm_requantize_*, arm_batch_norm_*, arm_softmax_*, arm_split_*, arm_unpack_*, arm_quantize_*, arm_dequantize_*, arm_concatenation_*, arm_rsqrt_*, arm_reshape_*, arm_nn_sqrt_*, arm_svdf_*)
+/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*, arm_batch_to_space_*, arm_space_to_batch_*, arm_depth_to_space_*, arm_space_to_depth_*, arm_strided_slice_*, arm_pad_*, arm_transpose_*, arm_gather_*, arm_resize_nearest_neighbor_*, arm_pack_*, arm_mirror_pad_*, arm_tile_*, arm_reverse_sequence_*, arm_select_v2_*, arm_scatter_nd_*, arm_dynamic_update_slice_*, arm_where_*, arm_requantize_*, arm_batch_norm_*, arm_softmax_*, arm_split_*, arm_unpack_*, arm_quantize_*, arm_dequantize_*, arm_concatenation_*, arm_rsqrt_*, arm_reshape_*, arm_nn_sqrt_*, arm_svdf_*, arm_lstm_unidirectional_*, arm_gru_unidirectional_*)
  * from ns-cmsis-nn arm_nnfunctions_flt.h; the fallback contract for unit tests without a checkout.
  * test_bound_operator_fixture_matches_the_real_tree keeps it equal to the export. */
 
@@ -336,7 +336,23 @@ arm_cmsis_nn_status arm_gather_nd_f16(const float16_t *params_data,
                                       float16_t *output_data,
                                       const cmsis_nn_dims *output_dims);
 
+arm_cmsis_nn_status arm_gru_unidirectional_f16(const float16_t *input,
+                                               float16_t *output,
+                                               const cmsis_nn_gru_params_f16 *params,
+                                               cmsis_nn_gru_context_f16 *buffers);
+
+int32_t arm_gru_unidirectional_f16_temp1_get_buffer_size(const cmsis_nn_gru_params_f16 *gru_params);
+
 arm_cmsis_nn_status arm_hard_swish_f16(const float16_t *input, float16_t *output, int32_t size);
+
+arm_cmsis_nn_status arm_lstm_unidirectional_f16(const float16_t *input,
+                                                float16_t *output,
+                                                const cmsis_nn_lstm_params_f16 *params,
+                                                cmsis_nn_lstm_context_f16 *buffers);
+
+int32_t arm_lstm_unidirectional_f16_temp1_get_buffer_size(const cmsis_nn_lstm_params_f16 *lstm_params);
+
+int32_t arm_lstm_unidirectional_f16_temp2_get_buffer_size(const cmsis_nn_lstm_params_f16 *lstm_params);
 
 arm_cmsis_nn_status arm_max_pool_f16(const cmsis_nn_context *ctx,
                                      const cmsis_nn_pool_params_f16 *pool_params,
@@ -858,7 +874,23 @@ arm_cmsis_nn_status arm_gather_nd_f32(const float32_t *params_data,
                                       float32_t *output_data,
                                       const cmsis_nn_dims *output_dims);
 
+arm_cmsis_nn_status arm_gru_unidirectional_f32(const float32_t *input,
+                                               float32_t *output,
+                                               const cmsis_nn_gru_params_f32 *params,
+                                               cmsis_nn_gru_context_f32 *buffers);
+
+int32_t arm_gru_unidirectional_f32_temp1_get_buffer_size(const cmsis_nn_gru_params_f32 *gru_params);
+
 arm_cmsis_nn_status arm_hard_swish_f32(const float32_t *input, float32_t *output, int32_t size);
+
+arm_cmsis_nn_status arm_lstm_unidirectional_f32(const float32_t *input,
+                                                float32_t *output,
+                                                const cmsis_nn_lstm_params_f32 *params,
+                                                cmsis_nn_lstm_context_f32 *buffers);
+
+int32_t arm_lstm_unidirectional_f32_temp1_get_buffer_size(const cmsis_nn_lstm_params_f32 *lstm_params);
+
+int32_t arm_lstm_unidirectional_f32_temp2_get_buffer_size(const cmsis_nn_lstm_params_f32 *lstm_params);
 
 arm_cmsis_nn_status arm_max_pool_f32(const cmsis_nn_context *ctx,
                                      const cmsis_nn_pool_params_f32 *pool_params,

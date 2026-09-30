@@ -1,8 +1,92 @@
-#include "{{ name }}_lstm_unidirectional.h"
-#include "arm_nnfunctions.h"
-{% include "common/standalone/runtime_common.j2" %}
+{#
+  LSTM body fragment for the generic harness: `header`, `file_scope` and `test_body` are imported
+  by the recurrent pool; the kernel is called through <name>_run, which the harness binds from
+  the kernel contract.
+#}
 {% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
+{% from "common/standalone/validation.j2" import validation_outputs with context %}
+{% macro header() %}
+#define {{ macro_prefix }}TIME_MAJOR {{ time_major_literal }}
+#define {{ macro_prefix }}BATCH_SIZE {{ batch_size }}
+#define {{ macro_prefix }}TIME_STEPS {{ time_steps }}
+#define {{ macro_prefix }}INPUT_SIZE {{ input_size }}
+#define {{ macro_prefix }}HIDDEN_SIZE {{ hidden_size }}
+#define {{ macro_prefix }}CELL_SCALE_POWER {{ cell_scale_power }}
+#define {{ macro_prefix }}INPUT_ZERO_POINT {{ input_zero_point }}
+#define {{ macro_prefix }}OUTPUT_ZERO_POINT {{ output_zero_point }}
+#define {{ macro_prefix }}CELL_CLIP {{ cell_clip }}
 
+#define {{ macro_prefix }}FORGET_TO_CELL_MULTIPLIER {{ mult_shift.forget_to_cell_multiplier }}
+#define {{ macro_prefix }}FORGET_TO_CELL_SHIFT {{ mult_shift.forget_to_cell_shift }}
+#define {{ macro_prefix }}INPUT_TO_CELL_MULTIPLIER {{ mult_shift.input_to_cell_multiplier }}
+#define {{ macro_prefix }}INPUT_TO_CELL_SHIFT {{ mult_shift.input_to_cell_shift }}
+#define {{ macro_prefix }}OUTPUT_MULTIPLIER {{ mult_shift.output_multiplier }}
+#define {{ macro_prefix }}OUTPUT_SHIFT {{ mult_shift.output_shift }}
+#define {{ macro_prefix }}OUTPUT_GATE_HIDDEN_MULTIPLIER {{ mult_shift.output_gate_hidden_multiplier }}
+#define {{ macro_prefix }}OUTPUT_GATE_HIDDEN_SHIFT {{ mult_shift.output_gate_hidden_shift }}
+#define {{ macro_prefix }}CELL_GATE_HIDDEN_MULTIPLIER {{ mult_shift.cell_gate_hidden_multiplier }}
+#define {{ macro_prefix }}CELL_GATE_HIDDEN_SHIFT {{ mult_shift.cell_gate_hidden_shift }}
+#define {{ macro_prefix }}FORGET_GATE_HIDDEN_MULTIPLIER {{ mult_shift.forget_gate_hidden_multiplier }}
+#define {{ macro_prefix }}FORGET_GATE_HIDDEN_SHIFT {{ mult_shift.forget_gate_hidden_shift }}
+#define {{ macro_prefix }}INPUT_GATE_HIDDEN_MULTIPLIER {{ mult_shift.input_gate_hidden_multiplier }}
+#define {{ macro_prefix }}INPUT_GATE_HIDDEN_SHIFT {{ mult_shift.input_gate_hidden_shift }}
+#define {{ macro_prefix }}OUTPUT_GATE_INPUT_MULTIPLIER {{ mult_shift.output_gate_input_multiplier }}
+#define {{ macro_prefix }}OUTPUT_GATE_INPUT_SHIFT {{ mult_shift.output_gate_input_shift }}
+#define {{ macro_prefix }}CELL_GATE_INPUT_MULTIPLIER {{ mult_shift.cell_gate_input_multiplier }}
+#define {{ macro_prefix }}CELL_GATE_INPUT_SHIFT {{ mult_shift.cell_gate_input_shift }}
+#define {{ macro_prefix }}FORGET_GATE_INPUT_MULTIPLIER {{ mult_shift.forget_gate_input_multiplier }}
+#define {{ macro_prefix }}FORGET_GATE_INPUT_SHIFT {{ mult_shift.forget_gate_input_shift }}
+#define {{ macro_prefix }}INPUT_GATE_INPUT_MULTIPLIER {{ mult_shift.input_gate_input_multiplier }}
+#define {{ macro_prefix }}INPUT_GATE_INPUT_SHIFT {{ mult_shift.input_gate_input_shift }}
+
+static const {{ input_dtype }} {{ data_prefix }}input_tensor[] = {
+{{ input_tensor_array }}
+};
+
+static const {{ weight_dtype }} {{ data_prefix }}input_gate_input_weights[] = {
+{{ input_gate_input_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}forget_gate_input_weights[] = {
+{{ forget_gate_input_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}cell_gate_input_weights[] = {
+{{ cell_gate_input_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}output_gate_input_weights[] = {
+{{ output_gate_input_weights_array }}
+};
+
+static const {{ weight_dtype }} {{ data_prefix }}input_gate_hidden_weights[] = {
+{{ input_gate_hidden_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}forget_gate_hidden_weights[] = {
+{{ forget_gate_hidden_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}cell_gate_hidden_weights[] = {
+{{ cell_gate_hidden_weights_array }}
+};
+static const {{ weight_dtype }} {{ data_prefix }}output_gate_hidden_weights[] = {
+{{ output_gate_hidden_weights_array }}
+};
+
+static const {{ bias_dtype }} {{ data_prefix }}input_gate_bias[] = {
+{{ input_gate_bias_array }}
+};
+static const {{ bias_dtype }} {{ data_prefix }}forget_gate_bias[] = {
+{{ forget_gate_bias_array }}
+};
+static const {{ bias_dtype }} {{ data_prefix }}cell_gate_bias[] = {
+{{ cell_gate_bias_array }}
+};
+static const {{ bias_dtype }} {{ data_prefix }}output_gate_bias[] = {
+{{ output_gate_bias_array }}
+};
+
+static const {{ output_dtype }} {{ data_prefix }}output[] = {
+{{ output_array }}
+};
+{% endmacro %}
+{% macro file_scope() %}
 {% if temp_sizers_available %}
 /*
  * ns-cmsis-nn temp-buffer sizer detection: DETECTED at generation time --
@@ -330,17 +414,12 @@ static int32_t run_lstm(void)
     buffers.cell_state = buffer3;
     buffers.hidden_state = NULL;
 
-{% if dtype == "s8" %}
-    arm_cmsis_nn_status result = arm_lstm_unidirectional_s8({{ data_prefix }}input_tensor, {{ name }}_output, &params, &buffers);
-{% else %}
-    arm_cmsis_nn_status result = arm_lstm_unidirectional_s16({{ data_prefix }}input_tensor, {{ name }}_output, &params, &buffers);
-{% endif %}
+    arm_cmsis_nn_status result = {{ name }}_run({{ data_prefix }}input_tensor, {{ name }}_output, &params, &buffers);
 
     return result;
 }
-
-int32_t {{ name }}_test_case_run(void)
-{
+{% endmacro %}
+{% macro test_body() %}
 {% if temp_sizers_available %}
     int sizer_failures = {{ name }}_check_temp_sizers();
     if (sizer_failures != 0)
@@ -376,7 +455,4 @@ int32_t {{ name }}_test_case_run(void)
         {{ validation_report_limit | default(8) }},
         failures
     );
-    HELIA_VALIDATE_RETURN_FAILURES(failures);
-}
-
-{% include "common/standalone/main.j2" %}
+{% endmacro %}

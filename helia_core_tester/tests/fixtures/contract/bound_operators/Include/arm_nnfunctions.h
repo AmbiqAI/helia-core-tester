@@ -1,4 +1,4 @@
-/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*, arm_batch_to_space_*, arm_space_to_batch_*, arm_depth_to_space_*, arm_space_to_depth_*, arm_strided_slice_*, arm_pad_*, arm_transpose_*, arm_gather_*, arm_resize_nearest_neighbor_*, arm_pack_*, arm_mirror_pad_*, arm_tile_*, arm_reverse_sequence_*, arm_select_v2_*, arm_scatter_nd_*, arm_dynamic_update_slice_*, arm_where_*, arm_requantize_*, arm_batch_norm_*, arm_softmax_*, arm_split_*, arm_unpack_*, arm_quantize_*, arm_dequantize_*, arm_concatenation_*, arm_rsqrt_*, arm_reshape_*, arm_nn_sqrt_*, arm_svdf_*)
+/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*, arm_batch_to_space_*, arm_space_to_batch_*, arm_depth_to_space_*, arm_space_to_depth_*, arm_strided_slice_*, arm_pad_*, arm_transpose_*, arm_gather_*, arm_resize_nearest_neighbor_*, arm_pack_*, arm_mirror_pad_*, arm_tile_*, arm_reverse_sequence_*, arm_select_v2_*, arm_scatter_nd_*, arm_dynamic_update_slice_*, arm_where_*, arm_requantize_*, arm_batch_norm_*, arm_softmax_*, arm_split_*, arm_unpack_*, arm_quantize_*, arm_dequantize_*, arm_concatenation_*, arm_rsqrt_*, arm_reshape_*, arm_nn_sqrt_*, arm_svdf_*, arm_lstm_unidirectional_*, arm_gru_unidirectional_*)
  * from ns-cmsis-nn arm_nnfunctions.h; the fallback contract for unit tests without a checkout.
  * test_bound_operator_fixture_matches_the_real_tree keeps it equal to the export. */
 
@@ -1368,6 +1368,24 @@ arm_cmsis_nn_status arm_logistic_s16(const int16_t *input,
                                      const int32_t input_size,
                                      int32_t input_multiplier,
                                      int32_t input_left_shift);
+
+arm_cmsis_nn_status arm_lstm_unidirectional_s16(const int16_t *input,
+                                                int16_t *output,
+                                                const cmsis_nn_lstm_params *params,
+                                                cmsis_nn_lstm_context *buffers);
+
+int32_t arm_lstm_unidirectional_s16_temp1_get_buffer_size(const cmsis_nn_lstm_params *lstm_params);
+
+int32_t arm_lstm_unidirectional_s16_temp2_get_buffer_size(const cmsis_nn_lstm_params *lstm_params);
+
+arm_cmsis_nn_status arm_lstm_unidirectional_s8(const int8_t *input,
+                                               int8_t *output,
+                                               const cmsis_nn_lstm_params *params,
+                                               cmsis_nn_lstm_context *buffers);
+
+int32_t arm_lstm_unidirectional_s8_temp1_get_buffer_size(const cmsis_nn_lstm_params *lstm_params);
+
+int32_t arm_lstm_unidirectional_s8_temp2_get_buffer_size(const cmsis_nn_lstm_params *lstm_params);
 
 arm_cmsis_nn_status arm_max_pool_s16(const cmsis_nn_context *ctx,
                                      const cmsis_nn_pool_params *pool_params,

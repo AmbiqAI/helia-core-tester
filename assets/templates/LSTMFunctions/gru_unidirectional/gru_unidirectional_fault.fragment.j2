@@ -1,7 +1,11 @@
-#include "{{ name }}_gru_unidirectional.h"
-{% include "common/standalone/runtime_common.j2" %}
+{#
+  GRU body fragment for the generic harness: `header`, `file_scope` and `test_body` are imported
+  by the recurrent pool; the kernel is called through <name>_run, which the harness binds from
+  the kernel contract.
+#}
 {% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
-
+{% from "common/standalone/validation.j2" import validation_outputs with context %}
+{% macro file_scope() %}
 {# Declare only the buffers this fault mode actually passes to the kernel:
    a NULL-substituted buffer would otherwise be an unused static
    (-Wunused-variable), which becomes a hard error under -Werror. #}
@@ -55,11 +59,14 @@ static int32_t run_gru(void)
     const {{ gru_params_type }} *params_arg = {% if fault == "null_params" %}NULL{% else %}&params{% endif %};
     {{ gru_context_type }} *buffers_arg = {% if fault == "null_buffers" %}NULL{% else %}&buffers{% endif %};
 
-    return {{ kernel_fn }}(input_arg, output_arg, params_arg, buffers_arg);
+    return {{ name }}_run(input_arg, output_arg, params_arg, buffers_arg);
 }
-
-int32_t {{ name }}_test_case_run(void)
-{
+{% endmacro %}
+{% macro test_body() %}
+{# The same fault-mode switches the file-scope macro derives: a macro's variables are its own. #}
+{% set pass_output = fault != "null_output" %}
+{% set pass_temp1 = fault not in ["missing_temp1_prereset", "null_buffers"] %}
+{% set pass_hidden_state = fault == "stateful_batch_gt1" %}
 {% if pass_output %}    HELIA_GUARD_ARM({{ name }}_output, true /* rejected call must not write it: poison */);
 {% endif %}{% if pass_temp1 %}    HELIA_GUARD_ARM({{ name }}_temp1, true /* pure scratch: poison-safe */);
 {% endif %}{% if pass_hidden_state %}    HELIA_GUARD_ARM({{ name }}_hidden_state, true /* rejected call must not write it: poison */);
@@ -73,7 +80,4 @@ int32_t {{ name }}_test_case_run(void)
         status,
         {{ expected_status | default("ARM_CMSIS_NN_SUCCESS") }}
     );
-    HELIA_VALIDATE_RETURN_FAILURES(failures);
-}
-
-{% include "common/standalone/main.j2" %}
+{% endmacro %}

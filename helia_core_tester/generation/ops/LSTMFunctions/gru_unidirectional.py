@@ -14,6 +14,9 @@ import numpy as np
 import tensorflow as tf
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.ops._shared.recurrent_pool import recurrent_argument_pool
+
+GRU_FRAGMENTS = "LSTMFunctions/gru_unidirectional"
 
 
 class OpGRUUnidirectional(OperationBase):
@@ -280,8 +283,7 @@ class OpGRUUnidirectional(OperationBase):
 
         if fault:
             context.update(self.fault_context())
-            h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.h.j2"
-            c_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional_fault.c.j2"
+            variant = "gru_unidirectional_fault"
         elif stream:
             if batch_size != 1:
                 raise ValueError("GRUUnidirectional streaming descriptors require batch_size == 1.")
@@ -299,21 +301,14 @@ class OpGRUUnidirectional(OperationBase):
             context["chunk_lengths"] = chunk_lengths
             context["chunk_input_offsets"] = [c * input_size for c in chunk_offsets]
             context["chunk_output_offsets"] = [c * hidden_size for c in chunk_offsets]
-            h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.h.j2"
-            c_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional_stream.c.j2"
+            variant = "gru_unidirectional_stream"
         else:
-            h_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.h.j2"
-            c_tpl = "LSTMFunctions/gru_unidirectional/gru_unidirectional.c.j2"
+            variant = "gru_unidirectional"
 
-        self._write_op_outputs(
-            Path(output_dir),
-            "gru_unidirectional",
-            h_tpl,
-            c_tpl,
-            context,
-            {
-                "name": name,
-                "operator": self.desc.get("operator", "GRUUnidirectional"),
-                "operator_name": "gru_unidirectional",
-            },
+        self.render_harness_case(
+            Path(output_dir), stem="gru_unidirectional", context=context,
+            pool=recurrent_argument_pool(
+                context, body=f"{GRU_FRAGMENTS}/{variant}.fragment.j2",
+                header=f"{GRU_FRAGMENTS}/gru_unidirectional.fragment.j2", ctype=context["data_dtype"]),
+            validation_key=f"{GRU_FRAGMENTS}/{variant}.c.j2", label="GRU", operator="GRUUnidirectional", sidecar=True,
         )

@@ -7623,6 +7623,120 @@
       ]
     },
     {
+      "name": "arm_lstm_unidirectional_s16",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 6850,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const int16_t *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "int16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "params",
+          "type": "const cmsis_nn_lstm_params *"
+        },
+        {
+          "direction": "in,out",
+          "name": "buffers",
+          "type": "cmsis_nn_lstm_context *"
+        }
+      ]
+    },
+    {
+      "name": "arm_lstm_unidirectional_s16_temp1_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 6897,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "lstm_params",
+          "type": "const cmsis_nn_lstm_params *"
+        }
+      ]
+    },
+    {
+      "name": "arm_lstm_unidirectional_s16_temp2_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 6906,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "lstm_params",
+          "type": "const cmsis_nn_lstm_params *"
+        }
+      ]
+    },
+    {
+      "name": "arm_lstm_unidirectional_s8",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 6828,
+      "guards": [],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const int8_t *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "int8_t *"
+        },
+        {
+          "direction": "in",
+          "name": "params",
+          "type": "const cmsis_nn_lstm_params *"
+        },
+        {
+          "direction": "in,out",
+          "name": "buffers",
+          "type": "cmsis_nn_lstm_context *"
+        }
+      ]
+    },
+    {
+      "name": "arm_lstm_unidirectional_s8_temp1_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 6876,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "lstm_params",
+          "type": "const cmsis_nn_lstm_params *"
+        }
+      ]
+    },
+    {
+      "name": "arm_lstm_unidirectional_s8_temp2_get_buffer_size",
+      "header": "Include/arm_nnfunctions.h",
+      "line": 6886,
+      "guards": [],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "lstm_params",
+          "type": "const cmsis_nn_lstm_params *"
+        }
+      ]
+    },
+    {
       "name": "arm_max_pool_s16",
       "header": "Include/arm_nnfunctions.h",
       "line": 5772,
@@ -15724,6 +15838,100 @@
       ]
     },
     {
+      "name": "arm_gru_unidirectional_f16",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 3288,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "params",
+          "type": "const cmsis_nn_gru_params_f16 *"
+        },
+        {
+          "direction": "in,out",
+          "name": "buffers",
+          "type": "cmsis_nn_gru_context_f16 *"
+        }
+      ]
+    },
+    {
+      "name": "arm_gru_unidirectional_f16_temp1_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 3327,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "gru_params",
+          "type": "const cmsis_nn_gru_params_f16 *"
+        }
+      ]
+    },
+    {
+      "name": "arm_gru_unidirectional_f32",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 1796,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const float32_t *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "params",
+          "type": "const cmsis_nn_gru_params_f32 *"
+        },
+        {
+          "direction": "in,out",
+          "name": "buffers",
+          "type": "cmsis_nn_gru_context_f32 *"
+        }
+      ]
+    },
+    {
+      "name": "arm_gru_unidirectional_f32_temp1_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 1847,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "gru_params",
+          "type": "const cmsis_nn_gru_params_f32 *"
+        }
+      ]
+    },
+    {
       "name": "arm_hard_swish_f16",
       "header": "Include/arm_nnfunctions_flt.h",
       "line": 2552,
@@ -15772,6 +15980,132 @@
           "direction": "in",
           "name": "size",
           "type": "int32_t"
+        }
+      ]
+    },
+    {
+      "name": "arm_lstm_unidirectional_f16",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 3257,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const float16_t *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "float16_t *"
+        },
+        {
+          "direction": "in",
+          "name": "params",
+          "type": "const cmsis_nn_lstm_params_f16 *"
+        },
+        {
+          "direction": "in,out",
+          "name": "buffers",
+          "type": "cmsis_nn_lstm_context_f16 *"
+        }
+      ]
+    },
+    {
+      "name": "arm_lstm_unidirectional_f16_temp1_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 3304,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "lstm_params",
+          "type": "const cmsis_nn_lstm_params_f16 *"
+        }
+      ]
+    },
+    {
+      "name": "arm_lstm_unidirectional_f16_temp2_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 3312,
+      "guards": [
+        "ARM_NN_ENABLE_F16"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "lstm_params",
+          "type": "const cmsis_nn_lstm_params_f16 *"
+        }
+      ]
+    },
+    {
+      "name": "arm_lstm_unidirectional_f32",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 1765,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "arm_cmsis_nn_status",
+      "params": [
+        {
+          "direction": "in",
+          "name": "input",
+          "type": "const float32_t *"
+        },
+        {
+          "direction": "out",
+          "name": "output",
+          "type": "float32_t *"
+        },
+        {
+          "direction": "in",
+          "name": "params",
+          "type": "const cmsis_nn_lstm_params_f32 *"
+        },
+        {
+          "direction": "in,out",
+          "name": "buffers",
+          "type": "cmsis_nn_lstm_context_f32 *"
+        }
+      ]
+    },
+    {
+      "name": "arm_lstm_unidirectional_f32_temp1_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 1817,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "lstm_params",
+          "type": "const cmsis_nn_lstm_params_f32 *"
+        }
+      ]
+    },
+    {
+      "name": "arm_lstm_unidirectional_f32_temp2_get_buffer_size",
+      "header": "Include/arm_nnfunctions_flt.h",
+      "line": 1826,
+      "guards": [
+        "ARM_NN_ENABLE_F32"
+      ],
+      "returns": "int32_t",
+      "params": [
+        {
+          "direction": "in",
+          "name": "lstm_params",
+          "type": "const cmsis_nn_lstm_params_f32 *"
         }
       ]
     },
