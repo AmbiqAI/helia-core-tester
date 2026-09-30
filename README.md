@@ -112,6 +112,10 @@ Identity resolution rules:
   `hardware memory-report` measures against all come from the row in
   `assets/hardware_boards.yaml` (`helia_core_tester boards` lists it). Default:
   `$HPX_BOARD`, else `apollo510_evb`.
+- DWT-only boards (`pmu_tier: dwt`, such as the Cortex-M4 `apollo3p_evb`) report DWT
+  cycles only: the counter default becomes cycles only and event counters are refused.
+  Cortex-M4 runs the int suite and FP32; FP16 cases are skipped and `--precision fp16`
+  is refused.
 - Session sizing comes from the target: every RTT session starts with the firmware's
   `TARGET_INFO` (cases and PMU passes per plan, receive-buffer bytes, PMU width) and
   the host batches the bridged cases from it, so a board with different firmware

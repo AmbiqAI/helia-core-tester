@@ -21,3 +21,14 @@ boards:
     workspace_bytes: 114688
     flash_region: MCU_MRAM
     ram_region: MCU_TCM
+  - id: apollo3p_evb
+    nsx_board: apollo3p_evb
+    soc: apollo3p
+    cpu: cortex-m4
+    pmu_tier: dwt
+    has_mve: false
+    jlink_device: AMA3B2KK-KBR
+    swd_speed_khz: 4000
+    workspace_bytes: 114688
+    flash_region: ROMEM
+    ram_region: RWMEM

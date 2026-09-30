@@ -20,7 +20,7 @@ from helia_core_tester.hardware.boards import (
 
 def test_board_table_seeds_apollo510_evb() -> None:
     table = load_board_table()
-    assert [b.id for b in table] == ["apollo510_evb"]
+    assert [b.id for b in table][:2] == ["apollo510_evb", "apollo3p_evb"]
     spec = resolve_board("apollo510_evb")
     assert spec == BoardSpec(
         id="apollo510_evb",

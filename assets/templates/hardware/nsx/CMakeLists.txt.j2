@@ -16,6 +16,10 @@ set({{ name }} "{{ value }}" CACHE STRING "helia-core-tester kernel option" FORC
 set(NSX_SEGGER_RTT_BUFFER_SIZE_UP {{ rtt_buffer_size_up }} CACHE STRING "RTT channel 0 up buffer bytes" FORCE)
 set(NSX_SEGGER_RTT_BUFFER_SIZE_DOWN {{ rtt_buffer_size_down }} CACHE STRING "RTT channel 0 down buffer bytes" FORCE)
 
+{% if fp16_storage %}
+# No FP16 math: GCC needs IEEE storage.
+add_compile_options($<$<COMPILE_LANGUAGE:C>:-mfp16-format=ieee>)
+{% endif %}
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/nsx/modules.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/nsx/nsx_app_bootstrap.cmake)
 
@@ -69,6 +73,11 @@ add_executable({{ target }}
 set_target_properties({{ target }} PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/{{ image_dir }}")
 add_dependencies({{ target }} hct_kernel_symbol_refs)
+{% if empty_heap %}
+# SoC script has no heap; link none.
+target_link_options({{ target }} PRIVATE
+    "LINKER:--defsym=__HeapBase=_ebss" "LINKER:--defsym=__HeapLimit=_ebss")
+{% endif %}
 target_include_directories({{ target }} PRIVATE
     "${HCT_SYMBOL_REFS_DIR}"
     "${HCT_HARDWARE_DIR}")

@@ -30,6 +30,7 @@ import yaml
 from .case_bundle import BlobInfo, CaseBundle, _blob_info, _case_root, _manifest_blob_entry, _write_blob, _write_manifest
 from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_kernel_id
 from .pathutil import display_path
+from helia_core_tester.core.cpu_targets import get_cpu_profile
 from helia_core_tester.generation.io.dtypes import resolve_comparison
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -529,12 +530,14 @@ def _calculate_convolve_s4_scratch_bytes(
     pad_w: int,
     dilation_h: int,
     dilation_w: int,
+    mve: bool = True,
 ) -> int:
     if _is_convolve_1x1(input_dims, filter_dims, pad_h=pad_h, pad_w=pad_w, dilation_h=dilation_h, dilation_w=dilation_w):
         return 0
 
     rhs_cols = filter_dims["w"] * filter_dims["h"] * input_dims["c"]
-    if _is_convolve_1_x_n(input_dims, filter_dims, stride_w=stride_w, dilation_w=dilation_w):
+    # DSP 1xN still needs im2col.
+    if mve and _is_convolve_1_x_n(input_dims, filter_dims, stride_w=stride_w, dilation_w=dilation_w):
         input_x = input_dims["w"]
         kernel_x = filter_dims["w"]
         output_x = output_dims["w"]
@@ -980,6 +983,7 @@ def _build_convolve_case(
             pad_w=pad_w,
             dilation_h=dilation_h,
             dilation_w=dilation_w,
+            mve=get_cpu_profile(generated_test.cpu).has_mve,
         )
     else:
         scratch_bytes = TemplateContextBuilder.calculate_buffer_size_max(

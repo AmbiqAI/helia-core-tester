@@ -63,7 +63,10 @@ def linker_script_path(board: BoardSpec, sdk_root: Path) -> Path:
     exports it to the CMake cache, so the same default path is rebuilt here from the
     board's SoC directory.
     """
-    return sdk_root / "modules" / "nsx-core" / "src" / board.soc / "gcc" / "linker_script_sbl.ld"
+    gcc_dir = sdk_root / "modules" / "nsx-core" / "src" / board.soc / "gcc"
+    sbl, plain = gcc_dir / "linker_script_sbl.ld", gcc_dir / "linker_script.ld"
+    # Apollo3/4 ship one script, no SBL.
+    return plain if plain.is_file() and not sbl.is_file() else sbl
 
 
 def app_linker_script(board: BoardSpec, build_dir: Path) -> Path:

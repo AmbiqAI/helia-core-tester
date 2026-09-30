@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Union
 
+from ..core.cpu_targets import get_cpu_profile
 from .boards import BoardSpec, default_session_id
 from .firmware_build import (
     FlashDecision,
@@ -32,7 +33,7 @@ from .measurement import (
     counter_passes_for_selection,
     resolve_counter_selection,
 )
-from .pmu_catalog import GROUPS, default_selection
+from .pmu_catalog import CPU_CYCLES_NAME, GROUPS, default_selection
 from .result_bundle import write_timing
 from .run_summary import make_live_progress_printer
 
@@ -214,6 +215,23 @@ class StreamOptions:
     session_id: Optional[str] = None
     float_precision: Optional[str] = None
     """Config.float_precision for the generate step when `--precision` was given (f16/f32)."""
+
+
+def fit_to_board(board: BoardSpec, options: StreamOptions, *, explicit_pmu: bool) -> StreamOptions:
+    """Narrow or refuse what the board cannot run."""
+    if not get_cpu_profile(board.cpu).supports_execution_dtype("FP16"):
+        if options.float_precision == "f16":
+            raise ValueError(f"{board.id} ({board.cpu}) runs no FP16 cases.")
+        # Config narrows "both" itself.
+        if options.suite == "float":
+            options.float_precision = options.float_precision or "f32"
+    if board.pmu_tier == "dwt":
+        events = any(p.counters for p in counter_passes_for_selection(options.pmu_counters))
+        if explicit_pmu and events:
+            raise ValueError(f"{board.id} has no PMU; it counts DWT cycles only.")
+        # One empty pass: DWT cycles.
+        options.pmu_counters = {"cpu": [CPU_CYCLES_NAME]}
+    return options
 
 
 @dataclass
