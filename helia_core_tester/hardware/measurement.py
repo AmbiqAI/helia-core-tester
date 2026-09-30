@@ -33,9 +33,9 @@ MAX_COUNTERS_PER_PASS = 4
 # a larger plan with an ERROR frame. Every host entry point (the CLI parser, the
 # session, the batch runner and the fake target) checks the planned pass count
 # against it so an oversized selection fails before any probe I/O. The full
-# catalog -- cpu:all memory:all mve:all -- plans 5 + 4 + 9 = 18 passes and is
-# therefore refused; passes are never split across sessions.
-MAX_PASSES_PER_PLAN = 16
+# catalog -- cpu:all memory:all mve:all -- plans 5 + 4 + 9 = 18 passes, so it fits
+# one plan; passes are never split across sessions.
+MAX_PASSES_PER_PLAN = 32
 # Firmware admits 1..HCT_SERVER_MAX_CASES cases per SESSION_PLAN (benchmark_server_session.h).
 MAX_CASES_PER_PLAN = 32
 

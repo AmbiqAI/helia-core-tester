@@ -93,13 +93,18 @@ def parse_pmu_counters(values: Sequence[str]) -> PmuSelection:
     """Parse repeated `--pmu-counters GROUP:SELECTION` values (hpx syntax).
 
     SELECTION is `all`, `default`, or a comma-separated list of catalog counter names
-    (`mve:all`, `cpu:default`, `mve:ARM_PMU_MVE_STALL,ARM_PMU_MVE_PRED`). Groups keep
+    (`mve:all`, `cpu:default`, `mve:ARM_PMU_MVE_STALL,ARM_PMU_MVE_PRED`). A bare `all`
+    selects every group at `all` (the full catalog, one run). Groups keep
     their command-line order, which is the order the PMU passes run in. Unknown groups,
     counter names and empty name lists (`mve:,`) are rejected here, naming the valid
     choices, and so is a selection that plans more passes than the firmware runs per
     SESSION_PLAN (measurement.MAX_PASSES_PER_PLAN) -- all before any probe I/O.
     """
     selection: PmuSelection = {}
+    if any(raw.strip().lower() == "all" for raw in values):
+        if len(values) > 1:
+            raise ValueError("--pmu-counters: bare 'all' already selects every group")
+        values = [f"{group}:all" for group in GROUPS]
     for raw in values:
         group, sep, spec = raw.partition(":")
         group = group.strip().lower()

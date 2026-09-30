@@ -18,7 +18,7 @@ extern "C" {
  * counters per pass. Cortex-M55 has 8 x 16-bit
  * event counters; a chained pass uses two slots per counter (32-bit), so 4 chained
  * counters fill the PMU. */
-#define HCT_SERVER_MAX_PASSES 16u
+#define HCT_SERVER_MAX_PASSES 32u
 #define HCT_SERVER_MAX_PASS_NAME 16u
 #define HCT_SERVER_MAX_COUNTERS_PER_PASS 4u
 #define HCT_SERVER_MAX_BLOBS 8u
