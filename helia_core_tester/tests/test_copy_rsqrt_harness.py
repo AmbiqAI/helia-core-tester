@@ -96,6 +96,8 @@ def test_an_empty_copy_keeps_one_element_of_storage_and_compares_nothing() -> No
                             label="Reshape")
     assert "#define CP_OUTPUT_SIZE (1 * 1 * 0 * 1)" in source
     assert re.search(r"int8_t body\[1\];[^}]*\} cp_output_guard;", source)
+    assert "HELIA_GUARD_ARM(cp_output, true" in source and "HELIA_GUARD_CHECK_UNTOUCHED(cp_output" in source
+    assert pool.output_poison and pool.output_untouched
     assert _call(source, "arm_reshape_s8") == ["input", "output", "0"]
 
 

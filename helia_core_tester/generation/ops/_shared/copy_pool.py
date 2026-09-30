@@ -17,6 +17,8 @@ def copy_argument_pool(context: Mapping[str, Any]) -> ArgumentPool:
     elements = int(dims["n"]) * int(dims["h"]) * int(dims["w"]) * int(dims["c"])
     if total != elements:
         raise ValueError(f"{n}: the copy moves {total} elements but the output holds {elements}")
-    # An empty copy compares nothing; one element of storage keeps the guard a real array.
+    # An empty copy compares nothing: one poisoned element of storage keeps the guard a real
+    # array and catches a kernel that writes anyway.
+    empty = total == 0
     return tensor_case_pool(context, {"total_size": str(total)}, output_count=dims_count(dims),
-                            output_capacity="1" if total == 0 else None)
+                            output_capacity="1" if empty else None, output_poison=empty, output_untouched=empty)
