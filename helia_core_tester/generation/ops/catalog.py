@@ -372,7 +372,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "quantize",
         "OpQuantize",
         descriptor_relpaths=("QuantizationFunctions/quantize.yaml", "QuantizationFunctions/quantize_float.yaml"),
-        template_relpath="QuantizationFunctions/quantize",
+        template_relpath=None,
     ),
     "Dequantize": _spec(
         "Dequantize",
@@ -380,7 +380,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "dequantize",
         "OpDequantize",
         descriptor_relpaths=("QuantizationFunctions/dequantize.yaml", "QuantizationFunctions/dequantize_float.yaml"),
-        template_relpath="QuantizationFunctions/dequantize",
+        template_relpath=None,
     ),
     "Reshape": _spec(
         "Reshape",
