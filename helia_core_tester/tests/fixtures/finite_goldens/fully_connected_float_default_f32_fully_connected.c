@@ -5,11 +5,15 @@
 #include "test_runtime/helia_test_runtime.h"
 
 
+
+// The kernel this harness links must have the prototype the ns-cmsis-nn export records.
+_Static_assert(__builtin_types_compatible_p(__typeof__(arm_fully_connected_f32), arm_cmsis_nn_status (const cmsis_nn_context *, const cmsis_nn_fc_params_f32 *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, const float32_t *, const cmsis_nn_dims *, float32_t *, arm_nn_tensor_layout)),
+               "arm_fully_connected_f32: prototype differs from the kernel contract export; rerun `python3 scripts/check_kernel_contract.py export` in ns-cmsis-nn and regenerate");
+
 // Context for buffer allocation
 static cmsis_nn_context fully_connected_float_default_f32_ctx;
 
 // Runtime scratch buffer (max upper bound; actual size queried at runtime)
-// Buffer size calculated conservatively to handle MVE and DSP implementations
 #define FULLY_CONNECTED_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX 1024
 static struct {
     uint8_t head[HELIA_GUARD_BYTES];
@@ -27,66 +31,51 @@ static struct {
 } fully_connected_float_default_f32_output_guard;
 #define fully_connected_float_default_f32_output (fully_connected_float_default_f32_output_guard.body)
 
+
 int32_t fully_connected_float_default_f32_run(
     const float* __restrict input,
     float* __restrict output
 ) {
-    // Calculate required buffer size. Each arm records the sizer it actually calls in
-    // sizer_fn, because the checks below name it in their failure line: reporting
-    // the dispatch-level name here would attribute a per-channel sizer's answer to the
-    // per-tensor one, which is the misattribution #133 exists to remove. The four-bit arm
-    // records nothing, since it calls no sizer at all.
+        // Calculate required buffer size
     int32_t required_buffer_size = arm_fully_connected_f32_get_buffer_size(
-        &fully_connected_float_default_f32_fc_params,
-        &fully_connected_float_default_f32_input_dims,
-        &fully_connected_float_default_f32_filter_dims,
-        &fully_connected_float_default_f32_output_dims,
-        ARM_NN_LAYOUT_NHWC
+        &fully_connected_float_default_f32_fc_params, /* fc_params */
+        &fully_connected_float_default_f32_input_dims, /* input_dims */
+        &fully_connected_float_default_f32_filter_dims, /* filter_dims */
+        &fully_connected_float_default_f32_output_dims, /* output_dims */
+        ARM_NN_LAYOUT_NHWC /* layout */
     );
     // Armed before the capacity check below: an early return there would otherwise leave
     // these canaries unstamped, and the unconditional check in _test_case_run would
     // report a fabricated breach instead of the real sizer error (#68).
     HELIA_GUARD_ARM(fully_connected_float_default_f32_buffer, true /* pure scratch: poison to catch read-before-write */);
     HELIA_GUARD_STAMP_SLACK(fully_connected_float_default_f32_buffer, 0u);
-    // The slack is stamped as wholly unused here so that an early return from the
-    // capacity check below leaves every canary in a checked state; it is re-stamped
-    // with the real size once the context is populated (#68).
 
-
-    // The sizer's answer is checked before it becomes a context size (#133). A negative
-    // answer is the documented out-of-range sentinel and never a usable size; an answer
-    // above this case's static means our generation-time bound and the shipped kernel
-    // disagree. They are separate failures because they have separate owners.
+    // The sizer's answer is checked before it becomes a context size (#133): a negative
+    // answer is the documented out-of-range sentinel, and one above this case's static bound
+    // means the generation-time bound and the shipped kernel disagree.
     HELIA_VALIDATE_SIZER("arm_fully_connected_f32_get_buffer_size", required_buffer_size);
     HELIA_VALIDATE_SIZER_FITS("arm_fully_connected_f32_get_buffer_size", required_buffer_size, FULLY_CONNECTED_FLOAT_DEFAULT_F32_BUFFER_SIZE_MAX);
-
-    // Armed unconditionally: fully_connected_float_default_f32_buffer is only ctx.buf in some branches
-    // below (s4 uses NULL, weight_sum variants point ctx.buf elsewhere), but
-    // poisoning/guarding it here regardless is harmless and keeps the check
-    // in _test_case_run unconditional too.
 
     // Initialize context buffer
     fully_connected_float_default_f32_ctx.buf = fully_connected_float_default_f32_buffer;
     fully_connected_float_default_f32_ctx.size = required_buffer_size;
     HELIA_GUARD_STAMP_SLACK(fully_connected_float_default_f32_buffer, fully_connected_float_default_f32_ctx.buf == fully_connected_float_default_f32_buffer ? (size_t)fully_connected_float_default_f32_ctx.size : 0u);
 
-    // Call fully connected kernel via wrapper (handles per-channel/per-tensor)
-    arm_cmsis_nn_status kernel_status = arm_fully_connected_f32(
-        &fully_connected_float_default_f32_ctx,
-        &fully_connected_float_default_f32_fc_params,
-        &fully_connected_float_default_f32_input_dims,
-        input,
-        &fully_connected_float_default_f32_filter_dims,
-        fully_connected_float_default_f32_weights,
-        &fully_connected_float_default_f32_bias_dims,
-        fully_connected_float_default_f32_biases,
-        &fully_connected_float_default_f32_output_dims,
-        output,
-        ARM_NN_LAYOUT_NHWC
+    return arm_fully_connected_f32(
+        &fully_connected_float_default_f32_ctx, /* ctx */
+        &fully_connected_float_default_f32_fc_params, /* fc_params */
+        &fully_connected_float_default_f32_input_dims, /* input_dims */
+        input, /* input */
+        &fully_connected_float_default_f32_filter_dims, /* filter_dims */
+        fully_connected_float_default_f32_weights, /* kernel */
+        &fully_connected_float_default_f32_bias_dims, /* bias_dims */
+        fully_connected_float_default_f32_biases, /* bias */
+        &fully_connected_float_default_f32_output_dims, /* output_dims */
+        output, /* output */
+        ARM_NN_LAYOUT_NHWC /* layout */
     );
-    
-    return kernel_status;
 }
+
 
 int32_t fully_connected_float_default_f32_test_case_run(void)
 {

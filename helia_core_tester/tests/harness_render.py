@@ -1,4 +1,4 @@
-"""Render Convolve and DepthwiseConv cases through the generic harness from a context dict (test helper)."""
+"""Render cases of the harness-rendered operators from a context dict (test helper)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,12 @@ from helia_core_tester.generation.harness import plan_harness, render_declaratio
 from helia_core_tester.generation.harness import ArgumentPool
 from helia_core_tester.generation.ops.ConvolutionFunctions.convolve import convolve_argument_pool
 from helia_core_tester.generation.ops.ConvolutionFunctions.depthwise_conv import depthwise_argument_pool
+from helia_core_tester.generation.ops.FullyConnectedFunctions.batch_matmul import BMM_VALIDATION_KEY, bmm_argument_pool
+from helia_core_tester.generation.ops.FullyConnectedFunctions.fully_connected import (
+    FC_VALIDATION_KEY,
+    fc_argument_pool,
+    fc_sizer,
+)
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -70,7 +76,7 @@ def depthwise_context(kernel_fn: str, sizer: Optional[str], *, float_kernel: boo
 
 
 def render_pool(context: dict, pool: ArgumentPool, *, stem: str, validation_key: str, label: str,
-                contracts: Optional[ContractSet] = None) -> tuple[str, str]:
+                contracts: Optional[ContractSet] = None, sizer_fn: Any = "context") -> tuple[str, str]:
     """(header, source) as OperationBase.render_harness_files writes them."""
     contracts = contracts if contracts is not None else load_current_contracts()
     # A private environment: the cached one is shared by every generation in the session, and a
@@ -80,7 +86,7 @@ def render_pool(context: dict, pool: ArgumentPool, *, stem: str, validation_key:
     env.globals.update(contract_globals(lambda: contracts))
     header = env.get_template(OperationBase.HARNESS_HEADER).render(
         name=context["name"], header_declarations=[render_declaration(d) for d in pool.header])
-    sizer = context.get("kernel_get_buffer_size_fn")
+    sizer = context.get("kernel_get_buffer_size_fn") if sizer_fn == "context" else sizer_fn
     plan = plan_harness(pool, kernel_fn=context["kernel_fn"], sizer_fn=sizer,
                         scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
                         contracts=contracts)
@@ -100,3 +106,13 @@ def render_convolve(context: dict, *, bias_is_struct: bool = False,
 def render_depthwise(context: dict, *, contracts: Optional[ContractSet] = None) -> tuple[str, str]:
     return render_pool(context, depthwise_argument_pool(context), stem="depthwise_conv",
                        validation_key=DEPTHWISE_VALIDATION_KEY, label="Depthwise convolution", contracts=contracts)
+
+
+def render_fully_connected(context: dict, *, contracts: Optional[ContractSet] = None) -> tuple[str, str]:
+    return render_pool(context, fc_argument_pool(context), stem="fully_connected", validation_key=FC_VALIDATION_KEY,
+                       label="Fully connected", contracts=contracts, sizer_fn=fc_sizer(context))
+
+
+def render_batch_matmul(context: dict, *, contracts: Optional[ContractSet] = None) -> tuple[str, str]:
+    return render_pool(context, bmm_argument_pool(context), stem="batch_matmul", validation_key=BMM_VALIDATION_KEY,
+                       label="Batch matmul", contracts=contracts)

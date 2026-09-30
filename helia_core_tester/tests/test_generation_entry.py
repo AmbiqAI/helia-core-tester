@@ -64,12 +64,12 @@ def test_table_entries_refuse_scratch_overrides(field: dict) -> None:
 
 
 def test_operators_not_yet_bound_name_their_table_entries() -> None:
-    with pytest.raises(EntryError, match=r"FullyConnected does not yet bind its call.*known FullyConnected entries: \['arm_"):
-        _resolve("arm_fx_kernel_s16", operator="FullyConnected")
+    with pytest.raises(EntryError, match=r"AvgPool does not yet bind its call.*known AvgPool entries: \[\]"):
+        _resolve("arm_fx_kernel_s16", operator="AvgPool")
 
 
 def test_convolve_binds_its_call_from_the_contract() -> None:
-    assert {"Convolve", "DepthwiseConv"} <= entry_module.CONTRACT_BOUND_OPERATORS
+    assert {"Convolve", "DepthwiseConv", "FullyConnected"} <= entry_module.CONTRACT_BOUND_OPERATORS
 
 
 def test_contract_entry_uses_its_own_sizer_per_cpu(bound) -> None:

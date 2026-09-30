@@ -1,8 +1,8 @@
 """Fault/rejection cases for the non-recurrent operator families (issue #72).
 
 Covers the shared `fault:` / `expected_status:` plumbing in OperationBase, the
-per-family `<op>_fault.c.j2` templates, and the fault edits Convolve and
-DepthwiseConv apply to their generic-harness pools: an unknown kind is rejected with a
+per-family `<op>_fault.c.j2` templates, and the fault edits the harness-rendered
+operators (HARNESS_SUFFIXES) apply to their pools: an unknown kind is rejected with a
 clear error, `expected_status` defaults to SUCCESS, the GRU/LSTM contexts the
 mechanism was lifted from are unchanged, and every rendered fault case asserts
 the kernel status without ever validating output.
@@ -55,7 +55,7 @@ FAULT_CASES = [
     ("batch_matmul_fault_null_ctx_buf_s8", "batch_matmul", ".buf = NULL"),
     ("batch_matmul_fault_small_ctx_size_s8", "batch_matmul", ".size = 1"),
     ("batch_matmul_fault_negative_dim_s8", "batch_matmul", "input_rhs_dims.w = -1"),
-    ("batch_matmul_fault_null_input_f32", "batch_matmul", "*input_lhs_arg = NULL"),
+    ("batch_matmul_fault_null_input_f32", "batch_matmul", "NULL, /* input_lhs */"),
     ("batch_matmul_fault_packed_rhs_adjoint_f16", "batch_matmul", "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"),
     ("avg_pool_fault_zero_dim_s8", "avg_pool", "input_dims.n = 0"),
     ("avg_pool_fault_negative_dim_s16", "avg_pool", "input_dims.n = -1"),
@@ -74,7 +74,7 @@ FAULT_CASES = [
 # Families rendered by the generic harness: a fault is an edit of the passing case's pool,
 # so the buffers are armed in _run and checked in test_case_run, and a NULL-substituted
 # output is still declared, poisoned and checked untouched.
-HARNESS_SUFFIXES = {"convolve", "depthwise_conv"}
+HARNESS_SUFFIXES = {"convolve", "depthwise_conv", "fully_connected", "batch_matmul"}
 
 GRU_LSTM_CASES = [
     ("gru_unidirectional_error_null_input_f32", "gru_unidirectional", "null_input"),
@@ -246,7 +246,6 @@ def test_rendered_fault_case_asserts_status_and_never_validates_output(
     ("case_name", "op_suffix", "absent_static"),
     [
         ("transpose_conv_fault_null_ctx_buf_s8", "transpose_conv", "_buffer["),
-        ("batch_matmul_fault_null_ctx_buf_s8", "batch_matmul", "_buffer["),
         ("svdf_fault_null_input_ctx_buf_s8", "svdf", "_scratch_input["),
     ],
 )

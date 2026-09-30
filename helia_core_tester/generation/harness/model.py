@@ -34,6 +34,18 @@ class Declaration:
     storage: str = "static const"
     array: bool = False
     comment: str = ""
+    extent: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class HarnessInput:
+    """One input tensor of the case: the kernel parameter it answers to, the `_run` argument
+    that carries it, and the header array the test passes in."""
+
+    param: str
+    local: str
+    array: str
+    ctype: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +115,13 @@ class ArgumentPool:
     output_count: str = "0"
     benchmark: bool = True
     fault: Optional[FaultEdit] = None
+    inputs: Sequence[HarnessInput] = ()
+    no_scratch: bool = False
+    context_setup: str = ""
+
+    @property
+    def harness_inputs(self) -> Sequence[HarnessInput]:
+        return tuple(self.inputs) or (HarnessInput(self.input_param, "input", f"{self.name}_input"),)
 
     def validate(self) -> None:
         names: set[str] = set()
@@ -121,9 +140,17 @@ class ArgumentPool:
             if provider.param in params:
                 raise HarnessError(f"{self.name}: {provider.param} is both a pool value and a provider")
             params.add(provider.param)
-        for param in (self.input_param, self.output_param):
+        call_site = [i.param for i in self.harness_inputs] + [self.output_param]
+        for param in call_site:
             if param in self.values:
                 raise HarnessError(f"{self.name}: {param} is supplied per call site, not as a pool value")
+        if len(set(call_site)) != len(call_site):
+            raise HarnessError(f"{self.name}: call-site parameters {call_site} repeat")
+        locals_ = [i.local for i in self.harness_inputs] + ["output"]
+        if len(set(locals_)) != len(locals_) or not all(_IDENT_RE.match(n) for n in locals_):
+            raise HarnessError(f"{self.name}: _run argument names {locals_} must be distinct C identifiers")
+        if self.no_scratch and self.context_setup.strip():
+            raise HarnessError(f"{self.name}: no_scratch and context_setup both set the context")
         for param, expr in self.values.items():
             if not isinstance(expr, str) or not expr.strip():
                 raise HarnessError(f"{self.name}: pool value {param!r} is empty")
@@ -135,7 +162,7 @@ class ArgumentPool:
                 if not _IDENT_RE.match(decl.name) or decl.name in names:
                     raise HarnessError(f"{self.name}: fault declaration {decl.name!r} is not a free C identifier")
                 names.add(decl.name)
-            supplied = params | {self.input_param, self.output_param}
+            supplied = params | set(call_site)
             for param, expr in fault.values.items():
                 if param not in supplied:
                     raise HarnessError(f"{self.name}: fault {fault.kind!r} edits {param!r}, which the pool does not supply")
@@ -160,6 +187,7 @@ def _render_init(value: Initializer, depth: int = 0) -> str:
 
 
 def render_declaration(decl: Declaration) -> str:
-    head = " ".join(part for part in (decl.storage, decl.ctype, decl.name + ("[]" if decl.array else "")) if part)
+    suffix = f"[{decl.extent or ''}]" if decl.array else ""
+    head = " ".join(part for part in (decl.storage, decl.ctype, decl.name + suffix) if part)
     text = head + ";" if decl.init is None else f"{head} = {_render_init(decl.init)};"
     return (f"// {decl.comment}\n" if decl.comment else "") + text

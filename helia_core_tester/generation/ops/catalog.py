@@ -285,7 +285,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "fully_connected",
         "OpFullyConnected",
         descriptor_relpaths=("FullyConnectedFunctions/fully_connected.yaml", "FullyConnectedFunctions/fully_connected_float.yaml"),
-        template_relpath="FullyConnectedFunctions/fully_connected",
+        template_relpath=None,  # rendered by common/harness
     ),
     "BatchMatMul": _spec(
         "BatchMatMul",
@@ -293,7 +293,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "batch_matmul",
         "OpBatchMatMul",
         descriptor_relpaths=("FullyConnectedFunctions/batch_matmul.yaml", "FullyConnectedFunctions/batch_matmul_float.yaml"),
-        template_relpath="FullyConnectedFunctions/batch_matmul",
+        template_relpath=None,  # rendered by common/harness
     ),
     "Gather": _spec(
         "Gather",

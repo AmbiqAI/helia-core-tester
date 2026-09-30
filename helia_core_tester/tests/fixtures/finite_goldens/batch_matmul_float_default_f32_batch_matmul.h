@@ -1,5 +1,5 @@
-#ifndef BATCH_MATMUL_FLOAT_DEFAULT_F32_MATMUL_BATCH_H
-#define BATCH_MATMUL_FLOAT_DEFAULT_F32_MATMUL_BATCH_H
+#ifndef BATCH_MATMUL_FLOAT_DEFAULT_F32_HARNESS_H
+#define BATCH_MATMUL_FLOAT_DEFAULT_F32_HARNESS_H
 
 #include <stdint.h>
 // Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
@@ -10,33 +10,35 @@
 
 // Input LHS dimensions
 static const cmsis_nn_dims batch_matmul_float_default_f32_input_lhs_dims = {
-    .n = 1, .h = 1,
-    .w = 3, .c = 4
+    .n = 1,
+    .h = 1,
+    .w = 3,
+    .c = 4
 };
 
 // Input RHS dimensions
 static const cmsis_nn_dims batch_matmul_float_default_f32_input_rhs_dims = {
-    .n = 1, .h = 1,
-    .w = 3, .c = 2
+    .n = 1,
+    .h = 1,
+    .w = 3,
+    .c = 2
 };
 
 // Output dimensions
 static const cmsis_nn_dims batch_matmul_float_default_f32_output_dims = {
-    .n = 1, .h = 1,
-    .w = 4, .c = 2
+    .n = 1,
+    .h = 1,
+    .w = 4,
+    .c = 2
 };
 
 // Batch matmul parameters
 static const cmsis_nn_bmm_params_f32 batch_matmul_float_default_f32_bmm_params = {
     .adj_x = false,
     .adj_y = true,
-    .activation = {
-        .min = -1.0e+30f,
-        .max = 1.0e+30f
-    },
+    .activation = {.min = -1.0e+30f, .max = 1.0e+30f},
     .rhs_format = ARM_NN_WEIGHT_FORMAT_STANDARD
 };
-
 
 // Input LHS data (for testing)
 static const float batch_matmul_float_default_f32_input_lhs[] = {

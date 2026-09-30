@@ -1,8 +1,22 @@
-/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*)
+/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*)
  * from ns-cmsis-nn arm_nnfunctions_flt.h; the fallback contract for unit tests without a checkout.
  * test_bound_operator_fixture_matches_the_real_tree keeps it equal to the export. */
 
 #if ARM_NN_ENABLE_F16
+arm_cmsis_nn_status arm_batch_matmul_f16(const cmsis_nn_context *ctx,
+                                         const cmsis_nn_bmm_params_f16 *bmm_params,
+                                         const cmsis_nn_dims *input_lhs_dims,
+                                         const float16_t *input_lhs,
+                                         const cmsis_nn_dims *input_rhs_dims,
+                                         const float16_t *input_rhs,
+                                         const cmsis_nn_dims *output_dims,
+                                         float16_t *output);
+
+int32_t arm_batch_matmul_f16_get_buffer_size(const cmsis_nn_bmm_params_f16 *bmm_params,
+                                             const cmsis_nn_dims *input_lhs_dims,
+                                             const cmsis_nn_dims *input_rhs_dims,
+                                             const cmsis_nn_dims *output_dims);
+
 arm_cmsis_nn_status arm_convolve_1_x_n_f16(const cmsis_nn_context *ctx,
                                            const cmsis_nn_conv_params_f16 *conv_params,
                                            const cmsis_nn_dims *input_dims,
@@ -151,9 +165,52 @@ arm_cmsis_nn_status arm_depthwise_nhwc_conv_f16(const cmsis_nn_context *ctx,
                                                 const cmsis_nn_dims *output_dims,
                                                 float16_t *output);
 
+arm_cmsis_nn_status arm_fully_connected_f16(const cmsis_nn_context *ctx,
+                                            const cmsis_nn_fc_params_f16 *fc_params,
+                                            const cmsis_nn_dims *input_dims,
+                                            const float16_t *input,
+                                            const cmsis_nn_dims *filter_dims,
+                                            const float16_t *kernel,
+                                            const cmsis_nn_dims *bias_dims,
+                                            const float16_t *bias,
+                                            const cmsis_nn_dims *output_dims,
+                                            float16_t *output,
+                                            arm_nn_tensor_layout layout);
+
+int32_t arm_fully_connected_f16_get_buffer_size(const cmsis_nn_fc_params_f16 *fc_params,
+                                                const cmsis_nn_dims *input_dims,
+                                                const cmsis_nn_dims *filter_dims,
+                                                const cmsis_nn_dims *output_dims,
+                                                arm_nn_tensor_layout layout);
+
+arm_cmsis_nn_status arm_fully_connected_nhwc_f16(const cmsis_nn_context *ctx,
+                                                 const cmsis_nn_fc_params_f16 *fc_params,
+                                                 const cmsis_nn_dims *input_dims,
+                                                 const float16_t *input,
+                                                 const cmsis_nn_dims *filter_dims,
+                                                 const float16_t *kernel,
+                                                 const cmsis_nn_dims *bias_dims,
+                                                 const float16_t *bias,
+                                                 const cmsis_nn_dims *output_dims,
+                                                 float16_t *output);
+
 #endif
 
 #if ARM_NN_ENABLE_F32
+arm_cmsis_nn_status arm_batch_matmul_f32(const cmsis_nn_context *ctx,
+                                         const cmsis_nn_bmm_params_f32 *bmm_params,
+                                         const cmsis_nn_dims *input_lhs_dims,
+                                         const float32_t *input_lhs,
+                                         const cmsis_nn_dims *input_rhs_dims,
+                                         const float32_t *input_rhs,
+                                         const cmsis_nn_dims *output_dims,
+                                         float32_t *output);
+
+int32_t arm_batch_matmul_f32_get_buffer_size(const cmsis_nn_bmm_params_f32 *bmm_params,
+                                             const cmsis_nn_dims *input_lhs_dims,
+                                             const cmsis_nn_dims *input_rhs_dims,
+                                             const cmsis_nn_dims *output_dims);
+
 arm_cmsis_nn_status arm_convolve_1_x_n_f32(const cmsis_nn_context *ctx,
                                            const cmsis_nn_conv_params_f32 *conv_params,
                                            const cmsis_nn_dims *input_dims,
@@ -301,5 +358,34 @@ arm_cmsis_nn_status arm_depthwise_nhwc_conv_f32(const cmsis_nn_context *ctx,
                                                 const float32_t *bias,
                                                 const cmsis_nn_dims *output_dims,
                                                 float32_t *output);
+
+arm_cmsis_nn_status arm_fully_connected_f32(const cmsis_nn_context *ctx,
+                                            const cmsis_nn_fc_params_f32 *fc_params,
+                                            const cmsis_nn_dims *input_dims,
+                                            const float32_t *input,
+                                            const cmsis_nn_dims *filter_dims,
+                                            const float32_t *kernel,
+                                            const cmsis_nn_dims *bias_dims,
+                                            const float32_t *bias,
+                                            const cmsis_nn_dims *output_dims,
+                                            float32_t *output,
+                                            arm_nn_tensor_layout layout);
+
+int32_t arm_fully_connected_f32_get_buffer_size(const cmsis_nn_fc_params_f32 *fc_params,
+                                                const cmsis_nn_dims *input_dims,
+                                                const cmsis_nn_dims *filter_dims,
+                                                const cmsis_nn_dims *output_dims,
+                                                arm_nn_tensor_layout layout);
+
+arm_cmsis_nn_status arm_fully_connected_nhwc_f32(const cmsis_nn_context *ctx,
+                                                 const cmsis_nn_fc_params_f32 *fc_params,
+                                                 const cmsis_nn_dims *input_dims,
+                                                 const float32_t *input,
+                                                 const cmsis_nn_dims *filter_dims,
+                                                 const float32_t *kernel,
+                                                 const cmsis_nn_dims *bias_dims,
+                                                 const float32_t *bias,
+                                                 const cmsis_nn_dims *output_dims,
+                                                 float32_t *output);
 
 #endif

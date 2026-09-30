@@ -19,7 +19,7 @@ from typing import Callable, Optional
 from helia_core_tester.contract.ir import load_contract_set
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "contract" / "bound_operators"
-BOUND_PREFIXES = ("arm_convolve_", "arm_depthwise_")
+BOUND_PREFIXES = ("arm_convolve_", "arm_depthwise_", "arm_fully_connected_", "arm_batch_matmul_")
 
 
 def fallback_resolver(resolve: Callable[[], Optional[Path]]) -> Callable[[], Optional[Path]]:
