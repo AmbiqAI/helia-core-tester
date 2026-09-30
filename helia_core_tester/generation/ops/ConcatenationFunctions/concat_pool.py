@@ -34,6 +34,11 @@ def concatenation_argument_pool(context: Mapping[str, Any]) -> ArgumentPool:
     arrays = context["input_data_arrays"]
     if len(arrays) != count:
         raise ValueError(f"{n}: {count} inputs declared but {len(arrays)} input arrays supplied")
+    for key in ("input_x_array", "input_y_array", "input_z_array", "input_w_array", "offsets_array",
+                "input_concat_dims_array"):
+        entries = len(str(context[key]).replace(",", " ").split())
+        if entries != count:
+            raise ValueError(f"{n}: {key} holds {entries} entries for {count} inputs")
     for i, body in enumerate(arrays):
         header.append(Declaration(f"{n}_input{i + 1}", dtype, ArrayLiteral(body), array=True))
     header.append(Declaration(f"{n}_expected_output", context["output_dtype"],

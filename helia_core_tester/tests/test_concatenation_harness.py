@@ -13,12 +13,15 @@ from helia_core_tester.tests.harness_render import render_pool
 
 
 def concat_context(kernel_fn: str = "arm_concatenation_s8", style: str = "per_tensor", count: int = 2, **overrides) -> dict:
+    per_input = lambda values: "    " + ", ".join(str(v) for v in values)  # noqa: E731
     context = {"name": "cc", "kernel_fn": kernel_fn, "output_dims": {"n": 1, "h": 2, "w": 3, "c": 4}, "output_rank": 4,
-               "num_inputs": count, "axis": 2, "input_concat_dims_array": "    1, 2", "output_shape_array": "    1, 2, 3, 4",
-               "input_data_arrays": ["    1"] * count, "expected_output_array": "    2", "input_dtype": "int8_t",
-               "output_dtype": "int8_t", "call_style": style, "input_x_array": "    1, 2", "input_y_array": "    2, 2",
-               "input_z_array": "    4, 4", "input_w_array": "    1, 1", "output_x": 3, "output_y": 2, "output_z": 4,
-               "output_w": 1, "offsets_array": "    0, 1", "use_batch_harness": False}
+               "num_inputs": count, "axis": 2, "input_concat_dims_array": per_input(range(1, count + 1)),
+               "output_shape_array": "    1, 2, 3, 4", "input_data_arrays": ["    1"] * count,
+               "expected_output_array": "    2", "input_dtype": "int8_t", "output_dtype": "int8_t", "call_style": style,
+               "input_x_array": per_input(range(1, count + 1)), "input_y_array": per_input([2] * count),
+               "input_z_array": per_input([4] * count), "input_w_array": per_input([1] * count), "output_x": 3,
+               "output_y": 2, "output_z": 4, "output_w": 1, "offsets_array": per_input(range(count)),
+               "use_batch_harness": False}
     context.update(overrides)
     return context
 
@@ -70,20 +73,36 @@ def test_axis_kernels_are_called_once_per_input_as_statements(axis: str, extra: 
     ({"num_inputs": 0, "input_data_arrays": []}, "at least one input"),
     ({"call_style": "axis_q"}, "call_style 'axis_q' is not one of"),
     ({"num_inputs": 3}, "3 inputs declared but 2 input arrays supplied"),
+    ({"num_inputs": 3, "input_data_arrays": ["    1"] * 3}, "input_x_array holds 2 entries for 3 inputs"),
+    ({"input_x_array": "    1"}, "input_x_array holds 1 entries for 2 inputs"),
+    ({"offsets_array": "    0, 1, 2"}, "offsets_array holds 3 entries for 2 inputs"),
 ])
 def test_bad_shapes_are_refused(overrides: dict, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         concatenation_argument_pool(concat_context(**overrides))
 
 
-def test_bridge_skips_the_parity_asserts_status_type_when_naming_the_kernel() -> None:
-    from helia_core_tester.hardware.generated_test_bridge import (
-        UnsupportedGeneratedTestError,
-        _extract_first_cmsis_function_name,
-    )
+def test_a_style_and_kernel_that_disagree_are_refused_by_name() -> None:
+    from helia_core_tester.contract.bind import ContractBindError
+    from helia_core_tester.generation.harness import HarnessError
 
-    source = ("_Static_assert(__builtin_types_compatible_p(__typeof__(arm_concatenation_s8), "
-              "arm_cmsis_nn_status (const int8_t * const *)), \"x\");\n    return arm_concatenation_s8(\n")
-    assert _extract_first_cmsis_function_name(source) == "arm_concatenation_s8"
-    with pytest.raises(UnsupportedGeneratedTestError, match="Could not find"):
-        _extract_first_cmsis_function_name("arm_cmsis_nn_status (int);")
+    with pytest.raises(HarnessError, match="a call overrides 'input', which arm_concatenation_s8 does not take under"):
+        _render(concat_context("arm_concatenation_s8", "axis_x"))
+    with pytest.raises(ContractBindError, match=r"arm_concatenation_s8_x: the harness cannot supply \['input_x"):
+        _render(concat_context("arm_concatenation_s8_x", "per_tensor"))
+
+
+def test_a_single_input_axis_case_makes_one_call() -> None:
+    _, source = _render(concat_context("arm_concatenation_s8_w", "axis_w", count=1))
+    calls = _calls(source, "arm_concatenation_s8_w")
+    assert len(calls) == 1 and calls[0][0] == "input_ptrs[0]" and calls[0][-1] == "(uint32_t)cc_offsets[0]"
+
+
+def test_a_call_list_refuses_the_benchmark_form() -> None:
+    from dataclasses import replace
+
+    from helia_core_tester.generation.harness import HarnessError
+
+    pool = concatenation_argument_pool(concat_context("arm_concatenation_s8_x", "axis_x"))
+    with pytest.raises(HarnessError, match="a call list has no benchmark or fault form"):
+        replace(pool, benchmark=True).validate()
