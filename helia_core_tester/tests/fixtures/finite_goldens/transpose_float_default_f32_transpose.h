@@ -1,34 +1,34 @@
-#ifndef TRANSPOSE_FLOAT_DEFAULT_F32_TRANSPOSE_H
-#define TRANSPOSE_FLOAT_DEFAULT_F32_TRANSPOSE_H
+#ifndef TRANSPOSE_FLOAT_DEFAULT_F32_HARNESS_H
+#define TRANSPOSE_FLOAT_DEFAULT_F32_HARNESS_H
 
 #include <stdint.h>
-// Golden arrays may carry NAN/INFINITY, and this header is included ahead of any
-// other translation-unit include that would define them.
+// Input arrays may carry NAN/INFINITY tokens, and this header is included ahead of
+// any other translation-unit include that would define them.
 #include <math.h>
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
 
-// Input dimensions
 static const cmsis_nn_dims transpose_float_default_f32_input_dims = {
-    .n = 1, .h = 2,
-    .w = 3, .c = 4
+    .n = 1,
+    .h = 2,
+    .w = 3,
+    .c = 4
 };
 
-// Output dimensions
 static const cmsis_nn_dims transpose_float_default_f32_output_dims = {
-    .n = 1, .h = 3,
-    .w = 2, .c = 4
+    .n = 1,
+    .h = 3,
+    .w = 2,
+    .c = 4
 };
 
-// Transpose parameters
 static const int32_t transpose_float_default_f32_perm[] = {
     0, 2, 1, 3
 };
 
 static const cmsis_nn_transpose_params_f32 transpose_float_default_f32_transpose_params = {
     .num_dims = 4,
-    .perm = {
-        (int32_t)transpose_float_default_f32_perm[0],        (int32_t)transpose_float_default_f32_perm[1],        (int32_t)transpose_float_default_f32_perm[2],        (int32_t)transpose_float_default_f32_perm[3]    }
+    .perm = { (int32_t)transpose_float_default_f32_perm[0], (int32_t)transpose_float_default_f32_perm[1], (int32_t)transpose_float_default_f32_perm[2], (int32_t)transpose_float_default_f32_perm[3] }
 };
 
 // Input data (for testing)

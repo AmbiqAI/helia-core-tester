@@ -122,18 +122,19 @@ class OpBatchToSpaceND(OperationBase):
             'output_size': int(np.prod(output_shape)),
         }
 
-        includes_api_dir = Path(output_dir) / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="batch_to_space_nd", context=context, pool=batch_to_space_nd_argument_pool(context),
+            validation_key="ReshapeFunctions/batch_to_space_nd/batch_to_space_nd.c.j2", label="BatchToSpaceND", operator="BatchToSpaceND",
+        )
 
-        h_content = self.render_template("ReshapeFunctions/batch_to_space_nd/batch_to_space_nd.h.j2", context)
-        (includes_api_dir / f"{name}_batch_to_space_nd.h").write_text(h_content)
-        c_content = self.render_template("ReshapeFunctions/batch_to_space_nd/batch_to_space_nd.c.j2", context)
-        (Path(output_dir) / f"{name}_batch_to_space_nd.c").write_text(c_content)
 
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'BatchToSpaceND'),
-            'operator_name': 'batch_to_space_nd',
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        (Path(output_dir) / "CMakeLists.txt").write_text(cmake_content)
+from helia_core_tester.generation.harness import ArrayLiteral, Declaration  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_count, dims_declaration, tensor_case_pool  # noqa: E402
+
+
+def batch_to_space_nd_argument_pool(context):
+    n, block, crops = context["name"], context["block_shape"], context["crops"]
+    extra = (Declaration(f"{n}_block_shape", "cmsis_nn_tile", {"h": block[0], "w": block[1]}),
+             Declaration(f"{n}_crop_dims", "cmsis_nn_dims", {"n": crops[0], "h": crops[1], "w": crops[2], "c": crops[3]}))
+    return tensor_case_pool(context, {"block_shape": f"&{n}_block_shape", "crop": f"&{n}_crop_dims"},
+                            extra_header=extra, output_count=f"({context['output_size']})")

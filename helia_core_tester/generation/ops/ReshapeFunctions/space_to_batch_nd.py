@@ -115,18 +115,20 @@ class OpSpaceToBatchND(OperationBase):
             'output_zero_point': int(output_zp),
         }
 
-        includes_api_dir = Path(output_dir) / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="space_to_batch_nd", context=context, pool=space_to_batch_nd_argument_pool(context),
+            validation_key="ReshapeFunctions/space_to_batch_nd/space_to_batch_nd.c.j2", label="SpaceToBatchND", operator="SpaceToBatchND",
+        )
 
-        h_content = self.render_template("ReshapeFunctions/space_to_batch_nd/space_to_batch_nd.h.j2", context)
-        (includes_api_dir / f"{name}_space_to_batch_nd.h").write_text(h_content)
-        c_content = self.render_template("ReshapeFunctions/space_to_batch_nd/space_to_batch_nd.c.j2", context)
-        (Path(output_dir) / f"{name}_space_to_batch_nd.c").write_text(c_content)
 
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'SpaceToBatchND'),
-            'operator_name': 'space_to_batch_nd',
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        (Path(output_dir) / "CMakeLists.txt").write_text(cmake_content)
+from helia_core_tester.generation.harness import ArrayLiteral, Declaration  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_count, dims_declaration, tensor_case_pool  # noqa: E402
+
+
+def space_to_batch_nd_argument_pool(context):
+    n, block, pads = context["name"], context["block_shape"], context["paddings"]
+    extra = (Declaration(f"{n}_block_shape", "cmsis_nn_tile", {"h": block[0], "w": block[1]}),
+             Declaration(f"{n}_pad_dims", "cmsis_nn_dims", {"n": pads[0], "h": pads[1], "w": pads[2], "c": pads[3]}))
+    return tensor_case_pool(context, {"block_shape": f"&{n}_block_shape", "pad": f"&{n}_pad_dims",
+                                      "output_offset": context["output_zero_point"]},
+                            extra_header=extra, output_count=f"({context['output_size']})")

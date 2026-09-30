@@ -227,26 +227,34 @@ class OpGatherND(OperationBase):
             "output_size": int(np.prod(output_shape)),
         }
 
-        includes_api_dir = output_dir / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="gather_nd", context=context, pool=gather_nd_argument_pool(context),
+            validation_key="GatherFunctions/gather_nd/gather_nd.c.j2", label="GatherND", operator="GatherND",
+        )
 
-        h_content = self.render_template("GatherFunctions/gather_nd/gather_nd.h.j2", context)
-        h_path = includes_api_dir / f"{name}_gather_nd.h"
-        with open(h_path, "w") as f:
-            f.write(h_content)
 
-        c_content = self.render_template("GatherFunctions/gather_nd/gather_nd.c.j2", context)
-        c_path = output_dir / f"{name}_gather_nd.c"
-        with open(c_path, "w") as f:
-            f.write(c_content)
 
-        cmake_context = {
-            "name": name,
-            "operator": self.desc.get("operator", "GatherND"),
-            "operator_name": "gather_nd",
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        cmake_path = output_dir / "CMakeLists.txt"
-        with open(cmake_path, "w") as f:
-            f.write(cmake_content)
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, HarnessInput  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_declaration  # noqa: E402
 
+
+def gather_nd_argument_pool(context):
+    n = context["name"]
+    dims = ("params_dims", "indices_dims", "output_dims")
+    header = [dims_declaration(f"{n}_{d}", context[d]) for d in dims]
+    header += [Declaration(f"{n}_{k}_shape", "int32_t", ArrayLiteral(context[f"{k}_shape_array"]), array=True)
+               for k in ("params", "indices", "output")]
+    header += [
+        Declaration(f"{n}_params_data", context["input_dtype"], ArrayLiteral(context["params_data_array"]), array=True),
+        Declaration(f"{n}_indices", "int32_t", ArrayLiteral(context["indices_data_array"]), array=True),
+        Declaration(f"{n}_expected_output", context["output_dtype"], ArrayLiteral(context["expected_output_array"]), array=True),
+    ]
+    params = Declaration(f"{n}_params", "cmsis_nn_gather_nd_params",
+                         {"params_rank": str(context["params_rank_test"]), "indices_rank": str(context["indices_rank_test"]),
+                          "batch_dims": str(context["batch_dims_test"])}, storage="static")
+    return ArgumentPool(
+        name=n, values={**{d: f"&{n}_{d}" for d in dims}, "params": f"&{n}_params"}, header=header, source=(params,),
+        inputs=(HarnessInput("params_data", "params", f"{n}_params_data"),
+                HarnessInput("indices_data", "indices", f"{n}_indices", "int32_t")),
+        output_count=f"({context['output_size']})", benchmark=False, scratch_buffer=False,
+    )

@@ -87,18 +87,18 @@ class OpDepthToSpace(OperationBase):
             'output_size': int(np.prod(output_shape)),
         }
 
-        includes_api_dir = Path(output_dir) / "includes"
-        includes_api_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="depth_to_space", context=context, pool=depth_to_space_argument_pool(context),
+            validation_key="ReshapeFunctions/depth_to_space/depth_to_space.c.j2", label="DepthToSpace", operator="DepthToSpace",
+        )
 
-        h_content = self.render_template("ReshapeFunctions/depth_to_space/depth_to_space.h.j2", context)
-        (includes_api_dir / f"{name}_depth_to_space.h").write_text(h_content)
-        c_content = self.render_template("ReshapeFunctions/depth_to_space/depth_to_space.c.j2", context)
-        (Path(output_dir) / f"{name}_depth_to_space.c").write_text(c_content)
 
-        cmake_context = {
-            'name': name,
-            'operator': self.desc.get('operator', 'DepthToSpace'),
-            'operator_name': 'depth_to_space',
-        }
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", cmake_context)
-        (Path(output_dir) / "CMakeLists.txt").write_text(cmake_content)
+from helia_core_tester.generation.harness import ArrayLiteral, Declaration  # noqa: E402
+from helia_core_tester.generation.harness.simple import dims_count, dims_declaration, tensor_case_pool  # noqa: E402
+
+
+def depth_to_space_argument_pool(context):
+    n = context["name"]
+    extra = (Declaration(f"{n}_block_size", "int32_t", str(context["block_size"])),)
+    return tensor_case_pool(context, {"block_size": f"{n}_block_size"}, extra_header=extra,
+                            output_count=f"({context['output_size']})")

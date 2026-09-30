@@ -1,4 +1,5 @@
 """SelectV2 operation implementation."""
+from pathlib import Path
 
 from typing import Dict
 import numpy as np
@@ -132,16 +133,22 @@ class OpSelectV2(OperationBase):
             "kernel_fn": ki["kernel_fn"],
         }
 
-        includes_dir = output_dir / "includes"
-        includes_dir.mkdir(parents=True, exist_ok=True)
+        self.render_harness_case(
+            Path(output_dir), stem="select_v2", context=context, pool=select_v2_argument_pool(context),
+            validation_key="SelectFunctions/select_v2/select_v2.c.j2", label="SelectV2", operator="SelectV2",
+        )
 
-        h_content = self.render_template("SelectFunctions/select_v2/select_v2.h.j2", context)
-        (includes_dir / f"{name}_select_v2.h").write_text(h_content)
 
-        c_content = self.render_template("SelectFunctions/select_v2/select_v2.c.j2", context)
-        (output_dir / f"{name}_select_v2.c").write_text(c_content)
+from helia_core_tester.generation.harness.simple import shaped_case_pool  # noqa: E402
 
-        cmake_content = self.render_template("common/CMakeLists.txt.j2", {
-            "name": name, "operator": "SelectV2", "operator_name": "select_v2"
-        })
-        (output_dir / "CMakeLists.txt").write_text(cmake_content)
+
+def select_v2_argument_pool(context):
+    n = context["name"]
+    return shaped_case_pool(
+        context, shapes=(("output_shape", "output_shape"), ("cond_strides", "cond_strides"), ("x_strides", "x_strides"),
+                         ("y_strides", "y_strides")),
+        params_type="cmsis_nn_select_v2_params",
+        params={"rank": context["rank"], "output_shape": f"{n}_output_shape", "cond_strides": f"{n}_cond_strides",
+                "x_strides": f"{n}_x_strides", "y_strides": f"{n}_y_strides"},
+        inputs=(("condition", "condition", "condition_array"), ("x", "x", "x_data_array"), ("y", "y", "y_data_array")),
+        condition_ctype=context["condition_c_type"], output_count=str(context["output_size"]))

@@ -101,3 +101,30 @@ class OpPack(OperationBase):
             context,
             cmake_context,
         )
+
+
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration, HarnessInput  # noqa: E402
+from helia_core_tester.generation.harness.registry import harness_pool  # noqa: E402
+
+
+@harness_pool("ConcatenationFunctions/pack/pack.c.j2", label="Pack")
+def pack_argument_pool(context):
+    """Pack takes an array of input pointers; the case lists them at file scope."""
+    n, dtype, count = context["name"], context["input_dtype"], int(context["num_inputs"])
+    header = []
+    if int(context["input_dims_count"]) > 0:
+        header.append(Declaration(f"{n}_input_shape", "int32_t", ArrayLiteral(context["input_shape_array"]), array=True))
+    header.append(Declaration(f"{n}_output_shape", "int32_t", ArrayLiteral(context["output_shape_array"]), array=True))
+    header += [Declaration(f"{n}_input{i + 1}", dtype, ArrayLiteral(context["input_data_arrays"][i]), array=True)
+               for i in range(count)]
+    header.append(Declaration(f"{n}_expected_output", context["output_dtype"],
+                              ArrayLiteral(context["expected_output_array"]), array=True))
+    pointers = Declaration(f"{n}_input_ptrs", f"{dtype}*", ArrayLiteral("\n".join(f"    {n}_input{i + 1}," for i in range(count))),
+                           array=True, comment="Array of input pointers")
+    values = {"num_inputs": str(count), "input_dims": str(context["input_dims_count"]),
+              "input_shape": f"{n}_input_shape" if int(context["input_dims_count"]) > 0 else "NULL", "axis": str(context["axis"])}
+    return ArgumentPool(
+        name=n, values=values, header=header, source=(pointers,),
+        inputs=(HarnessInput("input_data", "input_ptrs", f"{n}_input_ptrs", f"{dtype}* const"),),
+        output_count=f"({context['output_size']})", benchmark=False, scratch_buffer=False,
+    )
