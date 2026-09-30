@@ -1,4 +1,4 @@
-/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*, arm_batch_to_space_*, arm_space_to_batch_*, arm_depth_to_space_*, arm_space_to_depth_*, arm_strided_slice_*, arm_pad_*, arm_transpose_*, arm_gather_*, arm_resize_nearest_neighbor_*, arm_pack_*, arm_mirror_pad_*, arm_tile_*, arm_reverse_sequence_*, arm_select_v2_*, arm_scatter_nd_*, arm_dynamic_update_slice_*, arm_where_*)
+/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*, arm_batch_to_space_*, arm_space_to_batch_*, arm_depth_to_space_*, arm_space_to_depth_*, arm_strided_slice_*, arm_pad_*, arm_transpose_*, arm_gather_*, arm_resize_nearest_neighbor_*, arm_pack_*, arm_mirror_pad_*, arm_tile_*, arm_reverse_sequence_*, arm_select_v2_*, arm_scatter_nd_*, arm_dynamic_update_slice_*, arm_where_*, arm_requantize_*, arm_batch_norm_*, arm_softmax_*)
  * from ns-cmsis-nn arm_nnfunctions.h; the fallback contract for unit tests without a checkout.
  * test_bound_operator_fixture_matches_the_real_tree keeps it equal to the export. */
 
@@ -1598,6 +1598,22 @@ arm_cmsis_nn_status arm_relu_s8(const int8_t *input,
                                 int8_t *output,
                                 const int32_t output_size);
 
+arm_cmsis_nn_status arm_requantize_s16_s16(const int16_t *input,
+                                           int16_t *output,
+                                           int32_t size,
+                                           int32_t effective_scale_multiplier,
+                                           int32_t effective_scale_shift,
+                                           int32_t input_zeropoint,
+                                           int32_t output_zeropoint);
+
+arm_cmsis_nn_status arm_requantize_s8_s8(const int8_t *input,
+                                         int8_t *output,
+                                         int32_t size,
+                                         int32_t effective_scale_multiplier,
+                                         int32_t effective_scale_shift,
+                                         int32_t input_zeropoint,
+                                         int32_t output_zeropoint);
+
 arm_cmsis_nn_status arm_resize_nearest_neighbor_s16(const cmsis_nn_context *ctx,
                                                     const cmsis_nn_resize_params *resize_params,
                                                     const cmsis_nn_dims *input_shape,
@@ -1647,6 +1663,38 @@ arm_cmsis_nn_status arm_select_v2_s8(const bool *condition,
                                      const int8_t *y,
                                      const cmsis_nn_select_v2_params *params,
                                      int8_t *output);
+
+arm_cmsis_nn_status arm_softmax_s16(const int16_t *input,
+                                    const int32_t num_rows,
+                                    const int32_t row_size,
+                                    const int32_t mult,
+                                    const int32_t shift,
+                                    const cmsis_nn_softmax_lut_s16 *softmax_params,
+                                    int16_t *output);
+
+void arm_softmax_s8(const int8_t *input,
+                    const int32_t num_rows,
+                    const int32_t row_size,
+                    const int32_t mult,
+                    const int32_t shift,
+                    const int32_t diff_min,
+                    int8_t *output);
+
+void arm_softmax_s8_s16(const int8_t *input,
+                        const int32_t num_rows,
+                        const int32_t row_size,
+                        const int32_t mult,
+                        const int32_t shift,
+                        const int32_t diff_min,
+                        int16_t *output);
+
+void arm_softmax_u8(const uint8_t *input,
+                    const int32_t num_rows,
+                    const int32_t row_size,
+                    const int32_t mult,
+                    const int32_t shift,
+                    const int32_t diff_min,
+                    uint8_t *output);
 
 arm_cmsis_nn_status arm_space_to_batch_nd_s16(const int16_t *input_data,
                                               const cmsis_nn_dims *input_dims,

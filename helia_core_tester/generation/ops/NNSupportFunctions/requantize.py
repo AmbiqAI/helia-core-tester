@@ -5,7 +5,17 @@ Requantize operation implementation.
 from typing import Dict
 import numpy as np
 from pathlib import Path
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
+from helia_core_tester.generation.harness.simple import tensor_case_pool
 from helia_core_tester.generation.ops._shared.quantization_base import QuantizationFamilyBase
+
+
+def requantize_argument_pool(context: Dict) -> ArgumentPool:
+    shape = Declaration(f"{context['name']}_input_shape", "int32_t", ArrayLiteral(context["input_shape_array"]), array=True)
+    values = {key: context[key] for key in ("effective_scale_multiplier", "effective_scale_shift", "input_zeropoint",
+                                            "output_zeropoint")}
+    return tensor_case_pool(context, {"size": context["input_size"], **values}, dims=(), extra_header=(shape,),
+                            output_count=str(context["input_size"]))
 
 
 class OpRequantize(QuantizationFamilyBase):
@@ -91,9 +101,8 @@ class OpRequantize(QuantizationFamilyBase):
             "output_zeropoint": output_zp,
         }
 
-        cmake_context = {
-            "name": name,
-            "operator": self.desc.get("operator", "Requantize"),
-            "operator_name": "requantize",
-        }
-        self._write_op_outputs(output_dir, "requantize", "NNSupportFunctions/requantize/requantize.h.j2", "NNSupportFunctions/requantize/requantize.c.j2", context, cmake_context)
+        self.render_harness_case(
+            output_dir, stem="requantize", context=context, pool=requantize_argument_pool(context),
+            validation_key="NNSupportFunctions/requantize/requantize.c.j2", label="Requantize", operator="Requantize",
+            sidecar=True,
+        )

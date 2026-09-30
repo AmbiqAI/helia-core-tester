@@ -1766,7 +1766,7 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
 
 /* Fixed CMSIS-NN reference lookup tables required by arm_softmax_s16() -- identical bit
  * patterns are used by every generated S16 softmax test case (see
- * Tests/helia-core-tester/assets/templates/SoftmaxFunctions/softmax/softmax.h.j2), so they
+ * Tests/helia-core-tester/helia_core_tester/generation/ops/SoftmaxFunctions/softmax_luts.py), so they
  * are embedded once as firmware constants rather than transmitted per case. */
 static const int16_t hct_softmax_exp_lut[513] = {
 

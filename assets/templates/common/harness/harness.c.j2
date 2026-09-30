@@ -158,7 +158,12 @@ int32_t {{ name }}_run(
     {{ output_dtype }}* __restrict output
 ) {
     {{ harness_init() }}
+    {% if harness.void_return %}
+    {{ harness.run_call }};
+    return ARM_CMSIS_NN_SUCCESS;
+    {% else %}
     return {{ harness.run_call }};
+    {% endif %}
 }
 
 {% if harness_benchmark %}
@@ -183,7 +188,12 @@ int32_t {{ name }}_bench_op(void)
 static int32_t {{ name }}_bench_op(void)
 {% endif %}
 {
+    {% if harness.void_return %}
+    {{ harness.bench_call }};
+    return ARM_CMSIS_NN_SUCCESS;
+    {% else %}
     return {{ harness.bench_call }};
+    {% endif %}
 }
 
 {% if not use_batch_harness %}

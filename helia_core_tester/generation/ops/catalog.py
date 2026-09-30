@@ -333,14 +333,14 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         descriptor_relpaths=("LSTMFunctions/gru_unidirectional_float.yaml",),
         template_relpath="LSTMFunctions/gru_unidirectional",
     ),
-    "Requantize": _spec("Requantize", "NNSupportFunctions", "requantize", "OpRequantize", "NNSupportFunctions/requantize.yaml", "NNSupportFunctions/requantize"),
+    "Requantize": _spec("Requantize", "NNSupportFunctions", "requantize", "OpRequantize", "NNSupportFunctions/requantize.yaml", None),
     "BatchNorm": _spec(
         "BatchNorm",
         "NNSupportFunctions",
         "batch_norm",
         "OpBatchNorm",
         "NNSupportFunctions/batch_norm_float.yaml",
-        "NNSupportFunctions/batch_norm",
+        None,
     ),
     "Pad": _spec(
         "Pad",
@@ -427,7 +427,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "softmax",
         "OpSoftmax",
         descriptor_relpaths=("SoftmaxFunctions/softmax.yaml", "SoftmaxFunctions/softmax_float.yaml"),
-        template_relpath="SoftmaxFunctions/softmax",
+        template_relpath=None,
     ),
     "StridedSlice": _spec(
         "StridedSlice",

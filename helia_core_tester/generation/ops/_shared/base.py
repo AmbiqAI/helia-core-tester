@@ -1122,15 +1122,12 @@ class OperationBase(ABC):
         overrides `context['kernel_get_buffer_size_fn']` (None: the case calls no sizer).
         """
         from helia_core_tester.contract import render as contract_render
+        from helia_core_tester.generation.harness import HarnessError
         from helia_core_tester.generation.harness import plan_harness, render_declaration
 
         name = context["name"]
         env = template_environment(str(find_tester_templates_dir()))
-        includes_dir = output_dir / "includes"
-        includes_dir.mkdir(parents=True, exist_ok=True)
-        header = env.get_template(self.HARNESS_HEADER).render(
-            name=name, header_declarations=[render_declaration(d) for d in pool.header])
-        (includes_dir / f"{name}_{stem}.h").write_text(header)
+        # Every refusal runs before anything is written, so a refused case leaves no partial output.
         sizer = context.get("kernel_get_buffer_size_fn") if sizer_fn == "context" else sizer_fn
         plan = plan_harness(
             pool,
@@ -1139,6 +1136,15 @@ class OperationBase(ABC):
             scratch_bytes=None if sizer else int(context.get("entry_scratch_bytes") or 0),
             contracts=contract_render.load_current_contracts(),
         )
+        expected = str(context.get("expected_status", "ARM_CMSIS_NN_SUCCESS"))
+        if plan.void_return and expected != "ARM_CMSIS_NN_SUCCESS":
+            raise HarnessError(f"{context['name']}: {context['kernel_fn']} returns void, so expected_status "
+                               f"{expected} can never be observed")
+        includes_dir = output_dir / "includes"
+        includes_dir.mkdir(parents=True, exist_ok=True)
+        header = env.get_template(self.HARNESS_HEADER).render(
+            name=name, header_declarations=[render_declaration(d) for d in pool.header])
+        (includes_dir / f"{name}_{stem}.h").write_text(header)
         render_context = TemplateContextBuilder.build_validation_context(validation_key, dict(context), self.desc)
         if sidecar:
             payload = self._build_generation_sidecar(stem, render_context)
