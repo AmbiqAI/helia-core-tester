@@ -14,6 +14,21 @@
 #include "arm_nnfunctions.h"
 #include "benchmark_server_session.h"
 
+#ifdef HELIA_HARDWARE_BUILD
+#include "am_mcu_apollo.h"
+#endif
+
+/* The Armv8.1-M PMU (8 x 16-bit event counters + 32-bit CCNTR on Cortex-M55) is only
+ * present when the device header says so; a Cortex-M4 hardware build or the host
+ * harness compile take the DWT-only path below. */
+#if defined(__PMU_PRESENT) && (__PMU_PRESENT == 1)
+#include "nsx_pmu_map.h"
+#include "nsx_pmu_utils.h"
+#define HCT_PMU_AVAILABLE 1
+#else
+#define HCT_PMU_AVAILABLE 0
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -269,6 +284,55 @@ static inline bool null_arg_requested(const hct_server_session_t *session, int32
 {
     return (session->null_arg_mask & bit) != 0;
 }
+
+/* A timed sample counts kernel calls only. */
+typedef struct
+{
+    uint32_t pmu_mask;
+    uint32_t dwt_on;
+    uint32_t dwt_off;
+    bool armed;
+} hct_window_t;
+
+extern hct_window_t hct_window;
+
+/* Resume counting; PMU store goes last. */
+static inline bool hct_window_open(void)
+{
+    if (hct_window.armed)
+    {
+#ifdef HELIA_HARDWARE_BUILD
+        DWT->CTRL = hct_window.dwt_on;
+#endif
+#if HCT_PMU_AVAILABLE
+        ARM_PMU_CNTR_Enable(hct_window.pmu_mask);
+#endif
+    }
+    return true;
+}
+
+/* Pause counting; PMU store goes first. */
+static inline void hct_window_close(bool *open)
+{
+    (void)open;
+#if HCT_PMU_AVAILABLE
+    ARM_PMU_CNTR_Disable(hct_window.pmu_mask);
+#endif
+#ifdef HELIA_HARDWARE_BUILD
+    if (hct_window.armed)
+    {
+        DWT->CTRL = hct_window.dwt_off;
+    }
+#endif
+}
+
+/* Counts `call` only; cleanup closes after it. */
+#define HCT_TIMED(call)                                    \
+    ({                                                     \
+        __attribute__((cleanup(hct_window_close), unused)) \
+        bool hct_open_ = hct_window_open();                \
+        call;                                              \
+    })
 
 
 /* The hand-written abs adapter (benchmark_server_session.c), dispatched like every

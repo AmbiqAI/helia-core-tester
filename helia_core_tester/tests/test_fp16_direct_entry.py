@@ -10,7 +10,7 @@ import pytest
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.contract.bind import takes
 from helia_core_tester.contract.render import load_current_contracts
-from helia_core_tester.generation.entry import EntryError, resolve_entry
+from helia_core_tester.generation.entry import EntryError, check_entry_fault, resolve_entry
 from helia_core_tester.generation.test_ops import _required_kernel_symbols, generate_test
 from helia_core_tester.generation.entry import CONTRACT_BOUND_OPERATORS
 from helia_core_tester.generation.utils.temp_sizer_probe import probe_header_symbols
@@ -47,7 +47,8 @@ def test_fp16_entries_take_their_layout_from_the_prototype() -> None:
                              cpu="cortex-m55", desc={"name": "x", "entry_sizer": "arm_convolve_f16_get_buffer_size"},
                              contracts=contracts)
     assert resolved == {"kernel_fn": "arm_convolve_nhwc_f16", "entry_family": "contract",
-                        "kernel_get_buffer_size_fn": "arm_convolve_f16_get_buffer_size"}
+                        "kernel_get_buffer_size_fn": "arm_convolve_f16_get_buffer_size",
+                        "kernel_needs_layout": False, "buffer_size_needs_layout": True}
     # The nhwc entry takes no layout while its family's sizer does: the harness binds each by name.
     assert not takes(contracts.require("arm_convolve_nhwc_f16"), "layout")
     assert takes(contracts.require("arm_convolve_f16_get_buffer_size"), "layout")
@@ -62,6 +63,8 @@ def test_an_entry_the_checkout_lacks_gates_the_case_before_it_resolves() -> None
     # symbols and never reaches resolve_entry, which would refuse the unknown kernel.
     desc = _descriptors()["convolve_float_entry_acc16_8x8_k3x3_f16"]
     assert _required_kernel_symbols(desc) == ["arm_convolve_f16_acc16", "arm_convolve_f16_get_buffer_size"]
+    if load_current_contracts().find("arm_convolve_f16_acc16") is not None:
+        pytest.skip("this ns-cmsis-nn checkout declares arm_convolve_f16_acc16")
     with pytest.raises(EntryError, match="is not a public function"):
         resolve_entry("Convolve", desc["entry"], activation_dtype="FP16", weight_dtype="FP16", cpu="cortex-m55",
                       desc=desc, contracts=load_current_contracts())
@@ -132,3 +135,68 @@ def test_cases_without_an_entry_keep_the_layout_argument(name: str, tmp_path: Pa
     kernel = re.search(r"kernel_status = (\w+)\(|return (arm_\w+_f16)\(", source)
     fn = kernel.group(1) or kernel.group(2)
     assert "ARM_NN_LAYOUT_" in _call(source, fn)
+
+
+@pytest.mark.parametrize(
+    ("name", "entry"),
+    [
+        ("convolve_fault_entry_acc16_invalid_layout_f16", "arm_convolve_f16_acc16"),
+        ("convolve_fault_entry_1x1_acc16_invalid_layout_f16", "arm_convolve_1x1_f16_acc16"),
+        ("convolve_fault_entry_1xn_acc16_invalid_layout_f16", "arm_convolve_1_x_n_f16_acc16"),
+        ("depthwise_conv_fault_entry_acc16_invalid_layout_f16", "arm_depthwise_conv_f16_acc16"),
+        ("fully_connected_fault_entry_acc16_invalid_layout_f16", "arm_fully_connected_f16_acc16"),
+    ],
+)
+def test_invalid_layout_fault_calls_the_entry_with_a_bad_layout(name: str, entry: str, tmp_path: Path) -> None:
+    desc = _descriptors()[name]
+    required = _required_kernel_symbols(desc)
+    if required and not probe_header_symbols(required):
+        pytest.skip(f"{name}: this ns-cmsis-nn checkout does not declare {required}")
+    source = _source(name, tmp_path)
+
+    assert "(arm_nn_tensor_layout)(ARM_NN_LAYOUT_NHWC + 1)" in _call(source, entry)
+    assert "ARM_CMSIS_NN_ARG_ERROR" in source
+
+
+@pytest.mark.parametrize(
+    ("name", "fault"),
+    [
+        ("convolve_float_entry_nhwc_8x8_k3x3_f16", "invalid_layout"),
+        ("convolve_float_entry_acc16_8x8_k3x3_f16", "null_input"),
+    ],
+)
+def test_other_entry_faults_are_rejected(name: str, fault: str, tmp_path: Path) -> None:
+    desc = _descriptors()[name]
+    required = _required_kernel_symbols(desc)
+    if required and not probe_header_symbols(required):
+        pytest.skip(f"{name}: this ns-cmsis-nn checkout does not declare {required}")
+    desc = {**desc, "fault": fault, "expected_status": "ARM_CMSIS_NN_ARG_ERROR"}
+
+    with pytest.raises(EntryError, match="supports only fault: invalid_layout"):
+        generate_test(desc, str(tmp_path))
+
+
+@pytest.mark.parametrize(
+    ("desc", "resolved", "refused"),
+    [
+        ({"activation_dtype": "FP16"}, {"kernel_needs_layout": True}, False),
+        ({"activation_dtype": "FP16", "fault": "invalid_layout"}, {"kernel_needs_layout": True}, False),
+        ({"activation_dtype": "FP32", "fault": "invalid_layout"}, {"kernel_needs_layout": True}, False),
+        ({"activation_dtype": "fp16", "fault": "invalid_layout"}, {"kernel_needs_layout": True}, False),
+        ({"activation_dtype": "FP16", "fault": "invalid_layout"}, {"kernel_needs_layout": False}, True),
+        ({"activation_dtype": "FP16", "fault": "invalid_layout"}, {}, True),
+        ({"activation_dtype": "S8", "fault": "invalid_layout"}, {"kernel_needs_layout": True}, True),
+        ({"activation_dtype": "F16", "fault": "invalid_layout"}, {"kernel_needs_layout": True}, True),
+        ({"fault": "invalid_layout"}, {"kernel_needs_layout": True}, True),
+        ({"activation_dtype": "FP16", "fault": "null_input"}, {"kernel_needs_layout": True}, True),
+        ({"activation_dtype": "FP16", "fault": ""}, {}, False),
+    ],
+)
+def test_check_entry_fault_admits_only_a_layout_decline_on_a_layout_taking_float_entry(desc, resolved, refused) -> None:
+    desc = {"name": "x", **desc}
+    resolved = {"kernel_fn": "arm_fx_f16", **resolved}
+    if refused:
+        with pytest.raises(EntryError, match=r"supports only fault: invalid_layout.*got fault"):
+            check_entry_fault(desc, resolved)
+    else:
+        check_entry_fault(desc, resolved)

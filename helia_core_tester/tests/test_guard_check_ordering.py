@@ -196,8 +196,8 @@ def _descriptors_by_name() -> dict[str, dict]:
 @pytest.fixture
 def rendered_source(request, tmp_path, _descriptors_by_name) -> str:
     """Render one case. Per-case rather than a single batch, because a few descriptors read
-    data from an ns-cmsis-nn checkout that the pure-Python job does not have; those skip
-    while the rest still assert. The same templates are covered textually above."""
+    data from an ns-cmsis-nn checkout; without one (no CMSIS_NN_ROOT) those skip while
+    the rest still assert. The same templates are covered textually above."""
     import helia_core_tester.generation.test_ops as generation_module
 
     case_name = request.param

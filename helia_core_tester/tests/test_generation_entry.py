@@ -79,7 +79,8 @@ def test_convolve_binds_its_call_from_the_contract() -> None:
 
 def test_contract_entry_uses_its_own_sizer_per_cpu(bound) -> None:
     assert _resolve("arm_fx_kernel_s16") == {"kernel_fn": "arm_fx_kernel_s16", "entry_family": "contract",
-                                             "kernel_get_buffer_size_fn": "arm_fx_kernel_s16_get_buffer_size"}
+                                             "kernel_get_buffer_size_fn": "arm_fx_kernel_s16_get_buffer_size",
+                                             "kernel_needs_layout": False, "buffer_size_needs_layout": False}
     assert _resolve("arm_fx_kernel_s16", cpu="cortex-m55")["kernel_get_buffer_size_fn"] == \
         "arm_fx_kernel_s16_get_buffer_size_mve"
 

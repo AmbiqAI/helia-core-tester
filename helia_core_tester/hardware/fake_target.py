@@ -9,7 +9,7 @@ disagree about a payload layout without a round-trip test noticing.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -26,7 +26,7 @@ from .measurement import (
     RawSample,
     auto_calibrate_iterations,
 )
-from .pmu_catalog import CPU_CYCLES_EVENT_ID, CPU_CYCLES_NAME
+from .pmu_catalog import CPU_CYCLES_EVENT_ID, CPU_CYCLES_NAME, counter_by_event_id
 from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLargeError
 from .wire import (
     CAP_ABS_S8,
@@ -81,6 +81,7 @@ FAKE_MAX_RX_PAYLOAD = FAKE_RX_BUFFER_BYTES - HEADER_SIZE
 EVENT_COUNTER_MASK = 0xFFFF  # one 16-bit slot
 CHAINED_COUNTER_MASK = 0xFFFFFFFF  # two slots chained
 CCNTR_MASK = 0xFFFFFFFF
+HCTP_STATUS_INVALID_ARGUMENT = -1  # hctp_protocol.h
 
 
 class _TargetState(str, Enum):
@@ -141,10 +142,8 @@ class FakeKernelAdapter:
                     )
                 ]
                 for counter in counter_pass.counters:
-                    # A PMU-present target counts whatever event id it was programmed with
-                    # and reports it supported=1, catalog-known or not; only the fake's
-                    # deliberately unsupported groups (and DWT-only targets) clear it.
-                    supported = counter.group in self.supported_groups or counter.group == "unknown"
+                    # Only unsupported groups clear the flag.
+                    supported = counter.group in self.supported_groups
                     value = self._counter_value(counter, blobs, iterations, sample_index)
                     # Honour the real counter widths so tests can provoke an overflow:
                     # a 16-bit slot wraps unless the pass chains slot pairs into 32 bits.
@@ -244,8 +243,11 @@ class FakeTargetTransport:
         max_rx_payload: int = FAKE_MAX_RX_PAYLOAD,
         max_cases_per_session: int = MAX_CASES_PER_PLAN,
         max_passes: int = MAX_PASSES_PER_PLAN,
+        rejections: Mapping[str, tuple[str, int]] | None = None,
     ) -> None:
         self.build_id = build_id
+        # case_id -> (stage, kernel status) to refuse.
+        self._rejections = dict(rejections or {})
         self._session_id = 0xC0DE1234
         self._pmu_present = pmu_present
         self._pmu_counter_slots = pmu_counter_slots if pmu_present else 0
@@ -382,6 +384,15 @@ class FakeTargetTransport:
                 raise ValueError(f"SESSION_PLAN case id {case.case_id!r} does not fit the fake target's {FAKE_MAX_CASE_ID}-byte case-id storage (with NUL).")
         return plan
 
+    def _unmapped_ids(self, plan: SessionPlan) -> list[int]:
+        """Plan ids the firmware's PMU map lacks."""
+        # DWT-only firmware accepts any id.
+        if not self._pmu_present:
+            return []
+        ids = (counter.event_id for counter_pass in plan.passes for counter in counter_pass.counters)
+        # test_catalog_matches_the_synced_module guards this.
+        return [event_id for event_id in ids if counter_by_event_id(event_id) is None]
+
     def _handle_frame(self, frame: Frame) -> None:
         if frame.header.message_type == MessageType.TARGET_INFO_ACK:
             self._state = _TargetState.WAIT_PLAN
@@ -389,6 +400,10 @@ class FakeTargetTransport:
             return
         if frame.header.message_type == MessageType.SESSION_PLAN:
             self._plan = self._admit_session_plan(frame.payload)
+            if self._unmapped_ids(self._plan):
+                # Same ERROR frame as queue_error_frame().
+                self._queue_error(f"message_type={int(MessageType.SESSION_PLAN)} status={HCTP_STATUS_INVALID_ARGUMENT}")
+                return
             self._state = _TargetState.WAIT_CASE_META
             self._request_case()
             return
@@ -409,6 +424,10 @@ class FakeTargetTransport:
             self._handle_blob_chunk(frame.payload)
             return
         if frame.header.message_type == MessageType.RUN_CORRECTNESS:
+            status = self._rejected_status("correctness")
+            if status is not None:
+                self._finish_case(correctness_ran=False, status=status)
+                return
             self._run_correctness()
             self._state = _TargetState.WAIT_CORRECTNESS_ACK
             return
@@ -543,6 +562,10 @@ class FakeTargetTransport:
             counter_passes=passes,
         )
         self._last_iterations = iterations
+        status = self._rejected_status("performance")
+        if status is not None:
+            # Like firmware: queued samples precede the refusal.
+            samples = samples[: len(samples) // 2]
         for sample in samples:
             reported = RawSample(
                 sample_index=sample.sample_index,
@@ -552,7 +575,25 @@ class FakeTargetTransport:
                 pass_name=sample.pass_name,
             )
             self._queue(MessageType.SAMPLE_RESULT, encode_sample_result(reported))
-        complete = CaseComplete(case_id=self._case_meta.case_id, workspace_used_bytes=self._arena.used_bytes)
+        self._finish_case(correctness_ran=True, status=status)
+
+    def _rejected_status(self, stage: str) -> int | None:
+        """Kernel status when this stage refuses."""
+        assert self._case_meta is not None
+        rejection = self._rejections.get(self._case_meta.case_id)
+        return rejection[1] if rejection is not None and rejection[0] == stage else None
+
+    def _finish_case(self, *, correctness_ran: bool, status: int | None) -> None:
+        """CASE_COMPLETE, then the next case, like finish_case()."""
+        assert self._plan is not None
+        assert self._case_meta is not None
+        complete = CaseComplete(
+            case_id=self._case_meta.case_id,
+            workspace_used_bytes=self._arena.used_bytes,
+            correctness_ran=correctness_ran,
+            performance_ran=status is None,
+            kernel_status=status or 0,
+        )
         self._queue(MessageType.CASE_COMPLETE, encode_case_complete(complete))
         self._case_workspace_history.append(self._arena.used_bytes)
         self._arena.rewind()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import subprocess
 
 import pytest
@@ -9,6 +10,14 @@ from helia_core_tester.cli import app
 
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _no_saved_options(monkeypatch, tmp_path) -> None:
+    """Keep the real build dir out."""
+    from helia_core_tester.hardware import cli as hardware_cli
+
+    monkeypatch.setattr(hardware_cli, "repo_root", lambda: tmp_path / "repo")
 
 
 def _result_text(result) -> str:
@@ -302,3 +311,114 @@ def test_stream_requires_the_build_id_stamp_unless_allowed(monkeypatch, tmp_path
     monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _stream)
     runner.invoke(app, ["hardware", "run", "--skip-generate", "--skip-flash", "--allow-unverified-firmware"])
     assert seen["allow_unverified_firmware"] is True
+
+
+@pytest.mark.parametrize("command", ["build", "flash", "run"])
+def test_inline_asm_flag_is_tri_state(monkeypatch, tmp_path, command) -> None:
+    """Unset reuses the build dir's saved setting."""
+    from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    seen: dict = {}
+
+    def _capture(*args, **kwargs):
+        seen["options"] = kwargs.get("app_options") or kwargs.get("options")
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(firmware_build, "build_firmware", _capture)
+    monkeypatch.setattr(firmware_build, "flash_firmware", _capture)
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _capture)
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    built = nsx_app.AppOptions(cmsis_nn_ref="v9", cmsis_nn_ref_explicit=True, requantize_inline_asm=False)
+    nsx_app.save_options(app_dir, built)
+    base = ["hardware", command, "--build-dir", str(tmp_path)]
+    for flags, inline_asm in (([], False), (["--inline-asm"], True), (["--no-inline-asm"], False)):
+        runner.invoke(app, base + flags)
+        assert seen["options"] == dataclasses.replace(built, requantize_inline_asm=inline_asm), flags
+
+
+def test_stream_only_run_skips_option_resolution(monkeypatch, tmp_path) -> None:
+    """A gone kernel root cannot block streaming."""
+    from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    seen: dict = {}
+
+    def _pipeline(*args, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _pipeline)
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_root=tmp_path / "moved", requantize_inline_asm=False))
+    result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-generate", "--skip-flash"])
+    assert seen["app_options"] is None and "inline asm off" in _result_text(result)
+
+
+def _capture_run(monkeypatch, seen: dict) -> None:
+    from helia_core_tester.hardware import hardware_pipeline
+
+    def _pipeline(*args, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _pipeline)
+
+
+def test_skip_flash_generates_from_the_built_kernels(monkeypatch, tmp_path) -> None:
+    """Generation matches the flashed firmware."""
+    from helia_core_tester.hardware import firmware_build, nsx_app
+
+    seen: dict = {}
+    _capture_run(monkeypatch, seen)
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    # Defaulted, off the pin: still kept.
+    built = nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=False)
+    nsx_app.save_options(app_dir, built)
+    base = ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash"]
+    result = runner.invoke(app, base)
+    assert seen["app_options"] == built and "Options changed" not in _result_text(result)
+    seen.clear()
+    result = runner.invoke(app, base + ["--no-inline-asm", "--cmsis-nn-ref", "v9"])
+    assert seen["app_options"] == built
+
+
+@pytest.mark.parametrize("flags", [["--cmsis-nn-ref", "v10"], ["--inline-asm"]])
+def test_skip_flash_refuses_new_kernel_flags(monkeypatch, tmp_path, flags) -> None:
+    """New flags would not reach the firmware."""
+    from helia_core_tester.hardware import firmware_build, nsx_app
+
+    seen: dict = {}
+    _capture_run(monkeypatch, seen)
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_ref="v9", requantize_inline_asm=False))
+    result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash", *flags])
+    assert result.exit_code != 0 and not seen
+    assert "--skip-flash keeps the built kernels" in _result_text(result)
+
+
+def test_skip_flash_needs_a_saved_build(monkeypatch, tmp_path) -> None:
+    seen: dict = {}
+    _capture_run(monkeypatch, seen)
+    result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash"])
+    assert result.exit_code != 0 and not seen
+    assert "needs a saved build" in _result_text(result)
+
+
+def test_skip_flash_refusal_is_one_line(monkeypatch, tmp_path) -> None:
+    """Refusals are errors, not tracebacks."""
+    from helia_core_tester.hardware import firmware_build, nsx_app
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    app_dir = firmware_build.nsx_app_dir(tmp_path)
+    app_dir.mkdir(parents=True)
+    nsx_app.save_options(app_dir, nsx_app.AppOptions(cmsis_nn_ref="v9"))
+    result = runner.invoke(app, ["hardware", "run", "--build-dir", str(tmp_path), "--skip-flash"])
+    assert result.exit_code == 1
+    assert "Kernels changed since the build; rebuild first." in _result_text(result)
+    assert "Traceback" not in _result_text(result)

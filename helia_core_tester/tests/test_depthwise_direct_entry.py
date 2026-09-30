@@ -39,6 +39,8 @@ def test_entries_resolve_from_the_contract_with_the_opt_scratch_query() -> None:
             "kernel_fn": entry,
             "kernel_get_buffer_size_fn": "arm_depthwise_conv_s8_opt_get_buffer_size",
             "entry_family": "contract",
+            "kernel_needs_layout": False,
+            "buffer_size_needs_layout": False,
         }
 
 
@@ -91,7 +93,7 @@ def test_planar_case_checks_the_rule(tmp_path: Path) -> None:
 
 
 def test_entry_with_a_fault_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="not supported with fault"):
+    with pytest.raises(ValueError, match="supports only fault: invalid_layout"):
         _source(
             "depthwise_conv_entry_3x3_25x5_c64_s8",
             tmp_path,

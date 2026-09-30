@@ -259,6 +259,7 @@ def test_cmakelists_uses_nsxs_own_bootstrap_and_finalize(tmp_path: Path) -> None
     for target in ("nsx::cmsis_nn", "nsx::segger_rtt", "nsx::pmu_armv8m"):
         assert target in text
     assert "SEGGER_RTT.c" not in text, "RTT comes only from the module"
+    assert "CMSIS_5" not in text, "PMU comes only from the module"
 
 
 def test_server_sources_compile_out_of_this_checkout(tmp_path: Path) -> None:

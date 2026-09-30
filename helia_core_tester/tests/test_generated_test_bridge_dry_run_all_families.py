@@ -1,5 +1,5 @@
 """Regression check: run build_case_bundle_from_generated_test() against
-every real generated test case under artifacts/generated_tests/int/cortex-m55,
+every real generated test case under artifacts/generated_tests/{int,float}/cortex-m55,
 with require_fvp_pass=False (this sandbox has no FVP reports), and confirm every
 case either bridges successfully or raises UnsupportedGeneratedTestError with a
 reason (never an unexpected exception type). This is a host-side dry run of the
@@ -18,15 +18,17 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _all_families():
-    root = _PROJECT_ROOT / "artifacts/generated_tests/int/cortex-m55"
-    if not root.is_dir():
-        return []
-    return sorted(p.name for p in root.iterdir() if p.is_dir())
+    params = []
+    for suite in ("int", "float"):
+        root = _PROJECT_ROOT / "artifacts/generated_tests" / suite / "cortex-m55"
+        if root.is_dir():
+            params += [(suite, p.name) for p in sorted(root.iterdir()) if p.is_dir()]
+    return params
 
 
-@pytest.mark.parametrize("family", _all_families())
-def test_bridge_dry_run_over_all_generated_cases_in_family(tmp_path, family):
-    cases = discover_or_skip(_PROJECT_ROOT, cpu="cortex-m55", family=family)
+@pytest.mark.parametrize(("suite", "family"), _all_families())
+def test_bridge_dry_run_over_all_generated_cases_in_family(tmp_path, suite, family):
+    cases = discover_or_skip(_PROJECT_ROOT, cpu="cortex-m55", family=family, suite=suite)
     bridged = 0
     skipped = 0
     for case in cases:

@@ -14,10 +14,20 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Union
 
 from .boards import BoardSpec, default_session_id
-from .firmware_build import FlashDecision, build_id_path, flash_firmware, read_build_id, resolve_build_dir, stage_kernels
+from .firmware_build import (
+    FlashDecision,
+    build_id_path,
+    built_kernels,
+    flash_firmware,
+    nsx_app_dir,
+    read_build_id,
+    resolve_build_dir,
+    stage_kernels,
+)
 from .measurement import (
     TooManyPassesError,
     UnsupportedCounterError,
+    check_outbox_fits,
     check_pass_count,
     counter_passes_for_selection,
     resolve_counter_selection,
@@ -84,13 +94,18 @@ def parse_pmu_counters(values: Sequence[str]) -> PmuSelection:
     """Parse repeated `--pmu-counters GROUP:SELECTION` values (hpx syntax).
 
     SELECTION is `all`, `default`, or a comma-separated list of catalog counter names
-    (`mve:all`, `cpu:default`, `mve:ARM_PMU_MVE_STALL,ARM_PMU_MVE_PRED`). Groups keep
+    (`mve:all`, `cpu:default`, `mve:ARM_PMU_MVE_STALL,ARM_PMU_MVE_PRED`). A bare `all`
+    selects every group at `all` (the full catalog, one run). Groups keep
     their command-line order, which is the order the PMU passes run in. Unknown groups,
     counter names and empty name lists (`mve:,`) are rejected here, naming the valid
     choices, and so is a selection that plans more passes than the firmware runs per
     SESSION_PLAN (measurement.MAX_PASSES_PER_PLAN) -- all before any probe I/O.
     """
     selection: PmuSelection = {}
+    if any(raw.strip().lower() == "all" for raw in values):
+        if len(values) > 1:
+            raise ValueError("--pmu-counters: bare 'all' already selects every group")
+        values = [f"{group}:all" for group in GROUPS]
     for raw in values:
         group, sep, spec = raw.partition(":")
         group = group.strip().lower()
@@ -266,6 +281,9 @@ def stream_generated_tests(
     # the first printed line instead of widening them as longer names show up mid-run.
     id_width = max(len(b.case_id) for b in bundles)
     counter_passes = counter_passes_for_selection(options.pmu_counters)
+    # Refuse results the outbox cannot hold.
+    for case_bundle in bundles:
+        check_outbox_fits(counter_passes, int(case_bundle.manifest["timing"]["samples"]), case_bundle.case_id)
     echo(
         f"[hardware] Streaming generated tests to {board.id} (serial {serial_no}, session {session_id}, "
         f"firmware build id {expected_build_id or 'unverified'}, "
@@ -345,21 +363,29 @@ def run_hardware_pipeline(
     if skip_flash and force_flash:
         raise ValueError("--skip-flash and --force-flash cannot be combined.")
     resolved_build_dir = resolve_build_dir(repo_root, board, build_dir)
-    if app_options is None:
-        from .nsx_app import AppOptions, nested_kernel_root
+    if app_options is None and not (skip_generate and skip_flash):
+        from .nsx_app import resolve_options
 
-        # Same default as the CLI.
-        app_options = AppOptions(cmsis_nn_root=nested_kernel_root(repo_root))
+        # Same resolution as the CLI.
+        app_options = resolve_options(nsx_app_dir(resolved_build_dir), repo_root, follow_pin=not skip_flash)
 
     generate_s = 0.0
     if skip_generate:
         echo("[hardware] --skip-generate set; reusing existing artifacts/generated_tests.")
     else:
         # Generate against the firmware's kernels.
-        kernel_root = stage_kernels(
-            board, build_dir=resolved_build_dir, options=app_options, force_sync=force_reconfigure,
-            update_dependencies=update_dependencies,
-        )
+        if skip_flash:
+            if update_dependencies:
+                from .nsx_cli import HardwareBuildError
+
+                raise HardwareBuildError("--skip-flash cannot update dependencies.")
+            # Board keeps the built image.
+            kernel_root = built_kernels(board, resolved_build_dir, app_options)
+        else:
+            kernel_root = stage_kernels(
+                board, build_dir=resolved_build_dir, options=app_options, force_sync=force_reconfigure,
+                update_dependencies=update_dependencies,
+            )
         # Staging did the forced work.
         force_reconfigure = update_dependencies = False
         precision_note = f" float_precision={options.float_precision}" if options.float_precision else ""
