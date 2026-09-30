@@ -261,7 +261,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "convolve",
         "OpConvolve",
         descriptor_relpaths=("ConvolutionFunctions/convolve.yaml", "ConvolutionFunctions/convolve_float.yaml"),
-        template_relpath="ConvolutionFunctions/convolve",
+        template_relpath=None,  # rendered by common/harness
     ),
     "DepthwiseConv": _spec(
         "DepthwiseConv",
@@ -269,7 +269,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "depthwise_conv",
         "OpDepthwiseConv",
         descriptor_relpaths=("ConvolutionFunctions/depthwise_conv.yaml", "ConvolutionFunctions/depthwise_conv_float.yaml"),
-        template_relpath="ConvolutionFunctions/depthwise_conv",
+        template_relpath=None,  # rendered by common/harness
     ),
     "TransposeConv": _spec(
         "TransposeConv",

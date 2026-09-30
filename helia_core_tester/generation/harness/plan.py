@@ -39,6 +39,10 @@ class HarnessPlan:
     run_call: str
     bench_call: str
     checks: Sequence[tuple[str, str, str, int]] = ()
+    fault_kind: Optional[str] = None
+    fault_declarations: Sequence[str] = ()
+    fault_setup: str = ""
+    no_scratch: bool = False
 
 
 def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str], scratch_bytes: Optional[int],
@@ -52,8 +56,16 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
     values = dict(pool.values)
     values.update({p.param: p.expr for p in providers})
 
+    fault = pool.fault
+    if fault is not None:
+        for param in (*fault.values, *fault.requires):
+            if not takes(kernel, param):
+                raise HarnessError(f"{pool.name}: fault {fault.kind!r} edits {param!r}, which {kernel.name} does not take")
+
     def call(input_expr: str, output_expr: str) -> str:
         site = {**values, pool.input_param: input_expr, pool.output_param: output_expr}
+        if fault is not None:
+            site.update(fault.values)
         return render_call(kernel, bind(kernel, site), indent=indent)
 
     checks = []
@@ -78,4 +90,8 @@ def plan_harness(pool: ArgumentPool, *, kernel_fn: str, sizer_fn: Optional[str],
         run_call=call("input", "output"),
         bench_call=call(f"{pool.name}_input", f"{pool.name}_output"),
         checks=checks,
+        fault_kind=fault.kind if fault else None,
+        fault_declarations=[render_declaration(d) for d in fault.declarations] if fault else [],
+        fault_setup=fault.setup if fault else "",
+        no_scratch=bool(fault and fault.no_scratch),
     )
