@@ -12,6 +12,27 @@ import numpy as np
 
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
+from helia_core_tester.generation.harness import ArgumentPool, ArrayLiteral, Declaration
+from helia_core_tester.generation.harness.simple import dims_count, tensor_case_pool
+
+RSQRT_CALL_STYLES = ("per_op", "universal")
+
+
+def rsqrt_argument_pool(context: Dict[str, Any]) -> ArgumentPool:
+    """The universal kernel takes the requantisation and a 32-bit LUT; per-op takes a 16-bit LUT."""
+    n = context["name"]
+    style = str(context.get("call_style", "per_op"))
+    if style not in RSQRT_CALL_STYLES:
+        raise ValueError(f"{n}: Rsqrt call_style {style!r} is not one of {RSQRT_CALL_STYLES}")
+    values = {"input_offset": context["input_offset"], "out_offset": context["output_offset"],
+              "out_activation_min": context["out_activation_min"], "out_activation_max": context["out_activation_max"],
+              "block_size": context["block_size"], "lut": f"{n}_rsqrt_lut"}
+    if style == "universal":
+        values.update(out_mult=context["out_mult"], out_shift=context["out_shift"],
+                      needs_rescale=context["needs_rescale"])
+    lut = Declaration(f"{n}_rsqrt_lut", context["lut_dtype"], ArrayLiteral(context["rsqrt_lut_array"]), array=True,
+                      comment="Reciprocal square-root lookup table")
+    return tensor_case_pool(context, values, extra_header=(lut,), output_count=dims_count(context["output_dims"]))
 
 
 RSQRT_CANONICAL_OUTPUT_SCALE = 1.0 / 32768.0
@@ -249,16 +270,7 @@ class OpRsqrt(OperationBase):
             "expected_status": expected_status,
         }
 
-        cmake_context = {
-            "name": name,
-            "operator": self.desc.get("operator", "Rsqrt"),
-            "operator_name": "rsqrt",
-        }
-        self._write_op_outputs(
-            output_dir,
-            "rsqrt",
-            "BasicMathFunctions/rsqrt/rsqrt.h.j2",
-            "BasicMathFunctions/rsqrt/rsqrt.c.j2",
-            context,
-            cmake_context,
+        self.render_harness_case(
+            output_dir, stem="rsqrt", context=context, pool=rsqrt_argument_pool(context),
+            validation_key="BasicMathFunctions/rsqrt/rsqrt.c.j2", label="Rsqrt", operator="Rsqrt", sidecar=True,
         )

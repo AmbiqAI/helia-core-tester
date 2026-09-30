@@ -498,30 +498,22 @@ def test_transpose_header_int_uses_permutations_pointer() -> None:
 
 
 def test_rsqrt_invalid_status_render_uses_expected_status_helper() -> None:
-    text = _render(
-        "BasicMathFunctions/rsqrt/rsqrt.c.j2",
-        {
-            "name": "rsqrt_invalid_smoke",
-            "call_style": "per_op",
-            "input_dtype": "int16_t",
-            "output_dtype": "int16_t",
-            "kernel_fn": "arm_rsqrt_s16_per_op",
-            "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
-            "input_dims": {"n": 1, "h": 1, "w": 4, "c": 1},
-            "output_dims": {"n": 1, "h": 1, "w": 4, "c": 1},
-            "input_offset": 0,
-            "output_offset": 0,
-            "out_activation_min": -32768,
-            "out_activation_max": 32767,
-            "block_size": 4,
-            "rsqrt_lut_array": "    32767",
-            "lut_dtype": "int16_t",
-        },
-    )
+    from helia_core_tester.generation.ops.BasicMathFunctions.rsqrt import rsqrt_argument_pool
+
+    context = {
+        "name": "rsqrt_invalid_smoke", "call_style": "per_op", "input_dtype": "int16_t", "output_dtype": "int16_t",
+        "kernel_fn": "arm_rsqrt_s16_per_op", "expected_status": "ARM_CMSIS_NN_ARG_ERROR",
+        "input_dims": {"n": 1, "h": 1, "w": 4, "c": 1}, "output_dims": {"n": 1, "h": 1, "w": 4, "c": 1},
+        "input_offset": 0, "output_offset": 0, "out_activation_min": -32768, "out_activation_max": 32767,
+        "block_size": 4, "rsqrt_lut_array": "    32767", "lut_dtype": "int16_t", "input_data_array": "    0",
+        "expected_output_array": "    0", "use_batch_harness": False,
+    }
+    text = render_pool(context, rsqrt_argument_pool(context), stem="rsqrt",
+                       validation_key="BasicMathFunctions/rsqrt/rsqrt.c.j2", label="Rsqrt")[1]
 
     assert "HELIA_VALIDATE_EXPECTED_STATUS(" in text
     assert "ARM_CMSIS_NN_ARG_ERROR" in text
-    assert "{{ name }}_expected_output" not in text
+    assert "HELIA_VALIDATE_OUTPUTS(" not in text
 
 
 def test_broadcast_to_invalid_status_render_uses_expected_status_helper() -> None:

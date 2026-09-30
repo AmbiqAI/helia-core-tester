@@ -1,4 +1,4 @@
-/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*, arm_batch_to_space_*, arm_space_to_batch_*, arm_depth_to_space_*, arm_space_to_depth_*, arm_strided_slice_*, arm_pad_*, arm_transpose_*, arm_gather_*, arm_resize_nearest_neighbor_*, arm_pack_*, arm_mirror_pad_*, arm_tile_*, arm_reverse_sequence_*, arm_select_v2_*, arm_scatter_nd_*, arm_dynamic_update_slice_*, arm_where_*, arm_requantize_*, arm_batch_norm_*, arm_softmax_*, arm_split_*, arm_unpack_*, arm_quantize_*, arm_dequantize_*, arm_concatenation_*)
+/* Verbatim declarations of every function of the contract-bound operators (arm_convolve_*, arm_depthwise_*, arm_fully_connected_*, arm_batch_matmul_*, arm_avgpool_*, arm_avg_pool_*, arm_max_pool_*, arm_relu*, arm_clamp_*, arm_hard_swish_*, arm_leaky_relu_*, arm_logistic_*, arm_tanh_*, arm_nn_activation_*, arm_prelu_*, arm_abs_*, arm_nn_abs_*, arm_mean_*, arm_nn_mean_*, arm_reduce_*, arm_add_*, arm_sub_*, arm_mul_*, arm_elementwise_*, arm_squared_difference_*, arm_maximum_*, arm_minimum_*, arm_argmax_*, arm_argmin_*, arm_nn_fill_*, arm_sqrt_*, arm_equal_*, arm_not_equal_*, arm_greater_*, arm_less_*, arm_comparison_*, arm_broadcast_to_*, arm_batch_to_space_*, arm_space_to_batch_*, arm_depth_to_space_*, arm_space_to_depth_*, arm_strided_slice_*, arm_pad_*, arm_transpose_*, arm_gather_*, arm_resize_nearest_neighbor_*, arm_pack_*, arm_mirror_pad_*, arm_tile_*, arm_reverse_sequence_*, arm_select_v2_*, arm_scatter_nd_*, arm_dynamic_update_slice_*, arm_where_*, arm_requantize_*, arm_batch_norm_*, arm_softmax_*, arm_split_*, arm_unpack_*, arm_quantize_*, arm_dequantize_*, arm_concatenation_*, arm_rsqrt_*, arm_reshape_*)
  * from ns-cmsis-nn arm_nnfunctions.h; the fallback contract for unit tests without a checkout.
  * test_bound_operator_fixture_matches_the_real_tree keeps it equal to the export. */
 
@@ -1685,6 +1685,8 @@ arm_cmsis_nn_status arm_requantize_s8_s8(const int8_t *input,
                                          int32_t input_zeropoint,
                                          int32_t output_zeropoint);
 
+void arm_reshape_s8(const int8_t *input, int8_t *output, const uint32_t total_size);
+
 arm_cmsis_nn_status arm_resize_nearest_neighbor_s16(const cmsis_nn_context *ctx,
                                                     const cmsis_nn_resize_params *resize_params,
                                                     const cmsis_nn_dims *input_shape,
@@ -1712,6 +1714,27 @@ arm_cmsis_nn_status arm_reverse_sequence_s8(const int8_t *input,
                                             const int32_t *seq_lengths,
                                             const cmsis_nn_reverse_sequence_params *params,
                                             int8_t *output);
+
+arm_cmsis_nn_status arm_rsqrt_s16_per_op(const int16_t *input,
+                                         const int32_t input_offset,
+                                         int16_t *output,
+                                         const int32_t out_offset,
+                                         const int32_t out_activation_min,
+                                         const int32_t out_activation_max,
+                                         const int32_t block_size,
+                                         const int16_t *lut);
+
+arm_cmsis_nn_status arm_rsqrt_s16_universal(const int16_t *input,
+                                            const int32_t input_offset,
+                                            int16_t *output,
+                                            const int32_t out_offset,
+                                            const int32_t out_mult,
+                                            const int32_t out_shift,
+                                            const bool needs_rescale,
+                                            const int32_t out_activation_min,
+                                            const int32_t out_activation_max,
+                                            const int32_t block_size,
+                                            const int32_t *lut);
 
 arm_cmsis_nn_status arm_scatter_nd_s16(const int32_t *indices,
                                        const int16_t *updates,

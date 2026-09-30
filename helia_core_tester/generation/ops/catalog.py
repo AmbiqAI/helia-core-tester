@@ -221,7 +221,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         template_relpath=None,
     ),
     "Sqrt": _spec("Sqrt", "BasicMathFunctions", "sqrt", "OpSqrt", template_relpath=None, descriptor_relpaths=("BasicMathFunctions/sqrt.yaml", "BasicMathFunctions/sqrt_float.yaml")),
-    "Rsqrt": _spec("Rsqrt", "BasicMathFunctions", "rsqrt", "OpRsqrt", template_relpath="BasicMathFunctions/rsqrt", descriptor_relpaths=("BasicMathFunctions/rsqrt.yaml", "BasicMathFunctions/rsqrt_float.yaml")),
+    "Rsqrt": _spec("Rsqrt", "BasicMathFunctions", "rsqrt", "OpRsqrt", template_relpath=None, descriptor_relpaths=("BasicMathFunctions/rsqrt.yaml", "BasicMathFunctions/rsqrt_float.yaml")),
     "Comparison": _spec("Comparison", "ComparisonFunctions", "comparison", "OpComparison", "ComparisonFunctions/comparison.yaml", None),
     "Concatenation": _spec(
         "Concatenation",
@@ -388,7 +388,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "reshape",
         "OpReshape",
         descriptor_relpaths=("ReshapeFunctions/reshape.yaml", "ReshapeFunctions/reshape_float.yaml"),
-        template_relpath="ReshapeFunctions/reshape",
+        template_relpath=None,
     ),
     "ResizeNearestNeighbor": _spec(
         "ResizeNearestNeighbor",
@@ -459,7 +459,7 @@ OPERATOR_SPECS: Dict[str, OperatorSpec] = {
         "squeeze",
         "OpSqueeze",
         "TesterExtensions/squeeze.yaml",
-        "TesterExtensions/squeeze",
+        None,
         parity_kind="extension",
         rationale="Tester-only op retained for existing standalone generation coverage.",
     ),
