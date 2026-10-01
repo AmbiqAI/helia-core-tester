@@ -13,6 +13,7 @@ board_matrix.md; see README "Board matrix". Exit 1 unless every board passed.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import subprocess
@@ -30,6 +31,12 @@ from helia_core_tester.scripts.ab_bundles import load_bundle
 
 SCHEMA = "hct.hardware.board_matrix"
 MVE_RETIRED = "ARM_PMU_MVE_INST_RETIRED"
+SUMMARY_KEYS = ("case_count", "passed_cases", "failed_cases", "rejected_cases")
+# Options the matrix sets per leg.
+OWNED_OPTIONS = (
+    "--board", "--serial-no", "--session-id", "--suite", "--limit", "--family",
+    "--precision", "--pmu-counters", "--pmu-groups",
+)
 
 
 @dataclass(frozen=True)
@@ -82,8 +89,28 @@ def run_leg(leg: Leg, shared_args: list[str], log_path: Path, root: Path, env: d
         return subprocess.run(command, cwd=root, stdout=log, stderr=subprocess.STDOUT, env=env).returncode
 
 
-def _read_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+class BadBundle(ValueError):
+    """Bundle breaks the result-bundle contract."""
+
+
+def _read_bundle(bundle: Path) -> tuple[dict, dict]:
+    """Manifest and summary, contract-checked."""
+    try:
+        manifest = json.loads((bundle / "session_manifest.json").read_text(encoding="utf-8"))
+        summary = json.loads((bundle / "session_summary.json").read_text(encoding="utf-8"))
+        rows = load_bundle(bundle).rows
+        missing = [key for key in SUMMARY_KEYS if key not in summary]
+        if not isinstance((manifest.get("target") or {}).get("board"), str):
+            missing.append("target.board")
+        if missing:
+            raise BadBundle(f"{bundle}: missing {', '.join(missing)}")
+        if len(rows) != summary["case_count"]:
+            raise BadBundle(f"{bundle}: {len(rows)} CSV rows, {summary['case_count']} cases")
+    except BadBundle:
+        raise
+    except (OSError, ValueError, KeyError, AttributeError, TypeError, csv.Error) as exc:
+        raise BadBundle(f"{bundle}: {exc}") from exc
+    return manifest, summary
 
 
 def empty_entry(board: str) -> dict:
@@ -97,21 +124,20 @@ def empty_entry(board: str) -> dict:
 
 def board_entry(bundle: Path) -> dict:
     """One board's row from its bundle."""
-    manifest = _read_json(bundle / "session_manifest.json")
-    summary = _read_json(bundle / "session_summary.json")
-    target = manifest.get("target") or {}
+    manifest, summary = _read_bundle(bundle)
+    target = manifest["target"]
     boot = manifest.get("boot") or {}
     kernels = (manifest.get("build") or {}).get("kernels") or {}
-    rejected = len(summary.get("rejected_cases", []))
-    failed = int(summary.get("failed_cases", 0)) - rejected
-    entry = empty_entry(target.get("board", bundle.name))
+    rejected = len(summary["rejected_cases"])
+    failed = int(summary["failed_cases"]) - rejected
+    entry = empty_entry(target["board"])
     entry.update({
         "cpu": target.get("cpu"),
         "pmu_tier": target.get("pmu_tier"),
         "status": "passed" if failed == 0 and rejected == 0 else "failed",
         "session_id": manifest.get("session_id", bundle.name),
         "bundle": str(bundle),
-        "golden": {"total": summary.get("case_count"), "passed": summary.get("passed_cases"), "failed": failed, "rejected": rejected},
+        "golden": {"total": summary["case_count"], "passed": summary["passed_cases"], "failed": failed, "rejected": rejected},
         "boot": {"status": boot.get("status"), "core_clock_hz": boot.get("core_clock_hz")},
         "build_id": manifest.get("firmware_build_id"),
         "kernels": {key: kernels.get(key) for key in ("ref", "commit", "root")},
@@ -204,6 +230,9 @@ def run_matrix(args: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
     matrix_id = f"matrix-{now.strftime('%Y%m%dT%H%M%SZ')}"
     try:
+        owned = [arg for arg in args.extra if arg.split("=", 1)[0] in OWNED_OPTIONS]
+        if owned:
+            raise ValueError(f"The matrix sets {', '.join(owned)}; drop it after --.")
         legs = plan_legs(args.boards, args.pmu_counters or [], args.suite, now)
     except ValueError as exc:
         print(f"board_matrix: {exc}", file=sys.stderr)
@@ -226,13 +255,16 @@ def run_matrix(args: argparse.Namespace) -> int:
     boards = []
     for leg, code in zip(legs, codes):
         bundle = root / "artifacts" / "reports" / "hardware" / leg.session_id
-        if (bundle / "session_summary.json").is_file():
+        problem = None
+        try:
             entry = board_entry(bundle)
-        else:
+        except BadBundle as exc:
             entry = empty_entry(leg.board.id) | {"session_id": leg.session_id}
+            problem = str(exc) if bundle.exists() else None
         if code != 0 and entry["status"] == "passed":
             entry["status"] = "error"
-        entry.update(serial_no=leg.serial_no, exit_code=code, note=leg.note, log=str(out_dir / "logs" / f"{leg.board.id}.log"))
+        note = "; ".join(part for part in (leg.note, problem) if part) or None
+        entry.update(serial_no=leg.serial_no, exit_code=code, note=note, log=str(out_dir / "logs" / f"{leg.board.id}.log"))
         boards.append(entry)
     summary = build_summary(matrix_id, selection_of(args), boards)
     print(write_summary(summary, out_dir))
@@ -246,11 +278,11 @@ def selection_of(args: argparse.Namespace) -> dict:
 
 
 def summarize(args: argparse.Namespace) -> int:
-    missing = [str(path) for path in args.bundles if not (path / "session_summary.json").is_file() or not (path / "case_summary.csv").is_file()]
-    if missing:
-        print(f"board_matrix: not a result bundle: {', '.join(missing)}", file=sys.stderr)
+    try:
+        boards = [board_entry(path) for path in args.bundles]
+    except BadBundle as exc:
+        print(f"board_matrix: bad bundle {exc}", file=sys.stderr)
         return 2
-    boards = [board_entry(path) for path in args.bundles]
     ids = [entry["board"] for entry in boards]
     if len(set(ids)) != len(ids):
         print("board_matrix: one bundle per board, please.", file=sys.stderr)

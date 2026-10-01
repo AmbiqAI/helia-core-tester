@@ -179,3 +179,45 @@ def test_run_writes_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert summary["selection"]["pmu_counters"] == ["mve:default"]
     assert [case["case_id"] for case in summary["cases"]] == ["add_s8"]
     assert (out / "logs" / "apollo3p_evb.log").is_file()
+
+
+@pytest.mark.parametrize("extra", [["--board", "apollo3p_evb"], ["--session-id=x"], ["--serial-no", "9"], ["--pmu-counters", "cpu:all"]])
+def test_run_rejects_owned_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: list[str]) -> None:
+    monkeypatch.setattr(board_matrix, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(board_matrix.subprocess, "run", lambda *a, **k: pytest.fail("launched a leg"))
+    assert board_matrix.main(["run", "--board", "apollo510_evb:1", "--out", str(tmp_path / "out"), "--", *extra]) == 2
+
+
+def _break(bundle: Path, name: str, text: str) -> Path:
+    (bundle / name).write_text(text)
+    return bundle
+
+
+@pytest.mark.parametrize("name,text", [
+    ("session_summary.json", "{}"),
+    ("session_summary.json", "{not json"),
+    ("session_manifest.json", "[]"),
+    ("case_summary.csv", ""),
+    ("case_summary.csv", "median_cycles\n1\n"),
+])
+def test_summarize_rejects_broken_bundle(tmp_path: Path, name: str, text: str) -> None:
+    bundle = _break(_write_bundle(tmp_path / "b", "apollo510_evb", [
+        {"case_id": "add_s8", "comparison_passed": "true", "median_cycles": "1"},
+    ]), name, text)
+    assert board_matrix.main(["summarize", str(bundle), "--out", str(tmp_path / "out")]) == 2
+
+
+def test_run_reports_broken_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(command, cwd, stdout, stderr, env):
+        session = command[command.index("--session-id") + 1]
+        bundle = _write_bundle(tmp_path / "artifacts" / "reports" / "hardware" / session, "apollo510_evb", [])
+        _break(bundle, "session_summary.json", "{}")
+        return type("Done", (), {"returncode": 0})()
+
+    monkeypatch.setattr(board_matrix, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(board_matrix.subprocess, "run", fake_run)
+    out = tmp_path / "out"
+    assert board_matrix.main(["run", "--board", "apollo510_evb", "--out", str(out)]) == 1
+    (row,) = json.loads((out / "board_matrix.json").read_text())["boards"]
+    assert row["status"] == "error" and row["bundle"] is None and "missing case_count" in row["note"]
+    assert row.keys() == board_matrix.empty_entry("x").keys()
