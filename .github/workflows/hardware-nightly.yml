@@ -69,12 +69,13 @@ jobs:
           fi
           # Unknown labels queue for a day.
           known="$(sed -n 's/^ *- id: *//p' assets/hardware_boards.yaml)"
-          for board in $(jq -r '.[]' <<< "${boards}"); do
-            if ! grep -qx -- "${board}" <<< "${known}"; then
-              echo "::error::unknown board ${board}; see assets/hardware_boards.yaml" >&2
+          # One element per line; no word splitting.
+          while IFS= read -r board; do
+            if ! grep -qxF -- "${board}" <<< "${known}"; then
+              echo "::error::unknown board '${board}'; see assets/hardware_boards.yaml" >&2
               exit 2
             fi
-          done
+          done < <(jq -r '.[]' <<< "${boards}")
           {
             echo "boards=${boards}"
             echo "date=$(date -u +%Y%m%d)"
@@ -202,12 +203,13 @@ jobs:
       - name: Stage the result bundle
         if: always() && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure')
         run: |
-          rm -f "${RUNNER_TEMP}/hct-upload/NO_RESULT"
           if [[ -d artifacts/reports/hardware ]]; then
             cp -r artifacts/reports/hardware "${RUNNER_TEMP}/hct-upload/"
           fi
-          if [[ -f "${HCT_RUN_JSON}" ]]; then
+          # Keep the marker until results exist.
+          if [[ -s "${HCT_RUN_JSON}" ]]; then
             cp "${HCT_RUN_JSON}" "${RUNNER_TEMP}/hct-upload/"
+            rm -f "${RUNNER_TEMP}/hct-upload/NO_RESULT"
           fi
 
       # Re-runs replace the first attempt's artifact.
