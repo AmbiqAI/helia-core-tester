@@ -56,6 +56,14 @@ class RttRings:
         _, buffer, size, write, read, _ = (int(v) for v in self._memory.memory_read32(descriptor, 6))
         return (buffer, size, write, read) if write < size and read < size else None
 
+    def up_offsets(self) -> tuple[int, int, int] | None:
+        """(size, write, read) of the up ring."""
+        ring = self._ring(self._up) if self._find() else None
+        if ring is None:
+            return None
+        _, size, write, read = ring
+        return size, write, read
+
     def take(self, max_bytes: int) -> bytes:
         """Drain up to `max_bytes` from the up ring."""
         ring = self._ring(self._up) if self._find() else None
@@ -161,6 +169,22 @@ class JLinkRttTransport:
             time.sleep(self._poll_interval_s)
         return b""
 
+    def target_state(self) -> dict[str, int]:
+        """Halt the core, read fault and RTT state, resume."""
+        jlink = self._jlink
+        if not jlink.halt():
+            raise RuntimeError("Core did not halt.")
+        try:
+            index = {jlink.register_name(i): i for i in jlink.register_list()}
+            state = {key: jlink.register_read(index[name]) & 0xFFFFFFFF for key, name in _CORE_REGISTERS if name in index}
+            state["cfsr"], state["hfsr"] = (int(v) for v in jlink.memory_read32(SCB_CFSR, 2))
+            up = self._rings.up_offsets()
+            if up is not None:
+                state.update(zip(("rtt_size", "rtt_write", "rtt_read"), up))
+        finally:
+            jlink.restart()
+        return state
+
     def close(self) -> None:
         self._jlink.close()
 
@@ -170,9 +194,12 @@ RTT_ID = b"SEGGER RTT\0"
 RTT_ID_BYTES = 16
 # Ring: name, buffer, size, WrOff, RdOff, flags.
 RTT_RING_BYTES = 24
+SCB_CFSR = 0xE000ED28  # HFSR follows at +4.
+_CORE_REGISTERS = (("pc", "R15 (PC)"), ("lr", "R14"), ("sp", "R13 (SP)"))
 
 
-def symbol_address_from_elf(elf_path: str, symbol_name: str) -> int:
+def elf_symbols(elf_path: str) -> list[tuple[int, str, str]]:
+    """(address, nm type, name) for every ELF symbol, by address."""
     from .toolchain import arm_tool
 
     result = subprocess.run(
@@ -181,10 +208,18 @@ def symbol_address_from_elf(elf_path: str, symbol_name: str) -> int:
         capture_output=True,
         text=True,
     )
+    symbols = []
     for line in result.stdout.splitlines():
         parts = line.split()
-        if len(parts) == 3 and parts[2] == symbol_name:
-            return int(parts[0], 16)
+        if len(parts) == 3:
+            symbols.append((int(parts[0], 16), parts[1], parts[2]))
+    return symbols
+
+
+def symbol_address_from_elf(elf_path: str, symbol_name: str) -> int:
+    for address, _, name in elf_symbols(elf_path):
+        if name == symbol_name:
+            return address
     raise ValueError(f"Symbol not found in {elf_path}: {symbol_name}")
 
 

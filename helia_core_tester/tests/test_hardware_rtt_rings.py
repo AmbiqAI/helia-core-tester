@@ -1,10 +1,4 @@
-"""RttRings: the host's direct SEGGER RTT ring access.
-
-The J-Link DLL's RTT engine dropped the tail of a SAMPLE_RESULT burst when the host
-polled slowly (it advanced the target's read offset past bytes it never returned),
-which stalled full-catalog runs. The host now drains the rings itself; these tests
-pin the ring arithmetic against a fake target memory.
-"""
+"""Direct SEGGER RTT ring access against fake target memory."""
 
 from __future__ import annotations
 
@@ -12,7 +6,7 @@ import struct
 
 import pytest
 
-from helia_core_tester.hardware.transport import RTT_ID, RttRings
+from helia_core_tester.hardware.transport import RTT_ID, SCB_CFSR, JLinkRttTransport, RttRings
 
 BLOCK = 0x2000_0000
 UP_BUFFER = 0x2000_1000
@@ -95,12 +89,10 @@ def test_put_keeps_one_slot_free_and_wraps() -> None:
 def test_rings_wait_for_the_firmware_block() -> None:
     memory = _Memory()
     rings = RttRings(memory, BLOCK)
-    assert rings.take(4096) == b"" and rings.put(b"x") == 0
+    assert rings.take(4096) == b"" and rings.put(b"x") == 0 and rings.up_offsets() is None
     for address, value in enumerate(_target().memory_read(BLOCK, 0x200)):
         memory.bytes[BLOCK + address] = value
-    memory.memory_write(UP_BUFFER, list(b"hi"))
-    _set_ring(memory, 0, UP_BUFFER, 16, write=2, read=0)
-    assert rings.take(4096) == b"hi"
+    assert rings.up_offsets() == (16, 0, 0)
 
 
 def test_rings_refuse_a_missing_channel_and_corrupt_offsets() -> None:
@@ -110,3 +102,67 @@ def test_rings_refuse_a_missing_channel_and_corrupt_offsets() -> None:
     _set_ring(memory, 0, UP_BUFFER, 16, write=99, read=0)
     assert RttRings(memory, BLOCK).take(4096) == b""
 
+
+class _Probe(_Memory):
+    """Fake J-Link core: registers plus memory."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.names = ["R13 (SP)", "R14", "R15 (PC)"]
+        self.values = [0x20003F00, -7, 0x004967E0]  # pylink returns signed ints.
+        self.calls: list[str] = []
+
+    def register_list(self) -> list[int]:
+        return list(range(len(self.names)))
+
+    def register_name(self, index: int) -> str:
+        return self.names[index]
+
+    def register_read(self, index: int) -> int:
+        return self.values[index]
+
+    def halt(self) -> bool:
+        self.calls.append("halt")
+        return True
+
+    def restart(self) -> None:
+        self.calls.append("restart")
+
+
+def test_target_state_reads_unsigned_registers_and_resumes() -> None:
+    probe = _Probe()
+    for address, value in enumerate(_target().memory_read(BLOCK, 0x200)):
+        probe.bytes[BLOCK + address] = value
+    probe.memory_write32(SCB_CFSR, [0x100, 0x40000000])
+    transport = JLinkRttTransport.__new__(JLinkRttTransport)
+    transport._jlink = probe
+    transport._rings = RttRings(probe, BLOCK)
+    assert transport.target_state() == {
+        "pc": 0x004967E0, "lr": 0xFFFFFFF9, "sp": 0x20003F00, "cfsr": 0x100, "hfsr": 0x40000000,
+        "rtt_size": 16, "rtt_write": 0, "rtt_read": 0,
+    }
+    assert probe.calls == ["halt", "restart"]
+
+
+def test_take_stops_at_a_short_read() -> None:
+    memory = _target()
+    memory.memory_write(UP_BUFFER, list(b"WX" + bytes(10) + b"abcd"))
+    _set_ring(memory, 0, UP_BUFFER, 16, write=2, read=12)
+    rings = RttRings(memory, BLOCK)
+    assert rings.up_offsets() == (16, 2, 12)
+    full_read = memory.memory_read
+    # The probe returns 3 bytes of each ring read.
+    memory.memory_read = lambda address, count: full_read(address, min(count, 3) if address >= UP_BUFFER else count)  # type: ignore[method-assign]
+    # Only acknowledge bytes actually copied, in order.
+    assert rings.take(4096) == b"abc"
+    assert _offsets(memory, 0) == (2, 15)
+
+
+def test_target_state_refuses_a_running_core() -> None:
+    probe = _Probe()
+    probe.halt = lambda: False  # type: ignore[method-assign]
+    transport = JLinkRttTransport.__new__(JLinkRttTransport)
+    transport._jlink = probe
+    transport._rings = RttRings(probe, BLOCK)
+    with pytest.raises(RuntimeError, match="Core did not halt"):
+        transport.target_state()

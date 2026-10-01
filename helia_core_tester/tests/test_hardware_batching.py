@@ -346,6 +346,78 @@ def test_run_case_bundles_names_the_batch_when_a_session_fails(tmp_path: Path, m
         )
 
 
+class _HaltableTransport(_FakeTransport):
+    """Reports a target parked in its fault handler."""
+
+    def __init__(self, state: dict[str, int] | Exception) -> None:
+        super().__init__()
+        self._state = state
+
+    def target_state(self) -> dict[str, int]:
+        if isinstance(self._state, Exception):
+            raise self._state
+        return self._state
+
+
+_SYMBOLS = [
+    (0x00410798, "T", "main"), (0x004967E0, "W", "BusFault_Handler"), (0x004967E0, "W", "HardFault_Handler"),
+    (0x20000020, "b", "g_pui32Stack"),
+]
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (
+            dict(pc=0x004967E0, lr=0xFFFFFFF9, sp=0x20003F00, cfsr=0x00100000, hfsr=0x40000000, rtt_size=8192, rtt_write=10, rtt_read=10),
+            "Target faulted; decode CFSR/HFSR. PC=0x004967e0 (BusFault_Handler/HardFault_Handler), LR=0xfffffff9, "
+            "SP=0x20003f00, CFSR=0x00100000 HFSR=0x40000000, RTT up write=10 read=10 size=8192.",
+        ),
+        (
+            dict(pc=0x004107A1, lr=0x00410799, sp=0x20003F00, cfsr=0, hfsr=0, rtt_size=8192, rtt_write=99, rtt_read=100),
+            "Target blocked on a full RTT buffer. PC=0x004107a1 (main+0x8), LR=0x00410799, SP=0x20003f00, "
+            "CFSR=0x00000000 HFSR=0x00000000, RTT up write=99 read=100 size=8192.",
+        ),
+        (
+            dict(pc=0x004107A1, lr=0x00410799, sp=0x20003F00, cfsr=0, hfsr=0, rtt_size=8192, rtt_write=7, rtt_read=7),
+            "No fault; target sent all queued RTT bytes. PC=0x004107a1 (main+0x8), LR=0x00410799, SP=0x20003f00, "
+            "CFSR=0x00000000 HFSR=0x00000000, RTT up write=7 read=7 size=8192.",
+        ),
+        (
+            dict(pc=0x004107A1, lr=0x00410799, sp=0x20003F00, cfsr=0, hfsr=0),
+            "Target running; no fault latched. PC=0x004107a1 (main+0x8), LR=0x00410799, SP=0x20003f00, "
+            "CFSR=0x00000000 HFSR=0x00000000.",
+        ),
+    ],
+    ids=["faulted", "rtt-full", "drained", "running"],
+)
+def test_stall_names_the_target_state(tmp_path: Path, monkeypatch, state, expected) -> None:
+    def _open(board, serial_no, *, build_dir, counter_passes):
+        return _FakeSession(_target_info(), [], fail=session.TransportStall("Transport stalled")), _HaltableTransport(state), 0
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    monkeypatch.setattr(session_runner, "elf_symbols", lambda elf: _SYMBOLS)
+    with pytest.raises(RuntimeError) as raised:
+        session_runner.run_case_bundles(
+            tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
+            board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
+        )
+    assert str(raised.value) == f"Transport stalled {expected} (batch 0, candidate case_ids=['case_0'])"
+
+
+def test_stall_survives_an_unreadable_target(tmp_path: Path, monkeypatch) -> None:
+    def _open(board, serial_no, *, build_dir, counter_passes):
+        stall = session.TransportStall("Transport stalled")
+        return _FakeSession(_target_info(), [], fail=stall), _HaltableTransport(OSError("probe gone")), 0
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    with pytest.raises(RuntimeError, match=r"^Transport stalled Target state unreadable: probe gone\. \(batch 0, "):
+        session_runner.run_case_bundles(
+            tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
+            board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
+        )
+
+
 def test_consistency_check_covers_boot_health() -> None:
     first = _target_info(boot_status=0, core_clock_hz=250_000_000)
     with pytest.raises(RuntimeError, match=r"core_clock_hz: 250000000 -> 96000000"):

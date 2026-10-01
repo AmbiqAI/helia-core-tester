@@ -30,9 +30,10 @@ from .memory_report import generate_memory_report
 from .pmu_catalog import default_selection
 from .result_bundle import write_result_bundle
 from .session import (
-    BootFailure, CaseRunResult, HostSession, SessionResult, TargetLimits, check_case_id_length, check_case_ids_unique,
+    BootFailure, CaseRunResult, HostSession, SessionResult, TargetLimits, TransportStall, check_case_id_length,
+    check_case_ids_unique,
 )
-from .transport import JLinkRttTransport, Transport, symbol_address_from_elf
+from .transport import JLinkRttTransport, Transport, elf_symbols, symbol_address_from_elf
 from .wire import TargetInfo, session_plan_size
 from ..core.config import VALID_SUITE_MODES
 
@@ -113,6 +114,55 @@ def open_rtt_session(
         read_timeout_s=10.0,
     )
     return HostSession(transport, counter_passes=counter_passes), transport, rtt_address
+
+
+def stalled_target_state(transport: Transport, build_dir: Path) -> str:
+    """Name the stalled target's core and RTT state."""
+    read_state = getattr(transport, "target_state", None)
+    if read_state is None:
+        return ""
+    try:
+        return describe_target_state(read_state(), str(elf_path(build_dir)))
+    except Exception as exc:  # Diagnostics must not mask the stall.
+        return f"Target state unreadable: {exc}."
+
+
+def describe_target_state(state: dict[str, int], elf_path: str | None = None) -> str:
+    """One line: where the core sits and why it went quiet."""
+    symbols = elf_symbols(elf_path) if elf_path else []
+    parts = []
+    for key in ("pc", "lr", "sp"):
+        if key in state:
+            # LR often holds EXC_RETURN; name PC only.
+            name = symbol_at(symbols, state[key]) if key == "pc" else None
+            parts.append(f"{key.upper()}=0x{state[key]:08x}" + (f" ({name})" if name else ""))
+    parts.append(f"CFSR=0x{state['cfsr']:08x} HFSR=0x{state['hfsr']:08x}")
+    if "rtt_size" in state:
+        parts.append(f"RTT up write={state['rtt_write']} read={state['rtt_read']} size={state['rtt_size']}")
+    if state["cfsr"] or state["hfsr"]:
+        verdict = "Target faulted; decode CFSR/HFSR."
+    elif "rtt_size" in state and (state["rtt_write"] + 1) % state["rtt_size"] == state["rtt_read"]:
+        verdict = "Target blocked on a full RTT buffer."
+    elif "rtt_size" in state and state["rtt_write"] == state["rtt_read"]:
+        verdict = "No fault; target sent all queued RTT bytes."
+    else:
+        verdict = "Target running; no fault latched."
+    return f"{verdict} {', '.join(parts)}."
+
+
+def symbol_at(symbols: list[tuple[int, str, str]], address: int) -> str | None:
+    """The code symbol holding `address`, as name+offset."""
+    address &= ~1  # Drop the Thumb bit.
+    preceding = [entry for entry in symbols if entry[0] <= address]
+    if not preceding:
+        return None
+    start = max(entry[0] for entry in preceding)
+    # Aliases share one address.
+    names = [name for at, kind, name in preceding if at == start and kind in "tTwW"]
+    if not names:
+        return None
+    name = "/".join(names)
+    return name if address == start else f"{name}+0x{address - start:x}"
 
 
 _CONSISTENT_FIELDS = (
@@ -202,7 +252,9 @@ def run_case_bundles(
             # ValueError: take_batch() found a case that cannot fit the target's advertised
             # plan size on its own. Re-wrap so the CLI's one-line hardware error covers it.
             candidates = [b.case_id for b in (batch or (remaining[: limits.max_cases] if limits else remaining))]
-            raise RuntimeError(f"{exc} (batch {batch_index}, candidate case_ids={candidates})") from exc
+            state = stalled_target_state(transport, build_dir) if isinstance(exc, TransportStall) else ""
+            message = " ".join(part for part in (str(exc), state) if part)
+            raise RuntimeError(f"{message} (batch {batch_index}, candidate case_ids={candidates})") from exc
         finally:
             transport.close()
         all_cases.extend(result.cases)
