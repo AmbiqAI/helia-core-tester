@@ -7,12 +7,12 @@ name: Self-Validate Against ns-cmsis-nn
 # to whoever happened to bump the submodule pointer).
 #
 # This workflow checks out AmbiqAI/ns-cmsis-nn at a configurable ref (default
-# main), points CMSIS_NN_ROOT at it, and runs generation + a compile of the
-# generated harnesses (no FVP execution) for one representative Cortex-M55
-# int + float profile. That is enough to catch every class of breakage
-# described in #50 without paying for a full FVP run in this repo (the full
-# FVP suite still runs downstream in ns-cmsis-nn's own CI once the submodule
-# pointer is bumped).
+# main; the catalog check uses the firmware pin), points CMSIS_NN_ROOT at it,
+# and runs generation + a compile of the generated harnesses (no FVP
+# execution) for one representative Cortex-M55 int + float profile. That is
+# enough to catch every class of breakage described in #50 without paying for
+# a full FVP run in this repo (the full FVP suite still runs downstream in
+# ns-cmsis-nn's own CI once the submodule pointer is bumped).
 
 on:
   # Draft PRs skip every job (see each job's `if`). `ready_for_review` runs
