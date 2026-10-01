@@ -1,7 +1,7 @@
 """Independent index contract: first numeric extremum; a NaN never wins.
 
-As in LiteRT's comparator, a later number replaces a leading NaN and an all-NaN
-line selects index 0. Operands are decoded as integers so subnormal ordering
+As in LiteRT's reference comparator, a later number replaces a leading NaN and
+an all-NaN line selects index 0. Operands are decoded as integers so subnormal ordering
 cannot depend on host FTZ/DAZ.
 """
 

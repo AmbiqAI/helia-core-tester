@@ -5,7 +5,7 @@
 
 ### Bug Fixes
 
-* **arg:** float ARG_MAX/ARG_MIN expectations never let a NaN win, as in LiteRT ([#310](https://github.com/AmbiqAI/helia-core-tester/issues/310))
+* **arg:** float ARG_MAX/ARG_MIN expectations never let a NaN win, as in the LiteRT reference comparator ([#310](https://github.com/AmbiqAI/helia-core-tester/issues/310))
 
 ## [0.6.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.5.0...v0.6.0) (2026-09-29)
 
