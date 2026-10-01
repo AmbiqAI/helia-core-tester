@@ -398,14 +398,14 @@ def _quiet_stdout(as_json: bool):
     return stdout_to_stderr() if as_json else contextlib.nullcontext()
 
 
-def _report(outcome, spec: BoardSpec, *, as_json: bool) -> None:
+def _report(outcome, spec: BoardSpec, options, *, as_json: bool) -> None:
     from .run_summary import build_json_summary, print_run_report
 
     failed = print_run_report(outcome.result, outcome.skipped, outcome.bundle, err=as_json)
     if as_json:
         typer.echo(json.dumps(build_json_summary(
             outcome.result, outcome.skipped, session_id=outcome.session_id, board_id=spec.id, bundle=outcome.bundle,
-            timing=outcome.timing,
+            timing=outcome.timing, options=options,
         ), indent=2))
     if failed:
         typer.echo(typer.style("✗ One or more generated-test cases failed correctness", fg=typer.colors.RED, bold=True), err=True)
@@ -462,7 +462,7 @@ def stream(
             options=options, echo=echo, progress_to_stderr=as_json, allow_unverified_firmware=allow_unverified_firmware,
         )
         finalize_timing(outcome, echo=echo)
-    _report(outcome, spec, as_json=as_json)
+    _report(outcome, spec, options, as_json=as_json)
 
 
 @hardware_app.command()
@@ -523,4 +523,4 @@ def run(
             allow_unverified_firmware=allow_unverified_firmware, app_options=app_options,
             update_dependencies=update_dependencies,
         )
-    _report(outcome, spec, as_json=as_json)
+    _report(outcome, spec, options, as_json=as_json)

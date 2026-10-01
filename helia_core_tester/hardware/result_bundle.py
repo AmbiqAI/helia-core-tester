@@ -60,7 +60,10 @@ def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
     from .nsx_app import CMSIS_NN_MODULE, saved_options
 
     kernels: dict[str, Any] = dict.fromkeys(("ref", "commit", "root", "root_head", "root_dirty", "tree_hash"))
-    provenance: dict[str, Any] = {"options": None, "kernels": kernels, "neuralspotx_version": None, "nsx_lock_sha256": None}
+    provenance: dict[str, Any] = {
+        "options": None, "kernels": kernels, "neuralspotx_version": None, "nsx_lock_sha256": None,
+        "modules": None, "toolchain": None,
+    }
     if build_dir is None:
         return provenance, None
     app_dir = nsx_app_dir(build_dir)
@@ -69,6 +72,9 @@ def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
     kernels["tree_hash"] = _text(built.get("kernels"))
     provenance["nsx_lock_sha256"] = built_lock
     provenance["neuralspotx_version"] = _text(built.get("nsx_version"))
+    toolchain = built.get("toolchain")
+    if isinstance(toolchain, dict):
+        provenance["toolchain"] = {"name": _text(toolchain.get("name")), "version": _text(toolchain.get("version"))}
 
     options = saved_options(app_dir)
     if options is not None:
@@ -84,7 +90,9 @@ def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
     # Trust nsx.lock only if it built.
     if built_lock is None or nsx_cli.lock_digest(app_dir) != built_lock:
         return provenance, None
-    kernels["commit"] = nsx_cli.locked_commit(app_dir, CMSIS_NN_MODULE)
+    modules = nsx_cli.locked_modules(app_dir)
+    provenance["modules"] = modules
+    kernels["commit"] = next((m["commit"] for m in modules or () if m["name"] == CMSIS_NN_MODULE), None)
     return provenance, app_dir / "nsx.lock"
 
 
