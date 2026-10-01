@@ -86,7 +86,12 @@ def run_leg(leg: Leg, shared_args: list[str], log_path: Path, root: Path, env: d
     with log_path.open("w", encoding="utf-8") as log:
         log.write(" ".join(command) + "\n")
         log.flush()
-        return subprocess.run(command, cwd=root, stdout=log, stderr=subprocess.STDOUT, env=env).returncode
+        try:
+            return subprocess.run(command, cwd=root, stdout=log, stderr=subprocess.STDOUT, env=env).returncode
+        except OSError as exc:
+            # Launch failure: leg becomes error row.
+            log.write(f"board_matrix: launch failed: {exc}\n")
+            return 1
 
 
 class BadBundle(ValueError):
@@ -104,13 +109,32 @@ def _read_bundle(bundle: Path) -> tuple[dict, dict]:
             missing.append("target.board")
         if missing:
             raise BadBundle(f"{bundle}: missing {', '.join(missing)}")
-        if len(rows) != summary["case_count"]:
-            raise BadBundle(f"{bundle}: {len(rows)} CSV rows, {summary['case_count']} cases")
+        problem = _summary_problem(summary, len(rows))
+        if problem is None and not all(isinstance(manifest.get(key) or {}, dict) for key in ("boot", "build")):
+            problem = "boot or build is not an object"
+        if problem is not None:
+            raise BadBundle(f"{bundle}: {problem}")
     except BadBundle:
         raise
     except (OSError, ValueError, KeyError, AttributeError, TypeError, csv.Error) as exc:
         raise BadBundle(f"{bundle}: {exc}") from exc
     return manifest, summary
+
+
+def _summary_problem(summary: dict, row_count: int) -> str | None:
+    """Why the summary counts disagree, if they do."""
+    counts = [summary[key] for key in SUMMARY_KEYS[:3]]
+    rejected = summary["rejected_cases"]
+    if not all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in counts):
+        return "case counts must be non-negative integers"
+    if not isinstance(rejected, list) or not all(isinstance(case, str) for case in rejected):
+        return "rejected_cases must list case ids"
+    total, passed, failed = counts
+    if passed + failed != total or len(rejected) > failed:
+        return f"counts disagree: {passed} + {failed} != {total} or {len(rejected)} rejected"
+    if row_count != total:
+        return f"{row_count} CSV rows, {total} cases"
+    return None
 
 
 def empty_entry(board: str) -> dict:

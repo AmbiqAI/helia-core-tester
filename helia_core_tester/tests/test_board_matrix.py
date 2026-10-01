@@ -199,6 +199,11 @@ def _break(bundle: Path, name: str, text: str) -> Path:
     ("session_manifest.json", "[]"),
     ("case_summary.csv", ""),
     ("case_summary.csv", "median_cycles\n1\n"),
+    ("session_summary.json", '{"case_count": 1, "passed_cases": 1, "failed_cases": 0, "rejected_cases": null}'),
+    ("session_summary.json", '{"case_count": 1, "passed_cases": true, "failed_cases": 0, "rejected_cases": []}'),
+    ("session_summary.json", '{"case_count": 1, "passed_cases": 1, "failed_cases": 1, "rejected_cases": []}'),
+    ("session_summary.json", '{"case_count": 1, "passed_cases": 1, "failed_cases": 0, "rejected_cases": ["x"]}'),
+    ("session_manifest.json", '{"target": {"board": "apollo510_evb"}, "boot": "up"}'),
 ])
 def test_summarize_rejects_broken_bundle(tmp_path: Path, name: str, text: str) -> None:
     bundle = _break(_write_bundle(tmp_path / "b", "apollo510_evb", [
@@ -221,3 +226,16 @@ def test_run_reports_broken_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     (row,) = json.loads((out / "board_matrix.json").read_text())["boards"]
     assert row["status"] == "error" and row["bundle"] is None and "missing case_count" in row["note"]
     assert row.keys() == board_matrix.empty_entry("x").keys()
+
+
+def test_run_survives_launch_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("no python")
+
+    monkeypatch.setattr(board_matrix, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(board_matrix.subprocess, "run", fake_run)
+    out = tmp_path / "out"
+    assert board_matrix.main(["run", "--board", "apollo510_evb", "--out", str(out)]) == 1
+    (row,) = json.loads((out / "board_matrix.json").read_text())["boards"]
+    assert row["status"] == "error" and row["exit_code"] == 1
+    assert "launch failed: no python" in (out / "logs" / "apollo510_evb.log").read_text()
