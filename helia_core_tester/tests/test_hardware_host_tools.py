@@ -281,25 +281,24 @@ def _analyze_board(board_id: str, report_env: Path, tmp_path: Path, monkeypatch,
 
 # Totals match the linked .bin and map.
 @pytest.mark.parametrize(
-    "board_id, region, flash, ram, heap",
+    "board_id, region, flash, ram, heap, text",
     [
         # Vector table, ITCM code, exidx, .data.
-        ("apollo510_evb", "MCU_TCM", 1024 + 28 + 672260 + 8 + 2096, 16384 + 2096 + 166852, 322572),
+        ("apollo510_evb", "MCU_TCM", 1024 + 28 + 672260 + 8 + 2096, 16384 + 2096 + 166852, 322572, 1024 + 672260),
         # DTCM code sits in flash and TCM.
-        ("apollo330mP_evb", "MCU_TCM", 1024 + 28 + 650972 + 8 + 1960, 28 + 16388 + 1960 + 164180, 63196),
+        ("apollo330mP_evb", "MCU_TCM", 1024 + 28 + 650972 + 8 + 1960, 28 + 16388 + 1960 + 164180, 63196, 1024 + 650972),
         # Stack lives in STACKMEM, not RWMEM.
-        ("apollo3p_evb", "RWMEM", 551884 + 8 + 1888, 1888 + 163988, 0),
+        ("apollo3p_evb", "RWMEM", 551884 + 8 + 1888, 1888 + 163988, 0, 551884),
     ],
 )
-def test_usage_matches_the_linked_image(board_id, region, flash, ram, heap, tmp_path, report_env, monkeypatch) -> None:
+def test_usage_matches_the_linked_image(board_id, region, flash, ram, heap, text, tmp_path, report_env, monkeypatch) -> None:
     analysis = _analyze_board(board_id, report_env, tmp_path, monkeypatch)
     usage = analysis.usage
     assert (usage["flash_image_bytes"], usage["ram_static_bytes"], usage["heap_available_bytes"]) == (flash, ram, heap)
     assert usage["ram_region"] == region and usage["flash_gate_pass"] and usage["ram_gate_pass"]
     assert not any(key.startswith("tcm_") for key in usage)
     # Both `.text` output sections count.
-    text = [h.size for h in report.parse_section_headers(analysis.objdump_headers) if h.name == ".text"]
-    assert analysis.sections[".text"] == sum(text)
+    assert analysis.sections[".text"] == text
 
 
 def test_ram_gate_fails_over_75_percent(tmp_path, report_env, monkeypatch) -> None:
