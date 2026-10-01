@@ -6,7 +6,7 @@ import struct
 
 import pytest
 
-from helia_core_tester.hardware.transport import RTT_ID, SCB_CFSR, JLinkRttTransport, RttRings
+from helia_core_tester.hardware.transport import RTT_ID, SCB_CFSR, JLinkRttTransport, RttRings, TransportError
 
 BLOCK = 0x2000_0000
 UP_BUFFER = 0x2000_1000
@@ -22,16 +22,18 @@ class _Memory:
     def memory_read(self, address: int, count: int) -> list[int]:
         return [self.bytes.get(address + i, 0) for i in range(count)]
 
-    def memory_write(self, address: int, data: list[int]) -> None:
+    def memory_write(self, address: int, data: list[int]) -> int:
         for i, value in enumerate(data):
             self.bytes[address + i] = value
+        return len(data)
 
     def memory_read32(self, address: int, count: int) -> list[int]:
         raw = bytes(self.memory_read(address, 4 * count))
         return list(struct.unpack(f"<{count}I", raw))
 
-    def memory_write32(self, address: int, words: list[int]) -> None:
-        self.memory_write(address, list(struct.pack(f"<{len(words)}I", *words)))
+    def memory_write32(self, address: int, words: list[int]) -> int:
+        # Like pylink on a real probe: bytes written.
+        return self.memory_write(address, list(struct.pack(f"<{len(words)}I", *words)))
 
 
 def _target(*, up_size: int = 16, down_size: int = 8, max_up: int = 3, max_down: int = 3) -> _Memory:
@@ -166,3 +168,29 @@ def test_target_state_refuses_a_running_core() -> None:
     transport._rings = RttRings(probe, BLOCK)
     with pytest.raises(RuntimeError, match="Core did not halt"):
         transport.target_state()
+
+
+@pytest.mark.parametrize(
+    ("ring", "short"),
+    [("up", "memory_write32"), ("down", "memory_write32"), ("down", "memory_write")],
+    ids=["up-rdoff", "down-wroff", "down-data"],
+)
+def test_short_write_fails_the_transport(ring: str, short: str) -> None:
+    memory = _target()
+    memory.memory_write(UP_BUFFER, list(b"abcd"))
+    _set_ring(memory, 0, UP_BUFFER, 16, write=4, read=0)
+    rings = RttRings(memory, BLOCK)
+    assert rings.up_offsets() == (16, 4, 0)
+    # The probe reports nothing written.
+    setattr(memory, short, lambda address, data: 0)
+    with pytest.raises(TransportError, match=r"^Short RTT write at 0x"):
+        rings.take(4096) if ring == "up" else rings.put(b"xy")
+
+
+def test_short_descriptor_read_fails_the_transport() -> None:
+    memory = _target()
+    rings = RttRings(memory, BLOCK)
+    assert rings.up_offsets() == (16, 0, 0)
+    memory.memory_read32 = lambda address, count: []  # type: ignore[method-assign]
+    with pytest.raises(TransportError, match=r"^Short RTT read at 0x20000018: 0/6 words\.$"):
+        rings.take(4096)

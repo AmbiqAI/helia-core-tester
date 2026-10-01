@@ -30,10 +30,10 @@ from .memory_report import generate_memory_report
 from .pmu_catalog import default_selection
 from .result_bundle import write_result_bundle
 from .session import (
-    BootFailure, CaseRunResult, HostSession, SessionResult, TargetLimits, TransportStall, check_case_id_length,
+    BootFailure, CaseRunResult, HostSession, SessionResult, TargetLimits, check_case_id_length,
     check_case_ids_unique,
 )
-from .transport import JLinkRttTransport, Transport, elf_symbols, symbol_address_from_elf
+from .transport import JLinkRttTransport, Transport, TransportError, elf_symbols, symbol_address_from_elf
 from .wire import TargetInfo, session_plan_size
 from ..core.config import VALID_SUITE_MODES
 
@@ -252,7 +252,7 @@ def run_case_bundles(
             # ValueError: take_batch() found a case that cannot fit the target's advertised
             # plan size on its own. Re-wrap so the CLI's one-line hardware error covers it.
             candidates = [b.case_id for b in (batch or (remaining[: limits.max_cases] if limits else remaining))]
-            state = stalled_target_state(transport, build_dir) if isinstance(exc, TransportStall) else ""
+            state = stalled_target_state(transport, build_dir) if isinstance(exc, TransportError) else ""
             message = " ".join(part for part in (str(exc), state) if part)
             raise RuntimeError(f"{message} (batch {batch_index}, candidate case_ids={candidates})") from exc
         finally:

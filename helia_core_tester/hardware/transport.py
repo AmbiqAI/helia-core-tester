@@ -20,6 +20,14 @@ class Transport(Protocol):
         ...
 
 
+class TransportError(RuntimeError):
+    """The host-target link failed."""
+
+
+class TransportStall(TransportError):
+    """No complete frame within the read timeouts."""
+
+
 class RttRings:
     """Channel rings of a SEGGER_RTT_CB, by memory access.
 
@@ -43,7 +51,7 @@ class RttRings:
         block = bytes(self._memory.memory_read(self._address, RTT_ID_BYTES))
         if not block.startswith(RTT_ID):
             return False  # Firmware has not initialized RTT yet.
-        max_up, max_down = self._memory.memory_read32(self._address + RTT_ID_BYTES, 2)
+        max_up, max_down = self._words(self._address + RTT_ID_BYTES, 2)
         if self._up_index >= max_up or self._down_index >= max_down:
             raise RuntimeError(f"RTT block at 0x{self._address:08x} lacks the requested channels.")
         rings = self._address + RTT_ID_BYTES + 8
@@ -53,7 +61,7 @@ class RttRings:
 
     def _ring(self, descriptor: int) -> tuple[int, int, int, int] | None:
         """(buffer, size, write, read), or None when corrupt."""
-        _, buffer, size, write, read, _ = (int(v) for v in self._memory.memory_read32(descriptor, 6))
+        _, buffer, size, write, read, _ = self._words(descriptor, 6)
         return (buffer, size, write, read) if write < size and read < size else None
 
     def up_offsets(self) -> tuple[int, int, int] | None:
@@ -82,7 +90,7 @@ class RttRings:
             if len(chunk) < length:
                 break  # Short read: keep the stream in order.
         if data:
-            self._memory.memory_write32(self._up + 16, [(read + len(data)) % size])
+            self._commit(self._up + 16, (read + len(data)) % size)
         return bytes(data)
 
     def put(self, payload: bytes) -> int:
@@ -94,9 +102,29 @@ class RttRings:
         # Keep one slot free; stop at wrap.
         length = min(len(payload), (read - write - 1) % size, size - write)
         if length > 0:
-            self._memory.memory_write(buffer + write, list(payload[:length]))
-            self._memory.memory_write32(self._down + 12, [(write + length) % size])
+            self._write(buffer + write, payload[:length])
+            self._commit(self._down + 12, (write + length) % size)
         return length
+
+    def _words(self, address: int, count: int) -> list[int]:
+        """Read words; a short read fails the link."""
+        words = [int(v) for v in self._memory.memory_read32(address, count)]
+        if len(words) != count:
+            raise TransportError(f"Short RTT read at 0x{address:08x}: {len(words)}/{count} words.")
+        return words
+
+    def _write(self, address: int, data: bytes) -> None:
+        """Write bytes; a short write fails the link."""
+        written = self._memory.memory_write(address, list(data))
+        if written != len(data):
+            raise TransportError(f"Short RTT write at 0x{address:08x}: {written}/{len(data)} bytes.")
+
+    def _commit(self, address: int, offset: int) -> None:
+        """Publish a ring offset word."""
+        # memory_write32 returns bytes, not words.
+        written = self._memory.memory_write32(address, [offset])
+        if written != 4:
+            raise TransportError(f"Short RTT write at 0x{address:08x}: {written}/4 bytes.")
 
 
 class JLinkRttTransport:

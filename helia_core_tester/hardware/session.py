@@ -23,7 +23,7 @@ from .measurement import (
     counter_passes_for_selection,
     normalize_samples,
 )
-from .transport import Transport
+from .transport import Transport, TransportStall
 from .wire import (
     COMPARISON_MODE_CODES,
     BlobChunk,
@@ -85,10 +85,6 @@ def check_case_ids_unique(case_ids: Sequence[str]) -> None:
         seen.add(case_id)
     if duplicates:
         raise ValueError(f"Duplicate case id(s) in one run: {duplicates}. Every case id must be unique.")
-
-
-class TransportStall(RuntimeError):
-    """No complete frame within the read timeouts."""
 
 
 @dataclass(frozen=True)
