@@ -413,6 +413,20 @@ def test_stall_names_the_target_state(tmp_path: Path, monkeypatch, state, expect
     assert str(raised.value) == f"Transport stalled {expected} (batch 0, candidate case_ids=['case_0'])"
 
 
+class _SilentTransport(_FakeTransport):
+    def read(self, max_bytes: int = 4096) -> bytes:
+        return b""
+
+
+@pytest.mark.parametrize(("case_id", "suffix"), [(None, ""), ("", " (while running case_id='')")])
+def test_stall_names_even_an_empty_case_id(case_id: str | None, suffix: str) -> None:
+    host = HostSession(_SilentTransport())  # type: ignore[arg-type]
+    host._case_id = case_id
+    with pytest.raises(session.TransportStall) as raised:
+        host._recv_any()
+    assert str(raised.value).endswith(f"last few: [].{suffix}")
+
+
 def test_stall_survives_an_unreadable_target(tmp_path: Path, monkeypatch) -> None:
     def _open(board, serial_no, *, build_dir, counter_passes):
         stall = session.TransportStall("Transport stalled")

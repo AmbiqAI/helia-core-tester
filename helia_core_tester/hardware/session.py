@@ -587,7 +587,7 @@ class HostSession:
                 reads_left -= 1
                 if reads_left > 0:
                     continue
-                running = f" (while running case_id={self._case_id!r})" if self._case_id else ""
+                running = f" (while running case_id={self._case_id!r})" if self._case_id is not None else ""
                 raise TransportStall(
                     "Transport stalled without a complete frame. "
                     f"Last message sent to target: {self._last_sent_message_type or '<none>'}. "
