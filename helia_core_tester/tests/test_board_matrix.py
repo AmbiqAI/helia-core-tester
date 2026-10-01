@@ -134,16 +134,18 @@ def test_summary_from_fixture_bundles(tmp_path: Path) -> None:
     assert "| add_s8 | 40 | - |" in markdown
 
 
-def test_summary_refuses_duplicate_board(tmp_path: Path) -> None:
+def test_summary_refuses_bad_bundles(tmp_path: Path) -> None:
     a = _write_bundle(tmp_path / "a", "apollo510_evb", [])
     b = _write_bundle(tmp_path / "b", "apollo510_evb", [])
     assert board_matrix.main(["summarize", str(a), str(b), "--out", str(tmp_path / "out")]) == 2
+    assert board_matrix.main(["summarize", str(tmp_path), "--out", str(tmp_path / "out")]) == 2
 
 
 def test_run_writes_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     commands = []
 
-    def fake_run(command, cwd, stdout, stderr):
+    def fake_run(command, cwd, stdout, stderr, env):
+        assert "HPX_JLINK_SERIAL" not in env
         commands.append(command)
         board = command[command.index("--board") + 1]
         session = command[command.index("--session-id") + 1]
@@ -154,6 +156,7 @@ def test_run_writes_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
             return type("Done", (), {"returncode": 0})()
         return type("Done", (), {"returncode": 1})()
 
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
     monkeypatch.setattr(board_matrix, "repo_root", lambda: tmp_path)
     monkeypatch.setattr(board_matrix.subprocess, "run", fake_run)
     out = tmp_path / "out"
@@ -171,6 +174,8 @@ def test_run_writes_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     a510, a3p = summary["boards"]
     assert a510["status"] == "passed" and a510["exit_code"] == 0
     assert a3p["status"] == "error" and a3p["bundle"] is None and "DWT" in a3p["note"]
+    # Same keys on every row.
+    assert a3p.keys() == a510.keys() and a3p["golden"] is None
     assert summary["selection"]["pmu_counters"] == ["mve:default"]
     assert [case["case_id"] for case in summary["cases"]] == ["add_s8"]
     assert (out / "logs" / "apollo3p_evb.log").is_file()

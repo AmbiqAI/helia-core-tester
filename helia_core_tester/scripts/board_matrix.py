@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -23,7 +24,7 @@ from pathlib import Path
 
 from helia_core_tester.hardware.boards import BoardSpec, default_session_id, repo_root, resolve_board
 from helia_core_tester.hardware.hardware_pipeline import StreamOptions, fit_to_board, parse_pmu_counters
-from helia_core_tester.hardware.pmu_catalog import default_selection
+from helia_core_tester.hardware.probes import SERIAL_ENV_VAR
 from helia_core_tester.hardware.session_runner import canonical_suite
 from helia_core_tester.scripts.ab_bundles import load_bundle
 
@@ -43,7 +44,7 @@ class Leg:
 def plan_legs(board_args: list[str], pmu_counters: list[str], suite: str, now: datetime) -> list[Leg]:
     """Resolve boards and fit counters per board."""
     suite = canonical_suite(suite)
-    selection = parse_pmu_counters(pmu_counters) if pmu_counters else default_selection()
+    selection = parse_pmu_counters(pmu_counters) if pmu_counters else None
     requested = tuple(arg for value in pmu_counters for arg in ("--pmu-counters", value))
     legs: list[Leg] = []
     for arg in board_args:
@@ -52,12 +53,12 @@ def plan_legs(board_args: list[str], pmu_counters: list[str], suite: str, now: d
         if any(leg.board.id == board.id for leg in legs):
             raise ValueError(f"Board {board.id} given twice.")
         pmu_args, note = requested, None
-        try:
-            fit_to_board(board, StreamOptions(suite=suite, pmu_counters=dict(selection)), explicit_pmu=bool(pmu_counters))
-        except ValueError as exc:
-            # Unsupported counters: use board default.
-            fit_to_board(board, StreamOptions(suite=suite), explicit_pmu=False)
-            pmu_args, note = (), f"{exc} Ran its default counters."
+        if selection:
+            try:
+                fit_to_board(board, StreamOptions(suite=suite, pmu_counters=dict(selection)), explicit_pmu=True)
+            except ValueError as exc:
+                # Unsupported counters: use board default.
+                pmu_args, note = (), f"{exc} Ran its default counters."
         legs.append(Leg(board, int(serial) if serial else None, default_session_id(board, now), pmu_args, note))
     return legs
 
@@ -68,7 +69,7 @@ def runs_parallel(legs: list[Leg]) -> bool:
     return None not in serials and len(set(serials)) == len(serials)
 
 
-def run_leg(leg: Leg, shared_args: list[str], log_path: Path, root: Path) -> int:
+def run_leg(leg: Leg, shared_args: list[str], log_path: Path, root: Path, env: dict) -> int:
     command = [
         sys.executable, "-m", "helia_core_tester", "hardware", "run", "--board", leg.board.id,
         "--session-id", leg.session_id, *shared_args, *leg.pmu_args,
@@ -78,11 +79,20 @@ def run_leg(leg: Leg, shared_args: list[str], log_path: Path, root: Path) -> int
     with log_path.open("w", encoding="utf-8") as log:
         log.write(" ".join(command) + "\n")
         log.flush()
-        return subprocess.run(command, cwd=root, stdout=log, stderr=subprocess.STDOUT).returncode
+        return subprocess.run(command, cwd=root, stdout=log, stderr=subprocess.STDOUT, env=env).returncode
 
 
 def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+
+
+def empty_entry(board: str) -> dict:
+    """Row with every key, values unknown."""
+    return {
+        "board": board, "cpu": None, "pmu_tier": None, "status": "error", "session_id": None, "bundle": None,
+        "golden": None, "boot": None, "build_id": None, "kernels": None,
+        "serial_no": None, "exit_code": None, "note": None, "log": None,
+    }
 
 
 def board_entry(bundle: Path) -> dict:
@@ -94,8 +104,8 @@ def board_entry(bundle: Path) -> dict:
     kernels = (manifest.get("build") or {}).get("kernels") or {}
     rejected = len(summary.get("rejected_cases", []))
     failed = int(summary.get("failed_cases", 0)) - rejected
-    return {
-        "board": target.get("board", bundle.name),
+    entry = empty_entry(target.get("board", bundle.name))
+    entry.update({
         "cpu": target.get("cpu"),
         "pmu_tier": target.get("pmu_tier"),
         "status": "passed" if failed == 0 and rejected == 0 else "failed",
@@ -105,8 +115,8 @@ def board_entry(bundle: Path) -> dict:
         "boot": {"status": boot.get("status"), "core_clock_hz": boot.get("core_clock_hz")},
         "build_id": manifest.get("firmware_build_id"),
         "kernels": {key: kernels.get(key) for key in ("ref", "commit", "root")},
-        "note": None,
-    }
+    })
+    return entry
 
 
 def case_table(bundles: dict[str, Path]) -> list[dict]:
@@ -158,12 +168,9 @@ def _table(header: list[str], rows: list[list[str]]) -> list[str]:
 
 def render_markdown(summary: dict) -> str:
     selection = summary["selection"]
-    lines = [
-        f"# Board matrix {summary['matrix_id']}",
-        "",
-        " · ".join(f"{key} `{_cell(value)}`" for key, value in selection.items()),
-        "",
-    ]
+    lines = [f"# Board matrix {summary['matrix_id']}", ""]
+    if any(selection.values()):
+        lines += [" · ".join(f"{key} `{_cell(value)}`" for key, value in selection.items() if value), ""]
     rows = []
     for entry in summary["boards"]:
         golden, boot = entry.get("golden") or {}, entry.get("boot") or {}
@@ -211,8 +218,10 @@ def run_matrix(args: argparse.Namespace) -> int:
     shared += args.extra
     parallel = not args.sequential and runs_parallel(legs)
     print(f"board_matrix: {len(legs)} boards, {'parallel' if parallel else 'sequential'}; logs in {out_dir / 'logs'}", file=sys.stderr)
+    # Env serial would hit one probe.
+    env = {k: v for k, v in os.environ.items() if len(legs) == 1 or k != SERIAL_ENV_VAR}
     with ThreadPoolExecutor(max_workers=len(legs) if parallel else 1) as pool:
-        codes = list(pool.map(lambda leg: run_leg(leg, shared, out_dir / "logs" / f"{leg.board.id}.log", root), legs))
+        codes = list(pool.map(lambda leg: run_leg(leg, shared, out_dir / "logs" / f"{leg.board.id}.log", root, env), legs))
 
     boards = []
     for leg, code in zip(legs, codes):
@@ -220,27 +229,33 @@ def run_matrix(args: argparse.Namespace) -> int:
         if (bundle / "session_summary.json").is_file():
             entry = board_entry(bundle)
         else:
-            entry = {"board": leg.board.id, "status": "error", "session_id": leg.session_id, "bundle": None}
+            entry = empty_entry(leg.board.id) | {"session_id": leg.session_id}
         if code != 0 and entry["status"] == "passed":
             entry["status"] = "error"
         entry.update(serial_no=leg.serial_no, exit_code=code, note=leg.note, log=str(out_dir / "logs" / f"{leg.board.id}.log"))
         boards.append(entry)
-    selection = {
-        "suite": args.suite, "limit": args.limit, "family": args.family,
-        "pmu_counters": args.pmu_counters or None, "extra_args": args.extra or None,
-    }
-    summary = build_summary(matrix_id, selection, boards)
+    summary = build_summary(matrix_id, selection_of(args), boards)
     print(write_summary(summary, out_dir))
     return 0 if all(entry["status"] == "passed" for entry in boards) else 1
 
 
+def selection_of(args: argparse.Namespace) -> dict:
+    """Run selection; None when summarizing."""
+    keys = {"suite": "suite", "limit": "limit", "family": "family", "pmu_counters": "pmu_counters", "extra_args": "extra"}
+    return {key: getattr(args, attr, None) or None for key, attr in keys.items()}
+
+
 def summarize(args: argparse.Namespace) -> int:
+    missing = [str(path) for path in args.bundles if not (path / "session_summary.json").is_file() or not (path / "case_summary.csv").is_file()]
+    if missing:
+        print(f"board_matrix: not a result bundle: {', '.join(missing)}", file=sys.stderr)
+        return 2
     boards = [board_entry(path) for path in args.bundles]
     ids = [entry["board"] for entry in boards]
     if len(set(ids)) != len(ids):
         print("board_matrix: one bundle per board, please.", file=sys.stderr)
         return 2
-    summary = build_summary(args.matrix_id or args.out.name, {"bundles": len(boards)}, boards)
+    summary = build_summary(args.matrix_id or args.out.name, selection_of(args), boards)
     print(write_summary(summary, args.out))
     return 0 if all(entry["status"] == "passed" for entry in boards) else 1
 
