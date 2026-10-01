@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.hardware import nsx_cli
-from helia_core_tester.hardware import firmware_build
+from helia_core_tester.hardware import firmware_build, toolchain
 from helia_core_tester.hardware.firmware_build import nsx_app_dir
 from helia_core_tester.hardware.nsx_app import CMSIS_NN_REF, AppOptions, kernel_dir, save_options
 from helia_core_tester.hardware.result_bundle import build_provenance, write_result_bundle
@@ -42,6 +42,11 @@ targets:
           content_hash: sha256:11
           acquired_at: '2026-09-18T20:11:46+00:00'
 """
+
+
+@pytest.fixture(autouse=True)
+def _fixed_gcc(monkeypatch) -> None:
+    monkeypatch.setattr(firmware_build, "gcc_version", lambda: "14.2.1")
 
 
 def _fake_build(build_dir: Path, options: AppOptions) -> str:
@@ -87,6 +92,11 @@ def test_pinned_ref_build_is_stamped(tmp_path: Path) -> None:
     assert build["nsx_lock_sha256"] == digest
     assert manifest["artifacts"]["nsx_lock"] == "nsx.lock"
     assert (bundle_root / "nsx.lock").read_text(encoding="utf-8") == LOCK
+    assert build["toolchain"] == {"name": "arm-none-eabi-gcc", "version": "14.2.1"}
+    assert build["modules"] == [{
+        "name": "nsx-cmsis-nn", "project": "ns-cmsis-nn", "kind": "git", "revision": COMMIT, "tag": None,
+        "commit": COMMIT, "url": "https://github.com/AmbiqAI/ns-cmsis-nn.git",
+    }]
 
 
 def _git_checkout(root: Path) -> str:
@@ -129,6 +139,7 @@ def test_relocked_app_drops_lock_fields(tmp_path: Path) -> None:
 
     assert lock_file is None
     assert provenance["kernels"]["commit"] is None
+    assert provenance["modules"] is None
     assert provenance["kernels"]["ref"] == CMSIS_NN_REF
     assert provenance["neuralspotx_version"] == nsx_cli.nsx_version()
 
@@ -148,6 +159,8 @@ def test_missing_records_leave_nulls(tmp_path: Path, with_dir: bool) -> None:
         "kernels": dict.fromkeys(("ref", "commit", "root", "root_head", "root_dirty", "tree_hash")),
         "neuralspotx_version": None,
         "nsx_lock_sha256": None,
+        "modules": None,
+        "toolchain": None,
     }
     assert "nsx_lock" not in manifest["artifacts"]
     assert not (bundle_root / "nsx.lock").exists()
@@ -160,7 +173,7 @@ def test_corrupt_record_fields_read_null(tmp_path: Path) -> None:
     _fake_build(build_dir, AppOptions(cmsis_nn_root=root))
     app_dir = nsx_app_dir(build_dir)
     (app_dir / firmware_build.BUILT_LOCK).write_text(json.dumps({"lock": 1, "kernels": 123}), encoding="utf-8")
-    bad = {"nsx_version": [], "root_head": {}, "root_dirty": "yes"}
+    bad = {"nsx_version": [], "root_head": {}, "root_dirty": "yes", "toolchain": {"version": 14}}
     (app_dir / firmware_build.BUILT_INFO).write_text(json.dumps(bad), encoding="utf-8")
 
     provenance, lock_file = build_provenance(build_dir)
@@ -171,6 +184,7 @@ def test_corrupt_record_fields_read_null(tmp_path: Path) -> None:
     assert provenance["kernels"]["tree_hash"] is None
     assert provenance["kernels"]["root_head"] is None
     assert provenance["kernels"]["root_dirty"] is None
+    assert provenance["toolchain"] == {"name": None, "version": None}
 
 
 def test_rewrite_drops_stale_lock_copy(tmp_path: Path) -> None:
@@ -182,3 +196,9 @@ def test_rewrite_drops_stale_lock_copy(tmp_path: Path) -> None:
 
     assert not (bundle_root / "nsx.lock").exists()
     assert "nsx_lock" not in _manifest(bundle_root)["artifacts"]
+
+
+def test_missing_gcc_reads_null(monkeypatch) -> None:
+    monkeypatch.setattr(toolchain, "arm_tool", lambda name, repo_root=None: "/nonexistent/arm-none-eabi-gcc")
+
+    assert toolchain.gcc_version() is None

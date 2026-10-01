@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -55,3 +56,17 @@ def add_toolchain_to_path(repo_root: Optional[Path] = None) -> bool:
         return False
     os.environ["PATH"] = os.pathsep.join([str(bin_dir), *entries]) if entries != [""] else str(bin_dir)
     return True
+
+
+GCC_NAME = "arm-none-eabi-gcc"
+
+
+def gcc_version(repo_root: Optional[Path] = None) -> Optional[str]:
+    """The ARM GCC version, or None."""
+    try:
+        done = subprocess.run(
+            [arm_tool(GCC_NAME, repo_root), "-dumpversion"], capture_output=True, text=True, timeout=30, check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout.strip() or None

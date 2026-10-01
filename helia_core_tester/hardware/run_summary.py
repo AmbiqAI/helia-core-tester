@@ -6,6 +6,7 @@ import contextlib
 import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
@@ -178,8 +179,54 @@ def print_run_report(result, skipped: list[tuple], bundle: Path, *, err: bool = 
     return failed_case_ids
 
 
+RUN_SCHEMA = "hct.hardware.nightly_run"
+RUN_SCHEMA_VERSION = 1
+
+
+def _env(name: str) -> Optional[str]:
+    """A non-empty env var, or None."""
+    return os.environ.get(name) or None
+
+
+def _env_int(name: str) -> Optional[int]:
+    """A numeric env var, or None."""
+    value = _env(name) or ""
+    return int(value) if value.isdigit() else None
+
+
+def github_record() -> Optional[dict[str, Any]]:
+    """The Actions run, or None outside."""
+    run_id = _env_int("GITHUB_RUN_ID")
+    if run_id is None:
+        return None
+    server, repository = _env("GITHUB_SERVER_URL"), _env("GITHUB_REPOSITORY")
+    return {
+        "run_id": run_id,
+        "run_attempt": _env_int("GITHUB_RUN_ATTEMPT"),
+        "event_name": _env("GITHUB_EVENT_NAME"),
+        "sha": _env("GITHUB_SHA"),
+        "ref": _env("GITHUB_REF"),
+        "repository": repository,
+        "run_url": f"{server}/{repository}/actions/runs/{run_id}" if server and repository else None,
+    }
+
+
+def selection_record(options) -> Optional[dict[str, Any]]:
+    """The resolved case and counter selection."""
+    if options is None:
+        return None
+    return {
+        "suite": options.suite,
+        "limit": options.limit,
+        "family": options.family,
+        "precision": options.float_precision,
+        "pmu_counters": options.pmu_counters,
+    }
+
+
 def build_json_summary(
-    result, skipped: list[tuple], *, session_id: str, board_id: str, bundle: Path, timing: Optional[dict] = None
+    result, skipped: list[tuple], *, session_id: str, board_id: str, bundle: Path, timing: Optional[dict] = None,
+    options=None,
 ) -> dict[str, Any]:
     """The single JSON document `--json` prints on stdout."""
     cases: list[dict[str, Any]] = []
@@ -208,11 +255,16 @@ def build_json_summary(
         )
     ran = len(result.cases)
     return {
+        "schema": RUN_SCHEMA,
+        "schema_version": RUN_SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "session_id": session_id,
         "board": board_id,
         "boot": boot_record(result.target_info),
         "bundle": str(bundle),
         "totals": {"ran": ran, "passed": passed, "failed": ran - passed, "skipped": len(skipped)},
         "timing": dict(timing or {}),
+        "selection": selection_record(options),
+        "github": github_record(),
         "cases": cases,
     }

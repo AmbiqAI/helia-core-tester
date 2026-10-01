@@ -34,7 +34,7 @@ import typer
 from .boards import BoardSpec
 from .boards import repo_root as tester_repo_root
 from .jlink_library import JLinkLibraryError, find_jlink_exe
-from .toolchain import DOWNLOADS_DIR, add_toolchain_to_path
+from .toolchain import DOWNLOADS_DIR, GCC_NAME, add_toolchain_to_path, gcc_version
 
 if TYPE_CHECKING:
     from .nsx_app import AppOptions
@@ -287,7 +287,7 @@ def record_flash(build_dir: Path, serial_no: int, digest: str) -> Path:
 SYNC_STAMP = ".hct-sync"
 # Last good build: lock, kernel tree.
 BUILT_LOCK = ".hct-built-lock"
-# Last good build: NSX version, checkout.
+# Last good build: NSX, GCC, checkout.
 BUILT_INFO = ".hct-built-info"
 
 
@@ -410,7 +410,11 @@ def _record_built(app_dir: Path, options: "AppOptions") -> None:
     from . import nsx_cli
 
     _replace_json(app_dir / BUILT_LOCK, _built_record(app_dir, options))
-    info = {"nsx_version": nsx_cli.nsx_version(), **_checkout_state(options.cmsis_nn_root)}
+    info = {
+        "nsx_version": nsx_cli.nsx_version(),
+        "toolchain": {"name": GCC_NAME, "version": gcc_version()},
+        **_checkout_state(options.cmsis_nn_root),
+    }
     _replace_json(app_dir / BUILT_INFO, info)
 
 

@@ -418,6 +418,18 @@ Key files:
 - `logs/target.log`
 - `junit.xml`
 
+`session_manifest.json` (`hct.hardware.session_manifest`) records the build in
+`build`: kernel source, NSX version, `nsx.lock` digest, every locked module
+(`modules`: name, project, kind, revision, tag, commit, url) and the ARM GCC that
+built the image (`toolchain`). `hardware run --json` prints
+`hct.hardware.nightly_run`: totals and cases plus `generated_at`, the resolved
+`selection` and the `github` run (null outside Actions); the nightly saves it as
+`hardware-nightly-run.json` beside the bundle.
+
+Schema versions: bump `schema_version` when a field changes meaning, type or
+goes away. New optional fields keep the version; readers must accept missing
+fields, since older files lack them.
+
 ## Real vs simulated status by layer
 
 - **Host HCTP framing/CRC/session validation:** real and unit-tested in Python.
