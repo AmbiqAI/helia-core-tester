@@ -21,3 +21,16 @@ boards:
     workspace_bytes: 114688
     flash_region: MCU_MRAM
     ram_region: MCU_TCM
+  - id: apollo330mP_evb
+    nsx_board: apollo330mP_evb
+    soc: apollo330P
+    cpu: cortex-m55
+    pmu_tier: armv8m
+    has_mve: true
+    # Custom Ambiq J-Link entry; NSX flashes it too.
+    jlink_device: Apollo330P_510L
+    swd_speed_khz: 4000
+    # Fits largest case, stays under 75% TCM.
+    workspace_bytes: 112640
+    flash_region: MCU_MRAM
+    ram_region: MCU_TCM
