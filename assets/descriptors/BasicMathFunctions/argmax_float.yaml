@@ -1,6 +1,6 @@
 # Canonical rank4 standalone cases; exact S32 indices, no hardware-stream claim.
-# First NaN wins by CORE policy (not universal LiteRT parity); otherwise first
-# numeric extremum, including signed-zero ties. Native LiteRT FP16 is unsupported.
+# First numeric extremum, including signed-zero ties; a NaN never wins, as in
+# LiteRT, and an all-NaN line gives index 0. Native LiteRT FP16 is unsupported.
 # Finite cases place distinct boundary/interior winner indices across batches.
 operator: ArgMax
 name: argmax_first_f32
