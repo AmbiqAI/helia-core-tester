@@ -181,7 +181,7 @@ def test_run_writes_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert (out / "logs" / "apollo3p_evb.log").is_file()
 
 
-@pytest.mark.parametrize("extra", [["--board", "apollo3p_evb"], ["--session-id=x"], ["--serial-no", "9"], ["--pmu-counters", "cpu:all"]])
+@pytest.mark.parametrize("extra", [["--board", "apollo3p_evb"], ["--session-id=x"], ["--serial-no", "9"], ["--pmu-counters", "cpu:all"], ["--build-dir", "b"], ["--build-dir=b"]])
 def test_run_rejects_owned_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: list[str]) -> None:
     monkeypatch.setattr(board_matrix, "repo_root", lambda: tmp_path)
     monkeypatch.setattr(board_matrix.subprocess, "run", lambda *a, **k: pytest.fail("launched a leg"))
@@ -204,6 +204,8 @@ def _break(bundle: Path, name: str, text: str) -> Path:
     ("session_summary.json", '{"case_count": 1, "passed_cases": 1, "failed_cases": 1, "rejected_cases": []}'),
     ("session_summary.json", '{"case_count": 1, "passed_cases": 1, "failed_cases": 0, "rejected_cases": ["x"]}'),
     ("session_manifest.json", '{"target": {"board": "apollo510_evb"}, "boot": "up"}'),
+    ("session_manifest.json", '{"target": {"board": "apollo510_evb"}, "build": {"kernels": "bad"}}'),
+    ("case_summary.csv", "case_id,comparison_passed,median_cycles\nadd_s8,true,fast\n"),
 ])
 def test_summarize_rejects_broken_bundle(tmp_path: Path, name: str, text: str) -> None:
     bundle = _break(_write_bundle(tmp_path / "b", "apollo510_evb", [

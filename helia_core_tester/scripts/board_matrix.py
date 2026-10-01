@@ -32,10 +32,10 @@ from helia_core_tester.scripts.ab_bundles import load_bundle
 SCHEMA = "hct.hardware.board_matrix"
 MVE_RETIRED = "ARM_PMU_MVE_INST_RETIRED"
 SUMMARY_KEYS = ("case_count", "passed_cases", "failed_cases", "rejected_cases")
-# Options the matrix sets per leg.
+# Per-leg options; build dirs stay per board.
 OWNED_OPTIONS = (
     "--board", "--serial-no", "--session-id", "--suite", "--limit", "--family",
-    "--precision", "--pmu-counters", "--pmu-groups",
+    "--precision", "--pmu-counters", "--pmu-groups", "--build-dir",
 )
 
 
@@ -98,29 +98,6 @@ class BadBundle(ValueError):
     """Bundle breaks the result-bundle contract."""
 
 
-def _read_bundle(bundle: Path) -> tuple[dict, dict]:
-    """Manifest and summary, contract-checked."""
-    try:
-        manifest = json.loads((bundle / "session_manifest.json").read_text(encoding="utf-8"))
-        summary = json.loads((bundle / "session_summary.json").read_text(encoding="utf-8"))
-        rows = load_bundle(bundle).rows
-        missing = [key for key in SUMMARY_KEYS if key not in summary]
-        if not isinstance((manifest.get("target") or {}).get("board"), str):
-            missing.append("target.board")
-        if missing:
-            raise BadBundle(f"{bundle}: missing {', '.join(missing)}")
-        problem = _summary_problem(summary, len(rows))
-        if problem is None and not all(isinstance(manifest.get(key) or {}, dict) for key in ("boot", "build")):
-            problem = "boot or build is not an object"
-        if problem is not None:
-            raise BadBundle(f"{bundle}: {problem}")
-    except BadBundle:
-        raise
-    except (OSError, ValueError, KeyError, AttributeError, TypeError, csv.Error) as exc:
-        raise BadBundle(f"{bundle}: {exc}") from exc
-    return manifest, summary
-
-
 def _summary_problem(summary: dict, row_count: int) -> str | None:
     """Why the summary counts disagree, if they do."""
     counts = [summary[key] for key in SUMMARY_KEYS[:3]]
@@ -147,25 +124,44 @@ def empty_entry(board: str) -> dict:
 
 
 def board_entry(bundle: Path) -> dict:
-    """One board's row from its bundle."""
-    manifest, summary = _read_bundle(bundle)
-    target = manifest["target"]
-    boot = manifest.get("boot") or {}
-    kernels = (manifest.get("build") or {}).get("kernels") or {}
-    rejected = len(summary["rejected_cases"])
-    failed = int(summary["failed_cases"]) - rejected
-    entry = empty_entry(target["board"])
-    entry.update({
-        "cpu": target.get("cpu"),
-        "pmu_tier": target.get("pmu_tier"),
-        "status": "passed" if failed == 0 and rejected == 0 else "failed",
-        "session_id": manifest.get("session_id", bundle.name),
-        "bundle": str(bundle),
-        "golden": {"total": summary["case_count"], "passed": summary["passed_cases"], "failed": failed, "rejected": rejected},
-        "boot": {"status": boot.get("status"), "core_clock_hz": boot.get("core_clock_hz")},
-        "build_id": manifest.get("firmware_build_id"),
-        "kernels": {key: kernels.get(key) for key in ("ref", "commit", "root")},
-    })
+    """One board's row; read errors are BadBundle."""
+    try:
+        manifest = json.loads((bundle / "session_manifest.json").read_text(encoding="utf-8"))
+        summary = json.loads((bundle / "session_summary.json").read_text(encoding="utf-8"))
+        table = load_bundle(bundle)
+        missing = [key for key in SUMMARY_KEYS if key not in summary]
+        target = manifest.get("target") or {}
+        if not isinstance(target.get("board"), str):
+            missing.append("target.board")
+        if missing:
+            raise BadBundle(f"{bundle}: missing {', '.join(missing)}")
+        problem = _summary_problem(summary, len(table.rows))
+        if problem is not None:
+            raise BadBundle(f"{bundle}: {problem}")
+        # Parse every value the summary reads.
+        for case_id in table.rows:
+            for counter in ("median_cycles", MVE_RETIRED):
+                table.value(case_id, counter)
+        boot = manifest.get("boot") or {}
+        kernels = (manifest.get("build") or {}).get("kernels") or {}
+        rejected = len(summary["rejected_cases"])
+        failed = summary["failed_cases"] - rejected
+        entry = empty_entry(target["board"])
+        entry.update({
+            "cpu": target.get("cpu"),
+            "pmu_tier": target.get("pmu_tier"),
+            "status": "passed" if failed == 0 and rejected == 0 else "failed",
+            "session_id": manifest.get("session_id", bundle.name),
+            "bundle": str(bundle),
+            "golden": {"total": summary["case_count"], "passed": summary["passed_cases"], "failed": failed, "rejected": rejected},
+            "boot": {"status": boot.get("status"), "core_clock_hz": boot.get("core_clock_hz")},
+            "build_id": manifest.get("firmware_build_id"),
+            "kernels": {key: kernels.get(key) for key in ("ref", "commit", "root")},
+        })
+    except BadBundle:
+        raise
+    except (OSError, ValueError, KeyError, AttributeError, TypeError, csv.Error) as exc:
+        raise BadBundle(f"{bundle}: {exc}") from exc
     return entry
 
 
@@ -206,9 +202,9 @@ def _cell(value) -> str:
 def _kernels(kernels: dict | None) -> str:
     kernels = kernels or {}
     if kernels.get("root"):
-        return kernels["root"]
-    commit = (kernels.get("commit") or "")[:12]
-    return "@".join(part for part in (kernels.get("ref"), commit) if part) or "-"
+        return str(kernels["root"])
+    commit = str(kernels.get("commit") or "")[:12]
+    return "@".join(str(part) for part in (kernels.get("ref"), commit) if part) or "-"
 
 
 def _table(header: list[str], rows: list[list[str]]) -> list[str]:
@@ -227,7 +223,7 @@ def render_markdown(summary: dict) -> str:
         clock = boot.get("core_clock_hz")
         rows.append([
             entry["board"], entry["status"], _cell(golden.get("passed")), _cell(golden.get("failed")),
-            _cell(golden.get("rejected")), _cell(boot.get("status")), _cell(clock / 1e6 if clock else None),
+            _cell(golden.get("rejected")), _cell(boot.get("status")), _cell(clock / 1e6 if isinstance(clock, (int, float)) and clock else clock),
             _cell(entry.get("build_id")), _kernels(entry.get("kernels")), entry.get("note") or "",
         ])
     header = ["board", "status", "passed", "failed", "rejected", "boot", "clock MHz", "build id", "kernels", "note"]
@@ -256,7 +252,7 @@ def run_matrix(args: argparse.Namespace) -> int:
     try:
         owned = [arg for arg in args.extra if arg.split("=", 1)[0] in OWNED_OPTIONS]
         if owned:
-            raise ValueError(f"The matrix sets {', '.join(owned)}; drop it after --.")
+            raise ValueError(f"The matrix owns {', '.join(owned)}; drop it after --.")
         legs = plan_legs(args.boards, args.pmu_counters or [], args.suite, now)
     except ValueError as exc:
         print(f"board_matrix: {exc}", file=sys.stderr)

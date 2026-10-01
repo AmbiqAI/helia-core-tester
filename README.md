@@ -154,7 +154,7 @@ golden passed/failed/rejected, boot status and clock, build id, kernel source,
 bundle; per shared case, `median_cycles` and `ARM_PMU_MVE_INST_RETIRED` per board)
 and `board_matrix.md` into `artifacts/reports/hardware/matrix-<UTC stamp>` (or
 `--out`), and exit 1 unless every board passed (2 for bad input, a
-matrix-owned option after `--`, or a bundle missing its keys). Concurrent runs from one checkout
+matrix-owned option such as `--build-dir` after `--`, or an unreadable bundle). Concurrent runs from one checkout
 stage their cases under `artifacts/stream_cases/<suite>/<board>` and take turns
 generating into a shared CPU tree.
 
