@@ -134,9 +134,41 @@ Identity resolution rules:
   `/opt/SEGGER`). These are the same variables the lab runners export for hpx;
   `helia_core_tester doctor` prints which one resolved the library.
 
+### Board matrix
+
+Run one selection on several boards and get one summary:
+
+```bash
+uv run python -m helia_core_tester.scripts.board_matrix run \
+  --board apollo510_evb:1160003180 --board apollo330mP_evb:1160003409 \
+  --suite int --limit 2 --pmu-counters mve:default [--family F] [--precision fp16|fp32] \
+  [-- <hardware run args>]
+uv run python -m helia_core_tester.scripts.board_matrix summarize <bundle>... --out <dir>
+```
+
+Each board gets its own `hardware run` and its usual result bundle. Boards run in
+parallel when every `--board` names a distinct probe serial, else one at a time
+(`--sequential` forces that). A DWT-only board runs its default counters when
+`--pmu-counters` asks for events, and its summary row says so. Both commands write
+`board_matrix.json` (schema `hct.hardware.board_matrix` v1: per-board status,
+golden passed/failed/rejected, boot status and clock, build id, kernel source,
+bundle; per shared case, `median_cycles` and `ARM_PMU_MVE_INST_RETIRED` per board)
+and `board_matrix.md` into `artifacts/reports/hardware/matrix-<UTC stamp>` (or
+`--out`), and exit 1 unless every board passed (2 for bad input, a
+matrix-owned option such as `--build-dir` after `--`, or an unreadable bundle). Concurrent runs from one checkout
+stage their cases under `artifacts/stream_cases/<suite>/<board>` and take turns
+generating into a shared CPU tree.
+
 `helia_core_tester doctor` reports the hardware toolchain (arm-none-eabi-gcc,
 cmake, ninja, the neuralspotx version, the J-Link library) as
 informational checks; missing hardware tools do not fail doctor.
+
+`.github/workflows/hardware-nightly.yml` runs `hardware run --suite both` over
+the full catalog every night at 05:00 UTC on the lab runners, one job per board
+(default `apollo510_evb`, `apollo330mP_evb`, `apollo3p_evb`; `--pmu-counters all`
+on PMU boards), and uploads each board's result bundle.
+`gh workflow run hardware-nightly.yml -f boards=apollo510_evb -f limit=2` runs
+it by hand.
 
 ## Suite-Based Runs
 

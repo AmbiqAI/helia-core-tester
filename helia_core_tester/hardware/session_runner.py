@@ -12,6 +12,7 @@ session streams (`build_generated_test_case_bundles`).
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -238,7 +239,7 @@ def run_case_bundles(
         session, transport, rtt_address = open_rtt_session(board, serial_no, build_dir=build_dir, counter_passes=counter_passes)
         batch: list[CaseBundle] = []
         try:
-            info = session.handshake(expected_build_id=expected_build_id)
+            info = session.handshake(expected_build_id=expected_build_id, expected_clock_hz=board.core_clock_hz)
             if target_info is not None:
                 check_target_info_consistent(target_info, info, batch_index=batch_index)
             target_info = target_info or info
@@ -274,7 +275,11 @@ def run_case_bundles(
         counter_passes=counter_passes,
     )
 
-    memory_report = json.loads(generate_memory_report(board, project_root=project_root, build_dir=build_dir).read_text())
+    # Per-board report dir: concurrent runs.
+    report_root = project_root / "artifacts" / "hardware" / "benchmark_server" / board.id
+    memory_report = json.loads(
+        generate_memory_report(board, project_root=project_root, build_dir=build_dir, output_root=report_root).read_text()
+    )
     kernel_catalog = json.loads((project_root / "cmake" / "hardware" / "kernel_catalog.json").read_text())
     host_log = (
         f"hardware session_id={sid}\n"
@@ -367,6 +372,7 @@ def build_generated_test_case_bundles(
     suite: str = "int",
     require_fvp_pass: bool = True,
     fvp_gate: str | None = None,
+    board_id: str | None = None,
 ) -> tuple[list[CaseBundle], list[tuple[GeneratedTestCase, str]]]:
     """Discover generated (`helia_core_tester generate`) kernel tests and bridge the
     ones with real hardware benchmark firmware dispatch support into CaseBundles.
@@ -387,6 +393,8 @@ def build_generated_test_case_bundles(
     FVP model at all, where a fresh FVP report can never be produced locally and the
     gate would otherwise skip every case.
 
+    `board_id` keys staged cases per board, so boards run concurrently.
+
     Returns (bridged_case_bundles, [(skipped_test, reason), ...]).
     """
     families = bridged_families() if family is None else [family]
@@ -398,6 +406,7 @@ def build_generated_test_case_bundles(
                 project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite_name
             )
             for test in discovered:
+                test = replace(test, board=board_id)
                 try:
                     bundles.append(build_case_bundle_from_generated_test(
                         project_root, test, require_fvp_pass=require_fvp_pass, fvp_gate=fvp_gate))

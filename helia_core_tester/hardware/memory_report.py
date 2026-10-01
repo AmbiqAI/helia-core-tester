@@ -53,9 +53,8 @@ _SELECTED_ADAPTERS = (
 _MEMORY_RE = re.compile(
     r"^\s*([A-Za-z0-9_]+)\s*\([^)]*\)\s*:\s*ORIGIN\s*=\s*(0x[0-9A-Fa-f]+|\d+)\s*,\s*LENGTH\s*=\s*(0x[0-9A-Fa-f]+|\d+)"
 )
-# apollo330P links TCM code as .dtcm_text.
-_FLASH_SECTIONS = (".text", ".itcm_text", ".dtcm_text", ".data")
-_TCM_SECTIONS = (".dtcm_text", ".stack", ".data", ".bss")
+# `objdump -h`: idx, name, size, VMA, LMA.
+_HEADER_RE = re.compile(r"^\s*\d+\s+(\S+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s")
 _COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 _SYMBOL_RE = re.compile(r"^[0-9a-fA-F]+\s+[A-Za-z]\s+(arm_[A-Za-z0-9_]+)$")
 
@@ -101,16 +100,42 @@ def parse_memory_regions(linker_script: Path) -> list[dict[str, int | str]]:
     return regions
 
 
-def _parse_size_a(output: str) -> dict[str, int]:
-    sections: dict[str, int] = {}
-    for line in output.splitlines():
-        parts = line.split()
-        if len(parts) >= 2 and parts[0].startswith("."):
-            try:
-                sections[parts[0]] = int(parts[1])
-            except ValueError:
-                continue
-    return sections
+@dataclass(frozen=True)
+class SectionHeader:
+    name: str
+    size: int
+    vma: int
+    lma: int
+    flags: frozenset[str]
+
+
+def parse_section_headers(output: str) -> list[SectionHeader]:
+    """`objdump -h` rows with their flags."""
+    lines = output.splitlines()
+    rows: list[SectionHeader] = []
+    for line, flags in zip(lines, lines[1:]):
+        match = _HEADER_RE.match(line)
+        if match is None:
+            continue
+        name, size, vma, lma = match.groups()
+        rows.append(SectionHeader(
+            name, int(size, 16), int(vma, 16), int(lma, 16),
+            frozenset(flag.strip() for flag in flags.split(",")),
+        ))
+    return rows
+
+
+def _in_region(address: int, region: dict[str, int | str]) -> bool:
+    origin = int(region["origin"])
+    return origin <= address < origin + int(region["capacity"])
+
+
+def _section_totals(headers: list[SectionHeader]) -> dict[str, int]:
+    # NSX scripts emit two `.text` sections.
+    totals: dict[str, int] = {}
+    for header in headers:
+        totals[header.name] = totals.get(header.name, 0) + header.size
+    return totals
 
 
 def _parse_top_symbols(output: str, *, limit: int = 20) -> list[dict[str, int | str]]:
@@ -188,12 +213,10 @@ def analyze_elf(elf: Path, board: BoardSpec, linker_script: Path, project_root: 
     nm_symbols = _probe_binary("arm-none-eabi-nm", [str(elf)], project_root)
     objdump_headers = _probe_binary("arm-none-eabi-objdump", ["-h", str(elf)], project_root)
 
-    sections = _parse_size_a(size_sections)
+    headers = parse_section_headers(objdump_headers)
+    sections = _section_totals(headers)
     memory_regions = parse_memory_regions(linker_script)
-    region_map = {str(row["name"]): int(row["capacity"]) for row in memory_regions}
-    flash_image_bytes = sum(sections.get(name, 0) for name in _FLASH_SECTIONS)
-    tcm_static_bytes = sum(sections.get(name, 0) for name in _TCM_SECTIONS)
-    heap_available_bytes = sections.get(".heap", 0)
+    region_map = {str(row["name"]): row for row in memory_regions}
     # Fail closed: a missing or mistyped board region is a configuration error, not a
     # zero-capacity region that the gates below would wave through.
     missing = [name for name in (board.flash_region, board.ram_region) if name not in region_map]
@@ -202,20 +225,30 @@ def analyze_elf(elf: Path, board: BoardSpec, linker_script: Path, project_root: 
             f"Linker script for board {board.id!r} defines no memory region(s) {missing}; "
             f"available regions: {sorted(region_map)}. Check flash_region/ram_region in the board table."
         )
-    flash_capacity = region_map[board.flash_region]
-    tcm_capacity = region_map[board.ram_region]
+    flash, ram = region_map[board.flash_region], region_map[board.ram_region]
+    # Flash holds every loaded section's image.
+    flash_image_bytes = sum(h.size for h in headers if "LOAD" in h.flags and _in_region(h.lma, flash))
+    # RAM counts allocated sections placed there.
+    ram_static_bytes = sum(
+        h.size for h in headers if "ALLOC" in h.flags and h.name != ".heap" and _in_region(h.vma, ram)
+    )
+    heap_available_bytes = sections.get(".heap", 0)
+    flash_capacity = int(flash["capacity"])
+    ram_capacity = int(ram["capacity"])
     usage = {
+        "flash_region": board.flash_region,
         "flash_image_bytes": flash_image_bytes,
         "flash_capacity_bytes": flash_capacity,
         "flash_free_bytes": max(0, flash_capacity - flash_image_bytes),
         "flash_percent_used": round((flash_image_bytes / flash_capacity) * 100, 2) if flash_capacity else None,
-        "tcm_static_bytes": tcm_static_bytes,
-        "tcm_capacity_bytes": tcm_capacity,
-        "tcm_free_bytes_before_heap": max(0, tcm_capacity - tcm_static_bytes),
-        "tcm_percent_used_before_heap": round((tcm_static_bytes / tcm_capacity) * 100, 2) if tcm_capacity else None,
+        "ram_region": board.ram_region,
+        "ram_static_bytes": ram_static_bytes,
+        "ram_capacity_bytes": ram_capacity,
+        "ram_free_bytes_before_heap": max(0, ram_capacity - ram_static_bytes),
+        "ram_percent_used_before_heap": round((ram_static_bytes / ram_capacity) * 100, 2) if ram_capacity else None,
         "heap_available_bytes": heap_available_bytes,
         "flash_gate_pass": flash_image_bytes <= int(flash_capacity * 0.75),
-        "tcm_gate_pass": tcm_static_bytes <= int(tcm_capacity * 0.75),
+        "ram_gate_pass": ram_static_bytes <= int(ram_capacity * 0.75),
     }
     return ElfAnalysis(
         sections=sections,
@@ -253,7 +286,7 @@ def generate_memory_report(
 
     report = {
         "schema": "hct.memory_report",
-        "schema_version": 1,
+        "schema_version": 2,
         "artifact": SERVER_TARGET,
         "target": {"board": board.id, "cpu": board.cpu},
         # Repo-relative for the default in-tree build dir, absolute for an external --build-dir.
@@ -330,7 +363,7 @@ def build_size_probe(board: BoardSpec, variant: SizeProbeVariant, *, project_roo
 
     report = {
         "schema": "hct.memory_report",
-        "schema_version": 1,
+        "schema_version": 2,
         "variant": variant.name,
         "target": {"board": board.id, "cpu": board.cpu},
         "feature_set": {

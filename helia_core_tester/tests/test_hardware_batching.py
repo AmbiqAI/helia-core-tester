@@ -141,7 +141,7 @@ class _FakeSession:
         self.target_info: TargetInfo | None = None
         self.expected_build_id: str | None = None
 
-    def handshake(self, *, expected_build_id: str | None = None) -> TargetInfo:
+    def handshake(self, *, expected_build_id: str | None = None, expected_clock_hz: int | None = None) -> TargetInfo:
         if self._fail is not None:
             raise self._fail
         self.expected_build_id = expected_build_id
@@ -277,7 +277,13 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
     monkeypatch.setattr(session_runner, "write_result_bundle", _fake_write_result_bundle)
-    monkeypatch.setattr(session_runner, "generate_memory_report", lambda board, project_root=None, build_dir=None: tmp_path / "memory_report.json")
+    report_roots: list[Path] = []
+
+    def _fake_memory_report(board, *, project_root, build_dir, output_root):
+        report_roots.append(output_root)
+        return tmp_path / "memory_report.json"
+
+    monkeypatch.setattr(session_runner, "generate_memory_report", _fake_memory_report)
     (tmp_path / "memory_report.json").write_text("{}", encoding="utf-8")
     (tmp_path / "cmake" / "hardware").mkdir(parents=True, exist_ok=True)
     (tmp_path / "cmake" / "hardware" / "kernel_catalog.json").write_text("[]", encoding="utf-8")
@@ -296,6 +302,8 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
     # The target advertised 32 cases per plan: ceil(70/32) = 3 sessions of 32, 32, 6,
     # each over its own transport, closed afterwards.
     assert [len(call) for call in calls] == [32, 32, 6]
+    # Concurrent boards keep separate reports.
+    assert report_roots == [tmp_path / "artifacts" / "hardware" / "benchmark_server" / "apollo510_evb"]
     assert [b.case_id for b in calls[0]] == [f"case_{i}" for i in range(0, 32)]
     assert [b.case_id for b in calls[2]] == [f"case_{i}" for i in range(64, 70)]
     assert [t.closed for t in transports] == [1, 1, 1]
@@ -433,6 +441,18 @@ def test_boot_failure_skips_batch_context(tmp_path: Path, monkeypatch) -> None:
         session_runner.run_case_bundles(
             tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
             board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
+        )
+
+
+def test_runner_checks_board_row_clock(tmp_path: Path, monkeypatch) -> None:
+    def _open(board, serial_no, *, build_dir, counter_passes):
+        return HostSession(FakeTargetTransport(core_clock_hz=250_000_000)), _FakeTransport(), 0
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    with pytest.raises(RuntimeError, match=r"^Board core clock 250 MHz, expected 48 MHz\.$"):
+        session_runner.run_case_bundles(
+            tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
+            board=resolve_board("apollo3p_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
         )
 
 

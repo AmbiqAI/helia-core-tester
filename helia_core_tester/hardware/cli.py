@@ -37,6 +37,7 @@ import typer
 from .boards import BoardSpec, UnknownBoardError, default_board_id, load_board_table, repo_root, resolve_board
 from .memory_report import generate_memory_report
 from .probes import ProbeResolutionError, list_probes, resolve_serial
+from .wire import clock_mhz
 
 hardware_app = typer.Typer(
     name="hardware",
@@ -211,9 +212,12 @@ def _saved_kernels(build_dir: Path, echo) -> None:
 def boards() -> None:
     """List the known hardware boards (assets/hardware_boards.yaml)."""
     table = load_board_table()
-    header = ("id", "nsx_board", "cpu", "pmu_tier", "has_mve", "jlink_device", "swd_khz", "workspace_bytes")
+    header = ("id", "nsx_board", "cpu", "pmu_tier", "has_mve", "jlink_device", "swd_khz", "workspace_bytes", "core_clock")
     rows = [
-        (b.id, b.nsx_board, b.cpu, b.pmu_tier, "yes" if b.has_mve else "no", b.jlink_device, str(b.swd_speed_khz), str(b.workspace_bytes))
+        (
+            b.id, b.nsx_board, b.cpu, b.pmu_tier, "yes" if b.has_mve else "no", b.jlink_device, str(b.swd_speed_khz),
+            str(b.workspace_bytes), clock_mhz(b.core_clock_hz) if b.core_clock_hz else "-",
+        )
         for b in table
     ]
     widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(header)]

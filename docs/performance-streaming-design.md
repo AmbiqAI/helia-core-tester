@@ -158,8 +158,8 @@ The target sends nothing during `RUN_PERFORMANCE` until every pass has run
 (`passes x (warmups + samples x iterations)` kernel calls), so the host waits one
 RTT read timeout (10 s) per pass for the first `SAMPLE_RESULT`. That bounds one
 kernel call at about 10 s x f_cpu / (warmups + samples x iterations): at the
-generated plan (2 + 5 x 4 = 22 calls per pass) and the ~96 MHz the Apollo510
-firmware measures, about 43M cycles, whatever the pass count.
+generated plan (2 + 5 x 4 = 22 calls per pass), about 114M cycles at 250 MHz
+(Apollo510, Apollo330P) or 22M at 48 MHz (Apollo3P), whatever the pass count.
 
 `TARGET_INFO` (target -> host): `text build_id`, 32-byte catalog SHA-256,
 `u32 max_frame_payload`, `u32 runtime_arena_capacity`, `u8 transfer_mode`,
@@ -168,10 +168,15 @@ firmware measures, about 43M cycles, whatever the pass count.
 `u16 max_cases_per_session`, `u8 max_passes`, then an optional boot-health tail:
 `i32 boot_status` (the `nsx_system_init()` return) and `u32 core_clock_hz` (the clock
 the HAL reports: `am_hal_pwrctrl_mcu_mode_status()` mapped to Hz per part, or
-`am_hal_burst_mode_status()` on Apollo3; 0 on an unknown part). Firmware that predates
-the tail ends at `max_passes`; the host decodes it with both fields unset. The host
-refuses to stream when `boot_status` is non-zero, before `TARGET_INFO_ACK`, and stamps
-both fields in `session_manifest.json` (`boot`) and the run summary.
+`am_hal_burst_mode_status()` on Apollo3; 0 when unknown). Firmware that predates
+the tail ends at `max_passes`; the host decodes it with both fields unset. Each board
+row in `assets/hardware_boards.yaml` declares the `core_clock_hz` its healthy boot
+reports (250 MHz on apollo510_evb and apollo330mP_evb, 48 MHz on apollo3p_evb). Before
+`TARGET_INFO_ACK`, the host refuses to stream when `boot_status` is non-zero, or when
+`core_clock_hz` differs from the row's value; an exact match is required, and 0 is
+refused. Firmware without the tail still streams ("not reported"), and a row without
+`core_clock_hz` skips the clock check. The host stamps both fields in
+`session_manifest.json` (`boot`) and the run summary.
 `capability_flags` bit 6 is `HCT_CAP_PMU_ARMV8M`, set only when the firmware was
 built for a core whose device header declares `__PMU_PRESENT == 1`;
 `pmu_counter_slots` is `__PMU_NUM_EVENTCNT` (8 on Cortex-M55, 0 without a PMU).
@@ -370,7 +375,7 @@ Two sizing checkpoints now exist:
    - artifact: `artifacts/hardware/size_probe/<board>/<variant>/memory_report.json`
 2. **Real benchmark-server firmware image** (`hardware memory-report`, `memory_report.generate_memory_report`)
    - goal: measure the actual streaming skeleton with protocol, RTT binding, catalog, session state, and adapters
-   - artifact: `artifacts/hardware/benchmark_server/memory_report.json`, copied into every result bundle
+   - artifact: `artifacts/hardware/benchmark_server/memory_report.json`; a `hardware run` writes `artifacts/hardware/benchmark_server/<board>/` and copies it into the result bundle
 
 Both reports come from one analysis (`helia_core_tester/hardware/memory_report.py`) of:
 
@@ -382,10 +387,14 @@ Both reports come from one analysis (`helia_core_tester/hardware/memory_report.p
   flash/RAM region names (`flash_region`, `ram_region`) come from the board's row in
   `assets/hardware_boards.yaml`
 
-Reported percentages are computed against:
+Sections are classified by address against those regions (`objdump -h` VMA/LMA):
 
-- `MCU_MRAM` for flash image bytes
-- `MCU_TCM` for static TCM usage before heap
+- flash image bytes: every loaded section whose load address is in `flash_region`
+  (`MCU_MRAM` on Apollo5, `ROMEM` on Apollo3), vector table and `.data` image included
+- static RAM before heap (`ram_*` keys): every allocated section other than `.heap`
+  placed in `ram_region` (`MCU_TCM` on Apollo5, `RWMEM` on Apollo3); the usage block
+  records both region names
+- both gates pass at <= 75 % of the region
 
 ## Result bundle
 

@@ -7,6 +7,8 @@
 # SoC directory the NSX linker script lives in and the flash/RAM region names
 # the memory report measures against) are derived from the row here. Loaded by
 # helia_core_tester/hardware/boards.py.
+#
+# core_clock_hz: exact hct_core_clock_hz() boot value.
 schema: hct.hardware_boards
 schema_version: 1
 boards:
@@ -21,6 +23,8 @@ boards:
     workspace_bytes: 114688
     flash_region: MCU_MRAM
     ram_region: MCU_TCM
+    # HP mode.
+    core_clock_hz: 250000000
   - id: apollo330mP_evb
     nsx_board: apollo330mP_evb
     soc: apollo330P
@@ -34,6 +38,8 @@ boards:
     workspace_bytes: 112640
     flash_region: MCU_MRAM
     ram_region: MCU_TCM
+    # HP2 mode.
+    core_clock_hz: 250000000
   - id: apollo3p_evb
     nsx_board: apollo3p_evb
     soc: apollo3p
@@ -45,3 +51,5 @@ boards:
     workspace_bytes: 114688
     flash_region: ROMEM
     ram_region: RWMEM
+    # Burst off; NSX perf mode is a no-op.
+    core_clock_hz: 48000000

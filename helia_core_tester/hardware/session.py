@@ -35,6 +35,7 @@ from .wire import (
     SessionPlan,
     TargetInfo,
     boot_line,
+    clock_mhz,
     decode_case_complete,
     decode_correctness_result,
     decode_error,
@@ -331,7 +332,7 @@ class HostSession:
     def run(self, case_bundle: CaseBundle) -> SessionResult:
         return self.run_many([case_bundle])
 
-    def handshake(self, *, expected_build_id: str | None = None) -> TargetInfo:
+    def handshake(self, *, expected_build_id: str | None = None, expected_clock_hz: int | None = None) -> TargetInfo:
         """TARGET_INFO -> TARGET_INFO_ACK -> KERNEL_CATALOG: learn the target's limits and
         catalog, refusing PMU passes it cannot run before any plan is sent.
 
@@ -344,6 +345,7 @@ class HostSession:
         self._target_info = target_info
         check_build_id(target_info.build_id, expected_build_id)
         check_boot_status(target_info)
+        check_core_clock(target_info, expected_clock_hz)
         self._session_id = target_info_frame.header.session_id
         self._incoming_validator = SessionFrameValidator(session_id=self._session_id, next_sequence_id=1)
         check_counter_passes(self._counter_passes, target_info)
@@ -637,13 +639,21 @@ def check_build_id(actual: str, expected: str | None) -> None:
 
 
 class BootFailure(RuntimeError):
-    """nsx_system_init() failed on the target."""
+    """The target booted unhealthy."""
 
 
 def check_boot_status(info: TargetInfo) -> None:
     """Refuse failed nsx_system_init(); old firmware passes."""
     if info.boot_status:
         raise BootFailure(f"Board init failed: nsx_system_init {boot_line(info)}.")
+
+
+def check_core_clock(info: TargetInfo, expected_hz: int | None) -> None:
+    """Refuse a wrong or unknown clock; old firmware passes."""
+    if expected_hz is None or info.core_clock_hz is None or info.core_clock_hz == expected_hz:
+        return
+    actual = clock_mhz(info.core_clock_hz) if info.core_clock_hz else "unknown"
+    raise BootFailure(f"Board core clock {actual}, expected {clock_mhz(expected_hz)}.")
 
 
 def read_target_info(transport: Transport) -> TargetInfo:
