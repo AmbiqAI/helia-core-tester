@@ -36,6 +36,7 @@ def test_board_table_seeds_apollo510_evb() -> None:
         workspace_bytes=114688,
         flash_region="MCU_MRAM",
         ram_region="MCU_TCM",
+        core_clock_hz=250_000_000,
     )
 
 
@@ -52,6 +53,7 @@ def test_board_table_has_apollo330mP_evb() -> None:
         workspace_bytes=112640,
         flash_region="MCU_MRAM",
         ram_region="MCU_TCM",
+        core_clock_hz=250_000_000,
     )
 
 

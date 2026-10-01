@@ -141,7 +141,7 @@ class _FakeSession:
         self.target_info: TargetInfo | None = None
         self.expected_build_id: str | None = None
 
-    def handshake(self, *, expected_build_id: str | None = None) -> TargetInfo:
+    def handshake(self, *, expected_build_id: str | None = None, expected_clock_hz: int | None = None) -> TargetInfo:
         if self._fail is not None:
             raise self._fail
         self.expected_build_id = expected_build_id
@@ -361,6 +361,18 @@ def test_boot_failure_skips_batch_context(tmp_path: Path, monkeypatch) -> None:
         session_runner.run_case_bundles(
             tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
             board=resolve_board("apollo510_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
+        )
+
+
+def test_runner_checks_board_row_clock(tmp_path: Path, monkeypatch) -> None:
+    def _open(board, serial_no, *, build_dir, counter_passes):
+        return HostSession(FakeTargetTransport(core_clock_hz=250_000_000)), _FakeTransport(), 0
+
+    monkeypatch.setattr(session_runner, "open_rtt_session", _open)
+    with pytest.raises(RuntimeError, match=r"^Board core clock 250 MHz, expected 48 MHz\.$"):
+        session_runner.run_case_bundles(
+            tmp_path, [_DummyCaseBundle("case_0")],  # type: ignore[arg-type]
+            board=resolve_board("apollo3p_evb"), serial_no=1, counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
         )
 
 

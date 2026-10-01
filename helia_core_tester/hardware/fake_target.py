@@ -15,6 +15,7 @@ import numpy as np
 
 from helia_core_tester.generation.utils.tflite_utils import requantize_np
 
+from .boards import DEFAULT_BOARD_ID, resolve_board
 from .hctp import HEADER_SIZE, Frame, FrameDecoder, MessageType, SessionFrameValidator, encode_frame
 from .measurement import (
     MAX_CASES_PER_PLAN,
@@ -245,12 +246,13 @@ class FakeTargetTransport:
         max_passes: int = MAX_PASSES_PER_PLAN,
         rejections: Mapping[str, tuple[str, int]] | None = None,
         boot_status: int | None = 0,
-        core_clock_hz: int = 250_000_000,
+        core_clock_hz: int | None = None,
     ) -> None:
         self.build_id = build_id
         # Non-zero: failed init. None: old firmware.
         self._boot_status = boot_status
-        self._core_clock_hz = core_clock_hz
+        # Default: the default board row's clock.
+        self._core_clock_hz = resolve_board(DEFAULT_BOARD_ID).core_clock_hz if core_clock_hz is None else core_clock_hz
         # case_id -> (stage, kernel status) to refuse.
         self._rejections = dict(rejections or {})
         self._session_id = 0xC0DE1234

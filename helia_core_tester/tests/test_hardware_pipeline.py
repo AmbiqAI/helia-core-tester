@@ -39,7 +39,7 @@ from helia_core_tester.hardware.hardware_pipeline import (
 )
 from helia_core_tester.hardware.result_bundle import write_result_bundle
 from helia_core_tester.hardware.run_summary import build_json_summary, print_run_report
-from helia_core_tester.hardware.session import HostSession, read_target_info
+from helia_core_tester.hardware.session import BootFailure, HostSession, read_target_info
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BOARD = resolve_board("apollo510_evb")
@@ -444,6 +444,30 @@ def test_session_refuses_failed_boot_before_any_case(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match=r"^Board init failed: nsx_system_init status 7, core 96 MHz\.$"):
         HostSession(transport).run_many([bundle])
     # No ACK sent, so no catalog.
+    assert transport.read() == b"" and transport.completed_case_count == 0
+
+
+@pytest.mark.parametrize(
+    "boot_status, clock_hz, refusal",
+    [
+        (0, 250_000_000, None),
+        (0, 96_000_000, r"^Board core clock 96 MHz, expected 250 MHz\.$"),
+        (0, 0, r"^Board core clock unknown, expected 250 MHz\.$"),
+        (None, 96_000_000, None),
+    ],
+    ids=["match", "mismatch", "unknown", "not-reported"],
+)
+def test_session_checks_core_clock(tmp_path: Path, boot_status, clock_hz, refusal) -> None:
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_clock").manifest_path)
+    transport = FakeTargetTransport(boot_status=boot_status, core_clock_hz=clock_hz)
+    session = HostSession(transport)
+    if refusal is None:
+        session.handshake(expected_clock_hz=250_000_000)
+        assert session.run_many([bundle]).cases[0].comparison.passed
+        return
+    with pytest.raises(BootFailure, match=refusal):
+        session.handshake(expected_clock_hz=250_000_000)
+    # Refused before ACK and any case.
     assert transport.read() == b"" and transport.completed_case_count == 0
 
 

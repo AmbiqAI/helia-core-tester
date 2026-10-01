@@ -188,7 +188,7 @@ def run_case_bundles(
         session, transport, rtt_address = open_rtt_session(board, serial_no, build_dir=build_dir, counter_passes=counter_passes)
         batch: list[CaseBundle] = []
         try:
-            info = session.handshake(expected_build_id=expected_build_id)
+            info = session.handshake(expected_build_id=expected_build_id, expected_clock_hz=board.core_clock_hz)
             if target_info is not None:
                 check_target_info_consistent(target_info, info, batch_index=batch_index)
             target_info = target_info or info

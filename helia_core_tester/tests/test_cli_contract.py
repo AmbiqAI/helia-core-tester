@@ -98,6 +98,7 @@ def test_boards_lists_table() -> None:
     assert result.exit_code == 0
     text = _result_text(result)
     assert "apollo510_evb" in text and "cortex-m55" in text and "AP510NFA-CBR" in text and "4000" in text
+    assert "core_mhz" in text and "48" in text
 
 
 def test_unknown_board_lists_known_ids() -> None:

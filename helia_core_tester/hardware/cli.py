@@ -211,9 +211,12 @@ def _saved_kernels(build_dir: Path, echo) -> None:
 def boards() -> None:
     """List the known hardware boards (assets/hardware_boards.yaml)."""
     table = load_board_table()
-    header = ("id", "nsx_board", "cpu", "pmu_tier", "has_mve", "jlink_device", "swd_khz", "workspace_bytes")
+    header = ("id", "nsx_board", "cpu", "pmu_tier", "has_mve", "jlink_device", "swd_khz", "workspace_bytes", "core_mhz")
     rows = [
-        (b.id, b.nsx_board, b.cpu, b.pmu_tier, "yes" if b.has_mve else "no", b.jlink_device, str(b.swd_speed_khz), str(b.workspace_bytes))
+        (
+            b.id, b.nsx_board, b.cpu, b.pmu_tier, "yes" if b.has_mve else "no", b.jlink_device, str(b.swd_speed_khz),
+            str(b.workspace_bytes), f"{b.core_clock_hz / 1e6:g}" if b.core_clock_hz else "-",
+        )
         for b in table
     ]
     widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(header)]
