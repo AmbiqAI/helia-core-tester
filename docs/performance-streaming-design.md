@@ -306,8 +306,14 @@ Default transport is bidirectional SEGGER RTT. In the current live Apollo510 imp
 ### Current RTT implementation status
 
 - **Live-real on Apollo510:** the benchmark-server target now boots on real Apollo510 hardware, initializes the real `SEGGER_RTT` target sources from `neuralspotx/examples/coremark/src/rtt/`, emits TARGET_INFO over RTT, accepts host frames, requests blobs, and streams correctness/performance results back to the host.
-- **Host implementation:** the host now has a real J-Link RTT transport using `pylink-square`. It resolves `_SEGGER_RTT` from the linked ELF and starts RTT with an explicit control-block address.
-- **Observed limitation:** SEGGER CLI auto-discovery (`JLinkRTTLogger`) did not find the control block on this board/firmware, so the working hardware path currently uses explicit RTT block-address startup rather than auto-discovery.
+- **Host implementation:** `JLinkRttTransport` (`helia_core_tester/hardware/transport.py`) opens the probe with `pylink-square` and resolves `_SEGGER_RTT` from the linked ELF. It does not start the J-Link DLL's RTT engine. `RttRings` reads and writes the `SEGGER_RTT_CB` channel-0 rings with plain J-Link memory accesses:
+  - It waits for the block's `SEGGER RTT` id.
+  - It reads a ring descriptor, copies the bytes, then advances `RdOff` (up ring) only by the bytes it received, or `WrOff` (down ring) by the bytes it wrote.
+  - The firmware's up ring is in `SEGGER_RTT_MODE_BLOCK_IF_FIFO_FULL`, so a full ring blocks the target until the host drains it; nothing is dropped.
+  - Every ring write and descriptor read checks its access count. A short access raises `TransportError`; pylink's `memory_write32` returns bytes, not words.
+- **Why not the DLL's RTT engine:** under slow host reads (a busy CI host streaming several boards), it advanced the target's `RdOff` past about 4 KB it never returned. That dropped the tail of a SAMPLE_RESULT burst and stalled full-catalog runs on apollo330mP_evb.
+- **Stall diagnostics:** a stall, or any `TransportError`, names the running case. Over the open probe the host briefly halts the core and reports PC (symbolized from the ELF), LR, SP, CFSR/HFSR and the up ring's offsets, with a verdict: faulted, blocked on a full ring, or all queued bytes sent.
+- **Observed limitation:** SEGGER CLI auto-discovery (`JLinkRTTLogger`) did not find the control block on this board/firmware, so the host always uses the `_SEGGER_RTT` address from the ELF.
 
 ## PMU/DWT reuse
 
@@ -447,7 +453,7 @@ Key files:
 Current remaining boundary:
 
 - Corstone-300 FVP execution may still be blocked by missing Linux-only binaries
-- RTT auto-discovery via SEGGER CLI tools remains unreliable on this board/firmware; explicit `_SEGGER_RTT` address startup is the working path
+- RTT auto-discovery via SEGGER CLI tools remains unreliable on this board/firmware; the host uses the `_SEGGER_RTT` address from the ELF and accesses the rings directly
 
 Loopback/fake-target validation remains the hardware-independent proof path; Apollo510 live RTT now covers the first real-hardware proof path.
 

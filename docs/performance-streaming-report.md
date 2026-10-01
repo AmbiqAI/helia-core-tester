@@ -10,7 +10,7 @@ This snapshot now includes both the hardware-independent proof path and a live A
 
 - Python HCTP framing with 32-byte headers, little-endian encoding, payload/header CRC32, session/sequence validation.
 - Loopback and fake-target transports for deterministic tests.
-- Real J-Link RTT transport via `pylink-square`, using the firmware `_SEGGER_RTT` symbol address from the linked ELF.
+- Real J-Link RTT transport via `pylink-square`, using the firmware `_SEGGER_RTT` symbol address from the linked ELF (today it accesses the rings directly; see the design doc).
 - Streamable case-bundle generation (binary blobs + `case_manifest.json`) for:
   - `arm_abs_s8`
   - `arm_convolve_s8`
@@ -255,7 +255,8 @@ Two genuine hardware issues were hit and resolved during bring-up:
    `JLinkRTTLogger` reported:
    `Searching for RTT Control Block...RTT Control Block not found. Cannot get data.`  
    even though `_SEGGER_RTT` existed in SRAM and the firmware was running.  
-   Workaround used successfully: resolve `_SEGGER_RTT` from the linked ELF and start RTT explicitly with `pylink` using `rtt_start(block_address=...)`.
+   Workaround used successfully: resolve `_SEGGER_RTT` from the linked ELF and start RTT explicitly with `pylink` using `rtt_start(block_address=...)`.  
+   Since superseded: the host no longer starts the DLL's RTT engine. Under slow host reads that engine dropped bytes it had already taken from the target ring. The host now reads and writes the channel-0 rings directly over J-Link memory access (`RttRings`; see the design doc's Transport section).
 
 Additionally, the first live Conv2D correctness attempt stalled because the MVE `arm_convolve_s8` path requires a populated `weight_sum_ctx`; the firmware adapter/session path was updated to compute real weight sums with `arm_convolve_weight_sum()` before dispatch.
 
