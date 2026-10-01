@@ -1856,6 +1856,9 @@ arm_cmsis_nn_status
 arm_sqrt_s16(const int16_t *input, const cmsis_nn_dims *input_dims, int16_t *output, const int16_t *sqrt_lut);
 
 arm_cmsis_nn_status
+arm_sqrt_s16_tablefree(const int16_t *input, const cmsis_nn_dims *input_dims, int16_t *output, const float scale);
+
+arm_cmsis_nn_status
 arm_sqrt_s8(const int8_t *input, const cmsis_nn_dims *input_dims, int8_t *output, const int8_t *sqrt_lut);
 
 arm_cmsis_nn_status arm_squared_difference_s16(const int16_t *input1_data,
