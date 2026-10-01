@@ -30,11 +30,13 @@ from helia_core_tester.hardware.firmware_build import (
 from helia_core_tester.hardware.hardware_pipeline import (
     StreamOptions,
     apply_precision,
+    fit_to_board,
     float_precision_for,
     generate_tests_for_board,
     parse_pmu_counters,
     parse_pmu_groups,
     resolve_pmu_options,
+    resolved_selection,
     run_hardware_pipeline,
     validate_fvp_gate,
 )
@@ -513,7 +515,7 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
     summary = build_json_summary(
         result, skipped, session_id="apollo510_evb-20260912T000000Z", board_id="apollo510_evb",
         bundle=tmp_path / "artifacts" / "reports" / "hardware" / "apollo510_evb-20260912T000000Z",
-        timing=timing, options=StreamOptions(),
+        selection={"suite": "int"}, timing=timing,
     )
     encoded = json.loads(json.dumps(summary))  # must be JSON-serialisable as-is
 
@@ -547,7 +549,8 @@ def _run_document(tmp_path: Path, options: StreamOptions) -> dict:
     """A --json document from one fake case."""
     bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_doc").manifest_path)
     result = HostSession(FakeTargetTransport()).run_many([bundle])
-    summary = build_json_summary(result, [], session_id="s", board_id="apollo510_evb", bundle=tmp_path, options=options)
+    selection = resolved_selection(PROJECT_ROOT, resolve_board("apollo510_evb"), options)
+    summary = build_json_summary(result, [], session_id="s", board_id="apollo510_evb", bundle=tmp_path, selection=selection)
     return json.loads(json.dumps(summary))
 
 
@@ -568,6 +571,33 @@ def test_json_summary_identifies_its_schema(tmp_path: Path, monkeypatch) -> None
         "pmu_counters": {"cpu": "all"}, "fvp_gate": "strict",
     }
     assert encoded["github"] is None
+
+
+@pytest.mark.parametrize(
+    ("board_id", "suite", "env_precision", "precision"),
+    [
+        ("apollo510_evb", "float", None, "both"),  # config default
+        ("apollo510_evb", "float", "f16", "f16"),  # config from env
+        ("apollo510_evb", "both", None, "both"),
+        ("apollo3p_evb", "both", None, "f32"),  # M4 has no FP16
+        ("apollo3p_evb", "float", None, "f32"),
+        ("apollo510_evb", "int", None, None),  # no float cases
+    ],
+)
+def test_selection_records_generation_precision(monkeypatch, board_id, suite, env_precision, precision) -> None:
+    monkeypatch.delenv("HELIA_CORE_TESTER_FLOAT_PRECISION", raising=False)
+    if env_precision:
+        monkeypatch.setenv("HELIA_CORE_TESTER_FLOAT_PRECISION", env_precision)
+    board = resolve_board(board_id)
+    options = fit_to_board(board, StreamOptions(suite=suite), explicit_pmu=False)
+
+    assert resolved_selection(PROJECT_ROOT, board, options)["precision"] == precision
+
+
+def test_selection_records_default_fvp_gate() -> None:
+    board = resolve_board("apollo510_evb")
+
+    assert resolved_selection(PROJECT_ROOT, board, StreamOptions())["fvp_gate"] == "advisory"
 
 
 def test_json_summary_records_github_run(tmp_path: Path, monkeypatch) -> None:

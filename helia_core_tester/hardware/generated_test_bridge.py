@@ -689,7 +689,7 @@ def build_case_bundle_from_generated_test(
     `require_fvp_pass=False` to skip the check entirely (e.g. for host-only bridge unit
     tests that don't have a real FVP report to check against).
     """
-    from .fvp_gate import GATE_POLICIES, evaluate_fvp_gate
+    from .fvp_gate import DEFAULT_GATE, GATE_POLICIES, evaluate_fvp_gate
     from .known_limitations import lookup_known_limitation
 
     known_limitation = lookup_known_limitation(generated_test.name)
@@ -703,7 +703,7 @@ def build_case_bundle_from_generated_test(
             "has no golden output to stream"
         )
 
-    policy = fvp_gate if fvp_gate is not None else ("advisory" if require_fvp_pass else "off")
+    policy = fvp_gate if fvp_gate is not None else (DEFAULT_GATE if require_fvp_pass else "off")
     if policy not in GATE_POLICIES:
         raise ValueError(f"fvp_gate must be one of {GATE_POLICIES}, got {policy!r}")
 

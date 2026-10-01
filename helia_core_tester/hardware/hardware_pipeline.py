@@ -198,9 +198,22 @@ def generate_tests_for_board(
     [--float-precision <float_precision>]` would. `float_precision` (f16/f32/both)
     is an explicit override when given; otherwise the TOML/env/default applies.
     `cmsis_nn_root` is the kernel tree the firmware compiles."""
-    from ..core.config import Config
     from ..core.logging import setup_logger
     from ..core.steps import GenerateStep
+
+    config = _board_config(repo_root, board, suite, float_precision, cmsis_nn_root)
+    setup_logger(verbosity=config.verbosity)
+    with generation_lock(repo_root, board.cpu):
+        result = GenerateStep(config).execute()
+    if not (result.success or result.skipped):
+        raise RuntimeError(f"Generation failed: {result.message}")
+
+
+def _board_config(
+    repo_root: Path, board: BoardSpec, suite: str, float_precision: Optional[str], cmsis_nn_root: Optional[Path] = None,
+):
+    """Generation config for the board's CPU."""
+    from ..core.config import Config
 
     overrides = {"project_root", "cpu", "suite"}
     kwargs = {}
@@ -210,18 +223,42 @@ def generate_tests_for_board(
     if cmsis_nn_root is not None:
         kwargs["cmsis_nn_root"] = cmsis_nn_root
         overrides.add("cmsis_nn_root")
-    config = Config(
+    return Config(
         project_root=repo_root,
         cpu=board.cpu,
         suite=suite,
         _explicit_overrides=overrides,
         **kwargs,
     )
-    setup_logger(verbosity=config.verbosity)
-    with generation_lock(repo_root, board.cpu):
-        result = GenerateStep(config).execute()
-    if not (result.success or result.skipped):
-        raise RuntimeError(f"Generation failed: {result.message}")
+
+
+def generation_precision(repo_root: Path, board: BoardSpec, options: "StreamOptions") -> Optional[str]:
+    """Float precision generation resolves, or None."""
+    from ..core.errors import CMSISNNToolsError
+
+    try:
+        config = _board_config(repo_root, board, options.suite, options.float_precision)
+    except (CMSISNNToolsError, ValueError):
+        return None
+    # Null when the run has no float cases.
+    if "float" not in config.effective_suites_for_cpu(board.cpu):
+        return None
+    return config.effective_float_precision_for_cpu(board.cpu)
+
+
+def resolved_selection(repo_root: Path, board: BoardSpec, options: "StreamOptions") -> dict[str, Any]:
+    """The case and counter selection the run used."""
+    from .fvp_gate import DEFAULT_GATE
+
+    return {
+        "suite": options.suite,
+        "limit": options.limit,
+        "family": options.family,
+        "test_name": options.test_name,
+        "precision": generation_precision(repo_root, board, options),
+        "pmu_counters": options.pmu_counters,
+        "fvp_gate": options.fvp_gate or DEFAULT_GATE,
+    }
 
 
 @dataclass
