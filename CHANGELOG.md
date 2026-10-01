@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.7.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.6.0...v0.7.0) (2026-10-01)
+
+
+### Features
+
+* **hardware:** drive the PMU through the nsx-pmu-armv8m module ([1f28b96](https://github.com/AmbiqAI/helia-core-tester/commit/1f28b96069d3b4fe5032b8430d680d944d7305eb))
+* **hardware:** drive the PMU through the nsx-pmu-armv8m module ([9af1500](https://github.com/AmbiqAI/helia-core-tester/commit/9af15003a5ab5d95fcbcf21802720032f1d34e1e))
+* **hardware:** flash and run what was built ([6e8fce9](https://github.com/AmbiqAI/helia-core-tester/commit/6e8fce9fa4087b48f914b9c50a8c27b50c7b2de5))
+* **hardware:** keep the session going when a kernel rejects a case ([886e4a6](https://github.com/AmbiqAI/helia-core-tester/commit/886e4a662b28db2f9272425f9e1cf5390e828df6))
+* **hardware:** keep the session going when a kernel rejects a case ([bc57107](https://github.com/AmbiqAI/helia-core-tester/commit/bc5710719fddb53d9fb917d8f6d39d3bcbe22fde))
+* **hardware:** pin ns-cmsis-nn v7.38.0 and follow pin bumps ([5fd7655](https://github.com/AmbiqAI/helia-core-tester/commit/5fd76557f7cc242764d37b39fbc295f8c5ceaa14))
+* **hardware:** pin ns-cmsis-nn v7.38.0 and follow pin bumps ([eb5aeb4](https://github.com/AmbiqAI/helia-core-tester/commit/eb5aeb4c96522f5917a02be3969a7056eaf171f4))
+* **hardware:** run the full PMU catalog in one session ([588854f](https://github.com/AmbiqAI/helia-core-tester/commit/588854ff7e70a96304e974f2a00bd7b87470ae81))
+* **hardware:** run the full PMU catalog in one session ([94cae1a](https://github.com/AmbiqAI/helia-core-tester/commit/94cae1aa04a0fae7e0c7ec5e27991b5ec980f27c))
+* **hardware:** stamp bundles with NSX build provenance ([52809cf](https://github.com/AmbiqAI/helia-core-tester/commit/52809cf67df26c92008f7640be6fbd84ece06c49))
+* **hardware:** stamp bundles with NSX build provenance ([8ea745a](https://github.com/AmbiqAI/helia-core-tester/commit/8ea745afe6e0be2fb4f17eab85f28093edaa0df2))
+* **pmu:** sync the PMU catalog from nsx-pmu-armv8m ([4119e69](https://github.com/AmbiqAI/helia-core-tester/commit/4119e6927bc5e65e10fcb4d5fe4a8babad5d32d9))
+* **pmu:** sync the PMU catalog from nsx-pmu-armv8m ([7c59985](https://github.com/AmbiqAI/helia-core-tester/commit/7c59985b6ee80a9811ca51a53b01b93dc49e205b))
+
+
+### Bug Fixes
+
+* **hardware:** fake target rejects unmapped PMU event ids ([e024d09](https://github.com/AmbiqAI/helia-core-tester/commit/e024d09447d5f77b22ea9a905c76e35f715d426f))
+* **hardware:** fake target rejects unmapped PMU event ids ([c358c55](https://github.com/AmbiqAI/helia-core-tester/commit/c358c5570c51a5b728a245268ceeff585a311b9d))
+* **hardware:** let the float suite run end to end on hardware ([d24435c](https://github.com/AmbiqAI/helia-core-tester/commit/d24435ca8070b2f8d7cf9444b76e14e4aeb6254e))
+* **hardware:** null unverified or corrupt bundle provenance ([ccea531](https://github.com/AmbiqAI/helia-core-tester/commit/ccea531d85aa29d28faef7ea534ff49e7f205442))
+* **hardware:** record NSX version and checkout at build time ([d1732fb](https://github.com/AmbiqAI/helia-core-tester/commit/d1732fb129331abb6ad893b510c77db18125c6cc))
+* **hardware:** refuse bare all mixed with groups ([0f7fcda](https://github.com/AmbiqAI/helia-core-tester/commit/0f7fcda79bc4542821fa0d6c5f39be7201c76bd0))
+* **hardware:** refuse results that overflow the firmware outbox ([fb46a10](https://github.com/AmbiqAI/helia-core-tester/commit/fb46a10499888e04ffd6a95e34974f9a5baec9b7))
+* **hardware:** render the size probe from the requested checkout ([be75b41](https://github.com/AmbiqAI/helia-core-tester/commit/be75b4157047fc3e43329e18cad5eee0b0865246))
+* **hardware:** run benchmark firmware at 250 MHz ([a0b8dc2](https://github.com/AmbiqAI/helia-core-tester/commit/a0b8dc2ad0199541cc45c379511556424c9ddcf5))
+* **hardware:** run benchmark firmware at 250 MHz ([e9881f1](https://github.com/AmbiqAI/helia-core-tester/commit/e9881f1c538a5c3b00cdbd558f52cc3cae0ca470))
+* **hardware:** send padded packed float conv weights ([04301f6](https://github.com/AmbiqAI/helia-core-tester/commit/04301f657dcd07504716aa286926cca9a37160be))
+* **hardware:** skip float cases the firmware rejects ([ce38fcf](https://github.com/AmbiqAI/helia-core-tester/commit/ce38fcf6c6ff894e5fc01fb7fa98106a8c204717))
+* **hardware:** stage float stream cases under float/ ([ee3b558](https://github.com/AmbiqAI/helia-core-tester/commit/ee3b55889b9e1b32f9117aa02d1c7f84ade8be91))
+* **hardware:** tighten the outbox check after review ([754186f](https://github.com/AmbiqAI/helia-core-tester/commit/754186f589705218d3222867fecca25dbc5f7da7))
+* **hardware:** time the kernel itself, not its trampoline ([b2e49ff](https://github.com/AmbiqAI/helia-core-tester/commit/b2e49ff39fa9a7aa5bc40f522430e119471260a5))
+* **hardware:** wait one read timeout per PMU pass while sampling ([b525f01](https://github.com/AmbiqAI/helia-core-tester/commit/b525f01d0d2bd713a5c633f9c1ed00ff5b414953))
+* **mutation:** re-anchor three mutants on ns-cmsis-nn main ([3980a3e](https://github.com/AmbiqAI/helia-core-tester/commit/3980a3ef36afe952a3ee7adc8d9f224c5f6c8416))
+* **mutation:** re-anchor three mutants on ns-cmsis-nn main ([7d5c439](https://github.com/AmbiqAI/helia-core-tester/commit/7d5c439c25b79b1bdb32e94eef504717254bae4d))
+* **pmu:** compare catalog bytes; relock before re-sync ([8961f60](https://github.com/AmbiqAI/helia-core-tester/commit/8961f6044ee13d4ba75f092fe377aab8f5ef3637))
+
+
+### Performance
+
+* **hardware:** count only kernel calls in timed samples ([cbf1d39](https://github.com/AmbiqAI/helia-core-tester/commit/cbf1d3921d4f60cdc22856bb0b6d69aa75274bc2))
+* **hardware:** count only kernel calls in timed samples ([c80ea2e](https://github.com/AmbiqAI/helia-core-tester/commit/c80ea2e9c9719ccf9ac08090d3aefdc720dfdc2c))
+
+
+### Refactoring
+
+* **hardware:** drop the CMake hardware path ([31463a9](https://github.com/AmbiqAI/helia-core-tester/commit/31463a952d2fd4f0cef27032e01b4ded3ecdfc84))
+* **hardware:** keep explicit refs from older records ([a688921](https://github.com/AmbiqAI/helia-core-tester/commit/a6889210f0feeb9faf49b349a459fd1a2900436e))
+* **hardware:** keep timed-call helpers clear of kernel-contracts ([9ea7696](https://github.com/AmbiqAI/helia-core-tester/commit/9ea769650e4b18a20758b16483689a2cad8052f3))
+* **hardware:** tighten float bridge guards after review ([d51688d](https://github.com/AmbiqAI/helia-core-tester/commit/d51688d4123c31793a50da8156650d5a0e04cc25))
+* **hardware:** tighten rejection handling after review ([7770e5c](https://github.com/AmbiqAI/helia-core-tester/commit/7770e5c72997148c497aedb6f4bfd15c00249882))
+
+
+### Docs
+
+* drop claims that CI pytest has no ns-cmsis-nn ([0ce3586](https://github.com/AmbiqAI/helia-core-tester/commit/0ce3586437fa855b23de0cacacebf9e27b9beec8))
+* **hardware:** say PMU firmware rejects unmapped event ids ([7c7bbaa](https://github.com/AmbiqAI/helia-core-tester/commit/7c7bbaa92322edeaecc816f8a3fd9a600ded6b5e))
+
 ## [0.6.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.5.0...v0.6.0) (2026-09-29)
 
 
