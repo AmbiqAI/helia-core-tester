@@ -61,12 +61,12 @@ def add_toolchain_to_path(repo_root: Optional[Path] = None) -> bool:
 GCC_NAME = "arm-none-eabi-gcc"
 
 
-def gcc_version(repo_root: Optional[Path] = None) -> Optional[str]:
-    """The ARM GCC version, or None."""
+def gcc_version(compiler: Optional[str]) -> Optional[str]:
+    """A GCC's version, or None."""
+    if compiler is None:
+        return None
     try:
-        done = subprocess.run(
-            [arm_tool(GCC_NAME, repo_root), "-dumpversion"], capture_output=True, text=True, timeout=30, check=True,
-        )
+        done = subprocess.run([compiler, "-dumpversion"], capture_output=True, text=True, timeout=30, check=True)
     except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout.strip() or None

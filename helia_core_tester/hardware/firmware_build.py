@@ -125,6 +125,17 @@ def _configured_for(build_dir: Path, app_dir: Path, board: BoardSpec) -> bool:
     )
 
 
+def _built_compiler(build_dir: Path) -> Optional[str]:
+    """The C compiler CMake configured."""
+    # Newest probe wins after CMake upgrades.
+    probes = sorted(build_dir.glob("CMakeFiles/*/CMakeCCompiler.cmake"), key=lambda path: path.stat().st_mtime)
+    if not probes:
+        return None
+    text = probes[-1].read_text(encoding="utf-8", errors="ignore")
+    match = re.search(r'^set\(CMAKE_C_COMPILER "([^"]+)"\)', text, re.MULTILINE)
+    return match.group(1) if match else None
+
+
 def _drop_foreign_cache(build_dir: Path, app_dir: Path) -> None:
     """Remove a cache another source tree wrote."""
     cache = build_dir / "CMakeCache.txt"
@@ -366,7 +377,7 @@ def build_firmware(
     nsx_cli.build_app(app_dir, board=board.nsx_board, build_dir=build_dir, jobs=_jobs(jobs), frozen=True)
     # Record only what actually built.
     save_options(app_dir, options or AppOptions())
-    _record_built(app_dir, options or AppOptions())
+    _record_built(build_dir, options or AppOptions())
     return elf_path(build_dir)
 
 
@@ -405,14 +416,16 @@ def _replace_json(path: Path, data: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def _record_built(app_dir: Path, options: "AppOptions") -> None:
+def _record_built(build_dir: Path, options: "AppOptions") -> None:
     """Record what the build used."""
     from . import nsx_cli
 
+    app_dir = nsx_app_dir(build_dir)
     _replace_json(app_dir / BUILT_LOCK, _built_record(app_dir, options))
+    version = gcc_version(_built_compiler(build_dir))
     info = {
         "nsx_version": nsx_cli.nsx_version(),
-        "toolchain": {"name": GCC_NAME, "version": gcc_version()},
+        "toolchain": {"name": GCC_NAME, "version": version} if version else None,
         **_checkout_state(options.cmsis_nn_root),
     }
     _replace_json(app_dir / BUILT_INFO, info)

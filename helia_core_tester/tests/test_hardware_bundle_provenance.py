@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.hardware import nsx_cli
-from helia_core_tester.hardware import firmware_build
+from helia_core_tester.hardware import firmware_build, toolchain
 from helia_core_tester.hardware.firmware_build import nsx_app_dir
 from helia_core_tester.hardware.nsx_app import CMSIS_NN_REF, AppOptions, kernel_dir, save_options
 from helia_core_tester.hardware.result_bundle import build_provenance, write_result_bundle
@@ -44,20 +45,27 @@ targets:
 """
 
 
-@pytest.fixture(autouse=True)
-def _fixed_gcc(monkeypatch) -> None:
-    monkeypatch.setattr(firmware_build, "gcc_version", lambda: "14.2.1")
+def _fake_gcc(path: Path, version: str) -> Path:
+    """A compiler that only reports a version."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"#!/bin/sh\necho {version}\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
 
 
 def _fake_build(build_dir: Path, options: AppOptions) -> str:
     """Records a finished build leaves behind."""
+    compiler = _fake_gcc(build_dir.parent / "cached" / "arm-none-eabi-gcc", "14.2.1")
+    probe = build_dir / "CMakeFiles" / "4.4.3" / "CMakeCCompiler.cmake"
+    probe.parent.mkdir(parents=True)
+    probe.write_text(f'set(CMAKE_C_COMPILER "{compiler}")\nset(CMAKE_C_COMPILER_ID "GNU")\n', encoding="utf-8")
     app_dir = nsx_app_dir(build_dir)
     module = kernel_dir(app_dir, options)
     (module / "Source").mkdir(parents=True)
     (module / "Source" / "k.c").write_text("int k;\n", encoding="utf-8")
     (app_dir / "nsx.lock").write_text(LOCK, encoding="utf-8")
     save_options(app_dir, options)
-    firmware_build._record_built(app_dir, options)
+    firmware_build._record_built(build_dir, options)
     return nsx_cli.lock_digest(app_dir)
 
 
@@ -109,6 +117,21 @@ def _git_checkout(root: Path) -> str:
     subprocess.run([*git, "add", "-A"], check=True)
     subprocess.run([*git, "commit", "-qm", "init"], check=True)
     return subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def test_toolchain_is_the_configured_compiler(tmp_path: Path, monkeypatch) -> None:
+    # Downloaded GCC differs from the cached one.
+    downloaded = _fake_gcc(tmp_path / "downloads" / "bin" / "arm-none-eabi-gcc", "15.1.0")
+    monkeypatch.setattr(toolchain, "toolchain_bin_dir", lambda repo_root=None: downloaded.parent)
+    monkeypatch.setenv("PATH", f"{downloaded.parent}:{os.environ.get('PATH', '')}")
+    build_dir = tmp_path / "build"
+    _fake_build(build_dir, AppOptions())
+
+    assert build_provenance(build_dir)[0]["toolchain"] == {"name": "arm-none-eabi-gcc", "version": "14.2.1"}
+
+    shutil.rmtree(build_dir / "CMakeFiles")
+    firmware_build._record_built(build_dir, AppOptions())
+    assert build_provenance(build_dir)[0]["toolchain"] is None
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")

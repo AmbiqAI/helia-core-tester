@@ -339,7 +339,6 @@ def test_linker_script_missing_names_the_fix(tmp_path: Path) -> None:
         report.app_linker_script(BOARD, build)
 
 
-def test_missing_gcc_reads_null(monkeypatch) -> None:
-    monkeypatch.setattr(toolchain, "arm_tool", lambda name, repo_root=None: "/nonexistent/arm-none-eabi-gcc")
-
-    assert toolchain.gcc_version() is None
+@pytest.mark.parametrize("compiler", [None, "/nonexistent/arm-none-eabi-gcc"])
+def test_missing_gcc_reads_null(compiler) -> None:
+    assert toolchain.gcc_version(compiler) is None
