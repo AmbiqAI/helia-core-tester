@@ -42,6 +42,7 @@ def test_row_matches_nsx_and_hpx_facts() -> None:
         workspace_bytes=114688,
         flash_region="ROMEM",
         ram_region="RWMEM",
+        core_clock_hz=48_000_000,
     )
 
 
