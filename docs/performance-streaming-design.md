@@ -422,9 +422,13 @@ Key files:
 `build`: kernel source, NSX version, `nsx.lock` digest, every locked module
 (`modules`: name, project, kind, revision, tag, commit, url) and the ARM GCC that
 built the image (`toolchain`). `hardware run --json` prints
-`hct.hardware.nightly_run`: totals and cases plus `generated_at`, the resolved
-`selection` and the `github` run (null outside Actions); the nightly saves it as
-`hardware-nightly-run.json` beside the bundle.
+`hct.hardware.nightly_run`: totals and cases plus `generated_at`, the
+`selection` the run used and the `github` run (null outside Actions); the nightly
+saves it as `hardware-nightly-run.json` beside the bundle. `selection` records
+values after defaults and board fitting: `precision` is the float precision
+generation resolves for the board's CPU (null when the run has no float cases),
+`fvp_gate` is `advisory` unless set, and `pmu_counters` is the group selection
+(`session_summary.json` lists the counters). Null `family` or `limit` means all.
 
 Schema versions: bump `schema_version` when a field changes meaning, type or
 goes away. New optional fields keep the version; readers must accept missing

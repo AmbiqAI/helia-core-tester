@@ -211,22 +211,9 @@ def github_record() -> Optional[dict[str, Any]]:
     }
 
 
-def selection_record(options) -> dict[str, Any]:
-    """The resolved case and counter selection."""
-    return {
-        "suite": options.suite,
-        "limit": options.limit,
-        "family": options.family,
-        "test_name": options.test_name,
-        "precision": options.float_precision,
-        "pmu_counters": options.pmu_counters,
-        "fvp_gate": options.fvp_gate,
-    }
-
-
 def build_json_summary(
-    result, skipped: list[tuple], *, session_id: str, board_id: str, bundle: Path, options,
-    timing: Optional[dict] = None,
+    result, skipped: list[tuple], *, session_id: str, board_id: str, bundle: Path,
+    selection: dict[str, Any], timing: Optional[dict] = None,
 ) -> dict[str, Any]:
     """The single JSON document `--json` prints on stdout."""
     cases: list[dict[str, Any]] = []
@@ -264,7 +251,7 @@ def build_json_summary(
         "bundle": str(bundle),
         "totals": {"ran": ran, "passed": passed, "failed": ran - passed, "skipped": len(skipped)},
         "timing": dict(timing or {}),
-        "selection": selection_record(options),
+        "selection": selection,
         "github": github_record(),
         "cases": cases,
     }

@@ -399,13 +399,14 @@ def _quiet_stdout(as_json: bool):
 
 
 def _report(outcome, spec: BoardSpec, options, *, as_json: bool) -> None:
+    from .hardware_pipeline import resolved_selection
     from .run_summary import build_json_summary, print_run_report
 
     failed = print_run_report(outcome.result, outcome.skipped, outcome.bundle, err=as_json)
     if as_json:
         typer.echo(json.dumps(build_json_summary(
             outcome.result, outcome.skipped, session_id=outcome.session_id, board_id=spec.id, bundle=outcome.bundle,
-            timing=outcome.timing, options=options,
+            selection=resolved_selection(repo_root(), spec, options), timing=outcome.timing,
         ), indent=2))
     if failed:
         typer.echo(typer.style("✗ One or more generated-test cases failed correctness", fg=typer.colors.RED, bold=True), err=True)
