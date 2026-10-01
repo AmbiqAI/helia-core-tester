@@ -140,6 +140,7 @@ jobs:
         run: uv sync --locked --python 3.11
 
       - name: Run the hardware kernel suite
+        id: suite
         run: |
           args=(
             hardware run
@@ -179,8 +180,9 @@ jobs:
           echo "${freed}"
 
       # Re-runs replace the first attempt's artifact.
+      # Only after the suite ran: checkout cleans stale reports.
       - name: Upload the result bundle
-        if: always()
+        if: always() && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure')
         uses: actions/upload-artifact@v4
         with:
           name: hct-hardware-${{ matrix.board }}-${{ needs.plan.outputs.date }}-${{ github.run_id }}
@@ -200,15 +202,24 @@ jobs:
       BOARDS: ${{ needs.plan.outputs.boards }}
       RUN_TAG: ${{ needs.plan.outputs.date }}-${{ github.run_id }}
     steps:
+      # No artifacts: boards show "no result".
       - uses: actions/download-artifact@v4
+        id: download
+        continue-on-error: true
         with:
           pattern: hct-hardware-*-${{ github.run_id }}
           path: bundles
       - name: Summarise per board
+        env:
+          DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
         run: |
           {
             echo "### Hardware nightly"
             echo ""
+            if [[ "${DOWNLOAD_OUTCOME}" != "success" ]]; then
+              echo "Artifact download failed or found none; see the download step."
+              echo ""
+            fi
             echo "| Board | Ran | Passed | Failed | Skipped | Boot | Core MHz | Build id | Kernel |"
             echo "|---|---|---|---|---|---|---|---|---|"
             for board in $(jq -r '.[]' <<< "${BOARDS}"); do
