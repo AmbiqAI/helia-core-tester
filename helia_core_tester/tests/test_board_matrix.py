@@ -178,6 +178,9 @@ def test_run_writes_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert a3p.keys() == a510.keys() and a3p["golden"] is None
     assert summary["selection"]["pmu_counters"] == ["mve:default"]
     assert [case["case_id"] for case in summary["cases"]] == ["add_s8"]
+    # Errored boards stay in every metric map.
+    assert summary["cases"][0]["median_cycles"] == {"apollo510_evb": 10.0, "apollo3p_evb": None}
+    assert summary["cases"][0]["ARM_PMU_MVE_INST_RETIRED"] == {"apollo510_evb": None, "apollo3p_evb": None}
     assert (out / "logs" / "apollo3p_evb.log").is_file()
 
 
@@ -206,6 +209,9 @@ def _break(bundle: Path, name: str, text: str) -> Path:
     ("session_manifest.json", '{"target": {"board": "apollo510_evb"}, "boot": "up"}'),
     ("session_manifest.json", '{"target": {"board": "apollo510_evb"}, "build": {"kernels": "bad"}}'),
     ("case_summary.csv", "case_id,comparison_passed,median_cycles\nadd_s8,true,fast\n"),
+    ("case_summary.csv", "case_id,comparison_passed,median_cycles\nadd_s8,true,nan\n"),
+    ("case_summary.csv", "case_id,comparison_passed,median_cycles,ARM_PMU_MVE_INST_RETIRED\nadd_s8,true,1,inf\n"),
+    ("session_manifest.json", '{"target": {"board": "apollo510_evb"}, "boot": {"core_clock_hz": NaN}}'),
 ])
 def test_summarize_rejects_broken_bundle(tmp_path: Path, name: str, text: str) -> None:
     bundle = _break(_write_bundle(tmp_path / "b", "apollo510_evb", [

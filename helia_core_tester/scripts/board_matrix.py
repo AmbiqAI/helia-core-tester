@@ -139,9 +139,7 @@ def board_entry(bundle: Path) -> dict:
         if problem is not None:
             raise BadBundle(f"{bundle}: {problem}")
         # Parse every value the summary reads.
-        for case_id in table.rows:
-            for counter in ("median_cycles", MVE_RETIRED):
-                table.value(case_id, counter)
+        values = [table.value(case_id, counter) for case_id in table.rows for counter in ("median_cycles", MVE_RETIRED)]
         boot = manifest.get("boot") or {}
         kernels = (manifest.get("build") or {}).get("kernels") or {}
         rejected = len(summary["rejected_cases"])
@@ -158,6 +156,8 @@ def board_entry(bundle: Path) -> dict:
             "build_id": manifest.get("firmware_build_id"),
             "kernels": {key: kernels.get(key) for key in ("ref", "commit", "root")},
         })
+        # Refuse NaN or Infinity anywhere.
+        json.dumps([entry, values], allow_nan=False)
     except BadBundle:
         raise
     except (OSError, ValueError, KeyError, AttributeError, TypeError, csv.Error) as exc:
@@ -165,22 +165,22 @@ def board_entry(bundle: Path) -> dict:
     return entry
 
 
-def case_table(bundles: dict[str, Path]) -> list[dict]:
-    """Shared cases: median cycles and MVE retired."""
-    loaded = {board: load_bundle(path) for board, path in bundles.items()}
+def case_table(bundles: dict[str, Path | None]) -> list[dict]:
+    """Shared cases; boards without bundles get null."""
+    loaded = {board: load_bundle(path) for board, path in bundles.items() if path is not None}
     if not loaded:
         return []
     first, *rest = loaded.values()
     shared = [case_id for case_id in first.rows if all(case_id in other.rows for other in rest)]
 
     def column(case_id: str, counter: str) -> dict:
-        return {board: bundle.value(case_id, counter) for board, bundle in loaded.items()}
+        return {board: loaded[board].value(case_id, counter) if board in loaded else None for board in bundles}
 
     return [{"case_id": c, "median_cycles": column(c, "median_cycles"), MVE_RETIRED: column(c, MVE_RETIRED)} for c in shared]
 
 
 def build_summary(matrix_id: str, selection: dict, boards: list[dict]) -> dict:
-    bundles = {entry["board"]: Path(entry["bundle"]) for entry in boards if entry.get("bundle")}
+    bundles = {entry["board"]: Path(entry["bundle"]) if entry.get("bundle") else None for entry in boards}
     return {
         "schema": SCHEMA,
         "schema_version": 1,
@@ -228,7 +228,7 @@ def render_markdown(summary: dict) -> str:
         ])
     header = ["board", "status", "passed", "failed", "rejected", "boot", "clock MHz", "build id", "kernels", "note"]
     lines += _table(header, rows)
-    boards = [entry["board"] for entry in summary["boards"] if entry.get("bundle")]
+    boards = [entry["board"] for entry in summary["boards"]]
     for counter in ("median_cycles", MVE_RETIRED):
         rows = [[case["case_id"], *(_cell(case[counter][b]) for b in boards)] for case in summary["cases"]]
         if counter != "median_cycles" and all(cell == "-" for row in rows for cell in row[1:]):
@@ -239,7 +239,7 @@ def render_markdown(summary: dict) -> str:
 
 def write_summary(summary: dict, out_dir: Path) -> str:
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "board_matrix.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    (out_dir / "board_matrix.json").write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     markdown = render_markdown(summary)
     (out_dir / "board_matrix.md").write_text(markdown, encoding="utf-8")
     return markdown
