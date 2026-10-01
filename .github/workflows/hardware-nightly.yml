@@ -53,6 +53,11 @@ jobs:
       boards: ${{ steps.matrix.outputs.boards }}
       date: ${{ steps.matrix.outputs.date }}
     steps:
+      - name: Checkout the board table
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: assets/hardware_boards.yaml
+          sparse-checkout-cone-mode: false
       - name: Build the board matrix
         id: matrix
         run: |
@@ -62,6 +67,14 @@ jobs:
             echo "::error::boards input selects no boards" >&2
             exit 2
           fi
+          # Unknown labels queue for a day.
+          known="$(sed -n 's/^ *- id: *//p' assets/hardware_boards.yaml)"
+          for board in $(jq -r '.[]' <<< "${boards}"); do
+            if ! grep -qx -- "${board}" <<< "${known}"; then
+              echo "::error::unknown board ${board}; see assets/hardware_boards.yaml" >&2
+              exit 2
+            fi
+          done
           {
             echo "boards=${boards}"
             echo "date=$(date -u +%Y%m%d)"
@@ -81,6 +94,12 @@ jobs:
       HCT_NIGHTLY_BOARD: ${{ matrix.board }}
       HCT_RUN_JSON: ${{ github.workspace }}/artifacts/reports/hardware-nightly-run.json
     steps:
+      # Every attempt replaces its artifact.
+      - name: Stage a no-result marker
+        run: |
+          mkdir -p "${RUNNER_TEMP}/hct-upload"
+          echo "no result" > "${RUNNER_TEMP}/hct-upload/NO_RESULT"
+
       - name: Resolve board and probe from the runner
         run: |
           if [[ -z "${HPX_BOARD:-}" || -z "${HPX_JLINK_SERIAL:-}" ]]; then
@@ -179,17 +198,27 @@ jobs:
           fi
           echo "${freed}"
 
-      # Re-runs replace the first attempt's artifact.
       # Only after the suite ran: checkout cleans stale reports.
-      - name: Upload the result bundle
+      - name: Stage the result bundle
         if: always() && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure')
+        run: |
+          rm -f "${RUNNER_TEMP}/hct-upload/NO_RESULT"
+          if [[ -d artifacts/reports/hardware ]]; then
+            cp -r artifacts/reports/hardware "${RUNNER_TEMP}/hct-upload/"
+          fi
+          if [[ -f "${HCT_RUN_JSON}" ]]; then
+            cp "${HCT_RUN_JSON}" "${RUNNER_TEMP}/hct-upload/"
+          fi
+
+      # Re-runs replace the first attempt's artifact.
+      - name: Upload the result bundle
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: hct-hardware-${{ matrix.board }}-${{ needs.plan.outputs.date }}-${{ github.run_id }}
           overwrite: true
-          path: |
-            artifacts/reports/hardware/
-            artifacts/reports/hardware-nightly-run.json
+          path: ${{ runner.temp }}/hct-upload/
+          include-hidden-files: true
           if-no-files-found: warn
 
   # Minimal per-board table; board-matrix may replace it.
