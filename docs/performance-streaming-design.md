@@ -387,10 +387,14 @@ Both reports come from one analysis (`helia_core_tester/hardware/memory_report.p
   flash/RAM region names (`flash_region`, `ram_region`) come from the board's row in
   `assets/hardware_boards.yaml`
 
-Reported percentages are computed against:
+Sections are classified by address against those regions (`objdump -h` VMA/LMA):
 
-- `MCU_MRAM` for flash image bytes
-- `MCU_TCM` for static TCM usage before heap
+- flash image bytes: every loaded section whose load address is in `flash_region`
+  (`MCU_MRAM` on Apollo5, `ROMEM` on Apollo3), vector table and `.data` image included
+- static RAM before heap (`ram_*` keys): every allocated section other than `.heap`
+  placed in `ram_region` (`MCU_TCM` on Apollo5, `RWMEM` on Apollo3); the usage block
+  records both region names
+- both gates pass at <= 75 % of the region
 
 ## Result bundle
 

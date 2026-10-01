@@ -103,7 +103,10 @@ def report_env(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(report, "_probe_binary", lambda tool, args, project_root=None: "")
     monkeypatch.setattr(
         report, "parse_memory_regions",
-        lambda path: [{"name": "MCU_MRAM", "capacity": 4128768}, {"name": "MCU_TCM", "capacity": 507904}],
+        lambda path: [
+            {"name": "MCU_MRAM", "origin": 0x00410000, "capacity": 4128768},
+            {"name": "MCU_TCM", "origin": 0x20000000, "capacity": 507904},
+        ],
     )
     return repo
 
@@ -226,8 +229,8 @@ def test_memory_report_fails_closed_when_a_board_region_is_missing(tmp_path: Pat
         report.analyze_elf(elf, board, tmp_path / "fw.ld", report_env)
     # With both regions present the gates are computed against real capacities.
     usage = report.analyze_elf(elf, resolve_board(DEFAULT_BOARD_ID), tmp_path / "fw.ld", report_env).usage
-    assert usage["flash_capacity_bytes"] == 4128768 and usage["tcm_capacity_bytes"] == 507904
-    assert usage["flash_gate_pass"] is True and usage["tcm_gate_pass"] is True
+    assert usage["flash_capacity_bytes"] == 4128768 and usage["ram_capacity_bytes"] == 507904
+    assert usage["flash_gate_pass"] is True and usage["ram_gate_pass"] is True
 
 
 def test_memory_regions_skip_block_comments(tmp_path: Path) -> None:
@@ -244,17 +247,65 @@ def test_memory_regions_skip_block_comments(tmp_path: Path) -> None:
     assert report.parse_memory_regions(script) == [{"name": "MCU_TCM", "origin": 0x20000000, "capacity": 245760}]
 
 
-def test_tcm_code_counts_in_flash_and_tcm(tmp_path: Path, report_env: Path, monkeypatch) -> None:
-    # apollo330P puts TCM code in .dtcm_text.
-    sizes = ".dtcm_text 28 0\n.text 1000 0\n.stack 16 0\n.data 4 0\n.bss 8 0\n"
-    monkeypatch.setattr(
-        report, "_probe_binary", lambda tool, args, project_root=None: sizes if args[0] == "-A" else "",
-    )
+# Linked regions and `objdump -h` per board.
+_REGIONS = {
+    "apollo510_evb": [
+        {"name": "MCU_ITCM", "origin": 0x00000000, "capacity": 262144},
+        {"name": "MCU_MRAM", "origin": 0x00410000, "capacity": 4128768},
+        {"name": "MCU_TCM", "origin": 0x20000000, "capacity": 507904},
+        {"name": "SHARED_SRAM", "origin": 0x20080000, "capacity": 3145728},
+    ],
+    "apollo330mP_evb": [
+        {"name": "MCU_MRAM", "origin": 0x00410000, "capacity": 2031616},
+        {"name": "MCU_TCM", "origin": 0x20000000, "capacity": 245760},
+        {"name": "SHARED_SRAM", "origin": 0x20080000, "capacity": 1835008},
+    ],
+    "apollo3p_evb": [
+        {"name": "ROMEM", "origin": 0x0000C000, "capacity": 2048000},
+        {"name": "RWMEM", "origin": 0x10011000, "capacity": 716800},
+        {"name": "TCM", "origin": 0x10000000, "capacity": 65536},
+        {"name": "STACKMEM", "origin": 0x10010000, "capacity": 4096},
+    ],
+}
+_FIXTURES = Path(__file__).parent / "fixtures" / "memory_report"
+
+
+def _analyze_board(board_id: str, report_env: Path, tmp_path: Path, monkeypatch, regions=None) -> report.ElfAnalysis:
+    headers = (_FIXTURES / f"{board_id}.objdump_h.txt").read_text()
+    monkeypatch.setattr(report, "_probe_binary", lambda tool, args, project_root=None: headers if args[0] == "-h" else "")
+    monkeypatch.setattr(report, "parse_memory_regions", lambda path: regions or _REGIONS[board_id])
     elf = tmp_path / "fw.elf"
     elf.write_bytes(b"elf")
-    usage = report.analyze_elf(elf, resolve_board("apollo330mP_evb"), tmp_path / "fw.ld", report_env).usage
-    assert usage["flash_image_bytes"] == 28 + 1000 + 4
-    assert usage["tcm_static_bytes"] == 28 + 16 + 4 + 8
+    return report.analyze_elf(elf, resolve_board(board_id), tmp_path / "fw.ld", report_env)
+
+
+# Totals match the linked .bin and map.
+@pytest.mark.parametrize(
+    "board_id, region, flash, ram, heap, text",
+    [
+        # Vector table, ITCM code, exidx, .data.
+        ("apollo510_evb", "MCU_TCM", 1024 + 28 + 672260 + 8 + 2096, 16384 + 2096 + 166852, 322572, 1024 + 672260),
+        # DTCM code sits in flash and TCM.
+        ("apollo330mP_evb", "MCU_TCM", 1024 + 28 + 650972 + 8 + 1960, 28 + 16388 + 1960 + 164180, 63196, 1024 + 650972),
+        # Stack lives in STACKMEM, not RWMEM.
+        ("apollo3p_evb", "RWMEM", 551884 + 8 + 1888, 1888 + 163988, 0, 551884),
+    ],
+)
+def test_usage_matches_the_linked_image(board_id, region, flash, ram, heap, text, tmp_path, report_env, monkeypatch) -> None:
+    analysis = _analyze_board(board_id, report_env, tmp_path, monkeypatch)
+    usage = analysis.usage
+    assert (usage["flash_image_bytes"], usage["ram_static_bytes"], usage["heap_available_bytes"]) == (flash, ram, heap)
+    assert usage["ram_region"] == region and usage["flash_gate_pass"] and usage["ram_gate_pass"]
+    assert not any(key.startswith("tcm_") for key in usage)
+    # Both `.text` output sections count.
+    assert analysis.sections[".text"] == text
+
+
+def test_ram_gate_fails_over_75_percent(tmp_path, report_env, monkeypatch) -> None:
+    # 182556 static bytes > 75 % of 240000.
+    regions = [dict(row, capacity=240000) if row["name"] == "MCU_TCM" else row for row in _REGIONS["apollo330mP_evb"]]
+    usage = _analyze_board("apollo330mP_evb", report_env, tmp_path, monkeypatch, regions).usage
+    assert usage["ram_static_bytes"] == 182556 and usage["ram_gate_pass"] is False
 
 
 def test_write_text_lf_writes_lf(tmp_path: Path) -> None:
