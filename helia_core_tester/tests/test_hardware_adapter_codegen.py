@@ -12,9 +12,12 @@ problem the streaming architecture exists to avoid).
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from helia_core_tester.hardware.adapter_specs import (
     FIRMWARE_ADAPTERS,
@@ -344,6 +347,23 @@ def test_s8_fully_connected_firmware_body_gates_the_kernel_sum_on_mve() -> None:
     assert "arm_vector_sum_s8" in mve_branch[2].split("#endif", 1)[0]
     assert "arm_vector_sum_s8" not in mve_branch[0]
     assert "kernel_bias," in body and body.count("arm_vector_sum_s8") == 1
+
+
+@pytest.mark.parametrize("function_name", ["run_convolve_once", "run_transpose_conv_once"])
+def test_s8_conv_weight_sum_is_mve_only(function_name: str) -> None:
+    """Non-MVE arm_convolve_weight_sum() returns NO_IMPL.
+
+    The adapters map any non-success status to ARG_ERROR, so an unguarded call
+    fails every s8 case on DSP/scalar builds (measured on apollo3p_evb).
+    """
+    body = next(spec for spec in FIRMWARE_ADAPTERS if spec.function_name == function_name).c_body
+    calls = [match.start() for match in re.finditer(r"arm_convolve_weight_sum\(\(", body)]
+    assert calls, f"{function_name} no longer calls arm_convolve_weight_sum"
+    for call in calls:
+        before = body[:call]
+        guard = before.rfind("#if defined(ARM_MATH_MVEI)")
+        assert guard != -1 and "#endif" not in before[guard:], f"{function_name}: weight sum outside the MVE guard"
+        assert "#else" not in before[guard:], f"{function_name}: weight sum in the non-MVE branch"
 
 
 def test_batch_matmul_builder_scalar_keys_are_subset_of_firmware_adapter_scalar_fields(tmp_path: Path) -> None:

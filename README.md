@@ -112,6 +112,10 @@ Identity resolution rules:
   `hardware memory-report` measures against all come from the row in
   `assets/hardware_boards.yaml` (`helia_core_tester boards` lists it). Default:
   `$HPX_BOARD`, else `apollo510_evb`.
+- DWT-only boards (`pmu_tier: dwt`, such as the Cortex-M4 `apollo3p_evb`) report DWT
+  cycles only: the counter default becomes cycles only and event counters are refused.
+  Cortex-M4 runs the int suite and FP32; FP16 cases are skipped and `--precision fp16`
+  is refused.
 - The apollo330mP_evb J-Link device `Apollo330P_510L` is an Ambiq-supplied entry,
   not in SEGGER's stock database; install it under `~/.config/SEGGER/JLinkDevices/`
   (NSX flashes through it too).

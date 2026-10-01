@@ -23,6 +23,7 @@ from typing import Any, Optional
 import jinja2
 import yaml
 
+from ..core.cpu_targets import get_cpu_profile
 from ..core.discovery import find_tester_templates_dir
 from . import nsx_cli
 from .boards import BoardSpec
@@ -49,6 +50,9 @@ SEGGER_RTT_METADATA = "nsx-module.yaml"
 SEGGER_RTT_REF = "v0.1.2"
 
 PMU_MODULE = "nsx-pmu-armv8m"
+
+# NSX linker scripts without heap bounds.
+HEAPLESS_SOCS = ("apollo2", "apollo3", "apollo3p")
 
 # Copied from a local checkout, like hpx.
 KERNEL_TREES = ("Include", "Source", "cmake")
@@ -385,6 +389,8 @@ def render_app(
         image_dir="probe" if probe else IMAGE_SUBDIR,
         build_id_txt=BUILD_ID_TXT,
         link_pmu=PMU_MODULE in modules,
+        empty_heap=board.soc in HEAPLESS_SOCS,
+        fp16_storage=not get_cpu_profile(board.cpu).supports_execution_dtype("FP16"),
         rtt_buffer_size_up=RTT_BUFFER_SIZE_UP,
         rtt_buffer_size_down=RTT_BUFFER_SIZE_DOWN,
     )

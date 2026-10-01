@@ -363,8 +363,10 @@ _PMU_COUNTERS_HELP = (
 _PMU_GROUPS_HELP = "Deprecated alias for --pmu-counters GROUP:default per listed group."
 
 
-def _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id):
-    from .hardware_pipeline import StreamOptions, apply_precision, float_precision_for, resolve_pmu_options, validate_fvp_gate
+def _stream_options(spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id):
+    from .hardware_pipeline import (
+        StreamOptions, apply_precision, fit_to_board, float_precision_for, resolve_pmu_options, validate_fvp_gate,
+    )
     from .session_runner import canonical_suite
 
     try:
@@ -374,13 +376,14 @@ def _stream_options(suite, family, test_name, limit, precision, pmu_counters, pm
         suite, test_name = apply_precision(precision, suite, test_name)
         validate_fvp_gate(fvp_gate)
         selection = resolve_pmu_options(pmu_counters or [], pmu_groups, warn=lambda msg: typer.echo(msg, err=True))
+        options = StreamOptions(
+            suite=suite, family=family, test_name=test_name, limit=limit,
+            pmu_counters=selection, fvp_gate=fvp_gate, session_id=session_id,
+            float_precision=float_precision_for(precision),
+        )
+        return fit_to_board(spec, options, explicit_pmu=bool(pmu_counters) or pmu_groups is not None)
     except ValueError as exc:
         _fail(str(exc))
-    return StreamOptions(
-        suite=suite, family=family, test_name=test_name, limit=limit,
-        pmu_counters=selection, fvp_gate=fvp_gate, session_id=session_id,
-        float_precision=float_precision_for(precision),
-    )
 
 
 def _quiet_stdout(as_json: bool):
@@ -444,7 +447,7 @@ def stream(
     # Options first, probe last: a bad flag combination must fail with its own
     # message, not with whatever probe enumeration happens to hit.
     spec = _board(board)
-    options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
+    options = _stream_options(spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
@@ -494,7 +497,7 @@ def run(
     if skip_flash and force_flash:
         _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
-    options = _stream_options(suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
+    options = _stream_options(spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
     # Neither builds nor generates: nothing to resolve.
     streams_only = skip_generate and skip_flash

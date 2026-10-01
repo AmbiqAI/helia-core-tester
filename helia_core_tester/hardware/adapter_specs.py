@@ -385,6 +385,8 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
         ctx.size = required_scratch;
         weight_sum_ctx.buf = &session->workspace[session->scratch_offset + weight_sum_relative_offset];
         weight_sum_ctx.size = (int32_t)weight_sum_bytes;
+#if defined(ARM_MATH_MVEI)
+        /* Only MVE kernels read the sum. */
         if (arm_convolve_weight_sum((int32_t *)weight_sum_ctx.buf,
                                     (const int8_t *)blob_ptr(session, weights),
                                     &input_dims,
@@ -395,6 +397,7 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
+#endif
         return arm_convolve_s8(&ctx,
                                &weight_sum_ctx,
                                &conv_params,
@@ -1947,6 +1950,8 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
         weight_sum_ctx.buf = (weight_sum_bytes > 0u) ? &session->workspace[session->scratch_offset + weight_sum_offset] : NULL;
         weight_sum_ctx.size = (int32_t)weight_sum_bytes;
 
+#if defined(ARM_MATH_MVEI)
+        /* Only MVE kernels read the sum. */
         if (arm_convolve_weight_sum((int32_t *)weight_sum_ctx.buf,
                                     (const int8_t *)blob_ptr(session, weights),
                                     &input_dims,
@@ -1957,6 +1962,7 @@ static arm_cmsis_nn_status run_transpose_conv_once(hct_server_session_t *session
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
+#endif
 
         return arm_transpose_conv_wrapper_s8(&ctx,
                                              &weight_sum_ctx,
