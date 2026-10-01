@@ -277,7 +277,7 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
     monkeypatch.setattr(session_runner, "write_result_bundle", _fake_write_result_bundle)
-    monkeypatch.setattr(session_runner, "generate_memory_report", lambda board, project_root=None, build_dir=None: tmp_path / "memory_report.json")
+    monkeypatch.setattr(session_runner, "generate_memory_report", lambda board, **_: tmp_path / "memory_report.json")
     (tmp_path / "memory_report.json").write_text("{}", encoding="utf-8")
     (tmp_path / "cmake" / "hardware").mkdir(parents=True, exist_ok=True)
     (tmp_path / "cmake" / "hardware" / "kernel_catalog.json").write_text("[]", encoding="utf-8")

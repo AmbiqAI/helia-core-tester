@@ -7,11 +7,12 @@ RTT session runner) -- never a subprocess into the tester's own CLI.
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
 from ..core.cpu_targets import get_cpu_profile
 from .boards import BoardSpec, default_session_id
@@ -166,6 +167,25 @@ def resolve_pmu_options(pmu_counters: Sequence[str], pmu_groups: Optional[str], 
     return default_selection()
 
 
+@contextlib.contextmanager
+def generation_lock(repo_root: Path, cpu: str) -> Iterator[None]:
+    """Serialize generation into one CPU's tree."""
+    # Same-CPU boards share generated tests.
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - no flock on Windows
+        yield
+        return
+    path = repo_root / "artifacts" / "generated_tests" / f".{cpu}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def generate_tests_for_board(
     repo_root: Path,
     board: BoardSpec,
@@ -198,7 +218,8 @@ def generate_tests_for_board(
         **kwargs,
     )
     setup_logger(verbosity=config.verbosity)
-    result = GenerateStep(config).execute()
+    with generation_lock(repo_root, board.cpu):
+        result = GenerateStep(config).execute()
     if not (result.success or result.skipped):
         raise RuntimeError(f"Generation failed: {result.message}")
 
@@ -289,7 +310,7 @@ def stream_generated_tests(
     # session runner rather than rebuilt inside it.
     bundles, skipped = build_generated_test_case_bundles(
         repo_root, cpu=board.cpu, family=options.family, name_filter=options.test_name,
-        limit=options.limit, suite=options.suite, fvp_gate=options.fvp_gate,
+        limit=options.limit, suite=options.suite, fvp_gate=options.fvp_gate, board_id=board.id,
     )
     if not bundles:
         raise no_bridgeable_cases_error(

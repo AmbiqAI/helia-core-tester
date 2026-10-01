@@ -73,7 +73,7 @@ def test_runner_writes_the_bundle_with_the_rejected_case(tmp_path: Path, monkeyp
         session_runner, "open_rtt_session",
         lambda board, serial_no, *, build_dir, counter_passes: (HostSession(transport, counter_passes=counter_passes), transport, 0),
     )
-    monkeypatch.setattr(session_runner, "generate_memory_report", lambda board, project_root=None, build_dir=None: tmp_path / "memory_report.json")
+    monkeypatch.setattr(session_runner, "generate_memory_report", lambda board, **_: tmp_path / "memory_report.json")
     (tmp_path / "memory_report.json").write_text("{}", encoding="utf-8")
     (tmp_path / "cmake" / "hardware").mkdir(parents=True)
     (tmp_path / "cmake" / "hardware" / "kernel_catalog.json").write_text("[]", encoding="utf-8")
