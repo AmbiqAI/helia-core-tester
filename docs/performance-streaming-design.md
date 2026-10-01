@@ -370,7 +370,7 @@ Two sizing checkpoints now exist:
    - artifact: `artifacts/hardware/size_probe/<board>/<variant>/memory_report.json`
 2. **Real benchmark-server firmware image** (`hardware memory-report`, `memory_report.generate_memory_report`)
    - goal: measure the actual streaming skeleton with protocol, RTT binding, catalog, session state, and adapters
-   - artifact: `artifacts/hardware/benchmark_server/memory_report.json`, copied into every result bundle
+   - artifact: `artifacts/hardware/benchmark_server/memory_report.json`; a `hardware run` writes `artifacts/hardware/benchmark_server/<board>/` and copies it into the result bundle
 
 Both reports come from one analysis (`helia_core_tester/hardware/memory_report.py`) of:
 
