@@ -513,7 +513,7 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
     summary = build_json_summary(
         result, skipped, session_id="apollo510_evb-20260912T000000Z", board_id="apollo510_evb",
         bundle=tmp_path / "artifacts" / "reports" / "hardware" / "apollo510_evb-20260912T000000Z",
-        timing=timing,
+        timing=timing, options=StreamOptions(),
     )
     encoded = json.loads(json.dumps(summary))  # must be JSON-serialisable as-is
 
@@ -543,7 +543,7 @@ _GITHUB_ENV = {
 }
 
 
-def _run_document(tmp_path: Path, options=None) -> dict:
+def _run_document(tmp_path: Path, options: StreamOptions) -> dict:
     """A --json document from one fake case."""
     bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_doc").manifest_path)
     result = HostSession(FakeTargetTransport()).run_many([bundle])
@@ -554,14 +554,18 @@ def _run_document(tmp_path: Path, options=None) -> dict:
 def test_json_summary_identifies_its_schema(tmp_path: Path, monkeypatch) -> None:
     for name in _GITHUB_ENV:
         monkeypatch.delenv(name, raising=False)
-    options = StreamOptions(suite="float", family="ActivationFunctions", limit=2, float_precision="f32", pmu_counters={"cpu": "all"})
+    options = StreamOptions(
+        suite="float", family="ActivationFunctions", limit=2, float_precision="f32", pmu_counters={"cpu": "all"},
+        fvp_gate="strict",
+    )
     encoded = _run_document(tmp_path, options)
 
     assert encoded["schema"] == "hct.hardware.nightly_run"
     assert encoded["schema_version"] == 1
     assert datetime.fromisoformat(encoded["generated_at"]).utcoffset() == timedelta(0)
     assert encoded["selection"] == {
-        "suite": "float", "limit": 2, "family": "ActivationFunctions", "precision": "f32", "pmu_counters": {"cpu": "all"},
+        "suite": "float", "limit": 2, "family": "ActivationFunctions", "test_name": None, "precision": "f32",
+        "pmu_counters": {"cpu": "all"}, "fvp_gate": "strict",
     }
     assert encoded["github"] is None
 
@@ -570,9 +574,8 @@ def test_json_summary_records_github_run(tmp_path: Path, monkeypatch) -> None:
     for name, value in _GITHUB_ENV.items():
         monkeypatch.setenv(name, value)
 
-    encoded = _run_document(tmp_path)
+    encoded = _run_document(tmp_path, StreamOptions())
 
-    assert encoded["selection"] is None
     assert encoded["github"] == {
         "run_id": 123456, "run_attempt": 2, "event_name": "schedule", "sha": "a" * 40, "ref": "refs/heads/main",
         "repository": "AmbiqAI/helia-core-tester",

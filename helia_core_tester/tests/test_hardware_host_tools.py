@@ -337,3 +337,9 @@ def test_linker_script_missing_names_the_fix(tmp_path: Path) -> None:
     report.nsx_app_dir(build).mkdir(parents=True)
     with pytest.raises(FileNotFoundError, match="rerun hardware build"):
         report.app_linker_script(BOARD, build)
+
+
+def test_missing_gcc_reads_null(monkeypatch) -> None:
+    monkeypatch.setattr(toolchain, "arm_tool", lambda name, repo_root=None: "/nonexistent/arm-none-eabi-gcc")
+
+    assert toolchain.gcc_version() is None

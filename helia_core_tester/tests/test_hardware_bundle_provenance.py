@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.hardware import nsx_cli
-from helia_core_tester.hardware import firmware_build, toolchain
+from helia_core_tester.hardware import firmware_build
 from helia_core_tester.hardware.firmware_build import nsx_app_dir
 from helia_core_tester.hardware.nsx_app import CMSIS_NN_REF, AppOptions, kernel_dir, save_options
 from helia_core_tester.hardware.result_bundle import build_provenance, write_result_bundle
@@ -196,9 +196,3 @@ def test_rewrite_drops_stale_lock_copy(tmp_path: Path) -> None:
 
     assert not (bundle_root / "nsx.lock").exists()
     assert "nsx_lock" not in _manifest(bundle_root)["artifacts"]
-
-
-def test_missing_gcc_reads_null(monkeypatch) -> None:
-    monkeypatch.setattr(toolchain, "arm_tool", lambda name, repo_root=None: "/nonexistent/arm-none-eabi-gcc")
-
-    assert toolchain.gcc_version() is None
