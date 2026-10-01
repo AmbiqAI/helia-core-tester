@@ -61,8 +61,9 @@ jobs:
       - name: Build the board matrix
         id: matrix
         run: |
+          # Unique ids: one artifact name each.
           boards="$(jq -cn --arg csv "${HCT_NIGHTLY_BOARDS}" \
-            '$csv | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')"
+            '$csv | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | unique')"
           if [[ "${boards}" == "[]" ]]; then
             echo "::error::boards input selects no boards" >&2
             exit 2
