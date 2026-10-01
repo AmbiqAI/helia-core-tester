@@ -244,8 +244,13 @@ class FakeTargetTransport:
         max_cases_per_session: int = MAX_CASES_PER_PLAN,
         max_passes: int = MAX_PASSES_PER_PLAN,
         rejections: Mapping[str, tuple[str, int]] | None = None,
+        boot_status: int | None = 0,
+        core_clock_hz: int = 250_000_000,
     ) -> None:
         self.build_id = build_id
+        # Non-zero: failed init. None: old firmware.
+        self._boot_status = boot_status
+        self._core_clock_hz = core_clock_hz
         # case_id -> (stage, kernel status) to refuse.
         self._rejections = dict(rejections or {})
         self._session_id = 0xC0DE1234
@@ -346,6 +351,8 @@ class FakeTargetTransport:
             max_rx_payload=self._max_rx_payload,
             max_cases_per_session=self._max_cases_per_session,
             max_passes=self._max_passes,
+            boot_status=self._boot_status,
+            core_clock_hz=None if self._boot_status is None else self._core_clock_hz,
         )
         self._queue(MessageType.TARGET_INFO, encode_target_info(info))
 

@@ -25,6 +25,7 @@ static int write_file(const char *path, const uint8_t *data, size_t length)
 
 int main(int argc, char **argv)
 {
+    static const hct_boot_info_t kBoot = {0, 250000000u};
     uint8_t target_info[512];
     uint8_t catalog[16384];
     size_t target_info_len = 0u;
@@ -36,7 +37,7 @@ int main(int argc, char **argv)
         return 64;
     }
     if (hct_build_target_info_frame(0xC0DE1234u, 0u, 256u, 32768u, HCT_SERVER_MAX_RX_PAYLOAD_BYTES,
-                                    HCT_SERVER_MAX_CASES, HCT_SERVER_MAX_PASSES,
+                                    HCT_SERVER_MAX_CASES, HCT_SERVER_MAX_PASSES, &kBoot,
                                     target_info, sizeof(target_info), &target_info_len) != HCTP_STATUS_OK)
     {
         return 65;

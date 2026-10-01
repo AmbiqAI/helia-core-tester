@@ -273,8 +273,12 @@ int main(void)
     int status;
     hctp_frame_view_t frame;
 
-    hct_server_session_init(&session, 0xC0DE1234u, 256u, workspace, (uint32_t)sizeof(workspace));
+    static const hct_boot_info_t kBoot = {7, 96000000u};
+    hct_server_session_init(&session, 0xC0DE1234u, 256u, workspace, (uint32_t)sizeof(workspace), &kBoot);
     if (drain_single_message(&session, HCTP_MSG_TARGET_INFO, outbound_payload, &outbound_length) != 0) return 10;
+    /* Boot health trails TARGET_INFO. */
+    if (outbound_length < 8u || read_u32(&outbound_payload[outbound_length - 8u]) != 7u ||
+        read_u32(&outbound_payload[outbound_length - 4u]) != 96000000u) return 19;
 
     offset = 0u;
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_TARGET_INFO_ACK, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 11;
