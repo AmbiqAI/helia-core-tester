@@ -23,7 +23,7 @@ from .measurement import (
     counter_passes_for_selection,
     normalize_samples,
 )
-from .transport import Transport
+from .transport import Transport, TransportStall
 from .wire import (
     COMPARISON_MODE_CODES,
     BlobChunk,
@@ -312,6 +312,7 @@ class HostSession:
         self._last_sent_message_type: str | None = None
         self._target_info: TargetInfo | None = None
         self._catalog: tuple[CatalogEntry, ...] = ()
+        self._case_id: str | None = None
 
     @property
     def counter_passes(self) -> tuple[CounterPass, ...]:
@@ -419,7 +420,7 @@ class HostSession:
 
         case_map = {bundle.case_id: bundle for bundle in case_bundles}
         results: dict[str, CaseRunResult] = {}
-        current_case_id: str | None = None
+        self._case_id = None
         actual_output_bytes = bytearray()
         samples: list[RawSample] = []
         comparison_result: ComparisonResult | None = None
@@ -433,7 +434,7 @@ class HostSession:
                 continue
             if message_type == MessageType.REQUEST_CASE:
                 bundle = case_bundles[decode_request_case(frame.payload).case_index]
-                current_case_id = bundle.case_id
+                self._case_id = bundle.case_id
                 samples = []
                 comparison_result = None
                 actual_output_bytes = bytearray()
@@ -448,9 +449,9 @@ class HostSession:
                     )
                 self._send(MessageType.CASE_META, case_meta)
             elif message_type == MessageType.REQUEST_BLOB:
-                if current_case_id is None:
+                if self._case_id is None:
                     raise RuntimeError("Target requested a blob before selecting a case.")
-                self._handle_blob_request(frame.payload, case_map[current_case_id])
+                self._handle_blob_request(frame.payload, case_map[self._case_id])
             elif message_type == MessageType.CASE_READY:
                 self._send(MessageType.RUN_CORRECTNESS, b"")
             elif message_type == MessageType.CORRECTNESS_RESULT:
@@ -469,23 +470,23 @@ class HostSession:
                     )
                 actual_output_bytes.extend(chunk.data)
             elif message_type == MessageType.OUTPUT_END:
-                if current_case_id is None:
+                if self._case_id is None:
                     raise RuntimeError("Received OUTPUT_END without an active case.")
                 output_end = decode_output_end(frame.payload)
                 actual_checksum = output_checksum(bytes(actual_output_bytes))
                 if output_end.length != len(actual_output_bytes) or output_end.checksum != actual_checksum:
                     raise RuntimeError(
-                        f"Invalid OUTPUT_END for {current_case_id!r}: declared length/checksum "
+                        f"Invalid OUTPUT_END for {self._case_id!r}: declared length/checksum "
                         f"{output_end.length}/{output_end.checksum}, received "
                         f"{len(actual_output_bytes)}/{actual_checksum}."
                     )
-                bundle = case_map[current_case_id]
+                bundle = case_map[self._case_id]
                 if bundle.comparison["mode"] == "exact_status":
                     if reported_status is None:
                         raise RuntimeError("Received OUTPUT_END before CORRECTNESS_RESULT status payload.")
                     comparison_result = compare_status(reported_status, bundle.comparison)
                 else:
-                    comparison_result = _compare_output_bytes(current_case_id, bytes(actual_output_bytes), bundle)
+                    comparison_result = _compare_output_bytes(self._case_id, bytes(actual_output_bytes), bundle)
                 self._send(MessageType.CORRECTNESS_ACK, encode_correctness_ack(CorrectnessAck(passed=comparison_result.passed)))
                 # The target always advances to WAIT_RUN_PERFORMANCE after CORRECTNESS_ACK
                 # regardless of the pass/fail byte (it's informational only, for reporting).
@@ -499,9 +500,9 @@ class HostSession:
             elif message_type == MessageType.CASE_COMPLETE:
                 complete = decode_case_complete(frame.payload)
                 # Only a correctness-stage rejection skips the comparison.
-                if current_case_id is None or (comparison_result is None and (complete.correctness_ran or complete.performance_ran)):
+                if self._case_id is None or (comparison_result is None and (complete.correctness_ran or complete.performance_ran)):
                     raise RuntimeError("CASE_COMPLETE arrived before correctness finished.")
-                bundle = case_map[current_case_id]
+                bundle = case_map[self._case_id]
                 rejection = None
                 if not complete.performance_ran:
                     stage = "performance" if complete.correctness_ran else "correctness"
@@ -522,7 +523,8 @@ class HostSession:
                     statistics=compute_sample_statistics(normalized_samples),
                     rejection=rejection,
                 )
-                results[current_case_id] = case_result
+                results[self._case_id] = case_result
+                self._case_id = None
                 if on_case_complete is not None:
                     on_case_complete(case_result)
             elif message_type == MessageType.SESSION_COMPLETE:
@@ -530,7 +532,7 @@ class HostSession:
                 break
             elif message_type == MessageType.ERROR:
                 error_text = decode_error(frame.payload).message
-                case_context = f" (while running case_id={current_case_id!r})" if current_case_id is not None else ""
+                case_context = f" (while running case_id={self._case_id!r})" if self._case_id is not None else ""
                 raise RuntimeError(f"{error_text}{case_context}")
             else:
                 raise ValueError(f"Unhandled frame type: {message_type}")
@@ -585,10 +587,11 @@ class HostSession:
                 reads_left -= 1
                 if reads_left > 0:
                     continue
-                raise RuntimeError(
+                running = f" (while running case_id={self._case_id!r})" if self._case_id else ""
+                raise TransportStall(
                     "Transport stalled without a complete frame. "
                     f"Last message sent to target: {self._last_sent_message_type or '<none>'}. "
-                    f"{len(self._trace)} frame(s) exchanged so far; last few: {self._trace[-6:]}."
+                    f"{len(self._trace)} frame(s) exchanged so far; last few: {self._trace[-6:]}.{running}"
                 )
             self._frames.extend(self._decoder.feed(chunk))
         frame = self._frames.pop(0)

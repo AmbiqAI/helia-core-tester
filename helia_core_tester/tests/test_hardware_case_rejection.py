@@ -127,7 +127,8 @@ class _SilentSampling(FakeTargetTransport):
     [
         # pmu_event_known() refuses an unmapped id: ERROR frame.
         (FakeTargetTransport(), (CounterPass("cpu", 0, (CounterDescriptor("vendor", 0x0C00, "cpu"),)),), r"^message_type=4 status=-1"),
-        (_SilentSampling(silent=len(PASSES)), PASSES, r"^Transport stalled"),
+        # The stall names the case it interrupted.
+        (_SilentSampling(silent=len(PASSES)), PASSES, r"^Transport stalled .* \(while running case_id='abs_a'\) \(batch 0, "),
     ],
     ids=["error-frame", "transport-stall"],
 )

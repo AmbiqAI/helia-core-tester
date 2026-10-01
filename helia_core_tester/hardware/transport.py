@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 import subprocess
 import time
-from typing import Iterable, Protocol
+from typing import Any, Iterable, Protocol
 
 
 class Transport(Protocol):
@@ -20,14 +20,127 @@ class Transport(Protocol):
         ...
 
 
+class TransportError(RuntimeError):
+    """The host-target link failed."""
+
+
+class TransportStall(TransportError):
+    """No complete frame within the read timeouts."""
+
+
+class RttRings:
+    """Channel rings of a SEGGER_RTT_CB, by memory access.
+
+    `memory` is a pylink JLink. Bulk copies leave the access width to
+    the DLL: memory_read8 costs one SWD access per byte.
+    """
+
+    def __init__(self, memory: Any, address: int, *, up_index: int = 0, down_index: int = 0) -> None:
+        self._memory = memory
+        self._address = address
+        self._up_index = up_index
+        self._down_index = down_index
+        # Descriptor addresses, once the block is live.
+        self._up: int | None = None
+        self._down: int | None = None
+
+    def _find(self) -> bool:
+        """Locate both ring descriptors once the block is live."""
+        if self._up is not None:
+            return True
+        block = bytes(self._memory.memory_read(self._address, RTT_ID_BYTES))
+        if not block.startswith(RTT_ID):
+            return False  # Firmware has not initialized RTT yet.
+        max_up, max_down = self._words(self._address + RTT_ID_BYTES, 2)
+        if self._up_index >= max_up or self._down_index >= max_down:
+            raise RuntimeError(f"RTT block at 0x{self._address:08x} lacks the requested channels.")
+        rings = self._address + RTT_ID_BYTES + 8
+        self._up = rings + RTT_RING_BYTES * self._up_index
+        self._down = rings + RTT_RING_BYTES * (max_up + self._down_index)
+        return True
+
+    def _ring(self, descriptor: int) -> tuple[int, int, int, int] | None:
+        """(buffer, size, write, read), or None when corrupt."""
+        _, buffer, size, write, read, _ = self._words(descriptor, 6)
+        return (buffer, size, write, read) if write < size and read < size else None
+
+    def up_offsets(self) -> tuple[int, int, int] | None:
+        """(size, write, read) of the up ring."""
+        ring = self._ring(self._up) if self._find() else None
+        if ring is None:
+            return None
+        _, size, write, read = ring
+        return size, write, read
+
+    def take(self, max_bytes: int) -> bytes:
+        """Drain up to `max_bytes` from the up ring."""
+        ring = self._ring(self._up) if self._find() else None
+        if ring is None:
+            return b""
+        buffer, size, write, read = ring
+        # Copy to the wrap, then from 0.
+        spans = [(read, write - read)] if read <= write else [(read, size - read), (0, write)]
+        data = bytearray()
+        for offset, length in spans:
+            length = min(length, max_bytes - len(data))
+            if length <= 0:
+                break
+            chunk = bytes(self._memory.memory_read(buffer + offset, length))
+            data += chunk
+            if len(chunk) < length:
+                break  # Short read: keep the stream in order.
+        if data:
+            self._commit(self._up + 16, (read + len(data)) % size)
+        return bytes(data)
+
+    def put(self, payload: bytes) -> int:
+        """Copy what fits of `payload` into the down ring."""
+        ring = self._ring(self._down) if self._find() else None
+        if ring is None:
+            return 0
+        buffer, size, write, read = ring
+        # Keep one slot free; stop at wrap.
+        length = min(len(payload), (read - write - 1) % size, size - write)
+        if length > 0:
+            self._write(buffer + write, payload[:length])
+            self._commit(self._down + 12, (write + length) % size)
+        return length
+
+    def _words(self, address: int, count: int) -> list[int]:
+        """Read words; a short read fails the link."""
+        words = [int(v) for v in self._memory.memory_read32(address, count)]
+        if len(words) != count:
+            raise TransportError(f"Short RTT read at 0x{address:08x}: {len(words)}/{count} words.")
+        return words
+
+    def _write(self, address: int, data: bytes) -> None:
+        """Write bytes; a short write fails the link."""
+        written = self._memory.memory_write(address, list(data))
+        if written != len(data):
+            raise TransportError(f"Short RTT write at 0x{address:08x}: {written}/{len(data)} bytes.")
+
+    def _commit(self, address: int, offset: int) -> None:
+        """Publish a ring offset word."""
+        # memory_write32 returns bytes, not words.
+        written = self._memory.memory_write32(address, [offset])
+        if written != 4:
+            raise TransportError(f"Short RTT write at 0x{address:08x}: {written}/4 bytes.")
+
+
 class JLinkRttTransport:
+    """HCTP over the SEGGER RTT rings, by plain J-Link memory access.
+
+    Not the DLL's RTT engine: when the host polls slowly it can advance the
+    target's read offset past bytes it never returns, dropping a burst's tail.
+    """
+
     def __init__(
         self,
         *,
         serial_no: int,
         chip_name: str,
+        rtt_address: int,
         speed_khz: int = 4000,
-        rtt_address: int | None = None,
         up_buffer_index: int = 0,
         down_buffer_index: int = 0,
         reset_on_open: bool = False,
@@ -43,14 +156,12 @@ class JLinkRttTransport:
         self._serial_no = serial_no
         self._chip_name = chip_name
         self._speed_khz = speed_khz
-        self._rtt_address = rtt_address
-        self._up_buffer_index = up_buffer_index
-        self._down_buffer_index = down_buffer_index
         self._reset_on_open = reset_on_open
         self._reset_delay_s = reset_delay_s
         self._read_timeout_s = read_timeout_s
         self._poll_interval_s = poll_interval_s
         self._jlink = open_jlink(pylink)
+        self._rings = RttRings(self._jlink, rtt_address, up_index=up_buffer_index, down_index=down_buffer_index)
         self._jlink.open(serial_no=serial_no)
         try:
             self._jlink.set_tif(pylink.enums.JLinkInterfaces.SWD)
@@ -58,11 +169,10 @@ class JLinkRttTransport:
             if reset_on_open:
                 self._jlink.reset(halt=False)
                 time.sleep(reset_delay_s)
-            self._jlink.rtt_start(block_address=rtt_address)
         except Exception:
             # open() already claimed the JLink USB/DLL handle -- a failure in any step
-            # after it (bad chip name, comm failure, RTT discovery timeout) must not leak
-            # that handle, or the probe can require a process restart to reuse.
+            # after it (bad chip name, comm failure) must not leak that handle, or the
+            # probe can require a process restart to reuse.
             self._jlink.close()
             raise
 
@@ -70,7 +180,7 @@ class JLinkRttTransport:
         remaining = payload
         deadline = time.monotonic() + self._read_timeout_s
         while remaining:
-            written = int(self._jlink.rtt_write(self._down_buffer_index, list(remaining)))
+            written = self._rings.put(remaining)
             if written > 0:
                 remaining = remaining[written:]
                 continue
@@ -81,21 +191,43 @@ class JLinkRttTransport:
     def read(self, max_bytes: int = 4096) -> bytes:
         deadline = time.monotonic() + self._read_timeout_s
         while time.monotonic() < deadline:
-            data = bytes(self._jlink.rtt_read(self._up_buffer_index, max_bytes))
+            data = self._rings.take(max_bytes)
             if data:
                 return data
             time.sleep(self._poll_interval_s)
         return b""
 
-    def close(self) -> None:
+    def target_state(self) -> dict[str, int]:
+        """Halt the core, read fault and RTT state, resume."""
+        jlink = self._jlink
+        if not jlink.halt():
+            raise RuntimeError("Core did not halt.")
         try:
-            self._jlink.rtt_stop()
-        except Exception:
-            pass
+            index = {jlink.register_name(i): i for i in jlink.register_list()}
+            state = {key: jlink.register_read(index[name]) & 0xFFFFFFFF for key, name in _CORE_REGISTERS if name in index}
+            state["cfsr"], state["hfsr"] = (int(v) for v in jlink.memory_read32(SCB_CFSR, 2))
+            up = self._rings.up_offsets()
+            if up is not None:
+                state.update(zip(("rtt_size", "rtt_write", "rtt_read"), up))
+        finally:
+            jlink.restart()
+        return state
+
+    def close(self) -> None:
         self._jlink.close()
 
 
-def symbol_address_from_elf(elf_path: str, symbol_name: str) -> int:
+# SEGGER_RTT_CB: id, ring counts, rings.
+RTT_ID = b"SEGGER RTT\0"
+RTT_ID_BYTES = 16
+# Ring: name, buffer, size, WrOff, RdOff, flags.
+RTT_RING_BYTES = 24
+SCB_CFSR = 0xE000ED28  # HFSR follows at +4.
+_CORE_REGISTERS = (("pc", "R15 (PC)"), ("lr", "R14"), ("sp", "R13 (SP)"))
+
+
+def elf_symbols(elf_path: str) -> list[tuple[int, str, str]]:
+    """(address, nm type, name) for every ELF symbol, by address."""
     from .toolchain import arm_tool
 
     result = subprocess.run(
@@ -104,10 +236,18 @@ def symbol_address_from_elf(elf_path: str, symbol_name: str) -> int:
         capture_output=True,
         text=True,
     )
+    symbols = []
     for line in result.stdout.splitlines():
         parts = line.split()
-        if len(parts) == 3 and parts[2] == symbol_name:
-            return int(parts[0], 16)
+        if len(parts) == 3:
+            symbols.append((int(parts[0], 16), parts[1], parts[2]))
+    return symbols
+
+
+def symbol_address_from_elf(elf_path: str, symbol_name: str) -> int:
+    for address, _, name in elf_symbols(elf_path):
+        if name == symbol_name:
+            return address
     raise ValueError(f"Symbol not found in {elf_path}: {symbol_name}")
 
 
