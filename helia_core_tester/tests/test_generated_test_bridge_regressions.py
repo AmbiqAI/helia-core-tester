@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from helia_core_tester.core.config import Config
+from helia_core_tester.generation.io.descriptors import load_all_descriptors
+from helia_core_tester.generation.test_ops import generate_test
 from helia_core_tester.hardware.case_bundle import load_case_bundle
-from helia_core_tester.hardware.generated_test_bridge import UnsupportedGeneratedTestError, build_case_bundle_from_generated_test
+from helia_core_tester.hardware.generated_test_bridge import (
+    UnsupportedGeneratedTestError,
+    build_case_bundle_from_generated_test,
+    discover_generated_tests,
+)
 from helia_core_tester.hardware.kernel_registry import lookup_kernel_id
 from helia_core_tester.tests.generated_inputs import discover_or_skip
 
@@ -118,15 +127,58 @@ def test_grouped_convolve_case_01_now_bridges_with_unified_tolerance(tmp_path: P
     assert bundle.manifest["correctness_comparison"] == {"mode": "tolerant_int", "tolerance": 1}
 
 
-@pytest.mark.parametrize(("name", "element_count", "item_bytes"), [
-    ("convolve_float_generic_oc3_valid_packed_f32", 288, 4),
-    ("convolve_float_generic_oc3_valid_packed_f16", 576, 2),
-])
-def test_packed_float_convolve_keeps_padded_weights(tmp_path: Path, name: str, element_count: int, item_bytes: int) -> None:
-    # Packing pads output channels 3 -> 4/8.
-    cases = discover_or_skip(PROJECT_ROOT, suite="float", family="ConvolutionFunctions", name_filter=name)
-    manifest = build_case_bundle_from_generated_test(PROJECT_ROOT, cases[0], output_root=tmp_path, require_fvp_pass=False).manifest
-    weights = next(entry for entry in manifest["blob_roles"] if entry["role"] == "weights")
-    assert weights["dimensions"] == [3, 3, 8, 3]
-    assert weights["byte_length"] == element_count * item_bytes
-    assert manifest["serialized_scalar_parameters"]["weight_format_is_packed"] == 1
+_PACK_BLOCK = {"FP16": 8, "FP32": 4}
+_NUMPY_DTYPE = {"FP16": np.float16, "FP32": np.float32}
+_PACKED_HINTS = {"NT_N_PACKED", "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"}
+
+
+def _partially_filled_packed_descriptors() -> list[dict]:
+    # NT_N_PACKED stores float convolve weights as [ceil(out_c / block)][K][block], block 8 for f16
+    # and 4 for f32. Only an out_c that leaves the last block partly filled makes the array longer
+    # than the shape. The hint spellings and the block follow the generator.
+    return [
+        desc
+        for desc in load_all_descriptors(str(PROJECT_ROOT / "assets" / "descriptors"))
+        if desc["operator"] == "Convolve"
+        and desc.get("activation_dtype") in _PACK_BLOCK
+        and str((desc.get("hint") or {}).get("weight_format", "")).upper() in _PACKED_HINTS
+        and desc["filter_shape"][3] % _PACK_BLOCK[desc["activation_dtype"]]
+    ]
+
+
+@pytest.mark.parametrize("desc", _partially_filled_packed_descriptors(), ids=lambda desc: desc["name"])
+def test_packed_float_convolve_keeps_padded_weights(tmp_path: Path, desc: dict) -> None:
+    generate_test(desc, str(tmp_path / "artifacts" / "generated_tests" / "float" / "cortex-m55"), seed=Config.seed)
+    (case,) = discover_generated_tests(tmp_path, suite="float", family="ConvolutionFunctions", name_filter=desc["name"])
+    bundle = build_case_bundle_from_generated_test(
+        PROJECT_ROOT, case, output_root=tmp_path / "bundle", require_fvp_pass=False
+    )
+
+    kernel_h, kernel_w, in_c, out_c = desc["filter_shape"]
+    block = _PACK_BLOCK[desc["activation_dtype"]]
+    packed_elements = -(-out_c // block) * block * kernel_h * kernel_w * in_c
+    (header_path,) = sorted((case.directory / "includes").glob("*.h"))
+    header = header_path.read_text()
+    body = re.search(rf"{re.escape(desc['name'])}_weights\[\]\s*=\s*\{{([^}}]*)\}}", header).group(1)
+    generated = np.array(
+        [float(value.strip().rstrip("f")) for value in re.sub(r"\(float(?:16_t)?\)", "", body).split(",") if value.strip()],
+        dtype=_NUMPY_DTYPE[desc["activation_dtype"]],
+    )
+    assert generated.size == packed_elements
+
+    weights = next(blob for blob in bundle.blobs if blob.role == "weights")
+    assert list(weights.dimensions) == desc["filter_shape"]
+    sent, expected = weights.path.read_bytes(), generated.tobytes()
+    assert len(sent) == len(expected)
+    assert sent == expected
+    assert bundle.manifest["serialized_scalar_parameters"]["weight_format_is_packed"] == 1
+
+
+def test_packed_selection_covers_the_board_failures() -> None:
+    # The three cases the Apollo510 run reported (ns-cmsis-nn#633).
+    names = {desc["name"] for desc in _partially_filled_packed_descriptors()}
+    assert {
+        "convolve_float_1d_k5_fold_c12_oc13_packed_f16",
+        "convolve_float_entry_acc16_1d_k5_c4_oc13_packed_f16",
+        "convolve_float_direct_fold_c20_k5_oc5_packed_f16",
+    } <= names

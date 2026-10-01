@@ -7,6 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
+from helia_core_tester.hardware.boards import board_ids
 
 
 runner = CliRunner()
@@ -251,7 +252,7 @@ def test_doctor_reports_hardware_section_without_failing_on_missing_tools(monkey
     assert "Hardware (helia_core_tester hardware ...)" in text
     assert "J-Link library (pylink): missing" in text
     assert "⚠ JLinkExe (flash target): not found: set $JLINK_PATH" in text
-    assert "Board table" in text and "apollo510_evb" in text
+    assert "Board table" in text and f"{len(board_ids())} board(s)" in text
 
 
 def test_doctor_reports_jlinkexe_path_and_source_and_missing_hpx_jlink_dll(monkeypatch, tmp_path) -> None:

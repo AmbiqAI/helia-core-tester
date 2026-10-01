@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from neuralspotx.board_descriptors import load_board
 
+from helia_core_tester.hardware import nsx_cli
 from helia_core_tester.hardware.boards import (
     BoardSpec,
     UnknownBoardError,
@@ -20,7 +22,7 @@ from helia_core_tester.hardware.boards import (
 
 def test_board_table_seeds_apollo510_evb() -> None:
     table = load_board_table()
-    assert [b.id for b in table][:2] == ["apollo510_evb", "apollo3p_evb"]
+    assert [b.id for b in table] == ["apollo510_evb", "apollo330mP_evb", "apollo3p_evb"]
     spec = resolve_board("apollo510_evb")
     assert spec == BoardSpec(
         id="apollo510_evb",
@@ -35,6 +37,31 @@ def test_board_table_seeds_apollo510_evb() -> None:
         flash_region="MCU_MRAM",
         ram_region="MCU_TCM",
     )
+
+
+def test_board_table_has_apollo330mP_evb() -> None:
+    assert resolve_board("apollo330mP_evb") == BoardSpec(
+        id="apollo330mP_evb",
+        nsx_board="apollo330mP_evb",
+        soc="apollo330P",
+        cpu="cortex-m55",
+        pmu_tier="armv8m",
+        has_mve=True,
+        jlink_device="Apollo330P_510L",
+        swd_speed_khz=4000,
+        workspace_bytes=112640,
+        flash_region="MCU_MRAM",
+        ram_region="MCU_TCM",
+    )
+
+
+@pytest.mark.parametrize("spec", load_board_table(), ids=lambda spec: spec.id)
+def test_board_row_matches_nsx(spec: BoardSpec) -> None:
+    # NSX owns board, SoC and CPU facts.
+    descriptor = load_board(spec.nsx_board)
+    assert descriptor is not None, f"NSX has no board {spec.nsx_board}"
+    assert nsx_cli.starter_profile(spec.nsx_board) is not None
+    assert (descriptor.soc, descriptor.cpu.core) == (spec.soc, spec.cpu)
 
 
 def test_unknown_board_error_lists_known_ids() -> None:

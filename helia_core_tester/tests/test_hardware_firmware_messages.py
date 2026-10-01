@@ -85,6 +85,8 @@ def test_firmware_target_info_and_catalog_roundtrip_with_python_decoder(tmp_path
     assert target_info.max_rx_payload == 2048 - 32
     assert target_info.max_cases_per_session == 32
     assert target_info.max_passes == 32
+    # The emit tool passes a healthy boot.
+    assert (target_info.boot_status, target_info.core_clock_hz) == (0, 250_000_000)
     assert len(catalog) == 173
     assert catalog[0].kernel_id == 1
     assert catalog[0].canonical_name == "arm_abs_s8"

@@ -53,6 +53,10 @@ _SELECTED_ADAPTERS = (
 _MEMORY_RE = re.compile(
     r"^\s*([A-Za-z0-9_]+)\s*\([^)]*\)\s*:\s*ORIGIN\s*=\s*(0x[0-9A-Fa-f]+|\d+)\s*,\s*LENGTH\s*=\s*(0x[0-9A-Fa-f]+|\d+)"
 )
+# apollo330P links TCM code as .dtcm_text.
+_FLASH_SECTIONS = (".text", ".itcm_text", ".dtcm_text", ".data")
+_TCM_SECTIONS = (".dtcm_text", ".stack", ".data", ".bss")
+_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 _SYMBOL_RE = re.compile(r"^[0-9a-fA-F]+\s+[A-Za-z]\s+(arm_[A-Za-z0-9_]+)$")
 
 
@@ -86,10 +90,9 @@ def app_linker_script(board: BoardSpec, build_dir: Path) -> Path:
 def parse_memory_regions(linker_script: Path) -> list[dict[str, int | str]]:
     """`NAME (attrs) : ORIGIN = ..., LENGTH = ...` rows of the linker script's MEMORY block."""
     regions: list[dict[str, int | str]] = []
-    for line in linker_script.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("/*") or stripped.startswith("*"):
-            continue
+    # Drop block comments that span lines.
+    text = _COMMENT_RE.sub("", linker_script.read_text(encoding="utf-8"))
+    for line in text.splitlines():
         match = _MEMORY_RE.match(line)
         if match is None:
             continue
@@ -188,8 +191,8 @@ def analyze_elf(elf: Path, board: BoardSpec, linker_script: Path, project_root: 
     sections = _parse_size_a(size_sections)
     memory_regions = parse_memory_regions(linker_script)
     region_map = {str(row["name"]): int(row["capacity"]) for row in memory_regions}
-    flash_image_bytes = sections.get(".text", 0) + sections.get(".itcm_text", 0) + sections.get(".data", 0)
-    tcm_static_bytes = sections.get(".stack", 0) + sections.get(".data", 0) + sections.get(".bss", 0)
+    flash_image_bytes = sum(sections.get(name, 0) for name in _FLASH_SECTIONS)
+    tcm_static_bytes = sum(sections.get(name, 0) for name in _TCM_SECTIONS)
     heap_available_bytes = sections.get(".heap", 0)
     # Fail closed: a missing or mistyped board region is a configuration error, not a
     # zero-capacity region that the gates below would wave through.
