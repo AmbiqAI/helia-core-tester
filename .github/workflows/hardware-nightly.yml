@@ -1,0 +1,232 @@
+name: Hardware Nightly
+
+# Mirrors helia-profiler's hardware-validation.yml shape.
+
+on:
+  schedule:
+    # Clears hpx's 09:00 UTC nightly.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      boards:
+        description: "Comma-separated board ids, one job each"
+        required: true
+        default: apollo510_evb,apollo330mP_evb,apollo3p_evb
+        type: string
+      suite:
+        description: "Generated-test suite"
+        required: true
+        default: both
+        type: choice
+        options: [both, int, float]
+      limit:
+        description: "Tests per family and suite; empty runs all"
+        required: false
+        default: ""
+        type: string
+      pmu_counters:
+        description: "Space-separated --pmu-counters values; PMU boards only"
+        required: true
+        default: all
+        type: string
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Caches beside the workspace survive checkout's clean.
+  UV_CACHE_DIR: ${{ github.workspace }}/../hct-uv-cache
+  UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/../hct-uv-python
+  HCT_CACHE_DIR: ${{ github.workspace }}/../hct-cache
+  # Schedule has no inputs; use defaults.
+  HCT_NIGHTLY_BOARDS: ${{ inputs.boards || 'apollo510_evb,apollo330mP_evb,apollo3p_evb' }}
+  HCT_NIGHTLY_SUITE: ${{ inputs.suite || 'both' }}
+  HCT_NIGHTLY_LIMIT: ${{ inputs.limit }}
+  HCT_NIGHTLY_PMU: ${{ inputs.pmu_counters || 'all' }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      boards: ${{ steps.matrix.outputs.boards }}
+      date: ${{ steps.matrix.outputs.date }}
+    steps:
+      - name: Build the board matrix
+        id: matrix
+        run: |
+          boards="$(jq -cn --arg csv "${HCT_NIGHTLY_BOARDS}" \
+            '$csv | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')"
+          if [[ "${boards}" == "[]" ]]; then
+            echo "::error::boards input selects no boards" >&2
+            exit 2
+          fi
+          {
+            echo "boards=${boards}"
+            echo "date=$(date -u +%Y%m%d)"
+          } >> "${GITHUB_OUTPUT}"
+
+  run:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        board: ${{ fromJSON(needs.plan.outputs.boards) }}
+    # Board label picks its owning runner.
+    runs-on: [self-hosted, hpx-hardware, "${{ matrix.board }}"]
+    # Full catalog: ~16 min warm.
+    timeout-minutes: 120
+    env:
+      HCT_NIGHTLY_BOARD: ${{ matrix.board }}
+      HCT_RUN_JSON: ${{ github.workspace }}/artifacts/reports/hardware-nightly-run.json
+    steps:
+      - name: Resolve board and probe from the runner
+        run: |
+          if [[ -z "${HPX_BOARD:-}" || -z "${HPX_JLINK_SERIAL:-}" ]]; then
+            echo "::error::runner exports no HPX_BOARD or HPX_JLINK_SERIAL" >&2
+            exit 2
+          fi
+          if [[ "${HPX_BOARD}" != "${HCT_NIGHTLY_BOARD}" ]]; then
+            echo "::error::runner owns ${HPX_BOARD}, not ${HCT_NIGHTLY_BOARD}" >&2
+            exit 2
+          fi
+          # uv's CPython has no CA bundle here.
+          if [[ -z "${SSL_CERT_FILE:-}" && -f /etc/ssl/certs/ca-certificates.crt ]]; then
+            echo "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" >> "${GITHUB_ENV}"
+          fi
+          echo "HCT_SESSION_ID=nightly-${GITHUB_RUN_ID}-${HPX_BOARD}" >> "${GITHUB_ENV}"
+
+      # hpx's bench lock; ttl frees it.
+      - name: Take the board lock
+        id: lock
+        run: |
+          if [[ -z "${BENCH_BOARD:-}" ]] || ! command -v bench-agent > /dev/null; then
+            echo "::error::runner has no BENCH_BOARD or bench-agent" >&2
+            exit 2
+          fi
+          # Untagged: runner orphan cleanup skips it.
+          if ! held="$(env -u RUNNER_TRACKING_ID bench-agent lock "${BENCH_BOARD}" \
+              --holder ci \
+              --reason "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              --timeout 1800 \
+              --ttl 10800 2>&1)"; then
+            echo "::error::${held}" >&2
+            exit 1
+          fi
+          echo "${held}"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          # Keep the bench's warm uv cache.
+          enable-cache: false
+          cache-local-path: ${{ env.UV_CACHE_DIR }}
+
+      # Fetch ARM GCC once per pin.
+      - name: Link the download cache
+        run: |
+          # hashFiles needs node20, absent here.
+          pin="$(sha256sum helia_core_tester/scripts/setup_dependencies.py | cut -c1-16)"
+          HCT_DOWNLOADS="${HCT_CACHE_DIR}/downloads-${pin}"
+          mkdir -p "${HCT_DOWNLOADS}" artifacts
+          rm -rf artifacts/downloads
+          ln -s "${HCT_DOWNLOADS}" artifacts/downloads
+
+      - name: Install dependencies
+        run: uv sync --locked --python 3.11
+
+      - name: Run the hardware kernel suite
+        run: |
+          args=(
+            hardware run
+            --board "${HPX_BOARD}"
+            --suite "${HCT_NIGHTLY_SUITE}"
+            --session-id "${HCT_SESSION_ID}"
+            --build-dir "${HCT_CACHE_DIR}/hardware/${HPX_BOARD}"
+            --json
+          )
+          if [[ -n "${HCT_NIGHTLY_LIMIT}" ]]; then
+            args+=(--limit "${HCT_NIGHTLY_LIMIT}")
+          fi
+          # DWT-only boards refuse PMU counters.
+          tier="$(uv run python -c 'import sys; from helia_core_tester.hardware.boards import resolve_board; print(resolve_board(sys.argv[1]).pmu_tier)' "${HPX_BOARD}")"
+          if [[ "${tier}" != "dwt" ]]; then
+            for counters in ${HCT_NIGHTLY_PMU}; do
+              args+=(--pmu-counters "${counters}")
+            done
+          fi
+          mkdir -p "$(dirname "${HCT_RUN_JSON}")"
+          # --json: document on stdout, log on stderr.
+          uv run helia_core_tester "${args[@]}" > "${HCT_RUN_JSON}"
+          if [[ "$(jq -r '.totals.ran' "${HCT_RUN_JSON}")" == "0" ]]; then
+            echo "::error::selection ran no cases on ${HPX_BOARD}" >&2
+            exit 2
+          fi
+
+      - name: Release the board lock
+        if: always() && steps.lock.outcome == 'success'
+        run: |
+          if ! freed="$(bench-agent unlock "${BENCH_BOARD}" 2>&1)"; then
+            if [[ "${freed}" != *"is free"* ]]; then
+              echo "::error::${freed}" >&2
+              exit 1
+            fi
+          fi
+          echo "${freed}"
+
+      # Re-runs replace the first attempt's artifact.
+      - name: Upload the result bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hct-hardware-${{ matrix.board }}-${{ needs.plan.outputs.date }}-${{ github.run_id }}
+          overwrite: true
+          path: |
+            artifacts/reports/hardware/
+            artifacts/reports/hardware-nightly-run.json
+          if-no-files-found: warn
+
+  # Minimal per-board table; board-matrix may replace it.
+  summary:
+    needs: [plan, run]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BOARDS: ${{ needs.plan.outputs.boards }}
+      RUN_TAG: ${{ needs.plan.outputs.date }}-${{ github.run_id }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hct-hardware-*-${{ github.run_id }}
+          path: bundles
+      - name: Summarise per board
+        run: |
+          {
+            echo "### Hardware nightly"
+            echo ""
+            echo "| Board | Ran | Passed | Failed | Skipped | Boot | Core MHz | Build id | Kernel |"
+            echo "|---|---|---|---|---|---|---|---|---|"
+            for board in $(jq -r '.[]' <<< "${BOARDS}"); do
+              run_json="bundles/hct-hardware-${board}-${RUN_TAG}/hardware-nightly-run.json"
+              if [[ ! -s "${run_json}" ]]; then
+                echo "| ${board} | no result | | | | | | | |"
+                continue
+              fi
+              manifest="$(dirname "${run_json}")/hardware/$(jq -r .session_id "${run_json}")/session_manifest.json"
+              [[ -f "${manifest}" ]] || manifest=/dev/null
+              jq -r --slurpfile m "${manifest}" '
+                ($m[0] // {}) as $m
+                | [ .board, .totals.ran, .totals.passed, .totals.failed, .totals.skipped,
+                    (.boot.status // "n/a"),
+                    (if .boot.core_clock_hz then .boot.core_clock_hz / 1e6 else "n/a" end),
+                    ($m.firmware_build_id // "n/a"),
+                    ($m.build.kernels.commit // $m.build.kernels.ref // "n/a") ]
+                | "| " + (map(tostring) | join(" | ")) + " |"
+              ' "${run_json}"
+            done
+          } >> "${GITHUB_STEP_SUMMARY}"
