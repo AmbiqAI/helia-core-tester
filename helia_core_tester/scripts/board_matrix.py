@@ -264,6 +264,8 @@ def run_matrix(args: argparse.Namespace) -> int:
         shared += ["--limit", str(args.limit)]
     if args.family:
         shared += ["--family", args.family]
+    if args.precision:
+        shared += ["--precision", args.precision]
     shared += args.extra
     parallel = not args.sequential and runs_parallel(legs)
     print(f"board_matrix: {len(legs)} boards, {'parallel' if parallel else 'sequential'}; logs in {out_dir / 'logs'}", file=sys.stderr)
@@ -320,6 +322,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--suite", default="int", help="int, float or both (default int).")
     run.add_argument("--limit", type=int, default=None, help="Cases per family.")
     run.add_argument("--family", default=None, help="One operator family.")
+    run.add_argument("--precision", choices=("fp16", "fp32"), default=None, help="Float precision shortcut.")
     run.add_argument("--pmu-counters", action="append", metavar="GROUP:SELECTION", help="Counters, hpx syntax (repeatable).")
     run.add_argument("--sequential", action="store_true", help="Run one board at a time.")
     run.add_argument("--out", type=Path, default=None, help="Summary directory.")

@@ -141,7 +141,8 @@ Run one selection on several boards and get one summary:
 ```bash
 uv run python -m helia_core_tester.scripts.board_matrix run \
   --board apollo510_evb:1160003180 --board apollo330mP_evb:1160003409 \
-  --suite int --limit 2 --pmu-counters mve:default [-- <hardware run args>]
+  --suite int --limit 2 --pmu-counters mve:default [--family F] [--precision fp16|fp32] \
+  [-- <hardware run args>]
 uv run python -m helia_core_tester.scripts.board_matrix summarize <bundle>... --out <dir>
 ```
 

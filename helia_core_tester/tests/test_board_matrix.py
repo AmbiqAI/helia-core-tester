@@ -247,3 +247,17 @@ def test_run_survives_launch_failure(tmp_path: Path, monkeypatch: pytest.MonkeyP
     (row,) = json.loads((out / "board_matrix.json").read_text())["boards"]
     assert row["status"] == "error" and row["exit_code"] == 1
     assert "launch failed: no python" in (out / "logs" / "apollo510_evb.log").read_text()
+
+
+def test_run_passes_precision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    commands = []
+
+    def fake_run(command, cwd, stdout, stderr, env):
+        commands.append(command)
+        return type("Done", (), {"returncode": 1})()
+
+    monkeypatch.setattr(board_matrix, "repo_root", lambda: tmp_path)
+    monkeypatch.setattr(board_matrix.subprocess, "run", fake_run)
+    board_matrix.main(["run", "--board", "apollo510_evb:1", "--suite", "float", "--precision", "fp32", "--out", str(tmp_path / "out")])
+    (command,) = commands
+    assert command[command.index("--precision") + 1] == "fp32"
