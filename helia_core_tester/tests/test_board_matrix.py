@@ -165,7 +165,9 @@ def test_run_writes_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
         "--pmu-counters", "mve:default", "--out", str(out), "--", "--fvp-gate", "off",
     ])
     assert status == 1
-    m55, m4 = commands
+    # Legs run in parallel; key by board.
+    by_board = {command[command.index("--board") + 1]: command for command in commands}
+    m55, m4 = by_board["apollo510_evb"], by_board["apollo3p_evb"]
     assert m55[-4:] == ["--pmu-counters", "mve:default", "--serial-no", "1"]
     assert "--pmu-counters" not in m4 and m4[-4:] == ["--fvp-gate", "off", "--serial-no", "2"]
     assert "--limit" in m55 and "2" in m55
