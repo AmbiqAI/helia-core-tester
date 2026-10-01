@@ -35,6 +35,7 @@ from .wire import (
     SessionPlan,
     TargetInfo,
     boot_line,
+    clock_mhz,
     decode_case_complete,
     decode_correctness_result,
     decode_error,
@@ -648,8 +649,8 @@ def check_core_clock(info: TargetInfo, expected_hz: int | None) -> None:
     """Refuse a wrong or unknown clock; old firmware passes."""
     if expected_hz is None or info.core_clock_hz is None or info.core_clock_hz == expected_hz:
         return
-    actual = f"{info.core_clock_hz / 1e6:g} MHz" if info.core_clock_hz else "unknown"
-    raise BootFailure(f"Board core clock {actual}, expected {expected_hz / 1e6:g} MHz.")
+    actual = clock_mhz(info.core_clock_hz) if info.core_clock_hz else "unknown"
+    raise BootFailure(f"Board core clock {actual}, expected {clock_mhz(expected_hz)}.")
 
 
 def read_target_info(transport: Transport) -> TargetInfo:

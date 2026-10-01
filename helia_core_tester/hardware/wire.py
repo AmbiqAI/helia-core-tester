@@ -88,11 +88,16 @@ class TargetInfo:
         return bool(self.capability_flags & CAP_PMU_ARMV8M)
 
 
+def clock_mhz(hz: int) -> str:
+    """Clock as "250 MHz"."""
+    return f"{hz / 1e6:g} MHz"
+
+
 def boot_line(info: TargetInfo | None) -> str:
     """Boot health as one short phrase."""
     if info is None or info.boot_status is None:
         return "not reported"
-    clock = f"{info.core_clock_hz / 1e6:g} MHz" if info.core_clock_hz else "clock unknown"
+    clock = clock_mhz(info.core_clock_hz) if info.core_clock_hz else "clock unknown"
     return f"status {info.boot_status}, core {clock}"
 
 
