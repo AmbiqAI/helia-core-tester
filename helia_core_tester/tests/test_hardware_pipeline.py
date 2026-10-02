@@ -526,7 +526,7 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
         "schema", "schema_version", "generated_at", "session_id", "board", "boot", "bundle", "totals", "timing",
         "selection", "github", "cases",
     }
-    assert encoded["boot"]["fp_mode"] == {"ahp": 0, "dn": 0, "fz": 0, "rmode": 0, "fz16": 0}
+    assert encoded["boot"] == {"status": 0, "core_clock_hz": 250_000_000, "fpscr_boot": 0x03040000, "fpscr": 0x00040000, "fp_mode": {"ahp": 0, "dn": 0, "fz": 0, "rmode": 0, "fz16": 0}}
     assert encoded["session_id"] == "apollo510_evb-20260912T000000Z"
     assert encoded["board"] == "apollo510_evb"
     assert encoded["bundle"].endswith("apollo510_evb-20260912T000000Z")

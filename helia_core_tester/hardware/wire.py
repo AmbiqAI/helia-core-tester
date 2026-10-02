@@ -105,7 +105,7 @@ def boot_line(info: TargetInfo | None) -> str:
 
 
 def fp_mode(value: int | None) -> dict | None:
-    """FPSCR control bits kernels read."""
+    """FPSCR control bits; match HCT_FPSCR_CONTROL_MASK."""
     if value is None:
         return None
     return {

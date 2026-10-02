@@ -158,19 +158,20 @@ static uint32_t hct_core_clock_hz(void)
 #endif
 }
 
-/* FPSCR control bits kernels branch on. */
+/* AHP, DN, FZ, RMode, FZ16; wire.fp_mode matches. */
 #define HCT_FPSCR_CONTROL_MASK ((1u << 26) | (1u << 25) | (1u << 24) | (3u << 22) | (1u << 19))
-/* Reset FPDSCR: IEEE, round to nearest. */
-#define HCT_FPSCR_MODE 0u
+/* LTPSIZE; M4 keeps these zero. */
+#define HCT_FPSCR_LTPSIZE_MASK (7u << 16)
 
 /* Pin FP mode; return boot FPSCR. */
 static uint32_t hct_pin_fpscr(uint32_t *pinned)
 {
 #if defined(__FPU_PRESENT) && (__FPU_PRESENT == 1U) && defined(__FPU_USED) && (__FPU_USED == 1U)
     const uint32_t boot = __get_FPSCR();
-    /* New FP contexts load FPDSCR. */
-    FPU->FPDSCR = (FPU->FPDSCR & ~HCT_FPSCR_CONTROL_MASK) | HCT_FPSCR_MODE;
-    __set_FPSCR((boot & ~HCT_FPSCR_CONTROL_MASK) | HCT_FPSCR_MODE);
+    /* Reset FPDSCR: IEEE, round to nearest. */
+    FPU->FPDSCR &= ~HCT_FPSCR_CONTROL_MASK;
+    /* Clear flags too, so readback is stable. */
+    __set_FPSCR(boot & HCT_FPSCR_LTPSIZE_MASK);
     __ISB();
     *pinned = __get_FPSCR();
     return boot;
