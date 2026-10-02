@@ -5,7 +5,8 @@ Reads the CONV_2D, DEPTHWISE_CONV_2D, FULLY_CONNECTED and AVERAGE_POOL_2D
 operators of int8 `.tflite` models and emits one s8 descriptor per unique layer
 shape. Weights stay random; only shapes, strides, padding and the fused
 activation carry over. Each descriptor is named after the first layer with that
-shape (`<stem>_mlperf_<model>_l<op index>_s8`); a comment lists the others.
+shape (`<stem>_mlperf_<model>_l<op index>_s8`) and keeps that layer's activation;
+a comment lists the other layers.
 The cases replace a marked block at the end of each operator's descriptor file.
 
 Usage, with M the helia-profiler checkout's tests/fixtures/mlperf_tiny
@@ -24,12 +25,15 @@ from pathlib import Path
 import yaml
 from ai_edge_litert import schema_py_generated as fb
 
+from helia_core_tester.generation.ops.catalog import get_operator_spec
+from helia_core_tester.generation.utils.litert_utils import load_litert_model
+
 _DESCRIPTOR_DIR = Path(__file__).resolve().parent.parent / "assets" / "descriptors"
 _OUTPUTS = {
-    "CONV_2D": ("ConvolutionFunctions", "convolve", "Convolve"),
-    "DEPTHWISE_CONV_2D": ("ConvolutionFunctions", "depthwise_conv", "DepthwiseConv"),
-    "FULLY_CONNECTED": ("FullyConnectedFunctions", "fully_connected", "FullyConnected"),
-    "AVERAGE_POOL_2D": ("PoolingFunctions", "avg_pool", "AvgPool"),
+    "CONV_2D": "Convolve",
+    "DEPTHWISE_CONV_2D": "DepthwiseConv",
+    "FULLY_CONNECTED": "FullyConnected",
+    "AVERAGE_POOL_2D": "AvgPool",
 }
 _OP_NAMES = {v: k for k, v in vars(fb.BuiltinOperator).items() if not k.startswith("_")}
 _ACT_NAMES = {fb.ActivationFunctionType.NONE: "NONE", fb.ActivationFunctionType.RELU: "RELU",
@@ -65,8 +69,7 @@ def layer_fields(op_name: str, opts, shapes: list[list[int]]) -> dict:
 
 def model_layers(tag: str, path: Path):
     """Yield (op name, layer label, fields) per kernel layer."""
-    model = fb.ModelT.InitFromPackedBuf(path.read_bytes(), 0)
-    graph = model.subgraphs[0]
+    model, graph = load_litert_model(str(path))
     for index, op in enumerate(graph.operators):
         code = model.operatorCodes[op.opcodeIndex]
         op_name = _OP_NAMES[max(code.builtinCode, code.deprecatedBuiltinCode)]
@@ -118,12 +121,15 @@ def main() -> None:
     for spec in args.models:
         tag, _, path = spec.partition("=")
         for op_name, label, fields in model_layers(tag, Path(path)):
-            seen = groups[op_name].setdefault(shape_key(fields), (label, fields, []))
-            if seen[0] != label:
-                seen[2].append(label)
-    for op_name, (family, stem, operator) in _OUTPUTS.items():
-        out = _DESCRIPTOR_DIR / family / f"{stem}.yaml"
-        replace_block(out, render(stem, operator, list(groups[op_name].values())))
+            key = shape_key(fields)
+            if key in groups[op_name]:
+                groups[op_name][key][2].append(label)
+            else:
+                groups[op_name][key] = (label, fields, [])
+    for op_name, operator in _OUTPUTS.items():
+        spec = get_operator_spec(operator)
+        out = _DESCRIPTOR_DIR / spec.descriptor_relpath
+        replace_block(out, render(spec.descriptor_stem, operator, list(groups[op_name].values())))
         print(f"{out.relative_to(_DESCRIPTOR_DIR)}: {len(groups[op_name])} cases")
 
 
