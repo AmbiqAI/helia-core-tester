@@ -111,12 +111,10 @@ def _work_fields(case) -> dict[str, Any]:
     """Work counts, per-unit cycles, prepare cycles."""
     work = case_work(case.case_bundle)
     median = case.statistics.median_cycles if case.samples else None
-    per_mac = per_unit(median, work["macs"])
-    per_op = per_unit(median, work["ops"])
     return {
         **work,
-        "cycles_per_mac": None if per_mac is None else round(per_mac, 4),
-        "cycles_per_op": None if per_op is None else round(per_op, 4),
+        "cycles_per_mac": per_unit(median, work["macs"]),
+        "cycles_per_op": per_unit(median, work["ops"]),
         "prepare_cycles": case.prepare_cycles,
     }
 

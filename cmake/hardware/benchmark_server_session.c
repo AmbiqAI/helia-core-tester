@@ -422,6 +422,18 @@ static void window_arm(void)
     hct_window.armed = true;
 }
 
+/* Kernel calls pause the running counter. */
+static void window_arm_inverted(void)
+{
+#ifdef HELIA_HARDWARE_BUILD
+    const uint32_t ctrl = DWT->CTRL;
+    hct_window.dwt_on = ctrl & ~DWT_CTRL_CYCCNTENA_Msk;
+    hct_window.dwt_off = ctrl;
+#endif
+    hct_window.pmu_mask = 0u;
+    hct_window.armed = true;
+}
+
 static void window_disarm(void)
 {
     hct_window.armed = false;
@@ -1178,25 +1190,16 @@ static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint
 /* Correctness run; DWT skips kernel calls. */
 static arm_cmsis_nn_status run_counting_prepare(hct_server_session_t *session)
 {
-#ifdef HELIA_HARDWARE_BUILD
     const hct_window_t saved = hct_window;
     arm_cmsis_nn_status status;
     uint32_t start;
     enable_dwt();
-    /* Inverted window: kernel calls pause DWT. */
-    hct_window.pmu_mask = 0u;
-    hct_window.dwt_on = DWT->CTRL & ~DWT_CTRL_CYCCNTENA_Msk;
-    hct_window.dwt_off = DWT->CTRL;
-    hct_window.armed = true;
+    window_arm_inverted();
     start = dwt_cycles();
     status = hct_run_kernel_once(session);
     session->prepare_cycles = dwt_cycles() - start;
     hct_window = saved;
     return status;
-#else
-    session->prepare_cycles = 0u;
-    return hct_run_kernel_once(session);
-#endif
 }
 
 static hctp_status_t handle_run_correctness(hct_server_session_t *session)

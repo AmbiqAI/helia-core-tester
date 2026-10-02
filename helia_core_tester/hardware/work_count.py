@@ -32,19 +32,16 @@ _ELEMENT_OPERATORS = frozenset({
 
 
 def _dims(bundle: CaseBundle, role: str) -> tuple[int, ...] | None:
-    blob = next((blob for blob in bundle.blobs if blob.role == role), None)
-    return None if blob is None else tuple(int(dim) for dim in blob.dimensions)
+    return next((blob.dimensions for blob in bundle.blobs if blob.role == role), None)
 
 
-def _case_macs(bundle: CaseBundle, operator: str) -> int | None:
+def _case_macs(bundle: CaseBundle, operator: str, output: tuple[int, ...] | None, scalars: dict[str, Any]) -> int | None:
     """Dense MACs, or None if shapes are missing."""
-    output = _dims(bundle, "expected_output")
     if operator == "BatchMatMul":
         lhs = _dims(bundle, "input_0")
         if output is None or lhs is None:
             return None
-        adj_x = bool(bundle.manifest.get("serialized_scalar_parameters", {}).get("adj_x", 0))
-        return prod(output) * (lhs[-2] if adj_x else lhs[-1])
+        return prod(output) * (lhs[-2] if scalars.get("adj_x") else lhs[-1])
     weights = _dims(bundle, "weights")
     if output is None or weights is None:
         return None
@@ -63,7 +60,7 @@ def case_work(bundle: CaseBundle) -> dict[str, int | None]:
     output = _dims(bundle, "expected_output")
     macs = ops = None
     if operator in _MAC_OPERATORS:
-        macs = _case_macs(bundle, operator)
+        macs = _case_macs(bundle, operator, output, scalars)
         ops = None if macs is None else 2 * macs
     elif operator in _POOL_OPERATORS and output is not None and "pool_h" in scalars:
         ops = prod(output) * int(scalars["pool_h"]) * int(scalars["pool_w"])
@@ -75,7 +72,7 @@ def case_work(bundle: CaseBundle) -> dict[str, int | None]:
 
 
 def per_unit(cycles: float | None, units: int | None) -> float | None:
-    """`cycles / units`, or None when undefined."""
+    """`cycles / units` to 4 places, or None."""
     if cycles is None or not units:
         return None
-    return cycles / units
+    return round(cycles / units, 4)

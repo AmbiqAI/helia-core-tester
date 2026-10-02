@@ -25,9 +25,8 @@ from pathlib import Path
 
 from helia_core_tester.hardware.result_bundle import CASE_SUMMARY_BASE_FIELDS, CASE_SUMMARY_FLAG_FIELDS, CASE_SUMMARY_WORK_FIELDS
 
-# These fixed columns are measurements.
-_MEASURED_COLUMNS = {"median_cycles", "prepare_cycles"}
-_NON_COUNTER_COLUMNS = (set(CASE_SUMMARY_BASE_FIELDS) | set(CASE_SUMMARY_WORK_FIELDS) | set(CASE_SUMMARY_FLAG_FIELDS)) - _MEASURED_COLUMNS
+# median_cycles is the one gated base field.
+_NON_COUNTER_COLUMNS = (set(CASE_SUMMARY_BASE_FIELDS) | set(CASE_SUMMARY_WORK_FIELDS) | set(CASE_SUMMARY_FLAG_FIELDS)) - {"median_cycles"}
 _FLAG_COLUMNS = (("overflow_detected", "true", "overflow"), ("valid_for_regression", "false", "invalid"), ("comparison_passed", "false", "mismatch"))
 
 
