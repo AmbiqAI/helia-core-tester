@@ -4821,10 +4821,9 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
 '''
 
 
-# Ordered list -- rendering emits function bodies in this order. `compute_convolve_output_dims`
-# is a private helper of `run_convolve_once` (not a dispatched adapter itself, no scalar_fields
-# of its own beyond what run_convolve_once already declares) but lives in this same generated
-# block since it's only ever called from there.
+# Ordered list -- rendering emits function bodies in this order. Entries with no
+# kernel_ids (`compute_convolve_output_dims`, `place_weight_sums`) are private helpers
+# of the convolution adapters, not dispatched adapters themselves.
 FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
     FirmwareAdapterSpec(
         label="ConvolutionFunctions/Convolve (helper)",

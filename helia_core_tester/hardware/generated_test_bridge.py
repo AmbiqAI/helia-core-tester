@@ -582,6 +582,11 @@ def _calculate_depthwise_conv_s4_scratch_bytes(
     return 0
 
 
+def _with_weight_sums(scratch: int, channels: int) -> int:
+    """Mirror place_weight_sums: aligned int32 sums."""
+    return _align_up(int(scratch), 16) + channels * 4
+
+
 def _depthwise_s8_scratch_bytes(input_dims: dict[str, int], filter_dims: dict[str, int], output_dims: dict[str, int]) -> int:
     """Bound wrapper scratch plus weight sums."""
     scratch = TemplateContextBuilder.calculate_depthwise_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
@@ -589,7 +594,7 @@ def _depthwise_s8_scratch_bytes(input_dims: dict[str, int], filter_dims: dict[st
     if input_dims["c"] == 1:
         conv = TemplateContextBuilder.calculate_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
         scratch = max(scratch, conv + _shape_product(tuple(filter_dims.values())))
-    return _align_up(int(scratch), 16) + output_dims["c"] * 4
+    return _with_weight_sums(scratch, output_dims["c"])
 
 
 def discover_generated_tests(
@@ -1006,7 +1011,7 @@ def _build_convolve_case(
             input_dims_dict, filter_dims_dict, output_dims_dict, output_dtype=activation_dtype
         )
         if activation_dtype == "S8":
-            scratch_bytes = _align_up(int(scratch_bytes), 16) + output_channels * 4
+            scratch_bytes = _with_weight_sums(scratch_bytes, output_channels)
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
