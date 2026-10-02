@@ -169,6 +169,10 @@ the full catalog every night at 05:00 UTC on the lab runners, one job per board
 on PMU boards), and uploads each board's result bundle with the `--json`
 document as `hardware-nightly-run.json` (schemas and version policy:
 `docs/performance-streaming-design.md`, "Result bundle").
+Each board job then runs a second leg under the same board lock, built from
+ns-cmsis-nn `main` resolved to one SHA at plan time (`-f cmsis_nn_ref=<branch,
+tag or SHA>` swaps it); it uploads as `hct-main-hardware-<board>-...`
+(`hct-ref-hardware-...` for any other ref) with session `nightly-main-<run>-<board>`.
 `gh workflow run hardware-nightly.yml -f boards=apollo510_evb -f limit=2` runs
 it by hand.
 

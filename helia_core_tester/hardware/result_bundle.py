@@ -59,7 +59,9 @@ def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
     from .firmware_build import built_record, nsx_app_dir
     from .nsx_app import CMSIS_NN_MODULE, saved_options
 
-    kernels: dict[str, Any] = dict.fromkeys(("ref", "commit", "root", "root_head", "root_dirty", "tree_hash"))
+    kernels: dict[str, Any] = dict.fromkeys(
+        ("ref", "ref_kind", "commit", "root", "root_head", "root_dirty", "tree_hash")
+    )
     provenance: dict[str, Any] = {
         "options": None, "kernels": kernels, "neuralspotx_version": None, "nsx_lock_sha256": None,
         "modules": None, "toolchain": None,
@@ -81,7 +83,9 @@ def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
         provenance["options"] = json.loads(options.to_json())
         if options.cmsis_nn_root is None:
             kernels["ref"] = options.cmsis_nn_ref
+            kernels["ref_kind"] = "explicit" if options.cmsis_nn_ref_explicit else "pinned"
         else:
+            kernels["ref_kind"] = "local"
             kernels["root"] = str(options.cmsis_nn_root)
             dirty = built.get("root_dirty")
             kernels["root_head"] = _text(built.get("root_head"))

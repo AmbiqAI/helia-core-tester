@@ -92,7 +92,7 @@ def test_pinned_ref_build_is_stamped(tmp_path: Path) -> None:
     build = manifest["build"]
     tree = nsx_cli.tree_hash(kernel_dir(nsx_app_dir(build_dir), AppOptions()))
     assert build["kernels"] == {
-        "ref": CMSIS_NN_REF, "commit": COMMIT, "root": None, "root_head": None, "root_dirty": None, "tree_hash": tree,
+        "ref": CMSIS_NN_REF, "ref_kind": "pinned", "commit": COMMIT, "root": None, "root_head": None, "root_dirty": None, "tree_hash": tree,
     }
     assert build["options"]["requantize_inline_asm"] is False
     assert build["options"]["cmsis_nn_root"] is None
@@ -117,6 +117,17 @@ def _git_checkout(root: Path) -> str:
     subprocess.run([*git, "add", "-A"], check=True)
     subprocess.run([*git, "commit", "-qm", "init"], check=True)
     return subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def test_explicit_ref_is_stamped(tmp_path: Path) -> None:
+    build_dir = tmp_path / "build"
+    _fake_build(build_dir, AppOptions(cmsis_nn_ref=COMMIT, cmsis_nn_ref_explicit=True))
+
+    kernels = build_provenance(build_dir)[0]["kernels"]
+
+    assert kernels["ref"] == COMMIT
+    assert kernels["ref_kind"] == "explicit"
+    assert kernels["commit"] == COMMIT
 
 
 def test_toolchain_is_the_configured_compiler(tmp_path: Path, monkeypatch) -> None:
@@ -148,6 +159,7 @@ def test_local_root_records_build_checkout(tmp_path: Path, edit: str, dirty: boo
     kernels = build_provenance(build_dir)[0]["kernels"]
 
     assert kernels["ref"] is None
+    assert kernels["ref_kind"] == "local"
     assert kernels["root"] == str(root.resolve())
     assert kernels["root_head"] == head
     assert kernels["root_dirty"] is dirty
@@ -179,7 +191,7 @@ def test_missing_records_leave_nulls(tmp_path: Path, with_dir: bool) -> None:
     manifest = _manifest(bundle_root)
     assert manifest["build"] == {
         "options": None,
-        "kernels": dict.fromkeys(("ref", "commit", "root", "root_head", "root_dirty", "tree_hash")),
+        "kernels": dict.fromkeys(("ref", "ref_kind", "commit", "root", "root_head", "root_dirty", "tree_hash")),
         "neuralspotx_version": None,
         "nsx_lock_sha256": None,
         "modules": None,

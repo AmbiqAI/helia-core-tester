@@ -421,7 +421,9 @@ Key files:
 `session_manifest.json` (`hct.hardware.session_manifest`) records the build in
 `build`: kernel source, NSX version, `nsx.lock` digest, every locked module
 (`modules`: name, project, kind, revision, tag, commit, url) and the ARM GCC that
-built the image (`toolchain`). `hardware run --json` prints
+built the image (`toolchain`). `build.kernels.ref_kind` is `pinned` (the tester's
+ns-cmsis-nn pin), `explicit` (`--cmsis-nn-ref`) or `local` (`--cmsis-nn-root`);
+`build.kernels.commit` is the locked commit. `hardware run --json` prints
 `hct.hardware.nightly_run`: totals and cases plus `generated_at`, the
 `selection` the run used and the `github` run (null outside Actions); the nightly
 saves it as `hardware-nightly-run.json` beside the bundle. `selection` records
