@@ -183,7 +183,7 @@ firmware clears AHP, DN, FZ, RMode and FZ16 in FPDSCR, and sets FPSCR to its LTP
 field alone (control bits and sticky flags cleared): the reset FPDSCR value, IEEE with
 round to nearest. No NSX, HAL or runtime code sets these bits, so without
 the pin kernels inherit the secure boot ROM's state, which differs per SoC (Apollo510
-leaves FZ=0 DN=0; Apollo330P leaves FZ=1 DN=1 in FPSCR only, with FPDSCR still 0),
+leaves FZ=0 DN=0; Apollo330P leaves FZ=1 DN=1 in FPSCR only, with FPDSCR control bits still 0),
 and `arm_reduce_sum_f32` takes its MVE path only when FZ=1. The host stamps both
 values and the decoded control bits (`fp_mode`) in the manifest `boot` record; the
 board matrix shows the pinned `fpscr`. Batches must report the same pinned `fpscr`.
