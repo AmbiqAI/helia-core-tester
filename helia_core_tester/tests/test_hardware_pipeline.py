@@ -530,8 +530,11 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
     assert encoded["totals"] == {"ran": 1, "passed": 1, "failed": 0, "skipped": 1}
     assert encoded["timing"] == timing
     ran, skip = encoded["cases"]
-    assert set(ran) == {"case_id", "passed", "median_cycles", "valid_for_regression", "skipped_reason"}
-    assert ran == {"case_id": "abs_json", "passed": True, "median_cycles": ran["median_cycles"], "valid_for_regression": True, "skipped_reason": None}
+    assert set(ran) == {"case_id", "passed", "median_cycles", "valid_for_regression", "max_abs_diff", "skipped_reason"}
+    assert ran == {
+        "case_id": "abs_json", "passed": True, "median_cycles": ran["median_cycles"], "valid_for_regression": True,
+        "max_abs_diff": 0.0, "skipped_reason": None,
+    }
     assert isinstance(ran["median_cycles"], float)
     assert skip["case_id"] == "conv_x" and skip["passed"] is None and skip["median_cycles"] is None
     assert skip["skipped_reason"].startswith("operator='Foo' is not bridgeable")
@@ -569,6 +572,7 @@ def test_json_summary_identifies_its_schema(tmp_path: Path, monkeypatch) -> None
     assert encoded["selection"] == {
         "suite": "float", "limit": 2, "family": "ActivationFunctions", "test_name": None, "precision": "f32",
         "pmu_counters": {"cpu": "all"}, "fvp_gate": "strict",
+        "compare": {"strict": False, "golden_from": None},
     }
     assert encoded["github"] is None
 
@@ -734,6 +738,47 @@ def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeyp
     # Bridged exactly once: the preview list is what the session runner gets.
     assert bridged == ["bridge"]
     assert seen["bundles"] is preview[0] and outcome.skipped is preview[1]
+
+
+def test_strict_compare_drops_int_tolerance(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.hardware import hardware_pipeline
+    from helia_core_tester.hardware.case_bundle import CaseBundle
+
+    seen: dict = {}
+    tolerant = CaseBundle(tmp_path, tmp_path / "m.json", {
+        "case_id": "conv", "timing": {"samples": 5}, "correctness_comparison": {"mode": "tolerant_int", "tolerance": 1},
+    }, ())
+    monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([tolerant], []))
+    monkeypatch.setattr(
+        "helia_core_tester.hardware.session_runner.run_case_bundles",
+        lambda repo_root, bundles, **kwargs: (seen.update(kwargs, bundles=bundles), (object(), tmp_path))[1],
+    )
+    build_dir = tmp_path / "bd"
+    _write_elf(build_dir, b"fw", "hct-strict")
+    hardware_pipeline.stream_generated_tests(
+        tmp_path, BOARD, 5, build_dir=build_dir, options=StreamOptions(strict_compare=True), echo=lambda _msg: None,
+    )
+    assert [bundle.comparison for bundle in seen["bundles"]] == [{"mode": "exact_int"}]
+    assert seen["compare"] == {"strict": True, "golden_from": None}
+    assert tolerant.comparison["mode"] == "tolerant_int"
+
+
+def test_golden_from_judges_against_past_output(tmp_path: Path) -> None:
+    from helia_core_tester.hardware.case_bundle import blob_numpy, golden_bundle
+
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_gold").manifest_path)
+    golden_dir = tmp_path / "past"
+    with pytest.raises(RuntimeError, match="No usable golden output for abs_gold"):
+        golden_bundle(bundle, golden_dir)
+    (golden_dir / "outputs").mkdir(parents=True)
+    past = blob_numpy(bundle.expected_output).copy()
+    (golden_dir / "outputs" / "abs_gold.bin").write_bytes(past.tobytes())
+    assert HostSession(FakeTargetTransport()).run_many([golden_bundle(bundle, golden_dir)]).cases[0].comparison.passed
+    past.flat[0] += 1
+    (golden_dir / "outputs" / "abs_gold.bin").write_bytes(past.tobytes())
+    case = HostSession(FakeTargetTransport()).run_many([golden_bundle(bundle, golden_dir)]).cases[0]
+    assert (case.comparison.passed, case.comparison.diff_count, case.comparison.max_abs_diff) == (False, 1, 1.0)
 
 
 def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, monkeypatch) -> None:

@@ -258,6 +258,7 @@ def resolved_selection(repo_root: Path, board: BoardSpec, options: "StreamOption
         "precision": generation_precision(repo_root, board, options),
         "pmu_counters": options.pmu_counters,
         "fvp_gate": options.fvp_gate or DEFAULT_GATE,
+        "compare": options.compare_record(),
     }
 
 
@@ -273,6 +274,17 @@ class StreamOptions:
     session_id: Optional[str] = None
     float_precision: Optional[str] = None
     """Config.float_precision for the generate step when `--precision` was given (f16/f32)."""
+    strict_compare: bool = False
+    """Integer outputs must match exactly: no tolerance."""
+    golden_from: Optional[Path] = None
+    """Result bundle whose outputs replace the goldens; implies strict."""
+
+    def compare_record(self) -> dict[str, Any]:
+        """How outputs get judged, for the bundle."""
+        return {
+            "strict": self.strict_compare or self.golden_from is not None,
+            "golden_from": str(self.golden_from) if self.golden_from else None,
+        }
 
 
 def fit_to_board(board: BoardSpec, options: StreamOptions, *, explicit_pmu: bool) -> StreamOptions:
@@ -325,6 +337,7 @@ def stream_generated_tests(
     can be checked against it; a missing stamp is an error unless
     `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
     """
+    from .case_bundle import golden_bundle, strict_bundle
     from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error, run_case_bundles
 
     session_id = options.session_id or default_session_id(board)
@@ -353,6 +366,10 @@ def stream_generated_tests(
         raise no_bridgeable_cases_error(
             skipped, cpu=board.cpu, family=options.family, name_filter=options.test_name, suite=options.suite,
         )
+    if options.golden_from is not None:
+        bundles = [golden_bundle(bundle, options.golden_from) for bundle in bundles]
+    elif options.strict_compare:
+        bundles = [strict_bundle(bundle) for bundle in bundles]
     # The live progress printer aligns its [N/total] counter and case_id columns from
     # the first printed line instead of widening them as longer names show up mid-run.
     id_width = max(len(b.case_id) for b in bundles)
@@ -390,6 +407,7 @@ def stream_generated_tests(
         build_dir=build_dir,
         on_case_complete=on_case_complete,
         expected_build_id=expected_build_id,
+        compare=options.compare_record(),
     )
     timing = {
         "stream_s": round(time.monotonic() - stream_started, 4),

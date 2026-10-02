@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -11,6 +11,7 @@ import zlib
 
 import numpy as np
 
+from .comparison import strict_comparison
 from .pathutil import write_text_lf
 
 from helia_core_tester.generation.io.descriptors import load_descriptor
@@ -113,6 +114,24 @@ class CaseBundle:
 
     def blob_by_role(self, role: str) -> BlobInfo:
         return next(blob for blob in self.blobs if blob.role == role)
+
+
+def strict_bundle(bundle: CaseBundle) -> CaseBundle:
+    """The bundle, judged with no int tolerance."""
+    manifest = {**bundle.manifest, "correctness_comparison": strict_comparison(bundle.comparison)}
+    return replace(bundle, manifest=manifest)
+
+
+def golden_bundle(bundle: CaseBundle, golden_dir: Path) -> CaseBundle:
+    """The bundle, judged against a past run's output."""
+    if bundle.expected_status_code is not None:
+        return bundle
+    path = golden_dir / "outputs" / f"{bundle.case_id}.bin"
+    expected = bundle.expected_output
+    if not path.is_file() or path.stat().st_size != expected.byte_length:
+        raise RuntimeError(f"No usable golden output for {bundle.case_id} in {golden_dir}")
+    blobs = tuple(replace(blob, path=path) if blob is expected else blob for blob in bundle.blobs)
+    return replace(strict_bundle(bundle), blobs=blobs)
 
 
 

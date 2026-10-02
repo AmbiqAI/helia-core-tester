@@ -365,9 +365,21 @@ _PMU_COUNTERS_HELP = (
     "Default: cpu:default memory:default mve:default."
 )
 _PMU_GROUPS_HELP = "Deprecated alias for --pmu-counters GROUP:default per listed group."
+_STRICT_HELP = (
+    "Require bit-exact integer outputs: ignore per-operator LSB tolerances. "
+    "Every bundle records max_abs_diff and diff_count either way."
+)
+_GOLDEN_FROM_HELP = (
+    "Result bundle dir whose outputs/ become the goldens (self-golden). "
+    "Implies --strict-compare: every int case must match that run bit for bit; "
+    "float cases keep their tolerance. Refuses a case the bundle lacks."
+)
 
 
-def _stream_options(spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id):
+def _stream_options(
+    spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id, strict_compare,
+    golden_from,
+):
     from .hardware_pipeline import (
         StreamOptions, apply_precision, fit_to_board, float_precision_for, resolve_pmu_options, validate_fvp_gate,
     )
@@ -383,7 +395,7 @@ def _stream_options(spec, suite, family, test_name, limit, precision, pmu_counte
         options = StreamOptions(
             suite=suite, family=family, test_name=test_name, limit=limit,
             pmu_counters=selection, fvp_gate=fvp_gate, session_id=session_id,
-            float_precision=float_precision_for(precision),
+            float_precision=float_precision_for(precision), strict_compare=strict_compare, golden_from=golden_from,
         )
         return fit_to_board(spec, options, explicit_pmu=bool(pmu_counters) or pmu_groups is not None)
     except ValueError as exc:
@@ -429,6 +441,10 @@ def stream(
     pmu_counters: Optional[list[str]] = typer.Option(None, "--pmu-counters", help=_PMU_COUNTERS_HELP),
     pmu_groups: Optional[str] = typer.Option(None, "--pmu-groups", help=_PMU_GROUPS_HELP, hidden=True),
     fvp_gate: Optional[str] = typer.Option(None, "--fvp-gate", help=_FVP_GATE_HELP),
+    strict_compare: bool = typer.Option(False, "--strict-compare", help=_STRICT_HELP),
+    golden_from: Optional[Path] = typer.Option(
+        None, "--golden-from", help=_GOLDEN_FROM_HELP, exists=True, file_okay=False, resolve_path=True,
+    ),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP + " Must hold the flashed firmware's ELF."),
     allow_unverified_firmware: bool = typer.Option(False, "--allow-unverified-firmware", help=_ALLOW_UNVERIFIED_HELP),
@@ -452,7 +468,10 @@ def stream(
     # Options first, probe last: a bad flag combination must fail with its own
     # message, not with whatever probe enumeration happens to hit.
     spec = _board(board)
-    options = _stream_options(spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
+    options = _stream_options(
+        spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id, strict_compare,
+        golden_from,
+    )
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
@@ -478,6 +497,10 @@ def run(
     pmu_counters: Optional[list[str]] = typer.Option(None, "--pmu-counters", help=_PMU_COUNTERS_HELP),
     pmu_groups: Optional[str] = typer.Option(None, "--pmu-groups", help=_PMU_GROUPS_HELP, hidden=True),
     fvp_gate: Optional[str] = typer.Option(None, "--fvp-gate", help=_FVP_GATE_HELP),
+    strict_compare: bool = typer.Option(False, "--strict-compare", help=_STRICT_HELP),
+    golden_from: Optional[Path] = typer.Option(
+        None, "--golden-from", help=_GOLDEN_FROM_HELP, exists=True, file_okay=False, resolve_path=True,
+    ),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     skip_generate: bool = typer.Option(False, "--skip-generate", help="Reuse existing artifacts/generated_tests instead of regenerating."),
     skip_flash: bool = typer.Option(False, "--skip-flash", help="Skip build+flash and reuse whatever firmware is already running on the board (its TARGET_INFO build id is still checked against the build dir)."),
@@ -502,7 +525,10 @@ def run(
     if skip_flash and force_flash:
         _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
-    options = _stream_options(spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
+    options = _stream_options(
+        spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id, strict_compare,
+        golden_from,
+    )
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
     # Neither builds nor generates: nothing to resolve.
     streams_only = skip_generate and skip_flash

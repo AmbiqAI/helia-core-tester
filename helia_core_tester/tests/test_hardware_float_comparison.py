@@ -12,7 +12,7 @@ import yaml
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.ops.BasicMathFunctions.abs import OpAbs
 from helia_core_tester.hardware.case_bundle import blob_numpy, load_case_bundle
-from helia_core_tester.hardware.comparison import compare_output
+from helia_core_tester.hardware.comparison import compare_output, strict_comparison
 from helia_core_tester.hardware.fake_target import (
     FakeKernelAdapter,
     FakeTargetTransport,
@@ -58,6 +58,17 @@ def test_finite_tolerance_and_other_modes():
         assert (
             compare_output(np.array(actual), np.array(expected), mode).passed == passed
         )
+
+
+def test_diffs_recorded_within_tolerance():
+    actual, expected = np.array([3, 5, -2], dtype=np.int8), np.array([3, 4, -1], dtype=np.int8)
+    tolerant = compare_output(actual, expected, {"mode": "tolerant_int", "tolerance": 1})
+    assert (tolerant.passed, tolerant.mismatch_count, tolerant.diff_count, tolerant.max_abs_diff) == (True, 0, 2, 1.0)
+    strict = compare_output(actual, expected, strict_comparison({"mode": "tolerant_int", "tolerance": 1}))
+    assert (strict.passed, strict.mismatch_count, strict.diff_count) == (False, 2, 2)
+    assert strict_comparison(FLOAT) == FLOAT
+    loose = compare_output(np.array([1.125, 2.0]), np.array([1.0, 2.0]), {"mode": "float", "atol": 0.125, "rtol": 0})
+    assert (loose.passed, loose.diff_count) == (True, 1)
 
 
 def test_mask_precedes_classification_and_metrics():

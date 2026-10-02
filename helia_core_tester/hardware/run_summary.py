@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import re
 import sys
@@ -54,7 +55,7 @@ def _format_case_line(case, *, id_width: int = 0) -> str:
     if case.rejection is not None:
         line += f"  {case.rejection.reason}"
     elif not passed:
-        line += f"  mismatches={case.comparison.mismatch_count}"
+        line += f"  mismatches={case.comparison.mismatch_count}  max_abs_diff={case.comparison.max_abs_diff:g}"
     return line
 
 
@@ -227,6 +228,7 @@ def build_json_summary(
                 "passed": ok,
                 "median_cycles": float(case.statistics.median_cycles),
                 "valid_for_regression": bool(case.statistics.valid_for_regression),
+                "max_abs_diff": case.comparison.max_abs_diff if math.isfinite(case.comparison.max_abs_diff) else None,
                 "skipped_reason": None,
             }
         )
@@ -237,6 +239,7 @@ def build_json_summary(
                 "passed": None,
                 "median_cycles": None,
                 "valid_for_regression": None,
+                "max_abs_diff": None,
                 "skipped_reason": _clean_skip_reason(test.name, reason),
             }
         )

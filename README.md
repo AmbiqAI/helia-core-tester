@@ -50,7 +50,16 @@ instead, with the human output on stderr; the exit code is non-zero on any
 correctness failure). Useful narrowing flags: `--suite int|float|both`,
 `--family`, `--test-name`, `--limit`, `--precision fp16|fp32` (float-only shortcut,
 not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|strict`,
-`--skip-generate`, `--skip-flash`, `--force-flash`. The steps are also available individually as
+`--skip-generate`, `--skip-flash`, `--force-flash`.
+
+Correctness: int cases use the per-operator LSB tolerance in
+`generation/io/dtypes.py`, and every case records `max_abs_diff` and `diff_count`
+(elements differing at all) in `case_summary.csv` and `cases.json`.
+`--strict-compare` drops the tolerance so int outputs must match the golden
+exactly. `--golden-from <bundle dir>` judges each case against that past run's
+`outputs/` instead (bit-exact for int, the usual tolerance for float), which pins
+the current kernels' rounding where the TFLite golden differs by design. The
+session manifest's `compare` block records which mode ran. The steps are also available individually as
 `hardware build`, `hardware flash [--force]`, `hardware stream` and
 `hardware memory-report`.
 

@@ -16,6 +16,15 @@ class ComparisonResult:
     mismatch_count: int
     max_abs_diff: float
     mode: str
+    # Elements off the golden, tolerance aside.
+    diff_count: int = 0
+
+
+def strict_comparison(comparison: dict[str, Any]) -> dict[str, Any]:
+    """Drop the integer tolerance: exact match."""
+    if comparison.get("mode") == "tolerant_int":
+        return {"mode": "exact_int"}
+    return dict(comparison)
 
 
 def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_comparison: dict[str, Any]) -> ComparisonResult:
@@ -29,13 +38,12 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
         raise ValueError(f"Shape mismatch: actual {actual_np.shape}, expected {expected_np.shape}")
 
     mode = str(comparison["mode"])
-    if mode == "exact_int":
-        diffs = actual_np != expected_np
-        max_abs_diff = float(np.max(np.abs(actual_np.astype(np.int64) - expected_np.astype(np.int64)))) if actual_np.size else 0.0
-    elif mode == "tolerant_int":
-        tolerance = int(comparison.get("tolerance", 0))
+    diff_count = None
+    if mode in ("exact_int", "tolerant_int"):
+        tolerance = int(comparison.get("tolerance", 0)) if mode == "tolerant_int" else 0
         abs_diff = np.abs(actual_np.astype(np.int64) - expected_np.astype(np.int64))
         diffs = abs_diff > tolerance
+        diff_count = int(np.count_nonzero(abs_diff))
         max_abs_diff = float(np.max(abs_diff)) if actual_np.size else 0.0
     elif mode == "float":
         atol = float(comparison.get("atol", 0.0))
@@ -58,6 +66,7 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
         abs_diff = np.abs(actual_float[finite] - expected_float[finite])
         tol = atol + rtol * np.abs(expected_float[finite])
         max_abs_diff = float("inf") if np.any(diffs) else (float(np.max(abs_diff)) if abs_diff.size else 0.0)
+        diff_count = int(np.count_nonzero(diffs) + np.count_nonzero(abs_diff))
         diffs[finite] = abs_diff > tol
     elif mode == "bool":
         diffs = actual_np.astype(bool) != expected_np.astype(bool)
@@ -75,6 +84,7 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
         mismatch_count=mismatch_count,
         max_abs_diff=max_abs_diff,
         mode=mode,
+        diff_count=mismatch_count if diff_count is None else diff_count,
     )
 
 
@@ -91,4 +101,5 @@ def compare_status(actual_status: int, descriptor_or_comparison: dict[str, Any])
         mismatch_count=mismatch_count,
         max_abs_diff=float(abs(int(actual_status) - expected_status)),
         mode=mode,
+        diff_count=mismatch_count,
     )
