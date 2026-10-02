@@ -169,7 +169,7 @@ def symbol_at(symbols: list[tuple[int, str, str]], address: int) -> str | None:
 _CONSISTENT_FIELDS = (
     "build_id", "catalog_hash", "board_id", "target_cpu", "capability_flags", "pmu_counter_slots",
     "max_rx_payload", "max_cases_per_session", "max_passes", "runtime_arena_capacity",
-    "boot_status", "core_clock_hz",
+    "boot_status", "core_clock_hz", "fpscr_boot", "fpscr",
 )
 
 

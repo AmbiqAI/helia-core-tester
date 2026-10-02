@@ -150,6 +150,10 @@ hctp_status_t hct_build_target_info_frame(uint32_t session_id,
     if (status != HCTP_STATUS_OK) return status;
     status = write_u32(payload, sizeof(payload), &offset, boot->core_clock_hz);
     if (status != HCTP_STATUS_OK) return status;
+    status = write_u32(payload, sizeof(payload), &offset, boot->fpscr_boot);
+    if (status != HCTP_STATUS_OK) return status;
+    status = write_u32(payload, sizeof(payload), &offset, boot->fpscr);
+    if (status != HCTP_STATUS_OK) return status;
 
     return wrap_frame(HCTP_MSG_TARGET_INFO, session_id, sequence_id, HCTP_FLAG_NONE, payload, offset, frame_bytes, frame_capacity, frame_length);
 }

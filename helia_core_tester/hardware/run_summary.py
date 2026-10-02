@@ -169,7 +169,9 @@ def print_skipped_summary(skipped: list[tuple], *, err: bool = False) -> None:
 
 def print_run_report(result, skipped: list[tuple], bundle: Path, *, err: bool = False) -> list[str]:
     """The human report for `hardware run`/`hardware stream`. Returns the failed case ids."""
-    typer.echo(f"\nTarget boot: {boot_line(result.target_info)}", err=err)
+    info = result.target_info
+    fpscr = f", FPSCR {info.fpscr:#010x}" if info and info.fpscr is not None else ""
+    typer.echo(f"\nTarget boot: {boot_line(info)}{fpscr}", err=err)
     typer.echo("\nFinal per-case results:", err=err)
     passed_count, failed_case_ids = print_case_results(result.cases, err=err)
     if skipped:

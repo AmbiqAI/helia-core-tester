@@ -476,7 +476,10 @@ def test_session_checks_core_clock(tmp_path: Path, boot_status, clock_hz, refusa
 
 @pytest.mark.parametrize(
     "boot_status, expected",
-    [(0, {"status": 0, "core_clock_hz": 250_000_000}), (None, {"status": None, "core_clock_hz": None})],
+    [
+        (0, {"status": 0, "core_clock_hz": 250_000_000, "fpscr_boot": 0x03040000, "fpscr": 0x00040000, "fp_mode": {"ahp": 0, "dn": 0, "fz": 0, "rmode": 0, "fz16": 0}}),
+        (None, {"status": None, "core_clock_hz": None, "fpscr_boot": None, "fpscr": None, "fp_mode": None}),
+    ],
     ids=["healthy", "old-firmware"],
 )
 def test_boot_health_is_stamped_in_bundle(tmp_path: Path, boot_status, expected, capsys) -> None:
@@ -486,7 +489,7 @@ def test_boot_health_is_stamped_in_bundle(tmp_path: Path, boot_status, expected,
     bundle_root = write_result_bundle(result, session_id="boot", output_root=tmp_path, memory_report={}, kernel_catalog=[])
     assert json.loads((bundle_root / "session_manifest.json").read_text())["boot"] == expected
     print_run_report(result, [], bundle_root)
-    line = "status 0, core 250 MHz" if boot_status == 0 else "not reported"
+    line = "status 0, core 250 MHz, FPSCR 0x00040000" if boot_status == 0 else "not reported"
     assert f"Target boot: {line}" in capsys.readouterr().out
 
 
@@ -523,7 +526,7 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
         "schema", "schema_version", "generated_at", "session_id", "board", "boot", "bundle", "totals", "timing",
         "selection", "github", "cases",
     }
-    assert encoded["boot"] == {"status": 0, "core_clock_hz": 250_000_000}
+    assert encoded["boot"]["fp_mode"] == {"ahp": 0, "dn": 0, "fz": 0, "rmode": 0, "fz16": 0}
     assert encoded["session_id"] == "apollo510_evb-20260912T000000Z"
     assert encoded["board"] == "apollo510_evb"
     assert encoded["bundle"].endswith("apollo510_evb-20260912T000000Z")
