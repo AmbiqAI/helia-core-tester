@@ -54,11 +54,13 @@ not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|s
 
 Correctness: int cases use the per-operator LSB tolerance in
 `generation/io/dtypes.py`, and every case records `max_abs_diff` and `diff_count`
-(elements differing at all) in `case_summary.csv` and `cases.json`.
+(elements differing at all) in `case_summary.csv` and `cases.json`; both are null
+when unknown (unvalidated outputs, wrong output size).
 `--strict-compare` drops the tolerance so int outputs must match the golden
 exactly. `--golden-from <bundle dir>` judges each case against that past run's
 `outputs/` instead (bit-exact for int, the usual tolerance for float), which pins
-the current kernels' rounding where the TFLite golden differs by design. It refuses cases that run failed unless `--golden-allow-failed` is passed. The
+the current kernels' rounding where the TFLite golden differs by design. It refuses cases that run failed unless `--golden-allow-failed` is passed,
+and lists every missing or wrong-sized output before flashing. The
 session manifest's `compare` block records which mode ran. The steps are also available individually as
 `hardware build`, `hardware flash [--force]`, `hardware stream` and
 `hardware memory-report`.

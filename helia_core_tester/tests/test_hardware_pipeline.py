@@ -637,7 +637,7 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
         order.append(f"flash:{serial}:{build_dir.relative_to(tmp_path)}:force={force}")
         return firmware_build.FlashDecision(True, "abc", "test")
 
-    def _stream(repo_root, spec, serial, *, build_dir, options, echo, progress_to_stderr, allow_unverified_firmware):
+    def _stream(repo_root, spec, serial, *, build_dir, options, echo, progress_to_stderr, allow_unverified_firmware, prepared):
         order.append(f"stream:{options.suite}:{options.test_name}:unverified={allow_unverified_firmware}")
         return hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[])
 
@@ -812,6 +812,33 @@ def test_golden_from_refuses_failed_cases(tmp_path: Path, monkeypatch, record) -
     assert "bundles" not in seen
     stream(golden_allow_failed=True)
     assert [b.case_id for b in seen["bundles"]] == ["abs_bad"]
+
+
+def test_golden_gaps_fail_before_flash(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.hardware import hardware_pipeline
+    from helia_core_tester.hardware.case_bundle import blob_numpy
+
+    bundles = [
+        load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path / name, case_id=name).manifest_path)
+        for name in ("abs_gone", "abs_short")
+    ]
+    golden_dir = tmp_path / "past"
+    (golden_dir / "outputs").mkdir(parents=True)
+    (golden_dir / "correctness").mkdir()
+    for bundle in bundles:
+        (golden_dir / "correctness" / f"{bundle.case_id}.json").write_text(json.dumps({"passed": True}))
+    (golden_dir / "outputs" / "abs_short.bin").write_bytes(blob_numpy(bundles[1].expected_output).tobytes()[:-1])
+    order: list[str] = []
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: (bundles, []))
+    monkeypatch.setattr(hardware_pipeline, "generate_tests_for_board", lambda *a, **k: order.append("generate"))
+    monkeypatch.setattr(hardware_pipeline, "stage_kernels", lambda *a, **k: Path("/kernels"))
+    monkeypatch.setattr(hardware_pipeline, "flash_firmware", lambda *a, **k: order.append("flash"))
+    with pytest.raises(RuntimeError, match="for: abs_gone, abs_short$"):
+        run_hardware_pipeline(
+            tmp_path, BOARD, SERIAL, options=StreamOptions(golden_from=golden_dir), build_dir=tmp_path / "bd",
+            app_options=object(), echo=lambda _msg: None,
+        )
+    assert order == ["generate"]
 
 
 def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, monkeypatch) -> None:

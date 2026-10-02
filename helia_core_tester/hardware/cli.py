@@ -467,7 +467,7 @@ def stream(
     one result bundle.
     """
     from .firmware_build import resolve_build_dir
-    from .hardware_pipeline import finalize_timing, stream_generated_tests
+    from .hardware_pipeline import finalize_timing, prepare_bundles, stream_generated_tests
 
     # Options first, probe last: a bad flag combination must fail with its own
     # message, not with whatever probe enumeration happens to hit.
@@ -476,6 +476,11 @@ def stream(
         spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id, strict_compare,
         golden_from, golden_allow_failed,
     )
+    prepared = None
+    if golden_from is not None:
+        # Check goldens before probe access.
+        with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
+            prepared = prepare_bundles(repo_root(), spec, options)
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
@@ -484,6 +489,7 @@ def stream(
         outcome = stream_generated_tests(
             repo_root(), spec, serial, build_dir=build_dir,
             options=options, echo=echo, progress_to_stderr=as_json, allow_unverified_firmware=allow_unverified_firmware,
+            prepared=prepared,
         )
         finalize_timing(outcome, echo=echo)
     _report(outcome, spec, options, as_json=as_json)

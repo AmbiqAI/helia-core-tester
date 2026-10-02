@@ -322,6 +322,34 @@ class HardwareRunOutcome:
         return [c.case_bundle.case_id for c in self.result.cases if not c.comparison.passed]
 
 
+def prepare_bundles(repo_root: Path, board: BoardSpec, options: StreamOptions) -> tuple[list, list]:
+    """Bridge the cases; apply the compare mode."""
+    from .case_bundle import golden_bundle, golden_failed, golden_usable, strict_bundle
+    from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error
+
+    # Bridge once; the runner reuses it.
+    bundles, skipped = build_generated_test_case_bundles(
+        repo_root, cpu=board.cpu, family=options.family, name_filter=options.test_name,
+        limit=options.limit, suite=options.suite, fvp_gate=options.fvp_gate, board_id=board.id,
+    )
+    if not bundles:
+        raise no_bridgeable_cases_error(
+            skipped, cpu=board.cpu, family=options.family, name_filter=options.test_name, suite=options.suite,
+        )
+    golden_dir = options.golden_from
+    if golden_dir is not None:
+        failed = [b.case_id for b in bundles if golden_failed(b, golden_dir)]
+        if failed and not options.golden_allow_failed:
+            raise RuntimeError(f"Golden run failed these cases: {', '.join(failed)}")
+        unusable = [b.case_id for b in bundles if not golden_usable(b, golden_dir)]
+        if unusable:
+            raise RuntimeError(f"No usable golden output in {golden_dir} for: {', '.join(unusable)}")
+        bundles = [golden_bundle(bundle, golden_dir) for bundle in bundles]
+    elif options.strict_compare:
+        bundles = [strict_bundle(bundle) for bundle in bundles]
+    return bundles, skipped
+
+
 def stream_generated_tests(
     repo_root: Path,
     board: BoardSpec,
@@ -332,6 +360,7 @@ def stream_generated_tests(
     echo: Callable[[str], None],
     progress_to_stderr: bool = False,
     allow_unverified_firmware: bool = False,
+    prepared: Optional[tuple[list, list]] = None,
 ) -> HardwareRunOutcome:
     """Stream the generated suite to already-flashed firmware and write the bundle.
 
@@ -339,8 +368,7 @@ def stream_generated_tests(
     can be checked against it; a missing stamp is an error unless
     `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
     """
-    from .case_bundle import golden_bundle, golden_failed, strict_bundle
-    from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error, run_case_bundles
+    from .session_runner import run_case_bundles
 
     session_id = options.session_id or default_session_id(board)
 
@@ -357,24 +385,7 @@ def stream_generated_tests(
             )
         echo(f"[hardware] WARNING: {stamp_missing} Continuing unverified (--allow-unverified-firmware).")
 
-    # Bridge the cases once, before any hardware I/O: bridging loads every case's
-    # arrays and runs the FVP gate, so the list is built here and handed to the
-    # session runner rather than rebuilt inside it.
-    bundles, skipped = build_generated_test_case_bundles(
-        repo_root, cpu=board.cpu, family=options.family, name_filter=options.test_name,
-        limit=options.limit, suite=options.suite, fvp_gate=options.fvp_gate, board_id=board.id,
-    )
-    if not bundles:
-        raise no_bridgeable_cases_error(
-            skipped, cpu=board.cpu, family=options.family, name_filter=options.test_name, suite=options.suite,
-        )
-    if options.golden_from is not None:
-        failed = [b.case_id for b in bundles if golden_failed(b, options.golden_from)]
-        if failed and not options.golden_allow_failed:
-            raise RuntimeError(f"Golden run failed these cases: {', '.join(failed)}")
-        bundles = [golden_bundle(bundle, options.golden_from) for bundle in bundles]
-    elif options.strict_compare:
-        bundles = [strict_bundle(bundle) for bundle in bundles]
+    bundles, skipped = prepared or prepare_bundles(repo_root, board, options)
     # The live progress printer aligns its [N/total] counter and case_id columns from
     # the first printed line instead of widening them as longer names show up mid-run.
     id_width = max(len(b.case_id) for b in bundles)
@@ -495,6 +506,8 @@ def run_hardware_pipeline(
         )
         generate_s = time.monotonic() - generate_started
 
+    # Check goldens before touching the board.
+    prepared = prepare_bundles(repo_root, board, options) if options.golden_from is not None else None
     flash: Optional[FlashDecision] = None
     if skip_flash:
         echo("[hardware] --skip-flash set; reusing firmware already running on the board.")
@@ -507,6 +520,7 @@ def run_hardware_pipeline(
     outcome = stream_generated_tests(
         repo_root, board, serial_no, build_dir=resolved_build_dir, options=options,
         echo=echo, progress_to_stderr=progress_to_stderr, allow_unverified_firmware=allow_unverified_firmware,
+        prepared=prepared,
     )
     outcome.flash = flash
     if outcome.result is not None:

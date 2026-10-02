@@ -33,6 +33,16 @@ def strict_comparison(comparison: dict[str, Any]) -> dict[str, Any]:
     return dict(comparison)
 
 
+def int_abs_diff(actual: np.ndarray, expected: np.ndarray) -> np.ndarray:
+    """|actual - expected| as uint64, overflow-free."""
+    a = actual.astype(np.int64)
+    b = expected.astype(np.int64)
+    # Wrapping uint64 subtraction gives the exact gap.
+    hi = np.maximum(a, b).view(np.uint64)
+    lo = np.minimum(a, b).view(np.uint64)
+    return hi - lo
+
+
 def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_comparison: dict[str, Any]) -> ComparisonResult:
     comparison = descriptor_or_comparison
     if "mode" not in comparison:
@@ -46,9 +56,11 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
     mode = str(comparison["mode"])
     diff_count = None
     if mode in ("exact_int", "tolerant_int"):
-        tolerance = int(comparison.get("tolerance", 0)) if mode == "tolerant_int" else 0
-        abs_diff = np.abs(actual_np.astype(np.int64) - expected_np.astype(np.int64))
-        diffs = abs_diff > tolerance
+        abs_diff = int_abs_diff(actual_np, expected_np)
+        if mode == "exact_int":
+            diffs = actual_np != expected_np
+        else:
+            diffs = abs_diff > np.uint64(int(comparison.get("tolerance", 0)))
         diff_count = int(np.count_nonzero(abs_diff))
         max_abs_diff = float(np.max(abs_diff)) if actual_np.size else 0.0
     elif mode == "float":
@@ -78,9 +90,8 @@ def compare_output(actual: np.ndarray, expected: np.ndarray, descriptor_or_compa
         diffs = actual_np.astype(bool) != expected_np.astype(bool)
         max_abs_diff = float(np.max(diffs.astype(np.int32))) if actual_np.size else 0.0
     elif mode == "none":
-        # Intentionally unvalidated (HELIA_VALIDATE_OUTPUTS=NONE). Report a pass
-        # without diffing rather than crashing the session.
-        return ComparisonResult(passed=True, mismatch_count=0, max_abs_diff=0.0, mode=mode)
+        # Unvalidated: pass, metrics unknown.
+        return ComparisonResult(passed=True, mismatch_count=0, max_abs_diff=float("nan"), mode=mode, diff_count=None)
     else:
         raise ValueError(f"Unsupported comparison mode: {mode}")
 

@@ -128,14 +128,22 @@ def golden_failed(bundle: CaseBundle, golden_dir: Path) -> bool:
     return not record.is_file() or json.loads(record.read_text(encoding="utf-8")).get("passed") is not True
 
 
+def golden_usable(bundle: CaseBundle, golden_dir: Path) -> bool:
+    """True if the past output fits this case."""
+    if bundle.expected_status_code is not None:
+        return True
+    path = golden_dir / "outputs" / f"{bundle.case_id}.bin"
+    return path.is_file() and path.stat().st_size == bundle.expected_output.byte_length
+
+
 def golden_bundle(bundle: CaseBundle, golden_dir: Path) -> CaseBundle:
     """The bundle, judged against a past run's output."""
     if bundle.expected_status_code is not None:
         return bundle
+    if not golden_usable(bundle, golden_dir):
+        raise RuntimeError(f"No usable golden output for {bundle.case_id} in {golden_dir}")
     path = golden_dir / "outputs" / f"{bundle.case_id}.bin"
     expected = bundle.expected_output
-    if not path.is_file() or path.stat().st_size != expected.byte_length:
-        raise RuntimeError(f"No usable golden output for {bundle.case_id} in {golden_dir}")
     blobs = tuple(replace(blob, path=path) if blob is expected else blob for blob in bundle.blobs)
     return replace(strict_bundle(bundle), blobs=blobs)
 

@@ -705,7 +705,7 @@ def _compare_output_bytes(case_id: str, actual_output_bytes: bytes, bundle: Case
             mismatch_count=abs(actual_size - expected_size),
             max_abs_diff=float("nan"),
             mode=str(bundle.comparison.get("mode", "unknown")),
-            diff_count=abs(actual_size - expected_size),
+            diff_count=None,
         )
     actual = np.frombuffer(actual_output_bytes, dtype=expected_output.dtype).reshape(expected_output.shape)
     return compare_output(actual, expected_output, bundle.comparison)
