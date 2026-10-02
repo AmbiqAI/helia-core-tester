@@ -122,3 +122,17 @@ def test_depthwise_conv_s4_opt_case_bridges_with_wrapper_scratch(tmp_path: Path)
     manifest = _bridge(tmp_path, "depthwise_conv_opt_s4")
     assert manifest["required_target_capabilities"] == ["depthwise_conv_s4"]
     assert manifest["scratch_buffer"]["bytes"] == 4464
+
+
+def test_depthwise_conv_s8_reserves_wrapper_scratch_and_sums(tmp_path: Path) -> None:
+    # 4 * 124 * 3 * 3 opt bytes, then 5 sums.
+    manifest = _bridge(tmp_path, "depthwise_conv_kernel_3x3_s8")
+    assert manifest["scratch_buffer"]["bytes"] == 4464 + 5 * 4
+
+
+def test_depthwise_conv_s8_one_input_channel_fits_conv_route(tmp_path: Path) -> None:
+    # Conv scratch plus a transposed filter copy.
+    manifest = _bridge(tmp_path, "depthwise_conv_in_ch_one_out_ch_larger_one_s8")
+    weights = next(blob for blob in manifest["blob_roles"] if blob["role"] == "weights")
+    output_c = manifest["serialized_scalar_parameters"]["output_c"]
+    assert manifest["scratch_buffer"]["bytes"] >= weights["byte_length"] + output_c * 4
