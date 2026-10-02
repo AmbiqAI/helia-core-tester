@@ -567,7 +567,8 @@ def test_json_summary_identifies_its_schema(tmp_path: Path, monkeypatch) -> None
     assert encoded["schema_version"] == 1
     assert datetime.fromisoformat(encoded["generated_at"]).utcoffset() == timedelta(0)
     assert encoded["selection"] == {
-        "suite": "float", "limit": 2, "family": "ActivationFunctions", "test_name": None, "precision": "f32",
+        "suite": "float", "limit": 2, "family": "ActivationFunctions", "test_name": None,
+        "ops": [], "dtypes": [], "case_ids": [], "precision": "f32",
         "pmu_counters": {"cpu": "all"}, "fvp_gate": "strict",
     }
     assert encoded["github"] is None

@@ -355,6 +355,18 @@ _PRECISION_HELP = (
 )
 
 
+_OP_HELP = (
+    "Only bridge cases of this operator (repeatable), matched like "
+    "`generate --op`: operator, descriptor stem or name prefix, e.g. DepthwiseConv."
+)
+_DTYPE_HELP = (
+    "Only bridge cases using this dtype on any tensor (repeatable), "
+    "matched like `generate --dtype`, e.g. S8 or FP16."
+)
+_CASE_ID_HELP = "Only bridge this exact case id or test name (repeatable)."
+_CASES_FROM_HELP = "File of case ids, one per line ('#' comments)."
+
+
 _PMU_COUNTERS_HELP = (
     "PMU counters to capture, as GROUP:SELECTION (repeatable; hpx syntax). GROUP is cpu, "
     "memory or mve; SELECTION is 'all', 'default', or a comma-separated list of ARM_PMU_* "
@@ -367,7 +379,22 @@ _PMU_COUNTERS_HELP = (
 _PMU_GROUPS_HELP = "Deprecated alias for --pmu-counters GROUP:default per listed group."
 
 
-def _stream_options(spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id):
+def _read_case_ids(case_ids: Optional[list[str]], cases_from: Optional[Path]) -> tuple[str, ...]:
+    """Join --case-id with --cases-from lines."""
+    ids = list(case_ids or [])
+    if cases_from is not None:
+        try:
+            lines = cases_from.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            _fail(f"Cannot read --cases-from: {exc}")
+        ids += [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
+    return tuple(dict.fromkeys(ids))
+
+
+def _stream_options(
+    spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
+    ops=None, dtypes=None, case_ids=(),
+):
     from .hardware_pipeline import (
         StreamOptions, apply_precision, fit_to_board, float_precision_for, resolve_pmu_options, validate_fvp_gate,
     )
@@ -382,6 +409,7 @@ def _stream_options(spec, suite, family, test_name, limit, precision, pmu_counte
         selection = resolve_pmu_options(pmu_counters or [], pmu_groups, warn=lambda msg: typer.echo(msg, err=True))
         options = StreamOptions(
             suite=suite, family=family, test_name=test_name, limit=limit,
+            ops=tuple(ops or ()), dtypes=tuple(dtypes or ()), case_ids=case_ids,
             pmu_counters=selection, fvp_gate=fvp_gate, session_id=session_id,
             float_precision=float_precision_for(precision),
         )
@@ -400,13 +428,16 @@ def _quiet_stdout(as_json: bool):
 
 def _report(outcome, spec: BoardSpec, options, *, as_json: bool) -> None:
     from .hardware_pipeline import resolved_selection
+    from .result_bundle import merge_summary
     from .run_summary import build_json_summary, print_run_report
 
+    selection = resolved_selection(repo_root(), spec, options)
+    merge_summary(outcome.bundle, "selection", selection)
     failed = print_run_report(outcome.result, outcome.skipped, outcome.bundle, err=as_json)
     if as_json:
         typer.echo(json.dumps(build_json_summary(
             outcome.result, outcome.skipped, session_id=outcome.session_id, board_id=spec.id, bundle=outcome.bundle,
-            selection=resolved_selection(repo_root(), spec, options), timing=outcome.timing,
+            selection=selection, timing=outcome.timing,
         ), indent=2))
     if failed:
         typer.echo(typer.style("✗ One or more generated-test cases failed correctness", fg=typer.colors.RED, bold=True), err=True)
@@ -425,6 +456,10 @@ def stream(
     family: Optional[str] = typer.Option(None, "--family", help="Operator family under artifacts/generated_tests to bridge. Omit to bridge every family with real firmware dispatch support (see generated_test_bridge.bridged_families())."),
     test_name: Optional[str] = typer.Option(None, "--test-name", help="Only bridge generated tests whose directory name contains this substring."),
     limit: Optional[int] = typer.Option(None, "--limit", help="Only bridge the first N discovered generated tests (per suite/family)."),
+    op: Optional[list[str]] = typer.Option(None, "--op", help=_OP_HELP),
+    dtype: Optional[list[str]] = typer.Option(None, "--dtype", help=_DTYPE_HELP),
+    case_id: Optional[list[str]] = typer.Option(None, "--case-id", help=_CASE_ID_HELP),
+    cases_from: Optional[Path] = typer.Option(None, "--cases-from", help=_CASES_FROM_HELP),
     precision: Optional[str] = typer.Option(None, "--precision", help=_PRECISION_HELP),
     pmu_counters: Optional[list[str]] = typer.Option(None, "--pmu-counters", help=_PMU_COUNTERS_HELP),
     pmu_groups: Optional[str] = typer.Option(None, "--pmu-groups", help=_PMU_GROUPS_HELP, hidden=True),
@@ -452,7 +487,10 @@ def stream(
     # Options first, probe last: a bad flag combination must fail with its own
     # message, not with whatever probe enumeration happens to hit.
     spec = _board(board)
-    options = _stream_options(spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
+    options = _stream_options(
+        spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
+        op, dtype, _read_case_ids(case_id, cases_from),
+    )
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
@@ -474,6 +512,10 @@ def run(
     family: Optional[str] = typer.Option(None, "--family", help="Operator family under artifacts/generated_tests to bridge. Omit to bridge every family with real firmware dispatch support."),
     test_name: Optional[str] = typer.Option(None, "--test-name", help="Only bridge generated tests whose directory name contains this substring."),
     limit: Optional[int] = typer.Option(None, "--limit", help="Only bridge the first N discovered generated tests (per suite/family)."),
+    op: Optional[list[str]] = typer.Option(None, "--op", help=_OP_HELP),
+    dtype: Optional[list[str]] = typer.Option(None, "--dtype", help=_DTYPE_HELP),
+    case_id: Optional[list[str]] = typer.Option(None, "--case-id", help=_CASE_ID_HELP),
+    cases_from: Optional[Path] = typer.Option(None, "--cases-from", help=_CASES_FROM_HELP),
     precision: Optional[str] = typer.Option(None, "--precision", help=_PRECISION_HELP),
     pmu_counters: Optional[list[str]] = typer.Option(None, "--pmu-counters", help=_PMU_COUNTERS_HELP),
     pmu_groups: Optional[str] = typer.Option(None, "--pmu-groups", help=_PMU_GROUPS_HELP, hidden=True),
@@ -502,7 +544,10 @@ def run(
     if skip_flash and force_flash:
         _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
-    options = _stream_options(spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
+    options = _stream_options(
+        spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
+        op, dtype, _read_case_ids(case_id, cases_from),
+    )
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
     # Neither builds nor generates: nothing to resolve.
     streams_only = skip_generate and skip_flash
