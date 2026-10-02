@@ -584,6 +584,7 @@ static hctp_status_t queue_case_complete(hct_server_session_t *session, uint8_t 
     write_u8(payload, sizeof(payload), &offset, correctness_ran);
     write_u8(payload, sizeof(payload), &offset, performance_ran);
     write_u32(payload, sizeof(payload), &offset, session->workspace_used_bytes);
+    write_u32(payload, sizeof(payload), &offset, session->prepare_cycles);
     if (performance_ran == 0u)
     {
         write_i32(payload, sizeof(payload), &offset, session->last_kernel_status);
@@ -1174,9 +1175,33 @@ static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint
     return queue_case_ready(session);
 }
 
+/* Correctness run; DWT skips kernel calls. */
+static arm_cmsis_nn_status run_counting_prepare(hct_server_session_t *session)
+{
+#ifdef HELIA_HARDWARE_BUILD
+    const hct_window_t saved = hct_window;
+    arm_cmsis_nn_status status;
+    uint32_t start;
+    enable_dwt();
+    /* Inverted window: kernel calls pause DWT. */
+    hct_window.pmu_mask = 0u;
+    hct_window.dwt_on = DWT->CTRL & ~DWT_CTRL_CYCCNTENA_Msk;
+    hct_window.dwt_off = DWT->CTRL;
+    hct_window.armed = true;
+    start = dwt_cycles();
+    status = hct_run_kernel_once(session);
+    session->prepare_cycles = dwt_cycles() - start;
+    hct_window = saved;
+    return status;
+#else
+    session->prepare_cycles = 0u;
+    return hct_run_kernel_once(session);
+#endif
+}
+
 static hctp_status_t handle_run_correctness(hct_server_session_t *session)
 {
-    arm_cmsis_nn_status status = hct_run_kernel_once(session);
+    arm_cmsis_nn_status status = run_counting_prepare(session);
     session->last_kernel_status = status;
     if (kernel_status_is_fatal(session, status))
     {
