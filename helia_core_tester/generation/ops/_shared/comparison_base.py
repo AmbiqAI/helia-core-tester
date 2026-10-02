@@ -72,19 +72,12 @@ class ComparisonFamilyBase(OperationBase):
         result = result + (remainder > threshold)
         return result.astype(np.int32)
 
-    def _simulate_compare(self, input1_q: np.ndarray, input2_q: np.ndarray, operation: str) -> np.ndarray:
-        input_1_offset = int(self.desc.get("input_1_offset", 0))
-        input_2_offset = int(self.desc.get("input_2_offset", 0))
-        input_1_mult = int(self.desc.get("input_1_mult", 1))
-        input_2_mult = int(self.desc.get("input_2_mult", 1))
-        input_1_shift = int(self.desc.get("input_1_shift", 0))
-        input_2_shift = int(self.desc.get("input_2_shift", 0))
-        left_shift = int(self.desc.get("left_shift", 0))
-
-        a = (input1_q.astype(np.int32) + input_1_offset) << left_shift
-        b = (input2_q.astype(np.int32) + input_2_offset) << left_shift
-        a = self._requantize_np(a, input_1_mult, input_1_shift)
-        b = self._requantize_np(b, input_2_mult, input_2_shift)
+    def _simulate_compare(self, input1_q: np.ndarray, input2_q: np.ndarray, operation: str, params: Dict[str, int]) -> np.ndarray:
+        left_shift = params["left_shift"]
+        a = (input1_q.astype(np.int32) + params["input_1_offset"]) << left_shift
+        b = (input2_q.astype(np.int32) + params["input_2_offset"]) << left_shift
+        a = self._requantize_np(a, params["input_1_mult"], params["input_1_shift"])
+        b = self._requantize_np(b, params["input_2_mult"], params["input_2_shift"])
 
         if operation == "ARM_COMPARE_EQUAL":
             out = a == b
@@ -101,6 +94,36 @@ class ComparisonFamilyBase(OperationBase):
         else:
             raise ValueError(f"Unsupported operation: {operation}")
         return out.astype(np.uint8)
+
+    def _quant_params(self, tflite_path: Path) -> Dict[str, int]:
+        """Derive compare params like the runtime."""
+        from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
+
+        inputs = self.load_primary_operator_tensors(str(tflite_path))["inputs"]
+        params = {"left_shift": 8}
+        for index, tensor in enumerate(inputs[:2], start=1):
+            quant = tensor["quantization"]
+            mult, shift = calculate_multiplier_shift(float(self._quant_param_scalar(quant, "scale", 1.0)))
+            params[f"input_{index}_offset"] = -int(self._quant_param_scalar(quant, "zero_point", 0))
+            params[f"input_{index}_mult"] = int(mult)
+            params[f"input_{index}_shift"] = int(shift)
+        return params
+
+    def _sample_operands(self, shape_1, shape_2, output_shape, qmin, qmax, np_dtype):
+        """Draw spread operands with forced ties."""
+        rng = self._seeded_rng()
+        # Few levels so equal pairs occur.
+        levels = np.round(np.linspace(qmin, qmax, 7)).astype(np.int32)
+        input_1 = rng.choice(levels, size=shape_1)
+        input_2 = rng.choice(levels, size=shape_2)
+        # Tie every third output element.
+        if tuple(shape_2) == tuple(output_shape):
+            tied = np.broadcast_to(input_1, output_shape).reshape(-1)
+            input_2.reshape(-1)[::3] = tied[::3]
+        elif tuple(shape_1) == tuple(output_shape):
+            tied = np.broadcast_to(input_2, output_shape).reshape(-1)
+            input_1.reshape(-1)[::3] = tied[::3]
+        return input_1.astype(np_dtype), input_2.astype(np_dtype)
 
     def generate_c_files(self, output_dir) -> None:
         from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
@@ -132,18 +155,9 @@ class ComparisonFamilyBase(OperationBase):
         input_2_dims = builder.nhwc_to_cmsis_dims(input_shape_2)
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
 
-        # Default quantization: LiteRT builder uses scale 0.125 (s8) or 1/32768 (s16), zero point 0.
-        input_zp_1 = 0
-        input_zp_2 = 0
-
-        input_1_f, input_2_f = self._sample_dual_uniform_inputs(input_shape_1, input_shape_2)
-
-        input_1_q = np.round(input_1_f).astype(np.int32)
-        input_1_q = np.clip(input_1_q, qmin, qmax).astype(np_in_dtype)
-        input_2_q = np.round(input_2_f).astype(np.int32)
-        input_2_q = np.clip(input_2_q, qmin, qmax).astype(np_in_dtype)
-
-        expected = self._simulate_compare(input_1_q, input_2_q, op_enum)
+        params = self._quant_params(tflite_path)
+        input_1_q, input_2_q = self._sample_operands(input_shape_1, input_shape_2, output_shape, qmin, qmax, np_in_dtype)
+        expected = self._simulate_compare(input_1_q, input_2_q, op_enum, params)
 
         context = {
             "name": name,
@@ -156,13 +170,7 @@ class ComparisonFamilyBase(OperationBase):
             "input_dtype": c_type,
             "kernel_fn": kernel_fn,
             "output_size": int(np.prod(output_shape)),
-            "input_1_offset": int(-input_zp_1),
-            "input_1_mult": 1,
-            "input_1_shift": 0,
-            "input_2_offset": int(-input_zp_2),
-            "input_2_mult": 1,
-            "input_2_shift": 0,
-            "left_shift": 0,
+            **params,
         }
 
         cmake_context = {
