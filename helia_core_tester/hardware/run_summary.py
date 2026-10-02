@@ -227,6 +227,7 @@ def build_json_summary(
                 "passed": ok,
                 "median_cycles": float(case.statistics.median_cycles),
                 "valid_for_regression": bool(case.statistics.valid_for_regression),
+                "timing_status": case.statistics.timing_status,
                 "skipped_reason": None,
             }
         )
@@ -237,6 +238,7 @@ def build_json_summary(
                 "passed": None,
                 "median_cycles": None,
                 "valid_for_regression": None,
+                "timing_status": None,
                 "skipped_reason": _clean_skip_reason(test.name, reason),
             }
         )

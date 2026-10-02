@@ -17,7 +17,11 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from .boards import DEFAULT_BOARD_ID, BoardSpec, default_session_id, resolve_board
-from .case_bundle import CaseBundle, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
+from .case_bundle import (
+    EMPTY_CALL_KERNEL_ID, FLOOR_CASE_ID, CaseBundle, build_abs_s8_case_bundle, build_convolve_s8_case_bundle,
+    build_floor_bundle, load_case_bundle,
+)
+from .case_validity import apply_floor
 from .firmware_build import elf_path
 from .generated_test_bridge import (
     GeneratedTestCase,
@@ -227,6 +231,11 @@ def run_case_bundles(
         check_case_id_length(bundle.case_id)
 
     remaining = list(case_bundles)
+
+    def report_case(case: CaseRunResult) -> None:
+        if on_case_complete is not None and case.case_bundle.case_id != FLOOR_CASE_ID:
+            on_case_complete(case)
+
     all_cases: list[CaseRunResult] = []
     all_trace: list[str] = []
     session_complete_cases = 0
@@ -245,8 +254,11 @@ def run_case_bundles(
             target_info = target_info or info
             build_id = build_id or info.build_id
             limits = session.limits
+            # Floor case leads, when firmware has it.
+            if batch_index == 0 and EMPTY_CALL_KERNEL_ID in session.kernel_ids:
+                remaining.insert(0, build_floor_bundle(project_root, board_id=board.id))
             batch = take_batch(remaining, counter_passes, limits)
-            result = session.run_many(batch, on_case_complete=on_case_complete)
+            result = session.run_many(batch, on_case_complete=report_case)
         except BootFailure:
             raise  # board-wide, not batch-specific
         except (RuntimeError, ValueError) as exc:
@@ -265,10 +277,11 @@ def run_case_bundles(
         batch_index += 1
 
     batch_count = batch_index
+    timing_floor, kernel_cases = apply_floor(all_cases)
     merged_result = SessionResult(
-        cases=tuple(all_cases),
+        cases=tuple(kernel_cases),
         protocol_trace=tuple(all_trace),
-        session_complete_cases=session_complete_cases,
+        session_complete_cases=session_complete_cases - (len(all_cases) - len(kernel_cases)),
         build_id=build_id,
         batch_count=batch_count,
         target_info=target_info,
@@ -302,6 +315,7 @@ def run_case_bundles(
         target_info=board.target_info(),
         host_log_text=host_log,
         target_log_text=target_log,
+        timing_floor=timing_floor,
         # Unverified firmware gets no provenance.
         build_dir=build_dir if expected_build_id is not None and build_id == expected_build_id else None,
     )

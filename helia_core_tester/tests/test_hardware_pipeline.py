@@ -530,8 +530,9 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
     assert encoded["totals"] == {"ran": 1, "passed": 1, "failed": 0, "skipped": 1}
     assert encoded["timing"] == timing
     ran, skip = encoded["cases"]
-    assert set(ran) == {"case_id", "passed", "median_cycles", "valid_for_regression", "skipped_reason"}
-    assert ran == {"case_id": "abs_json", "passed": True, "median_cycles": ran["median_cycles"], "valid_for_regression": True, "skipped_reason": None}
+    assert set(ran) == {"case_id", "passed", "median_cycles", "valid_for_regression", "timing_status", "skipped_reason"}
+    assert ran == {"case_id": "abs_json", "passed": True, "median_cycles": ran["median_cycles"], "valid_for_regression": True,
+                   "timing_status": "valid", "skipped_reason": None}
     assert isinstance(ran["median_cycles"], float)
     assert skip["case_id"] == "conv_x" and skip["passed"] is None and skip["median_cycles"] is None
     assert skip["skipped_reason"].startswith("operator='Foo' is not bridgeable")

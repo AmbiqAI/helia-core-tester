@@ -140,6 +140,7 @@ class _FakeSession:
         self._fail = fail
         self.target_info: TargetInfo | None = None
         self.expected_build_id: str | None = None
+        self.kernel_ids: frozenset[int] = frozenset()
 
     def handshake(self, *, expected_build_id: str | None = None, expected_clock_hz: int | None = None) -> TargetInfo:
         if self._fail is not None:
@@ -271,12 +272,14 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
 
     written: dict[str, Any] = {}
 
-    def _fake_write_result_bundle(result, *, session_id, output_root, memory_report, kernel_catalog, target_info, host_log_text, target_log_text, build_dir):
+    def _fake_write_result_bundle(result, *, session_id, output_root, memory_report, kernel_catalog, target_info, host_log_text, target_log_text, build_dir, timing_floor):
         written.update(result=result, session_id=session_id, target_info=target_info, host_log=host_log_text, build_dir=build_dir)
         return output_root / "artifacts" / "reports" / "hardware" / session_id
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
     monkeypatch.setattr(session_runner, "write_result_bundle", _fake_write_result_bundle)
+    # Placeholder results skip classification.
+    monkeypatch.setattr(session_runner, "apply_floor", lambda cases: (None, list(cases)))
     report_roots: list[Path] = []
 
     def _fake_memory_report(board, *, project_root, build_dir, output_root):

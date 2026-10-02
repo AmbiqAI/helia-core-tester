@@ -2101,9 +2101,6 @@ _ACTIVATION_CMSIS_FUNCTION = {
     ("HardSwishPrecise", "S8"): "arm_hard_swish_precise_s8",
     ("HardSwishPrecise", "S16"): "arm_hard_swish_precise_s16",
 }
-# CMSIS-NN only implements these two ops in S16 -- the generator forces S16 even when the
-# descriptor's activation_dtype says S8 (see OpLogistic/OpTanh generate_c_files()).
-_ACTIVATION_FORCE_S16_OPERATORS = ("Logistic", "Tanh")
 _ACTIVATION_ARG_COUNT = {
     "Relu": 7,
     "Relu6": 9,
@@ -2175,8 +2172,6 @@ def _build_activation_case(
     descriptor = generated_test.descriptor
     operator = str(descriptor.get("operator", ""))
     activation_dtype = str(descriptor.get("activation_dtype", ""))
-    if operator in _ACTIVATION_FORCE_S16_OPERATORS:
-        activation_dtype = "S16"
     if (operator, activation_dtype) not in _ACTIVATION_CMSIS_FUNCTION:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: operator={operator!r} activation_dtype={activation_dtype!r} is not "

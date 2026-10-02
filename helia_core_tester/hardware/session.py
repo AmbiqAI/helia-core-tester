@@ -332,6 +332,11 @@ class HostSession:
     def run(self, case_bundle: CaseBundle) -> SessionResult:
         return self.run_many([case_bundle])
 
+    @property
+    def kernel_ids(self) -> frozenset[int]:
+        """Kernel ids the target's catalog lists."""
+        return frozenset(entry.kernel_id for entry in self._catalog)
+
     def handshake(self, *, expected_build_id: str | None = None, expected_clock_hz: int | None = None) -> TargetInfo:
         """TARGET_INFO -> TARGET_INFO_ACK -> KERNEL_CATALOG: learn the target's limits and
         catalog, refusing PMU passes it cannot run before any plan is sent.

@@ -4905,6 +4905,8 @@ arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
         case HCT_KERNEL_ID_ABS_F32:
         case HCT_KERNEL_ID_ABS_F16:
             return hct_run_abs_once(session);
+        case HCT_KERNEL_ID_EMPTY_CALL:
+            return hct_run_empty_once(session);
         case HCT_KERNEL_ID_CONVOLVE_S8:
         case HCT_KERNEL_ID_CONVOLVE_S4:
         case HCT_KERNEL_ID_CONVOLVE_S16:

@@ -100,6 +100,8 @@ class SampleStatistics:
     valid_for_regression: bool
     overflow_detected: bool
     unsupported_counters: tuple[str, ...]
+    # Set by case_validity.classify_case.
+    timing_status: str = "valid"
 
 
 @dataclass(frozen=True)

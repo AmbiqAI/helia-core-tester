@@ -33,11 +33,8 @@ class OpLogistic(OperationBase):
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
         # Apply quantization based on activation_dtype
-        # NOTE: CMSIS-NN only supports S16 for Logistic, so convert S8 to S16
+        # CMSIS-NN has no s8 logistic.
         activation_dtype = self.desc.get('activation_dtype', 'S8')
-        if activation_dtype == 'S8':
-            # CMSIS-NN Logistic only supports S16, so use S16 quantization
-            activation_dtype = 'S16'
         
         if activation_dtype == 'S16':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
@@ -76,10 +73,8 @@ class OpLogistic(OperationBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        # NOTE: CMSIS-NN only supports S16 for Logistic, so convert S8 to S16
+        # CMSIS-NN has no s8 logistic.
         activation_dtype = self.desc.get('activation_dtype', 'S8')
-        if activation_dtype == 'S8':
-            activation_dtype = 'S16'
         
         if activation_dtype == 'S16':
             return {

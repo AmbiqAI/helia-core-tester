@@ -33,11 +33,8 @@ class OpTanh(OperationBase):
         converter = tf.lite.TFLiteConverter.from_keras_model(model)
         
         # Apply quantization based on activation_dtype
-        # NOTE: CMSIS-NN only supports S16 for Tanh, so convert S8 to S16
+        # CMSIS-NN has no s8 tanh.
         activation_dtype = self.desc.get('activation_dtype', 'S8')
-        if activation_dtype == 'S8':
-            # CMSIS-NN Tanh only supports S16, so use S16 quantization
-            activation_dtype = 'S16'
         
         if activation_dtype == 'S16':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
