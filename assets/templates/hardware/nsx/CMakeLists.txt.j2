@@ -88,6 +88,9 @@ target_compile_definitions({{ target }} PRIVATE
     HCT_BENCHMARK_SERVER_TARGET_CPU="{{ board.cpu }}"
     HCT_SERVER_WORKSPACE_BYTES={{ board.workspace_bytes }}
     HCT_BENCHMARK_SERVER_BUILD_ID_PATCHED
+{% if placement == "mram" %}
+    HCT_PLACEMENT_MRAM
+{% endif %}
 {% endif %}
 )
 # Keep MVE out of the timed harness.

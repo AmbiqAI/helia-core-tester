@@ -79,7 +79,15 @@ out, so a bare `hardware flash` flashes what `hardware build` built. A flag that
 differs from the saved options rebuilds and prints one line naming the change. A
 saved ref you did not pass with `--cmsis-nn-ref` follows the pinned release, so
 a pin bump rebuilds those build dirs the same way. Every build, flash, run and
-stream prints the kernel source and inline asm setting.
+stream prints the kernel source, inline asm setting and placement.
+
+`--placement` picks where operands live. `tcm` (the default) keeps every operand
+in DTCM: kernel-only cost, no cache traffic. `mram` (Apollo510, Apollo330P)
+programs each case's weights and bias into a reserved MRAM pool past the image
+and evicts them from the D-cache before every timed call, as a large model's
+layer sees them; activations, scratch, multipliers and shifts stay in DTCM, as
+hpx places a TCM-sized arena. Give each placement its own `--build-dir`. The
+bundle records it in `session_manifest.json` `target.placement`.
 
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
 `hardware run` and `hardware stream`; hpx syntax). `GROUP` is `cpu`, `memory` or

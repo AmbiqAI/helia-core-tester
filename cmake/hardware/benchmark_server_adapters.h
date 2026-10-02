@@ -264,7 +264,7 @@ static inline hct_server_blob_t *find_blob_by_role(hct_server_session_t *session
 
 static inline uint8_t *blob_ptr(hct_server_session_t *session, const hct_server_blob_t *blob)
 {
-    return &session->workspace[blob->arena_offset];
+    return blob->placed ? (uint8_t *)blob->placed : &session->workspace[blob->arena_offset];
 }
 
 static inline uint8_t *hct_output_ptr(hct_server_session_t *session)
@@ -289,6 +289,10 @@ typedef struct
     uint32_t dwt_on;
     uint32_t dwt_off;
     bool armed;
+    /* MRAM ranges evicted before each call. */
+    const void *cold_addr[HCT_SERVER_MAX_BLOBS];
+    int32_t cold_bytes[HCT_SERVER_MAX_BLOBS];
+    uint8_t cold_count;
 } hct_window_t;
 
 extern hct_window_t hct_window;
@@ -298,6 +302,13 @@ static inline bool hct_window_open(void)
 {
     if (hct_window.armed)
     {
+#if defined(HCT_PLACEMENT_MRAM)
+        /* Weights start cold, as in inference. */
+        for (uint8_t index = 0u; index < hct_window.cold_count; ++index)
+        {
+            SCB_InvalidateDCache_by_Addr((volatile void *)hct_window.cold_addr[index], hct_window.cold_bytes[index]);
+        }
+#endif
 #ifdef HELIA_HARDWARE_BUILD
         DWT->CTRL = hct_window.dwt_on;
 #endif

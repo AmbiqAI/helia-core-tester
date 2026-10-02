@@ -61,6 +61,11 @@ CHECKOUT_DIRS = ("Include", "Source")
 CHECKOUT_FILES = ("nsx/CMakeLists.txt", "nsx/nsx-module.yaml")
 KERNEL_SHIM = "# Shim: delegates to the native ns-cmsis-nn NSX build.\nadd_subdirectory(nsx)\n"
 
+# tcm: all operands in DTCM. mram: weights, bias in MRAM.
+PLACEMENTS = ("tcm", "mram")
+# Parts with MRAM behind an L1 D-cache.
+MRAM_SOCS = ("apollo510", "apollo330P")
+
 # Options the last successful build used.
 OPTIONS_FILE = ".hct-options.json"
 
@@ -98,6 +103,7 @@ class AppOptions:
     enable_f32: bool = True
     enable_f16: bool = True
     build_size_probe: bool = False
+    placement: str = "tcm"
 
     def __post_init__(self) -> None:
         # One spelling per checkout.
@@ -123,7 +129,7 @@ class AppOptions:
 
     def summary(self) -> str:
         """Kernel source and inline asm, as printed."""
-        return f"{self.kernel_source()}, inline asm {_on_off(self.requantize_inline_asm)}"
+        return f"{self.kernel_source()}, inline asm {_on_off(self.requantize_inline_asm)}, placement {self.placement}"
 
     def changes_from(self, old: "AppOptions") -> list[str]:
         """What differs from old, as printed."""
@@ -135,7 +141,9 @@ class AppOptions:
             if field.name.startswith("cmsis_nn_") or before == after:
                 continue
             label = field.name.replace("_", " ")
-            changes.append(f"{label} {_on_off(before)} -> {_on_off(after)}")
+            if isinstance(after, bool):
+                before, after = _on_off(before), _on_off(after)
+            changes.append(f"{label} {before} -> {after}")
         return changes
 
     def to_json(self) -> str:
@@ -167,6 +175,8 @@ def _field_type_ok(name: str, value: Any) -> bool:
         return isinstance(value, str) and bool(value)
     if name == "cmsis_nn_root":
         return value is None or (isinstance(value, str) and bool(value))
+    if name == "placement":
+        return value in PLACEMENTS
     return isinstance(value, bool)
 
 
@@ -196,6 +206,7 @@ def resolve_options(
     cmsis_nn_ref: Optional[str] = None,
     cmsis_nn_root: Optional[Path] = None,
     inline_asm: Optional[bool] = None,
+    placement: Optional[str] = None,
     follow_pin: bool = True,
 ) -> AppOptions:
     """Given flags win, then saved, then defaults."""
@@ -213,6 +224,8 @@ def resolve_options(
         base = dataclasses.replace(base, cmsis_nn_ref=CMSIS_NN_REF)
     if inline_asm is not None:
         base = dataclasses.replace(base, requantize_inline_asm=inline_asm)
+    if placement is not None:
+        base = dataclasses.replace(base, placement=placement)
     return base
 
 
@@ -344,6 +357,10 @@ def render_app(
     repo_root: Optional[Path] = None,
 ) -> AppRender:
     """Write nsx.yml, modules.cmake, CMakeLists.txt, local kernels."""
+    if options.placement not in PLACEMENTS:
+        raise AppRenderError(f"Unknown placement: {options.placement}")
+    if options.placement == "mram" and board.soc not in MRAM_SOCS:
+        raise AppRenderError(f"{board.id} has no cached MRAM; use tcm")
     if options.cmsis_nn_root is not None:
         # App files must not land in root.
         _check_no_overlap(options.cmsis_nn_root, app_dir)
@@ -393,6 +410,7 @@ def render_app(
         fp16_storage=not get_cpu_profile(board.cpu).supports_execution_dtype("FP16"),
         rtt_buffer_size_up=RTT_BUFFER_SIZE_UP,
         rtt_buffer_size_down=RTT_BUFFER_SIZE_DOWN,
+        placement=options.placement,
     )
 
     if options.cmsis_nn_root is not None:
