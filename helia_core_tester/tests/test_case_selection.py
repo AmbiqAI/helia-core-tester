@@ -108,3 +108,11 @@ def test_limit_with_case_ids_refused(capsys) -> None:
     with pytest.raises(SystemExit):
         _stream_options(None, "int", None, None, 1, None, None, None, None, None, None, None, ["a"], None)
     assert "--limit cannot combine" in capsys.readouterr().err
+
+
+def test_empty_cases_from_refused(tmp_path: Path, capsys) -> None:
+    listing = tmp_path / "ids.txt"
+    listing.write_text("# only a comment\n\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        _read_case_ids(None, listing)
+    assert "lists no case ids" in capsys.readouterr().err

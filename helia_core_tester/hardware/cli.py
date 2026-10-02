@@ -387,7 +387,11 @@ def _read_case_ids(case_ids: Optional[list[str]], cases_from: Optional[Path]) ->
             lines = cases_from.read_text(encoding="utf-8").splitlines()
         except OSError as exc:
             _fail(f"Cannot read --cases-from: {exc}")
-        ids += [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
+        listed = [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
+        # Empty would mean "run everything".
+        if not listed:
+            _fail(f"--cases-from lists no case ids: {cases_from}")
+        ids += listed
     return tuple(ids)
 
 
