@@ -332,7 +332,8 @@ def stream_generated_tests(
     can be checked against it; a missing stamp is an error unless
     `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
     """
-    from .generated_test_bridge import CaseSelection
+    from .generated_test_bridge import HW_CASE_SUFFIX, CaseSelection
+    from .result_bundle import merge_summary
     from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error, run_case_bundles
 
     session_id = options.session_id or default_session_id(board)
@@ -360,10 +361,12 @@ def stream_generated_tests(
         select=select,
     )
     if select.case_ids:
-        names = [b.case_id.removesuffix("_hw_generated") for b in bundles] + [t.name for t, _ in skipped]
+        names = [b.case_id.removesuffix(HW_CASE_SUFFIX) for b in bundles] + [t.name for t, _ in skipped]
         missing = select.unmatched_ids(names)
         if missing:
-            raise RuntimeError(f"No generated case matches: {', '.join(missing)}")
+            raise RuntimeError(f"No case matches these ids: {', '.join(missing)}")
+    if not bundles and not skipped and select != CaseSelection():
+        raise RuntimeError("No generated case matches --op/--dtype/--case-id.")
     if not bundles:
         raise no_bridgeable_cases_error(
             skipped, cpu=board.cpu, family=options.family, name_filter=options.test_name, suite=options.suite,
@@ -406,6 +409,7 @@ def stream_generated_tests(
         on_case_complete=on_case_complete,
         expected_build_id=expected_build_id,
     )
+    merge_summary(bundle, "selection", resolved_selection(repo_root, board, options))
     timing = {
         "stream_s": round(time.monotonic() - stream_started, 4),
         "batch_count": int(getattr(result, "batch_count", 1)),

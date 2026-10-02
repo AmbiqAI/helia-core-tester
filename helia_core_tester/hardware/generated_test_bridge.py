@@ -32,7 +32,7 @@ from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_ke
 from .pathutil import display_path
 from helia_core_tester.core.cpu_targets import get_cpu_profile
 from helia_core_tester.generation.io.descriptors import descriptor_matches_op
-from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, resolve_comparison
+from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, normalize_dtype, resolve_comparison
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -94,31 +94,36 @@ class GeneratedTestCase:
         return self.board or self.cpu
 
 
+HW_CASE_SUFFIX = "_hw_generated"
+
+
 @dataclass(frozen=True)
 class CaseSelection:
     """Op, dtype and case-id filters (OR within, AND across).
 
     `ops` and `dtypes` match exactly like `generate --op/--dtype`.
-    `case_ids` match a test name or its `_hw_generated` case id."""
+    `case_ids` take a test name or its `_hw_generated` case id."""
 
     ops: tuple[str, ...] = ()
     dtypes: tuple[str, ...] = ()
     case_ids: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        # Fail on bad dtypes before any I/O.
+        object.__setattr__(self, "dtypes", tuple(normalize_dtype(d) for d in self.dtypes))
+        bare = (i.removesuffix(HW_CASE_SUFFIX) for i in self.case_ids)
+        object.__setattr__(self, "case_ids", tuple(dict.fromkeys(bare)))
+
     def matches(self, name: str, descriptor: dict) -> bool:
-        if self.case_ids and not self._id_hits(name):
+        if self.case_ids and name not in self.case_ids:
             return False
         if self.ops and not any(descriptor_matches_op(descriptor, op) for op in self.ops):
             return False
         return not self.dtypes or any(descriptor_matches_dtype_filter(descriptor, d) for d in self.dtypes)
 
-    def _id_hits(self, name: str) -> bool:
-        return name in self.case_ids or f"{name}_hw_generated" in self.case_ids
-
     def unmatched_ids(self, names: list[str]) -> list[str]:
         """Requested ids absent from these test names."""
-        found = set(names) | {f"{n}_hw_generated" for n in names}
-        return [i for i in self.case_ids if i not in found]
+        return [i for i in self.case_ids if i not in set(names)]
 
 
 _INT_ARRAY_RE = re.compile(r"=\s*\{([^}]*)\}")

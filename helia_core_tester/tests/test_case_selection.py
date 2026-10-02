@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from helia_core_tester.generation.test_ops import should_run_test
@@ -70,8 +71,14 @@ def test_read_case_ids_joins_flag_and_file(tmp_path: Path) -> None:
     listing = tmp_path / "ids.txt"
     listing.write_text("# rerun\na_hw_generated\n\n  b  \na_hw_generated\n")
 
-    assert _read_case_ids(["c", "b"], listing) == ("c", "b", "a_hw_generated")
+    assert _read_case_ids(["c", "b"], listing) == ("c", "b", "a_hw_generated", "b", "a_hw_generated")
+    assert CaseSelection(case_ids=_read_case_ids(["c"], listing)).case_ids == ("c", "a", "b")
     assert _read_case_ids(None, None) == ()
+
+
+def test_bad_dtype_fails_at_construction() -> None:
+    with pytest.raises(ValueError, match="int8"):
+        CaseSelection(dtypes=("int8",))
 
 
 def test_selection_records_case_filters() -> None:
@@ -79,3 +86,17 @@ def test_selection_records_case_filters() -> None:
     selection = resolved_selection(Path("."), resolve_board("apollo510_evb"), options)
 
     assert (selection["ops"], selection["dtypes"], selection["case_ids"]) == (["DepthwiseConv"], ["S8"], ["x"])
+
+
+def test_empty_filter_result_names_the_filters(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.hardware import hardware_pipeline
+
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([], []))
+    build_dir = tmp_path / "bd"
+    build_dir.mkdir()
+    (build_dir / "hct_build_id.txt").write_text("id\n")
+    options = StreamOptions(ops=("Depthwise",))
+    with pytest.raises(RuntimeError, match="--op/--dtype/--case-id"):
+        hardware_pipeline.stream_generated_tests(
+            tmp_path, resolve_board("apollo510_evb"), 5, build_dir=build_dir, options=options, echo=lambda _: None,
+        )

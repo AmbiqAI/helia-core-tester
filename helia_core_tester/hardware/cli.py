@@ -388,16 +388,17 @@ def _read_case_ids(case_ids: Optional[list[str]], cases_from: Optional[Path]) ->
         except OSError as exc:
             _fail(f"Cannot read --cases-from: {exc}")
         ids += [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
-    return tuple(dict.fromkeys(ids))
+    return tuple(ids)
 
 
 def _stream_options(
     spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
-    ops=None, dtypes=None, case_ids=(),
+    ops, dtypes, case_ids, cases_from,
 ):
     from .hardware_pipeline import (
         StreamOptions, apply_precision, fit_to_board, float_precision_for, resolve_pmu_options, validate_fvp_gate,
     )
+    from .generated_test_bridge import CaseSelection
     from .session_runner import canonical_suite
 
     try:
@@ -406,10 +407,11 @@ def _stream_options(
         suite = canonical_suite(suite)
         suite, test_name = apply_precision(precision, suite, test_name)
         validate_fvp_gate(fvp_gate)
+        cases = CaseSelection(tuple(ops or ()), tuple(dtypes or ()), _read_case_ids(case_ids, cases_from))
         selection = resolve_pmu_options(pmu_counters or [], pmu_groups, warn=lambda msg: typer.echo(msg, err=True))
         options = StreamOptions(
             suite=suite, family=family, test_name=test_name, limit=limit,
-            ops=tuple(ops or ()), dtypes=tuple(dtypes or ()), case_ids=case_ids,
+            ops=cases.ops, dtypes=cases.dtypes, case_ids=cases.case_ids,
             pmu_counters=selection, fvp_gate=fvp_gate, session_id=session_id,
             float_precision=float_precision_for(precision),
         )
@@ -428,16 +430,13 @@ def _quiet_stdout(as_json: bool):
 
 def _report(outcome, spec: BoardSpec, options, *, as_json: bool) -> None:
     from .hardware_pipeline import resolved_selection
-    from .result_bundle import merge_summary
     from .run_summary import build_json_summary, print_run_report
 
-    selection = resolved_selection(repo_root(), spec, options)
-    merge_summary(outcome.bundle, "selection", selection)
     failed = print_run_report(outcome.result, outcome.skipped, outcome.bundle, err=as_json)
     if as_json:
         typer.echo(json.dumps(build_json_summary(
             outcome.result, outcome.skipped, session_id=outcome.session_id, board_id=spec.id, bundle=outcome.bundle,
-            selection=selection, timing=outcome.timing,
+            selection=resolved_selection(repo_root(), spec, options), timing=outcome.timing,
         ), indent=2))
     if failed:
         typer.echo(typer.style("✗ One or more generated-test cases failed correctness", fg=typer.colors.RED, bold=True), err=True)
@@ -489,7 +488,7 @@ def stream(
     spec = _board(board)
     options = _stream_options(
         spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
-        op, dtype, _read_case_ids(case_id, cases_from),
+        op, dtype, case_id, cases_from,
     )
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
@@ -546,7 +545,7 @@ def run(
     spec = _board(board)
     options = _stream_options(
         spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
-        op, dtype, _read_case_ids(case_id, cases_from),
+        op, dtype, case_id, cases_from,
     )
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
     # Neither builds nor generates: nothing to resolve.
