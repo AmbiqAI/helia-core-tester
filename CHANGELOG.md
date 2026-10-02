@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.8.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.7.0...v0.8.0) (2026-10-02)
+
+
+### Features
+
+* **hardware:** add apollo330mP_evb as a second board ([428c59b](https://github.com/AmbiqAI/helia-core-tester/commit/428c59bbebb0b9a0c6c5526983714304a8bbb621))
+* **hardware:** add apollo3p_evb Cortex-M4 DWT-only board ([6ad9561](https://github.com/AmbiqAI/helia-core-tester/commit/6ad95618de0a0a94f1a0c8faf6327da32981cfb2))
+* **hardware:** board matrix runner and per-board run paths ([afdf9ef](https://github.com/AmbiqAI/helia-core-tester/commit/afdf9ef1ff039202aafbf4c800c8b709131daa38))
+* **hardware:** name the case and target state on a stall ([2575612](https://github.com/AmbiqAI/helia-core-tester/commit/25756129d81117628919914a81a7bdd2f4627c7f))
+* **hardware:** refuse boards booted at the wrong clock ([8b3a11f](https://github.com/AmbiqAI/helia-core-tester/commit/8b3a11f150aa4111ebc9c6369f654e93ee54a66b))
+* **hardware:** refuse boards booted at the wrong clock ([35be217](https://github.com/AmbiqAI/helia-core-tester/commit/35be217dc232f2c7afec7e69cb0c493c7649d0fb))
+* **hardware:** report boot health in TARGET_INFO ([3e85336](https://github.com/AmbiqAI/helia-core-tester/commit/3e8533645fba2628c50250e0f654310ace3cb69b))
+* **hardware:** version the nightly run document and record build sources ([75ef4e8](https://github.com/AmbiqAI/helia-core-tester/commit/75ef4e8ba6498fb5d5cab5e7498885cadc82df51))
+* **hardware:** version the nightly run document and record build sources ([626db66](https://github.com/AmbiqAI/helia-core-tester/commit/626db663012270edf16bef4852098c1125aea05f))
+* **scripts:** add board matrix runner and summary ([a7d71e5](https://github.com/AmbiqAI/helia-core-tester/commit/a7d71e562154fd0fdf60ab925587e2a4243e8cc2))
+
+
+### Bug Fixes
+
+* **arg:** float ARG_MAX/ARG_MIN expectations never let a NaN win ([#318](https://github.com/AmbiqAI/helia-core-tester/issues/318)) ([91581e9](https://github.com/AmbiqAI/helia-core-tester/commit/91581e954eaa67a7387aa6d67ff455e4c9437cec)), closes [#310](https://github.com/AmbiqAI/helia-core-tester/issues/310)
+* **hardware:** classify memory report sections by region address ([47b58fe](https://github.com/AmbiqAI/helia-core-tester/commit/47b58fe55ce4627f71a13c688e4bc5ab119a5336))
+* **hardware:** classify memory report sections by region address ([cd78dd2](https://github.com/AmbiqAI/helia-core-tester/commit/cd78dd2476ac47e476697469e65e701c50be3bc0))
+* **hardware:** drain RTT rings by direct memory access ([f7f09c1](https://github.com/AmbiqAI/helia-core-tester/commit/f7f09c19e74b9d57b314229a39792b09c31c3758))
+* **hardware:** drain RTT rings by direct memory access ([e764d5a](https://github.com/AmbiqAI/helia-core-tester/commit/e764d5af655e2fec8013800abc17f47dc76b4295))
+* **hardware:** fail the link on a short RTT ring access ([9028f69](https://github.com/AmbiqAI/helia-core-tester/commit/9028f69eda94cf5d120de556f85a02ff5ef39b40))
+* **hardware:** key per-run paths by board for concurrent runs ([0dbc3ca](https://github.com/AmbiqAI/helia-core-tester/commit/0dbc3caa3f2f87a9a50cb5ce86f9effe994db475))
+* **hardware:** record the GCC CMake configured, not the PATH one ([f49fd67](https://github.com/AmbiqAI/helia-core-tester/commit/f49fd670d39c097a738dc76e50c89ec98aac81b2))
+* **hardware:** record the precision and FVP gate the run used ([72bbd96](https://github.com/AmbiqAI/helia-core-tester/commit/72bbd96eca35b0ba533ba6473dc525178c1187cd))
+* **hardware:** record the precision and FVP gate the run used ([3458529](https://github.com/AmbiqAI/helia-core-tester/commit/3458529833bd9a059a29880ed14bf485d9dfdedd))
+* **mutation:** re-anchor the 1xN s8 guard mutants ([689c2dc](https://github.com/AmbiqAI/helia-core-tester/commit/689c2dc9a31be9de79c75d130230f2eeab73833e))
+* **scripts:** forward --precision from the board matrix ([f11990c](https://github.com/AmbiqAI/helia-core-tester/commit/f11990c56dbcba16a89de01f4cb9c33b0e4fb74e))
+* **scripts:** refuse matrix-owned args and broken bundles ([1d05c18](https://github.com/AmbiqAI/helia-core-tester/commit/1d05c1894e5a15574a09a0376a96ea2dfe8f5172))
+* **scripts:** refuse non-finite values, keep errored boards as null ([5dd344f](https://github.com/AmbiqAI/helia-core-tester/commit/5dd344fbc909a861222a2deae4dc7876f6f8bdbd))
+* **scripts:** refuse shared build dir, treat any bad read as bad bundle ([dec06a5](https://github.com/AmbiqAI/helia-core-tester/commit/dec06a5fe5629dcb19d54087760f050983f93f4e))
+* **scripts:** stabilize board matrix rows and probe env ([834a34f](https://github.com/AmbiqAI/helia-core-tester/commit/834a34f26787ca75754883055ff8f24f0dabcc7f))
+* **scripts:** type-check bundle counts, survive launch errors ([978a419](https://github.com/AmbiqAI/helia-core-tester/commit/978a419ef29828e3115b54f9bde960cd7867ab12))
+
+
+### Refactoring
+
+* **hardware:** require run options and record narrowing flags ([e634401](https://github.com/AmbiqAI/helia-core-tester/commit/e634401356b16a665f9adec304c52764f9aed9a3))
+* **hardware:** share the MHz clock formatter ([c5f84dc](https://github.com/AmbiqAI/helia-core-tester/commit/c5f84dc001315fa5cf39b810b30c6bf1e12b1665))
+
+
+### Docs
+
+* describe the board clock check ([01ab3d4](https://github.com/AmbiqAI/helia-core-tester/commit/01ab3d40bb4c131c6b09d56b339d3f5b4359e7eb))
+
 ## [0.7.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.6.0...v0.7.0) (2026-10-01)
 
 
