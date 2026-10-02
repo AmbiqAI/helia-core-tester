@@ -32,8 +32,17 @@ def _git(checkout: Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(checkout), *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
+def _require_clean(checkout: Path, path: str) -> None:
+    """Reject uncommitted changes under path."""
+    if _git(checkout, "status", "--porcelain", "--", path):
+        raise SystemExit(f"Uncommitted changes in {checkout / path}")
+
+
 def derive(helia_rt: Path, cmsis_nn: Path) -> dict:
     """Public kernels the helia-rt sources call."""
+    # Recorded refs must match scanned files.
+    _require_clean(helia_rt, KERNELS_DIR)
+    _require_clean(cmsis_nn, "Include")
     kernels = helia_rt / KERNELS_DIR
     sources = sorted([*kernels.glob("*.cc"), *kernels.glob("*.h")])
     if not sources:

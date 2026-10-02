@@ -444,7 +444,7 @@ def no_bridgeable_cases_error(
     or bypassing the gate, not by regenerating)."""
     base = (
         f"No bridgeable generated tests found for cpu={cpu} "
-        f"family={family if family is not None else '<all bridged families>'} "
+        f"family={family if family is not None else '<all generated families>'} "
         f"name_filter={name_filter!r} suite={suite!r} (skipped {len(skipped)})"
     )
     if not skipped:
