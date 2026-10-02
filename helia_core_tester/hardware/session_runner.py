@@ -461,14 +461,14 @@ def no_bridgeable_cases_error(
             # Only --fvp-gate strict blocks on staleness, so the useful advice is
             # "stop being strict", not "bypass the gate".
             hint = (
-                "\nEvery case was rejected as stale by --fvp-gate strict. Either refresh the "
+                "\nEvery bridgeable case was rejected as stale by --fvp-gate strict. Either refresh the "
                 "report (`uv run helia_core_tester build && uv run helia_core_tester run`) or "
                 "drop back to --fvp-gate advisory, which runs stale cases and records them as "
                 "stale in case_summary.csv."
             )
         else:
             hint = (
-                "\nEvery case was rejected by the FVP gate because the FVP recorded a FAILURE "
+                "\nEvery bridgeable case was rejected by the FVP gate because the FVP recorded a FAILURE "
                 "for these exact artifacts -- that is evidence the kernel is wrong, not a stale "
                 "report. Investigate before overriding; --fvp-gate off will run them anyway and "
                 "record fvp_status=failed in case_summary.csv."

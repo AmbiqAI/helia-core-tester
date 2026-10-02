@@ -399,7 +399,8 @@ def stream_generated_tests(
         "batch_count": int(getattr(result, "batch_count", 1)),
         "cases": case_seconds,
     }
-    coverage = build_coverage(repo_root, result.cases, build_dir)
+    # Unverified firmware: build symbols unknown.
+    coverage = build_coverage(repo_root, result.cases, build_dir if expected_build_id else None)
     write_coverage(bundle, coverage, skipped)
     return HardwareRunOutcome(
         session_id=session_id, result=result, bundle=bundle, skipped=skipped, timing=timing, coverage=coverage,

@@ -25,6 +25,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def public_entry_points(include_dir: Path) -> list[str]:
     """Kernels the public headers declare."""
     headers = sorted(include_dir.glob("arm_nnfunctions*.h"))
+    if not headers:
+        raise SystemExit(f"No public headers under {include_dir}")
     return timed_kernel_calls("\n".join(h.read_text(encoding="utf-8") for h in headers))
 
 

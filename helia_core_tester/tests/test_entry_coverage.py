@@ -137,4 +137,17 @@ def test_adapter_gaps_keep_the_fvp_hint() -> None:
     fvp = (SimpleNamespace(name="conv_a"), "FVP recorded a failure for these artifacts")
     gap = (SimpleNamespace(name="lstm_a"), f"{NO_ADAPTER}: LSTMFunctions has no firmware adapter")
     error = no_bridgeable_cases_error([fvp, gap], cpu="cortex-m55", family=None, name_filter=None, suite="int")
-    assert "rejected by the FVP gate" in str(error)
+    assert "Every bridgeable case was rejected by the FVP gate" in str(error)
+
+
+def test_derive_refuses_missing_headers(tmp_path: Path) -> None:
+    import importlib.util
+
+    import pytest
+
+    script = Path(__file__).resolve().parents[2] / "scripts" / "derive_deployed_entry_points.py"
+    spec = importlib.util.spec_from_file_location("derive_entry_points", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with pytest.raises(SystemExit, match="No public headers"):
+        module.public_entry_points(tmp_path)
