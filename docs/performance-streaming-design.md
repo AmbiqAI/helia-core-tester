@@ -111,9 +111,9 @@ The protocol is target-driven after plan load:
 15. target sends `CASE_COMPLETE`
 16. loop until `SESSION_COMPLETE`
 
-### Messages (HCTP v3)
+### Messages (HCTP v4)
 
-Protocol version 3 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
+Protocol version 4 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
 another version is refused at the header. Message ids are compact and in protocol
 order; every payload is encoded and decoded on the host by exactly one pair of
 functions in `helia_core_tester/hardware/wire.py`, which the host session and the
