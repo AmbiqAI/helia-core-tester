@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 import numpy as np
@@ -17,7 +18,12 @@ class ComparisonResult:
     max_abs_diff: float
     mode: str
     # Elements off the golden, tolerance aside.
-    diff_count: int = 0
+    diff_count: int | None = 0
+
+
+def finite_or_none(value: float) -> float | None:
+    """The value, or None if not finite."""
+    return value if math.isfinite(value) else None
 
 
 def strict_comparison(comparison: dict[str, Any]) -> dict[str, Any]:

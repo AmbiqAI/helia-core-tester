@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import math
 import os
 import re
 import sys
@@ -13,6 +12,7 @@ from typing import Any, Callable, Iterator, Optional
 
 import typer
 
+from .comparison import finite_or_none
 from .wire import boot_line, boot_record
 
 
@@ -228,7 +228,8 @@ def build_json_summary(
                 "passed": ok,
                 "median_cycles": float(case.statistics.median_cycles),
                 "valid_for_regression": bool(case.statistics.valid_for_regression),
-                "max_abs_diff": case.comparison.max_abs_diff if math.isfinite(case.comparison.max_abs_diff) else None,
+                "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
+                "diff_count": case.comparison.diff_count,
                 "skipped_reason": None,
             }
         )
@@ -240,6 +241,7 @@ def build_json_summary(
                 "median_cycles": None,
                 "valid_for_regression": None,
                 "max_abs_diff": None,
+                "diff_count": None,
                 "skipped_reason": _clean_skip_reason(test.name, reason),
             }
         )

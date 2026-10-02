@@ -510,7 +510,8 @@ class HostSession:
                     # Drop samples from a partial measurement.
                     samples = []
                     comparison_result = replace(comparison_result, passed=False) if comparison_result else ComparisonResult(
-                        passed=False, mismatch_count=0, max_abs_diff=float("nan"), mode=str(bundle.comparison["mode"])
+                        passed=False, mismatch_count=0, max_abs_diff=float("nan"), mode=str(bundle.comparison["mode"]),
+                        diff_count=None,
                     )
                 raw_samples = tuple(samples)
                 normalized_samples = tuple(normalize_samples(raw_samples))

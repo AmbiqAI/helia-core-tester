@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import csv
 import json
-import math
 import shutil
 from pathlib import Path
 from typing import Any
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
+from .comparison import finite_or_none
 from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
 from .wire import boot_record
@@ -97,11 +97,6 @@ def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
     provenance["modules"] = modules
     kernels["commit"] = next((m["commit"] for m in modules or () if m["name"] == CMSIS_NN_MODULE), None)
     return provenance, app_dir / "nsx.lock"
-
-
-def _finite(value: float) -> float | None:
-    """The value, or None if not finite."""
-    return value if math.isfinite(value) else None
 
 
 def _rejection_record(case) -> dict | None:
@@ -208,7 +203,7 @@ def write_result_bundle(
                 "kernel_id": case.case_bundle.kernel_id,
                 "comparison_passed": case.comparison.passed,
                 "mismatch_count": case.comparison.mismatch_count,
-                "max_abs_diff": _finite(case.comparison.max_abs_diff),
+                "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
                 "diff_count": case.comparison.diff_count,
                 "sample_count": len(case.samples),
                 "median_cycles": case.statistics.median_cycles,
@@ -229,7 +224,7 @@ def write_result_bundle(
             "kernel_id": case.case_bundle.kernel_id,
             "comparison_passed": str(case.comparison.passed).lower(),
             "mismatch_count": case.comparison.mismatch_count,
-            "max_abs_diff": _finite(case.comparison.max_abs_diff),
+            "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
             "diff_count": case.comparison.diff_count,
             "sample_count": case.statistics.sample_count,
             "median_cycles": case.statistics.median_cycles,
@@ -250,7 +245,7 @@ def write_result_bundle(
                     "case_id": case.case_bundle.case_id,
                     "passed": case.comparison.passed,
                     "mismatch_count": case.comparison.mismatch_count,
-                    "max_abs_diff": _finite(case.comparison.max_abs_diff),
+                    "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
                     "diff_count": case.comparison.diff_count,
                     "comparison": case.case_bundle.comparison,
                     "rejection": rejection,
