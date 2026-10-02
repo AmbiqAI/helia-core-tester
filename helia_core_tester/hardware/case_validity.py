@@ -1,6 +1,7 @@
 """Timing status: why cycles may not gate perf.
 
-Only "valid" cases gate perf; all stay correctness-checked. The floor is an empty
+Only "valid" cases gate perf; all stay correctness-checked. A descriptor's
+degenerate_golden_reason marks a constant golden as intended, so it stays valid. The floor is an empty
 call through the same timed window as every kernel; it is recorded, never subtracted.
 FLOOR_FACTOR = 3 keeps the fixed window cost under a third of a valid reading.
 """
@@ -11,7 +12,7 @@ from dataclasses import replace
 
 import numpy as np
 
-from .case_bundle import FLOOR_CASE_ID, blob_numpy
+from .case_bundle import DEGENERATE_REASON_KEY, FLOOR_CASE_ID, blob_numpy
 from .measurement import SampleStatistics
 
 FLOOR_FACTOR = 3
@@ -48,7 +49,8 @@ def timing_status(case, floor_cycles: float | None) -> str:
         return "zero_cycles"
     if floor_cycles and stats.median_cycles < FLOOR_FACTOR * floor_cycles:
         return "below_floor"
-    if golden_degenerate(blob_numpy(case.case_bundle.expected_output)):
+    intended = case.case_bundle.manifest.get(DEGENERATE_REASON_KEY)
+    if not intended and golden_degenerate(blob_numpy(case.case_bundle.expected_output)):
         return "degenerate_output"
     return "valid"
 

@@ -256,7 +256,7 @@ def run_case_bundles(
             limits = session.limits
             # Floor case leads, when firmware has it.
             if batch_index == 0 and EMPTY_CALL_KERNEL_ID in session.kernel_ids:
-                remaining.insert(0, build_floor_bundle(project_root, board_id=board.id))
+                remaining.insert(0, build_floor_bundle(project_root, board_id=board.id, cpu=board.cpu))
             batch = take_batch(remaining, counter_passes, limits)
             result = session.run_many(batch, on_case_complete=report_case)
         except BootFailure:

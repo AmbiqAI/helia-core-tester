@@ -73,10 +73,10 @@ class OpTanh(OperationBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
-        # NOTE: CMSIS-NN only supports S16 for Tanh
-        # S8 tests are converted to S16 in convert_to_tflite, so we always use S16 kernel
+        # CMSIS-NN has no s8 tanh.
         activation_dtype = self.desc.get('activation_dtype', 'S8')
-        # Always use S16 kernel (S8 is converted to S16 during TFLite conversion)
+        if activation_dtype != 'S16':
+            raise NotImplementedError(f"Unsupported Tanh dtype: {activation_dtype} (only S16 supported)")
         return {
             'kernel_fn': 'arm_tanh_s16',
             'input_c_type': 'int16_t',

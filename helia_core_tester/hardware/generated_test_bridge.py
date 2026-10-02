@@ -27,7 +27,9 @@ from typing import Callable
 import numpy as np
 import yaml
 
-from .case_bundle import BlobInfo, CaseBundle, _blob_info, _case_root, _manifest_blob_entry, _write_blob, _write_manifest
+from .case_bundle import (
+    DEGENERATE_REASON_KEY, BlobInfo, CaseBundle, _blob_info, _case_root, _manifest_blob_entry, _write_blob, _write_manifest,
+)
 from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_kernel_id
 from .pathutil import display_path
 from helia_core_tester.core.cpu_targets import get_cpu_profile
@@ -769,7 +771,7 @@ def _generated_manifest_header(
     descriptor_text: str,
 ) -> dict:
     """Build identity before the caller evaluates kernel lookup and policy fields."""
-    return {
+    header = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,
         "case_id": case_id,
@@ -777,6 +779,11 @@ def _generated_manifest_header(
         "descriptor_path": display_path(descriptor_path, project_root),
         "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
     }
+    # Intended constant goldens stay timing-valid.
+    reason = generated_test.descriptor.get(DEGENERATE_REASON_KEY)
+    if reason:
+        header[DEGENERATE_REASON_KEY] = str(reason)
+    return header
 
 
 def _finish_generated_bundle(

@@ -314,13 +314,17 @@ def build_abs_s8_case_bundle(
 
 
 FLOOR_CASE_ID = "hct_empty_call_floor"
+# Descriptor key: intended degenerate golden.
+DEGENERATE_REASON_KEY = "degenerate_golden_reason"
 # Matches assets/kernel_registry.yaml.
 EMPTY_CALL_KERNEL_ID = 174
 
 
-def build_floor_bundle(project_root: Path, *, board_id: str | None = None) -> CaseBundle:
+def build_floor_bundle(
+    project_root: Path, *, board_id: str | None = None, cpu: str = "cortex-m55",
+) -> CaseBundle:
     """A no-op case timed like every kernel."""
-    case_root = _case_root(project_root, "Timing", FLOOR_CASE_ID, target=board_id or "cortex-m55")
+    case_root = _case_root(project_root, "Timing", FLOOR_CASE_ID, target=board_id or cpu)
     blobs_dir = case_root / "blobs"
     blobs_dir.mkdir(parents=True, exist_ok=True)
     # Firmware ignores it; cases need one.
@@ -339,7 +343,7 @@ def build_floor_bundle(project_root: Path, *, board_id: str | None = None) -> Ca
         "descriptor_sha256": hashlib.sha256(FLOOR_CASE_ID.encode("utf-8")).hexdigest(),
         "operator": "EmptyCall",
         "family": "Timing",
-        "target_cpu": "cortex-m55",
+        "target_cpu": cpu,
         "kernel_id": EMPTY_CALL_KERNEL_ID,
         "adapter_metadata_schema": 1,
         "serialized_scalar_parameters": {},

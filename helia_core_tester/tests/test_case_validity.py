@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 
 from helia_core_tester.hardware.case_bundle import (
-    EMPTY_CALL_KERNEL_ID, FLOOR_CASE_ID, build_abs_s8_case_bundle, build_floor_bundle, load_case_bundle,
+    DEGENERATE_REASON_KEY, EMPTY_CALL_KERNEL_ID, FLOOR_CASE_ID, build_abs_s8_case_bundle, build_floor_bundle,
+    load_case_bundle,
 )
 from helia_core_tester.hardware.case_validity import apply_floor, golden_degenerate, timing_status
 from helia_core_tester.hardware.kernel_registry import lookup_kernel_id
@@ -78,3 +79,26 @@ def test_floor_bundle_loads_and_matches_registry(tmp_path: Path) -> None:
     assert bundle.expected_output.byte_length == 0
     assert bundle.kernel_id == EMPTY_CALL_KERNEL_ID
     assert lookup_kernel_id(PROJECT_ROOT, family="Timing", operator="EmptyCall") == EMPTY_CALL_KERNEL_ID
+
+
+def test_degenerate_reason_keeps_case_valid(tmp_path: Path) -> None:
+    flat = build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_flat", input_shape=(1, 4, 4, 2))
+    golden_path = flat.root_dir / "blobs" / "expected_output.bin"
+    golden_path.write_bytes(bytes(golden_path.stat().st_size))
+    flat = load_case_bundle(flat.manifest_path)
+    assert timing_status(_case(flat), None) == "degenerate_output"
+    flat.manifest[DEGENERATE_REASON_KEY] = "constant by design"
+    assert timing_status(_case(flat), None) == "valid"
+
+
+def test_floor_bundle_records_board_cpu(tmp_path: Path) -> None:
+    bundle = build_floor_bundle(tmp_path, board_id="apollo3p_evb", cpu="cortex-m4")
+    assert bundle.manifest["target_cpu"] == "cortex-m4"
+
+
+def test_tanh_selector_rejects_s8() -> None:
+    from helia_core_tester.generation.ops.ActivationFunctions.tanh import OpTanh
+
+    assert OpTanh({"activation_dtype": "S16"})._select_cmsis_tanh_kernel()["kernel_fn"] == "arm_tanh_s16"
+    with pytest.raises(NotImplementedError, match="S8"):
+        OpTanh({"activation_dtype": "S8"})._select_cmsis_tanh_kernel()
