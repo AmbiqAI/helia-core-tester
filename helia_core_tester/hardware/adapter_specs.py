@@ -5296,7 +5296,7 @@ def _render_dispatch() -> list[str]:
 
 
 # Setup calls TFLM runs once in Prepare.
-_SETUP_CALL = re.compile(r"_get_\w*size(?:_mve|_dsp)?$|^arm_convolve_weight_sum$|^arm_vector_sum_s8$")
+_SETUP_CALL = re.compile(r"_get_\w*size(?:_mve|_dsp)?$|^arm_(?:depthwise_)?convolve_weight_sum$|^arm_vector_sum_s8(?:_s64)?$")
 _KERNEL_CALL = re.compile(r"\b(arm_[a-z0-9_]+)\s*\(")
 
 

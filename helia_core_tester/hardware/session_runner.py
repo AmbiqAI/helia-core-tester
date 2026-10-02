@@ -29,6 +29,7 @@ from .generated_test_bridge import (
 from .measurement import CounterPass, check_pass_count, counter_passes_for_selection
 from .memory_report import generate_memory_report
 from .pmu_catalog import default_selection
+from .entry_coverage import NO_ADAPTER
 from .result_bundle import write_result_bundle
 from .session import (
     BootFailure, CaseRunResult, HostSession, SessionResult, TargetLimits, check_case_id_length,
@@ -397,10 +398,11 @@ def build_generated_test_case_bundles(
 
     Returns (bridged_case_bundles, [(skipped_test, reason), ...]).
     """
-    families = bridged_families() if family is None else [family]
+    bridged = bridged_families()
     bundles: list[CaseBundle] = []
     skipped: list[tuple[GeneratedTestCase, str]] = []
     for suite_name in normalize_suites(suite):
+        families = bridged if family is None else [family]
         for fam in families:
             discovered = discover_generated_tests(
                 project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite_name
@@ -412,7 +414,22 @@ def build_generated_test_case_bundles(
                         project_root, test, require_fvp_pass=require_fvp_pass, fvp_gate=fvp_gate))
                 except UnsupportedGeneratedTestError as exc:
                     skipped.append((test, str(exc)))
+        if family is None:
+            # Unbridged families skip, not vanish.
+            for fam in unbridged_families(project_root, cpu=cpu, suite=suite_name, bridged=bridged):
+                for test in discover_generated_tests(
+                    project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite_name
+                ):
+                    skipped.append((replace(test, board=board_id), f"{NO_ADAPTER}: {fam} has no firmware adapter"))
     return bundles, skipped
+
+
+def unbridged_families(project_root: Path, *, cpu: str, suite: str, bridged: Sequence[str]) -> list[str]:
+    """Generated families with no firmware adapter."""
+    root = project_root / "artifacts" / "generated_tests" / suite / cpu
+    if not root.is_dir():
+        return []
+    return sorted(p.name for p in root.iterdir() if p.is_dir() and p.name not in bridged)
 
 
 def no_bridgeable_cases_error(
@@ -434,11 +451,12 @@ def no_bridgeable_cases_error(
     if not skipped:
         return RuntimeError(f"{base}; run `helia_core_tester generate` first.")
     fvp_skips = [(t, r) for t, r in skipped if "FVP" in r or "artifact" in r]
+    adapter_gaps = sum(r.startswith(NO_ADAPTER) for _, r in skipped)
     detail = "\n".join(f"  - {t.name}: {r}" for t, r in skipped[:5])
     if len(skipped) > 5:
         detail += f"\n  ... and {len(skipped) - 5} more"
     hint = ""
-    if len(fvp_skips) == len(skipped):
+    if fvp_skips and len(fvp_skips) + adapter_gaps == len(skipped):
         stale_only = all("does not match" in r or "no artifact_sha256" in r for _, r in fvp_skips)
         if stale_only:
             # Only --fvp-gate strict blocks on staleness, so the useful advice is

@@ -302,6 +302,8 @@ class HardwareRunOutcome:
     # Wall-clock seconds per stage (generate/build/flash/stream/total) and per case;
     # also written into the bundle's session_summary.json. See stage_timing().
     timing: Dict[str, Any] = field(default_factory=dict)
+    # CMSIS-NN entry points timed; see entry_coverage.
+    coverage: Optional[Dict[str, Any]] = None
 
     @property
     def failed_case_ids(self) -> list[str]:
@@ -326,6 +328,7 @@ def stream_generated_tests(
     `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
     """
     from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error, run_case_bundles
+    from .entry_coverage import build_coverage, write_coverage
 
     session_id = options.session_id or default_session_id(board)
 
@@ -396,7 +399,11 @@ def stream_generated_tests(
         "batch_count": int(getattr(result, "batch_count", 1)),
         "cases": case_seconds,
     }
-    return HardwareRunOutcome(session_id=session_id, result=result, bundle=bundle, skipped=skipped, timing=timing)
+    coverage = build_coverage(repo_root, result.cases, build_dir)
+    write_coverage(bundle, coverage, skipped)
+    return HardwareRunOutcome(
+        session_id=session_id, result=result, bundle=bundle, skipped=skipped, timing=timing, coverage=coverage,
+    )
 
 
 def finalize_timing(outcome: HardwareRunOutcome, *, generate_s: float = 0.0, echo: Callable[[str], None]) -> None:
