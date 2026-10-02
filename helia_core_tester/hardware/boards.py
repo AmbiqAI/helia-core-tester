@@ -47,6 +47,8 @@ class BoardSpec:
     ram_region: str
     # Firmware-reported clock; None skips the check.
     core_clock_hz: Optional[int] = None
+    # MRAM behind an L1 D-cache.
+    has_mram: bool = False
 
     def build_dir(self, repo_root: Path) -> Path:
         """Board-keyed benchmark-server CMake build directory."""
@@ -94,6 +96,7 @@ def _parse_row(row: dict, path: Path) -> BoardSpec:
         flash_region=str(row["flash_region"]),
         ram_region=str(row["ram_region"]),
         core_clock_hz=int(row["core_clock_hz"]) if "core_clock_hz" in row else None,
+        has_mram=bool(row.get("has_mram", False)),
     )
 
 

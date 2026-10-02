@@ -152,11 +152,13 @@ _INLINE_ASM_HELP = (
 )
 
 
-def _check_placement(placement) -> None:
+def _check_placement(placement, spec: BoardSpec) -> None:
     from .nsx_app import PLACEMENTS
 
     if placement is not None and placement not in PLACEMENTS:
         _fail(f"--placement must be one of: {', '.join(PLACEMENTS)}.")
+    if placement == "mram" and not spec.has_mram:
+        _fail(f"{spec.id} has no cached MRAM; use tcm.")
 
 
 def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None):
@@ -166,7 +168,6 @@ def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, place
 
     if cmsis_nn_ref and cmsis_nn_root:
         _fail("Pass --cmsis-nn-ref or --cmsis-nn-root, not both.")
-    _check_placement(placement)
     app_dir = nsx_app_dir(build_dir)
     try:
         options = resolve_options(
@@ -192,7 +193,6 @@ def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, pla
 
     if cmsis_nn_ref and cmsis_nn_root:
         _fail("Pass --cmsis-nn-ref or --cmsis-nn-root, not both.")
-    _check_placement(placement)
     app_dir = nsx_app_dir(build_dir)
     saved = saved_options(app_dir)
     if saved is None:
@@ -287,6 +287,7 @@ def build(
     from .firmware_build import build_firmware, resolve_build_dir
 
     spec = _board(board)
+    _check_placement(placement, spec)
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
     app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
     with _pipeline_errors(_verbosity(verbosity)):
@@ -318,6 +319,7 @@ def flash(
     from .firmware_build import flash_firmware, resolve_build_dir
 
     spec = _board(board)
+    _check_placement(placement, spec)
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
     app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
     serial = _serial(serial_no)
@@ -520,11 +522,15 @@ def run(
     if skip_flash and force_flash:
         _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
+    _check_placement(placement, spec)
     options = _stream_options(spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
     # Neither builds nor generates: nothing to resolve.
     streams_only = skip_generate and skip_flash
     if streams_only:
+        # A passed placement must match the build.
+        if placement is not None:
+            _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
         app_options = None
     elif skip_flash:
         app_options = _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)

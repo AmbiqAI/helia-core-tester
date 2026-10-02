@@ -25,6 +25,8 @@ boards:
     ram_region: MCU_TCM
     # HP mode.
     core_clock_hz: 250000000
+    # Cached MRAM: --placement mram.
+    has_mram: true
   - id: apollo330mP_evb
     nsx_board: apollo330mP_evb
     soc: apollo330P
@@ -40,6 +42,7 @@ boards:
     ram_region: MCU_TCM
     # HP2 mode.
     core_clock_hz: 250000000
+    has_mram: true
   - id: apollo3p_evb
     nsx_board: apollo3p_evb
     soc: apollo3p

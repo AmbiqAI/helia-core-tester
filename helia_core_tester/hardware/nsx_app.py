@@ -63,8 +63,6 @@ KERNEL_SHIM = "# Shim: delegates to the native ns-cmsis-nn NSX build.\nadd_subdi
 
 # tcm: all operands in DTCM. mram: weights, bias in MRAM.
 PLACEMENTS = ("tcm", "mram")
-# Parts with MRAM behind an L1 D-cache.
-MRAM_SOCS = ("apollo510", "apollo330P")
 
 # Options the last successful build used.
 OPTIONS_FILE = ".hct-options.json"
@@ -106,6 +104,8 @@ class AppOptions:
     placement: str = "tcm"
 
     def __post_init__(self) -> None:
+        if self.placement not in PLACEMENTS:
+            raise ValueError(f"placement must be one of: {', '.join(PLACEMENTS)}")
         # One spelling per checkout.
         if self.cmsis_nn_root is not None:
             object.__setattr__(self, "cmsis_nn_root", Path(self.cmsis_nn_root).expanduser().resolve())
@@ -357,9 +357,7 @@ def render_app(
     repo_root: Optional[Path] = None,
 ) -> AppRender:
     """Write nsx.yml, modules.cmake, CMakeLists.txt, local kernels."""
-    if options.placement not in PLACEMENTS:
-        raise AppRenderError(f"Unknown placement: {options.placement}")
-    if options.placement == "mram" and board.soc not in MRAM_SOCS:
+    if options.placement == "mram" and not board.has_mram:
         raise AppRenderError(f"{board.id} has no cached MRAM; use tcm")
     if options.cmsis_nn_root is not None:
         # App files must not land in root.

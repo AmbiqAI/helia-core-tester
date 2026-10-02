@@ -707,7 +707,7 @@ static hctp_status_t parse_scalar(hct_server_session_t *session, const char *nam
 }
 
 /* Models keep these in MRAM. */
-static bool blob_is_const(const hct_server_blob_t *blob)
+static bool blob_in_mram(const hct_server_blob_t *blob)
 {
 #if defined(HCT_PLACEMENT_MRAM)
     return blob->role == HCT_BLOB_ROLE_WEIGHTS || blob->role == HCT_BLOB_ROLE_BIAS;
@@ -724,7 +724,7 @@ static hctp_status_t allocate_blob(hct_server_session_t *session, hct_server_blo
 {
     uint32_t aligned;
     uint32_t end;
-    const bool staged = blob_is_const(blob);
+    const bool staged = blob_in_mram(blob);
     const uint32_t alignment = (staged && blob->alignment < HCT_MRAM_ROW_BYTES) ? HCT_MRAM_ROW_BYTES : blob->alignment;
     const uint32_t length = staged ? ((blob->byte_length + HCT_MRAM_ROW_BYTES - 1u) & ~(HCT_MRAM_ROW_BYTES - 1u)) : blob->byte_length;
     if (staged && length < blob->byte_length)
@@ -1153,6 +1153,7 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
 /* Pool sits past the image; 512 KiB. */
 #define HCT_MRAM_POOL_BYTES (512u * 1024u)
 #define HCT_MRAM_LINE_BYTES 32u
+/* NSX SBL script MCU_MRAM ends. */
 #if defined(AM_PART_APOLLO330P)
 #define HCT_MRAM_END 0x00600000u
 #else
@@ -1174,11 +1175,15 @@ static uint32_t mram_pool_base(void)
 static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blob_t *blob)
 {
     const uint32_t base = mram_pool_base();
-    const uint32_t length = (blob->byte_length + HCT_MRAM_LINE_BYTES - 1u) & ~(HCT_MRAM_LINE_BYTES - 1u);
-    const uint32_t words = ((blob->byte_length + HCT_MRAM_ROW_BYTES - 1u) & ~(HCT_MRAM_ROW_BYTES - 1u)) / 4u;
+    /* allocate_blob padded the stage to rows. */
+    const uint32_t length = (blob->byte_length + HCT_MRAM_ROW_BYTES - 1u) & ~(HCT_MRAM_ROW_BYTES - 1u);
     uint8_t *staged = &session->workspace[blob->arena_offset];
     uint32_t address;
-    if (base == 0u || length == 0u || length > HCT_MRAM_POOL_BYTES || hct_window.cold_count >= HCT_SERVER_MAX_BLOBS)
+    if (length == 0u)
+    {
+        return HCTP_STATUS_OK;
+    }
+    if (base == 0u || length > HCT_MRAM_POOL_BYTES || hct_window.cold_count >= HCT_SERVER_MAX_BLOBS)
     {
         return HCTP_STATUS_INVALID_ARGUMENT;
     }
@@ -1192,11 +1197,12 @@ static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blo
         session->mram_cursor = base;
     }
     address = session->mram_cursor;
-    session->mram_cursor += length;
+    /* Each blob starts on a cache line. */
+    session->mram_cursor += (length + HCT_MRAM_LINE_BYTES - 1u) & ~(HCT_MRAM_LINE_BYTES - 1u);
     /* Skip rows that already match. */
     if (memcmp((const void *)address, staged, blob->byte_length) != 0)
     {
-        if (am_hal_mram_main_program(AM_HAL_MRAM_PROGRAM_KEY, (uint32_t *)staged, (uint32_t *)address, words) != 0u)
+        if (am_hal_mram_main_program(AM_HAL_MRAM_PROGRAM_KEY, (uint32_t *)staged, (uint32_t *)address, length / 4u) != 0u)
         {
             return HCTP_STATUS_INVALID_ARGUMENT;
         }
@@ -1259,7 +1265,7 @@ static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint
         return HCTP_STATUS_PAYLOAD_CRC_MISMATCH;
     }
 
-    if (blob_is_const(blob))
+    if (blob_in_mram(blob))
     {
         const hctp_status_t placed = place_in_mram(session, blob);
         if (placed != HCTP_STATUS_OK) return placed;

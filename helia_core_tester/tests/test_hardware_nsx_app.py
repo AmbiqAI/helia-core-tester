@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 from helia_core_tester.hardware import nsx_app, nsx_cli
-from helia_core_tester.hardware.boards import resolve_board
+from helia_core_tester.hardware.boards import load_board_table, resolve_board
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BOARD = resolve_board("apollo510_evb")
@@ -347,8 +347,9 @@ def test_mram_placement_defines_the_switch(tmp_path: Path) -> None:
 def test_mram_placement_needs_cached_mram(tmp_path: Path) -> None:
     with pytest.raises(nsx_app.AppRenderError, match="no cached MRAM"):
         nsx_app.render_app(resolve_board("apollo3p_evb"), nsx_app.AppOptions(placement="mram"), tmp_path / "app")
-    with pytest.raises(nsx_app.AppRenderError, match="Unknown placement"):
-        _render(tmp_path, placement="sram")
+    with pytest.raises(ValueError, match="placement"):
+        nsx_app.AppOptions(placement="sram")
+    assert [board.id for board in load_board_table() if board.has_mram] == ["apollo510_evb", "apollo330mP_evb"]
 
 
 def test_placement_is_a_saved_option(tmp_path: Path) -> None:
