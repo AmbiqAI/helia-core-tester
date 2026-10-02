@@ -62,6 +62,20 @@ def test_timing_status_order(abs_bundle) -> None:
     assert timing_status(_case(abs_bundle, median=89.0), None) == "valid"
 
 
+def test_expected_success_is_not_error_path(abs_bundle) -> None:
+    manifest = {**abs_bundle.manifest, "correctness_comparison": {"mode": "exact_status", "expected_status": 0}}
+    assert timing_status(_case(replace(abs_bundle, manifest=manifest)), 30.0) == "valid"
+
+
+def test_unclassified_stats_agree_with_validity() -> None:
+    from helia_core_tester.hardware.measurement import compute_sample_statistics
+
+    sample = SimpleNamespace(cycles_per_invocation=10.0, overflow=True, unsupported_counters=())
+    stats = compute_sample_statistics([sample])
+    assert (stats.timing_status, stats.valid_for_regression) == ("overflow", False)
+    assert compute_sample_statistics([]).timing_status == "zero_cycles"
+
+
 def test_apply_floor_records_and_classifies(abs_bundle, tmp_path: Path) -> None:
     floor = build_floor_bundle(tmp_path, board_id="apollo510_evb")
     cases = [_case(floor, median=40.0), _case(abs_bundle, median=100.0), _case(abs_bundle, median=200.0)]

@@ -41,7 +41,8 @@ def golden_degenerate(golden: np.ndarray) -> bool:
 def timing_status(case, floor_cycles: float | None) -> str:
     """The first reason a case's cycles cannot gate perf."""
     stats: SampleStatistics = case.statistics
-    if case.case_bundle.expected_status_code is not None:
+    # Expected success is a normal case.
+    if case.case_bundle.expected_status_code not in (None, 0):
         return "error_path"
     if stats.overflow_detected:
         return "overflow"

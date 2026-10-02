@@ -325,7 +325,7 @@ def compute_sample_statistics(samples: Iterable[NormalizedSample]) -> SampleStat
     """
     materialized = list(samples)
     if not materialized:
-        return SampleStatistics(0, 0.0, 0.0, 0.0, 0.0, 0.0, False, False, ())
+        return SampleStatistics(0, 0.0, 0.0, 0.0, 0.0, 0.0, False, False, (), timing_status="zero_cycles")
     cycle_values = [sample.cycles_per_invocation for sample in materialized]
     median_cycles = float(statistics.median(cycle_values))
     abs_deviation = [abs(value - median_cycles) for value in cycle_values]
@@ -341,6 +341,8 @@ def compute_sample_statistics(samples: Iterable[NormalizedSample]) -> SampleStat
         valid_for_regression=not overflow,
         overflow_detected=overflow,
         unsupported_counters=tuple(unsupported),
+        # The runner refines this later.
+        timing_status="overflow" if overflow else "valid",
     )
 
 
