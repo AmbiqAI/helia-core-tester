@@ -27,7 +27,7 @@ _ELEMENT_OPERATORS = frozenset({
     "Clamp", "HardSwishCompat", "HardSwishPrecise", "LeakyRelu", "Logistic", "NNActivationFloat", "PReLU",
     "PReLUScalar", "Relu", "Relu6", "Tanh",
     "Equal", "NotEqual", "Greater", "GreaterEqual", "Less", "LessEqual",
-    "Quantize", "Dequantize", "Requantize", "BatchNorm", "Softmax", "SoftmaxS8S16", "SelectV2", "Where",
+    "Quantize", "Dequantize", "Requantize", "BatchNorm", "Softmax", "SoftmaxS8S16", "SelectV2",
 })
 
 
