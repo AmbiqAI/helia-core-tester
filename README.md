@@ -58,7 +58,7 @@ Correctness: int cases use the per-operator LSB tolerance in
 `--strict-compare` drops the tolerance so int outputs must match the golden
 exactly. `--golden-from <bundle dir>` judges each case against that past run's
 `outputs/` instead (bit-exact for int, the usual tolerance for float), which pins
-the current kernels' rounding where the TFLite golden differs by design. The
+the current kernels' rounding where the TFLite golden differs by design. It refuses cases that run failed unless `--golden-allow-failed` is passed. The
 session manifest's `compare` block records which mode ran. The steps are also available individually as
 `hardware build`, `hardware flash [--force]`, `hardware stream` and
 `hardware memory-report`.

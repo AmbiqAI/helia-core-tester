@@ -122,6 +122,12 @@ def strict_bundle(bundle: CaseBundle) -> CaseBundle:
     return replace(bundle, manifest=manifest)
 
 
+def golden_failed(bundle: CaseBundle, golden_dir: Path) -> bool:
+    """True if the past run failed this case."""
+    record = golden_dir / "correctness" / f"{bundle.case_id}.json"
+    return not record.is_file() or json.loads(record.read_text(encoding="utf-8")).get("passed") is not True
+
+
 def golden_bundle(bundle: CaseBundle, golden_dir: Path) -> CaseBundle:
     """The bundle, judged against a past run's output."""
     if bundle.expected_status_code is not None:

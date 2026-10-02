@@ -781,6 +781,39 @@ def test_golden_from_judges_against_past_output(tmp_path: Path) -> None:
     assert (case.comparison.passed, case.comparison.diff_count, case.comparison.max_abs_diff) == (False, 1, 1.0)
 
 
+@pytest.mark.parametrize("record", [{"passed": False}, None])
+def test_golden_from_refuses_failed_cases(tmp_path: Path, monkeypatch, record) -> None:
+    from helia_core_tester.hardware import hardware_pipeline
+    from helia_core_tester.hardware.case_bundle import blob_numpy
+
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_bad").manifest_path)
+    golden_dir = tmp_path / "past"
+    (golden_dir / "outputs").mkdir(parents=True)
+    (golden_dir / "outputs" / "abs_bad.bin").write_bytes(blob_numpy(bundle.expected_output).tobytes())
+    if record is not None:
+        (golden_dir / "correctness").mkdir()
+        (golden_dir / "correctness" / "abs_bad.json").write_text(json.dumps(record))
+    seen: dict = {}
+    monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([bundle], []))
+    monkeypatch.setattr(
+        "helia_core_tester.hardware.session_runner.run_case_bundles",
+        lambda repo_root, bundles, **kwargs: (seen.update(bundles=bundles), (object(), tmp_path))[1],
+    )
+    build_dir = tmp_path / "bd"
+    _write_elf(build_dir, b"fw", "hct-gold")
+
+    def stream(**flags):
+        options = StreamOptions(golden_from=golden_dir, **flags)
+        hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=build_dir, options=options, echo=lambda _m: None)
+
+    with pytest.raises(RuntimeError, match="Golden run failed these cases: abs_bad"):
+        stream()
+    assert "bundles" not in seen
+    stream(golden_allow_failed=True)
+    assert [b.case_id for b in seen["bundles"]] == ["abs_bad"]
+
+
 def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, monkeypatch) -> None:
     from helia_core_tester.hardware import hardware_pipeline
 

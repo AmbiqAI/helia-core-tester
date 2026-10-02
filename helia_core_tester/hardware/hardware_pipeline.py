@@ -278,6 +278,8 @@ class StreamOptions:
     """Integer outputs must match exactly: no tolerance."""
     golden_from: Optional[Path] = None
     """Result bundle whose outputs replace the goldens; implies strict."""
+    golden_allow_failed: bool = False
+    """Accept golden cases the past run failed."""
 
     def compare_record(self) -> dict[str, Any]:
         """How outputs get judged, for the bundle."""
@@ -337,7 +339,7 @@ def stream_generated_tests(
     can be checked against it; a missing stamp is an error unless
     `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
     """
-    from .case_bundle import golden_bundle, strict_bundle
+    from .case_bundle import golden_bundle, golden_failed, strict_bundle
     from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error, run_case_bundles
 
     session_id = options.session_id or default_session_id(board)
@@ -367,6 +369,9 @@ def stream_generated_tests(
             skipped, cpu=board.cpu, family=options.family, name_filter=options.test_name, suite=options.suite,
         )
     if options.golden_from is not None:
+        failed = [b.case_id for b in bundles if golden_failed(b, options.golden_from)]
+        if failed and not options.golden_allow_failed:
+            raise RuntimeError(f"Golden run failed these cases: {', '.join(failed)}")
         bundles = [golden_bundle(bundle, options.golden_from) for bundle in bundles]
     elif options.strict_compare:
         bundles = [strict_bundle(bundle) for bundle in bundles]
