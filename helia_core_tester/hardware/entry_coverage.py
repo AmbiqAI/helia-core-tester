@@ -1,44 +1,40 @@
 """CMSIS-NN entry points: public, timed, and deployed.
 
-Timed: each unrejected case's registry `cmsis_function` plus the
-arm_* names in its manifest capabilities. Deployed comes from
-assets/deployed_entry_points.json.
+Public: kernels the build linked (kernel_symbol_refs.inc).
+Timed: each unrejected case's arm_* capability, else its registry
+`cmsis_function`. Deployed: assets/deployed_entry_points.json.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from .adapter_specs import timed_kernel_calls
+from .adapter_specs import is_setup_call
 from .kernel_registry import load_kernel_registry
 from .pathutil import write_text_lf
+from .result_bundle import merge_summary
 
 DEPLOYED_PATH = Path("assets/deployed_entry_points.json")
 COVERAGE_FILE = "coverage.json"
 NO_ADAPTER = "no_hardware_adapter"
+SYMBOL_REFS = "kernel_symbol_refs.inc"
+_SYMBOL_REF = re.compile(r'^\{ "(arm_\w+)"', re.M)
 
 
-def public_entry_points(include_dir: Path) -> list[str]:
-    """Kernels the public headers declare, minus setup calls."""
-    headers = sorted(include_dir.glob("arm_nnfunctions*.h"))
-    return timed_kernel_calls("\n".join(h.read_text(encoding="utf-8") for h in headers))
-
-
-def built_include_dir(build_dir: Optional[Path]) -> Optional[Path]:
-    """Include/ of the kernels the build compiled."""
-    from .firmware_build import nsx_app_dir
-    from .nsx_app import kernel_dir, saved_options
+def built_entry_points(build_dir: Optional[Path]) -> tuple[Optional[Path], Optional[list[str]]]:
+    """Public kernels the build linked."""
+    from .firmware_build import IMAGE_SUBDIR
 
     if build_dir is None:
-        return None
-    app_dir = nsx_app_dir(build_dir)
-    options = saved_options(app_dir)
-    if options is None:
-        return None
-    include = (options.cmsis_nn_root or kernel_dir(app_dir, options)) / "Include"
-    return include if include.is_dir() else None
+        return None, None
+    path = build_dir / IMAGE_SUBDIR / SYMBOL_REFS
+    if not path.is_file():
+        return None, None
+    names = _SYMBOL_REF.findall(path.read_text(encoding="utf-8"))
+    return path, sorted({name for name in names if not is_setup_call(name)})
 
 
 def build_coverage(project_root: Path, cases: Sequence, build_dir: Optional[Path]) -> dict[str, Any]:
@@ -49,22 +45,22 @@ def build_coverage(project_root: Path, cases: Sequence, build_dir: Optional[Path
         if case.rejection is not None or not case.samples:
             continue
         bundle = case.case_bundle
-        # Capabilities name per-axis variants.
+        # Capabilities name the exact variant.
         capabilities = bundle.manifest.get("required_target_capabilities") or ()
-        timed_set.update(name for name in capabilities if name.startswith("arm_"))
-        if bundle.kernel_id in by_id:
-            timed_set.add(by_id[bundle.kernel_id])
+        named = {name for name in capabilities if name.startswith("arm_")}
+        if not named and bundle.kernel_id in by_id:
+            named = {by_id[bundle.kernel_id]}
+        timed_set.update(named)
     timed = sorted(timed_set)
     deployed = json.loads((project_root / DEPLOYED_PATH).read_text(encoding="utf-8"))
     deployed_names = deployed["entry_points"]
-    include = built_include_dir(build_dir)
-    public = public_entry_points(include) if include is not None else None
+    refs, public = built_entry_points(build_dir)
     deployed_timed = [name for name in deployed_names if name in timed]
     return {
         "schema": "hct.hardware.coverage",
         "schema_version": 1,
         "public": {
-            "include_dir": str(include) if include is not None else None,
+            "source": str(refs) if refs is not None else None,
             "entry_points": public,
             "timed": None if public is None else len(set(public) & set(timed)),
             "total": None if public is None else len(public),
@@ -88,13 +84,10 @@ def write_coverage(bundle_root: Path, coverage: dict, skipped: Sequence[tuple]) 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest.setdefault("artifacts", {})["coverage"] = COVERAGE_FILE
     write_text_lf(manifest_path, json.dumps(manifest, indent=2))
-    summary_path = bundle_root / "session_summary.json"
-    summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
-    summary["skipped_cases"] = [
+    merge_summary(bundle_root, skipped_cases=[
         {"case_id": test.name, "family": test.family, "suite": test.suite, "reason": reason}
         for test, reason in skipped
-    ]
-    write_text_lf(summary_path, json.dumps(summary, indent=2))
+    ])
     return path
 
 

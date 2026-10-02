@@ -5305,4 +5305,9 @@ def timed_kernel_calls(source: str) -> list[str]:
     weight and vector sums). The generated file routes each through `HCT_TIMED()`, so
     a timed sample counts the kernel call and not the adapter work around it."""
     names = set(_KERNEL_CALL.findall(_strip_comments(source)))
-    return sorted(name for name in names if not _SETUP_CALL.search(name))
+    return sorted(name for name in names if not is_setup_call(name))
+
+
+def is_setup_call(name: str) -> bool:
+    """True for Prepare-time setup calls."""
+    return bool(_SETUP_CALL.search(name))

@@ -16,10 +16,16 @@ import subprocess
 from pathlib import Path
 
 from helia_core_tester.hardware.adapter_specs import timed_kernel_calls
-from helia_core_tester.hardware.entry_coverage import DEPLOYED_PATH, public_entry_points
+from helia_core_tester.hardware.entry_coverage import DEPLOYED_PATH
 
 KERNELS_DIR = "tensorflow/lite/micro/kernels/helia"
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def public_entry_points(include_dir: Path) -> list[str]:
+    """Kernels the public headers declare."""
+    headers = sorted(include_dir.glob("arm_nnfunctions*.h"))
+    return timed_kernel_calls("\n".join(h.read_text(encoding="utf-8") for h in headers))
 
 
 def _git(checkout: Path, *args: str) -> str:

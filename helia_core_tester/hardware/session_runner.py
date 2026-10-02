@@ -402,25 +402,24 @@ def build_generated_test_case_bundles(
     bundles: list[CaseBundle] = []
     skipped: list[tuple[GeneratedTestCase, str]] = []
     for suite_name in normalize_suites(suite):
-        families = bridged if family is None else [family]
+        families = [family] if family is not None else [
+            *bridged, *unbridged_families(project_root, cpu=cpu, suite=suite_name, bridged=bridged),
+        ]
         for fam in families:
             discovered = discover_generated_tests(
                 project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite_name
             )
             for test in discovered:
                 test = replace(test, board=board_id)
+                if fam not in bridged:
+                    # Unbridged families skip, not vanish.
+                    skipped.append((test, f"{NO_ADAPTER}: {fam} has no firmware adapter"))
+                    continue
                 try:
                     bundles.append(build_case_bundle_from_generated_test(
                         project_root, test, require_fvp_pass=require_fvp_pass, fvp_gate=fvp_gate))
                 except UnsupportedGeneratedTestError as exc:
                     skipped.append((test, str(exc)))
-        if family is None:
-            # Unbridged families skip, not vanish.
-            for fam in unbridged_families(project_root, cpu=cpu, suite=suite_name, bridged=bridged):
-                for test in discover_generated_tests(
-                    project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite_name
-                ):
-                    skipped.append((replace(test, board=board_id), f"{NO_ADAPTER}: {fam} has no firmware adapter"))
     return bundles, skipped
 
 
