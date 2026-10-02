@@ -64,7 +64,9 @@ jobs:
       - name: Checkout the board table
         uses: actions/checkout@v4
         with:
-          sparse-checkout: assets/hardware_boards.yaml
+          sparse-checkout: |
+            assets/hardware_boards.yaml
+            .github/scripts/resolve-kernel-ref.sh
           sparse-checkout-cone-mode: false
       - name: Build the board matrix
         id: matrix
@@ -92,29 +94,7 @@ jobs:
       # A SHA keeps every board on one commit.
       - name: Resolve the kernel ref
         id: ref
-        run: |
-          ref="${HCT_NIGHTLY_REF//[[:space:]]/}"
-          if [[ "${ref}" =~ ^[0-9a-f]{40}$ ]]; then
-            sha="${ref}"
-          else
-            refs="$(git ls-remote https://github.com/AmbiqAI/ns-cmsis-nn.git \
-              "refs/heads/${ref}" "refs/tags/${ref}" "refs/tags/${ref}^{}")"
-            # Annotated tags: take the peeled commit.
-            sha="$(awk -v t="refs/tags/${ref}^{}" '$2 == t { print $1 }' <<< "${refs}")"
-            sha="${sha:-$(awk 'NR == 1 { print $1 }' <<< "${refs}")}"
-          fi
-          if [[ -z "${sha}" ]]; then
-            echo "::error::ns-cmsis-nn has no ref '${ref}'" >&2
-            exit 2
-          fi
-          # Only main feeds the main series.
-          leg=ref
-          [[ "${ref}" == main ]] && leg=main
-          echo "::notice::second leg ${leg}: ns-cmsis-nn ${ref} at ${sha}"
-          {
-            echo "leg=${leg}"
-            echo "sha=${sha}"
-          } >> "${GITHUB_OUTPUT}"
+        run: .github/scripts/resolve-kernel-ref.sh
 
   run:
     needs: plan
@@ -213,11 +193,13 @@ jobs:
       # Same lock; own build dir keeps pinned warm.
       - name: Run the kernel ref suite
         id: ref_suite
+        # A stall must not sink pinned.
+        timeout-minutes: 45
         if: ${{ !cancelled() && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure') }}
         env:
           LEG_SESSION: ${{ env.HCT_REF_SESSION_ID }}
           LEG_JSON: ${{ env.HCT_REF_JSON }}
-          LEG_BUILD_DIR: ${{ env.HCT_CACHE_DIR }}/hardware-ref/${{ matrix.board }}
+          LEG_BUILD_DIR: ${{ env.HCT_CACHE_DIR }}/hardware-${{ needs.plan.outputs.ref_leg }}/${{ matrix.board }}
           LEG_REF: ${{ needs.plan.outputs.ref_sha }}
         run: .github/scripts/hardware-suite.sh
 
