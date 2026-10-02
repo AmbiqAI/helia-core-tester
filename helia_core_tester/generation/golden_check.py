@@ -17,7 +17,6 @@ MIN_ELEMENTS = 8
 # Share of outputs at the dtype bounds.
 MAX_SATURATED_SHARE = 0.9
 
-_BOUNDS = {"int8_t": (-128, 127), "int16_t": (-32768, 32767)}
 _GOLDEN_RE = re.compile(
     r"static\s+const\s+(int8_t|int16_t|bool)\s+(\w+_expected_output)\s*\[\s*\]\s*=\s*\{([^}]*)\}"
 )
@@ -33,7 +32,8 @@ def golden_problem(values: np.ndarray, c_type: str) -> str | None:
         return "constant bool output" if distinct == 1 else None
     if distinct <= 2:
         return f"{distinct} distinct value(s) over {flat.size}"
-    low, high = _BOUNDS[c_type]
+    info = np.iinfo(c_type.removesuffix("_t"))
+    low, high = info.min, info.max
     share = float(np.mean((flat == low) | (flat == high)))
     if share >= MAX_SATURATED_SHARE:
         return f"{share:.0%} of {flat.size} at dtype bounds"

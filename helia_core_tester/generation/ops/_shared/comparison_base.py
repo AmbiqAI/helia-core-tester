@@ -4,6 +4,7 @@ from typing import Dict
 import numpy as np
 from pathlib import Path
 from helia_core_tester.generation.ops._shared.base import OperationBase
+from helia_core_tester.generation.utils.tflite_utils import simulate_compare
 
 
 _OP_MAP = {
@@ -55,67 +56,25 @@ class ComparisonFamilyBase(OperationBase):
         )
         self._write_tflite_bytes(out_path, model_bytes)
 
-    @staticmethod
-    def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
-        left_shift = shift if shift > 0 else 0
-        right_shift = -shift if shift < 0 else 0
-        prod = values.astype(np.int64) * (1 << left_shift)
-        mult = (1 << 30) + (prod * int(multiplier))
-        res = (mult >> 31).astype(np.int64)
-        if right_shift == 0:
-            return res.astype(np.int32)
-        remainder_mask = (1 << right_shift) - 1
-        remainder = res & remainder_mask
-        result = res >> right_shift
-        threshold = remainder_mask >> 1
-        threshold = threshold + (result < 0)
-        result = result + (remainder > threshold)
-        return result.astype(np.int32)
-
-    def _simulate_compare(self, input1_q: np.ndarray, input2_q: np.ndarray, operation: str, params: Dict[str, int]) -> np.ndarray:
-        left_shift = params["left_shift"]
-        a = (input1_q.astype(np.int32) + params["input_1_offset"]) << left_shift
-        b = (input2_q.astype(np.int32) + params["input_2_offset"]) << left_shift
-        a = self._requantize_np(a, params["input_1_mult"], params["input_1_shift"])
-        b = self._requantize_np(b, params["input_2_mult"], params["input_2_shift"])
-
-        if operation == "ARM_COMPARE_EQUAL":
-            out = a == b
-        elif operation == "ARM_COMPARE_NOT_EQUAL":
-            out = a != b
-        elif operation == "ARM_COMPARE_GREATER":
-            out = a > b
-        elif operation == "ARM_COMPARE_GREATER_EQUAL":
-            out = a >= b
-        elif operation == "ARM_COMPARE_LESS":
-            out = a < b
-        elif operation == "ARM_COMPARE_LESS_EQUAL":
-            out = a <= b
-        else:
-            raise ValueError(f"Unsupported operation: {operation}")
-        return out.astype(np.uint8)
-
     def _quant_params(self, tflite_path: Path) -> Dict[str, int]:
-        """Derive compare params like the runtime."""
-        from helia_core_tester.generation.utils.tflite_utils import calculate_multiplier_shift
+        """Read operand scales from the model."""
+        from helia_core_tester.generation.utils.tflite_utils import comparison_quant_params, scalar_scale_zp
 
         inputs = self.load_primary_operator_tensors(str(tflite_path))["inputs"]
-        params = {"left_shift": 8}
-        for index, tensor in enumerate(inputs[:2], start=1):
-            quant = tensor["quantization"]
-            mult, shift = calculate_multiplier_shift(float(self._quant_param_scalar(quant, "scale", 1.0)))
-            params[f"input_{index}_offset"] = -int(self._quant_param_scalar(quant, "zero_point", 0))
-            params[f"input_{index}_mult"] = int(mult)
-            params[f"input_{index}_shift"] = int(shift)
-        return params
+        (scale_1, zp_1), (scale_2, zp_2) = (scalar_scale_zp(t["quantization"]) for t in inputs[:2])
+        return comparison_quant_params(scale_1, zp_1, scale_2, zp_2)
 
-    def _sample_operands(self, shape_1, shape_2, output_shape, qmin, qmax, np_dtype):
+    def _sample_operands(self, rng, shape_1, shape_2, output_shape, qmin, qmax, np_dtype):
         """Draw spread operands with forced ties."""
-        rng = self._seeded_rng()
         # Few levels so equal pairs occur.
         levels = np.round(np.linspace(qmin, qmax, 7)).astype(np.int32)
         input_1 = rng.choice(levels, size=shape_1)
         input_2 = rng.choice(levels, size=shape_2)
+        # A scalar at the median splits outputs.
+        if input_1.size == 1:
+            input_1[...] = np.median(input_2)
+        elif input_2.size == 1:
+            input_2[...] = np.median(input_1)
         # Tie every third output element.
         if tuple(shape_2) == tuple(output_shape):
             tied = np.broadcast_to(input_1, output_shape).reshape(-1)
@@ -156,8 +115,15 @@ class ComparisonFamilyBase(OperationBase):
         output_dims = builder.nhwc_to_cmsis_dims(output_shape)
 
         params = self._quant_params(tflite_path)
-        input_1_q, input_2_q = self._sample_operands(input_shape_1, input_shape_2, output_shape, qmin, qmax, np_in_dtype)
-        expected = self._simulate_compare(input_1_q, input_2_q, op_enum, params)
+        rng = self._seeded_rng()
+        # Redraw until the output mixes.
+        for _ in range(16):
+            input_1_q, input_2_q = self._sample_operands(
+                rng, input_shape_1, input_shape_2, output_shape, qmin, qmax, np_in_dtype
+            )
+            expected = simulate_compare(input_1_q, input_2_q, operation=op_enum, **params)
+            if np.unique(expected).size > 1:
+                break
 
         context = {
             "name": name,
