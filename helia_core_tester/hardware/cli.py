@@ -408,6 +408,9 @@ def _stream_options(
         suite, test_name = apply_precision(precision, suite, test_name)
         validate_fvp_gate(fvp_gate)
         cases = CaseSelection(tuple(ops or ()), tuple(dtypes or ()), _read_case_ids(case_ids, cases_from))
+        # Exact ids already bound the run.
+        if cases.case_ids and limit is not None:
+            raise ValueError("--limit cannot combine with --case-id or --cases-from.")
         selection = resolve_pmu_options(pmu_counters or [], pmu_groups, warn=lambda msg: typer.echo(msg, err=True))
         options = StreamOptions(
             suite=suite, family=family, test_name=test_name, limit=limit,

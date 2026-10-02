@@ -100,3 +100,11 @@ def test_empty_filter_result_names_the_filters(tmp_path: Path, monkeypatch) -> N
         hardware_pipeline.stream_generated_tests(
             tmp_path, resolve_board("apollo510_evb"), 5, build_dir=build_dir, options=options, echo=lambda _: None,
         )
+
+
+def test_limit_with_case_ids_refused(capsys) -> None:
+    from helia_core_tester.hardware.cli import _stream_options
+
+    with pytest.raises(SystemExit):
+        _stream_options(None, "int", None, None, 1, None, None, None, None, None, None, None, ["a"], None)
+    assert "--limit cannot combine" in capsys.readouterr().err
