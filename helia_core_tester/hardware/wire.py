@@ -120,12 +120,15 @@ def placement_record(info: TargetInfo | None) -> dict:
     if info is None:
         return {"name": None, "weights": None, "activations": None, "dcache": None, "weights_cache": None}
     mram = info.placement == "mram"
+    m4 = info.target_cpu == "cortex-m4"
+    # M4 static BSS lands in SRAM.
+    workspace = "sram" if m4 else "dtcm"
     return {
         "name": info.placement,
-        "weights": "mram" if mram else "dtcm",
-        "activations": "dtcm",
+        "weights": "mram" if mram else workspace,
+        "activations": workspace,
         # Cortex-M4 has no D-cache; TCM bypasses it.
-        "dcache": "none" if info.target_cpu == "cortex-m4" else "on",
+        "dcache": "none" if m4 else "on",
         "weights_cache": "cold" if mram else "uncached",
     }
 

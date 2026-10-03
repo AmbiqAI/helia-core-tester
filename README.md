@@ -84,7 +84,9 @@ a pin bump rebuilds those build dirs the same way. Every build, flash, run and
 stream prints the kernel source, inline asm setting and placement.
 
 `--placement` picks where operands live. `tcm` (the default) keeps every operand
-in DTCM: kernel-only cost, no cache traffic. `mram` (Apollo510, Apollo330P)
+in one workspace: DTCM on Apollo510 and Apollo330P, and SRAM (`RWMEM`) on
+Apollo3P, whose 64 KiB TCM can't hold it. Neither path touches a D-cache, so it
+measures kernel-only cost. `mram` (Apollo510, Apollo330P)
 programs each case's weights and bias into a reserved MRAM pool past the image
 and evicts them from the D-cache before every timed call, as a large model's
 layer sees them; activations, scratch, multipliers and shifts stay in DTCM, as

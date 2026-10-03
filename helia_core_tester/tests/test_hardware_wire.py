@@ -272,5 +272,7 @@ def test_placement_rides_a_capability_bit() -> None:
     }
     assert wire.placement_record(mram)["weights"] == "mram"
     assert wire.placement_record(mram)["weights_cache"] == "cold"
-    assert wire.placement_record(_target_info(target_cpu="cortex-m4"))["dcache"] == "none"
+    assert wire.placement_record(_target_info(target_cpu="cortex-m4")) == {
+        "name": "tcm", "weights": "sram", "activations": "sram", "dcache": "none", "weights_cache": "uncached",
+    }
     assert wire.placement_record(None)["name"] is None

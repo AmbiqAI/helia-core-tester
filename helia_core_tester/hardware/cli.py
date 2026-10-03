@@ -140,8 +140,8 @@ _CMSIS_NN_ROOT_HELP = (
     "Copies its Include/, Source/, cmake/ and nsx/ into the app."
 )
 _PLACEMENT_HELP = (
-    "Operand memory: tcm (all in DTCM, kernel-only cost) or mram "
-    "(weights and bias in cached MRAM, evicted before each call; "
+    "Operand memory: tcm (one workspace: DTCM on Apollo5, SRAM on Apollo3P) "
+    "or mram (weights and bias in cached MRAM, evicted before each call; "
     "activations and scratch in DTCM). Default: the last build's, else tcm."
 )
 _JOBS_HELP = "Parallel build jobs (default: CPU count + 2, like ninja)."
