@@ -568,7 +568,8 @@ def test_json_summary_identifies_its_schema(tmp_path: Path, monkeypatch) -> None
     assert encoded["schema_version"] == 1
     assert datetime.fromisoformat(encoded["generated_at"]).utcoffset() == timedelta(0)
     assert encoded["selection"] == {
-        "suite": "float", "limit": 2, "family": "ActivationFunctions", "test_name": None, "precision": "f32",
+        "suite": "float", "limit": 2, "family": "ActivationFunctions", "test_name": None,
+        "ops": [], "dtypes": [], "case_ids": [], "precision": "f32",
         "pmu_counters": {"cpu": "all"}, "fvp_gate": "strict",
     }
     assert encoded["github"] is None
@@ -711,6 +712,8 @@ def _skip_coverage(monkeypatch) -> None:
 def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeypatch) -> None:
     from helia_core_tester.hardware import hardware_pipeline
 
+    (tmp_path / "bundle").mkdir()
+
     seen: dict = {}
     bridged: list[str] = []
 
@@ -746,6 +749,8 @@ def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeyp
 
 def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, monkeypatch) -> None:
     from helia_core_tester.hardware import hardware_pipeline
+
+    (tmp_path / "bundle").mkdir()
 
     class _Bundle:
         case_id = "abs_default_s8_hw_generated"

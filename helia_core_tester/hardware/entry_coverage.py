@@ -84,7 +84,7 @@ def write_coverage(bundle_root: Path, coverage: dict, skipped: Sequence[tuple]) 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest.setdefault("artifacts", {})["coverage"] = COVERAGE_FILE
     write_text_lf(manifest_path, json.dumps(manifest, indent=2))
-    merge_summary(bundle_root, skipped_cases=[
+    merge_summary(bundle_root, "skipped_cases", [
         {"case_id": test.name, "family": test.family, "suite": test.suite, "reason": reason}
         for test, reason in skipped
     ])
