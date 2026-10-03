@@ -12,6 +12,7 @@ import zlib
 import numpy as np
 
 from .pathutil import write_text_lf
+from .transfer import staged_extent
 
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
@@ -99,10 +100,15 @@ class CaseBundle:
 
     @property
     def workspace_bytes_required(self) -> int:
-        """Exact firmware bump-allocation footprint for this case."""
+        """Exact firmware footprint with TCM weights."""
+        return self.workspace_bytes_for("tcm")
+
+    def workspace_bytes_for(self, placement: str) -> int:
+        """Exact firmware footprint under placement."""
         used = 0
         for blob in self.streamable_blobs:
-            used = _align_up(used, max(blob.required_alignment, 1)) + blob.byte_length
+            length, alignment = staged_extent(blob.role, blob.byte_length, blob.required_alignment, placement)
+            used = _align_up(used, alignment) + length
         scratch = int(self.manifest.get("scratch_buffer", {}).get("bytes", 0))
         if scratch:
             used = _align_up(used, 16) + scratch
