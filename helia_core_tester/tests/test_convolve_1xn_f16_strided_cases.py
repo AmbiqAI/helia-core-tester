@@ -34,6 +34,7 @@ def _k_and_cout(desc: dict) -> tuple[int, int]:
 
 @pytest.mark.parametrize("desc", CASES, ids=lambda desc: desc["name"])
 def test_case_runs_the_strided_kernel(desc: dict) -> None:
+    assert desc["operator"] == "Convolve" and desc["activation_dtype"] == desc["weight_dtype"] == "FP16"
     rhs_cols, output_c = _k_and_cout(desc)
     assert not _rows_in_place(output_c, rhs_cols)
     weight_format = str((desc.get("hint") or {}).get("weight_format", "STANDARD")).upper()
