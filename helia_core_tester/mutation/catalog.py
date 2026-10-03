@@ -906,8 +906,9 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             ),
             Edit(
                 relpath="Source/PoolingFunctions/arm_avgpool_s16.c",
-                pattern="    if (batch_cnt < 1)\n",
-                replacement="    if (0) /* MUTANT drop_pool_batch_guard */\n",
+                # ns-cmsis-nn #627 folded the channel check into the batch guard; drop only the batch clause.
+                pattern="    if ((batch_cnt < 1) || (ch_src < 0))\n",
+                replacement="    if ((0 /* MUTANT drop_pool_batch_guard */) || (ch_src < 0))\n",
                 count=1,
             ),
             Edit(
