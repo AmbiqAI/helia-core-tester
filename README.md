@@ -50,6 +50,8 @@ instead, with the human output on stderr; the exit code is non-zero on any
 correctness failure). Useful narrowing flags: `--suite int|float|both`,
 `--family`, `--test-name`, `--limit`, `--precision fp16|fp32` (float-only shortcut,
 not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|strict`,
+`--op`/`--dtype` (repeatable, matched like `generate --op/--dtype`),
+`--case-id`/`--cases-from <file>` (exact case ids, e.g. a rerun list; not combinable with `--limit`),
 `--skip-generate`, `--skip-flash`, `--force-flash`.
 
 Correctness: int cases use the per-operator LSB tolerance in

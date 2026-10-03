@@ -255,6 +255,9 @@ def resolved_selection(repo_root: Path, board: BoardSpec, options: "StreamOption
         "limit": options.limit,
         "family": options.family,
         "test_name": options.test_name,
+        "ops": list(options.ops),
+        "dtypes": list(options.dtypes),
+        "case_ids": list(options.case_ids),
         "precision": generation_precision(repo_root, board, options),
         "pmu_counters": options.pmu_counters,
         "fvp_gate": options.fvp_gate or DEFAULT_GATE,
@@ -268,6 +271,10 @@ class StreamOptions:
     family: Optional[str] = None
     test_name: Optional[str] = None
     limit: Optional[int] = None
+    # Same matching as `generate --op/--dtype`.
+    ops: tuple[str, ...] = ()
+    dtypes: tuple[str, ...] = ()
+    case_ids: tuple[str, ...] = ()
     # `{group: "all" | "default" | [names]}` -- see parse_pmu_counters().
     pmu_counters: PmuSelection = field(default_factory=default_selection)
     fvp_gate: Optional[str] = None
@@ -325,13 +332,23 @@ class HardwareRunOutcome:
 def prepare_bundles(repo_root: Path, board: BoardSpec, options: StreamOptions) -> tuple[list, list]:
     """Bridge the cases; apply the compare mode."""
     from .case_bundle import golden_bundle, golden_failed, golden_usable, strict_bundle
+    from .generated_test_bridge import HW_CASE_SUFFIX, CaseSelection
     from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error
 
     # Bridge once; the runner reuses it.
+    select = CaseSelection(ops=options.ops, dtypes=options.dtypes, case_ids=options.case_ids)
     bundles, skipped = build_generated_test_case_bundles(
         repo_root, cpu=board.cpu, family=options.family, name_filter=options.test_name,
         limit=options.limit, suite=options.suite, fvp_gate=options.fvp_gate, board_id=board.id,
+        select=select,
     )
+    if select.case_ids:
+        names = [b.case_id.removesuffix(HW_CASE_SUFFIX) for b in bundles] + [t.name for t, _ in skipped]
+        missing = select.unmatched_ids(names)
+        if missing:
+            raise RuntimeError(f"No case matches these ids: {', '.join(missing)}")
+    if not bundles and not skipped and select != CaseSelection():
+        raise RuntimeError("No generated case matches --op/--dtype/--case-id.")
     if not bundles:
         raise no_bridgeable_cases_error(
             skipped, cpu=board.cpu, family=options.family, name_filter=options.test_name, suite=options.suite,
@@ -368,6 +385,7 @@ def stream_generated_tests(
     can be checked against it; a missing stamp is an error unless
     `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
     """
+    from .result_bundle import merge_summary
     from .session_runner import run_case_bundles
 
     session_id = options.session_id or default_session_id(board)
@@ -425,6 +443,7 @@ def stream_generated_tests(
         expected_build_id=expected_build_id,
         compare=options.compare_record(),
     )
+    merge_summary(bundle, "selection", resolved_selection(repo_root, board, options))
     timing = {
         "stream_s": round(time.monotonic() - stream_started, 4),
         "batch_count": int(getattr(result, "batch_count", 1)),
