@@ -61,6 +61,8 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
         {{ kernel_layout }}
         {% endif %}
     );
+    {% elif entry_family == 'convolve_1x1_s8' %}
+    int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(&{{ name }}_input_dims);
     {% elif entry_family %}
     int32_t required_buffer_size = {{ kernel_get_buffer_size_fn }}(
         &{{ name }}_input_dims,
@@ -167,6 +169,27 @@ static const cmsis_nn_bias_data {{ name }}_bias_data = {
         NULL,  // bias_data
         {% endif %}
         NULL,  // upscale_dims
+        &{{ name }}_output_dims,
+        {{ output_expr }}
+    );
+    {% elif entry_family == 'convolve_1x1_s8' %}
+    // arm_convolve_1x1_s8_fast signature: (ctx, weight_sum_ctx, conv_params, quant_params, input_dims, input_data, filter_dims, filter_data, bias_dims, bias_data, output_dims, output_data)
+    return {{ kernel_fn }}(
+        &{{ name }}_ctx,
+        &{{ name }}_weight_sum_ctx,
+        &{{ name }}_conv_params,
+        &{{ name }}_quant_params,
+        &{{ name }}_input_dims,
+        {{ input_expr }},
+        &{{ name }}_filter_dims,
+        {{ name }}_weights,
+        {% if has_biases %}
+        &{{ name }}_bias_dims,
+        {{ name }}_biases,
+        {% else %}
+        NULL,  // bias_dims
+        NULL,  // bias_data
+        {% endif %}
         &{{ name }}_output_dims,
         {{ output_expr }}
     );
