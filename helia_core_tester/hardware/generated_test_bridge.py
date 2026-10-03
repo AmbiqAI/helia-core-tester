@@ -582,6 +582,21 @@ def _calculate_depthwise_conv_s4_scratch_bytes(
     return 0
 
 
+def _with_weight_sums(scratch: int, channels: int) -> int:
+    """Mirror place_weight_sums: aligned int32 sums."""
+    return _align_up(int(scratch), 16) + channels * 4
+
+
+def _depthwise_s8_scratch_bytes(input_dims: dict[str, int], filter_dims: dict[str, int], output_dims: dict[str, int]) -> int:
+    """Bound wrapper scratch plus weight sums."""
+    scratch = TemplateContextBuilder.calculate_depthwise_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
+    # One input channel may run as conv.
+    if input_dims["c"] == 1:
+        conv = TemplateContextBuilder.calculate_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
+        scratch = max(scratch, conv + _shape_product(tuple(filter_dims.values())))
+    return _with_weight_sums(scratch, output_dims["c"])
+
+
 def discover_generated_tests(
     project_root: Path,
     *,
@@ -850,7 +865,7 @@ def _build_convolve_case(
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} "
             f"is not bridgeable -- hardware benchmark firmware only dispatches arm_convolve_wrapper_s4, "
-            f"arm_convolve_s8, arm_convolve_wrapper_s16, arm_convolve_f32, and arm_convolve_f16."
+            f"arm_convolve_wrapper_s8, arm_convolve_wrapper_s16, arm_convolve_f32, and arm_convolve_f16."
         )
 
     header_path = _find_header_file(generated_test.directory)
@@ -863,7 +878,7 @@ def _build_convolve_case(
     if input_dims["n"] != 1:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: batch size {input_dims['n']} > 1 is not yet supported by the "
-            f"hardware bridge (firmware dispatches a single arm_convolve_s8 invocation per case)."
+            f"hardware bridge (firmware runs one invocation per case)."
         )
     input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
     filter_shape = (filter_dims["h"], filter_dims["w"], filter_dims["c"], filter_dims["n"])
@@ -996,7 +1011,7 @@ def _build_convolve_case(
             input_dims_dict, filter_dims_dict, output_dims_dict, output_dtype=activation_dtype
         )
         if activation_dtype == "S8":
-            scratch_bytes = _align_up(int(scratch_bytes), 16) + output_channels * 4
+            scratch_bytes = _with_weight_sums(scratch_bytes, output_channels)
 
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
@@ -1355,7 +1370,7 @@ def _build_depthwise_conv_case(
     hardware CaseBundle.
 
     Supported paths:
-    - S8 activation + S8 weights -> arm_depthwise_conv_s8
+    - S8 activation + S8 weights -> arm_depthwise_conv_wrapper_s8
     - S8 activation + S4 weights -> arm_depthwise_conv_wrapper_s4
     - S16 activation + S8 weights -> arm_depthwise_conv_wrapper_s16
     - FP32 activation + FP32 weights -> arm_depthwise_conv_f32
@@ -1378,7 +1393,7 @@ def _build_depthwise_conv_case(
     ):
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: weight_dtype={weight_dtype!r} activation_dtype={activation_dtype!r} "
-            f"is not bridgeable -- hardware benchmark firmware only dispatches arm_depthwise_conv_s8, "
+            f"is not bridgeable -- hardware benchmark firmware only dispatches arm_depthwise_conv_wrapper_s8, "
             f"arm_depthwise_conv_wrapper_s4, arm_depthwise_conv_wrapper_s16, arm_depthwise_conv_f32, and arm_depthwise_conv_f16."
         )
 
@@ -1392,8 +1407,7 @@ def _build_depthwise_conv_case(
     if input_dims["n"] != 1:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: batch size {input_dims['n']} > 1 is not yet supported by the "
-            f"hardware bridge (firmware dispatches a single arm_depthwise_conv_s8 "
-            f"invocation per case)."
+            f"hardware bridge (firmware runs one invocation per case)."
         )
     input_shape = (input_dims["n"], input_dims["h"], input_dims["w"], input_dims["c"])
     # Native (N, H, W, C_OUT) order, per arm_depthwise_conv_s8's filter_dims docstring.
@@ -1525,7 +1539,7 @@ def _build_depthwise_conv_case(
             output_dtype=activation_dtype,
         )
     else:
-        scratch_bytes = 0
+        scratch_bytes = _depthwise_s8_scratch_bytes(input_dims, filter_dims, output_dims)
 
     arrays = [
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
