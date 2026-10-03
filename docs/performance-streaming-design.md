@@ -111,9 +111,9 @@ The protocol is target-driven after plan load:
 15. target sends `CASE_COMPLETE`
 16. loop until `SESSION_COMPLETE`
 
-### Messages (HCTP v3)
+### Messages (HCTP v4)
 
-Protocol version 3 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
+Protocol version 4 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
 another version is refused at the header. Message ids are compact and in protocol
 order; every payload is encoded and decoded on the host by exactly one pair of
 functions in `helia_core_tester/hardware/wire.py`, which the host session and the
@@ -139,7 +139,7 @@ firmware byte for byte.
 | 15 | `CORRECTNESS_ACK` | host -> target | `u8 passed` (informational) |
 | 16 | `RUN_PERFORMANCE` | host -> target | empty |
 | 17 | `SAMPLE_RESULT` | target -> host | one sample of one pass (below) |
-| 18 | `CASE_COMPLETE` | target -> host | `text case_id, u8 correctness_ran, u8 performance_ran, u32 workspace_used_bytes`, then `i32 kernel_status` only when `performance_ran` is 0 |
+| 18 | `CASE_COMPLETE` | target -> host | `text case_id, u8 correctness_ran, u8 performance_ran, u32 workspace_used_bytes, u32 prepare_cycles` (DWT cycles the correctness run spent outside the timed kernel calls: setup calls such as scratch sizing and weight sums, plus adapter glue; one cold sample), then `i32 kernel_status` only when `performance_ran` is 0 |
 | 19 | `SESSION_COMPLETE` | target -> host | `u16 case_count` |
 | 20 | `ERROR` | target -> host | `text message` |
 
