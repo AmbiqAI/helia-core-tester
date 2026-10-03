@@ -429,6 +429,9 @@ values after defaults and board fitting: `precision` is the float precision
 generation resolves for the board's CPU (null when the run has no float cases),
 `fvp_gate` is `advisory` unless set, and `pmu_counters` is the group selection
 (`session_summary.json` lists the counters). Null `family` or `limit` means all.
+`ops`, `dtypes` and `case_ids` list the `--op`, `--dtype` and `--case-id`/
+`--cases-from` filters; empty means all. The bundle's `session_summary.json`
+carries the same `selection`, with or without `--json`.
 
 Schema versions: bump `schema_version` when a field changes meaning, type or
 goes away. New optional fields keep the version; readers must accept missing

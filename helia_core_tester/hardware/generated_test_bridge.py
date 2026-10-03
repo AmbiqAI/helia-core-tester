@@ -31,7 +31,8 @@ from .case_bundle import BlobInfo, CaseBundle, _blob_info, _case_root, _manifest
 from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_kernel_id
 from .pathutil import display_path
 from helia_core_tester.core.cpu_targets import get_cpu_profile
-from helia_core_tester.generation.io.dtypes import resolve_comparison
+from helia_core_tester.generation.io.descriptors import descriptor_matches_op
+from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, normalize_dtype, resolve_comparison
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
 
@@ -91,6 +92,38 @@ class GeneratedTestCase:
     def target(self) -> str:
         """Staging key: the board, else the CPU."""
         return self.board or self.cpu
+
+
+HW_CASE_SUFFIX = "_hw_generated"
+
+
+@dataclass(frozen=True)
+class CaseSelection:
+    """Op, dtype and case-id filters (OR within, AND across).
+
+    `ops` and `dtypes` match exactly like `generate --op/--dtype`.
+    `case_ids` take a test name or its `_hw_generated` case id."""
+
+    ops: tuple[str, ...] = ()
+    dtypes: tuple[str, ...] = ()
+    case_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        # Fail on bad dtypes before any I/O.
+        object.__setattr__(self, "dtypes", tuple(normalize_dtype(d) for d in self.dtypes))
+        bare = (i.removesuffix(HW_CASE_SUFFIX) for i in self.case_ids)
+        object.__setattr__(self, "case_ids", tuple(dict.fromkeys(bare)))
+
+    def matches(self, name: str, descriptor: dict) -> bool:
+        if self.case_ids and name not in self.case_ids:
+            return False
+        if self.ops and not any(descriptor_matches_op(descriptor, op) for op in self.ops):
+            return False
+        return not self.dtypes or any(descriptor_matches_dtype_filter(descriptor, d) for d in self.dtypes)
+
+    def unmatched_ids(self, names: list[str]) -> list[str]:
+        """Requested ids absent from these test names."""
+        return [i for i in self.case_ids if i not in set(names)]
 
 
 _INT_ARRAY_RE = re.compile(r"=\s*\{([^}]*)\}")
@@ -590,10 +623,12 @@ def discover_generated_tests(
     name_filter: str | None = None,
     limit: int | None = None,
     suite: str = "int",
+    select: CaseSelection | None = None,
 ) -> list[GeneratedTestCase]:
     """Discover generated-test directories with a parseable descriptor.yaml under
     artifacts/generated_tests/<suite>/<cpu>/<family>. `suite="int"` (default) covers the
-    quantized/S4/S8/S16/S32 test tree; `suite="float"` covers the FP16/FP32 tree."""
+    quantized/S4/S8/S16/S32 test tree; `suite="float"` covers the FP16/FP32 tree.
+    `select` filters before `limit` counts."""
     root = project_root / "artifacts" / "generated_tests" / suite / cpu / family
     if not root.is_dir():
         return []
@@ -606,6 +641,8 @@ def discover_generated_tests(
         if name_filter is not None and name_filter not in name:
             continue
         descriptor = yaml.safe_load(descriptor_path.read_text(encoding="utf-8"))
+        if select is not None and not select.matches(name, descriptor):
+            continue
         descriptor["resolved_comparison"] = resolve_comparison(
             descriptor, descriptor.get("resolved_tensor_dtypes")
         )
