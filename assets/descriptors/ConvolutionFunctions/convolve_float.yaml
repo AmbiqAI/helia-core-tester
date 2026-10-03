@@ -2235,3 +2235,651 @@ padding: VALID
 use_bias: true
 fault: invalid_layout
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# Strided 1xN FP16 kernel: shapes outside the in-place contiguous-K route, which takes
+# Cout >= 4 && ((Cout % 8 >= 4 && K >= 80) || K >= 224) with K = kernel_w * Cin, so the
+# no-padding rows keep running the strided dual/8/4-row blocks, the fold and the remainder dot.
+# Width kernel_w + 15: VALID gives 16 output columns, SAME 16 no-padding rows.
+# Comparisons are the strided kernel's own blockwise FP16 precision (float16 lane partials folded
+# into float32 every 32 taps; _acc16 stays in float16), measured identical on ns-cmsis-nn 5f3fed9f
+# and #663: each is the smallest of 0.002/0.003/0.004/0.005/0.01 that keeps the worst error over
+# the data seeds 500 and 1-8 within 0.8 of the tolerance.
+# K = 280 with Cout 3 is the only shape past one 256-element fold span, so it alone runs the dot
+# fold's multi-block loop; Cout < 4 never takes the in-place route.
+operator: Convolve
+name: convolve_float_1xn_strided_c14_k7_oc16_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 14]
+filter_shape: [1, 7, 14, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c14_k7_oc16_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 14]
+filter_shape: [1, 7, 14, 16]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c14_k7_oc16_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 14]
+filter_shape: [1, 7, 14, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.005, rtol: 0.005}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c14_k7_oc16_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 14]
+filter_shape: [1, 7, 14, 16]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.005, rtol: 0.005}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c24_k9_oc24_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 24]
+filter_shape: [1, 9, 24, 24]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c24_k9_oc24_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 24]
+filter_shape: [1, 9, 24, 24]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c24_k9_oc24_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 24]
+filter_shape: [1, 9, 24, 24]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.01, rtol: 0.01}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c24_k9_oc24_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 24]
+filter_shape: [1, 9, 24, 24]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.01, rtol: 0.01}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c16_k7_oc8_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 16]
+filter_shape: [1, 7, 16, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c16_k7_oc8_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 16]
+filter_shape: [1, 7, 16, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c16_k7_oc8_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 16]
+filter_shape: [1, 7, 16, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.005, rtol: 0.005}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c16_k7_oc8_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 16]
+filter_shape: [1, 7, 16, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.005, rtol: 0.005}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c8_k9_oc12_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 8]
+filter_shape: [1, 9, 8, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.004, rtol: 0.004}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c8_k9_oc12_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 8]
+filter_shape: [1, 9, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.004, rtol: 0.004}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c8_k9_oc12_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 8]
+filter_shape: [1, 9, 8, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.005, rtol: 0.005}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c8_k9_oc12_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 8]
+filter_shape: [1, 9, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.005, rtol: 0.005}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c8_k7_oc5_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c8_k7_oc5_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 5]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c8_k7_oc5_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.004, rtol: 0.004}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c8_k7_oc5_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 5]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.004, rtol: 0.004}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c8_k7_oc7_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 7]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c8_k7_oc7_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 7]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c8_k7_oc7_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 7]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c8_k7_oc7_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 7]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c10_k7_oc21_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 10]
+filter_shape: [1, 7, 10, 21]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c10_k7_oc21_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 10]
+filter_shape: [1, 7, 10, 21]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c10_k7_oc21_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 10]
+filter_shape: [1, 7, 10, 21]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.005, rtol: 0.005}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c10_k7_oc21_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 10]
+filter_shape: [1, 7, 10, 21]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.005, rtol: 0.005}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c32_k7_oc3_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 3]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c32_k7_oc3_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c32_k7_oc3_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 3]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c32_k7_oc3_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c32_k7_oc1_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c32_k7_oc1_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c32_k7_oc1_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c32_k7_oc1_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c4_k7_oc16_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 4]
+filter_shape: [1, 7, 4, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c4_k7_oc16_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 4]
+filter_shape: [1, 7, 4, 16]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c4_k7_oc16_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 4]
+filter_shape: [1, 7, 4, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c4_k7_oc16_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 4]
+filter_shape: [1, 7, 4, 16]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c40_k7_oc3_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 40]
+filter_shape: [1, 7, 40, 3]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c40_k7_oc3_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 40]
+filter_shape: [1, 7, 40, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c40_k7_oc3_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 40]
+filter_shape: [1, 7, 40, 3]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c40_k7_oc3_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 40]
+filter_shape: [1, 7, 40, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
