@@ -16,6 +16,9 @@
 
 #ifdef HELIA_HARDWARE_BUILD
 #include "am_mcu_apollo.h"
+#elif defined(HCT_PLACEMENT_MRAM)
+/* Host harness: stubbed MRAM HAL. */
+#include "hct_mram_stub.h"
 #endif
 
 /* The Armv8.1-M PMU (8 x 16-bit event counters + 32-bit CCNTR on Cortex-M55) is only

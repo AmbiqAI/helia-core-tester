@@ -280,7 +280,7 @@ typedef struct
     uint32_t output_stream_offset;
     uint32_t output_stream_checksum;
     /* Next free MRAM address this case. */
-    uint32_t mram_cursor;
+    uintptr_t mram_cursor;
     uint8_t output_stream_active;
     uint8_t *workspace;
     uint32_t workspace_bytes;

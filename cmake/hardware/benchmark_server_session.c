@@ -1154,7 +1154,9 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
 #define HCT_MRAM_POOL_BYTES (512u * 1024u)
 #define HCT_MRAM_LINE_BYTES 32u
 /* NSX SBL script MCU_MRAM ends. */
-#if defined(AM_PART_APOLLO330P)
+#if defined(HCT_MRAM_END)
+/* Host harness supplies its own. */
+#elif defined(AM_PART_APOLLO330P)
 #define HCT_MRAM_END 0x00600000u
 #else
 #define HCT_MRAM_END 0x00800000u
@@ -1162,23 +1164,23 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
 extern uint32_t _init_data, _sdata, _edata, _init_data_sram, _ssdata, _sedata;
 
 /* Pool start, or 0 when it overlaps. */
-static uint32_t mram_pool_base(void)
+static uintptr_t mram_pool_base(void)
 {
-    const uint32_t data_end = (uint32_t)&_init_data + ((uint32_t)&_edata - (uint32_t)&_sdata);
-    const uint32_t sram_end = (uint32_t)&_init_data_sram + ((uint32_t)&_sedata - (uint32_t)&_ssdata);
-    const uint32_t image_end = data_end > sram_end ? data_end : sram_end;
-    const uint32_t base = (image_end + 0xFFFFu) & ~0xFFFFu;
+    const uintptr_t data_end = (uintptr_t)&_init_data + ((uintptr_t)&_edata - (uintptr_t)&_sdata);
+    const uintptr_t sram_end = (uintptr_t)&_init_data_sram + ((uintptr_t)&_sedata - (uintptr_t)&_ssdata);
+    const uintptr_t image_end = data_end > sram_end ? data_end : sram_end;
+    const uintptr_t base = (image_end + 0xFFFFu) & ~(uintptr_t)0xFFFFu;
     return (base + HCT_MRAM_POOL_BYTES <= HCT_MRAM_END) ? base : 0u;
 }
 
 /* Program the staged copy into MRAM. */
 static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blob_t *blob)
 {
-    const uint32_t base = mram_pool_base();
+    const uintptr_t base = mram_pool_base();
     /* allocate_blob padded the stage to rows. */
     const uint32_t length = (blob->byte_length + HCT_MRAM_ROW_BYTES - 1u) & ~(HCT_MRAM_ROW_BYTES - 1u);
     uint8_t *staged = &session->workspace[blob->arena_offset];
-    uint32_t address;
+    uintptr_t address;
     if (length == 0u)
     {
         return HCTP_STATUS_OK;
