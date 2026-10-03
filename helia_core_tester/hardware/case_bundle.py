@@ -138,7 +138,11 @@ def golden_usable(bundle: CaseBundle, golden_dir: Path) -> bool:
     if bundle.expected_status_code is not None:
         return True
     path = golden_dir / "outputs" / f"{bundle.case_id}.bin"
-    return path.is_file() and path.stat().st_size == bundle.expected_output.byte_length
+    # Read now; fail before the board.
+    try:
+        return len(path.read_bytes()) == bundle.expected_output.byte_length
+    except OSError:
+        return False
 
 
 def golden_bundle(bundle: CaseBundle, golden_dir: Path) -> CaseBundle:

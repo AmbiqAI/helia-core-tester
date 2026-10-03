@@ -824,7 +824,7 @@ def test_golden_gaps_fail_before_flash(tmp_path: Path, monkeypatch) -> None:
 
     bundles = [
         load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path / name, case_id=name).manifest_path)
-        for name in ("abs_gone", "abs_short")
+        for name in ("abs_gone", "abs_short", "abs_unread")
     ]
     golden_dir = tmp_path / "past"
     (golden_dir / "outputs").mkdir(parents=True)
@@ -832,12 +832,14 @@ def test_golden_gaps_fail_before_flash(tmp_path: Path, monkeypatch) -> None:
     for bundle in bundles:
         (golden_dir / "correctness" / f"{bundle.case_id}.json").write_text(json.dumps({"passed": True}))
     (golden_dir / "outputs" / "abs_short.bin").write_bytes(blob_numpy(bundles[1].expected_output).tobytes()[:-1])
+    # A directory cannot be read.
+    (golden_dir / "outputs" / "abs_unread.bin").mkdir()
     order: list[str] = []
     monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: (bundles, []))
     monkeypatch.setattr(hardware_pipeline, "generate_tests_for_board", lambda *a, **k: order.append("generate"))
     monkeypatch.setattr(hardware_pipeline, "stage_kernels", lambda *a, **k: Path("/kernels"))
     monkeypatch.setattr(hardware_pipeline, "flash_firmware", lambda *a, **k: order.append("flash"))
-    with pytest.raises(RuntimeError, match="for: abs_gone, abs_short$"):
+    with pytest.raises(RuntimeError, match="for: abs_gone, abs_short, abs_unread$"):
         run_hardware_pipeline(
             tmp_path, BOARD, SERIAL, options=StreamOptions(golden_from=golden_dir), build_dir=tmp_path / "bd",
             app_options=object(), echo=lambda _msg: None,
