@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.8.0...v0.9.0) (2026-10-03)
+
+
+### Features
+
+* **hardware:** select run cases by op, dtype and case id ([596778a](https://github.com/AmbiqAI/helia-core-tester/commit/596778a5f76812f0afcee9f133e65d3f18bb3cca))
+
+
+### Bug Fixes
+
+* **hardware:** refuse --limit with --case-id ([9de7215](https://github.com/AmbiqAI/helia-core-tester/commit/9de7215a3050b9d7cb1d08a3e11609586d0d242c))
+* **hardware:** refuse an empty --cases-from file ([5f0531b](https://github.com/AmbiqAI/helia-core-tester/commit/5f0531b4f245d59ff9b9404fe04ec8fcecc87c19))
+
 ## [0.8.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.7.0...v0.8.0) (2026-10-02)
 
 
