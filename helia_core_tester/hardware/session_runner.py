@@ -201,6 +201,7 @@ def run_case_bundles(
     build_dir: Path | None = None,
     on_case_complete: OnCaseComplete | None = None,
     expected_build_id: str | None = None,
+    compare: dict | None = None,
 ) -> tuple[SessionResult, Path]:
     """Stream `case_bundles` to the board in as many sessions as the target's limits
     require, merge every case into one SessionResult, and write its result bundle.
@@ -303,6 +304,7 @@ def run_case_bundles(
         target_info=board.target_info(),
         host_log_text=host_log,
         target_log_text=target_log,
+        compare=compare,
         # Unverified firmware gets no provenance.
         build_dir=build_dir if expected_build_id is not None and build_id == expected_build_id else None,
     )
