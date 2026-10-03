@@ -29,8 +29,9 @@ class DirectEntry:
     # The prototype the operator's template renders the call for. An entry of an existing
     # family takes one row below plus its cases; a new family also needs a template branch.
     family: str
-    # Scratch query. s8 families call it with (input_dims, filter_dims); float entries call it
-    # like their default entry, with (params, input_dims, filter_dims, output_dims[, layout]).
+    # Scratch query. depthwise_s8 and convolve_s8 call it with (input_dims, filter_dims),
+    # convolve_1x1_s8 with (input_dims); float entries call it like their default entry,
+    # with (params, input_dims, filter_dims, output_dims[, layout]).
     buffer_size_fn: str
     # Float entries: whether the call and the scratch query take a trailing layout argument.
     kernel_needs_layout: bool = False
@@ -39,7 +40,8 @@ class DirectEntry:
 
 # Public entries that no wrapper routes to. The depthwise_s8 family takes
 # arm_depthwise_conv_wrapper_s8's arguments; convolve_s8 takes arm_convolve_s8's
-# (upscale_dims passed as NULL, as arm_convolve_wrapper_s8 does). Both take weight sums.
+# (upscale_dims passed as NULL, as arm_convolve_wrapper_s8 does); convolve_1x1_s8 takes
+# arm_convolve_1x1_s8_fast's and sizes scratch from the input dims alone. All take weight sums.
 DIRECT_ENTRIES: Dict[str, DirectEntry] = {
     "arm_depthwise_conv_s8_opt_3x3": DirectEntry(
         "DepthwiseConv", "S8", "S8", "depthwise_s8", "arm_depthwise_conv_s8_opt_get_buffer_size"
@@ -58,6 +60,11 @@ DIRECT_ENTRIES: Dict[str, DirectEntry] = {
     ),
     "arm_convolve_s8_3x3_c16_s1": DirectEntry(
         "Convolve", "S8", "S8", "convolve_s8", "arm_convolve_s8_get_buffer_size"
+    ),
+    # Declines with ARM_CMSIS_NN_NO_IMPL_ERROR outside its shape; callers then run
+    # arm_convolve_1x1_s8_fast with the same arguments, so scratch is sized for that.
+    "arm_convolve_1x1_s8_short_k": DirectEntry(
+        "Convolve", "S8", "S8", "convolve_1x1_s8", "arm_convolve_1x1_s8_fast_get_buffer_size"
     ),
 }
 
