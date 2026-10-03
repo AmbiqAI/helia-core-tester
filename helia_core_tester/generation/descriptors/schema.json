@@ -266,6 +266,11 @@
     "use_bias": {
       "type": "boolean"
     },
+    "bias_dtype": {
+      "type": "string",
+      "enum": ["S32", "S64"],
+      "description": "S16 x S8 Convolve only: bias width passed to arm_convolve_wrapper_s16 and used for the golden. Defaults to S64."
+    },
     "axis": {
       "type": "integer"
     },
