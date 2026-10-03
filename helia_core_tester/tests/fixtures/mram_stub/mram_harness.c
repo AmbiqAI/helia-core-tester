@@ -274,6 +274,48 @@ static int test_place_and_reuse(uintptr_t base)
     return drain(&s) == HCTP_MSG_SESSION_COMPLETE ? 0 : 170;
 }
 
+/* Stream rows; return calls and rows programmed. */
+static int stream_rows(const blob_spec_t *blobs, uint32_t *calls, uint32_t *rows)
+{
+    static hct_server_session_t s;
+    const uint32_t calls_before = hct_mram_stub.program_calls;
+    const uint32_t rows_before = hct_mram_rows_programmed;
+    if (open_session(&s, workspace, sizeof(workspace), "mram_rows") != 0) return 1;
+    if (send_meta(&s, "mram_rows", blobs, 3u) != HCTP_STATUS_OK) return 2;
+    if (stream(&s, blobs) != HCTP_STATUS_OK) return 3;
+    if (memcmp(s.blobs[2].placed, blobs[2].data, blobs[2].length) != 0) return 4;
+    *calls = hct_mram_stub.program_calls - calls_before;
+    *rows = hct_mram_rows_programmed - rows_before;
+    return 0;
+}
+
+/* Only changed rows get programmed. */
+static int test_row_skip(void)
+{
+    static uint8_t bias[80];
+    const blob_spec_t blobs[3] = {
+        {"input_0", (const uint8_t *)kInput, sizeof(kInput), 1u},
+        {"weights", kWeights, sizeof(kWeights), 1u},
+        {"bias", bias, sizeof(bias), 4u},
+    };
+    uint32_t calls;
+    uint32_t rows;
+    /* Bias changes keep the weights-hashed offset. */
+    for (uint32_t index = 0u; index < sizeof(bias); ++index) bias[index] = (uint8_t)(index * 3u + 1u);
+    if (stream_rows(blobs, &calls, &rows) != 0) return 300;
+    if (stream_rows(blobs, &calls, &rows) != 0 || calls != 0u || rows != 0u) return 301;
+    bias[37] ^= 0x5Au;
+    if (stream_rows(blobs, &calls, &rows) != 0 || calls != 1u || rows != 1u) return 302;
+    if (hct_mram_stub.last_invalidate_bytes != 16) return 303;
+    /* Rows 0, 3, 4: two runs, three rows. */
+    bias[0] ^= 1u;
+    bias[50] ^= 1u;
+    bias[79] ^= 1u;
+    if (stream_rows(blobs, &calls, &rows) != 0 || calls != 2u || rows != 3u) return 304;
+    printf("rows skipped\n");
+    return 0;
+}
+
 static int test_pool_limits(uintptr_t base)
 {
     static hct_server_session_t s;
@@ -310,6 +352,7 @@ int main(void)
     hct_stub_mram_end = (uintptr_t)hct_stub_mram + HCT_STUB_MRAM_BYTES;
     if ((hct_benchmark_server_capability_flags() & HCT_CAP_WEIGHTS_MRAM) == 0u) return 10;
     status = test_place_and_reuse(base);
+    if (status == 0) status = test_row_skip();
     if (status == 0) status = test_pool_limits(base);
     return status;
 }

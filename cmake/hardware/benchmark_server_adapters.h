@@ -299,6 +299,10 @@ typedef struct
 } hct_window_t;
 
 extern hct_window_t hct_window;
+#if defined(HCT_PLACEMENT_MRAM)
+/* Rows programmed since boot. */
+extern volatile uint32_t hct_mram_rows_programmed;
+#endif
 
 /* Resume counting; PMU store goes last. */
 static inline bool hct_window_open(void)

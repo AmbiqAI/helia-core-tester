@@ -1173,6 +1173,42 @@ static uintptr_t mram_pool_base(void)
     return (base + HCT_MRAM_POOL_BYTES <= HCT_MRAM_END) ? base : 0u;
 }
 
+volatile uint32_t hct_mram_rows_programmed;
+
+/* Row differs in its blob bytes. */
+static bool row_differs(const uint8_t *staged, uintptr_t address, uint32_t offset, uint32_t byte_length)
+{
+    const uint32_t span = byte_length - offset < HCT_MRAM_ROW_BYTES ? byte_length - offset : HCT_MRAM_ROW_BYTES;
+    return memcmp((const void *)(address + offset), staged + offset, span) != 0;
+}
+
+/* Program differing row runs only. */
+static int program_changed_rows(const uint8_t *staged, uintptr_t address, uint32_t byte_length, uint32_t length)
+{
+    uint32_t offset = 0u;
+    while (offset < length)
+    {
+        uint32_t end = offset;
+        if (!row_differs(staged, address, offset, byte_length))
+        {
+            offset += HCT_MRAM_ROW_BYTES;
+            continue;
+        }
+        while (end < length && row_differs(staged, address, end, byte_length))
+        {
+            end += HCT_MRAM_ROW_BYTES;
+        }
+        if (am_hal_mram_main_program(AM_HAL_MRAM_PROGRAM_KEY, (uint32_t *)(staged + offset), (uint32_t *)(address + offset), (end - offset) / 4u) != 0u)
+        {
+            return 1;
+        }
+        SCB_InvalidateDCache_by_Addr((volatile void *)(address + offset), (int32_t)(end - offset));
+        hct_mram_rows_programmed += (end - offset) / HCT_MRAM_ROW_BYTES;
+        offset = end;
+    }
+    return 0;
+}
+
 /* Program the staged copy into MRAM. */
 static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blob_t *blob)
 {
@@ -1201,14 +1237,9 @@ static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blo
     address = session->mram_cursor;
     /* Each blob starts on a cache line. */
     session->mram_cursor += (length + HCT_MRAM_LINE_BYTES - 1u) & ~(HCT_MRAM_LINE_BYTES - 1u);
-    /* Skip rows that already match. */
-    if (memcmp((const void *)address, staged, blob->byte_length) != 0)
+    if (program_changed_rows(staged, address, blob->byte_length, length) != 0)
     {
-        if (am_hal_mram_main_program(AM_HAL_MRAM_PROGRAM_KEY, (uint32_t *)staged, (uint32_t *)address, length / 4u) != 0u)
-        {
-            return HCTP_STATUS_INVALID_ARGUMENT;
-        }
-        SCB_InvalidateDCache_by_Addr((volatile void *)address, (int32_t)length);
+        return HCTP_STATUS_INVALID_ARGUMENT;
     }
     if (hctp_crc32((const uint8_t *)address, blob->byte_length) != blob->crc32)
     {

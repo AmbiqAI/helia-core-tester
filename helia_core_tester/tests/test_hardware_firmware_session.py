@@ -154,4 +154,5 @@ def test_c_mram_placement(tmp_path: Path) -> None:
         used = -(-used // alignment) * alignment + length
     assert f"workspace={used}" in result.stdout
     assert "placed reused" in result.stdout
+    assert "rows skipped" in result.stdout
     assert "pool limits refused" in result.stdout
