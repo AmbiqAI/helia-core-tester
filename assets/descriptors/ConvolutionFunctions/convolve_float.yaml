@@ -138,6 +138,194 @@ padding: SAME
 use_bias: true
 ---
 operator: Convolve
+name: convolve_float_group4_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 5, 5, 16]
+filter_shape: [3, 3, 16, 16]
+strides: [1, 1]
+padding: SAME
+groups: 4
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_group_depthwise_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 5, 5, 16]
+filter_shape: [3, 3, 16, 16]
+strides: [1, 1]
+padding: SAME
+groups: 16
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_group_depthwise_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 5, 5, 16]
+filter_shape: [3, 3, 16, 16]
+strides: [1, 1]
+padding: VALID
+groups: 16
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_group_small_kernel_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes:
+  input: FP16
+  output: FP16
+  weights: FP16
+  bias: FP16
+input_shape: [1, 1, 5, 4]
+filter_shape: [1, 3, 4, 4]
+strides: [1, 1]
+padding: VALID
+groups: 4
+use_bias: false
+---
+operator: Convolve
+name: convolve_fault_channel_group_mismatch_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+groups: 2
+use_bias: true
+fault: channel_group_mismatch
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_fault_output_group_mismatch_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+groups: 2
+use_bias: true
+fault: output_group_mismatch
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_fault_negative_batch_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+groups: 2
+use_bias: true
+fault: negative_batch
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_fault_batch_mismatch_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+groups: 2
+use_bias: true
+fault: batch_mismatch
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_fault_packed_grouped_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+groups: 2
+use_bias: true
+fault: packed_grouped
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_fault_zero_output_batch_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+groups: 2
+use_bias: true
+fault: zero_output_batch
+expected_status: ARM_CMSIS_NN_SUCCESS
+---
+operator: Convolve
+name: convolve_fault_oversized_kernel_area_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+groups: 2
+use_bias: true
+fault: oversized_kernel_area
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_fault_oversized_patch_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+groups: 2
+use_bias: true
+fault: oversized_patch
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
 name: convolve_float_stride2_valid_f16
 suite: float
 activation_dtype: FP16
