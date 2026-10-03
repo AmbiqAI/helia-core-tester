@@ -784,7 +784,7 @@ def test_golden_from_judges_against_past_output(tmp_path: Path) -> None:
     assert (case.comparison.passed, case.comparison.diff_count, case.comparison.max_abs_diff) == (False, 1, 1.0)
 
 
-@pytest.mark.parametrize("record", [{"passed": False}, None])
+@pytest.mark.parametrize("record", [{"passed": False}, None, '{"passed": tr', "[true]"])
 def test_golden_from_refuses_failed_cases(tmp_path: Path, monkeypatch, record) -> None:
     from helia_core_tester.hardware import hardware_pipeline
     from helia_core_tester.hardware.case_bundle import blob_numpy
@@ -795,7 +795,8 @@ def test_golden_from_refuses_failed_cases(tmp_path: Path, monkeypatch, record) -
     (golden_dir / "outputs" / "abs_bad.bin").write_bytes(blob_numpy(bundle.expected_output).tobytes())
     if record is not None:
         (golden_dir / "correctness").mkdir()
-        (golden_dir / "correctness" / "abs_bad.json").write_text(json.dumps(record))
+        text = record if isinstance(record, str) else json.dumps(record)
+        (golden_dir / "correctness" / "abs_bad.json").write_text(text)
     seen: dict = {}
     monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
     monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([bundle], []))
@@ -1012,3 +1013,10 @@ def test_skip_flash_refuses_dependency_updates(tmp_path: Path, monkeypatch) -> N
     build_dir, _ = _built_app(tmp_path, monkeypatch)
     with pytest.raises(HardwareBuildError, match="cannot update dependencies"):
         _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=nsx_app.AppOptions(), update_dependencies=True)
+
+
+def test_status_compare_has_no_output_diff() -> None:
+    from helia_core_tester.hardware.comparison import compare_status
+
+    result = compare_status(-1, {"mode": "exact_status", "expected_status": 0})
+    assert (result.passed, result.mismatch_count, result.diff_count) == (False, 1, None)

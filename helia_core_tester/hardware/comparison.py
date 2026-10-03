@@ -116,7 +116,8 @@ def compare_status(actual_status: int, descriptor_or_comparison: dict[str, Any])
     return ComparisonResult(
         passed=mismatch_count == 0,
         mismatch_count=mismatch_count,
-        max_abs_diff=float(abs(int(actual_status) - expected_status)),
+        # No output elements were compared.
+        max_abs_diff=float("nan"),
         mode=mode,
-        diff_count=mismatch_count,
+        diff_count=None,
     )

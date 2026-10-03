@@ -125,7 +125,12 @@ def strict_bundle(bundle: CaseBundle) -> CaseBundle:
 def golden_failed(bundle: CaseBundle, golden_dir: Path) -> bool:
     """True if the past run failed this case."""
     record = golden_dir / "correctness" / f"{bundle.case_id}.json"
-    return not record.is_file() or json.loads(record.read_text(encoding="utf-8")).get("passed") is not True
+    # Unreadable records count as unjudged.
+    try:
+        doc = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    return not isinstance(doc, dict) or doc.get("passed") is not True
 
 
 def golden_usable(bundle: CaseBundle, golden_dir: Path) -> bool:
