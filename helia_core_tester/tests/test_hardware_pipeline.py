@@ -9,6 +9,7 @@ import json
 import struct
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -521,7 +522,7 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
 
     assert set(encoded) == {
         "schema", "schema_version", "generated_at", "session_id", "board", "boot", "bundle", "totals", "timing",
-        "selection", "github", "cases",
+        "selection", "coverage", "github", "cases",
     }
     assert encoded["boot"] == {"status": 0, "core_clock_hz": 250_000_000}
     assert encoded["session_id"] == "apollo510_evb-20260912T000000Z"
@@ -702,6 +703,12 @@ def test_run_generates_from_the_saved_kernels(tmp_path: Path, monkeypatch) -> No
     assert seen == {"stage": saved, "generate": saved.cmsis_nn_root, "flash": saved}
 
 
+def _skip_coverage(monkeypatch) -> None:
+    """Fake results need no bundle."""
+    monkeypatch.setattr("helia_core_tester.hardware.entry_coverage.build_coverage", lambda *a, **k: {})
+    monkeypatch.setattr("helia_core_tester.hardware.entry_coverage.write_coverage", lambda *a, **k: None)
+
+
 def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeypatch) -> None:
     from helia_core_tester.hardware import hardware_pipeline
 
@@ -722,9 +729,10 @@ def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeyp
 
     def _session(repo_root, bundles, **kwargs):
         seen.update(kwargs, bundles=bundles)
-        return object(), tmp_path / "bundle"
+        return SimpleNamespace(cases=[]), tmp_path / "bundle"
 
     monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
+    _skip_coverage(monkeypatch)
     monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", _bridge)
     monkeypatch.setattr("helia_core_tester.hardware.session_runner.run_case_bundles", _session)
 
@@ -750,10 +758,11 @@ def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, 
 
     seen: dict = {}
     monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
+    _skip_coverage(monkeypatch)
     monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([_Bundle()], []))
     monkeypatch.setattr(
         "helia_core_tester.hardware.session_runner.run_case_bundles",
-        lambda repo_root, bundles, **kwargs: (seen.update(kwargs), (object(), tmp_path / "bundle"))[1],
+        lambda repo_root, bundles, **kwargs: (seen.update(kwargs), (SimpleNamespace(cases=[]), tmp_path / "bundle"))[1],
     )
 
     unstamped = tmp_path / "old"
