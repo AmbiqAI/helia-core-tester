@@ -2659,3 +2659,137 @@ use_bias: true
 depth_multiplier: 1
 fault: channel_mismatch
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# BEGIN mlperf model shapes (scripts/extract_model_shapes.py)
+# Same shape: kws_l3, kws_l5, kws_l7
+operator: DepthwiseConv
+name: depthwise_conv_mlperf_kws_l1_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 25, 5, 64]
+filter_shape: [3, 3, 64, 1]
+depth_multiplier: 1
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: DepthwiseConv
+name: depthwise_conv_mlperf_vww_l1_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 48, 48, 8]
+filter_shape: [3, 3, 8, 1]
+depth_multiplier: 1
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: DepthwiseConv
+name: depthwise_conv_mlperf_vww_l3_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 48, 48, 16]
+filter_shape: [3, 3, 16, 1]
+depth_multiplier: 1
+strides: [2, 2]
+padding: SAME
+use_bias: true
+---
+operator: DepthwiseConv
+name: depthwise_conv_mlperf_vww_l5_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 24, 24, 32]
+filter_shape: [3, 3, 32, 1]
+depth_multiplier: 1
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: DepthwiseConv
+name: depthwise_conv_mlperf_vww_l7_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 24, 24, 32]
+filter_shape: [3, 3, 32, 1]
+depth_multiplier: 1
+strides: [2, 2]
+padding: SAME
+use_bias: true
+---
+operator: DepthwiseConv
+name: depthwise_conv_mlperf_vww_l9_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 12, 12, 64]
+filter_shape: [3, 3, 64, 1]
+depth_multiplier: 1
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: DepthwiseConv
+name: depthwise_conv_mlperf_vww_l11_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 12, 12, 64]
+filter_shape: [3, 3, 64, 1]
+depth_multiplier: 1
+strides: [2, 2]
+padding: SAME
+use_bias: true
+---
+# Same shape: vww_l15, vww_l17, vww_l19, vww_l21
+operator: DepthwiseConv
+name: depthwise_conv_mlperf_vww_l13_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 6, 6, 128]
+filter_shape: [3, 3, 128, 1]
+depth_multiplier: 1
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: DepthwiseConv
+name: depthwise_conv_mlperf_vww_l23_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 6, 6, 128]
+filter_shape: [3, 3, 128, 1]
+depth_multiplier: 1
+strides: [2, 2]
+padding: SAME
+use_bias: true
+---
+operator: DepthwiseConv
+name: depthwise_conv_mlperf_vww_l25_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 3, 3, 256]
+filter_shape: [3, 3, 256, 1]
+depth_multiplier: 1
+strides: [1, 1]
+padding: SAME
+use_bias: true
+# END mlperf model shapes
