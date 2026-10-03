@@ -2659,3 +2659,386 @@ use_bias: true
 depth_multiplier: 1
 fault: channel_mismatch
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# s16 depthwise through arm_depthwise_conv_fast_s16's direct Helium paths: 3x3 cases inside the
+# in-place 3x3 gate (batch 1, ch_mult 1, C >= 8 and C % 4 == 0, stride <= 2, pad <= 1, output
+# H >= 3, output W x H >= 16) and a non-dilated stride-1 1x9 for the planar path. The 8x8 stride-2
+# SAME case pads 0 top/left and 1 bottom/right; C 68 with SAME runs the second 64-channel pass over
+# the padded edges. Exact, as the paths are bit-identical to arm_depthwise_conv_s16.
+operator: DepthwiseConv
+name: depthwise_conv_fast_3x3_c8_s1_same_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 8
+filter_shape:
+- 3
+- 3
+- 8
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_fast_3x3_c8_s1_same_no_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 8
+filter_shape:
+- 3
+- 3
+- 8
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: false
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_fast_3x3_c16_s2_same_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 9
+- 9
+- 16
+filter_shape:
+- 3
+- 3
+- 16
+- 1
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_fast_3x3_c16_s2_same_no_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 9
+- 9
+- 16
+filter_shape:
+- 3
+- 3
+- 16
+- 1
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: false
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_fast_3x3_c68_s1_valid_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 7
+- 6
+- 68
+filter_shape:
+- 3
+- 3
+- 68
+- 1
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_fast_3x3_c68_s1_valid_no_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 7
+- 6
+- 68
+filter_shape:
+- 3
+- 3
+- 68
+- 1
+strides:
+- 1
+- 1
+padding: VALID
+use_bias: false
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_fast_3x3_c12_s1x2_same_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 6
+- 10
+- 12
+filter_shape:
+- 3
+- 3
+- 12
+- 1
+strides:
+- 1
+- 2
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_fast_3x3_c12_s1x2_same_no_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 6
+- 10
+- 12
+filter_shape:
+- 3
+- 3
+- 12
+- 1
+strides:
+- 1
+- 2
+padding: SAME
+use_bias: false
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_fast_3x3_c16_s2_same_asym_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 16
+filter_shape:
+- 3
+- 3
+- 16
+- 1
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_fast_3x3_c16_s2_same_asym_no_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 8
+- 8
+- 16
+filter_shape:
+- 3
+- 3
+- 16
+- 1
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: false
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_fast_3x3_c68_s1_same_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 7
+- 6
+- 68
+filter_shape:
+- 3
+- 3
+- 68
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_fast_3x3_c68_s1_same_no_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 7
+- 6
+- 68
+filter_shape:
+- 3
+- 3
+- 68
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: false
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_fast_planar_1x9_c8_same_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 50
+- 8
+filter_shape:
+- 1
+- 9
+- 8
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+---
+operator: DepthwiseConv
+name: depthwise_conv_fast_planar_1x9_c8_same_no_bias_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 1
+- 50
+- 8
+filter_shape:
+- 1
+- 9
+- 8
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: false
+depth_multiplier: 1
+dilation:
+- 1
+- 1
