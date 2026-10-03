@@ -102,7 +102,7 @@ def _fixture_bundles(tmp_path: Path) -> list[Path]:
         _write_bundle(tmp_path / "a510", "apollo510_evb", [
             {"case_id": "add_s8", "comparison_passed": "true", "median_cycles": "100.5", "ARM_PMU_MVE_INST_RETIRED": "40"},
             {"case_id": "only_510", "comparison_passed": "true", "median_cycles": "9"},
-        ], boot={"status": 0, "core_clock_hz": 250_000_000}),
+        ], boot={"status": 0, "core_clock_hz": 250_000_000, "fpscr": 0x00040000}),
         _write_bundle(tmp_path / "a3p", "apollo3p_evb", [
             {"case_id": "add_s8", "comparison_passed": "false", "median_cycles": "300"},
             {"case_id": "conv_s8", "comparison_passed": "false", "median_cycles": "0"},
@@ -119,9 +119,9 @@ def test_summary_from_fixture_bundles(tmp_path: Path) -> None:
     assert summary["schema"] == "hct.hardware.board_matrix" and summary["schema_version"] == 1
     a510, a3p = summary["boards"]
     assert a510["golden"] == {"total": 2, "passed": 2, "failed": 0, "rejected": 0}
-    assert a510["boot"] == {"status": 0, "core_clock_hz": 250_000_000}
+    assert a510["boot"] == {"status": 0, "core_clock_hz": 250_000_000, "fpscr": 0x00040000}
     assert a3p["golden"] == {"total": 2, "passed": 0, "failed": 1, "rejected": 1}
-    assert a3p["status"] == "failed" and a3p["boot"] == {"status": None, "core_clock_hz": None}
+    assert a3p["status"] == "failed" and a3p["boot"] == {"status": None, "core_clock_hz": None, "fpscr": None}
     assert summary["cases"] == [{
         "case_id": "add_s8",
         "median_cycles": {"apollo510_evb": 100.5, "apollo3p_evb": 300.0},
@@ -129,7 +129,7 @@ def test_summary_from_fixture_bundles(tmp_path: Path) -> None:
     }]
 
     markdown = (out / "board_matrix.md").read_text()
-    assert "| apollo510_evb | passed | 2 | 0 | 0 | 0 | 250 | hct-apollo510_evb | v7.38.0@82786f27ffaf |  |" in markdown
+    assert "| apollo510_evb | passed | 2 | 0 | 0 | 0 | 250 | 0x00040000 | hct-apollo510_evb | v7.38.0@82786f27ffaf |  |" in markdown
     assert "| add_s8 | 100.5 | 300 |" in markdown
     assert "| add_s8 | 40 | - |" in markdown
 

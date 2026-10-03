@@ -432,6 +432,12 @@ def test_consistency_check_covers_boot_health() -> None:
         session_runner.check_target_info_consistent(first, replace(first, core_clock_hz=96_000_000), batch_index=1)
 
 
+def test_consistency_check_covers_fpscr() -> None:
+    first = _target_info(fpscr_boot=0x03040000, fpscr=0x00040000)
+    with pytest.raises(RuntimeError, match=r"fpscr: 262144 -> 50593792"):
+        session_runner.check_target_info_consistent(first, replace(first, fpscr=0x03040000), batch_index=1)
+
+
 def test_boot_failure_skips_batch_context(tmp_path: Path, monkeypatch) -> None:
     def _open(board, serial_no, *, build_dir, counter_passes):
         return HostSession(FakeTargetTransport(boot_status=7, core_clock_hz=96_000_000)), _FakeTransport(), 0
