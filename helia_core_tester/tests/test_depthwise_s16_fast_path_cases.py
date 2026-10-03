@@ -10,12 +10,15 @@ paths, so a shape edited outside a gate would silently drop the coverage they we
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 
 import pytest
 
+from helia_core_tester.core.config import Config
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.io.dtypes import resolve_comparison
+from helia_core_tester.generation.test_ops import generate_test
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -81,3 +84,25 @@ def test_cases_cover_the_requested_variants() -> None:
         desc["strides"] == [2, 2] and _geometry(desc)[2:] == (0, 0) and desc["padding"] == "SAME"
         for desc in three_by_three
     )
+
+
+def _header_array(header: str, name: str) -> list[int] | None:
+    found = re.search(rf"\b{re.escape(name)}\[[^\]]*\]\s*=\s*\{{([^}}]*)\}}", header)
+    return None if found is None else [int(value, 0) for value in found.group(1).replace("LL", "").split(",") if value.strip()]
+
+
+@pytest.mark.parametrize("desc", CASES, ids=lambda desc: desc["name"])
+def test_generated_quantization_is_inside_the_direct_paths_range(tmp_path: Path, desc: dict) -> None:
+    # Both paths also decline, falling back to im2col with identical output, when a shift is
+    # outside [-31, 7] or a bias could overflow the int32 accumulator (arm_nn_dw_s16_quant_ok).
+    generate_test(desc, str(tmp_path), seed=Config.seed)
+    (header_path,) = sorted(tmp_path.rglob(f"{desc['name']}*.h"))
+    header = header_path.read_text()
+    shifts = _header_array(header, f"{desc['name']}_shift")
+    assert shifts and all(-31 <= shift <= 7 for shift in shifts)
+    biases = _header_array(header, f"{desc['name']}_biases")
+    if desc["use_bias"]:
+        k_h, k_w, _, _ = desc["filter_shape"]
+        limit = 2**31 - 1 - k_h * k_w * (1 << 22)
+        assert biases and all(abs(bias) <= limit for bias in biases)
+
