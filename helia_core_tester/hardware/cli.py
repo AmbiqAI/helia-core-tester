@@ -139,6 +139,11 @@ _CMSIS_NN_ROOT_HELP = (
     "ns-cmsis-nn/Tests/helia-core-tester, else the pinned release. "
     "Copies its Include/, Source/, cmake/ and nsx/ into the app."
 )
+_PLACEMENT_HELP = (
+    "Operand memory: tcm (all in DTCM, kernel-only cost) or mram "
+    "(weights and bias in cached MRAM, evicted before each call; "
+    "activations and scratch in DTCM). Default: the last build's, else tcm."
+)
 _JOBS_HELP = "Parallel build jobs (default: CPU count + 2, like ninja)."
 _UPDATE_DEPS_HELP = "Re-resolve NSX modules and rewrite nsx.lock before building."
 _INLINE_ASM_HELP = (
@@ -147,7 +152,16 @@ _INLINE_ASM_HELP = (
 )
 
 
-def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
+def _check_placement(placement, spec: BoardSpec) -> None:
+    from .nsx_app import PLACEMENTS
+
+    if placement is not None and placement not in PLACEMENTS:
+        _fail(f"--placement must be one of: {', '.join(PLACEMENTS)}.")
+    if placement == "mram" and not spec.has_mram:
+        _fail(f"{spec.id} has no cached MRAM; use tcm.")
+
+
+def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None):
     """Kernel flags over the build dir's saved options."""
     from .firmware_build import nsx_app_dir
     from .nsx_app import AppRenderError, resolve_options, saved_options
@@ -158,6 +172,7 @@ def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
     try:
         options = resolve_options(
             app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
+            placement=placement,
         )
     except AppRenderError as exc:
         _fail(f"{exc}; pass --cmsis-nn-root or --cmsis-nn-ref.")
@@ -171,7 +186,7 @@ def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
     return options
 
 
-def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
+def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None):
     """The flashed build's options, unchanged."""
     from .firmware_build import nsx_app_dir
     from .nsx_app import AppRenderError, resolve_options, saved_options
@@ -185,7 +200,7 @@ def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm):
     try:
         wanted = resolve_options(
             app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
-            follow_pin=False,
+            placement=placement, follow_pin=False,
         )
     except AppRenderError as exc:
         _fail(f"{exc}; pass --skip-generate to stream only.")
@@ -264,6 +279,7 @@ def build(
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
     inline_asm: Optional[bool] = typer.Option(None, "--inline-asm/--no-inline-asm", help=_INLINE_ASM_HELP),
+    placement: Optional[str] = typer.Option(None, "--placement", help=_PLACEMENT_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -271,8 +287,9 @@ def build(
     from .firmware_build import build_firmware, resolve_build_dir
 
     spec = _board(board)
+    _check_placement(placement, spec)
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
-    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
+    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
     with _pipeline_errors(_verbosity(verbosity)):
         elf = build_firmware(
             spec, build_dir=build_dir, jobs=jobs,
@@ -292,6 +309,7 @@ def flash(
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
     inline_asm: Optional[bool] = typer.Option(None, "--inline-asm/--no-inline-asm", help=_INLINE_ASM_HELP),
+    placement: Optional[str] = typer.Option(None, "--placement", help=_PLACEMENT_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -301,8 +319,9 @@ def flash(
     from .firmware_build import flash_firmware, resolve_build_dir
 
     spec = _board(board)
+    _check_placement(placement, spec)
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
-    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
+    app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
     serial = _serial(serial_no)
     with _pipeline_errors(_verbosity(verbosity)):
         decision = flash_firmware(
@@ -538,6 +557,7 @@ def run(
     cmsis_nn_ref: Optional[str] = typer.Option(None, "--cmsis-nn-ref", help=_CMSIS_NN_REF_HELP),
     cmsis_nn_root: Optional[Path] = typer.Option(None, "--cmsis-nn-root", help=_CMSIS_NN_ROOT_HELP),
     inline_asm: Optional[bool] = typer.Option(None, "--inline-asm/--no-inline-asm", help=_INLINE_ASM_HELP),
+    placement: Optional[str] = typer.Option(None, "--placement", help=_PLACEMENT_HELP),
     update_dependencies: bool = typer.Option(False, "--update-dependencies", help=_UPDATE_DEPS_HELP),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help=_VERBOSITY_HELP),
 ) -> None:
@@ -550,6 +570,7 @@ def run(
     if skip_flash and force_flash:
         _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
+    _check_placement(placement, spec)
     options = _stream_options(
         spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
         op, dtype, case_id, cases_from,
@@ -558,11 +579,14 @@ def run(
     # Neither builds nor generates: nothing to resolve.
     streams_only = skip_generate and skip_flash
     if streams_only:
+        # A passed placement must match the build.
+        if placement is not None:
+            _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
         app_options = None
     elif skip_flash:
-        app_options = _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
+        app_options = _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
     else:
-        app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm)
+        app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     if streams_only:

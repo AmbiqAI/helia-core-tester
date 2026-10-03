@@ -93,6 +93,20 @@ class BlobAccumulator:
         return payload
 
 
+# Mirror allocate_blob() MRAM row padding.
+MRAM_ROW_BYTES = 16
+MRAM_ROLES = frozenset({"weights", "bias"})
+
+
+def staged_extent(role: str, byte_length: int, alignment: int, placement: str) -> tuple[int, int]:
+    """Blob's firmware workspace length and alignment."""
+    alignment = max(alignment, 1)
+    if placement != "mram" or role not in MRAM_ROLES:
+        return byte_length, alignment
+    padded = -(-byte_length // MRAM_ROW_BYTES) * MRAM_ROW_BYTES
+    return padded, max(alignment, MRAM_ROW_BYTES)
+
+
 class ArenaTracker:
     def __init__(self, capacity_bytes: int) -> None:
         self.capacity_bytes = capacity_bytes

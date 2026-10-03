@@ -11,7 +11,7 @@ from xml.etree.ElementTree import Element, SubElement, ElementTree
 
 from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
-from .wire import boot_record
+from .wire import boot_record, placement_record
 from .pathutil import write_text_lf
 
 CASE_SUMMARY_BASE_FIELDS = [
@@ -148,7 +148,11 @@ def write_result_bundle(
         "schema_version": 1,
         "session_id": session_id,
         "case_count": len(result.cases),
-        "target": target_info or {"board": "apollo510_evb", "cpu": "cortex-m55", "transport": "fake-target"},
+        "target": {
+            **(target_info or {"board": "apollo510_evb", "cpu": "cortex-m55", "transport": "fake-target"}),
+            # Runs pair only within one placement.
+            "placement": placement_record(result.target_info),
+        },
         "artifacts": {
             "memory_report": "memory_report.json",
             "kernel_catalog": "kernel_catalog.json",

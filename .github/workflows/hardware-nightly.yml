@@ -95,12 +95,14 @@ jobs:
     env:
       HCT_NIGHTLY_BOARD: ${{ matrix.board }}
       HCT_RUN_JSON: ${{ github.workspace }}/artifacts/reports/hardware-nightly-run.json
+      HCT_MRAM_RUN_JSON: ${{ github.workspace }}/artifacts/reports/hardware-nightly-mram-run.json
     steps:
       # Every attempt replaces its artifact.
       - name: Stage a no-result marker
         run: |
-          mkdir -p "${RUNNER_TEMP}/hct-upload"
+          mkdir -p "${RUNNER_TEMP}/hct-upload" "${RUNNER_TEMP}/hct-mram-upload"
           echo "no result" > "${RUNNER_TEMP}/hct-upload/NO_RESULT"
+          echo "no result" > "${RUNNER_TEMP}/hct-mram-upload/NO_RESULT"
 
       - name: Resolve board and probe from the runner
         run: |
@@ -117,6 +119,7 @@ jobs:
             echo "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" >> "${GITHUB_ENV}"
           fi
           echo "HCT_SESSION_ID=nightly-${GITHUB_RUN_ID}-${HPX_BOARD}" >> "${GITHUB_ENV}"
+          echo "HCT_MRAM_SESSION_ID=nightly-mram-${GITHUB_RUN_ID}-${HPX_BOARD}" >> "${GITHUB_ENV}"
 
       # hpx's bench lock; ttl frees it.
       - name: Take the board lock
@@ -163,31 +166,23 @@ jobs:
       - name: Run the hardware kernel suite
         id: suite
         run: |
-          args=(
-            hardware run
-            --board "${HPX_BOARD}"
-            --suite "${HCT_NIGHTLY_SUITE}"
-            --session-id "${HCT_SESSION_ID}"
-            --build-dir "${HCT_CACHE_DIR}/hardware/${HPX_BOARD}"
-            --json
-          )
-          if [[ -n "${HCT_NIGHTLY_LIMIT}" ]]; then
-            args+=(--limit "${HCT_NIGHTLY_LIMIT}")
+          # Build dir keeps placement; force TCM.
+          scripts/nightly_leg.sh "${HCT_SESSION_ID}" "${HCT_CACHE_DIR}/hardware/${HPX_BOARD}" "${HCT_RUN_JSON}" \
+            --placement tcm
+
+      # Weights in cached MRAM; MRAM boards only.
+      - name: Run the MRAM-placement leg
+        id: mram
+        if: ${{ !cancelled() && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure') }}
+        run: |
+          mram="$(uv run python -c 'import sys; from helia_core_tester.hardware.boards import resolve_board; print(resolve_board(sys.argv[1]).has_mram)' "${HPX_BOARD}")"
+          if [[ "${mram}" != "True" ]]; then
+            echo "${HPX_BOARD} has no cached MRAM; skipping"
+            exit 0
           fi
-          # DWT-only boards refuse PMU counters.
-          tier="$(uv run python -c 'import sys; from helia_core_tester.hardware.boards import resolve_board; print(resolve_board(sys.argv[1]).pmu_tier)' "${HPX_BOARD}")"
-          if [[ "${tier}" != "dwt" ]]; then
-            for counters in ${HCT_NIGHTLY_PMU}; do
-              args+=(--pmu-counters "${counters}")
-            done
-          fi
-          mkdir -p "$(dirname "${HCT_RUN_JSON}")"
-          # --json: document on stdout, log on stderr.
-          uv run helia_core_tester "${args[@]}" > "${HCT_RUN_JSON}"
-          if [[ "$(jq -r '.totals.ran' "${HCT_RUN_JSON}")" == "0" ]]; then
-            echo "::error::selection ran no cases on ${HPX_BOARD}" >&2
-            exit 2
-          fi
+          echo "ran=true" >> "${GITHUB_OUTPUT}"
+          scripts/nightly_leg.sh "${HCT_MRAM_SESSION_ID}" "${HCT_CACHE_DIR}/hardware/${HPX_BOARD}-mram" "${HCT_MRAM_RUN_JSON}" \
+            --placement mram --skip-generate
 
       - name: Release the board lock
         if: always() && steps.lock.outcome == 'success'
@@ -201,17 +196,22 @@ jobs:
           echo "${freed}"
 
       # Only after the suite ran: checkout cleans stale reports.
-      - name: Stage the result bundle
+      - name: Stage the result bundles
         if: always() && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure')
         run: |
-          if [[ -d artifacts/reports/hardware ]]; then
-            cp -r artifacts/reports/hardware "${RUNNER_TEMP}/hct-upload/"
-          fi
-          # Keep the marker until results exist.
-          if [[ -s "${HCT_RUN_JSON}" ]]; then
-            cp "${HCT_RUN_JSON}" "${RUNNER_TEMP}/hct-upload/"
-            rm -f "${RUNNER_TEMP}/hct-upload/NO_RESULT"
-          fi
+          # One leg's session per artifact.
+          for leg in "${HCT_SESSION_ID}:${HCT_RUN_JSON}:hct-upload" "${HCT_MRAM_SESSION_ID}:${HCT_MRAM_RUN_JSON}:hct-mram-upload"; do
+            IFS=: read -r session run_json upload <<< "${leg}"
+            if [[ -d "artifacts/reports/hardware/${session}" ]]; then
+              mkdir -p "${RUNNER_TEMP}/${upload}/hardware"
+              cp -r "artifacts/reports/hardware/${session}" "${RUNNER_TEMP}/${upload}/hardware/"
+            fi
+            # Keep the marker until results exist.
+            if [[ -s "${run_json}" ]]; then
+              cp "${run_json}" "${RUNNER_TEMP}/${upload}/hardware-nightly-run.json"
+              rm -f "${RUNNER_TEMP}/${upload}/NO_RESULT"
+            fi
+          done
 
       # Re-runs replace the first attempt's artifact.
       - name: Upload the result bundle
@@ -221,6 +221,17 @@ jobs:
           name: hct-hardware-${{ matrix.board }}-${{ needs.plan.outputs.date }}-${{ github.run_id }}
           overwrite: true
           path: ${{ runner.temp }}/hct-upload/
+          include-hidden-files: true
+          if-no-files-found: warn
+
+      # Own prefix: the dashboard keys hct-hardware-* by board.
+      - name: Upload the MRAM-leg bundle
+        if: always() && steps.mram.outputs.ran == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hct-mram-${{ matrix.board }}-${{ needs.plan.outputs.date }}-${{ github.run_id }}
+          overwrite: true
+          path: ${{ runner.temp }}/hct-mram-upload/
           include-hidden-files: true
           if-no-files-found: warn
 

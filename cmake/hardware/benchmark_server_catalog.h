@@ -33,7 +33,9 @@ enum
     HCT_CAP_ABS_S8 = (1u << 5),
     /* Armv8.1-M PMU event counters are available (__PMU_PRESENT == 1). Absent on
      * DWT-only cores such as Cortex-M4, where SAMPLE_RESULT only carries cycles. */
-    HCT_CAP_PMU_ARMV8M = (1u << 6)
+    HCT_CAP_PMU_ARMV8M = (1u << 6),
+    /* Weights and bias live in MRAM. */
+    HCT_CAP_WEIGHTS_MRAM = (1u << 7)
 };
 
 const hct_kernel_catalog_entry_t *hct_benchmark_server_catalog(size_t *count);

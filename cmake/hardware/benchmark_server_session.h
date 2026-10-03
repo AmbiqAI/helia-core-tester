@@ -62,6 +62,8 @@ typedef struct
     uint32_t crc32;
     uint32_t arena_offset;
     uint32_t bytes_received;
+    /* Read-only copy outside the workspace. */
+    const uint8_t *placed;
 } hct_server_blob_t;
 
 /* One PMU measurement pass from SESSION_PLAN: which event ids to program into the
@@ -277,6 +279,8 @@ typedef struct
     uint32_t output_length;
     uint32_t output_stream_offset;
     uint32_t output_stream_checksum;
+    /* Next free MRAM address this case. */
+    uintptr_t mram_cursor;
     uint8_t output_stream_active;
     uint8_t *workspace;
     uint32_t workspace_bytes;

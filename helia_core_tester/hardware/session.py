@@ -394,7 +394,7 @@ class HostSession:
                     f"Case {bundle.case_id!r} references kernel_id {bundle.kernel_id}, "
                     "which is not present in the target's advertised catalog."
                 )
-            required = bundle.workspace_bytes_required
+            required = bundle.workspace_bytes_for(target_info.placement)
             available = int(target_info.runtime_arena_capacity)
             if required > available:
                 raise RuntimeError(
