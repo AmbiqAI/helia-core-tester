@@ -27,7 +27,9 @@ from typing import Callable
 import numpy as np
 import yaml
 
-from .case_bundle import BlobInfo, CaseBundle, _blob_info, _case_root, _manifest_blob_entry, _write_blob, _write_manifest
+from .case_bundle import (
+    DEGENERATE_REASON_KEY, BlobInfo, CaseBundle, _blob_info, _case_root, _manifest_blob_entry, _write_blob, _write_manifest,
+)
 from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_kernel_id
 from .pathutil import display_path
 from helia_core_tester.core.cpu_targets import get_cpu_profile
@@ -769,7 +771,7 @@ def _generated_manifest_header(
     descriptor_text: str,
 ) -> dict:
     """Build identity before the caller evaluates kernel lookup and policy fields."""
-    return {
+    header = {
         "schema_name": "hct.case_manifest",
         "schema_version": 1,
         "case_id": case_id,
@@ -777,6 +779,11 @@ def _generated_manifest_header(
         "descriptor_path": display_path(descriptor_path, project_root),
         "descriptor_sha256": hashlib.sha256(descriptor_text.encode("utf-8")).hexdigest(),
     }
+    # Intended constant goldens stay timing-valid.
+    reason = generated_test.descriptor.get(DEGENERATE_REASON_KEY)
+    if reason:
+        header[DEGENERATE_REASON_KEY] = str(reason)
+    return header
 
 
 def _finish_generated_bundle(
@@ -2101,9 +2108,6 @@ _ACTIVATION_CMSIS_FUNCTION = {
     ("HardSwishPrecise", "S8"): "arm_hard_swish_precise_s8",
     ("HardSwishPrecise", "S16"): "arm_hard_swish_precise_s16",
 }
-# CMSIS-NN only implements these two ops in S16 -- the generator forces S16 even when the
-# descriptor's activation_dtype says S8 (see OpLogistic/OpTanh generate_c_files()).
-_ACTIVATION_FORCE_S16_OPERATORS = ("Logistic", "Tanh")
 _ACTIVATION_ARG_COUNT = {
     "Relu": 7,
     "Relu6": 9,
@@ -2175,8 +2179,6 @@ def _build_activation_case(
     descriptor = generated_test.descriptor
     operator = str(descriptor.get("operator", ""))
     activation_dtype = str(descriptor.get("activation_dtype", ""))
-    if operator in _ACTIVATION_FORCE_S16_OPERATORS:
-        activation_dtype = "S16"
     if (operator, activation_dtype) not in _ACTIVATION_CMSIS_FUNCTION:
         raise UnsupportedGeneratedTestError(
             f"{generated_test.name}: operator={operator!r} activation_dtype={activation_dtype!r} is not "

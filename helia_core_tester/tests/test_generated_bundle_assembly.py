@@ -1,5 +1,6 @@
 """Assembly preserves storage, ordered metadata and the existing failure boundary."""
 
+from dataclasses import replace
 from pathlib import Path
 import struct
 
@@ -90,3 +91,9 @@ def test_blob_writes_then_descriptor_read_precede_kernel_lookup(abs_case, tmp_pa
         bridge._build_abs_case(ROOT, abs_case, output_root=tmp_path / "failed")
     assert calls == ([] if missing_descriptor else ["kernel"])
     assert sorted(p.name for p in (tmp_path / "failed").rglob("*.bin")) == ["expected_output.bin", "input_0.bin"]
+
+
+def test_manifest_carries_degenerate_reason(abs_case, tmp_path):
+    labeled = replace(abs_case, descriptor={**abs_case.descriptor, "degenerate_golden_reason": "by design"})
+    bundle = load_case_bundle(bridge._build_abs_case(ROOT, labeled, output_root=tmp_path).manifest_path)
+    assert bundle.manifest["degenerate_golden_reason"] == "by design"

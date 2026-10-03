@@ -54,6 +54,7 @@ HAND_WRITTEN_DISPATCH: tuple[tuple[str, tuple[str, ...]], ...] = (
         "hct_run_abs_once",
         ("HCT_KERNEL_ID_ABS_S8", "HCT_KERNEL_ID_ABS_S16", "HCT_KERNEL_ID_ABS_F32", "HCT_KERNEL_ID_ABS_F16"),
     ),
+    ("hct_run_empty_once", ("HCT_KERNEL_ID_EMPTY_CALL",)),
 )
 
 

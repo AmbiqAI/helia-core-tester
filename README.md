@@ -99,7 +99,13 @@ so `mve:all` costs nine passes per case. One run takes up to 32 passes (the firm
 `cpu:all memory:all mve:all`, 18 passes) fits one run and one bundle.
 `ARM_PMU_CPU_CYCLES` is always reported from the PMU cycle counter alongside the DWT
 cycles. `case_summary.csv` gets one column per counter (median per invocation) plus
-`overflow_detected` and `valid_for_regression`;
+`overflow_detected`, `valid_for_regression` and `timing_status`. Only `valid` cases
+gate perf; the others are `error_path` (expects any non-success status, such as an argument or no-impl error), `overflow`,
+`zero_cycles`, `below_floor` (median under 3x the board's empty-call floor, which
+`session_manifest.json` records as `timing_floor`) or `degenerate_output` (the
+golden is constant, has at most two values, or is at least 90 % saturated).
+Goldens under 8 elements are never judged, BOOL goldens are degenerate only when
+constant, and a descriptor's `degenerate_golden_reason` marks the shape as intended.
 `session_summary.json` records the passes, counters and per-stage/per-case timing.
 `--pmu-groups a,b` still works as a deprecated alias for `--pmu-counters a:default
 --pmu-counters b:default`.
