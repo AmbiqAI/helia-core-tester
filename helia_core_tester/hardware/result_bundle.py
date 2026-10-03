@@ -110,9 +110,14 @@ def write_timing(bundle_root: Path, timing: dict) -> Path:
     The bundle is written by the batched runner before the pipeline knows the stage
     totals, so the pipeline adds them afterwards instead of threading a callback
     through every layer."""
+    return merge_summary(bundle_root, "timing", timing)
+
+
+def merge_summary(bundle_root: Path, key: str, value: Any) -> Path:
+    """Set one key in session_summary.json."""
     path = bundle_root / "session_summary.json"
     summary = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    summary["timing"] = timing
+    summary[key] = value
     write_text_lf(path, json.dumps(summary, indent=2))
     return path
 
