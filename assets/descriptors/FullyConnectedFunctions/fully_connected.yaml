@@ -546,3 +546,111 @@ filter_shape: [4, 8]
 use_bias: true
 fault: small_ctx_size
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# arm_fully_connected_per_channel_packed_s8 (fully_connected_packed_s8 family): the case packs the
+# weights once with the entry's own packer, gate first, and calls the entry. Blocks of four output
+# rows over K rounded up to 16: K is 3, 13, 16, 17, 29, 32 and 64, the last block has 1 to 4 live
+# rows, batches run 1 to 3, and outputs saturate at the int8 bounds. MVE only: it declines on the
+# autovectorized coverage build, and for a nonzero filter offset.
+operator: FullyConnected
+name: fully_connected_entry_packed_k16_c8_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [1, 16]
+filter_shape: [8, 16]
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_k13_c5_b2_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [2, 13]
+filter_shape: [5, 13]
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_k17_c6_no_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [1, 17]
+filter_shape: [6, 17]
+use_bias: false
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_k29_c7_b2_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [2, 29]
+filter_shape: [7, 29]
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_k64_c4_b3_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [3, 64]
+filter_shape: [4, 64]
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_k3_c2_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [1, 3]
+filter_shape: [2, 3]
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_k2x2x8_c9_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [1, 2, 2, 8]
+filter_shape: [9, 32]
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_declines_filter_offset_k13_c5_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor, extras: {force_filter_offset: 3}}
+input_shape: [2, 13]
+filter_shape: [5, 13]
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR

@@ -2,20 +2,48 @@
 #include "arm_nnfunctions.h"
 {% include "common/standalone/runtime_common.j2" %}
 {% from "common/standalone/runtime_common.j2" import helia_guard_declare %}
-{% from "common/standalone/validation.j2" import validation_outputs with context %}
+{% from "common/standalone/validation.j2" import validation_outputs, declinable_status_checks with context %}
 
+{% set packed = entry_family == "fully_connected_packed_s8" %}
 // Context for buffer allocation
 static cmsis_nn_context {{ name }}_ctx;
 
+{% if packed %}
+#include "arm_nnsupportfunctions.h"
+
+// The entry takes no scratch. The buffer holds the weight stream {{ kernel_fn }}_pack()
+// builds once before the call, as an ahead-of-time caller does (max upper bound in bytes;
+// actual size queried at runtime). Word storage keeps it 4-byte aligned, as the entry requires.
+#define {{ name|upper }}_BUFFER_SIZE_MAX {{ buffer_size_max }}
+{{ helia_guard_declare("int32_t", name ~ "_buffer", name|upper ~ "_BUFFER_SIZE_MAX / 4") }}
+{{ helia_guard_declare("int32_t", name ~ "_kernel_sum", filter_dims.c) }}
+{% else %}
 // Runtime scratch buffer (max upper bound; actual size queried at runtime)
 // Buffer size calculated conservatively to handle MVE and DSP implementations
 #define {{ name|upper }}_BUFFER_SIZE_MAX {{ buffer_size_max }}
 {{ helia_guard_declare("uint8_t", name ~ "_buffer", name|upper ~ "_BUFFER_SIZE_MAX") }}
+{% endif %}
 
 
 #define {{ name|upper }}_OUTPUT_SIZE ({{ output_dims.n }} * {{ output_dims.h }} * {{ output_dims.w }} * {{ output_dims.c }})
 {{ helia_guard_declare(output_dtype, name ~ "_output", name|upper ~ "_OUTPUT_SIZE") }}
 
+{% if packed %}
+int32_t {{ name }}_run(
+    const {{ input_dtype }}* __restrict input,
+    {{ output_dtype }}* __restrict output
+) {
+    return {{ kernel_fn }}(
+        &{{ name }}_fc_params,
+        &{{ name }}_input_dims,
+        input,
+        &{{ name }}_filter_dims,
+        (const int8_t *){{ name }}_buffer,
+        &{{ name }}_output_dims,
+        output
+    );
+}
+{% else %}
 int32_t {{ name }}_run(
     const {{ input_dtype }}* __restrict input,
     {{ output_dtype }}* __restrict output
@@ -167,18 +195,70 @@ int32_t {{ name }}_run(
     
     return kernel_status;
 }
+{% endif %}
 
 int32_t {{ name }}_test_case_run(void)
 {
-    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
-    int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
+    {% if packed %}
     int failures = 0;
-    HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Fully connected") }} scratch", failures);
-    HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ validation_label | default("Fully connected") }} scratch slack", {{ name }}_ctx.buf == {{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u, failures);
+    // The stream is built the way the entry's caller must build it: the gate first, then kernel
+    // sums with the input offset and bias folded in (filter offset 0), then the entry's packer.
+    HELIA_VALIDATE_SCALAR_EQ_INT(
+        "{{ validation_label | default("Fully connected") }}",
+        "arm_nn_fc_packed_s8_supported",
+        {{ 1 if expected_status == "ARM_CMSIS_NN_SUCCESS" else 0 }},
+        arm_nn_fc_packed_s8_supported(&{{ name }}_fc_params, &{{ name }}_quant_params, &{{ name }}_filter_dims)
+    );
+    const int32_t packed_size = {{ kernel_get_buffer_size_fn }}(&{{ name }}_filter_dims);
+    HELIA_VALIDATE_SIZER("{{ kernel_get_buffer_size_fn }}", packed_size);
+    HELIA_VALIDATE_SIZER_FITS("{{ kernel_get_buffer_size_fn }}", packed_size, {{ name|upper }}_BUFFER_SIZE_MAX);
+    {{ name }}_ctx.buf = (uint8_t *){{ name }}_buffer;
+    {{ name }}_ctx.size = packed_size;
+    HELIA_GUARD_ARM({{ name }}_kernel_sum, true /* written only by arm_vector_sum_s8: poison */);
+    HELIA_GUARD_ARM({{ name }}_buffer, true /* written only by the packer: poison */);
+    HELIA_GUARD_STAMP_SLACK({{ name }}_buffer, (size_t)packed_size);
+    arm_cmsis_nn_status pack_status = arm_vector_sum_s8(
+        {{ name }}_kernel_sum,
+        {{ filter_dims.n }},
+        {{ filter_dims.c }},
+        {{ name }}_weights,
+        {{ name }}_fc_params.input_offset,
+        0,
+        {{ name }}_biases
+    );
+    if (pack_status == ARM_CMSIS_NN_SUCCESS) {
+        pack_status = {{ kernel_fn }}_pack(
+            &{{ name }}_filter_dims,
+            {{ name }}_weights,
+            {{ name }}_kernel_sum,
+            &{{ name }}_quant_params,
+            (int8_t *){{ name }}_buffer
+        );
+    }
+    HELIA_GUARD_CHECK({{ name }}_kernel_sum, "{{ validation_label | default("Fully connected") }} kernel sums", failures);
+    HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Fully connected") }} packed weights", failures);
+    HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ validation_label | default("Fully connected") }} packed weights slack", (size_t)packed_size, failures);
+    HELIA_VALIDATE_STATUS("{{ kernel_fn }}_pack", pack_status);
+    {% endif %}
+    {% if autovectorize_declines %}
+#if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
+    HELIA_GUARD_ARM({{ name }}_output, true /* the entry declines on this build: poison */);
+#else
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
+#endif
+    {% elif expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
+    HELIA_GUARD_ARM({{ name }}_output, true /* a declined call must not write it: poison */);
+    {% else %}
+    HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
+    {% endif %}
+    int32_t status = {{ name }}_run({{ name }}_input, {{ name }}_output);
+    {% if not packed %}
+    int failures = 0;
+    {% endif %}
+    HELIA_GUARD_CHECK({{ name }}_buffer, "{{ validation_label | default("Fully connected") }} {{ "packed weights" if packed else "scratch" }}", failures);
+    HELIA_GUARD_CHECK_SLACK({{ name }}_buffer, "{{ validation_label | default("Fully connected") }} {{ "packed weights" if packed else "scratch" }} slack", {{ name }}_ctx.buf == {{ "(uint8_t *)" if packed }}{{ name }}_buffer ? (size_t){{ name }}_ctx.size : 0u, failures);
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Fully connected") }} output", failures);
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("Fully connected") }}", status);
-
-{{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
+{{ declinable_status_checks(validation_label | default("Fully connected")) }}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 

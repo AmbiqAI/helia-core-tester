@@ -31,7 +31,8 @@ class DirectEntry:
     family: str
     # Scratch query. depthwise_s8 and convolve_s8 call it with (input_dims, filter_dims),
     # convolve_1x1_s8 with (input_dims); float entries call it like their default entry,
-    # with (params, input_dims, filter_dims, output_dims[, layout]).
+    # with (params, input_dims, filter_dims, output_dims[, layout]). fully_connected_packed_s8
+    # takes no scratch: this sizes the weight stream that <entry>_pack builds, from (filter_dims).
     buffer_size_fn: str
     # Float entries: whether the call and the scratch query take a trailing layout argument.
     kernel_needs_layout: bool = False
@@ -42,6 +43,8 @@ class DirectEntry:
 # arm_depthwise_conv_wrapper_s8's arguments; convolve_s8 takes arm_convolve_s8's
 # (upscale_dims passed as NULL, as arm_convolve_wrapper_s8 does); convolve_1x1_s8 takes
 # arm_convolve_1x1_s8_fast's and sizes scratch from the input dims alone. All take weight sums.
+# fully_connected_packed_s8 takes one stream in place of the weights, kernel sums and
+# quantization; the case builds it once with <entry>_pack, as an ahead-of-time caller does.
 DIRECT_ENTRIES: Dict[str, DirectEntry] = {
     "arm_depthwise_conv_s8_opt_3x3": DirectEntry(
         "DepthwiseConv", "S8", "S8", "depthwise_s8", "arm_depthwise_conv_s8_opt_get_buffer_size"
@@ -65,6 +68,14 @@ DIRECT_ENTRIES: Dict[str, DirectEntry] = {
     # arm_convolve_1x1_s8_fast with the same arguments, so scratch is sized for that.
     "arm_convolve_1x1_s8_short_k": DirectEntry(
         "Convolve", "S8", "S8", "convolve_1x1_s8", "arm_convolve_1x1_s8_fast_get_buffer_size"
+    ),
+    # Reads a weight stream packed ahead of the call; per-channel quantization only.
+    "arm_fully_connected_per_channel_packed_s8": DirectEntry(
+        "FullyConnected",
+        "S8",
+        "S8",
+        "fully_connected_packed_s8",
+        "arm_fully_connected_per_channel_packed_s8_get_packed_size",
     ),
 }
 
