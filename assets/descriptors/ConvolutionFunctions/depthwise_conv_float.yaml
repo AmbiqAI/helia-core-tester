@@ -1,3 +1,4 @@
+# FP16 comparisons follow the rule stated at the top of ConvolutionFunctions/convolve_float.yaml.
 operator: DepthwiseConv
 name: depthwise_conv_float_default_f32
 suite: float
@@ -127,6 +128,7 @@ strides:
 padding: SAME
 use_bias: true
 depth_multiplier: 1
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_stride2_valid_f16
@@ -181,6 +183,7 @@ strides:
 padding: SAME
 use_bias: true
 depth_multiplier: 2
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_1d_chmult1_f16
@@ -265,6 +268,7 @@ strides:
 padding: VALID
 use_bias: true
 depth_multiplier: 2
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_1d_k3_no_bias_f32
@@ -337,6 +341,7 @@ use_bias: true
 depth_multiplier: 1
 hint:
   kernel_variant: wrapper
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_fast_nt_t_f32
@@ -371,6 +376,7 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 1
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_fast_kc_no_scratch_f32
@@ -409,6 +415,7 @@ use_bias: true
 depth_multiplier: 1
 hint:
   force_no_scratch: true
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_3x3_valid_stride1_f32
@@ -443,6 +450,7 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 1
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_1d_k3_no_bias_f16
@@ -477,6 +485,7 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 2
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_single_input_channel_out8_f16
@@ -494,6 +503,7 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 8
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_fast_nt_t_no_bias_f32
@@ -823,6 +833,7 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 1
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_acc16_chmult2_f16
@@ -837,6 +848,7 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 2
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_nhwc_5x5_c4_f16
@@ -851,6 +863,7 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 1
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_nhwc_acc16_5x5_c4_f16
@@ -865,6 +878,7 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 1
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_nhwc_acc16_chmult2_f16
@@ -879,6 +893,7 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 2
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_entry_wrapper_acc16_6x6_c3_f16
@@ -893,10 +908,10 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 1
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 # Long reductions: more than 32 taps per float16 lane, so the kernels fold each block of 32 into
-# float32 (the direct and generic depthwise kernels). A comparison override is about twice the
-# case's measured maximum error on cortex-m55, which folding keeps at or below the unfolded kernels'.
+# float32 (the direct and generic depthwise kernels).
 operator: DepthwiseConv
 name: depthwise_conv_float_direct_fold_7x7_c28_f16
 suite: float
@@ -936,7 +951,7 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 depth_multiplier: 2
-comparison: {atol: 0.004, rtol: 0.004}
+comparison: {atol: 0.003, rtol: 0.003}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_fault_entry_acc16_invalid_layout_f16
@@ -985,7 +1000,6 @@ strides: [1, 1]
 padding: VALID
 use_bias: true
 depth_multiplier: 1
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: DepthwiseConv
 name: depthwise_conv_float_route_direct_f16

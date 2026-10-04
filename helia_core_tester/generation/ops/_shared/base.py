@@ -98,6 +98,17 @@ class OperationBase(ABC):
         """
         pass
 
+    def round_float16_weights(self, model) -> None:
+        """Round an FP16 case's Keras weights and biases to float16 before conversion.
+
+        The kernel receives float16 weights and bias, so the golden output is computed from those
+        same rounded values rather than the float32 draw.
+        """
+        if model is None or str(self.desc.get("activation_dtype", "")).upper() != "FP16":
+            return
+        for layer in model.layers:
+            layer.set_weights([w.astype(np.float16).astype(np.float32) for w in layer.get_weights()])
+
     def needs_keras_model(self) -> bool:
         """Return True if build_keras_model should be called for conversion."""
         return True
