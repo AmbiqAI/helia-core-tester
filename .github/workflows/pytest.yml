@@ -41,6 +41,9 @@ concurrency:
   # its own, or a regression on that commit can slip through unreported.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+
 jobs:
   pytest:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
