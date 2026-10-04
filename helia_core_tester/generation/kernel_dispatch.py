@@ -91,6 +91,12 @@ def _fp16(operator: str, buffer_size_fn: str, kernel_needs_layout: bool, buffer_
     )
 
 
+def _fp32(operator: str, buffer_size_fn: str, kernel_needs_layout: bool, buffer_size_needs_layout: bool) -> DirectEntry:
+    return DirectEntry(
+        operator, "FP32", "FP32", "float", buffer_size_fn, kernel_needs_layout, buffer_size_needs_layout
+    )
+
+
 # FP16 entries take their default entry's float call. The _nhwc_ entries have no layout
 # argument and size scratch with the layout-taking query at ARM_NN_LAYOUT_NHWC; the wrappers
 # keep their own query. The _acc16 entries keep float16 lane accumulation (heliaAOT fast mode).
@@ -121,12 +127,83 @@ DIRECT_ENTRIES.update(
         ),
     }
 )
+
+# Per-route float entries (ns-cmsis-nn#674): the argument list of arm_convolve_nhwc_f16/f32 or
+# arm_depthwise_nhwc_conv_f16, with no layout argument. _ohwi_ entries take STANDARD filters and
+# _packed_ NT_N_PACKED; each declines the other format with ARM_CMSIS_NN_NO_IMPL_ERROR. 1x1, 1xN
+# and patch-GEMM size scratch with their own query; the rest need none and get the router's.
+DIRECT_ENTRIES.update(
+    {
+        "arm_convolve_1x1_nhwc_ohwi_f32": _fp32("Convolve", "arm_convolve_1x1_f32_get_buffer_size", False, True),
+        "arm_convolve_1_x_n_nhwc_ohwi_f32": _fp32("Convolve", "arm_convolve_1_x_n_f32_get_buffer_size", False, True),
+        "arm_convolve_1d_k5_nhwc_ohwi_f32": _fp32("Convolve", "arm_convolve_f32_get_buffer_size", False, True),
+        "arm_convolve_1d_k3_nhwc_ohwi_f32": _fp32("Convolve", "arm_convolve_f32_get_buffer_size", False, True),
+        "arm_convolve_patch_gemm_nhwc_ohwi_f32": _fp32("Convolve", "arm_convolve_patch_gemm_f32_get_buffer_size", False, False),
+        "arm_convolve_direct_nhwc_ohwi_f32": _fp32("Convolve", "arm_convolve_f32_get_buffer_size", False, True),
+        "arm_convolve_1x1_nhwc_packed_f32": _fp32("Convolve", "arm_convolve_1x1_f32_get_buffer_size", False, True),
+        "arm_convolve_1_x_n_nhwc_packed_f32": _fp32("Convolve", "arm_convolve_1_x_n_f32_get_buffer_size", False, True),
+        "arm_convolve_1d_k5_nhwc_packed_f32": _fp32("Convolve", "arm_convolve_f32_get_buffer_size", False, True),
+        "arm_convolve_1d_k3_nhwc_packed_f32": _fp32("Convolve", "arm_convolve_f32_get_buffer_size", False, True),
+        "arm_convolve_patch_gemm_nhwc_packed_f32": _fp32("Convolve", "arm_convolve_patch_gemm_f32_get_buffer_size", False, False),
+        "arm_convolve_direct_nhwc_packed_f32": _fp32("Convolve", "arm_convolve_f32_get_buffer_size", False, True),
+        "arm_convolve_small_c_nhwc_f32": _fp32("Convolve", "arm_convolve_f32_get_buffer_size", False, True),
+        "arm_convolve_1x1_nhwc_ohwi_f16": _fp16("Convolve", "arm_convolve_1x1_f16_get_buffer_size", False, True),
+        "arm_convolve_1_x_n_nhwc_ohwi_f16": _fp16("Convolve", "arm_convolve_1_x_n_f16_get_buffer_size", False, True),
+        "arm_convolve_1d_k5_nhwc_ohwi_f16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
+        "arm_convolve_1d_k3_nhwc_ohwi_f16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
+        "arm_convolve_patch_gemm_nhwc_ohwi_f16": _fp16("Convolve", "arm_convolve_patch_gemm_f16_get_buffer_size", False, False),
+        "arm_convolve_direct_nhwc_ohwi_f16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
+        "arm_convolve_1x1_nhwc_ohwi_f16_acc16": _fp16("Convolve", "arm_convolve_1x1_f16_get_buffer_size", False, True),
+        "arm_convolve_1_x_n_nhwc_ohwi_f16_acc16": _fp16("Convolve", "arm_convolve_1_x_n_f16_get_buffer_size", False, True),
+        "arm_convolve_1d_k5_nhwc_ohwi_f16_acc16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
+        "arm_convolve_1d_k3_nhwc_ohwi_f16_acc16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
+        "arm_convolve_patch_gemm_nhwc_ohwi_f16_acc16": _fp16("Convolve", "arm_convolve_patch_gemm_f16_get_buffer_size", False, False),
+        "arm_convolve_direct_nhwc_ohwi_f16_acc16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
+        "arm_convolve_1x1_nhwc_packed_f16": _fp16("Convolve", "arm_convolve_1x1_f16_get_buffer_size", False, True),
+        "arm_convolve_1_x_n_nhwc_packed_f16": _fp16("Convolve", "arm_convolve_1_x_n_f16_get_buffer_size", False, True),
+        "arm_convolve_1d_k5_nhwc_packed_f16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
+        "arm_convolve_1d_k3_nhwc_packed_f16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
+        "arm_convolve_patch_gemm_nhwc_packed_f16": _fp16("Convolve", "arm_convolve_patch_gemm_f16_get_buffer_size", False, False),
+        "arm_convolve_direct_nhwc_packed_f16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
+        "arm_convolve_1x1_nhwc_packed_f16_acc16": _fp16("Convolve", "arm_convolve_1x1_f16_get_buffer_size", False, True),
+        "arm_convolve_1_x_n_nhwc_packed_f16_acc16": _fp16("Convolve", "arm_convolve_1_x_n_f16_get_buffer_size", False, True),
+        "arm_convolve_1d_k5_nhwc_packed_f16_acc16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
+        "arm_convolve_1d_k3_nhwc_packed_f16_acc16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
+        "arm_convolve_patch_gemm_nhwc_packed_f16_acc16": _fp16("Convolve", "arm_convolve_patch_gemm_f16_get_buffer_size", False, False),
+        "arm_convolve_direct_nhwc_packed_f16_acc16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
+        "arm_convolve_small_c_nhwc_f16": _fp16("Convolve", "arm_convolve_f16_get_buffer_size", False, True),
+        "arm_depthwise_conv_1d_k3_nhwc_f16": _fp16("DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True),
+        "arm_depthwise_conv_2x5_nhwc_f16": _fp16("DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True),
+        "arm_depthwise_conv_cin1_nhwc_f16": _fp16("DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True),
+        "arm_depthwise_conv_cin1_nhwc_f16_acc16": _fp16("DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True),
+        "arm_depthwise_conv_direct_nhwc_f16": _fp16("DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True),
+        "arm_depthwise_conv_direct_nhwc_f16_acc16": _fp16("DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True),
+        "arm_depthwise_conv_generic_nhwc_f16": _fp16("DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True),
+        "arm_depthwise_conv_generic_nhwc_f16_acc16": _fp16("DepthwiseConv", "arm_depthwise_conv_f16_get_buffer_size", False, True),
+    }
+)
+
 DEPTHWISE_CONV_S8_DIRECT_ENTRIES = tuple(
     name for name, spec in DIRECT_ENTRIES.items() if spec.operator == "DepthwiseConv" and spec.activation_dtype == "S8"
 )
 DEPTHWISE_CONV_S8_PLANAR_RULE = "arm_depthwise_conv_s8_opt_planar_supported"
 
 _OPERATOR_LABELS = {"DepthwiseConv": "depthwise", "Convolve": "convolve", "FullyConnected": "fully connected"}
+
+
+def autovectorize_declines_if(input_c_type: str) -> str:
+    """The preprocessor condition under which an `autovectorize_declines` entry declines.
+
+    Integer entries live on ns-cmsis-nn's MVE integer paths, which an integer coverage build compiles
+    out. Float entries live on its MVE float paths, absent without MVE float and compiled out by a
+    coverage build that gives the float sources ARM_MATH_AUTOVECTORIZE. CMakeLists.txt sets the
+    HELIA_CMSIS_NN_*_AUTOVECTORIZE flags.
+    """
+    if input_c_type == "float16_t":
+        return "!defined(ARM_MATH_MVE_FLOAT16) || defined(HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE)"
+    if input_c_type == "float":
+        return "!defined(ARM_MATH_MVEF) || defined(HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE)"
+    return "defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)"
 
 
 def resolve_direct_entry(operator: str, entry: str, activation_dtype: str, weight_dtype: str) -> Dict[str, str]:

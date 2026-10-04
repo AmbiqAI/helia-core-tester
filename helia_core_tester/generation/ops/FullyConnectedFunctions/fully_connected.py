@@ -8,6 +8,7 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
 from helia_core_tester.generation.kernel_dispatch import (
+    autovectorize_declines_if,
     check_entry_fault,
     resolve_direct_entry,
     resolve_fully_connected_kernel,
@@ -1082,9 +1083,9 @@ class OpFullyConnected(OperationBase):
             'has_weight_sum': has_weight_sum,
             'entry_family': entry_family,
             'expected_status': self.expected_status(),
-            # The entry lives only on ns-cmsis-nn's MVE integer paths, so it declines on a build
-            # that compiles them out (HELIA_CMSIS_NN_INT_AUTOVECTORIZE, set by CMakeLists.txt).
+            # The entry lives only on ns-cmsis-nn's MVE paths, so it declines on a build without them.
             'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
+            'autovectorize_declines_if': autovectorize_declines_if(kernel_info["input_c_type"]),
         }
         fault = self.fault_kind()
         c_template = "FullyConnectedFunctions/fully_connected/fully_connected.c.j2"

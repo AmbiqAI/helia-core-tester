@@ -12,6 +12,7 @@ from helia_core_tester.generation.ops._shared.bias_init import (
     inject_hoisted_dilation_bias,
 )
 from helia_core_tester.generation.kernel_dispatch import (
+    autovectorize_declines_if,
     DEPTHWISE_CONV_S8_PLANAR_RULE,
     check_entry_fault,
     resolve_depthwise_conv_kernel,
@@ -769,6 +770,9 @@ class OpDepthwiseConv(OperationBase):
                 'buffer_size_max': buffer_size_max,
                 'force_no_scratch': bool(self._hint().get("force_no_scratch", False)),
                 'float_kernel': True,
+                'expected_status': self.expected_status(),
+                'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
+                'autovectorize_declines_if': autovectorize_declines_if(kernel_info["input_c_type"]),
                 'dw_conv_params_type': (
                     'cmsis_nn_dw_conv_params_f16'
                     if kernel_info["input_c_type"] == "float16_t"
@@ -1020,6 +1024,9 @@ class OpDepthwiseConv(OperationBase):
             or bool(kernel_info.get("direct_entry")),
             'direct_entry': bool(kernel_info.get("direct_entry")),
             'expected_status': self.expected_status(),
+            # The entry lives only on ns-cmsis-nn's MVE paths, so it declines on a build without them.
+            'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
+            'autovectorize_declines_if': autovectorize_declines_if(kernel_info["input_c_type"]),
             'planar_supported': self.desc.get("planar_supported"),
             'planar_rule_fn': DEPTHWISE_CONV_S8_PLANAR_RULE,
         }
