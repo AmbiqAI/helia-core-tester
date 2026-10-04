@@ -1954,8 +1954,7 @@ use_bias: true
 comparison: {atol: 0.002, rtol: 0.002}
 ---
 # Long reductions: more than 32 taps per float16 lane, so the kernels fold each block of 32 into
-# float32 (1xN, conv1d k3/k5, the direct loop, and the _acc16 entries on the same shapes). Folding keeps
-# the error at or below the unfolded kernels' error.
+# float32 (1xN, conv1d k3/k5, the direct loop, and the _acc16 entries on the same shapes).
 operator: Convolve
 name: convolve_float_direct_fold_c20_k5_oc5_f16
 suite: float
