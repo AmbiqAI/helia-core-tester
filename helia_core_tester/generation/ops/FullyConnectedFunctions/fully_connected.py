@@ -1048,7 +1048,10 @@ class OpFullyConnected(OperationBase):
         entry_family = kernel_info.get("entry_family")
         if entry_family == "fully_connected_packed_s8":
             if not quant_params_dict.get('per_channel', False):
-                raise ValueError(f"{name}: entry {kernel_info['kernel_fn']!r} takes per-channel quantization only")
+                raise ValueError(
+                    f"{name}: entry {kernel_info['kernel_fn']!r} takes per-channel quantization only; "
+                    "a single output channel is generated per-tensor"
+                )
             # The buffer holds the packed weight stream, not scratch: a bound in whole words on
             # ceil(C/4) blocks of four K-rows padded to 16 bytes plus 48 bytes of parameters. The
             # run-time size query must fit it, and the slack past that answer is guarded.
