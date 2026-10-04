@@ -28,12 +28,41 @@ def _source(name: str, tmp_path: Path) -> str:
     return "".join(p.read_text() for p in case_dir.glob("*.c"))
 
 
-def test_every_float_route_entry_has_a_case() -> None:
-    entries = {name for name, spec in DIRECT_ENTRIES.items() if spec.family == "float" and _ROUTE.search(name)}
-    called = {d.get("entry") for d in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors"))}
+_ROUTE_ENTRIES = sorted(name for name, spec in DIRECT_ENTRIES.items() if spec.family == "float" and _ROUTE.search(name))
 
-    assert len(entries) == 46
-    assert entries <= called
+
+def _route_query(entry: str) -> tuple[str, bool]:
+    """The scratch query a route entry takes: its route's own, or the router's when it needs none."""
+    if entry.startswith("arm_depthwise_conv_"):
+        return "arm_depthwise_conv_f16_get_buffer_size", True
+    bits = re.search(r"_(f16|f32)(?:_acc16)?$", entry).group(1)
+    for route, query, takes_layout in (
+        ("1x1", f"arm_convolve_1x1_{bits}_get_buffer_size", True),
+        ("1_x_n", f"arm_convolve_1_x_n_{bits}_get_buffer_size", True),
+        ("patch_gemm", f"arm_convolve_patch_gemm_{bits}_get_buffer_size", False),
+    ):
+        if entry.startswith(f"arm_convolve_{route}_nhwc_"):
+            return query, takes_layout
+    return f"arm_convolve_{bits}_get_buffer_size", True
+
+
+def test_every_float_route_entry_has_a_case_that_runs_it() -> None:
+    succeeding = {
+        d.get("entry")
+        for d in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors"))
+        if d.get("expected_status", "ARM_CMSIS_NN_SUCCESS") == "ARM_CMSIS_NN_SUCCESS"
+    }
+
+    assert len(_ROUTE_ENTRIES) == 46
+    assert set(_ROUTE_ENTRIES) <= succeeding
+
+
+@pytest.mark.parametrize("entry", _ROUTE_ENTRIES)
+def test_route_entry_takes_its_route_scratch_query(entry: str) -> None:
+    spec = DIRECT_ENTRIES[entry]
+
+    assert (spec.buffer_size_fn, spec.buffer_size_needs_layout) == _route_query(entry)
+    assert spec.kernel_needs_layout is False
 
 
 @pytest.mark.parametrize(
@@ -108,3 +137,12 @@ def test_float_coverage_build_flags_the_harness() -> None:
         block
         and "target_compile_definitions(helia_test_runtime PUBLIC HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE)" in block.group(1)
     )
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["depthwise_conv_entry_3x3_5x8_c64_s8", "fully_connected_float_entry_nhwc_k24_n17_f16"],
+)
+def test_declines_flag_is_rejected_where_the_template_does_not_render_it(name: str, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="autovectorize_declines is not supported"):
+        generate_test({**_descriptor(name), "autovectorize_declines": True}, str(tmp_path))

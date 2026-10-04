@@ -216,6 +216,11 @@ class OperationBase(ABC):
             )
         return status
 
+    def reject_autovectorize_declines(self) -> None:
+        """Reject `autovectorize_declines` on a path whose template does not render it."""
+        if self.desc.get("autovectorize_declines"):
+            raise ValueError(f"{self.desc.get('name')!r}: autovectorize_declines is not supported for this case")
+
     def fault_context(self) -> Dict[str, Any]:
         """Return the template context keys of the `fault:` mechanism (empty without a fault)."""
         kind = self.fault_kind()

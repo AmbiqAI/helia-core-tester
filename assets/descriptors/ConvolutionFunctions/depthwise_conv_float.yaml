@@ -955,7 +955,8 @@ fault: invalid_layout
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
 # Per-route float16 depthwise entries (ns-cmsis-nn#674): one case per entry inside its route's gate
-# and a shape outside the 1d_k3, 2x5 and direct gates. cin1 runs only on the MVE float16 leg and
+# and a shape outside the 1d_k3, 2x5, direct and cin1 gates (the cin1 gate is checked first, so
+# that decline holds on every build). cin1 runs only on the MVE float16 leg and
 # declines elsewhere; its scratch comes from the router's query.
 operator: DepthwiseConv
 name: depthwise_conv_float_route_1d_k3_f16
@@ -1111,6 +1112,51 @@ expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 operator: DepthwiseConv
 name: depthwise_conv_float_route_direct_declines_mult2_f16
 entry: arm_depthwise_conv_direct_nhwc_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 5, 5, 4]
+filter_shape: [3, 3, 4, 2]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 2
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: DepthwiseConv
+name: depthwise_conv_float_route_cin1_declines_cin2_f16
+entry: arm_depthwise_conv_cin1_nhwc_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 2]
+filter_shape: [3, 3, 2, 4]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 4
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: DepthwiseConv
+name: depthwise_conv_float_route_cin1_acc16_declines_cin2_f16
+entry: arm_depthwise_conv_cin1_nhwc_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 2]
+filter_shape: [3, 3, 2, 4]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+depth_multiplier: 4
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: DepthwiseConv
+name: depthwise_conv_float_route_direct_acc16_declines_mult2_f16
+entry: arm_depthwise_conv_direct_nhwc_f16_acc16
 suite: float
 activation_dtype: FP16
 weight_dtype: FP16

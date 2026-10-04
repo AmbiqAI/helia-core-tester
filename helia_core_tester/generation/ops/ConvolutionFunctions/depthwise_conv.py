@@ -997,6 +997,7 @@ class OpDepthwiseConv(OperationBase):
         
         
         # Build template context
+        self.reject_autovectorize_declines()
         context = {
             'name': name,
             'input_dims': input_dims,
