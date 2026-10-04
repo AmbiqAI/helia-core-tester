@@ -8,10 +8,11 @@ from pathlib import Path
 import pytest
 
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
-from helia_core_tester.generation.kernel_dispatch import resolve_direct_entry
+from helia_core_tester.generation.kernel_dispatch import DIRECT_ENTRIES
 from helia_core_tester.generation.test_ops import generate_test
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_ROUTE = re.compile(r"_nhwc_(?:ohwi|packed)_f|_small_c_|^arm_depthwise_conv_(?:1d_k3|2x5|cin1|direct|generic)_nhwc_")
 _DECLINES = re.compile(
     r"#if (!defined\(\w+\) \|\| defined\(HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE\))\n(.*?)#else(.*?)#endif", re.S
 )
@@ -27,23 +28,39 @@ def _source(name: str, tmp_path: Path) -> str:
     return "".join(p.read_text() for p in case_dir.glob("*.c"))
 
 
+def test_every_float_route_entry_has_a_case() -> None:
+    entries = {name for name, spec in DIRECT_ENTRIES.items() if spec.family == "float" and _ROUTE.search(name)}
+    called = {d.get("entry") for d in load_all_descriptors(str(_PROJECT_ROOT / "assets" / "descriptors"))}
+
+    assert len(entries) == 46
+    assert entries <= called
+
+
 @pytest.mark.parametrize(
-    ("entry", "dtype", "sizer", "sizer_takes_layout"),
+    ("name", "sizer_call"),
     [
-        ("arm_convolve_1x1_nhwc_packed_f16_acc16", "FP16", "arm_convolve_1x1_f16_get_buffer_size", True),
-        ("arm_convolve_1_x_n_nhwc_ohwi_f32", "FP32", "arm_convolve_1_x_n_f32_get_buffer_size", True),
-        ("arm_convolve_patch_gemm_nhwc_packed_f32", "FP32", "arm_convolve_patch_gemm_f32_get_buffer_size", False),
-        ("arm_convolve_1d_k3_nhwc_ohwi_f16", "FP16", "arm_convolve_f16_get_buffer_size", True),
-        ("arm_convolve_small_c_nhwc_f32", "FP32", "arm_convolve_f32_get_buffer_size", True),
+        (
+            "convolve_float_route_1x1_ohwi_stride2_f32",
+            r"arm_convolve_1x1_f32_get_buffer_size\([^;]*ARM_NN_LAYOUT_NHWC\s*\)",
+        ),
+        (
+            "convolve_float_route_1_x_n_packed_acc16_f16",
+            r"arm_convolve_1_x_n_f16_get_buffer_size\([^;]*ARM_NN_LAYOUT_NHWC\s*\)",
+        ),
+        (
+            "convolve_float_route_patch_gemm_packed_f32",
+            r"arm_convolve_patch_gemm_f32_get_buffer_size\([^;,]*,[^;,]*,[^;,]*,[^;,]*_output_dims\s*\)",
+        ),
+        ("convolve_float_route_1d_k3_ohwi_f16", r"arm_convolve_f16_get_buffer_size\([^;]*ARM_NN_LAYOUT_NHWC\s*\)"),
     ],
 )
-def test_convolve_route_entry_takes_its_route_scratch_query(
-    entry: str, dtype: str, sizer: str, sizer_takes_layout: bool
-) -> None:
-    resolved = resolve_direct_entry("Convolve", entry, dtype, dtype)
-    assert resolved["kernel_get_buffer_size_fn"] == sizer
-    assert resolved["buffer_size_needs_layout"] is sizer_takes_layout
-    assert resolved["kernel_needs_layout"] is False
+def test_route_case_sizes_scratch_with_its_route_query(name: str, sizer_call: str, tmp_path: Path) -> None:
+    source = _source(name, tmp_path)
+    entry = _descriptor(name)["entry"]
+
+    assert re.search(sizer_call, source)
+    # The entry itself takes no layout argument.
+    assert re.search(rf"{entry}\((?:[^;]*?,){{9}}[^,;]*?output\s*\)", source)
 
 
 @pytest.mark.parametrize(
@@ -73,3 +90,21 @@ def test_decline_case_of_an_entry_with_a_scalar_leg_expects_no_impl_on_every_bui
     assert "HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE" not in source
     assert re.search(r"HELIA_VALIDATE_EXPECTED_STATUS\([^;]*ARM_CMSIS_NN_NO_IMPL_ERROR", source)
     assert "HELIA_GUARD_CHECK_UNTOUCHED(" in source and "HELIA_VALIDATE_OUTPUTS(" not in source
+
+
+def test_declines_flag_cannot_take_an_expected_status() -> None:
+    from helia_core_tester.generation.ops.ConvolutionFunctions.convolve import OpConvolve
+
+    desc = {**_descriptor("convolve_float_route_small_c_ohwi_f16"), "expected_status": "ARM_CMSIS_NN_ARG_ERROR"}
+    with pytest.raises(ValueError, match="cannot be combined with expected_status"):
+        OpConvolve(desc).expected_status()
+
+
+def test_float_coverage_build_flags_the_harness() -> None:
+    cmake = (_PROJECT_ROOT / "CMakeLists.txt").read_text()
+    block = re.search(r"if\(ENABLE_COVERAGE AND NOT ENABLE_COVERAGE_MVE_FLOAT\)(.*?)endif\(\)", cmake, re.S)
+
+    assert (
+        block
+        and "target_compile_definitions(helia_test_runtime PUBLIC HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE)" in block.group(1)
+    )
