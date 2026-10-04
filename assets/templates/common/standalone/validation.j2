@@ -45,37 +45,3 @@
     );
 {%- endif %}
 {%- endmacro %}
-
-{#
- Status and output checks after a call that may decline: a direct entry that declines on the
- autovectorized integer build (autovectorize_declines) expects ARM_CMSIS_NN_NO_IMPL_ERROR and an
- untouched output there, and a case with a non-success expected_status expects that status and an
- untouched output everywhere. The template arms its output poisoned for the same cases.
-#}
-{% macro declinable_status_checks(label) %}
-{% if autovectorize_declines %}
-#if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
-    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ label }} output", failures);
-    HELIA_VALIDATE_EXPECTED_STATUS(
-        "{{ label }}",
-        status,
-        ARM_CMSIS_NN_NO_IMPL_ERROR
-    );
-#else
-    HELIA_VALIDATE_STATUS("{{ label }}", status);
-
-{{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
-#endif
-{%- elif expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
-    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ label }} output", failures);
-    HELIA_VALIDATE_EXPECTED_STATUS(
-        "{{ label }}",
-        status,
-        {{ expected_status }}
-    );
-{%- else %}
-    HELIA_VALIDATE_STATUS("{{ label }}", status);
-
-{{ validation_outputs(validation_mode_token | default("TOLERANT_INT"), validation_tolerance | default(1)) }}
-{%- endif %}
-{%- endmacro %}
