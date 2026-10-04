@@ -49,11 +49,21 @@ def test_declined_case_expects_no_impl_and_an_untouched_output(op: str, tmp_path
     source = _source(f"{op}_entry_row_broadcast_declines_same_shape_s8", tmp_path)
 
     assert re.search(r"HELIA_GUARD_ARM\(\w+_output, true", source)
-    assert re.search(r"HELIA_VALIDATE_EXPECTED_STATUS\([^;]*ARM_CMSIS_NN_NO_IMPL_ERROR", source)
-    assert "HELIA_GUARD_CHECK_UNTOUCHED(" in source
+    status = re.search(r"HELIA_VALIDATE_EXPECTED_STATUS\([^;]*ARM_CMSIS_NN_NO_IMPL_ERROR", source)
+    # The untouched check runs first: a status mismatch returns before anything after it.
+    assert status and -1 < source.find("HELIA_GUARD_CHECK_UNTOUCHED(") < status.start()
     assert "HELIA_VALIDATE_OUTPUTS(" not in source
 
 
 def test_entry_of_another_operator_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Unknown Mul entry"):
         _source("mul_entry_row_broadcast_w2_s8", tmp_path, entry="arm_add_row_broadcast_s8")
+
+
+def test_other_binary_operators_reject_an_entry_at_load() -> None:
+    from helia_core_tester.generation.ops.BasicMathFunctions.sub import OpSub
+
+    desc = {**_descriptor("add_entry_row_broadcast_w2_s8"), "operator": "Sub", "name": "sub_with_entry_s8"}
+    with pytest.raises(ValueError, match="Unknown Sub entry"):
+        OpSub(desc)
+

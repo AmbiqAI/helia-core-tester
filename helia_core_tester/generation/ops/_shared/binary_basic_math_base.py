@@ -15,6 +15,11 @@ class BinaryBasicMathBase(OperationBase):
     # (arm_elementwise_{sub,add,mul}_broadcast_{f32,f16}, ns-cmsis-nn#415).
     FLOAT_BROADCAST_CALL_STYLE = "broadcast"
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # Fail at load for an entry this operator does not call, rather than gating the case on it.
+        self._direct_entry_kernel()
+
     def _float_broadcast_call(self, *, auto_on_shape_mismatch: bool) -> bool:
         """Return True when the float path must call the broadcast entry point.
 

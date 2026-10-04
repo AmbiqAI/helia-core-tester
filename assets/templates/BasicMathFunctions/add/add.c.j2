@@ -77,7 +77,9 @@ int32_t {{ name }}_test_case_run(void)
 {% endif %}    int32_t status = {{ name }}_run({{ name }}_input1, {{ name }}_input2, {{ name }}_output);
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Add") }} output", failures);
-    HELIA_VALIDATE_EXPECTED_STATUS(
+{% if expected_status | default("ARM_CMSIS_NN_SUCCESS") != "ARM_CMSIS_NN_SUCCESS" %}
+    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("Add") }} output", failures);
+{% endif %}    HELIA_VALIDATE_EXPECTED_STATUS(
         "{{ validation_label | default("Add") }}",
         status,
         {{ expected_status | default("ARM_CMSIS_NN_SUCCESS") }}
@@ -95,8 +97,6 @@ int32_t {{ name }}_test_case_run(void)
         {{ validation_report_limit | default(20) }},
         failures
     );
-{% else %}
-    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("Add") }} output", failures);
 {% endif %}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
