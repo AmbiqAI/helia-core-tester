@@ -740,6 +740,13 @@ def build_case_bundle_from_generated_test(
             "has no golden output to stream"
         )
 
+    entry = generated_test.descriptor.get("entry")
+    if entry:
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: direct-entry case ({entry}); the firmware calls the operator's "
+            "default function, not the named entry"
+        )
+
     policy = fvp_gate if fvp_gate is not None else (DEFAULT_GATE if require_fvp_pass else "off")
     if policy not in GATE_POLICIES:
         raise ValueError(f"fvp_gate must be one of {GATE_POLICIES}, got {policy!r}")
