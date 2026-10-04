@@ -247,10 +247,15 @@ class OpConvolve(OperationBase):
                 f.write(tflite_model)
             return
 
-        converter = converter_for_batched_model(model, [self.desc['input_shape']])
-        
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-        
+        if activation_dtype == 'FP16':
+            # The kernel receives float16 weights and bias, so the golden output is computed
+            # from those same rounded values rather than the float32 draw.
+            for layer in model.layers:
+                layer.set_weights([w.astype(np.float16).astype(np.float32) for w in layer.get_weights()])
+
+        converter = converter_for_batched_model(model, [self.desc['input_shape']])
+
         if activation_dtype == 'S8':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_types = [tf.int8]
