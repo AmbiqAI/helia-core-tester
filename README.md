@@ -540,7 +540,7 @@ Behavior:
 - for a single suite (`--suite int` or `--suite float`), merge is strict and fails if any requested CPU input is missing.
 - for `--suite both`, merge requires both int and float inputs for every requested CPU; missing pairs are named in the failure output and reports.
 - `--include-mve-float` adds optional cortex-m55 float-MVE coverage; it cannot replace a missing required int/float input. Reports are still written when required inputs are missing.
-- `--include-mve-int` adds optional cortex-m55 integer-MVE coverage from a `--coverage --coverage-mve-int` run (`artifacts/reports/coverage/int-mve`), under the same rules. The default coverage build defines `ARM_MATH_AUTOVECTORIZE`, which compiles out integer MVE paths guarded by `!ARM_MATH_AUTOVECTORIZE`; `--coverage-mve-int` builds integer sources without it, except `arm_nn_mat_mul_core_4x_s8.c`.
+- `--include-mve-int` adds optional cortex-m55 integer-MVE coverage from a `--coverage --coverage-mve-int` run (`artifacts/reports/coverage/int-mve`), under the same rules. The default coverage build defines `ARM_MATH_AUTOVECTORIZE`, which compiles out integer MVE paths guarded by `!ARM_MATH_AUTOVECTORIZE`; `--coverage-mve-int` builds integer sources without it, except `arm_nn_mat_mul_core_4x_s8.c`. Float sources get the same define unless the run adds `--coverage-mve-float`; such a build sets `HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE` for the harness, and a float case marked `autovectorize_declines` then expects `ARM_CMSIS_NN_NO_IMPL_ERROR`, as it does on a core without MVE float.
 
 ## Clean Contract
 

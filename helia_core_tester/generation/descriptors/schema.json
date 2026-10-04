@@ -209,7 +209,7 @@
       "type": "string"
     },
     "autovectorize_declines": {
-      "description": "The entry declines (ARM_CMSIS_NN_NO_IMPL_ERROR, output untouched) on a build whose ns-cmsis-nn integer sources have ARM_MATH_AUTOVECTORIZE (the default coverage build); the case expects that there and the full result elsewhere.",
+      "description": "The entry declines (ARM_CMSIS_NN_NO_IMPL_ERROR, output untouched) on a build without the MVE paths it lives on: for an integer entry, a build whose ns-cmsis-nn integer sources have ARM_MATH_AUTOVECTORIZE (the default coverage build); for a float entry, a build without MVE float or whose float sources have ARM_MATH_AUTOVECTORIZE. The case expects that there and the full result elsewhere.",
       "type": "boolean"
     },
     "planar_supported": {

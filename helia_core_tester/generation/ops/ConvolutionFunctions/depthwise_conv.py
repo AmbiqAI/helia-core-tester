@@ -13,6 +13,7 @@ from helia_core_tester.generation.ops._shared.bias_init import (
 )
 from helia_core_tester.generation.kernel_dispatch import (
     DEPTHWISE_CONV_S8_PLANAR_RULE,
+    autovectorize_declines_if,
     check_entry_fault,
     resolve_depthwise_conv_kernel,
     resolve_direct_entry,
@@ -769,6 +770,9 @@ class OpDepthwiseConv(OperationBase):
                 'buffer_size_max': buffer_size_max,
                 'force_no_scratch': bool(self._hint().get("force_no_scratch", False)),
                 'float_kernel': True,
+                'expected_status': self.expected_status(),
+                'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
+                'autovectorize_declines_if': autovectorize_declines_if(kernel_info["input_c_type"]),
                 'dw_conv_params_type': (
                     'cmsis_nn_dw_conv_params_f16'
                     if kernel_info["input_c_type"] == "float16_t"
@@ -993,6 +997,7 @@ class OpDepthwiseConv(OperationBase):
         
         
         # Build template context
+        self.reject_autovectorize_declines()
         context = {
             'name': name,
             'input_dims': input_dims,

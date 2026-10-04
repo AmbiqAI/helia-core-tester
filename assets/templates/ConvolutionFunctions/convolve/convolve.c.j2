@@ -318,7 +318,7 @@ static int32_t {{ name }}_benchmark_run(void)
 int32_t {{ name }}_test_case_run(void)
 {
     {% if autovectorize_declines %}
-#if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
+#if {{ autovectorize_declines_if }}
     HELIA_GUARD_ARM({{ name }}_output, true /* the entry declines on this build: poison */);
 #else
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
@@ -337,7 +337,7 @@ int32_t {{ name }}_test_case_run(void)
     {% endif %}
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Convolution") }} output", failures);
     {% if autovectorize_declines %}
-#if defined(HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
+#if {{ autovectorize_declines_if }}
     HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("Convolution") }} output", failures);
     HELIA_VALIDATE_EXPECTED_STATUS(
         "{{ validation_label | default("Convolution") }}",
