@@ -77,6 +77,10 @@ DIRECT_ENTRIES: Dict[str, DirectEntry] = {
         "fully_connected_packed_s8",
         "arm_fully_connected_per_channel_packed_s8_get_packed_size",
     ),
+    # Row broadcast only ([N,H,W,C] x [N|1,H|1,1,C]): each takes its router's arguments, needs no
+    # scratch, and declines any other shape with ARM_CMSIS_NN_NO_IMPL_ERROR.
+    "arm_add_row_broadcast_s8": DirectEntry("Add", "S8", "S8", "add_s8", ""),
+    "arm_mul_row_broadcast_s8": DirectEntry("Mul", "S8", "S8", "mul_s8", ""),
 }
 
 

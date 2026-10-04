@@ -70,12 +70,20 @@ int32_t {{ name }}_run(
 
 int32_t {{ name }}_test_case_run(void)
 {
+{% if expected_status | default("ARM_CMSIS_NN_SUCCESS") == "ARM_CMSIS_NN_SUCCESS" %}
     HELIA_GUARD_ARM({{ name }}_output, false /* real output, not scratch: don't poison */);
-    int32_t status = {{ name }}_run({{ name }}_input1, {{ name }}_input2, {{ name }}_output);
+{% else %}
+    HELIA_GUARD_ARM({{ name }}_output, true /* a declined call must not write it: poison */);
+{% endif %}    int32_t status = {{ name }}_run({{ name }}_input1, {{ name }}_input2, {{ name }}_output);
     int failures = 0;
     HELIA_GUARD_CHECK({{ name }}_output, "{{ validation_label | default("Add") }} output", failures);
-    HELIA_VALIDATE_STATUS("{{ validation_label | default("Add") }}", status);
+    HELIA_VALIDATE_EXPECTED_STATUS(
+        "{{ validation_label | default("Add") }}",
+        status,
+        {{ expected_status | default("ARM_CMSIS_NN_SUCCESS") }}
+    );
 
+{% if expected_status | default("ARM_CMSIS_NN_SUCCESS") == "ARM_CMSIS_NN_SUCCESS" %}
     HELIA_VALIDATE_OUTPUTS(
         {{ validation_mode_token | default("TOLERANT_INT") }},
         {{ name }}_output,
@@ -87,6 +95,9 @@ int32_t {{ name }}_test_case_run(void)
         {{ validation_report_limit | default(20) }},
         failures
     );
+{% else %}
+    HELIA_GUARD_CHECK_UNTOUCHED({{ name }}_output, "{{ validation_label | default("Add") }} output", failures);
+{% endif %}
     HELIA_VALIDATE_RETURN_FAILURES(failures);
 }
 

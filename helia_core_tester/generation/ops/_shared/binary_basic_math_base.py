@@ -1,7 +1,10 @@
 """Shared helpers for binary basic-math operators."""
 
+from typing import Any, Dict, Optional
+
 import numpy as np
 
+from helia_core_tester.generation.kernel_dispatch import check_entry_fault, resolve_direct_entry
 from helia_core_tester.generation.ops._shared.base import OperationBase
 
 
@@ -31,6 +34,25 @@ class BinaryBasicMathBase(OperationBase):
         if shape_1 is None or shape_2 is None:
             return False
         return tuple(shape_1) != tuple(shape_2)
+
+    def _direct_entry_kernel(self) -> Optional[Dict[str, Any]]:
+        """Kernel info for an `entry:` case, which calls an s8 entry with its router's arguments."""
+        entry = self.desc.get("entry")
+        if not entry:
+            return None
+        resolved = resolve_direct_entry(
+            str(self.desc.get("operator")),
+            str(entry),
+            self.tensor_dtype("input"),
+            self.desc.get("weight_dtype", "S8"),
+        )
+        check_entry_fault(self.desc, resolved)
+        return {
+            "kernel_fn": resolved["kernel_fn"],
+            "input_c_type": "int8_t",
+            "output_c_type": "int8_t",
+            "float_kernel": False,
+        }
 
     @staticmethod
     def _requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:
