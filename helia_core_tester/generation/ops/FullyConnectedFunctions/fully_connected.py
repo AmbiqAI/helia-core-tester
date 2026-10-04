@@ -1045,6 +1045,17 @@ class OpFullyConnected(OperationBase):
                     filter_dims,
                     output_dtype=activation_dtype
                 )
+        entry_family = kernel_info.get("entry_family")
+        if entry_family == "fully_connected_packed_s8":
+            if not quant_params_dict.get('per_channel', False):
+                raise ValueError(
+                    f"{name}: entry {kernel_info['kernel_fn']!r} takes per-channel quantization only; "
+                    "a single output channel is generated per-tensor"
+                )
+            # The buffer holds the packed weight stream, not scratch: a bound in whole words on
+            # ceil(C/4) blocks of four K-rows padded to 16 bytes plus 48 bytes of parameters. The
+            # run-time size query must fit it, and the slack past that answer is guarded.
+            buffer_size_max = ((filter_dims['c'] + 3) * (filter_dims['n'] + 27) + 3) // 4 * 4
         
         # Build template context
         context = {
@@ -1069,6 +1080,11 @@ class OpFullyConnected(OperationBase):
             'buffer_size_max': buffer_size_max,
             'weight_sum_array': weight_sum_array_str,
             'has_weight_sum': has_weight_sum,
+            'entry_family': entry_family,
+            'expected_status': self.expected_status(),
+            # The entry lives only on ns-cmsis-nn's MVE integer paths, so it declines on a build
+            # that compiles them out (HELIA_CMSIS_NN_INT_AUTOVECTORIZE, set by CMakeLists.txt).
+            'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
         }
         fault = self.fault_kind()
         c_template = "FullyConnectedFunctions/fully_connected/fully_connected.c.j2"
