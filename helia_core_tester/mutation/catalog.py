@@ -619,10 +619,11 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
                 replacement="    if (0) /* MUTANT drop_conv_ctx_guard */\n",
                 count=1,
             ),
+            # Clause only: the guard's wrapping drifts.
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_convolve_1_x_n_s8.c",
-                pattern="conv_params->dilation.w != 1 || ctx->buf == NULL ||",
-                replacement="conv_params->dilation.w != 1 || /* MUTANT drop_conv_ctx_guard */",
+                pattern="ctx->buf == NULL ||",
+                replacement="0 /* MUTANT drop_conv_ctx_guard */ ||",
                 count=1,
             ),
         ),
@@ -668,11 +669,13 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
         description="arm_convolve_1_x_n_s8 no longer rejects stride.w == 0",
         family="ConvolutionFunctions",
         edits=(
+            # Matches the old `== 0` and newer `<= 0`.
             Edit(
                 relpath="Source/ConvolutionFunctions/arm_convolve_1_x_n_s8.c",
-                pattern="ctx->buf == NULL || conv_params->stride.w == 0 ||",
-                replacement="ctx->buf == NULL || /* MUTANT drop_conv_1xn_zero_stride_guard */",
+                pattern=r"conv_params->stride\.w [=<]= 0 \|\|",
+                replacement="0 /* MUTANT drop_conv_1xn_zero_stride_guard */ ||",
                 count=1,
+                regex=True,
             ),
         ),
         expected_detected_by=(
@@ -903,8 +906,9 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             ),
             Edit(
                 relpath="Source/PoolingFunctions/arm_avgpool_s16.c",
-                pattern="    if (batch_cnt < 1)\n",
-                replacement="    if (0) /* MUTANT drop_pool_batch_guard */\n",
+                # ns-cmsis-nn #627 folded the channel check into the batch guard; drop only the batch clause.
+                pattern="    if ((batch_cnt < 1) || (ch_src < 0))\n",
+                replacement="    if ((0 /* MUTANT drop_pool_batch_guard */) || (ch_src < 0))\n",
                 count=1,
             ),
             Edit(
