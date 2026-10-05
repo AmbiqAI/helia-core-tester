@@ -2,8 +2,12 @@
 # Resolve HCT_NIGHTLY_REF to one ns-cmsis-nn commit.
 set -euo pipefail
 
-ref="${HCT_NIGHTLY_REF//[[:space:]]/}"
-if [[ "${ref}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+# Trim the ends; inner space is invalid.
+ref="${HCT_NIGHTLY_REF#"${HCT_NIGHTLY_REF%%[![:space:]]*}"}"
+ref="${ref%"${ref##*[![:space:]]}"}"
+if [[ -z "${ref}" || "${ref}" =~ [[:space:]] ]]; then
+  sha=""
+elif [[ "${ref}" =~ ^[0-9a-fA-F]{40}$ ]]; then
   sha="${ref,,}"
 elif [[ "${ref}" =~ [*?\[] ]]; then
   # ls-remote would glob-match these.
