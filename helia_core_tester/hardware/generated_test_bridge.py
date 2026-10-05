@@ -5039,7 +5039,6 @@ def _build_svdf_case(project_root: Path, generated_test: GeneratedTestCase, *, o
             "output_offset": _extract_define_int(header, macro + "OUTPUT_OFFSET"),
             "activation_min": _extract_define_int(header, macro + "OUTPUT_ACTIVATION_MIN"),
             "activation_max": _extract_define_int(header, macro + "OUTPUT_ACTIVATION_MAX"),
-            **{f"output_{key}": value for key, value in dims["output"].items()},
         },
         scratch_bytes=2 * ctx_bytes + dims["weights_feature"]["n"] * 4,
     )

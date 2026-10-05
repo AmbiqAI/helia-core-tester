@@ -4835,6 +4835,35 @@ static bool take_scratch(hct_server_session_t *session, uint32_t *used, int32_t 
     ctx->size = bytes;
     *used = end;
     return true;
+}
+
+/* Validated meta ints for an adapter. */
+static bool meta_ints(hct_server_session_t *session, uint32_t count, const int32_t **meta)
+{
+    hct_server_blob_t *blob = find_blob_by_role(session, HCT_BLOB_ROLE_META_0);
+    const uint8_t *data;
+    if (blob == NULL || blob->dtype != HCT_DTYPE_S32 || blob->byte_length < count * (uint32_t)sizeof(int32_t))
+    {
+        return false;
+    }
+    data = blob_ptr(session, blob);
+    *meta = (const int32_t *)data;
+    return ((uintptr_t)data % sizeof(int32_t)) == 0u;
+}
+
+/* Blob dims as n, h, w, c. */
+static void blob_dims(const hct_server_blob_t *blob, cmsis_nn_dims *dims)
+{
+    int32_t shape[4] = {1, 1, 1, 1};
+    uint8_t index;
+    for (index = 0u; index < blob->rank && index < 4u; ++index)
+    {
+        shape[index] = (int32_t)blob->dimensions[index];
+    }
+    dims->n = shape[0];
+    dims->h = shape[1];
+    dims->w = shape[2];
+    dims->c = shape[3];
 }'''
 
 _RUN_SVDF_ONCE = '''\
@@ -4846,7 +4875,6 @@ static arm_cmsis_nn_status run_svdf_once(hct_server_session_t *session)
     hct_server_blob_t *weights_time = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_2);
     hct_server_blob_t *weights_feature = find_blob_by_role(session, HCT_BLOB_ROLE_WEIGHTS);
     hct_server_blob_t *bias = find_blob_by_role(session, HCT_BLOB_ROLE_BIAS);
-    hct_server_blob_t *meta_blob = find_blob_by_role(session, HCT_BLOB_ROLE_META_0);
     const bool state_s16 = (session->expected_kernel_id == HCT_KERNEL_ID_SVDF_STATE_S16_S8);
     const uint32_t state_size = state_s16 ? (uint32_t)sizeof(int16_t) : 1u;
     cmsis_nn_context ctx = {NULL, 0};
@@ -4865,29 +4893,42 @@ static arm_cmsis_nn_status run_svdf_once(hct_server_session_t *session)
     uint32_t used = 0u;
     uint32_t bytes;
 
-    if (input == NULL || state == NULL || weights_time == NULL || weights_feature == NULL ||
-        !hct_validate_meta0_blob(meta_blob, 7u, -1, -1))
+    if (input == NULL || state == NULL || weights_time == NULL || weights_feature == NULL || !meta_ints(session, 7u, &meta))
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
-    meta = (const int32_t *)blob_ptr(session, meta_blob);
-    hct_fill_dims_from_blob(input, &input_dims);
-    hct_fill_dims_from_blob(state, &state_dims);
-    hct_fill_dims_from_blob(weights_feature, &feature_dims);
-    hct_fill_dims_from_blob(weights_time, &time_dims);
-    hct_fill_output_dims_from_session(session, &output_dims);
+    blob_dims(input, &input_dims);
+    blob_dims(state, &state_dims);
+    blob_dims(weights_feature, &feature_dims);
+    blob_dims(weights_time, &time_dims);
+    if (meta[0] <= 0 || feature_dims.n <= 0 || feature_dims.n % meta[0] != 0)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    output_dims.n = input_dims.n;
+    output_dims.h = feature_dims.n / meta[0];
+    output_dims.w = 1;
+    output_dims.c = 1;
     bias_dims.n = 1;
     bias_dims.h = 1;
     bias_dims.w = 1;
     bias_dims.c = output_dims.h;
-    if (!hct_checked_dims_bytes(&input_dims, 1u, input->byte_length, &bytes) ||
-        !hct_checked_dims_bytes(&state_dims, state_size, state->byte_length, &bytes) ||
-        !hct_checked_dims_bytes(&feature_dims, 1u, weights_feature->byte_length, &bytes) ||
-        !hct_checked_dims_bytes(&time_dims, state_size, weights_time->byte_length, &bytes) ||
-        (bias != NULL && !hct_checked_count_bytes(bias_dims.c, sizeof(int32_t), bias->byte_length, &bytes)) ||
-        !hct_checked_dims_bytes(&output_dims, 1u, session->output_capacity_bytes, &session->output_length))
     {
-        return ARM_CMSIS_NN_ARG_ERROR;
+        /* Extents the kernel actually reads. */
+        const int32_t input_shape[2] = {input_dims.n, input_dims.h};
+        const int32_t feature_shape[2] = {feature_dims.n, input_dims.h};
+        const int32_t time_shape[2] = {feature_dims.n, time_dims.h};
+        const int32_t state_shape[3] = {input_dims.n, feature_dims.n, time_dims.h};
+        const int32_t output_shape[2] = {input_dims.n, output_dims.h};
+        if (!hct_checked_shape_bytes(input_shape, 2, 1u, input->byte_length, &bytes) ||
+            !hct_checked_shape_bytes(feature_shape, 2, 1u, weights_feature->byte_length, &bytes) ||
+            !hct_checked_shape_bytes(time_shape, 2, state_size, weights_time->byte_length, &bytes) ||
+            !hct_checked_shape_bytes(state_shape, 3, state_size, state->byte_length, &bytes) ||
+            (bias != NULL && !hct_checked_count_bytes(bias_dims.c, sizeof(int32_t), bias->byte_length, &bytes)) ||
+            !hct_checked_shape_bytes(output_shape, 2, 1u, session->output_capacity_bytes, &session->output_length))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
     }
 
     params.rank = meta[0];
@@ -4948,7 +4989,6 @@ static arm_cmsis_nn_status run_lstm_once(hct_server_session_t *session)
     hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
     hct_server_blob_t *weights = find_blob_by_role(session, HCT_BLOB_ROLE_WEIGHTS);
     hct_server_blob_t *bias = find_blob_by_role(session, HCT_BLOB_ROLE_BIAS);
-    hct_server_blob_t *meta_blob = find_blob_by_role(session, HCT_BLOB_ROLE_META_0);
     cmsis_nn_lstm_gate *gates[4];
     cmsis_nn_lstm_params params;
     cmsis_nn_lstm_context buffers;
@@ -4965,11 +5005,10 @@ static arm_cmsis_nn_status run_lstm_once(hct_server_session_t *session)
     uint32_t used = 0u;
     uint32_t bytes;
 
-    if (input == NULL || weights == NULL || bias == NULL || !hct_validate_meta0_blob(meta_blob, 31u, -1, -1))
+    if (input == NULL || weights == NULL || bias == NULL || !meta_ints(session, 31u, &meta))
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
-    meta = (const int32_t *)blob_ptr(session, meta_blob);
     params.time_major = meta[0];
     params.batch_size = meta[1];
     params.time_steps = meta[2];
@@ -4985,17 +5024,35 @@ static arm_cmsis_nn_status run_lstm_once(hct_server_session_t *session)
     params.output_multiplier = meta[12];
     params.output_shift = meta[13];
     params.output_offset = meta[14];
-    if (params.batch_size <= 0 || params.time_steps <= 0 || input_size <= 0 || hidden <= 0 ||
-        !hct_checked_count_bytes(params.batch_size * params.time_steps * input_size, 1u, input->byte_length, &bytes) ||
-        !hct_checked_count_bytes(4 * hidden * (input_size + hidden), 1u, weights->byte_length, &bytes) ||
-        !hct_checked_count_bytes(4 * hidden, sizeof(int32_t), bias->byte_length, &bytes) ||
-        !hct_checked_count_bytes(params.batch_size * params.time_steps * hidden, 1u, session->output_capacity_bytes, &session->output_length) ||
-        !take_scratch(session, &used, 8 * hidden * (int32_t)sizeof(int32_t), &sums) ||
-        !take_scratch(session, &used, arm_lstm_unidirectional_s8_temp1_get_buffer_size(&params), &temp1) ||
-        !take_scratch(session, &used, arm_lstm_unidirectional_s8_temp2_get_buffer_size(&params), &temp2) ||
-        !take_scratch(session, &used, params.batch_size * hidden * (int32_t)sizeof(int16_t), &cell))
     {
-        return ARM_CMSIS_NN_ARG_ERROR;
+        /* Check factors before any 32-bit math. */
+        const int32_t input_shape[3] = {params.batch_size, params.time_steps, input_size};
+        const int32_t output_shape[3] = {params.batch_size, params.time_steps, hidden};
+        const int32_t input_weight_shape[3] = {4, hidden, input_size};
+        const int32_t hidden_weight_shape[3] = {4, hidden, hidden};
+        const int32_t bias_shape[2] = {4, hidden};
+        const int32_t sum_shape[2] = {8, hidden};
+        const int32_t state_shape[2] = {params.batch_size, hidden};
+        const uint32_t scratch_cap = (session->scratch_bytes < (uint32_t)INT32_MAX) ? session->scratch_bytes : (uint32_t)INT32_MAX;
+        uint32_t input_weight_bytes;
+        uint32_t hidden_weight_bytes;
+        uint32_t sum_bytes;
+        uint32_t state_bytes;
+        if (!hct_checked_shape_bytes(input_shape, 3, 1u, input->byte_length, &bytes) ||
+            !hct_checked_shape_bytes(output_shape, 3, 1u, session->output_capacity_bytes, &session->output_length) ||
+            !hct_checked_shape_bytes(input_weight_shape, 3, 1u, weights->byte_length, &input_weight_bytes) ||
+            !hct_checked_shape_bytes(hidden_weight_shape, 3, 1u, weights->byte_length, &hidden_weight_bytes) ||
+            (uint64_t)input_weight_bytes + hidden_weight_bytes > weights->byte_length ||
+            !hct_checked_shape_bytes(bias_shape, 2, sizeof(int32_t), bias->byte_length, &bytes) ||
+            !hct_checked_shape_bytes(sum_shape, 2, sizeof(int32_t), scratch_cap, &sum_bytes) ||
+            !hct_checked_shape_bytes(state_shape, 2, sizeof(int16_t), scratch_cap, &state_bytes) ||
+            !take_scratch(session, &used, (int32_t)sum_bytes, &sums) ||
+            !take_scratch(session, &used, arm_lstm_unidirectional_s8_temp1_get_buffer_size(&params), &temp1) ||
+            !take_scratch(session, &used, arm_lstm_unidirectional_s8_temp2_get_buffer_size(&params), &temp2) ||
+            !take_scratch(session, &used, (int32_t)state_bytes, &cell))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
     }
 
     /* Blobs hold input, forget, cell, output. */
@@ -5007,11 +5064,12 @@ static arm_cmsis_nn_status run_lstm_once(hct_server_session_t *session)
     bias_data = (const int32_t *)blob_ptr(session, bias);
     for (gate = 0; gate < 4; ++gate)
     {
-        const int8_t *input_weights = &weight_data[gate * hidden * input_size];
-        const int8_t *hidden_weights = &weight_data[4 * hidden * input_size + gate * hidden * hidden];
-        int32_t *input_sum = &((int32_t *)sums.buf)[gate * hidden];
-        int32_t *hidden_sum = &((int32_t *)sums.buf)[(4 + gate) * hidden];
-        arm_vector_sum_s8(input_sum, input_size, hidden, input_weights, params.input_offset, 0, &bias_data[gate * hidden]);
+        const size_t rows = (size_t)gate * (size_t)hidden;
+        const int8_t *input_weights = &weight_data[rows * (size_t)input_size];
+        const int8_t *hidden_weights = &weight_data[(size_t)4 * hidden * input_size + rows * (size_t)hidden];
+        int32_t *input_sum = &((int32_t *)sums.buf)[rows];
+        int32_t *hidden_sum = &((int32_t *)sums.buf)[(size_t)(4 + gate) * hidden];
+        arm_vector_sum_s8(input_sum, input_size, hidden, input_weights, params.input_offset, 0, &bias_data[rows]);
         arm_vector_sum_s8(hidden_sum, hidden, hidden, hidden_weights, -params.output_offset, 0, NULL);
         gates[gate]->input_multiplier = meta[15 + 4 * gate];
         gates[gate]->input_shift = meta[16 + 4 * gate];
@@ -5021,7 +5079,7 @@ static arm_cmsis_nn_status run_lstm_once(hct_server_session_t *session)
         gates[gate]->hidden_shift = meta[18 + 4 * gate];
         gates[gate]->hidden_weights = hidden_weights;
         gates[gate]->hidden_effective_bias = hidden_sum;
-        gates[gate]->bias = &bias_data[gate * hidden];
+        gates[gate]->bias = &bias_data[rows];
         gates[gate]->activation_type = (gate == 2) ? ARM_TANH : ARM_SIGMOID;
     }
 
@@ -5458,7 +5516,7 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         label="SVDFunctions/SVDF,LSTMFunctions/LSTMUnidirectional (helper)",
         function_name="take_scratch",
         kernel_ids=(),
-        guard="HCT_HOST_ABS_ONLY",
+        guard=None,
         scalar_fields=(),
         c_body=_TAKE_SCRATCH,
     ),
@@ -5466,15 +5524,15 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         label="SVDFunctions/SVDF",
         function_name="run_svdf_once",
         kernel_ids=("HCT_KERNEL_ID_SVDF_S8", "HCT_KERNEL_ID_SVDF_STATE_S16_S8"),
-        guard="HCT_HOST_ABS_ONLY",
-        scalar_fields=("input_offset", "output_offset", "activation_min", "activation_max", "output_n", "output_h", "output_w", "output_c"),
+        guard=None,
+        scalar_fields=("input_offset", "output_offset", "activation_min", "activation_max"),
         c_body=_RUN_SVDF_ONCE,
     ),
     FirmwareAdapterSpec(
         label="LSTMFunctions/LSTMUnidirectional",
         function_name="run_lstm_once",
         kernel_ids=("HCT_KERNEL_ID_LSTM_UNIDIRECTIONAL_S8",),
-        guard="HCT_HOST_ABS_ONLY",
+        guard=None,
         scalar_fields=(),
         c_body=_RUN_LSTM_ONCE,
     ),

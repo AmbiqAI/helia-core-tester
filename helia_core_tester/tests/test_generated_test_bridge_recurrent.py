@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +21,26 @@ from helia_core_tester.hardware.generated_test_bridge import (
 from helia_core_tester.hardware.kernel_registry import lookup_kernel_id
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CMSIS_NN_ROOT = Path(os.environ.get("CMSIS_NN_ROOT") or PROJECT_ROOT.parent.parent)
+HARNESS = PROJECT_ROOT / "helia_core_tester" / "tests" / "fixtures" / "recurrent_stub" / "recurrent_adapter_harness.c"
+
+
+def test_c_adapters_reject_short_or_wrapped_shapes(tmp_path: Path) -> None:
+    cc = shutil.which("cc")
+    if cc is None:
+        pytest.skip("host C compiler not available")
+    if not (CMSIS_NN_ROOT / "Include" / "arm_nnfunctions.h").is_file():
+        pytest.skip(f"no real ns-cmsis-nn checkout found at {CMSIS_NN_ROOT}")
+    binary = tmp_path / "recurrent_harness"
+    subprocess.run(
+        [cc, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-DHCT_HOST_ABS_ONLY",
+         "-I", str(PROJECT_ROOT / "cmake" / "hardware"), "-I", str(CMSIS_NN_ROOT / "Include"),
+         str(HARNESS), "-o", str(binary)],
+        check=True,
+    )
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    # Exit codes name the failed check.
+    assert result.returncode == 0, result.stdout
 
 
 def _case(tmp_path: Path, family: str, descriptor: dict, header: str) -> GeneratedTestCase:
