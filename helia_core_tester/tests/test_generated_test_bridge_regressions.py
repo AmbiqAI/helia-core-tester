@@ -14,6 +14,7 @@ from helia_core_tester.hardware.case_bundle import load_case_bundle
 from helia_core_tester.hardware.generated_test_bridge import (
     GeneratedTestCase,
     UnsupportedGeneratedTestError,
+    _extract_define_int,
     build_case_bundle_from_generated_test,
     discover_generated_tests,
 )
@@ -250,7 +251,7 @@ def test_packed_fc_scratch_holds_sums_and_stream(tmp_path: Path) -> None:
     name = "fully_connected_entry_packed_k29_c7_b2_bias_s8"
     case, manifest = _bridge_entry(tmp_path, "FullyConnectedFunctions", name)
     (source,) = case.directory.glob("*.c")
-    stream = int(re.search(rf"#define {name.upper()}_BUFFER_SIZE_MAX (\d+)", source.read_text()).group(1))
+    stream = _extract_define_int(source.read_text(), f"{name.upper()}_BUFFER_SIZE_MAX")
     # Seven int32 sums pad to 32 bytes.
     assert manifest["scratch_buffer"]["bytes"] == 32 + stream
 

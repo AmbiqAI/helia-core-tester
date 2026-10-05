@@ -4212,15 +4212,16 @@ def _build_fully_connected_case(
     manifest_header = _generated_manifest_header(
         project_root, generated_test, case_id, descriptor_path, descriptor_text
     )
+    is_packed = descriptor.get("entry") == "arm_fully_connected_per_channel_packed_s8"
     source_max = None
-    if is_float or descriptor.get("entry"):
+    if is_float or is_packed:
         source_text = _find_source_file(generated_test.directory).read_text(encoding="utf-8")
         source_max = int(_extract_define_int(source_text, f"{prefix.upper()}_BUFFER_SIZE_MAX"))
     if weight_dtype == "S4":
         scratch_bytes = 0
     elif is_float:
         scratch_bytes = source_max
-    elif descriptor.get("entry"):
+    elif is_packed:
         # Kernel sums, then the packed stream.
         scratch_bytes = _align_up(output_units * 4, 16) + source_max
     else:
