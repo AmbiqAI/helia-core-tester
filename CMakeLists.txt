@@ -194,6 +194,10 @@ if(ENABLE_COVERAGE AND NOT ENABLE_COVERAGE_MVE_INT)
   # MVE integer paths; a harness whose entry lives only on those paths expects it to decline.
   target_compile_definitions(helia_test_runtime PUBLIC HELIA_CMSIS_NN_INT_AUTOVECTORIZE)
 endif()
+if(ENABLE_COVERAGE AND NOT ENABLE_COVERAGE_MVE_FLOAT)
+  # The same for the float sources and their MVE float paths.
+  target_compile_definitions(helia_test_runtime PUBLIC HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE)
+endif()
 
 # ---------- Helpers ----------
 function(_normalize_target_name out_var in_path)

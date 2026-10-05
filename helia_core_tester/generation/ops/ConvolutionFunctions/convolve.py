@@ -13,7 +13,12 @@ from helia_core_tester.generation.ops._shared.bias_init import (
     bias_is_hoisted_by_lowering,
     inject_hoisted_dilation_bias,
 )
-from helia_core_tester.generation.kernel_dispatch import check_entry_fault, resolve_convolve_kernel, resolve_direct_entry
+from helia_core_tester.generation.kernel_dispatch import (
+    autovectorize_declines_if,
+    check_entry_fault,
+    resolve_convolve_kernel,
+    resolve_direct_entry,
+)
 
 
 class OpConvolve(OperationBase):
@@ -247,10 +252,11 @@ class OpConvolve(OperationBase):
                 f.write(tflite_model)
             return
 
-        converter = converter_for_batched_model(model, [self.desc['input_shape']])
-        
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-        
+        self.round_float16_weights(model)
+
+        converter = converter_for_batched_model(model, [self.desc['input_shape']])
+
         if activation_dtype == 'S8':
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_types = [tf.int8]
@@ -787,15 +793,15 @@ class OpConvolve(OperationBase):
             # silicon). No CLI flag exists yet for this -- set via env var so
             # benchmarking scripts can select it without deeper Config/CLI plumbing.
             'benchmark_target': os.environ.get("HELIA_BENCH_TARGET", "fvp"),
-            # Direct entries (entry:) of the convolve_s8 family take arm_convolve_s8's arguments,
-            # weight sums included, and size scratch from the input and filter dims alone.
+            # s8 direct entries (entry:) take weight sums like arm_convolve_wrapper_s8; the
+            # family picks the call and scratch-size arguments (kernel_dispatch.DIRECT_ENTRIES).
             'entry_family': kernel_info.get("entry_family"),
             'conv_s8_weight_sum': kernel_info["kernel_fn"] == "arm_convolve_wrapper_s8"
-            or kernel_info.get("entry_family") == "convolve_s8",
+            or kernel_info.get("entry_family") in ("convolve_s8", "convolve_1x1_s8"),
             'expected_status': self.expected_status(),
-            # The entry lives only on ns-cmsis-nn's MVE integer paths, so it declines on a build
-            # that compiles them out (HELIA_CMSIS_NN_INT_AUTOVECTORIZE, set by CMakeLists.txt).
+            # The entry lives only on ns-cmsis-nn's MVE paths, so it declines on a build without them.
             'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
+            'autovectorize_declines_if': autovectorize_declines_if(kernel_info["input_c_type"]),
         }
         if float_kernel:
             context['conv_activation_min_literal'] = builder.format_float_literal(conv_params['activation_min'])

@@ -2984,6 +2984,174 @@ padding: SAME
 use_bias: true
 expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
 ---
+# arm_convolve_1x1_s8_short_k (convolve_1x1_s8 family: arm_convolve_1x1_s8_fast's arguments).
+# Pointwise, no padding, unit stride, input depth 1..16; depth 8 takes the paired-pixel path.
+# The kernel runs all N*H*W pixels as one matrix in 4-pixel steps, so the tail is N*H*W % 4;
+# both paths see tails 1, 2 and 3. MVE only: it declines on the autovectorized coverage
+# build, and outside its shape.
+operator: Convolve
+name: convolve_entry_1x1_short_k_c8_2x4_co16_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_convolve_1x1_s8_short_k
+hint: {call_style: per_tensor}
+input_shape: [1, 2, 4, 8]
+filter_shape: [1, 1, 8, 16]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: Convolve
+name: convolve_entry_1x1_short_k_c8_b2_1x11_co5_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_convolve_1x1_s8_short_k
+hint: {call_style: per_tensor}
+input_shape: [2, 1, 11, 8]
+filter_shape: [1, 1, 8, 5]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: Convolve
+name: convolve_entry_1x1_short_k_c1_3x3_co8_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_convolve_1x1_s8_short_k
+hint: {call_style: per_tensor}
+input_shape: [1, 3, 3, 1]
+filter_shape: [1, 1, 1, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: Convolve
+name: convolve_entry_1x1_short_k_c3_b2_4x4_co4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_convolve_1x1_s8_short_k
+hint: {call_style: per_tensor}
+input_shape: [2, 4, 4, 3]
+filter_shape: [1, 1, 3, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: Convolve
+name: convolve_entry_1x1_short_k_c16_2x5_co12_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_convolve_1x1_s8_short_k
+hint: {call_style: per_tensor}
+input_shape: [1, 2, 5, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: Convolve
+name: convolve_entry_1x1_short_k_c5_1x3_co7_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_convolve_1x1_s8_short_k
+hint: {call_style: per_tensor}
+input_shape: [1, 1, 3, 5]
+filter_shape: [1, 1, 5, 7]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: Convolve
+name: convolve_entry_1x1_short_k_c13_3x4_co9_no_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_convolve_1x1_s8_short_k
+hint: {call_style: per_tensor}
+input_shape: [1, 3, 4, 13]
+filter_shape: [1, 1, 13, 9]
+strides: [1, 1]
+padding: VALID
+use_bias: false
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: Convolve
+name: convolve_entry_1x1_short_k_c8_1x11_co8_relu6_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: RELU6
+entry: arm_convolve_1x1_s8_short_k
+hint: {call_style: per_tensor}
+input_shape: [1, 1, 11, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: Convolve
+name: convolve_entry_1x1_short_k_c8_3x3_co4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_convolve_1x1_s8_short_k
+hint: {call_style: per_tensor}
+input_shape: [1, 3, 3, 8]
+filter_shape: [1, 1, 8, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: Convolve
+name: convolve_entry_1x1_short_k_declines_c17_2x4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_convolve_1x1_s8_short_k
+hint: {call_style: per_tensor}
+input_shape: [1, 2, 4, 17]
+filter_shape: [1, 1, 17, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_entry_1x1_short_k_declines_stride2_c8_4x4_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_convolve_1x1_s8_short_k
+hint: {call_style: per_tensor}
+input_shape: [1, 4, 4, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [2, 2]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
 # BEGIN mlperf model shapes (scripts/extract_model_shapes.py)
 operator: Convolve
 name: convolve_mlperf_ic_l0_s8
