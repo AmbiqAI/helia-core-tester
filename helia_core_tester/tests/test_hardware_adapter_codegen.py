@@ -86,11 +86,11 @@ def test_only_kernel_calls_count_in_a_sample() -> None:
     adapters make is routed through HCT_TIMED()."""
     text = ADAPTERS_C_PATH.read_text(encoding="utf-8")
     timed = timed_kernel_calls(text)
-    for setup in ("arm_convolve_weight_sum", "arm_vector_sum_s8", "arm_convolve_s8_get_buffer_size",
-                  "arm_transpose_conv_s8_get_reverse_conv_buffer_size"):
+    for setup in ("arm_convolve_weight_sum", "arm_depthwise_convolve_weight_sum", "arm_vector_sum_s8",
+                  "arm_convolve_wrapper_s8_get_buffer_size", "arm_transpose_conv_s8_get_reverse_conv_buffer_size"):
         assert setup not in timed
-    for kernel in ("arm_convolve_s8", "arm_fully_connected_wrapper_s8", "arm_transpose_conv_wrapper_s8",
-                   "arm_concatenation_s8_x"):
+    for kernel in ("arm_convolve_wrapper_s8", "arm_depthwise_conv_wrapper_s8", "arm_fully_connected_wrapper_s8",
+                   "arm_transpose_conv_wrapper_s8", "arm_concatenation_s8_x"):
         assert kernel in timed
     assert timed_kernel_calls("/* arm_relu_s8(x) */ arm_relu_s16(y);") == ["arm_relu_s16"]
     for name in timed:
@@ -500,3 +500,23 @@ def test_nn_activation_float_builder_scalar_keys_are_subset_of_firmware_adapter_
     manifest_keys = set(bundle.manifest["serialized_scalar_parameters"])
     firmware_fields = set(generated_test_bridge_scalar_fields("run_nn_activation_float_once"))
     assert manifest_keys <= firmware_fields, manifest_keys - firmware_fields
+
+
+def test_s8_convolutions_time_the_tflm_wrappers() -> None:
+    """TFLM calls the wrappers, so samples must too."""
+    timed = timed_kernel_calls(ADAPTERS_C_PATH.read_text(encoding="utf-8"))
+    assert "arm_convolve_s8" not in timed
+    assert "arm_depthwise_conv_s8" not in timed
+
+
+def test_registry_names_the_timed_call() -> None:
+    """Bundles report the registry name as timed_symbol."""
+    from helia_core_tester.hardware.kernel_registry import load_kernel_registry
+
+    header = ADAPTERS_H_PATH.read_text(encoding="utf-8")
+    ids = {name: int(value) for name, value in re.findall(r"^#define (HCT_KERNEL_ID_[A-Z0-9_]+) (\d+)u$", header, re.M)}
+    names = {entry.kernel_id: entry.cmsis_function for entry in load_kernel_registry(PROJECT_ROOT)}
+    for adapter in FIRMWARE_ADAPTERS:
+        timed = timed_kernel_calls(adapter.c_body)
+        for kernel_id in adapter.kernel_ids:
+            assert names[ids[kernel_id]] in timed, (adapter.function_name, kernel_id)

@@ -14,7 +14,7 @@
   {
     "adapter_schema_version": 1,
     "api_version": 1,
-    "canonical_name": "arm_convolve_s8",
+    "canonical_name": "arm_convolve_wrapper_s8",
     "kernel_id": 2,
     "mutates_input": false,
     "operator_family": "ConvolutionFunctions",
@@ -86,7 +86,7 @@
   {
     "adapter_schema_version": 1,
     "api_version": 1,
-    "canonical_name": "arm_depthwise_conv_s8",
+    "canonical_name": "arm_depthwise_conv_wrapper_s8",
     "kernel_id": 8,
     "mutates_input": false,
     "operator_family": "ConvolutionFunctions",
