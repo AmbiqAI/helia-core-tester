@@ -26,8 +26,9 @@ hint:
   call_style: per_tensor
 ---
 # # arm_dequantize_f16_f32 (ns-cmsis-nn#475) widens float16 to float32 bit-exactly: finite
-# # values, subnormals, signed zeros, infinities and NaNs (sign, quiet bit and payload) all
-# # convert exactly, so the golden is numpy's astype and the comparison is zero-tolerance.
+# # values, subnormals, signed zeros and infinities convert exactly, so the golden is numpy's
+# # astype and the comparison is zero-tolerance. A NaN follows its build path's rule (ns-cmsis-nn#719;
+# # the f16_bits cases below pin it bit for bit).
 # # The survey note above ("non-finite inputs are not possible for this operator") holds for
 # # the S8/S16 kernels only; a float16 input carries every class, so the sweep applies here.
 # # The runtime matches NaN by class, so the NaN lane asserts NaN-ness rather than the
@@ -119,4 +120,64 @@ input_shape: [1, 43]
 input_mode: nonfinite_sweep
 nonfinite_policy: strict
 nonfinite_positions: [40, 41, 42]
+hint: {call_style: per_tensor}
+---
+# arm_dequantize_f16_bits_f32 (ns-cmsis-nn#719) widens binary16 bit patterns without float16 support,
+# so it runs on every float leg, including the f32-only ones. Finite values and infinities widen
+# exactly; a NaN becomes the default NaN on the MVE vector conversion and keeps its sign and payload,
+# made quiet, on the scalar conversion and the no-FPU integer widening. Each case carries both
+# expectations and compares bits against the one its build compiled. The FP16-tagged cases run on
+# the f16 legs; the U16-tagged ones (the same bit patterns as storage) on the f32 legs, cortex-m0's
+# integer widening and cortex-m4's FPU among them.
+# Every lane is a special class: signed zeros, subnormal ends and a normal; under one MVE block.
+operator: Dequantize
+name: dequantize_float_f16_bits_vec7_f32
+entry: arm_dequantize_f16_bits_f32
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP32
+input_shape: [1, 7]
+hint: {call_style: per_tensor}
+---
+# All 26 special classes (zeros, subnormals, normal ends, infinities, quiet and signalling NaNs of both signs) then random patterns; nine blocks and a tail.
+operator: Dequantize
+name: dequantize_float_f16_bits_vec75_f32
+entry: arm_dequantize_f16_bits_f32
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP32
+input_shape: [1, 75]
+hint: {call_style: per_tensor}
+---
+# Special classes then 975 random patterns, about 3% of them NaN: 125 blocks and a one-element tail.
+operator: Dequantize
+name: dequantize_float_f16_bits_vec1001_f32
+entry: arm_dequantize_f16_bits_f32
+suite: float
+tensor_dtypes:
+  input: FP16
+  output: FP32
+input_shape: [1, 1001]
+hint: {call_style: per_tensor}
+---
+operator: Dequantize
+name: dequantize_float_f16_bits_storage_vec75_f32
+entry: arm_dequantize_f16_bits_f32
+suite: float
+tensor_dtypes:
+  input: U16
+  output: FP32
+input_shape: [1, 75]
+hint: {call_style: per_tensor}
+---
+operator: Dequantize
+name: dequantize_float_f16_bits_storage_vec1001_f32
+entry: arm_dequantize_f16_bits_f32
+suite: float
+tensor_dtypes:
+  input: U16
+  output: FP32
+input_shape: [1, 1001]
 hint: {call_style: per_tensor}

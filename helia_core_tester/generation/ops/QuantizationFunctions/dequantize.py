@@ -5,7 +5,17 @@ Dequantize operation implementation.
 import numpy as np
 import tensorflow as tf
 from pathlib import Path
+from helia_core_tester.generation.kernel_dispatch import check_entry_fault, resolve_direct_entry
 from helia_core_tester.generation.ops._shared.quantization_base import QuantizationFamilyBase
+
+# Binary16 patterns every bit-pattern case starts with: signed zeros, subnormal ends and middle,
+# normal-range ends, signed infinities, then quiet and signalling NaNs of both signs, with and
+# without payload. The rest of the case is uniform random patterns.
+_F16_BIT_CLASSES = (
+    0x0000, 0x8000, 0x0001, 0x8001, 0x0200, 0x03FF, 0x83FF, 0x0400, 0x8400, 0x3C00, 0xC000, 0x3555,
+    0x7BFF, 0xFBFF, 0x7C00, 0xFC00, 0x7E00, 0xFE00, 0x7E01, 0x7FFF, 0xFFFF, 0x7C01, 0xFC01, 0x7D55,
+    0x7DFF, 0xFD00,
+)
 
 
 class OpDequantize(QuantizationFamilyBase):
@@ -16,13 +26,18 @@ class OpDequantize(QuantizationFamilyBase):
     def allow_no_tflite(self) -> bool:
         return True
 
+    def _widens_f16_bits(self) -> bool:
+        """An `entry:` case: arm_dequantize_f16_bits_f32 on binary16 bit patterns, checked bit for bit
+        against each NaN rule rather than against a converted model."""
+        return bool(self.desc.get("entry"))
+
     def _widens_f16(self) -> bool:
         """FP16 -> FP32 is arm_dequantize_f16_f32 (ns-cmsis-nn#475): a bit-exact widening
         with no scale or zero point, built as a LiteRT DEQUANTIZE rather than a Keras model."""
         return self.tensor_dtype("input") == "FP16"
 
     def needs_keras_model(self) -> bool:
-        return not self._widens_f16()
+        return not (self._widens_f16() or self._widens_f16_bits())
 
     def build_keras_model(self) -> tf.keras.Model:
         """Build Keras model for Dequantize operation."""
@@ -45,6 +60,8 @@ class OpDequantize(QuantizationFamilyBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        if self._widens_f16_bits():
+            raise NotImplementedError("a bit-pattern case has no golden model")
         if self._widens_f16():
             from helia_core_tester.generation.utils.litert_builder import build_unary_same_shape_op
 
@@ -73,6 +90,19 @@ class OpDequantize(QuantizationFamilyBase):
         """
         input_dtype = self.tensor_dtype("input")
         output_dtype = self.tensor_dtype("output")
+
+        entry = self.desc.get("entry")
+        if entry:
+            # The entry reads binary16 storage: an FP16 tag runs it on the f16 legs, U16 on the f32 legs.
+            storage = "U16" if input_dtype in ("FP16", "U16") else input_dtype
+            resolved = resolve_direct_entry("Dequantize", str(entry), storage, storage)
+            check_entry_fault(self.desc, resolved)
+            return {
+                'kernel_fn': resolved["kernel_fn"],
+                'input_c_type': 'uint16_t',
+                'output_c_type': 'float',
+                'kernel_style': 'f16_bits',
+            }
 
         if output_dtype != "FP32":
             raise NotImplementedError(f"Dequantize currently requires FP32 output, got {output_dtype}")
@@ -116,6 +146,10 @@ class OpDequantize(QuantizationFamilyBase):
         # descriptor activation in C to match TFLite behavior.
         activation_str = self.activation_name()
         has_activation = activation_str in ['RELU', 'RELU6']
+
+        if kernel_info.get("kernel_style") == "f16_bits":
+            self._generate_f16_bits(output_dir, kernel_info)
+            return
 
         if kernel_info.get("kernel_style") == "widen":
             # No quantization parameters: the kernel widens every float16 bit
@@ -269,3 +303,53 @@ class OpDequantize(QuantizationFamilyBase):
         }
         self._write_op_outputs(output_dir, "dequantize", "QuantizationFunctions/dequantize/dequantize.h.j2", "QuantizationFunctions/dequantize/dequantize.c.j2", context, cmake_context)
         
+
+    def _generate_f16_bits(self, output_dir: Path, kernel_info: dict) -> None:
+        """A bit-pattern case: binary16 inputs and the float32 bits each NaN rule gives.
+
+        Finite values and infinities widen exactly. A NaN becomes the default NaN 0x7FC00000 on the
+        MVE vector conversion; the scalar conversion, and the integer widening that copies it, keep
+        its sign and payload and set the quiet bit. The C file picks the rule its build compiled.
+        """
+        name = self.desc["name"]
+        size = int(np.prod([int(dim) for dim in self.desc["input_shape"]]))
+        classes = np.array(_F16_BIT_CLASSES[:size], dtype=np.uint16)
+        rest = self.rng.integers(0, 1 << 16, size=size - classes.size).astype(np.uint16)
+        bits = np.concatenate([classes, rest])
+
+        frac = (bits & 0x3FF).astype(np.uint32)
+        sign = (bits >> 15).astype(np.uint32)
+        is_nan = ((bits >> 10) & 0x1F == 0x1F) & (frac != 0)
+        widened = bits.view(np.float16).astype(np.float32).view(np.uint32)
+        scalar = np.where(is_nan, (sign << 31) | 0x7FC00000 | (frac << 13), widened).astype(np.uint32)
+        vector = np.where(is_nan, np.uint32(0x7FC00000), widened).astype(np.uint32)
+
+        def hex_rows(values, digits):
+            items = [f"0x{int(v):0{digits}X}u" for v in values]
+            return ",\n".join("    " + ", ".join(items[i:i + 8]) for i in range(0, len(items), 8))
+
+        context = {
+            'name': name,
+            'input_size': size,
+            'kernel_fn': kernel_info["kernel_fn"],
+            'kernel_style': 'f16_bits',
+            'input_dtype': 'uint16_t',
+            'output_dtype': 'float',
+            'input_data_array': hex_rows(bits, 4),
+            'expected_vector_bits_array': hex_rows(vector, 8),
+            'expected_scalar_bits_array': hex_rows(scalar, 8),
+            'nan_count': int(is_nan.sum()),
+        }
+        cmake_context = {
+            'name': name,
+            'operator': self.desc.get('operator', 'Dequantize'),
+            'operator_name': 'dequantize',
+        }
+        self._write_op_outputs(
+            output_dir,
+            "dequantize",
+            "QuantizationFunctions/dequantize/dequantize.h.j2",
+            "QuantizationFunctions/dequantize/dequantize_f16_bits.c.j2",
+            context,
+            cmake_context,
+        )

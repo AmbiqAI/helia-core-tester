@@ -6,12 +6,12 @@ from typing import Any, Dict, Mapping
 
 
 TENSOR_DTYPE_KEYS = ("input", "output", "weights", "bias")
-ALLOWED_TENSOR_DTYPES = ("FP32", "FP16", "S8", "S16", "S32", "S4", "BOOL")
+ALLOWED_TENSOR_DTYPES = ("FP32", "FP16", "S8", "S16", "S32", "S4", "U16", "BOOL")
 LEGACY_ACTIVATION_DTYPES = ("S8", "S16", "S32")
 LEGACY_WEIGHT_DTYPES = ("S4", "S8")
 
 FLOAT_DTYPES = frozenset({"FP32", "FP16"})
-INTEGER_DTYPES = frozenset({"S8", "S16", "S32", "S4"})
+INTEGER_DTYPES = frozenset({"S8", "S16", "S32", "S4", "U16"})
 
 _DTYPE_TO_C_TYPE = {
     "FP32": "float",
@@ -20,6 +20,7 @@ _DTYPE_TO_C_TYPE = {
     "S16": "int16_t",
     "S32": "int32_t",
     "S4": "int8_t",
+    "U16": "uint16_t",
     "BOOL": "bool",
 }
 
@@ -30,6 +31,7 @@ _DTYPE_TO_LITERT = {
     "S16": "int16",
     "S32": "int32",
     "S4": "int4",
+    "U16": "uint16",
     "BOOL": "bool",
 }
 
