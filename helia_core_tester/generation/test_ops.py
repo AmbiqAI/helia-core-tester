@@ -60,6 +60,11 @@ def _float_precision_mode(filters: Dict[str, Any]) -> str:
     return str(filters.get("float_precision") or "both").strip().lower()
 
 
+def _split_filter(value: Any) -> List[str]:
+    """Comma-separated filter values; any one matches."""
+    return [part.strip() for part in str(value or "").split(",") if part.strip()]
+
+
 def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     """
     Determine if test should run based on filters.
@@ -71,15 +76,14 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     Returns:
         True if test should run
     """
-    if filters.get('name'):
-        if desc['name'] != filters['name']:
-            return False
-
-    if filters.get('op') and not descriptor_matches_op(desc, str(filters['op'])):
+    if filters.get('name') and desc['name'] not in _split_filter(filters['name']):
         return False
 
-    # Filter by activation dtype
-    if filters.get('dtype') and not descriptor_matches_dtype_filter(desc, str(filters['dtype'])):
+    if filters.get('op') and not any(descriptor_matches_op(desc, op) for op in _split_filter(filters['op'])):
+        return False
+
+    dtypes = _split_filter(filters.get('dtype'))
+    if dtypes and not any(descriptor_matches_dtype_filter(desc, dtype) for dtype in dtypes):
         return False
 
     descriptor_suite = _descriptor_suite(desc).strip().lower()

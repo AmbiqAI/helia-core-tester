@@ -118,9 +118,9 @@ def run_step_exit(step, config: Config, success_msg: str, failure_prefix: Option
 
 @app.command()
 def generate(
-    op: Optional[str] = typer.Option(None, help="Generate only specific operator"),
-    dtype: Optional[str] = typer.Option(None, help="Generate only specific dtype"),
-    name: Optional[str] = typer.Option(None, help="Generate only specific test by name"),
+    op: Optional[str] = typer.Option(None, help="Only these operators, comma-separated"),
+    dtype: Optional[str] = typer.Option(None, help="Only this case dtype: activations, or S4 weights"),
+    name: Optional[str] = typer.Option(None, help="Only these exact test names, comma-separated"),
     limit: Optional[int] = typer.Option(None, help="Limit number of models to generate"),
     seed: Optional[int] = typer.Option(None, help="Random seed for test generation"),
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),
@@ -247,9 +247,9 @@ def run(
 
 @app.command()
 def full(
-    op: Optional[str] = typer.Option(None, help="Generate only specific operator"),
-    dtype: Optional[str] = typer.Option(None, help="Generate only specific dtype"),
-    name: Optional[str] = typer.Option(None, help="Generate only specific test by name"),
+    op: Optional[str] = typer.Option(None, help="Only these operators, comma-separated"),
+    dtype: Optional[str] = typer.Option(None, help="Only this case dtype: activations, or S4 weights"),
+    name: Optional[str] = typer.Option(None, help="Only these exact test names, comma-separated"),
     limit: Optional[int] = typer.Option(None, help="Limit number of models to generate"),
     seed: Optional[int] = typer.Option(None, help="Random seed for test generation"),
     cpu: str = typer.Option("cortex-m55", help="Target CPU(s), comma-separated (e.g. m0,m4,m55)"),

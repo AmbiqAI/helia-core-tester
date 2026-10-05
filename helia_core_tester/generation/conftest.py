@@ -14,13 +14,13 @@ from helia_core_tester.core.discovery import find_generated_tests_dir
 def pytest_addoption(parser):
     """Add custom command line options."""
     parser.addoption("--op", action="store", default=None,
-                    help="Filter by operator (e.g., FullyConnected)")
+                    help="Filter by operators, comma-separated (e.g., FullyConnected)")
     parser.addoption("--dtype", action="store", default=None,
-                    help="Filter by activation dtype (S8, S16)")
+                    help="Filter by case dtype: activations, or S4 weights")
     parser.addoption("--wtype", action="store", default=None,
                     help="Filter by weight dtype (S8, S4)")
     parser.addoption("--name", action="store", default=None,
-                    help="Filter by exact test name")
+                    help="Filter by exact test names, comma-separated")
     parser.addoption("--limit", action="store", type=int, default=None,
                     help="Limit number of tests to run")
     parser.addoption("--seed", action="store", type=int, default=None,

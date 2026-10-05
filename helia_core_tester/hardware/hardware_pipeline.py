@@ -39,6 +39,7 @@ from .result_bundle import write_timing
 from .run_summary import make_live_progress_printer
 
 if TYPE_CHECKING:
+    from .generated_test_bridge import CaseSelection
     from .nsx_app import AppOptions
 
 PRECISION_SUFFIX = {"fp16": "_f16", "fp32": "_f32"}
@@ -192,16 +193,18 @@ def generate_tests_for_board(
     suite: str,
     float_precision: Optional[str] = None,
     cmsis_nn_root: Optional[Path] = None,
+    select: Optional[CaseSelection] = None,
 ) -> None:
     """Run the generate step for the board's CPU and the requested suite, exactly as
     `helia_core_tester generate --cpu <board.cpu> --suite <suite>
     [--float-precision <float_precision>]` would. `float_precision` (f16/f32/both)
     is an explicit override when given; otherwise the TOML/env/default applies.
-    `cmsis_nn_root` is the kernel tree the firmware compiles."""
+    `cmsis_nn_root` is the kernel tree the firmware compiles. `select` narrows
+    generation to its ops, dtypes and case ids, like `generate --op/--dtype/--name`."""
     from ..core.logging import setup_logger
     from ..core.steps import GenerateStep
 
-    config = _board_config(repo_root, board, suite, float_precision, cmsis_nn_root)
+    config = _board_config(repo_root, board, suite, float_precision, cmsis_nn_root, select)
     setup_logger(verbosity=config.verbosity)
     with generation_lock(repo_root, board.cpu):
         result = GenerateStep(config).execute()
@@ -211,12 +214,19 @@ def generate_tests_for_board(
 
 def _board_config(
     repo_root: Path, board: BoardSpec, suite: str, float_precision: Optional[str], cmsis_nn_root: Optional[Path] = None,
+    select: Optional[CaseSelection] = None,
 ):
     """Generation config for the board's CPU."""
     from ..core.config import Config
 
     overrides = {"project_root", "cpu", "suite"}
     kwargs = {}
+    # One suite may match nothing under both.
+    if select is not None and suite != "both":
+        for key, values in (("op_filter", select.ops), ("dtype_filter", select.dtypes), ("name_filter", select.case_ids)):
+            if values:
+                kwargs[key] = ",".join(values)
+                overrides.add(key)
     if float_precision is not None:
         kwargs["float_precision"] = float_precision
         overrides.add("float_precision")
@@ -288,6 +298,12 @@ class StreamOptions:
     golden_allow_failed: bool = False
     """Accept golden cases the past run failed."""
 
+    def selection(self) -> CaseSelection:
+        """The op, dtype and id filters."""
+        from .generated_test_bridge import CaseSelection
+
+        return CaseSelection(ops=self.ops, dtypes=self.dtypes, case_ids=self.case_ids)
+
     def compare_record(self) -> dict[str, Any]:
         """How outputs get judged, for the bundle."""
         return {
@@ -338,7 +354,7 @@ def prepare_bundles(repo_root: Path, board: BoardSpec, options: StreamOptions) -
     from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error
 
     # Bridge once; the runner reuses it.
-    select = CaseSelection(ops=options.ops, dtypes=options.dtypes, case_ids=options.case_ids)
+    select = options.selection()
     bundles, skipped = build_generated_test_case_bundles(
         repo_root, cpu=board.cpu, family=options.family, name_filter=options.test_name,
         limit=options.limit, suite=options.suite, fvp_gate=options.fvp_gate, board_id=board.id,
@@ -530,6 +546,7 @@ def run_hardware_pipeline(
         generate_started = time.monotonic()
         generate_tests_for_board(
             repo_root, board, options.suite, float_precision=options.float_precision, cmsis_nn_root=kernel_root,
+            select=options.selection(),
         )
         generate_s = time.monotonic() - generate_started
 

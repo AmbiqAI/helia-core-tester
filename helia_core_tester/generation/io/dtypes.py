@@ -282,10 +282,14 @@ def resolve_comparison(desc: Mapping[str, Any], resolved_tensor_dtypes: Mapping[
     return comparison
 
 
-def descriptor_matches_dtype_filter(desc: Mapping[str, Any], dtype: str) -> bool:
-    wanted = normalize_dtype(dtype)
+def case_dtype(desc: Mapping[str, Any]) -> str | None:
+    """Kernel-name dtype: S4 weights, else activations."""
+    # arm_convolve_s4 takes s8 activations.
     resolved = desc.get("resolved_tensor_dtypes") or resolve_tensor_dtypes(desc)
-    if wanted in resolved.values():
-        return True
-    activation_dtype = desc.get("activation_dtype")
-    return activation_dtype is not None and normalize_dtype(str(activation_dtype)) == wanted
+    if resolved.get("weights") == "S4":
+        return "S4"
+    return derive_legacy_activation_dtype(desc, resolved)
+
+
+def descriptor_matches_dtype_filter(desc: Mapping[str, Any], dtype: str) -> bool:
+    return case_dtype(desc) == normalize_dtype(dtype)
