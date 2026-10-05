@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import yaml
 
+from helia_core_tester.hardware import entry_coverage
 from helia_core_tester.hardware.entry_coverage import (
     DEPLOYED_PATH,
     NO_ADAPTER,
@@ -167,7 +168,8 @@ def test_derive_refuses_missing_headers(tmp_path: Path) -> None:
         module.public_entry_points(tmp_path)
 
 
-def test_build_coverage_counts_a_wrapper_route() -> None:
+def test_build_coverage_counts_a_wrapper_route(monkeypatch) -> None:
+    monkeypatch.setattr(entry_coverage, "build_gate", lambda build_dir: True)
     coverage = build_coverage(PROJECT_ROOT, [_conv_s8_case()], build_dir=None)
     assert coverage["timed_entry_points"] == ["arm_convolve_1x1_s8_fast", "arm_convolve_wrapper_s8"]
     # arm_convolve_1x1_s8_fast is itself deployed.

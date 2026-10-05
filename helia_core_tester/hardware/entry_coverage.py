@@ -17,7 +17,7 @@ from .adapter_specs import is_setup_call
 from .kernel_registry import load_kernel_registry
 from .pathutil import write_text_lf
 from .result_bundle import merge_summary
-from .wrapper_route import inner_symbol
+from .wrapper_route import build_gate, inner_symbol
 
 DEPLOYED_PATH = Path("assets/deployed_entry_points.json")
 COVERAGE_FILE = "coverage.json"
@@ -43,6 +43,7 @@ def build_coverage(project_root: Path, cases: Sequence, build_dir: Optional[Path
     """The bundle's coverage section for `cases`."""
     by_id = {entry.kernel_id: entry.cmsis_function for entry in load_kernel_registry(project_root)}
     timed_set: set[str] = set()
+    gate_1xn = build_gate(build_dir)
     for case in cases:
         if case.rejection is not None or not case.samples:
             continue
@@ -53,7 +54,7 @@ def build_coverage(project_root: Path, cases: Sequence, build_dir: Optional[Path
         if not named and bundle.kernel_id in by_id:
             named = {by_id[bundle.kernel_id]}
         # A wrapper also times its route.
-        inners = {inner_symbol(name, bundle.manifest) for name in named}
+        inners = {inner_symbol(name, bundle.manifest, gate_1xn) for name in named}
         timed_set.update(named, inners - {None})
     timed = sorted(timed_set)
     deployed = json.loads((project_root / DEPLOYED_PATH).read_text(encoding="utf-8"))
