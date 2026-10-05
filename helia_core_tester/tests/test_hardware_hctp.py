@@ -74,17 +74,18 @@ def test_unsupported_version_rejected() -> None:
         decode_header(bytes(patched[:HEADER_SIZE]))
 
 
-def test_protocol_is_v3_and_older_frames_are_rejected() -> None:
+def test_older_versions_rejected() -> None:
     # v2 changed what were then LOAD_PLAN (PMU passes), HELLO (PMU slots, max_rx_payload)
     # and SAMPLE_RESULT (CCNTR entry first); v3 renamed them to SESSION_PLAN and
     # TARGET_INFO, dropped the unused messages and added the session limits to
-    # TARGET_INFO. Host and firmware are built from the same commit, so any older peer
+    # TARGET_INFO; v4 added prepare cycles to
+    # CASE_COMPLETE. Host and firmware are built from the same commit, so any older peer
     # must be refused outright.
-    assert SUPPORTED_VERSION == 3
+    assert SUPPORTED_VERSION == 4
     raw = bytearray(_frame(MessageType.REQUEST_CASE, b"abc"))
     struct.pack_into("<H", raw, 4, 1)
     raw[28:32] = struct.pack("<I", crc32(bytes(raw[:28])))
-    with pytest.raises(UnsupportedVersionError, match="version 1; expected 3"):
+    with pytest.raises(UnsupportedVersionError, match="version 1; expected 4"):
         decode_header(bytes(raw[:HEADER_SIZE]))
 
 

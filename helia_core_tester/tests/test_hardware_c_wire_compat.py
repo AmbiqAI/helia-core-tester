@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from helia_core_tester.hardware.hctp import MessageType, encode_frame
+from helia_core_tester.hardware.hctp import SUPPORTED_VERSION, MessageType, encode_frame
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -50,7 +50,7 @@ def test_c_decoder_matches_python_wire_format(tmp_path: Path) -> None:
     stdout = result.stdout.strip()
 
     assert "magic=0x31544348" in stdout
-    assert "version=3" in stdout
+    assert f"version={SUPPORTED_VERSION}" in stdout
     assert f"type={int(MessageType.CASE_META)}" in stdout
     assert "flags=2779096485" in stdout
     assert "session=0x12345678" in stdout

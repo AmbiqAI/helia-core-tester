@@ -157,7 +157,7 @@ def sample_frame_bytes(counter_pass: CounterPass) -> int:
 
 def case_tail_bytes(case_id: str) -> int:
     """CASE_COMPLETE plus REQUEST_CASE or SESSION_COMPLETE."""
-    case_complete = HEADER_SIZE + 2 + len(case_id.encode("utf-8")) + 1 + 1 + 4
+    case_complete = HEADER_SIZE + 2 + len(case_id.encode("utf-8")) + 1 + 1 + 4 + 4
     return case_complete + HEADER_SIZE + 2
 
 

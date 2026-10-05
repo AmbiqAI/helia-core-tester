@@ -109,6 +109,8 @@ class CaseRunResult:
     normalized_samples: tuple[NormalizedSample, ...]
     statistics: SampleStatistics
     rejection: CaseRejection | None = None
+    # Untimed adapter cycles, correctness run.
+    prepare_cycles: int | None = None
 
 
 @dataclass(frozen=True)
@@ -528,6 +530,7 @@ class HostSession:
                     normalized_samples=normalized_samples,
                     statistics=compute_sample_statistics(normalized_samples),
                     rejection=rejection,
+                    prepare_cycles=complete.prepare_cycles,
                 )
                 results[self._case_id] = case_result
                 self._case_id = None
