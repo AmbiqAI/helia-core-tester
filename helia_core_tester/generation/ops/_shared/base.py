@@ -98,6 +98,17 @@ class OperationBase(ABC):
         """
         pass
 
+    def round_float16_weights(self, model) -> None:
+        """Round an FP16 case's Keras weights and biases to float16 before conversion.
+
+        The kernel receives float16 weights and bias, so the golden output is computed from those
+        same rounded values rather than the float32 draw.
+        """
+        if model is None or str(self.desc.get("activation_dtype", "")).upper() != "FP16":
+            return
+        for layer in model.layers:
+            layer.set_weights([w.astype(np.float16).astype(np.float32) for w in layer.get_weights()])
+
     def needs_keras_model(self) -> bool:
         """Return True if build_keras_model should be called for conversion."""
         return True
@@ -209,7 +220,17 @@ class OperationBase(ABC):
                 f"Unsupported expected_status {status!r} for descriptor {self.desc.get('name')!r}; "
                 f"known values are {list(self.EXPECTED_STATUS_VALUES)}"
             )
+        if status != "ARM_CMSIS_NN_SUCCESS" and self.desc.get("autovectorize_declines"):
+            raise ValueError(
+                f"{self.desc.get('name')!r}: autovectorize_declines expects the full result where the entry runs; "
+                f"it cannot be combined with expected_status {status}"
+            )
         return status
+
+    def reject_autovectorize_declines(self) -> None:
+        """Reject `autovectorize_declines` on a path whose template does not render it."""
+        if self.desc.get("autovectorize_declines"):
+            raise ValueError(f"{self.desc.get('name')!r}: autovectorize_declines is not supported for this case")
 
     def fault_context(self) -> Dict[str, Any]:
         """Return the template context keys of the `fault:` mechanism (empty without a fault)."""

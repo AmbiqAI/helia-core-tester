@@ -106,7 +106,7 @@ def test_limit_with_case_ids_refused(capsys) -> None:
     from helia_core_tester.hardware.cli import _stream_options
 
     with pytest.raises(SystemExit):
-        _stream_options(None, "int", None, None, 1, None, None, None, None, None, None, None, ["a"], None)
+        _stream_options(None, "int", None, None, 1, None, None, None, None, None, None, None, ["a"], None, False, None, False)
     assert "--limit cannot combine" in capsys.readouterr().err
 
 

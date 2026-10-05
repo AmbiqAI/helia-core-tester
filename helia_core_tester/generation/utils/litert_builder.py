@@ -257,6 +257,7 @@ def build_unary_same_shape_op(
     output_dtype: Optional[str] = None,
     options=None,
     options_type=None,
+    input_scale: Optional[float] = None,
 ) -> bytes:
     _require_litert()
 
@@ -272,7 +273,7 @@ def build_unary_same_shape_op(
             shape=input_shape,
             tensor_type=input_tensor_type,
             is_input=True,
-            quantization=_default_quant(input_tensor_type),
+            quantization=_default_quant(input_tensor_type) if input_scale is None else ([input_scale], [0]),
         )
     )
 

@@ -11,6 +11,7 @@ from helia_core_tester.generation.io.descriptors import load_all_descriptors
 from helia_core_tester.generation.test_ops import generate_test
 from helia_core_tester.hardware.case_bundle import load_case_bundle
 from helia_core_tester.hardware.generated_test_bridge import (
+    GeneratedTestCase,
     UnsupportedGeneratedTestError,
     build_case_bundle_from_generated_test,
     discover_generated_tests,
@@ -135,11 +136,13 @@ _PACKED_HINTS = {"NT_N_PACKED", "ARM_NN_WEIGHT_FORMAT_NT_N_PACKED"}
 def _partially_filled_packed_descriptors() -> list[dict]:
     # NT_N_PACKED stores float convolve weights as [ceil(out_c / block)][K][block], block 8 for f16
     # and 4 for f32. Only an out_c that leaves the last block partly filled makes the array longer
-    # than the shape. The hint spellings and the block follow the generator.
+    # than the shape. The hint spellings and the block follow the generator. Direct-entry cases
+    # are left out: the bridge refuses them.
     return [
         desc
         for desc in load_all_descriptors(str(PROJECT_ROOT / "assets" / "descriptors"))
         if desc["operator"] == "Convolve"
+        and not desc.get("entry")
         and desc.get("activation_dtype") in _PACK_BLOCK
         and str((desc.get("hint") or {}).get("weight_format", "")).upper() in _PACKED_HINTS
         and desc["filter_shape"][3] % _PACK_BLOCK[desc["activation_dtype"]]
@@ -175,10 +178,21 @@ def test_packed_float_convolve_keeps_padded_weights(tmp_path: Path, desc: dict) 
 
 
 def test_packed_selection_covers_the_board_failures() -> None:
-    # The three cases the Apollo510 run reported (ns-cmsis-nn#633).
+    # The Apollo510 run reported three cases (ns-cmsis-nn#633). The third,
+    # convolve_float_entry_acc16_1d_k5_c4_oc13_packed_f16, is a direct-entry case the bridge now refuses.
     names = {desc["name"] for desc in _partially_filled_packed_descriptors()}
     assert {
         "convolve_float_1d_k5_fold_c12_oc13_packed_f16",
-        "convolve_float_entry_acc16_1d_k5_c4_oc13_packed_f16",
         "convolve_float_direct_fold_c20_k5_oc5_packed_f16",
     } <= names
+
+
+def test_direct_entry_cases_are_refused(tmp_path: Path) -> None:
+    # The firmware calls an operator's default function, so a bundled entry case would report
+    # that function's result under the entry's name.
+    desc = next(d for d in load_all_descriptors(str(PROJECT_ROOT / "assets" / "descriptors")) if d.get("entry"))
+    case = GeneratedTestCase(
+        name=desc["name"], cpu="cortex-m55", family="ConvolutionFunctions", directory=tmp_path, descriptor=desc
+    )
+    with pytest.raises(UnsupportedGeneratedTestError, match=rf"direct-entry case \({desc['entry']}\)"):
+        build_case_bundle_from_generated_test(PROJECT_ROOT, case, require_fvp_pass=False)

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.9.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.8.0...v0.9.0) (2026-10-04)
+
+
+### Features
+
+* **conv:** call direct entries with arm_convolve_1x1_s8_fast's signature ([#340](https://github.com/AmbiqAI/helia-core-tester/issues/340)) ([2591342](https://github.com/AmbiqAI/helia-core-tester/commit/2591342b90c41b8fe666326e28b2e81b2dbb50ce)), closes [#339](https://github.com/AmbiqAI/helia-core-tester/issues/339)
+* **fc:** call arm_fully_connected_per_channel_packed_s8 as a direct entry ([#342](https://github.com/AmbiqAI/helia-core-tester/issues/342)) ([35704db](https://github.com/AmbiqAI/helia-core-tester/commit/35704db7153ee27e78fadbf23dc8759067d00eba)), closes [#341](https://github.com/AmbiqAI/helia-core-tester/issues/341)
+* **hardware:** select run cases by op, dtype and case id ([596778a](https://github.com/AmbiqAI/helia-core-tester/commit/596778a5f76812f0afcee9f133e65d3f18bb3cca))
+
+
+### Bug Fixes
+
+* **hardware:** refuse --limit with --case-id ([9de7215](https://github.com/AmbiqAI/helia-core-tester/commit/9de7215a3050b9d7cb1d08a3e11609586d0d242c))
+* **hardware:** refuse an empty --cases-from file ([5f0531b](https://github.com/AmbiqAI/helia-core-tester/commit/5f0531b4f245d59ff9b9404fe04ec8fcecc87c19))
+
 ## [0.8.0](https://github.com/AmbiqAI/helia-core-tester/compare/v0.7.0...v0.8.0) (2026-10-02)
 
 

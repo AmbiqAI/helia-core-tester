@@ -546,3 +546,202 @@ filter_shape: [4, 8]
 use_bias: true
 fault: small_ctx_size
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# arm_fully_connected_per_channel_packed_s8 (fully_connected_packed_s8 family): the case packs the
+# weights once with the entry's own packer, gate first, and calls the entry. Blocks of four output
+# rows over K rounded up to 16: K is 3, 13, 16, 17, 29, 32 and 64, the last block has 1 to 4 live
+# rows, batches run 1 to 3, and outputs saturate at the int8 bounds. Compared bit-exact. MVE only:
+# it declines on the autovectorized coverage build, and for a nonzero filter offset.
+operator: FullyConnected
+name: fully_connected_entry_packed_k16_c8_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [1, 16]
+filter_shape: [8, 16]
+use_bias: true
+comparison: {tolerance: 0}
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_k13_c5_b2_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [2, 13]
+filter_shape: [5, 13]
+use_bias: true
+comparison: {tolerance: 0}
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_k17_c6_no_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [1, 17]
+filter_shape: [6, 17]
+use_bias: false
+comparison: {tolerance: 0}
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_k29_c7_b2_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [2, 29]
+filter_shape: [7, 29]
+use_bias: true
+comparison: {tolerance: 0}
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_k64_c4_b3_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [3, 64]
+filter_shape: [4, 64]
+use_bias: true
+comparison: {tolerance: 0}
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_k3_c2_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [1, 3]
+filter_shape: [2, 3]
+use_bias: true
+comparison: {tolerance: 0}
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_k2x2x8_c9_bias_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor}
+input_shape: [1, 2, 2, 8]
+filter_shape: [9, 32]
+use_bias: true
+comparison: {tolerance: 0}
+required_capabilities: [mve]
+autovectorize_declines: true
+---
+operator: FullyConnected
+name: fully_connected_entry_packed_declines_filter_offset_k13_c5_s8
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_fully_connected_per_channel_packed_s8
+hint: {call_style: per_tensor, extras: {force_filter_offset: 3}}
+input_shape: [2, 13]
+filter_shape: [5, 13]
+use_bias: true
+comparison: {tolerance: 0}
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+# BEGIN mlperf model shapes (scripts/extract_model_shapes.py)
+operator: FullyConnected
+name: fully_connected_mlperf_ad_l0_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 640]
+filter_shape: [128, 640]
+use_bias: true
+---
+# Same shape: ad_l2, ad_l3, ad_l6, ad_l7, ad_l8
+operator: FullyConnected
+name: fully_connected_mlperf_ad_l1_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 128]
+filter_shape: [128, 128]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_mlperf_ad_l4_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 128]
+filter_shape: [8, 128]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_mlperf_ad_l5_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 8]
+filter_shape: [128, 8]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_mlperf_ad_l9_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: NONE
+input_shape: [1, 128]
+filter_shape: [640, 128]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_mlperf_ic_l14_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: NONE
+input_shape: [1, 64]
+filter_shape: [10, 64]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_mlperf_kws_l11_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: NONE
+input_shape: [1, 64]
+filter_shape: [12, 64]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_mlperf_vww_l29_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: NONE
+input_shape: [1, 256]
+filter_shape: [2, 256]
+use_bias: true
+# END mlperf model shapes

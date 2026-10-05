@@ -14,6 +14,7 @@ import yaml
 
 from helia_core_tester.core.discovery import find_descriptors_dir, find_generated_tests_dir, find_repo_root
 from helia_core_tester.core.cpu_targets import missing_required_capabilities, normalize_cpu
+from helia_core_tester.generation.golden_check import check_case_golden
 from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, resolve_comparison, resolve_tensor_dtypes
 from helia_core_tester.generation.io.descriptors import descriptor_matches_op, load_all_descriptors
@@ -360,6 +361,7 @@ def generate_test(
     try:
         op.generate_c_files(test_dir)
         op.assert_input_mode_consumed()
+        check_case_golden(test_dir, desc)
     except NotImplementedError:
         # Operator doesn't support C file generation yet
         print(f"INFO: {name} - C file generation not implemented")
