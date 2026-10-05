@@ -699,6 +699,8 @@ class CaseComplete:
     performance_ran: bool = True
     # On the wire only when performance_ran is False.
     kernel_status: int = 0
+    # Untimed adapter cycles, correctness run.
+    prepare_cycles: int = 0
 
 
 def encode_case_complete(complete: CaseComplete) -> bytes:
@@ -707,6 +709,7 @@ def encode_case_complete(complete: CaseComplete) -> bytes:
     writer.u8(1 if complete.correctness_ran else 0)
     writer.u8(1 if complete.performance_ran else 0)
     writer.u32(complete.workspace_used_bytes)
+    writer.u32(complete.prepare_cycles)
     if not complete.performance_ran:
         writer.i32(complete.kernel_status)
     return writer.finish()
@@ -718,12 +721,14 @@ def decode_case_complete(payload: bytes) -> CaseComplete:
     correctness_ran = bool(reader.u8())
     performance_ran = bool(reader.u8())
     workspace_used_bytes = reader.u32()
+    prepare_cycles = reader.u32()
     return _consumed(reader, "CASE_COMPLETE", CaseComplete(
         case_id=case_id,
         workspace_used_bytes=workspace_used_bytes,
         correctness_ran=correctness_ran,
         performance_ran=performance_ran,
         kernel_status=0 if performance_ran else reader.i32(),
+        prepare_cycles=prepare_cycles,
     ))
 
 

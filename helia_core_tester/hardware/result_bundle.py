@@ -13,6 +13,7 @@ from .comparison import finite_or_none
 from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
 from .wire import boot_record
+from .work_count import case_work, per_unit
 from .pathutil import write_text_lf
 
 CASE_SUMMARY_BASE_FIELDS = [
@@ -30,6 +31,8 @@ CASE_SUMMARY_BASE_FIELDS = [
     "fvp_status",
     "timed_symbol",
 ]
+# Work counts and prepare cost.
+CASE_SUMMARY_WORK_FIELDS = ["macs", "ops", "cycles_per_mac", "cycles_per_op", "prepare_cycles"]
 CASE_SUMMARY_FLAG_FIELDS = ["overflow_detected", "valid_for_regression"]
 
 
@@ -106,6 +109,18 @@ def _rejection_record(case) -> dict | None:
     if rejection is None:
         return None
     return {"kernel_status": rejection.kernel_status, "stage": rejection.stage, "reason": rejection.reason}
+
+
+def _work_fields(case) -> dict[str, Any]:
+    """Work counts, per-unit cycles, prepare cycles."""
+    work = case_work(case.case_bundle)
+    median = case.statistics.median_cycles if case.samples else None
+    return {
+        **work,
+        "cycles_per_mac": per_unit(median, work["macs"]),
+        "cycles_per_op": per_unit(median, work["ops"]),
+        "prepare_cycles": case.prepare_cycles,
+    }
 
 
 def write_timing(bundle_root: Path, timing: dict) -> Path:
@@ -197,6 +212,7 @@ def write_result_bundle(
         timed_symbol = timed_symbols.get(case.case_bundle.kernel_id, "")
         rejection = _rejection_record(case)
         counter_medians = compute_counter_medians(case.normalized_samples)
+        work_fields = _work_fields(case)
         for sample in case.samples:
             if sample.pass_name not in pass_names:
                 pass_names.append(sample.pass_name)
@@ -221,6 +237,8 @@ def write_result_bundle(
                 "mad_cycles": case.statistics.mad_cycles,
                 "fvp_status": case.case_bundle.fvp_status,
                 "timed_symbol": timed_symbol,
+                **work_fields,
+                "shapes": {blob.role: list(blob.dimensions) for blob in case.case_bundle.blobs},
                 "unsupported_counters": list(case.statistics.unsupported_counters),
                 # Median per-invocation value of every supported counter across samples.
                 "counters": counter_medians,
@@ -243,6 +261,7 @@ def write_result_bundle(
             "p99_cycles": case.statistics.p99_cycles,
             "fvp_status": case.case_bundle.fvp_status,
             "timed_symbol": timed_symbol,
+            **work_fields,
         }
         summary_row.update(counter_medians)
         summary_row["overflow_detected"] = str(case.statistics.overflow_detected).lower()
@@ -304,7 +323,7 @@ def write_result_bundle(
     with (bundle_root / "case_summary.csv").open("w", encoding="utf-8", newline="") as handle:
         # One column per selected/reported counter name (a case with no supported
         # value for a counter leaves that cell empty), then the overflow/validity flags.
-        case_summary_fieldnames = CASE_SUMMARY_BASE_FIELDS + counter_names + CASE_SUMMARY_FLAG_FIELDS
+        case_summary_fieldnames = CASE_SUMMARY_BASE_FIELDS + CASE_SUMMARY_WORK_FIELDS + counter_names + CASE_SUMMARY_FLAG_FIELDS
         writer = csv.DictWriter(handle, fieldnames=case_summary_fieldnames, restval="")
         writer.writeheader()
         writer.writerows(case_summary_rows)
