@@ -7,13 +7,15 @@ __attribute__((aligned(16))) uint8_t hct_stub_mram[HCT_STUB_MRAM_BYTES];
 uintptr_t hct_stub_mram_end = 0u;
 hct_mram_stub_t hct_mram_stub;
 
+/* Assembler names; Mach-O adds "_". */
+#define HCT_STR_(x) #x
+#define HCT_STR(x) HCT_STR_(x)
+#define HCT_ASM_NAME(name) HCT_STR(__USER_LABEL_PREFIX__) #name
+#define HCT_ALIAS(name) ".globl " HCT_ASM_NAME(name) "\n.set " HCT_ASM_NAME(name) ", " HCT_ASM_NAME(hct_stub_mram) "\n"
+
 /* Linker symbols: empty data, image ends here. */
-__asm__(".globl _init_data\n.set _init_data, hct_stub_mram\n"
-        ".globl _sdata\n.set _sdata, hct_stub_mram\n"
-        ".globl _edata\n.set _edata, hct_stub_mram\n"
-        ".globl _init_data_sram\n.set _init_data_sram, hct_stub_mram\n"
-        ".globl _ssdata\n.set _ssdata, hct_stub_mram\n"
-        ".globl _sedata\n.set _sedata, hct_stub_mram\n");
+__asm__(HCT_ALIAS(_init_data) HCT_ALIAS(_sdata) HCT_ALIAS(_edata)
+        HCT_ALIAS(_init_data_sram) HCT_ALIAS(_ssdata) HCT_ALIAS(_sedata));
 
 int am_hal_mram_main_program(uint32_t key, uint32_t *src, uint32_t *dst, uint32_t words)
 {
