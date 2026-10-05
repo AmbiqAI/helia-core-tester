@@ -23,6 +23,7 @@ class TestResultParser:
         'GuardBreach[',
         'HELIA_SIZER_INVALID[',
         'HELIA_SIZER_OVER_CAPACITY[',
+        'HELIA_F16_NAN_RULE',
     )
     failure_count_line_pattern = re.compile(r'^\d+\s+Failures$', re.IGNORECASE)
 

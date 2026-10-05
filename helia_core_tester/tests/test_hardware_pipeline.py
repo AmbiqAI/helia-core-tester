@@ -503,9 +503,11 @@ def test_bundle_names_the_timed_kernel(tmp_path: Path) -> None:
     result = HostSession(FakeTargetTransport()).run_many([bundle])
     catalog = json.loads((PROJECT_ROOT / "cmake" / "hardware" / "kernel_catalog.json").read_text())
     bundle_root = write_result_bundle(result, session_id="timed", output_root=tmp_path, memory_report={}, kernel_catalog=catalog)
-    assert json.loads((bundle_root / "cases.json").read_text())[0]["timed_symbol"] == "arm_abs_s8"
+    row = json.loads((bundle_root / "cases.json").read_text())[0]
+    assert row["timed_symbol"] == "arm_abs_s8" and row["inner_symbol"] is None
     with (bundle_root / "case_summary.csv").open(encoding="utf-8") as handle:
-        assert next(csv.DictReader(handle))["timed_symbol"] == "arm_abs_s8"
+        row = next(csv.DictReader(handle))
+        assert row["timed_symbol"] == "arm_abs_s8" and row["inner_symbol"] == ""
 
 
 def test_read_target_info_returns_the_full_payload_without_acknowledging() -> None:
@@ -646,7 +648,7 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     board = resolve_board("apollo510_evb")
     order: list[str] = []
 
-    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None):
+    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None, select=None):
         order.append(f"generate:{spec.cpu}:{suite}:{float_precision}:{cmsis_nn_root}")
 
     def _stage(spec, *, build_dir, options, force_sync, update_dependencies):

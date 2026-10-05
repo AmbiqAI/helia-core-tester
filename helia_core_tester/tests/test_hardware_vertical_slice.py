@@ -12,7 +12,14 @@ from helia_core_tester.hardware.case_bundle import (
     blob_numpy,
     load_case_bundle,
 )
-from helia_core_tester.hardware.fake_target import FakeAbsS8Adapter, FakeKernelAdapter, FakeTargetTransport
+from helia_core_tester.hardware.fake_target import (
+    FakeAbsS8Adapter,
+    FakeConvolveS8Adapter,
+    FakeKernelAdapter,
+    FakeTargetTransport,
+)
+from helia_core_tester.hardware.generated_test_bridge import build_case_bundle_from_generated_test
+from helia_core_tester.hardware.kernel_registry import load_kernel_registry
 from helia_core_tester.hardware.measurement import (
     MAX_CASES_PER_PLAN,
     MAX_PASSES_PER_PLAN,
@@ -35,6 +42,7 @@ from helia_core_tester.hardware.session import (
     session_plan_for_bundles,
 )
 from helia_core_tester.hardware.wire import PlannedCase, SessionPlan, encode_session_plan, session_plan_size
+from helia_core_tester.tests.generated_inputs import discover_or_skip
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -132,6 +140,30 @@ def test_fake_convolve_vertical_slice_end_to_end(tmp_path: Path) -> None:
     assert case.statistics.median_cycles > 0
     assert result.protocol_trace.count("RX:REQUEST_BLOB") >= 6
 
+
+
+def test_fake_adapters_match_kernel_registry() -> None:
+    registry = {entry.kernel_id: entry.cmsis_function for entry in load_kernel_registry(PROJECT_ROOT)}
+    for adapter in (FakeAbsS8Adapter, FakeConvolveS8Adapter):
+        assert adapter.entry.canonical_name == registry[adapter.entry.kernel_id]
+
+
+# Offset+padding, OHWI weights, groups, dilation.
+@pytest.mark.parametrize(
+    "case_name",
+    [
+        "convolve_stride2pad1_s8",
+        "convolve_kernel_support_groups1_s8",
+        "convolve_grouped_conv_case_02_s8",
+        "convolve_2x2_dilation_s8",
+    ],
+)
+def test_fake_convolve_passes_generated_case(tmp_path: Path, case_name: str) -> None:
+    (case,) = (c for c in discover_or_skip(PROJECT_ROOT, name_filter=case_name) if c.name == case_name)
+    bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, case, output_root=tmp_path, require_fvp_pass=False)
+    passes = counter_passes_for_selection({"cpu": "default"})
+    result = HostSession(FakeTargetTransport(), counter_passes=passes).run(load_case_bundle(bundle.manifest_path))
+    assert result.cases[0].comparison.mismatch_count == 0
 
 
 def test_multi_case_session_rewinds_arena(tmp_path: Path) -> None:

@@ -205,6 +205,8 @@ class OpAdd(BinaryBasicMathBase):
             # Draw both operands from one RNG stream: reseeding per call would
             # make input1 == input2 and weaken/vacuously pass the golden.
             input1_data, input2_data = self._sample_dual_uniform_inputs(input1_shape, input2_shape)
+            input1_data = self._widen_s8(input1_data, input1_scale, kernel_info["input_c_type"])
+            input2_data = self._widen_s8(input2_data, input2_scale, kernel_info["input_c_type"])
             qmin, qmax = activation_bounds(activation_dtype)
             np_in_dtype = np.int16 if activation_dtype == "S16" else np.int8
             input1_q = np.round(input1_data / float(input1_scale) + float(input1_zp)).astype(np.int32)

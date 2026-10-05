@@ -100,6 +100,8 @@ class Config:
     seed: Optional[int] = 500
 
     force_generate: bool = False
+    # Shared trees: keep other runs' cases.
+    keep_unselected: bool = False
     skip_generation: bool = False
     skip_build: bool = False
     skip_run: bool = False
@@ -230,6 +232,7 @@ class Config:
             "dry_run",
             "plan",
             "force_generate",
+            "keep_unselected",
             "skip_generation",
             "skip_build",
             "skip_run",
@@ -486,6 +489,7 @@ class Config:
             "limit": self.limit,
             "seed": self.seed,
             "force_generate": self.force_generate,
+            "keep_unselected": self.keep_unselected,
             "skip_generation": self.skip_generation,
             "skip_build": self.skip_build,
             "skip_run": self.skip_run,

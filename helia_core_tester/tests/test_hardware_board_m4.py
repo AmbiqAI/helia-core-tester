@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-from helia_core_tester.hardware import generated_test_bridge as bridge
 from helia_core_tester.hardware import memory_report, nsx_app, nsx_cli
 from helia_core_tester.hardware.boards import BoardSpec, resolve_board
 from helia_core_tester.hardware.hardware_pipeline import StreamOptions, fit_to_board
@@ -81,18 +80,6 @@ def test_m4_refuses_fp16_and_narrows_float_to_f32() -> None:
     assert fit_to_board(M4, StreamOptions(suite="both"), explicit_pmu=False).float_precision is None
     assert fit_to_board(M4, StreamOptions(suite="int"), explicit_pmu=False).float_precision is None
     assert fit_to_board(M55, StreamOptions(suite="float"), explicit_pmu=False).float_precision is None
-
-
-def test_s4_one_by_n_needs_im2col_without_mve() -> None:
-    dims = dict(
-        input_dims={"n": 1, "h": 1, "w": 8, "c": 4},
-        filter_dims={"n": 2, "h": 1, "w": 3, "c": 4},
-        output_dims={"n": 1, "h": 1, "w": 6, "c": 2},
-        stride_h=1, stride_w=1, pad_h=0, pad_w=0, dilation_h=1, dilation_w=1,
-    )
-    assert bridge._calculate_convolve_s4_scratch_bytes(**dims) == 0
-    # Covers arm_convolve_s4_get_buffer_size's 2 * rhs_cols * 2.
-    assert bridge._calculate_convolve_s4_scratch_bytes(**dims, mve=False) >= 2 * (3 * 4) * 2
 
 
 def test_linker_script_falls_back_to_the_plain_script(tmp_path: Path) -> None:

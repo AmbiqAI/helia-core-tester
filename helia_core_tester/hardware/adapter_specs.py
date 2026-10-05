@@ -370,18 +370,28 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
     }
 
     {
-        /* S8: the wrapper TFLM calls. */
+        /* S8: the wrapper TFLM calls, or an entry. */
+        const uint32_t kernel_id = session->expected_kernel_id;
         cmsis_nn_context weight_sum_ctx;
         uint32_t operand_bytes_needed;
+        int32_t required_scratch;
 
+        if (kernel_id == HCT_KERNEL_ID_CONVOLVE_S8)
+        {
+            required_scratch = arm_convolve_wrapper_s8_get_buffer_size(&conv_params, &input_dims, &filter_dims, &output_dims);
+        }
+        else if (kernel_id == HCT_KERNEL_ID_CONVOLVE_1X1_S8_SHORT_K)
+        {
+            required_scratch = arm_convolve_1x1_s8_fast_get_buffer_size(&input_dims);
+        }
+        else
+        {
+            required_scratch = arm_convolve_s8_get_buffer_size(&input_dims, &filter_dims);
+        }
         if (!hct_checked_dims_bytes(&input_dims, sizeof(int8_t), input->byte_length, &operand_bytes_needed) ||
             !hct_checked_dims_bytes(&filter_dims, sizeof(int8_t), weights->byte_length, &operand_bytes_needed) ||
             !hct_checked_count_bytes(bias_dims.c, sizeof(int32_t), bias->byte_length, &operand_bytes_needed) ||
-            !place_weight_sums(session,
-                               arm_convolve_wrapper_s8_get_buffer_size(&conv_params, &input_dims, &filter_dims, &output_dims),
-                               output_dims.c,
-                               &ctx,
-                               &weight_sum_ctx))
+            !place_weight_sums(session, required_scratch, output_dims.c, &ctx, &weight_sum_ctx))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
@@ -398,18 +408,29 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
             return ARM_CMSIS_NN_ARG_ERROR;
         }
 #endif
-        return arm_convolve_wrapper_s8(&ctx,
-                                       &weight_sum_ctx,
-                                       &conv_params,
-                                       &quant_params,
-                                       &input_dims,
-                                       (const int8_t *)blob_ptr(session, input),
-                                       &filter_dims,
-                                       (const int8_t *)blob_ptr(session, weights),
-                                       &bias_dims,
-                                       (const int32_t *)blob_ptr(session, bias),
-                                       &output_dims,
-                                       (int8_t *)hct_output_ptr(session));
+#define HCT_CONV_S8_ARGS &ctx, &weight_sum_ctx, &conv_params, &quant_params, \\
+    &input_dims, (const int8_t *)blob_ptr(session, input), \\
+    &filter_dims, (const int8_t *)blob_ptr(session, weights), \\
+    &bias_dims, (const int32_t *)blob_ptr(session, bias)
+#define HCT_CONV_S8_OUT &output_dims, (int8_t *)hct_output_ptr(session)
+        switch (kernel_id)
+        {
+            case HCT_KERNEL_ID_CONVOLVE_S8_SMALL_CIN:
+                return arm_convolve_s8_small_cin(HCT_CONV_S8_ARGS, NULL, HCT_CONV_S8_OUT);
+            case HCT_KERNEL_ID_CONVOLVE_S8_3X3_C16_S1:
+                return arm_convolve_s8_3x3_c16_s1(HCT_CONV_S8_ARGS, NULL, HCT_CONV_S8_OUT);
+            case HCT_KERNEL_ID_CONVOLVE_1X1_S8_SHORT_K:
+                /* Absent from older kernels. */
+                if (arm_convolve_1x1_s8_short_k == NULL)
+                {
+                    return ARM_CMSIS_NN_NO_IMPL_ERROR;
+                }
+                return arm_convolve_1x1_s8_short_k(HCT_CONV_S8_ARGS, HCT_CONV_S8_OUT);
+            default:
+                return arm_convolve_wrapper_s8(HCT_CONV_S8_ARGS, HCT_CONV_S8_OUT);
+        }
+#undef HCT_CONV_S8_ARGS
+#undef HCT_CONV_S8_OUT
     }
 }'''
 
@@ -641,18 +662,18 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
         return ARM_CMSIS_NN_ARG_ERROR;
     }
     {
-        /* S8: the wrapper TFLM calls. */
+        /* S8: the wrapper TFLM calls, or an entry. */
+        const uint32_t kernel_id = session->expected_kernel_id;
         cmsis_nn_context ctx;
         cmsis_nn_context weight_sum_ctx;
         uint32_t operand_bytes_needed;
+        const int32_t required_scratch = (kernel_id == HCT_KERNEL_ID_DEPTHWISE_CONV_S8)
+            ? arm_depthwise_conv_wrapper_s8_get_buffer_size(&dw_conv_params, &input_dims, &filter_dims, &output_dims)
+            : arm_depthwise_conv_s8_opt_get_buffer_size(&input_dims, &filter_dims);
         if (!hct_checked_dims_bytes(&input_dims, sizeof(int8_t), input->byte_length, &operand_bytes_needed) ||
             !hct_checked_dims_bytes(&filter_dims, sizeof(int8_t), weights->byte_length, &operand_bytes_needed) ||
             !hct_checked_count_bytes(bias_dims.c, sizeof(int32_t), bias->byte_length, &operand_bytes_needed) ||
-            !place_weight_sums(session,
-                               arm_depthwise_conv_wrapper_s8_get_buffer_size(&dw_conv_params, &input_dims, &filter_dims, &output_dims),
-                               output_dims.c,
-                               &ctx,
-                               &weight_sum_ctx))
+            !place_weight_sums(session, required_scratch, output_dims.c, &ctx, &weight_sum_ctx))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
@@ -671,18 +692,25 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
             return ARM_CMSIS_NN_ARG_ERROR;
         }
 #endif
-        return arm_depthwise_conv_wrapper_s8(&ctx,
-                                             &weight_sum_ctx,
-                                             &dw_conv_params,
-                                             &quant_params,
-                                             &input_dims,
-                                             (const int8_t *)blob_ptr(session, input),
-                                             &filter_dims,
-                                             (const int8_t *)blob_ptr(session, weights),
-                                             &bias_dims,
-                                             (const int32_t *)blob_ptr(session, bias),
-                                             &output_dims,
-                                             (int8_t *)hct_output_ptr(session));
+#define HCT_DW_S8_ARGS &ctx, &weight_sum_ctx, &dw_conv_params, &quant_params, \\
+    &input_dims, (const int8_t *)blob_ptr(session, input), \\
+    &filter_dims, (const int8_t *)blob_ptr(session, weights), \\
+    &bias_dims, (const int32_t *)blob_ptr(session, bias), \\
+    &output_dims, (int8_t *)hct_output_ptr(session)
+        switch (kernel_id)
+        {
+            case HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3:
+                return arm_depthwise_conv_s8_opt_3x3(HCT_DW_S8_ARGS);
+            case HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3_C64_S1:
+                return arm_depthwise_conv_s8_opt_3x3_c64_s1(HCT_DW_S8_ARGS);
+            case HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_PLANAR:
+                return arm_depthwise_conv_s8_opt_planar(HCT_DW_S8_ARGS);
+            case HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_CHANNELWISE:
+                return arm_depthwise_conv_s8_opt_channelwise(HCT_DW_S8_ARGS);
+            default:
+                return arm_depthwise_conv_wrapper_s8(HCT_DW_S8_ARGS);
+        }
+#undef HCT_DW_S8_ARGS
     }
 }
 '''
@@ -2446,6 +2474,43 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
                                         session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_FULLY_CONNECTED_PER_CHANNEL_PACKED_S8)
+            {
+                /* Pack untimed, as Prepare would. */
+                const cmsis_nn_per_channel_quant_params channel_quant = {quant_params.multiplier, quant_params.shift};
+                int32_t packed_size;
+                uint32_t stream_offset;
+                uint32_t stream_end;
+                int8_t *stream;
+                if (arm_fully_connected_per_channel_packed_s8 == NULL)
+                {
+                    return ARM_CMSIS_NN_NO_IMPL_ERROR;
+                }
+                packed_size = arm_fully_connected_per_channel_packed_s8_get_packed_size(&filter_dims);
+                if (packed_size < 0 ||
+                    !hct_checked_aligned_range(required_scratch, 16u, (uint32_t)packed_size, session->scratch_bytes,
+                                               &stream_offset, &stream_end))
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
+                stream = (int8_t *)&session->workspace[session->scratch_offset + stream_offset];
+                /* Packs the MVE kernel sums above. */
+                if (arm_fully_connected_per_channel_packed_s8_pack(&filter_dims,
+                                                                   (const int8_t *)blob_ptr(session, weights),
+                                                                   (const int32_t *)ctx.buf,
+                                                                   &channel_quant,
+                                                                   stream) != ARM_CMSIS_NN_SUCCESS)
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
+                return arm_fully_connected_per_channel_packed_s8(&fc_params,
+                                                                 &input_dims,
+                                                                 (const int8_t *)blob_ptr(session, input),
+                                                                 &filter_dims,
+                                                                 stream,
+                                                                 &output_dims,
+                                                                 (int8_t *)hct_output_ptr(session));
             }
             return arm_fully_connected_wrapper_s8(&ctx,
                                                   &fc_params,
@@ -4821,6 +4886,280 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
 }
 '''
 
+_TAKE_SCRATCH = '''\
+/* Carve one aligned slice from scratch. */
+static bool take_scratch(hct_server_session_t *session, uint32_t *used, int32_t bytes, cmsis_nn_context *ctx)
+{
+    uint32_t offset;
+    uint32_t end;
+    if (bytes < 0 || !hct_checked_aligned_range(*used, 16u, (uint32_t)bytes, session->scratch_bytes, &offset, &end))
+    {
+        return false;
+    }
+    ctx->buf = (bytes > 0) ? &session->workspace[session->scratch_offset + offset] : NULL;
+    ctx->size = bytes;
+    *used = end;
+    return true;
+}
+
+/* Validated meta ints for an adapter. */
+static bool meta_ints(hct_server_session_t *session, uint32_t count, const int32_t **meta)
+{
+    hct_server_blob_t *blob = find_blob_by_role(session, HCT_BLOB_ROLE_META_0);
+    const uint8_t *data;
+    if (blob == NULL || blob->dtype != HCT_DTYPE_S32 || blob->byte_length < count * (uint32_t)sizeof(int32_t))
+    {
+        return false;
+    }
+    data = blob_ptr(session, blob);
+    *meta = (const int32_t *)data;
+    return ((uintptr_t)data % sizeof(int32_t)) == 0u;
+}
+
+/* Blob dims as n, h, w, c. */
+static void blob_dims(const hct_server_blob_t *blob, cmsis_nn_dims *dims)
+{
+    int32_t shape[4] = {1, 1, 1, 1};
+    uint8_t index;
+    for (index = 0u; index < blob->rank && index < 4u; ++index)
+    {
+        shape[index] = (int32_t)blob->dimensions[index];
+    }
+    dims->n = shape[0];
+    dims->h = shape[1];
+    dims->w = shape[2];
+    dims->c = shape[3];
+}'''
+
+_RUN_SVDF_ONCE = '''\
+/* meta_0: rank, in/out quant, input clamp. */
+static arm_cmsis_nn_status run_svdf_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+    hct_server_blob_t *state = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_1);
+    hct_server_blob_t *weights_time = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_2);
+    hct_server_blob_t *weights_feature = find_blob_by_role(session, HCT_BLOB_ROLE_WEIGHTS);
+    hct_server_blob_t *bias = find_blob_by_role(session, HCT_BLOB_ROLE_BIAS);
+    const bool state_s16 = (session->expected_kernel_id == HCT_KERNEL_ID_SVDF_STATE_S16_S8);
+    const uint32_t state_size = state_s16 ? (uint32_t)sizeof(int16_t) : 1u;
+    cmsis_nn_context ctx = {NULL, 0};
+    cmsis_nn_context input_ctx;
+    cmsis_nn_context output_ctx;
+    cmsis_nn_svdf_params params;
+    cmsis_nn_per_tensor_quant_params input_quant;
+    cmsis_nn_per_tensor_quant_params output_quant;
+    cmsis_nn_dims input_dims;
+    cmsis_nn_dims state_dims;
+    cmsis_nn_dims feature_dims;
+    cmsis_nn_dims time_dims;
+    cmsis_nn_dims bias_dims;
+    cmsis_nn_dims output_dims;
+    const int32_t *meta;
+    uint32_t used = 0u;
+    uint32_t bytes;
+
+    if (input == NULL || state == NULL || weights_time == NULL || weights_feature == NULL || !meta_ints(session, 7u, &meta))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    blob_dims(input, &input_dims);
+    blob_dims(state, &state_dims);
+    blob_dims(weights_feature, &feature_dims);
+    blob_dims(weights_time, &time_dims);
+    if (meta[0] <= 0 || feature_dims.n <= 0 || feature_dims.n % meta[0] != 0 || feature_dims.h != input_dims.h)
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    output_dims.n = input_dims.n;
+    output_dims.h = feature_dims.n / meta[0];
+    output_dims.w = 1;
+    output_dims.c = 1;
+    bias_dims.n = 1;
+    bias_dims.h = 1;
+    bias_dims.w = 1;
+    bias_dims.c = output_dims.h;
+    {
+        /* Extents the kernel actually reads. */
+        const int32_t input_shape[2] = {input_dims.n, input_dims.h};
+        const int32_t feature_shape[2] = {feature_dims.n, input_dims.h};
+        const int32_t time_shape[2] = {feature_dims.n, time_dims.h};
+        const int32_t state_shape[3] = {input_dims.n, feature_dims.n, time_dims.h};
+        const int32_t output_shape[2] = {input_dims.n, output_dims.h};
+        if (!hct_checked_shape_bytes(input_shape, 2, 1u, input->byte_length, &bytes) ||
+            !hct_checked_shape_bytes(feature_shape, 2, 1u, weights_feature->byte_length, &bytes) ||
+            !hct_checked_shape_bytes(time_shape, 2, state_size, weights_time->byte_length, &bytes) ||
+            !hct_checked_shape_bytes(state_shape, 3, state_size, state->byte_length, &bytes) ||
+            (bias != NULL && !hct_checked_count_bytes(bias_dims.c, sizeof(int32_t), bias->byte_length, &bytes)) ||
+            !hct_checked_shape_bytes(output_shape, 2, 1u, session->output_capacity_bytes, &session->output_length))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+    }
+
+    params.rank = meta[0];
+    params.input_offset = session->input_offset;
+    params.output_offset = session->output_offset;
+    params.input_activation.min = meta[5];
+    params.input_activation.max = meta[6];
+    params.output_activation.min = session->activation_min;
+    params.output_activation.max = session->activation_max;
+    input_quant.multiplier = meta[1];
+    input_quant.shift = meta[2];
+    output_quant.multiplier = meta[3];
+    output_quant.shift = meta[4];
+
+    if (state_s16)
+    {
+        if (!take_scratch(session, &used, arm_svdf_state_s16_s8_input_ctx_get_buffer_size(&input_dims, &feature_dims), &input_ctx) ||
+            !take_scratch(session, &used, arm_svdf_state_s16_s8_output_ctx_get_buffer_size(&params, &input_dims, &feature_dims), &output_ctx))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        return arm_svdf_state_s16_s8(&input_ctx, &output_ctx, &params, &input_quant, &output_quant,
+                                     &input_dims, (const int8_t *)blob_ptr(session, input),
+                                     &state_dims, (int16_t *)blob_ptr(session, state),
+                                     &feature_dims, (const int8_t *)blob_ptr(session, weights_feature),
+                                     &time_dims, (const int16_t *)blob_ptr(session, weights_time),
+                                     &bias_dims, (bias != NULL) ? (const int32_t *)blob_ptr(session, bias) : NULL,
+                                     &output_dims, (int8_t *)hct_output_ptr(session));
+    }
+
+    if (!take_scratch(session, &used, arm_svdf_s8_input_ctx_get_buffer_size(&input_dims, &feature_dims), &input_ctx) ||
+        !take_scratch(session, &used, arm_svdf_s8_output_ctx_get_buffer_size(&params, &input_dims, &feature_dims), &output_ctx) ||
+        !take_scratch(session, &used, arm_svdf_s8_get_buffer_size(&feature_dims), &ctx))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+#if defined(ARM_MATH_MVEI)
+    /* Only MVE kernels read the sum. */
+    if (ctx.buf != NULL)
+    {
+        arm_vector_sum_s8((int32_t *)ctx.buf, input_dims.h, feature_dims.n,
+                          (const int8_t *)blob_ptr(session, weights_feature), -params.input_offset, 0, NULL);
+    }
+#endif
+    return arm_svdf_s8(&ctx, &input_ctx, &output_ctx, &params, &input_quant, &output_quant,
+                       &input_dims, (const int8_t *)blob_ptr(session, input),
+                       &state_dims, (int8_t *)blob_ptr(session, state),
+                       &feature_dims, (const int8_t *)blob_ptr(session, weights_feature),
+                       &time_dims, (const int8_t *)blob_ptr(session, weights_time),
+                       &bias_dims, (bias != NULL) ? (const int32_t *)blob_ptr(session, bias) : NULL,
+                       &output_dims, (int8_t *)hct_output_ptr(session));
+}'''
+
+_RUN_LSTM_ONCE = '''\
+/* meta_0: lstm params, then per-gate quant. */
+static arm_cmsis_nn_status run_lstm_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+    hct_server_blob_t *weights = find_blob_by_role(session, HCT_BLOB_ROLE_WEIGHTS);
+    hct_server_blob_t *bias = find_blob_by_role(session, HCT_BLOB_ROLE_BIAS);
+    cmsis_nn_lstm_gate *gates[4];
+    cmsis_nn_lstm_params params;
+    cmsis_nn_lstm_context buffers;
+    cmsis_nn_context sums;
+    cmsis_nn_context temp1;
+    cmsis_nn_context temp2;
+    cmsis_nn_context cell;
+    const int32_t *meta;
+    const int8_t *weight_data;
+    const int32_t *bias_data;
+    int32_t hidden;
+    int32_t input_size;
+    int32_t gate;
+    uint32_t used = 0u;
+    uint32_t bytes;
+
+    if (input == NULL || weights == NULL || bias == NULL || !meta_ints(session, 31u, &meta))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    params.time_major = meta[0];
+    params.batch_size = meta[1];
+    params.time_steps = meta[2];
+    params.input_size = input_size = meta[3];
+    params.hidden_size = hidden = meta[4];
+    params.input_offset = meta[5];
+    params.forget_to_cell_multiplier = meta[6];
+    params.forget_to_cell_shift = meta[7];
+    params.input_to_cell_multiplier = meta[8];
+    params.input_to_cell_shift = meta[9];
+    params.cell_clip = meta[10];
+    params.cell_scale_power = meta[11];
+    params.output_multiplier = meta[12];
+    params.output_shift = meta[13];
+    params.output_offset = meta[14];
+    {
+        /* Check factors before any 32-bit math. */
+        const int32_t input_shape[3] = {params.batch_size, params.time_steps, input_size};
+        const int32_t output_shape[3] = {params.batch_size, params.time_steps, hidden};
+        const int32_t input_weight_shape[3] = {4, hidden, input_size};
+        const int32_t hidden_weight_shape[3] = {4, hidden, hidden};
+        const int32_t bias_shape[2] = {4, hidden};
+        const int32_t sum_shape[2] = {8, hidden};
+        const int32_t state_shape[2] = {params.batch_size, hidden};
+        const uint32_t scratch_cap = (session->scratch_bytes < (uint32_t)INT32_MAX) ? session->scratch_bytes : (uint32_t)INT32_MAX;
+        uint32_t input_weight_bytes;
+        uint32_t hidden_weight_bytes;
+        uint32_t sum_bytes;
+        uint32_t state_bytes;
+        if (!hct_checked_shape_bytes(input_shape, 3, 1u, input->byte_length, &bytes) ||
+            !hct_checked_shape_bytes(output_shape, 3, 1u, session->output_capacity_bytes, &session->output_length) ||
+            !hct_checked_shape_bytes(input_weight_shape, 3, 1u, weights->byte_length, &input_weight_bytes) ||
+            !hct_checked_shape_bytes(hidden_weight_shape, 3, 1u, weights->byte_length, &hidden_weight_bytes) ||
+            (uint64_t)input_weight_bytes + hidden_weight_bytes > weights->byte_length ||
+            !hct_checked_shape_bytes(bias_shape, 2, sizeof(int32_t), bias->byte_length, &bytes) ||
+            !hct_checked_shape_bytes(sum_shape, 2, sizeof(int32_t), scratch_cap, &sum_bytes) ||
+            !hct_checked_shape_bytes(state_shape, 2, sizeof(int16_t), scratch_cap, &state_bytes) ||
+            !take_scratch(session, &used, (int32_t)sum_bytes, &sums) ||
+            !take_scratch(session, &used, arm_lstm_unidirectional_s8_temp1_get_buffer_size(&params), &temp1) ||
+            !take_scratch(session, &used, arm_lstm_unidirectional_s8_temp2_get_buffer_size(&params), &temp2) ||
+            !take_scratch(session, &used, (int32_t)state_bytes, &cell))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+    }
+
+    /* Blobs hold input, forget, cell, output. */
+    gates[0] = &params.input_gate;
+    gates[1] = &params.forget_gate;
+    gates[2] = &params.cell_gate;
+    gates[3] = &params.output_gate;
+    weight_data = (const int8_t *)blob_ptr(session, weights);
+    bias_data = (const int32_t *)blob_ptr(session, bias);
+    for (gate = 0; gate < 4; ++gate)
+    {
+        const size_t rows = (size_t)gate * (size_t)hidden;
+        const int8_t *input_weights = &weight_data[rows * (size_t)input_size];
+        const int8_t *hidden_weights = &weight_data[(size_t)4 * hidden * input_size + rows * (size_t)hidden];
+        int32_t *input_sum = &((int32_t *)sums.buf)[rows];
+        int32_t *hidden_sum = &((int32_t *)sums.buf)[(size_t)(4 + gate) * hidden];
+        arm_vector_sum_s8(input_sum, input_size, hidden, input_weights, params.input_offset, 0, &bias_data[rows]);
+        arm_vector_sum_s8(hidden_sum, hidden, hidden, hidden_weights, -params.output_offset, 0, NULL);
+        gates[gate]->input_multiplier = meta[15 + 4 * gate];
+        gates[gate]->input_shift = meta[16 + 4 * gate];
+        gates[gate]->input_weights = input_weights;
+        gates[gate]->input_effective_bias = input_sum;
+        gates[gate]->hidden_multiplier = meta[17 + 4 * gate];
+        gates[gate]->hidden_shift = meta[18 + 4 * gate];
+        gates[gate]->hidden_weights = hidden_weights;
+        gates[gate]->hidden_effective_bias = hidden_sum;
+        gates[gate]->bias = &bias_data[rows];
+        gates[gate]->activation_type = (gate == 2) ? ARM_TANH : ARM_SIGMOID;
+    }
+
+    /* Each call starts from zero cell state. */
+    memset(cell.buf, 0, (size_t)cell.size);
+    buffers.temp1 = temp1.buf;
+    buffers.temp2 = temp2.buf;
+    buffers.cell_state = cell.buf;
+    buffers.hidden_state = NULL;
+    return arm_lstm_unidirectional_s8((const int8_t *)blob_ptr(session, input),
+                                      (int8_t *)hct_output_ptr(session),
+                                      &params,
+                                      &buffers);
+}'''
+
 
 # Ordered list -- rendering emits function bodies in this order. Entries with no
 # kernel_ids (`compute_convolve_output_dims`, `place_weight_sums`) are private helpers
@@ -4847,6 +5186,9 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         function_name="run_convolve_once",
         kernel_ids=(
             "HCT_KERNEL_ID_CONVOLVE_S8",
+            "HCT_KERNEL_ID_CONVOLVE_S8_SMALL_CIN",
+            "HCT_KERNEL_ID_CONVOLVE_S8_3X3_C16_S1",
+            "HCT_KERNEL_ID_CONVOLVE_1X1_S8_SHORT_K",
             "HCT_KERNEL_ID_CONVOLVE_S4",
             "HCT_KERNEL_ID_CONVOLVE_S16",
             "HCT_KERNEL_ID_CONVOLVE_F32",
@@ -4865,6 +5207,10 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         function_name="run_depthwise_conv_once",
         kernel_ids=(
             "HCT_KERNEL_ID_DEPTHWISE_CONV_S8",
+            "HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3",
+            "HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3_C64_S1",
+            "HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_PLANAR",
+            "HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_CHANNELWISE",
             "HCT_KERNEL_ID_DEPTHWISE_CONV_S4",
             "HCT_KERNEL_ID_DEPTHWISE_CONV_S16",
             "HCT_KERNEL_ID_DEPTHWISE_CONV_F32",
@@ -5054,6 +5400,7 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         function_name="run_fully_connected_once",
         kernel_ids=(
             "HCT_KERNEL_ID_FULLY_CONNECTED_S8",
+            "HCT_KERNEL_ID_FULLY_CONNECTED_PER_CHANNEL_PACKED_S8",
             "HCT_KERNEL_ID_FULLY_CONNECTED_S4",
             "HCT_KERNEL_ID_FULLY_CONNECTED_S16",
             "HCT_KERNEL_ID_FULLY_CONNECTED_F32",
@@ -5238,6 +5585,30 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         scalar_fields=("output_n", "output_h", "output_w", "output_c", "null_arg_mask"),
         c_body=_RUN_DATA_MOVEMENT_ONCE,
     ),
+    FirmwareAdapterSpec(
+        label="SVDFunctions/SVDF,LSTMFunctions/LSTMUnidirectional (helper)",
+        function_name="take_scratch",
+        kernel_ids=(),
+        guard=None,
+        scalar_fields=(),
+        c_body=_TAKE_SCRATCH,
+    ),
+    FirmwareAdapterSpec(
+        label="SVDFunctions/SVDF",
+        function_name="run_svdf_once",
+        kernel_ids=("HCT_KERNEL_ID_SVDF_S8", "HCT_KERNEL_ID_SVDF_STATE_S16_S8"),
+        guard=None,
+        scalar_fields=("input_offset", "output_offset", "activation_min", "activation_max"),
+        c_body=_RUN_SVDF_ONCE,
+    ),
+    FirmwareAdapterSpec(
+        label="LSTMFunctions/LSTMUnidirectional",
+        function_name="run_lstm_once",
+        kernel_ids=("HCT_KERNEL_ID_LSTM_UNIDIRECTIONAL_S8",),
+        guard=None,
+        scalar_fields=(),
+        c_body=_RUN_LSTM_ONCE,
+    ),
 )
 
 
@@ -5250,6 +5621,37 @@ def generated_test_bridge_scalar_fields(function_name: str) -> tuple[str, ...]:
         if adapter.function_name == function_name:
             return adapter.scalar_fields
     raise KeyError(f"No FirmwareAdapterSpec registered with function_name={function_name!r}")
+
+
+# Weak: older kernels lack these.
+_NEWER_ENTRIES = """\
+/* Entries missing before v7.39.3. */
+arm_cmsis_nn_status arm_convolve_1x1_s8_short_k(const cmsis_nn_context *ctx,
+                                                const cmsis_nn_context *weight_sum_ctx,
+                                                const cmsis_nn_conv_params *conv_params,
+                                                const cmsis_nn_per_channel_quant_params *quant_params,
+                                                const cmsis_nn_dims *input_dims,
+                                                const int8_t *input_data,
+                                                const cmsis_nn_dims *filter_dims,
+                                                const int8_t *filter_data,
+                                                const cmsis_nn_dims *bias_dims,
+                                                const int32_t *bias_data,
+                                                const cmsis_nn_dims *output_dims,
+                                                int8_t *output_data) __attribute__((weak));
+int32_t arm_fully_connected_per_channel_packed_s8_get_packed_size(const cmsis_nn_dims *filter_dims)
+    __attribute__((weak));
+arm_cmsis_nn_status arm_fully_connected_per_channel_packed_s8_pack(const cmsis_nn_dims *filter_dims,
+                                                                   const int8_t *filter_data,
+                                                                   const int32_t *kernel_sum,
+                                                                   const cmsis_nn_per_channel_quant_params *quant_params,
+                                                                   int8_t *packed_data) __attribute__((weak));
+arm_cmsis_nn_status arm_fully_connected_per_channel_packed_s8(const cmsis_nn_fc_params *fc_params,
+                                                              const cmsis_nn_dims *input_dims,
+                                                              const int8_t *input_data,
+                                                              const cmsis_nn_dims *filter_dims,
+                                                              const int8_t *packed_data,
+                                                              const cmsis_nn_dims *output_dims,
+                                                              int8_t *output_data) __attribute__((weak));"""
 
 
 def render_generated_adapters_source() -> str:
@@ -5280,6 +5682,7 @@ def render_generated_adapters_source() -> str:
         "                                   uint32_t capacity,",
         "                                   uint32_t *output_bytes);",
         "static float quant_scale_from_bits(int32_t bits);",
+        _NEWER_ENTRIES,
         "#endif",
     ]
     pieces: list[str] = []
@@ -5325,7 +5728,7 @@ def _render_dispatch() -> list[str]:
 
 
 # Setup calls TFLM runs once in Prepare.
-_SETUP_CALL = re.compile(r"_get_\w*size(?:_mve|_dsp)?$|^arm_(?:depthwise_)?convolve_weight_sum$|^arm_vector_sum_s8(?:_s64)?$")
+_SETUP_CALL = re.compile(r"_get_\w*size(?:_mve|_dsp)?$|_pack$|^arm_(?:depthwise_)?convolve_weight_sum$|^arm_vector_sum_s8(?:_s64)?$")
 _KERNEL_CALL = re.compile(r"\b(arm_[a-z0-9_]+)\s*\(")
 
 

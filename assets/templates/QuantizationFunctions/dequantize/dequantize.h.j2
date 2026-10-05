@@ -9,6 +9,22 @@
 #include "arm_nnfunctions.h"
 #include "arm_nn_types.h"
 
+{% if kernel_style == 'f16_bits' %}
+// Binary16 bit patterns
+static const uint16_t {{ name }}_input[] = {
+{{ input_data_array }}
+};
+
+// Expected float32 bits: every NaN the default NaN (MVE vector conversion)
+static const uint32_t {{ name }}_expected_vector_bits[] = {
+{{ expected_vector_bits_array }}
+};
+
+// Expected float32 bits: every NaN quiet with its sign and payload (scalar conversion)
+static const uint32_t {{ name }}_expected_scalar_bits[] = {
+{{ expected_scalar_bits_array }}
+};
+{% else %}
 // Input data (quantized, for testing)
 static const {{ input_dtype }} {{ name }}_input[] = {
 {{ input_data_array }}
@@ -18,5 +34,6 @@ static const {{ input_dtype }} {{ name }}_input[] = {
 static const {{ output_dtype }} {{ name }}_expected_output[] = {
 {{ expected_output_array }}
 };
+{% endif %}
 
 #endif

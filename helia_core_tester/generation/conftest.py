@@ -14,13 +14,13 @@ from helia_core_tester.core.discovery import find_generated_tests_dir
 def pytest_addoption(parser):
     """Add custom command line options."""
     parser.addoption("--op", action="store", default=None,
-                    help="Filter by operator (e.g., FullyConnected)")
+                    help="Filter by operators, comma-separated (e.g., FullyConnected)")
     parser.addoption("--dtype", action="store", default=None,
-                    help="Filter by activation dtype (S8, S16)")
+                    help="Filter by case dtype: activations, or S4 weights")
     parser.addoption("--wtype", action="store", default=None,
                     help="Filter by weight dtype (S8, S4)")
     parser.addoption("--name", action="store", default=None,
-                    help="Filter by exact test name")
+                    help="Filter by exact test names, comma-separated")
     parser.addoption("--limit", action="store", type=int, default=None,
                     help="Limit number of tests to run")
     parser.addoption("--seed", action="store", type=int, default=None,
@@ -35,6 +35,8 @@ def pytest_addoption(parser):
                     help="Float precision for float suite: f16, f32, or both")
     parser.addoption("--force-generate", action="store_true", default=False,
                     help="Regenerate every case, ignoring reuse stamps")
+    parser.addoption("--keep-unselected", action="store_true", default=False,
+                    help="Keep cases outside the filter instead of pruning")
 
 
 def pytest_configure(config):
@@ -50,8 +52,9 @@ def pytest_configure(config):
 
     # Without --force-generate the tree is the reuse cache: cases still matching
     # their stamp are kept and the run prunes whatever falls outside the active
-    # filter (see generation/reuse.py). Only a forced run starts from empty.
-    if not config.getoption("--force-generate"):
+    # filter (see generation/reuse.py). Only a forced run starts from empty,
+    # unless --keep-unselected keeps other cases.
+    if not config.getoption("--force-generate") or config.getoption("--keep-unselected"):
         generated_tests_dir.mkdir(parents=True, exist_ok=True)
         print("Reusing generated tests directory (stamp-checked per case)")
         return
@@ -97,4 +100,5 @@ def test_filters(request):
         'float_precision': request.config.getoption("--float-precision"),
         'generated_tests_dir': request.config.getoption("--generated-tests-dir"),
         'force_generate': request.config.getoption("--force-generate"),
+        'keep_unselected': request.config.getoption("--keep-unselected"),
     }

@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import yaml
 
+from helia_core_tester.hardware import entry_coverage
+from helia_core_tester.hardware.nsx_app import CMSIS_NN_REF
 from helia_core_tester.hardware.entry_coverage import (
     DEPLOYED_PATH,
     NO_ADAPTER,
@@ -45,6 +47,20 @@ def _case(kernel_id: int, *, rejected: bool = False, samples: int = 1, capabilit
     )
 
 
+def _conv_s8_case() -> SimpleNamespace:
+    """A 1x1 arm_convolve_wrapper_s8 case."""
+    case = _case(_kernel_id("arm_convolve_wrapper_s8"), capabilities=["convolve_s8"])
+    case.case_bundle.manifest.update(
+        target_cpu="cortex-m55",
+        serialized_scalar_parameters={
+            "stride_h": 1, "stride_w": 1, "pad_h": 0, "pad_w": 0, "dilation_h": 1, "dilation_w": 1,
+            "output_h": 4, "output_w": 4, "output_c": 8,
+        },
+        blob_roles=[{"role": "input_0", "dimensions": [1, 4, 4, 8]}, {"role": "weights", "dimensions": [1, 1, 8, 8]}],
+    )
+    return case
+
+
 def _kernel_id(name: str) -> int:
     return next(e.kernel_id for e in load_kernel_registry(PROJECT_ROOT) if e.cmsis_function == name)
 
@@ -60,6 +76,7 @@ def test_built_entry_points_drop_setup_calls(tmp_path: Path) -> None:
 def test_deployed_data_file_is_pinned() -> None:
     data = json.loads((PROJECT_ROOT / DEPLOYED_PATH).read_text(encoding="utf-8"))
     assert re.fullmatch(r"[0-9a-f]{40}", data["source"]["commit"])
+    assert data["source"]["cmsis_nn"] == CMSIS_NN_REF
     names = data["entry_points"]
     assert names == sorted(set(names)) and "arm_svdf_s8" in names
     assert not any(n.endswith("_get_buffer_size") for n in names)
@@ -91,7 +108,7 @@ def test_build_coverage_counts_only_unrejected_timed_kernels() -> None:
 
 def test_build_coverage_reads_the_built_symbols(tmp_path: Path) -> None:
     build_dir = _build_dir(tmp_path)
-    coverage = build_coverage(PROJECT_ROOT, [_case(_kernel_id("arm_convolve_wrapper_s8"), capabilities=["convolve_s8"])], build_dir=build_dir)
+    coverage = build_coverage(PROJECT_ROOT, [_conv_s8_case()], build_dir=build_dir)
     assert coverage["public"]["timed"] == 1 and coverage["public"]["total"] == 2
     assert coverage_line(coverage).endswith(", 1/2 public")
     assert coverage_totals(coverage)["public_entry_points_total"] == 2
@@ -120,17 +137,18 @@ def _write_case(root: Path, family: str, name: str) -> None:
 
 
 def test_unbridged_families_are_skipped_not_dropped(tmp_path: Path) -> None:
-    _write_case(tmp_path, "LSTMFunctions", "lstm_one_s8")
-    _write_case(tmp_path, "SVDFunctions", "svdf_one_s8")
+    # Every real family bridges; use stand-ins.
+    _write_case(tmp_path, "AlphaFunctions", "alpha_one_s8")
+    _write_case(tmp_path, "BetaFunctions", "beta_one_s8")
     bundles, skipped = build_generated_test_case_bundles(tmp_path, family=None, board_id="b1")
 
     assert bundles == []
     assert [(t.name, t.board, r) for t, r in skipped] == [
-        ("lstm_one_s8", "b1", f"{NO_ADAPTER}: LSTMFunctions has no firmware adapter"),
-        ("svdf_one_s8", "b1", f"{NO_ADAPTER}: SVDFunctions has no firmware adapter"),
+        ("alpha_one_s8", "b1", f"{NO_ADAPTER}: AlphaFunctions has no firmware adapter"),
+        ("beta_one_s8", "b1", f"{NO_ADAPTER}: BetaFunctions has no firmware adapter"),
     ]
-    explicit = build_generated_test_case_bundles(tmp_path, family="LSTMFunctions")[1]
-    assert [r for _, r in explicit] == [f"{NO_ADAPTER}: LSTMFunctions has no firmware adapter"]
+    explicit = build_generated_test_case_bundles(tmp_path, family="AlphaFunctions")[1]
+    assert [r for _, r in explicit] == [f"{NO_ADAPTER}: AlphaFunctions has no firmware adapter"]
 
 
 def test_adapter_gaps_keep_the_fvp_hint() -> None:
@@ -151,3 +169,11 @@ def test_derive_refuses_missing_headers(tmp_path: Path) -> None:
     spec.loader.exec_module(module)
     with pytest.raises(SystemExit, match="No public headers"):
         module.public_entry_points(tmp_path)
+
+
+def test_build_coverage_counts_a_wrapper_route(monkeypatch) -> None:
+    monkeypatch.setattr(entry_coverage, "build_gate", lambda build_dir: True)
+    coverage = build_coverage(PROJECT_ROOT, [_conv_s8_case()], build_dir=None)
+    assert coverage["timed_entry_points"] == ["arm_convolve_1x1_s8_fast", "arm_convolve_wrapper_s8"]
+    # arm_convolve_1x1_s8_fast is itself deployed.
+    assert coverage["deployed_entry_points_timed"] == 2

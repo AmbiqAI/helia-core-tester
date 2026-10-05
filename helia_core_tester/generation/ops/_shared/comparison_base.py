@@ -22,6 +22,33 @@ _DTYPE_INFO = {
 }
 
 
+def _near_step(params: Dict[str, int]) -> int:
+    """Smallest input gap the rescale keeps."""
+    gains = [
+        params[f"input_{i}_mult"] * 2.0 ** (params[f"input_{i}_shift"] + params["left_shift"] - 31)
+        for i in (1, 2)
+    ]
+    return max(1, int(np.ceil(1.0 / min(gains))))
+
+
+def _pin_near(rng, source, target, output_shape, qmin, qmax, gap) -> None:
+    """Tie or nudge target to source."""
+    src_ids = np.broadcast_to(np.arange(source.size).reshape(source.shape), output_shape).reshape(-1)
+    dst_ids = np.broadcast_to(np.arange(target.size).reshape(target.shape), output_shape).reshape(-1)
+    # One output per target element.
+    order = np.argsort(dst_ids, kind="stable")
+    counts = np.bincount(dst_ids, minlength=target.size)
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    picks = order[starts + np.arange(target.size) % counts]
+    src = source.reshape(-1)[src_ids[picks]]
+    flat = target.reshape(-1)
+    flat[::3] = src[::3]
+    step = gap * rng.choice([-1, 1], size=flat[1::3].size)
+    near = src[1::3] + step
+    # Step inward at the dtype bounds.
+    flat[1::3] = np.where((near < qmin) | (near > qmax), src[1::3] - step, near)
+
+
 class ComparisonFamilyBase(OperationBase):
     """Shared implementation for the generic CMSIS-NN comparison API."""
 
@@ -64,24 +91,20 @@ class ComparisonFamilyBase(OperationBase):
         (scale_1, zp_1), (scale_2, zp_2) = (scalar_scale_zp(t["quantization"]) for t in inputs[:2])
         return comparison_quant_params(scale_1, zp_1, scale_2, zp_2)
 
-    def _sample_operands(self, rng, shape_1, shape_2, output_shape, qmin, qmax, np_dtype):
+    def _sample_operands(self, rng, shape_1, shape_2, output_shape, qmin, qmax, np_dtype, gap):
         """Draw spread operands with forced ties."""
-        # Few levels so equal pairs occur.
-        levels = np.round(np.linspace(qmin, qmax, 7)).astype(np.int32)
-        input_1 = rng.choice(levels, size=shape_1)
-        input_2 = rng.choice(levels, size=shape_2)
+        input_1 = rng.integers(qmin, qmax + 1, size=shape_1, dtype=np.int32)
+        input_2 = rng.integers(qmin, qmax + 1, size=shape_2, dtype=np.int32)
         # A scalar at the median splits outputs.
         if input_1.size == 1:
             input_1[...] = np.median(input_2)
         elif input_2.size == 1:
             input_2[...] = np.median(input_1)
-        # Tie every third output element.
-        if tuple(shape_2) == tuple(output_shape):
-            tied = np.broadcast_to(input_1, output_shape).reshape(-1)
-            input_2.reshape(-1)[::3] = tied[::3]
-        elif tuple(shape_1) == tuple(output_shape):
-            tied = np.broadcast_to(input_2, output_shape).reshape(-1)
-            input_1.reshape(-1)[::3] = tied[::3]
+        # Per three outputs: tie, near, free.
+        if input_2.size >= input_1.size:
+            _pin_near(rng, input_1, input_2, output_shape, qmin, qmax, gap)
+        else:
+            _pin_near(rng, input_2, input_1, output_shape, qmin, qmax, gap)
         return input_1.astype(np_dtype), input_2.astype(np_dtype)
 
     def generate_c_files(self, output_dir) -> None:
@@ -119,7 +142,7 @@ class ComparisonFamilyBase(OperationBase):
         # Redraw until the output mixes.
         for _ in range(16):
             input_1_q, input_2_q = self._sample_operands(
-                rng, input_shape_1, input_shape_2, output_shape, qmin, qmax, np_in_dtype
+                rng, input_shape_1, input_shape_2, output_shape, qmin, qmax, np_in_dtype, _near_step(params)
             )
             expected = simulate_compare(input_1_q, input_2_q, operation=op_enum, **params)
             if np.unique(expected).size > 1:
