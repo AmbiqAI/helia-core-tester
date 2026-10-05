@@ -1,3 +1,7 @@
+# FP16 comparisons: a case without a comparison uses the FP16 default (atol = rtol = 1e-3). A stated
+# comparison is the smallest of 0.002/0.003/0.004/0.005/0.01 that keeps the worst error over the
+# data seeds 500 and 1-8 within 0.8 of the tolerance on every cortex-m55 FP16 leg of ns-cmsis-nn's
+# CI (shipped flags, MVE float coverage, fallback coverage).
 operator: Convolve
 name: convolve_float_default_f32
 suite: float
@@ -295,15 +299,6 @@ strides:
 - 1
 padding: VALID
 use_bias: true
-# Measured floor (issue #54 first real comparisons): patch-GEMM f16
-# accumulation reassociation reaches 1.06-1.11x the FP16 default on this case
-# (worst diff 1.95e-3 at |exp|=1.01). 2e-3/2e-3 gives ~1.7x margin over the
-# measured floor. The f32 twin keeps defaults and carries the fleet's
-# scaling-mutation sensitivity (caught at 29x there).
-comparison:
-  atol: 0.002
-  rtol: 0.002
-
 ---
 operator: Convolve
 name: convolve_float_1xn_generic_k4_valid_f32
@@ -368,6 +363,7 @@ filter_shape: [1, 4, 3, 5]
 strides: [1, 1]
 padding: VALID
 use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_1xn_generic_k4_same_stride2_f16
@@ -474,6 +470,7 @@ use_bias: true
 hint:
   kernel_variant: direct_1x1
   weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_1xn_direct_k4_valid_f32
@@ -510,6 +507,7 @@ padding: VALID
 use_bias: true
 hint:
   kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_1d_k3_packed_f32
@@ -636,6 +634,7 @@ padding: VALID
 use_bias: true
 hint:
   kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_1xn_direct_k5_valid_tail_f16
@@ -708,6 +707,7 @@ padding: VALID
 use_bias: true
 hint:
   kernel_variant: direct_1x1
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_1d_k3_packed_f16
@@ -726,6 +726,7 @@ padding: VALID
 use_bias: true
 hint:
   weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_1d_k5_packed_f32
@@ -762,6 +763,7 @@ padding: VALID
 use_bias: true
 hint:
   weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_1x1_patch_gemm_packed_no_bias_f32
@@ -800,6 +802,7 @@ use_bias: false
 hint:
   kernel_variant: direct_1x1
   weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_1xn_direct_k4_valid_no_bias_f32
@@ -1387,11 +1390,6 @@ filter_shape: [3, 3, 3, 5]
 strides: [1, 1]
 padding: SAME
 use_bias: true
-# Measured floor 1.06x the FP16 default on the m55 f16 fallback leg (scalar fp16 accumulation);
-# the MVE direct kernel accumulates in fp32 and stays below 0.5x. 2e-3/2e-3 gives ~1.9x margin.
-comparison:
-  atol: 0.002
-  rtol: 0.002
 ---
 operator: Convolve
 name: convolve_float_small_c5_k3_same_f16
@@ -1408,11 +1406,6 @@ filter_shape: [3, 3, 5, 8]
 strides: [1, 1]
 padding: SAME
 use_bias: true
-# Measured floor 1.49x the FP16 default on the m55 f16 fallback leg (scalar fp16 accumulation over
-# 45 terms); the MVE direct kernel stays below 0.5x. 3e-3/3e-3 gives ~2x margin.
-comparison:
-  atol: 0.003
-  rtol: 0.003
 ---
 operator: Convolve
 name: convolve_float_small_c7_k3_same_stride2_f16
@@ -1429,11 +1422,6 @@ filter_shape: [3, 3, 7, 5]
 strides: [2, 2]
 padding: SAME
 use_bias: false
-# Measured floor 1.37x the FP16 default on the m55 f16 fallback leg (63-term scalar fp16
-# accumulation); 3e-3/3e-3 gives ~2.2x margin.
-comparison:
-  atol: 0.003
-  rtol: 0.003
 ---
 operator: Convolve
 name: convolve_float_generic_oc3_valid_f16
@@ -1450,12 +1438,7 @@ filter_shape: [3, 3, 8, 3]
 strides: [1, 1]
 padding: VALID
 use_bias: true
-# Measured on the FVP: the m55 f16 fallback leg (ARM_MATH_AUTOVECTORIZE, scalar fp16 accumulation
-# over the 72-term patch) reaches 1.79x the FP16 default; the MVE build stays at 0.60x. 4e-3/4e-3
-# gives ~2.2x margin over the fallback floor.
-comparison:
-  atol: 0.004
-  rtol: 0.004
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_generic_oc3_valid_packed_f16
@@ -1474,9 +1457,6 @@ padding: VALID
 use_bias: true
 hint:
   weight_format: NT_N_PACKED
-# Measured on the FVP at the shipped flags: the NT_N_PACKED generic loop accumulates the 72-term
-# patch in fp16 lanes and reaches 1.54x the FP16 default (worst diff 3.9e-3 at |exp|=1.53).
-# 3e-3/3e-3 gives ~1.9x margin over the measured floor.
 comparison:
   atol: 0.003
   rtol: 0.003
@@ -1498,8 +1478,6 @@ padding: VALID
 use_bias: false
 hint:
   weight_format: NT_N_PACKED
-# Measured floor 1.09x the FP16 default (fp16 lane accumulation over 72 terms); 2e-3/2e-3 gives
-# ~1.8x margin.
 comparison:
   atol: 0.002
   rtol: 0.002
@@ -1521,8 +1499,6 @@ padding: VALID
 use_bias: true
 hint:
   weight_format: NT_N_PACKED
-# Measured floor 1.47x the FP16 default (packed-patch GEMM, 72-term fp16 accumulation);
-# 3e-3/3e-3 gives ~2x margin. Same reasoning as convolve_float_patch_gemm_f16 above.
 comparison:
   atol: 0.003
   rtol: 0.003
@@ -1578,11 +1554,7 @@ filter_shape: [3, 3, 8, 3]
 strides: [1, 1]
 padding: SAME
 use_bias: true
-# Measured floor 1.79x the FP16 default on the m55 f16 fallback leg (scalar fp16 accumulation over
-# 72 terms), 0.81x with MVE. 4e-3/4e-3 gives ~2.2x margin, as for the VALID twin.
-comparison:
-  atol: 0.004
-  rtol: 0.004
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_generic_oc3_same_packed_f16
@@ -1601,11 +1573,7 @@ padding: SAME
 use_bias: false
 hint:
   weight_format: NT_N_PACKED
-# Measured floor 2.14x the FP16 default on the m55 f16 fallback leg and 1.67x with the MVE packed
-# loop (72-term fp16 accumulation). 5e-3/5e-3 gives ~2.3x margin over the fallback floor.
-comparison:
-  atol: 0.005
-  rtol: 0.005
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 # Non-finite cover for the float convolution kernels. arm_convolve_f32 and
 # arm_convolve_f16 (Include/arm_nnfunctions_flt.h:213 and :1430, the f16 entry a
@@ -1861,7 +1829,6 @@ filter_shape: [3, 3, 5, 8]
 strides: [1, 1]
 padding: VALID
 use_bias: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_entry_nhwc_8x8_k3x3_f16
@@ -1875,7 +1842,6 @@ filter_shape: [3, 3, 5, 8]
 strides: [1, 1]
 padding: VALID
 use_bias: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_entry_nhwc_acc16_8x8_k3x3_f16
@@ -1889,7 +1855,6 @@ filter_shape: [3, 3, 5, 8]
 strides: [1, 1]
 padding: VALID
 use_bias: true
-comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_entry_wrapper_acc16_6x6_k3x3_f16
@@ -1916,6 +1881,7 @@ filter_shape: [1, 1, 16, 8]
 strides: [2, 2]
 padding: VALID
 use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_entry_1x1_nhwc_8x8_c16_f16
@@ -1929,6 +1895,7 @@ filter_shape: [1, 1, 16, 8]
 strides: [2, 2]
 padding: VALID
 use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_entry_1x1_nhwc_acc16_8x8_c16_f16
@@ -1942,6 +1909,7 @@ filter_shape: [1, 1, 16, 8]
 strides: [2, 2]
 padding: VALID
 use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_entry_1xn_acc16_k5_oc4_f16
@@ -1955,6 +1923,7 @@ filter_shape: [1, 5, 4, 4]
 strides: [1, 1]
 padding: VALID
 use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_entry_1xn_nhwc_k5_oc4_f16
@@ -1968,6 +1937,7 @@ filter_shape: [1, 5, 4, 4]
 strides: [1, 1]
 padding: VALID
 use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_entry_1xn_nhwc_acc16_k5_oc4_f16
@@ -1981,11 +1951,10 @@ filter_shape: [1, 5, 4, 4]
 strides: [1, 1]
 padding: VALID
 use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 # Long reductions: more than 32 taps per float16 lane, so the kernels fold each block of 32 into
-# float32 (1xN, conv1d k3/k5, the direct loop, and the _acc16 entries on the same shapes). An override
-# is about twice the case's measured maximum error on cortex-m55, which folding keeps at or below
-# the unfolded kernels' error.
+# float32 (1xN, conv1d k3/k5, the direct loop, and the _acc16 entries on the same shapes).
 operator: Convolve
 name: convolve_float_direct_fold_c20_k5_oc5_f16
 suite: float
@@ -1997,6 +1966,7 @@ filter_shape: [5, 5, 20, 5]
 strides: [1, 1]
 padding: SAME
 use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
 ---
 operator: Convolve
 name: convolve_float_direct_fold_c20_k5_oc5_packed_f16
@@ -2011,7 +1981,7 @@ padding: SAME
 use_bias: true
 hint:
   weight_format: NT_N_PACKED
-comparison: {atol: 0.004, rtol: 0.004}
+comparison: {atol: 0.003, rtol: 0.003}
 ---
 operator: Convolve
 name: convolve_float_1xn_fold_k4_c12_oc3_f16
@@ -2024,6 +1994,7 @@ filter_shape: [1, 4, 12, 3]
 strides: [1, 1]
 padding: VALID
 use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_1xn_fold_k4_c72_oc31_f16
@@ -2036,7 +2007,7 @@ filter_shape: [1, 4, 72, 31]
 strides: [1, 1]
 padding: VALID
 use_bias: true
-comparison: {atol: 0.004, rtol: 0.004}
+comparison: {atol: 0.003, rtol: 0.003}
 ---
 operator: Convolve
 name: convolve_float_1xn_fold_k4_c20_oc13_packed_f16
@@ -2051,7 +2022,7 @@ padding: VALID
 use_bias: true
 hint:
   weight_format: NT_N_PACKED
-comparison: {atol: 0.003, rtol: 0.003}
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_1d_k3_fold_c88_oc7_f16
@@ -2079,6 +2050,7 @@ padding: VALID
 use_bias: true
 hint:
   weight_format: NT_N_PACKED
+comparison: {atol: 0.003, rtol: 0.003}
 ---
 operator: Convolve
 name: convolve_float_1d_k5_fold_c16_oc23_f16
@@ -2162,7 +2134,7 @@ filter_shape: [1, 5, 16, 16]
 strides: [1, 1]
 padding: VALID
 use_bias: true
-comparison: {atol: 0.003, rtol: 0.003}
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_entry_acc16_1d_k5_c4_oc13_packed_f16
@@ -2178,6 +2150,7 @@ padding: VALID
 use_bias: true
 hint:
   weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
 ---
 operator: Convolve
 name: convolve_float_1d_k5_fold_c56_oc7_f16
@@ -2190,6 +2163,7 @@ filter_shape: [1, 5, 56, 7]
 strides: [1, 1]
 padding: VALID
 use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
 ---
 operator: Convolve
 name: convolve_fault_entry_acc16_invalid_layout_f16
@@ -2235,3 +2209,2085 @@ padding: VALID
 use_bias: true
 fault: invalid_layout
 expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# Strided 1xN FP16 kernel: shapes outside the in-place contiguous-K route, which takes
+# Cout >= 4 && ((Cout % 8 >= 4 && K >= 80) || K >= 224) with K = kernel_w * Cin, so the
+# no-padding rows keep running the strided dual/8/4-row blocks, the fold and the remainder dot.
+# Width kernel_w + 15: VALID gives 16 output columns, SAME 16 no-padding rows.
+# Their error is the strided kernel's own blockwise FP16 precision (float16 lane partials folded
+# into float32 every 32 taps; _acc16 stays in float16), identical on ns-cmsis-nn 5f3fed9f and #663.
+# K = 280 with Cout 3 is the only shape past one 256-element fold span, so it alone runs the dot
+# fold's multi-block loop; Cout < 4 never takes the in-place route.
+operator: Convolve
+name: convolve_float_1xn_strided_c14_k7_oc16_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 14]
+filter_shape: [1, 7, 14, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c14_k7_oc16_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 14]
+filter_shape: [1, 7, 14, 16]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c14_k7_oc16_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 14]
+filter_shape: [1, 7, 14, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.004, rtol: 0.004}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c14_k7_oc16_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 14]
+filter_shape: [1, 7, 14, 16]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.004, rtol: 0.004}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c24_k9_oc24_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 24]
+filter_shape: [1, 9, 24, 24]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c24_k9_oc24_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 24]
+filter_shape: [1, 9, 24, 24]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c24_k9_oc24_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 24]
+filter_shape: [1, 9, 24, 24]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.01, rtol: 0.01}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c24_k9_oc24_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 24]
+filter_shape: [1, 9, 24, 24]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.01, rtol: 0.01}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c16_k7_oc8_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 16]
+filter_shape: [1, 7, 16, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c16_k7_oc8_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 16]
+filter_shape: [1, 7, 16, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c16_k7_oc8_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 16]
+filter_shape: [1, 7, 16, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.004, rtol: 0.004}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c16_k7_oc8_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 16]
+filter_shape: [1, 7, 16, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.004, rtol: 0.004}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c8_k9_oc12_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 8]
+filter_shape: [1, 9, 8, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c8_k9_oc12_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 8]
+filter_shape: [1, 9, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c8_k9_oc12_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 8]
+filter_shape: [1, 9, 8, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c8_k9_oc12_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 24, 8]
+filter_shape: [1, 9, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c8_k7_oc5_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c8_k7_oc5_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 5]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c8_k7_oc5_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c8_k7_oc5_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 5]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c8_k7_oc7_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 7]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c8_k7_oc7_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 7]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c8_k7_oc7_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 7]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c8_k7_oc7_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 8]
+filter_shape: [1, 7, 8, 7]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c10_k7_oc21_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 10]
+filter_shape: [1, 7, 10, 21]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c10_k7_oc21_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 10]
+filter_shape: [1, 7, 10, 21]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c10_k7_oc21_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 10]
+filter_shape: [1, 7, 10, 21]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.004, rtol: 0.004}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c10_k7_oc21_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 10]
+filter_shape: [1, 7, 10, 21]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.004, rtol: 0.004}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c32_k7_oc3_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 3]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c32_k7_oc3_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c32_k7_oc3_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 3]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c32_k7_oc3_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c32_k7_oc1_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c32_k7_oc1_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c32_k7_oc1_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 1]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c32_k7_oc1_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 32]
+filter_shape: [1, 7, 32, 1]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c4_k7_oc16_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 4]
+filter_shape: [1, 7, 4, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c4_k7_oc16_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 4]
+filter_shape: [1, 7, 4, 16]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c4_k7_oc16_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 4]
+filter_shape: [1, 7, 4, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c4_k7_oc16_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 4]
+filter_shape: [1, 7, 4, 16]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c40_k7_oc3_same_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 40]
+filter_shape: [1, 7, 40, 3]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_1xn_strided_c40_k7_oc3_valid_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 40]
+filter_shape: [1, 7, 40, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  kernel_variant: direct_1_x_n
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c40_k7_oc3_same_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 40]
+filter_shape: [1, 7, 40, 3]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_entry_1xn_acc16_strided_c40_k7_oc3_valid_f16
+entry: arm_convolve_1_x_n_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 22, 40]
+filter_shape: [1, 7, 40, 3]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.003, rtol: 0.003}
+---
+# Per-route float entries (ns-cmsis-nn#674): one case per entry inside its route's gate, one per
+# format-specific entry with the other weight format (NO_IMPL), and per route a shape outside the
+# gate where the route has one (NO_IMPL; 1x1 and 1xN return ARG_ERROR). Patch-GEMM and direct have
+# no shape gate. small_c runs only on the MVE
+# float leg and declines elsewhere. The _acc16 cases reduce at most 40 taps, so they cannot tell
+# float16 lanes from the blockwise fold: an _acc16 entry running its plain kernel passes them.
+operator: Convolve
+name: convolve_float_route_1x1_ohwi_f32
+entry: arm_convolve_1x1_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 4, 4, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_1x1_packed_f32
+entry: arm_convolve_1x1_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 4, 4, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_ohwi_f32
+entry: arm_convolve_1_x_n_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 10, 6]
+filter_shape: [1, 4, 6, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_packed_f32
+entry: arm_convolve_1_x_n_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 10, 6]
+filter_shape: [1, 4, 6, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_ohwi_f32
+entry: arm_convolve_1d_k5_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_packed_f32
+entry: arm_convolve_1d_k5_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_ohwi_f32
+entry: arm_convolve_1d_k3_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_packed_f32
+entry: arm_convolve_1d_k3_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+---
+operator: Convolve
+name: convolve_float_route_patch_gemm_ohwi_f32
+entry: arm_convolve_patch_gemm_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_patch_gemm_packed_f32
+entry: arm_convolve_patch_gemm_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+---
+operator: Convolve
+name: convolve_float_route_direct_ohwi_f32
+entry: arm_convolve_direct_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_direct_packed_f32
+entry: arm_convolve_direct_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+---
+operator: Convolve
+name: convolve_float_route_small_c_ohwi_f32
+entry: arm_convolve_small_c_nhwc_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 6, 6, 3]
+filter_shape: [3, 3, 3, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+autovectorize_declines: true
+---
+operator: Convolve
+name: convolve_float_route_small_c_packed_f32
+entry: arm_convolve_small_c_nhwc_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 6, 6, 3]
+filter_shape: [3, 3, 3, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+autovectorize_declines: true
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_declines_k3_f32
+entry: arm_convolve_1d_k5_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_small_c_declines_c4_f32
+entry: arm_convolve_small_c_nhwc_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1x1_rejects_3x3_f32
+entry: arm_convolve_1x1_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_rejects_3x3_f32
+entry: arm_convolve_1_x_n_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1x1_ohwi_f16
+entry: arm_convolve_1x1_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 4, 4, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_1x1_ohwi_acc16_f16
+entry: arm_convolve_1x1_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 4, 4, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_1x1_packed_f16
+entry: arm_convolve_1x1_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 4, 4, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_1x1_packed_acc16_f16
+entry: arm_convolve_1x1_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 4, 4, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_ohwi_f16
+entry: arm_convolve_1_x_n_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 10, 6]
+filter_shape: [1, 4, 6, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_ohwi_acc16_f16
+entry: arm_convolve_1_x_n_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 10, 6]
+filter_shape: [1, 4, 6, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_packed_f16
+entry: arm_convolve_1_x_n_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 10, 6]
+filter_shape: [1, 4, 6, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_packed_acc16_f16
+entry: arm_convolve_1_x_n_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 10, 6]
+filter_shape: [1, 4, 6, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_ohwi_f16
+entry: arm_convolve_1d_k5_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_ohwi_acc16_f16
+entry: arm_convolve_1d_k5_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_packed_f16
+entry: arm_convolve_1d_k5_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_packed_acc16_f16
+entry: arm_convolve_1d_k5_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_ohwi_f16
+entry: arm_convolve_1d_k3_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_ohwi_acc16_f16
+entry: arm_convolve_1d_k3_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_packed_f16
+entry: arm_convolve_1d_k3_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_packed_acc16_f16
+entry: arm_convolve_1d_k3_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_patch_gemm_ohwi_f16
+entry: arm_convolve_patch_gemm_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_patch_gemm_ohwi_acc16_f16
+entry: arm_convolve_patch_gemm_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_patch_gemm_packed_f16
+entry: arm_convolve_patch_gemm_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_patch_gemm_packed_acc16_f16
+entry: arm_convolve_patch_gemm_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_direct_ohwi_f16
+entry: arm_convolve_direct_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_direct_ohwi_acc16_f16
+entry: arm_convolve_direct_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_direct_packed_f16
+entry: arm_convolve_direct_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_route_direct_packed_acc16_f16
+entry: arm_convolve_direct_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+comparison: {atol: 0.003, rtol: 0.003}
+---
+operator: Convolve
+name: convolve_float_route_small_c_ohwi_f16
+entry: arm_convolve_small_c_nhwc_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 3]
+filter_shape: [3, 3, 3, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+autovectorize_declines: true
+---
+operator: Convolve
+name: convolve_float_route_small_c_packed_f16
+entry: arm_convolve_small_c_nhwc_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 3]
+filter_shape: [3, 3, 3, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+autovectorize_declines: true
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_declines_k3_f16
+entry: arm_convolve_1d_k5_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_small_c_declines_c8_f16
+entry: arm_convolve_small_c_nhwc_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 8]
+filter_shape: [3, 3, 8, 8]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1x1_rejects_3x3_f16
+entry: arm_convolve_1x1_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_rejects_3x3_f16
+entry: arm_convolve_1_x_n_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+# Stride 2 takes the 1x1 patch-GEMM path (scratch from the 1x1 query); 224 taps with 4 output
+# channels take the 1xN in-place rows on MVE builds.
+operator: Convolve
+name: convolve_float_route_1x1_ohwi_stride2_f16
+entry: arm_convolve_1x1_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 8, 8, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [2, 2]
+padding: VALID
+use_bias: true
+comparison: {atol: 0.002, rtol: 0.002}
+---
+operator: Convolve
+name: convolve_float_route_1x1_ohwi_stride2_f32
+entry: arm_convolve_1x1_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 8, 8, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [2, 2]
+padding: VALID
+use_bias: true
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_ohwi_k224_f32
+entry: arm_convolve_1_x_n_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 16, 32]
+filter_shape: [1, 7, 32, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+---
+# Each format-specific entry declines the other weight format.
+operator: Convolve
+name: convolve_float_route_1x1_ohwi_declines_packed_f32
+entry: arm_convolve_1x1_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 4, 4, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1x1_packed_declines_ohwi_f32
+entry: arm_convolve_1x1_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 4, 4, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_ohwi_declines_packed_f32
+entry: arm_convolve_1_x_n_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 10, 6]
+filter_shape: [1, 4, 6, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_packed_declines_ohwi_f32
+entry: arm_convolve_1_x_n_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 10, 6]
+filter_shape: [1, 4, 6, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_ohwi_declines_packed_f32
+entry: arm_convolve_1d_k5_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_packed_declines_ohwi_f32
+entry: arm_convolve_1d_k5_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_ohwi_declines_packed_f32
+entry: arm_convolve_1d_k3_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_packed_declines_ohwi_f32
+entry: arm_convolve_1d_k3_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_patch_gemm_ohwi_declines_packed_f32
+entry: arm_convolve_patch_gemm_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_patch_gemm_packed_declines_ohwi_f32
+entry: arm_convolve_patch_gemm_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_direct_ohwi_declines_packed_f32
+entry: arm_convolve_direct_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_direct_packed_declines_ohwi_f32
+entry: arm_convolve_direct_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1x1_ohwi_declines_packed_f16
+entry: arm_convolve_1x1_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 4, 4, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1x1_packed_declines_ohwi_f16
+entry: arm_convolve_1x1_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 4, 4, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_ohwi_declines_packed_f16
+entry: arm_convolve_1_x_n_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 10, 6]
+filter_shape: [1, 4, 6, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_packed_declines_ohwi_f16
+entry: arm_convolve_1_x_n_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 10, 6]
+filter_shape: [1, 4, 6, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_ohwi_declines_packed_f16
+entry: arm_convolve_1d_k5_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_packed_declines_ohwi_f16
+entry: arm_convolve_1d_k5_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_ohwi_declines_packed_f16
+entry: arm_convolve_1d_k3_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_packed_declines_ohwi_f16
+entry: arm_convolve_1d_k3_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_patch_gemm_ohwi_declines_packed_f16
+entry: arm_convolve_patch_gemm_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_patch_gemm_packed_declines_ohwi_f16
+entry: arm_convolve_patch_gemm_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_direct_ohwi_declines_packed_f16
+entry: arm_convolve_direct_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_direct_packed_declines_ohwi_f16
+entry: arm_convolve_direct_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+# The _acc16 entries decline the other weight format too, and every 1d entry declines the other
+# kernel width.
+operator: Convolve
+name: convolve_float_route_1x1_ohwi_acc16_declines_packed_f16
+entry: arm_convolve_1x1_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 4, 4, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1x1_packed_acc16_declines_ohwi_f16
+entry: arm_convolve_1x1_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 4, 4, 16]
+filter_shape: [1, 1, 16, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_ohwi_acc16_declines_packed_f16
+entry: arm_convolve_1_x_n_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 10, 6]
+filter_shape: [1, 4, 6, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1_x_n_packed_acc16_declines_ohwi_f16
+entry: arm_convolve_1_x_n_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 10, 6]
+filter_shape: [1, 4, 6, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_ohwi_acc16_declines_packed_f16
+entry: arm_convolve_1d_k5_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_packed_acc16_declines_ohwi_f16
+entry: arm_convolve_1d_k5_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_ohwi_acc16_declines_packed_f16
+entry: arm_convolve_1d_k3_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_packed_acc16_declines_ohwi_f16
+entry: arm_convolve_1d_k3_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_patch_gemm_ohwi_acc16_declines_packed_f16
+entry: arm_convolve_patch_gemm_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_patch_gemm_packed_acc16_declines_ohwi_f16
+entry: arm_convolve_patch_gemm_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 12]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_direct_ohwi_acc16_declines_packed_f16
+entry: arm_convolve_direct_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_direct_packed_acc16_declines_ohwi_f16
+entry: arm_convolve_direct_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 6, 6, 4]
+filter_shape: [3, 3, 4, 5]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_ohwi_declines_k5_f32
+entry: arm_convolve_1d_k3_nhwc_ohwi_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_packed_declines_k5_f32
+entry: arm_convolve_1d_k3_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_packed_declines_k3_f32
+entry: arm_convolve_1d_k5_nhwc_packed_f32
+suite: float
+activation_dtype: FP32
+weight_dtype: FP32
+tensor_dtypes: {input: FP32, output: FP32, weights: FP32, bias: FP32}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_ohwi_declines_k5_f16
+entry: arm_convolve_1d_k3_nhwc_ohwi_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_packed_declines_k5_f16
+entry: arm_convolve_1d_k3_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_packed_declines_k3_f16
+entry: arm_convolve_1d_k5_nhwc_packed_f16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_ohwi_acc16_declines_k5_f16
+entry: arm_convolve_1d_k3_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k3_packed_acc16_declines_k5_f16
+entry: arm_convolve_1d_k3_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 5, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_ohwi_acc16_declines_k3_f16
+entry: arm_convolve_1d_k5_nhwc_ohwi_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+operator: Convolve
+name: convolve_float_route_1d_k5_packed_acc16_declines_k3_f16
+entry: arm_convolve_1d_k5_nhwc_packed_f16_acc16
+suite: float
+activation_dtype: FP16
+weight_dtype: FP16
+tensor_dtypes: {input: FP16, output: FP16, weights: FP16, bias: FP16}
+input_shape: [1, 1, 12, 8]
+filter_shape: [1, 3, 8, 12]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+hint:
+  weight_format: NT_N_PACKED
+expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
