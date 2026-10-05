@@ -17,6 +17,7 @@ story and is deferred with the FVP leg.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -47,6 +48,9 @@ KERNEL_SOURCE_DIRS = (
 
 # Float kernels are not part of the host build (see module docstring).
 _EXCLUDED_NAME_PARTS = ("f16", "fp16", "f32", "_flt")
+
+# Host DSP kernels need the DSP size.
+_MVE_SIZER = re.compile(r"\b(arm_\w+_get_buffer_size)_mve\b")
 
 
 class HostBuildError(RuntimeError):
@@ -108,6 +112,13 @@ def _base_cflags(tree_root: Path) -> List[str]:
         "-I",
         str(tree_root / "Include"),
     ]
+
+
+def host_sizer_defines(sources: Iterable[Path]) -> List[str]:
+    """Map MVE sizers to the host build's."""
+    names = {m for src in sources for m in _MVE_SIZER.findall(src.read_text())}
+    # Plain sizers dispatch on ARM_MATH_* macros.
+    return [f"-D{name}_mve={name}" for name in sorted(names)]
 
 
 def build_kernel_lib(tree_root: Path, out_dir: Path, cc: str = "gcc", jobs: int = 8) -> Path:
@@ -199,6 +210,7 @@ def build_and_run_case(
     cmd = [
         cc,
         *_base_cflags(tree_root),
+        *host_sizer_defines(sources),
         "-I",
         str(tester_root / "src"),
         "-I",

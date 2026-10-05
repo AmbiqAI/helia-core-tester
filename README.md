@@ -521,6 +521,13 @@ this bug class"), while `NOT_APPLICABLE` says the run never sampled the question
 example -- its only killers are the MVE-gated chunked-equivalence requantize cases, so
 `--cpu cortex-m4` reports it not applicable.
 
+The host kernel library is the DSP build (`ARM_MATH_DSP`, no `ARM_MATH_MVEI`), so a cortex-m55
+case's `*_get_buffer_size_mve` call is compiled as the plain sizer, which answers for the build it
+runs in. Otherwise the DSP kernel gets MVE-sized scratch, and the 1xN convolve cases (whose MVE
+route needs less) overrun it. Cases that assert an MVE-only guard, such as the
+`null_weight_sum_ctx` faults, still fail the host baseline (the DSP kernel never reads that
+context and returns success) and are excluded from scoring; the board and FVP runs cover them.
+
 With `--cases-root`, the corpus CPU is read from the tree on disk (its `manifest.json`, or an
 `artifacts/generated_tests/<suite>/<cpu>/` path) rather than from `--cpu`, so a `--cpu` that
 does not match the cases cannot excuse a mutant whose killers are in that tree. A `--cpu` that
