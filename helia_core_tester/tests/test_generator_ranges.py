@@ -46,14 +46,30 @@ def test_s8_inputs_span_range(tmp_path, name, reach):
     assert np.abs(inputs).max() >= reach
 
 
-@pytest.mark.parametrize(("name", "step"), [("comparison_equal_nhwc_s16", 128), ("comparison_equal_s8", 1)])
+@pytest.mark.parametrize(
+    ("name", "step"),
+    [
+        ("comparison_equal_nhwc_s16", 128),
+        ("comparison_equal_s8", 1),
+        ("comparison_less_batch_scalar_left_s8", 1),
+        ("comparison_less_equal_batch_scalar_right_s8", 1),
+        ("comparison_less_batch_scalar_left_s16", 128),
+        ("comparison_less_equal_batch_scalar_right_s16", 128),
+    ],
+)
 def test_comparison_has_near_pairs(tmp_path, name, step):
     arrays = _generate(tmp_path, name)
-    gap = np.abs(arrays["input_1"] - arrays["input_2"])
-    equal = arrays["expected_output"].astype(bool)
-    assert np.any(equal & (gap == 0))
-    # One rescale step apart, not equal.
-    assert np.any(~equal & (gap == step))
+    desc = {d["name"]: d for d in load_all_descriptors(str(find_descriptors_dir()))}[name]
+    shape_1, shape_2 = desc["input_1_shape"], desc["input_2_shape"]
+    out_shape = np.broadcast_shapes(tuple(shape_1), tuple(shape_2))
+    lhs = np.broadcast_to(arrays["input_1"].reshape(shape_1), out_shape).reshape(-1)
+    rhs = np.broadcast_to(arrays["input_2"].reshape(shape_2), out_shape).reshape(-1)
+    out = arrays["expected_output"].astype(bool)
+    gap = np.abs(lhs - rhs)
+    ties = out[gap == 0]
+    assert ties.size
+    # A near pair flips the tie result.
+    assert np.any(out[gap == step] != ties[0])
 
 
 @pytest.mark.parametrize("name", ["rsqrt_small_input_per_op_s16", "rsqrt_small_input_universal_s16"])

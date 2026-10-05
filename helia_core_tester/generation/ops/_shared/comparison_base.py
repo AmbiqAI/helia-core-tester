@@ -31,9 +31,16 @@ def _near_step(params: Dict[str, int]) -> int:
     return max(1, int(np.ceil(1.0 / min(gains))))
 
 
-def _pin_near(rng, source, target, qmin, qmax, gap) -> None:
+def _pin_near(rng, source, target, output_shape, qmin, qmax, gap) -> None:
     """Tie or nudge target to source."""
-    src = source.reshape(-1)
+    src_ids = np.broadcast_to(np.arange(source.size).reshape(source.shape), output_shape).reshape(-1)
+    dst_ids = np.broadcast_to(np.arange(target.size).reshape(target.shape), output_shape).reshape(-1)
+    # One output per target element.
+    order = np.argsort(dst_ids, kind="stable")
+    counts = np.bincount(dst_ids, minlength=target.size)
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    picks = order[starts + np.arange(target.size) % counts]
+    src = source.reshape(-1)[src_ids[picks]]
     flat = target.reshape(-1)
     flat[::3] = src[::3]
     step = gap * rng.choice([-1, 1], size=flat[1::3].size)
@@ -94,10 +101,10 @@ class ComparisonFamilyBase(OperationBase):
         elif input_2.size == 1:
             input_2[...] = np.median(input_1)
         # Per three outputs: tie, near, free.
-        if tuple(shape_2) == tuple(output_shape):
-            _pin_near(rng, np.broadcast_to(input_1, output_shape), input_2, qmin, qmax, gap)
-        elif tuple(shape_1) == tuple(output_shape):
-            _pin_near(rng, np.broadcast_to(input_2, output_shape), input_1, qmin, qmax, gap)
+        if input_2.size >= input_1.size:
+            _pin_near(rng, input_1, input_2, output_shape, qmin, qmax, gap)
+        else:
+            _pin_near(rng, input_2, input_1, output_shape, qmin, qmax, gap)
         return input_1.astype(np_dtype), input_2.astype(np_dtype)
 
     def generate_c_files(self, output_dir) -> None:
