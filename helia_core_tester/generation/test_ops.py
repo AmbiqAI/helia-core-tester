@@ -577,10 +577,18 @@ def test_generation(test_filters):
     )
 
     produced_count = generated_count + reused_count
-    pruned_count = 0 if test_filters.get("keep_unselected") else prune_unlisted_cases(
-        top_generated,
-        {str(entry["relative_test_dir"]) for entry in manifest_entries},
-    )
+    produced_dirs = {str(entry["relative_test_dir"]) for entry in manifest_entries}
+    if test_filters.get("keep_unselected"):
+        # Drop selected cases this run skipped.
+        stale = [
+            test_dir for test_dir in (_descriptor_test_dir(Path(top_generated), d) for d in filtered_descriptors)
+            if test_dir.is_dir() and str(test_dir.relative_to(top_generated)) not in produced_dirs
+        ]
+        for test_dir in stale:
+            reset_case_dir(test_dir)
+        pruned_count = len(stale)
+    else:
+        pruned_count = prune_unlisted_cases(top_generated, produced_dirs)
     if pruned_count:
         print(f"Pruned {pruned_count} case director(ies) outside the active filter")
 

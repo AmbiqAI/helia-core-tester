@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -291,15 +292,20 @@ def test_second_generation_reuses_every_case(tmp_path: Path, monkeypatch: pytest
 
 @pytest.mark.parametrize("keep", [False, True])
 def test_keep_unselected_skips_the_prune(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep: bool) -> None:
-    generated_tests_dir = tmp_path / "artifacts" / "generated_tests" / "int" / "cortex-m55"
+    generated_tests_dir = tmp_path / "artifacts" / "generated_tests" / "int" / "cortex-m4"
     other = generated_tests_dir / "OtherFunctions" / "other_case"
-    other.mkdir(parents=True)
+    # Selected, generated earlier, skipped now.
+    skipped = generated_tests_dir / "FullyConnectedFunctions" / "fc_needs_mve"
+    for case in (other, skipped):
+        case.mkdir(parents=True)
+        (case / "descriptor.yaml").write_text("name: x\n")
+    base = {"operator": "FullyConnected", "activation_dtype": "S8", "weight_dtype": "S8",
+            "_family": "FullyConnectedFunctions", "_parity_kind": "cmsis"}
     monkeypatch.setattr(generation_module, "find_repo_root", lambda: tmp_path)
     monkeypatch.setattr(generation_module, "find_descriptors_dir", lambda: tmp_path)
     monkeypatch.setattr(
         generation_module, "load_all_descriptors",
-        lambda _path: [{"name": "fc_keep", "operator": "FullyConnected", "activation_dtype": "S8", "weight_dtype": "S8",
-                        "_family": "FullyConnectedFunctions", "_parity_kind": "cmsis"}],
+        lambda _path: [{"name": "fc_keep", **base}, {"name": "fc_needs_mve", "required_capabilities": ["mve"], **base}],
     )
 
     def _fake_generate_test(desc, out_dir, **_kwargs):
@@ -308,6 +314,21 @@ def test_keep_unselected_skips_the_prune(tmp_path: Path, monkeypatch: pytest.Mon
         (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
 
     monkeypatch.setattr(generation_module, "generate_test", _fake_generate_test)
-    generation_module.test_generation({**_filters(generated_tests_dir), "keep_unselected": keep})
+    generation_module.test_generation({**_filters(generated_tests_dir, cpu="cortex-m4"), "keep_unselected": keep})
+
+    assert other.is_dir() is keep
+    assert not skipped.exists()
+    assert (generated_tests_dir / "FullyConnectedFunctions" / "fc_keep").is_dir()
+
+
+@pytest.mark.parametrize("keep", [False, True])
+def test_forced_run_wipes_only_without_keep(tmp_path: Path, keep: bool) -> None:
+    from helia_core_tester.generation import conftest
+
+    other = tmp_path / "OtherFunctions" / "other_case"
+    other.mkdir(parents=True)
+    options = {"--generated-tests-dir": str(tmp_path), "--cpu": "cortex-m55", "--suite": "int",
+               "--force-generate": True, "--keep-unselected": keep}
+    conftest.pytest_configure(SimpleNamespace(getoption=options.get))
 
     assert other.is_dir() is keep

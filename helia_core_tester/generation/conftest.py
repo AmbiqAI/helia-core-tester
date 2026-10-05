@@ -52,8 +52,9 @@ def pytest_configure(config):
 
     # Without --force-generate the tree is the reuse cache: cases still matching
     # their stamp are kept and the run prunes whatever falls outside the active
-    # filter (see generation/reuse.py). Only a forced run starts from empty.
-    if not config.getoption("--force-generate"):
+    # filter (see generation/reuse.py). Only a forced run starts from empty,
+    # unless --keep-unselected keeps other cases.
+    if not config.getoption("--force-generate") or config.getoption("--keep-unselected"):
         generated_tests_dir.mkdir(parents=True, exist_ok=True)
         print("Reusing generated tests directory (stamp-checked per case)")
         return
