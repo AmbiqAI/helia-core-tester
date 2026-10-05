@@ -82,6 +82,9 @@ class TargetInfo:
     # Boot health; None from older firmware.
     boot_status: int | None = None
     core_clock_hz: int | None = None
+    # FPSCR at boot, then as pinned.
+    fpscr_boot: int | None = None
+    fpscr: int | None = None
 
     @property
     def has_pmu(self) -> bool:
@@ -101,11 +104,27 @@ def boot_line(info: TargetInfo | None) -> str:
     return f"status {info.boot_status}, core {clock}"
 
 
+def fp_mode(value: int | None) -> dict | None:
+    """FPSCR control bits; match HCT_FPSCR_CONTROL_MASK."""
+    if value is None:
+        return None
+    return {
+        "ahp": value >> 26 & 1,
+        "dn": value >> 25 & 1,
+        "fz": value >> 24 & 1,
+        "rmode": value >> 22 & 3,
+        "fz16": value >> 19 & 1,
+    }
+
+
 def boot_record(info: TargetInfo | None) -> dict:
     """Boot health for bundle and summary JSON."""
     return {
         "status": info.boot_status if info else None,
         "core_clock_hz": info.core_clock_hz if info else None,
+        "fpscr_boot": info.fpscr_boot if info else None,
+        "fpscr": info.fpscr if info else None,
+        "fp_mode": fp_mode(info.fpscr if info else None),
     }
 
 
@@ -130,11 +149,14 @@ def encode_target_info(info: TargetInfo) -> bytes:
     if info.boot_status is not None:
         writer.i32(info.boot_status)
         writer.u32(info.core_clock_hz or 0)
+        if info.fpscr is not None:
+            writer.u32(info.fpscr_boot or 0)
+            writer.u32(info.fpscr)
     return writer.finish()
 
 
 def decode_target_info(payload: bytes) -> TargetInfo:
-    """Older firmware omits the boot tail."""
+    """Older firmware omits the boot and FPSCR tails."""
     reader = ByteReader(payload)
     info = TargetInfo(
         build_id=reader.text(),
@@ -154,6 +176,8 @@ def decode_target_info(payload: bytes) -> TargetInfo:
     )
     if reader.remaining():
         info = replace(info, boot_status=reader.i32(), core_clock_hz=reader.u32())
+    if reader.remaining():
+        info = replace(info, fpscr_boot=reader.u32(), fpscr=reader.u32())
     return _consumed(reader, "TARGET_INFO", info)
 
 

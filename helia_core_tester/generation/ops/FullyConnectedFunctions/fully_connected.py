@@ -293,14 +293,15 @@ class OpFullyConnected(OperationBase):
         else:  # int8
             default_min, default_max = -128, 127
         
+        # Real zero sits at the output zero point.
         if activation_str == 'RELU':
-            activation_min = max(0, default_min)
+            activation_min = max(output_zp, default_min)
             activation_max = default_max
         elif activation_str == 'RELU6':
             # RELU6: clamp to [0, 6] in float, then quantize
             relu6_max_float = 6.0
             relu6_max_quantized = int(np.round(relu6_max_float / output_scale + output_zp))
-            activation_min = max(0, default_min)
+            activation_min = max(output_zp, default_min)
             activation_max = min(relu6_max_quantized, default_max)
         else:  # NONE, TANH, SIGMOID, etc.
             activation_min = default_min

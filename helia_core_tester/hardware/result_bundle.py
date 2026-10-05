@@ -29,6 +29,7 @@ CASE_SUMMARY_BASE_FIELDS = [
     "p90_cycles",
     "p99_cycles",
     "fvp_status",
+    "timed_symbol",
 ]
 # Work counts and prepare cost.
 CASE_SUMMARY_WORK_FIELDS = ["macs", "ops", "cycles_per_mac", "cycles_per_op", "prepare_cycles"]
@@ -203,9 +204,12 @@ def write_result_bundle(
     # fixed by the selection rather than by target support.
     counter_names: list[str] = counter_names_for_passes(result.counter_passes) if result.counter_passes else []
     pass_names: list[str] = [counter_pass.name for counter_pass in result.counter_passes]
+    # The kernel each sample timed.
+    timed_symbols = {int(entry["kernel_id"]): str(entry.get("canonical_name", "")) for entry in kernel_catalog}
     passed = 0
     for case in result.cases:
         passed += 1 if case.comparison.passed else 0
+        timed_symbol = timed_symbols.get(case.case_bundle.kernel_id, "")
         rejection = _rejection_record(case)
         counter_medians = compute_counter_medians(case.normalized_samples)
         work_fields = _work_fields(case)
@@ -232,6 +236,7 @@ def write_result_bundle(
                 "p99_cycles": case.statistics.p99_cycles,
                 "mad_cycles": case.statistics.mad_cycles,
                 "fvp_status": case.case_bundle.fvp_status,
+                "timed_symbol": timed_symbol,
                 **work_fields,
                 "shapes": {blob.role: list(blob.dimensions) for blob in case.case_bundle.blobs},
                 "unsupported_counters": list(case.statistics.unsupported_counters),
@@ -255,6 +260,7 @@ def write_result_bundle(
             "p90_cycles": case.statistics.p90_cycles,
             "p99_cycles": case.statistics.p99_cycles,
             "fvp_status": case.case_bundle.fvp_status,
+            "timed_symbol": timed_symbol,
             **work_fields,
         }
         summary_row.update(counter_medians)
