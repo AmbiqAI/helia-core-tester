@@ -31,6 +31,7 @@ _FLOAT = [
     # The float token sits mid-name; these compile MVE float bodies.
     "Source/QuantizationFunctions/arm_quantize_f32_s8.c",
     "Source/QuantizationFunctions/arm_quantize_f32_s16.c",
+    "Source/QuantizationFunctions/arm_dequantize_half_bits.c",
 ]
 
 
