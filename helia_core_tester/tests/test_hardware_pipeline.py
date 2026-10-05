@@ -489,7 +489,10 @@ def test_boot_health_is_stamped_in_bundle(tmp_path: Path, boot_status, expected,
     result = HostSession(FakeTargetTransport(boot_status=boot_status)).run_many([bundle])
     assert result.cases[0].comparison.passed
     bundle_root = write_result_bundle(result, session_id="boot", output_root=tmp_path, memory_report={}, kernel_catalog=[])
-    assert json.loads((bundle_root / "session_manifest.json").read_text())["boot"] == expected
+    manifest = json.loads((bundle_root / "session_manifest.json").read_text())
+    assert manifest["boot"] == expected
+    # Fake targets set no placement bit.
+    assert manifest["target"]["placement"]["name"] == "tcm"
     print_run_report(result, [], bundle_root)
     line = "status 0, core 250 MHz, FPSCR 0x00040000" if boot_status == 0 else "not reported"
     assert f"Target boot: {line}" in capsys.readouterr().out

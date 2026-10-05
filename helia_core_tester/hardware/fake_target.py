@@ -28,7 +28,7 @@ from .measurement import (
     auto_calibrate_iterations,
 )
 from .pmu_catalog import CPU_CYCLES_EVENT_ID, CPU_CYCLES_NAME, counter_by_event_id
-from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLargeError
+from .transfer import ArenaTracker, BlobAccumulator, BlobTransferSpec, CaseTooLargeError, staged_extent
 from .wire import (
     CAP_ABS_S8,
     CAP_CASE_STREAMING,
@@ -37,6 +37,7 @@ from .wire import (
     CAP_PERFORMANCE,
     CAP_PMU_ARMV8M,
     CAP_RTT_TRANSPORT,
+    CAP_WEIGHTS_MRAM,
     BlobDescriptor,
     CaseComplete,
     CaseMeta,
@@ -247,6 +248,7 @@ class FakeTargetTransport:
         rejections: Mapping[str, tuple[str, int]] | None = None,
         boot_status: int | None = 0,
         core_clock_hz: int | None = None,
+        placement: str = "tcm",
     ) -> None:
         self.build_id = build_id
         # Non-zero: failed init. None: old firmware.
@@ -269,6 +271,7 @@ class FakeTargetTransport:
         self._max_frame_payload = max_frame_payload
         self._read_chunk_size = read_chunk_size
         self._runtime_arena_capacity = runtime_arena_capacity
+        self._placement = placement
         self._arena = ArenaTracker(runtime_arena_capacity)
         self._flash_count = 1
         self._rewind_count = 0
@@ -338,6 +341,8 @@ class FakeTargetTransport:
         flags = CAP_CASE_STREAMING | CAP_CORRECTNESS | CAP_PERFORMANCE | CAP_RTT_TRANSPORT | CAP_KERNEL_CATALOG | CAP_ABS_S8
         if self._pmu_present:
             flags |= CAP_PMU_ARMV8M
+        if self._placement == "mram":
+            flags |= CAP_WEIGHTS_MRAM
         info = TargetInfo(
             build_id=self.build_id,
             catalog_hash=kernel_catalog_hash(self._catalog),
@@ -482,7 +487,7 @@ class FakeTargetTransport:
             for blob_id, spec in self._blob_specs.items()
         }
         for spec in self._case_meta.blobs:
-            self._arena.reserve_aligned(spec.byte_length, max(1, spec.alignment))
+            self._arena.reserve_aligned(*staged_extent(spec.role, spec.byte_length, spec.alignment, self._placement))
         scratch_bytes = self._case_meta.scratch_bytes
         output_bytes = int(self._scalar_parameters()["output_capacity_bytes"])
         if scratch_bytes:

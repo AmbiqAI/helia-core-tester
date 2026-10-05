@@ -14,7 +14,7 @@ import pytest
 import yaml
 
 from helia_core_tester.hardware import nsx_app, nsx_cli
-from helia_core_tester.hardware.boards import resolve_board
+from helia_core_tester.hardware.boards import load_board_table, resolve_board
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BOARD = resolve_board("apollo510_evb")
@@ -334,3 +334,34 @@ def test_synced_modules_cmake_is_left_alone(tmp_path: Path) -> None:
     synced.write_text("# written by nsx sync\n", encoding="utf-8")
     _render(tmp_path)
     assert synced.read_text(encoding="utf-8") == "# written by nsx sync\n"
+
+
+# --- placement ---------------------------------------------------------------------
+
+
+def test_mram_placement_defines_the_switch(tmp_path: Path) -> None:
+    assert "HCT_PLACEMENT_MRAM" not in _render(tmp_path / "tcm").cmakelists
+    assert "    HCT_PLACEMENT_MRAM\n" in _render(tmp_path / "mram", placement="mram").cmakelists
+
+
+def test_mram_placement_needs_cached_mram(tmp_path: Path) -> None:
+    with pytest.raises(nsx_app.AppRenderError, match="no cached MRAM"):
+        nsx_app.render_app(resolve_board("apollo3p_evb"), nsx_app.AppOptions(placement="mram"), tmp_path / "app")
+    with pytest.raises(ValueError, match="placement"):
+        nsx_app.AppOptions(placement="sram")
+    assert [board.id for board in load_board_table() if board.has_mram] == ["apollo510_evb", "apollo330mP_evb"]
+
+
+def test_placement_is_a_saved_option(tmp_path: Path) -> None:
+    options = nsx_app.AppOptions(cmsis_nn_ref="v9", placement="mram")
+    assert nsx_app.AppOptions.from_json(options.to_json()) == options
+    assert "placement tcm -> mram" in options.changes_from(nsx_app.AppOptions(cmsis_nn_ref="v9"))
+    with pytest.raises(TypeError, match="placement"):
+        nsx_app.AppOptions.from_json('{"placement": "sram"}')
+    # Records without the field built tcm.
+    assert nsx_app.AppOptions.from_json('{"cmsis_nn_ref": "v9"}').placement == "tcm"
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    nsx_app.save_options(app_dir, options)
+    assert nsx_app.resolve_options(app_dir, tmp_path).placement == "mram"
+    assert nsx_app.resolve_options(app_dir, tmp_path, placement="tcm").placement == "tcm"

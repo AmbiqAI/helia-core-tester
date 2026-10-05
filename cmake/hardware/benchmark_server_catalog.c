@@ -14,6 +14,11 @@
 #define HCT_PMU_CAPABILITY_FLAGS 0u
 #define HCT_PMU_COUNTER_SLOTS 0u
 #endif
+#if defined(HCT_PLACEMENT_MRAM)
+#define HCT_PLACEMENT_CAPABILITY_FLAGS HCT_CAP_WEIGHTS_MRAM
+#else
+#define HCT_PLACEMENT_CAPABILITY_FLAGS 0u
+#endif
 
 #ifndef HCT_BENCHMARK_SERVER_BOARD_ID
 #define HCT_BENCHMARK_SERVER_BOARD_ID "apollo510_evb"
@@ -253,7 +258,8 @@ uint32_t hct_benchmark_server_capability_flags(void)
          | HCT_CAP_RTT_TRANSPORT
          | HCT_CAP_KERNEL_CATALOG
          | HCT_CAP_ABS_S8
-         | HCT_PMU_CAPABILITY_FLAGS;
+         | HCT_PMU_CAPABILITY_FLAGS
+         | HCT_PLACEMENT_CAPABILITY_FLAGS;
 }
 
 uint8_t hct_benchmark_server_pmu_counter_slots(void)

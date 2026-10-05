@@ -7,6 +7,8 @@ import subprocess
 
 import pytest
 
+from helia_core_tester.hardware.transfer import staged_extent
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # The ns-cmsis-nn checkout: $CMSIS_NN_ROOT (what `generate` and the firmware build use),
 # else the tester's conventional location two levels up.
@@ -111,3 +113,46 @@ int main(void) {
         check=True,
     )
     subprocess.run([str(binary)], check=True)
+
+
+MRAM_STUB_DIR = PROJECT_ROOT / "helia_core_tester" / "tests" / "fixtures" / "mram_stub"
+
+
+def test_c_mram_placement(tmp_path: Path) -> None:
+    cc = shutil.which("cc")
+    if cc is None:
+        pytest.skip("host C compiler not available")
+    if not (CMSIS_NN_ROOT / "Include" / "arm_nnfunctions.h").is_file():
+        pytest.skip(f"no real ns-cmsis-nn checkout found at {CMSIS_NN_ROOT}")
+    hardware = PROJECT_ROOT / "cmake" / "hardware"
+    binary = tmp_path / "mram_harness"
+    subprocess.run(
+        [
+            cc, "-std=c99", "-Wall", "-Wextra", "-Werror",
+            "-DHCT_HOST_ABS_ONLY", "-DHCT_PLACEMENT_MRAM",
+            "-I", str(MRAM_STUB_DIR), "-I", str(hardware), "-I", str(CMSIS_NN_ROOT / "Include"),
+            *(str(hardware / name) for name in (
+                "hctp_protocol.c", "benchmark_server_catalog.c", "benchmark_server_messages.c",
+                "benchmark_server_adapter.c", "benchmark_server_session.c",
+            )),
+            str(MRAM_STUB_DIR / "mram_stub.c"),
+            str(MRAM_STUB_DIR / "mram_harness.c"),
+            str(CMSIS_NN_ROOT / "Source" / "BasicMathFunctions" / "arm_abs_s8.c"),
+            "-o", str(binary),
+        ],
+        check=True,
+        cwd=PROJECT_ROOT,
+    )
+
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    # Exit codes name the failed check.
+    assert result.returncode == 0, f"harness exit {result.returncode}"
+    # Host preflight mirrors the firmware allocator.
+    used = 0
+    for role, length, alignment in (("input_0", 12, 1), ("weights", 13, 1), ("bias", 8, 4), ("output", 12, 16)):
+        length, alignment = staged_extent(role, length, alignment, "mram")
+        used = -(-used // alignment) * alignment + length
+    assert f"workspace={used}" in result.stdout
+    assert "placed reused" in result.stdout
+    assert "rows skipped" in result.stdout
+    assert "pool limits refused" in result.stdout

@@ -276,3 +276,18 @@ def test_case_meta_rejects_rank_above_the_wire_limit() -> None:
     payload.u8(wire.BLOB_MAX_RANK + 1)
     with pytest.raises(ValueError, match=rf"blob 7 has rank {wire.BLOB_MAX_RANK + 1}; the wire carries at most {wire.BLOB_MAX_RANK}"):
         wire.decode_case_meta(payload.finish())
+
+
+def test_placement_rides_a_capability_bit() -> None:
+    tcm = _target_info()
+    mram = wire.decode_target_info(wire.encode_target_info(_target_info(capability_flags=tcm.capability_flags | wire.CAP_WEIGHTS_MRAM)))
+    assert (tcm.placement, mram.placement) == ("tcm", "mram")
+    assert wire.placement_record(tcm) == {
+        "name": "tcm", "weights": "dtcm", "activations": "dtcm", "dcache": "on", "weights_cache": "uncached",
+    }
+    assert wire.placement_record(mram)["weights"] == "mram"
+    assert wire.placement_record(mram)["weights_cache"] == "cold"
+    assert wire.placement_record(_target_info(target_cpu="cortex-m4")) == {
+        "name": "tcm", "weights": "sram", "activations": "sram", "dcache": "none", "weights_cache": "uncached",
+    }
+    assert wire.placement_record(None)["name"] is None

@@ -16,6 +16,9 @@
 
 #ifdef HELIA_HARDWARE_BUILD
 #include "am_mcu_apollo.h"
+#elif defined(HCT_PLACEMENT_MRAM)
+/* Host harness: stubbed MRAM HAL. */
+#include "hct_mram_stub.h"
 #endif
 
 /* The Armv8.1-M PMU (8 x 16-bit event counters + 32-bit CCNTR on Cortex-M55) is only
@@ -265,7 +268,7 @@ static inline hct_server_blob_t *find_blob_by_role(hct_server_session_t *session
 
 static inline uint8_t *blob_ptr(hct_server_session_t *session, const hct_server_blob_t *blob)
 {
-    return &session->workspace[blob->arena_offset];
+    return blob->placed ? (uint8_t *)blob->placed : &session->workspace[blob->arena_offset];
 }
 
 static inline uint8_t *hct_output_ptr(hct_server_session_t *session)
@@ -290,15 +293,43 @@ typedef struct
     uint32_t dwt_on;
     uint32_t dwt_off;
     bool armed;
+    /* Counter runs outside kernel calls. */
+    bool inverted;
+    /* MRAM ranges evicted before each call. */
+    const void *cold_addr[HCT_SERVER_MAX_BLOBS];
+    int32_t cold_bytes[HCT_SERVER_MAX_BLOBS];
+    uint8_t cold_count;
 } hct_window_t;
 
 extern hct_window_t hct_window;
+#if defined(HCT_PLACEMENT_MRAM)
+/* Rows programmed since boot. */
+extern volatile uint32_t hct_mram_rows_programmed;
+#endif
 
 /* Resume counting; PMU store goes last. */
 static inline bool hct_window_open(void)
 {
     if (hct_window.armed)
     {
+#if defined(HCT_PLACEMENT_MRAM)
+        /* Evict while no window counts. */
+        if (hct_window.inverted)
+        {
+#ifdef HELIA_HARDWARE_BUILD
+            DWT->CTRL = hct_window.dwt_on;
+#endif
+        }
+        /* Weights start cold, as in inference. */
+        for (uint8_t index = 0u; index < hct_window.cold_count; ++index)
+        {
+            SCB_InvalidateDCache_by_Addr((volatile void *)hct_window.cold_addr[index], hct_window.cold_bytes[index]);
+        }
+        if (hct_window.inverted)
+        {
+            return true;
+        }
+#endif
 #ifdef HELIA_HARDWARE_BUILD
         DWT->CTRL = hct_window.dwt_on;
 #endif

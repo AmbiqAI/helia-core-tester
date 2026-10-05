@@ -419,6 +419,7 @@ static void window_arm(void)
     hct_window.dwt_off = ctrl & ~DWT_CTRL_CYCCNTENA_Msk;
     DWT->CTRL = hct_window.dwt_off;
 #endif
+    hct_window.inverted = false;
     hct_window.armed = true;
 }
 
@@ -431,6 +432,7 @@ static void window_arm_inverted(void)
     hct_window.dwt_off = ctrl;
 #endif
     hct_window.pmu_mask = 0u;
+    hct_window.inverted = true;
     hct_window.armed = true;
 }
 
@@ -631,6 +633,8 @@ static void reset_case_buffers(hct_server_session_t *session)
     session->output_stream_offset = 0u;
     session->output_stream_checksum = 0u;
     session->output_stream_active = 0u;
+    session->mram_cursor = 0u;
+    hct_window.cold_count = 0u;
     session->last_kernel_status = ARM_CMSIS_NN_SUCCESS;
     /* Zero every per-case scalar param field (stride_h..adj_y, contiguous in the struct --
      * see benchmark_server_session.h) in one shot. Individually resetting only a handful of
@@ -717,13 +721,34 @@ static hctp_status_t parse_scalar(hct_server_session_t *session, const char *nam
     return HCTP_STATUS_OK;
 }
 
+/* Models keep these in MRAM. */
+static bool blob_in_mram(const hct_server_blob_t *blob)
+{
+#if defined(HCT_PLACEMENT_MRAM)
+    return blob->role == HCT_BLOB_ROLE_WEIGHTS || blob->role == HCT_BLOB_ROLE_BIAS;
+#else
+    (void)blob;
+    return false;
+#endif
+}
+
+/* MRAM programs whole 16-byte rows. */
+#define HCT_MRAM_ROW_BYTES 16u
+
 static hctp_status_t allocate_blob(hct_server_session_t *session, hct_server_blob_t *blob)
 {
     uint32_t aligned;
     uint32_t end;
+    const bool staged = blob_in_mram(blob);
+    const uint32_t alignment = (staged && blob->alignment < HCT_MRAM_ROW_BYTES) ? HCT_MRAM_ROW_BYTES : blob->alignment;
+    const uint32_t length = staged ? ((blob->byte_length + HCT_MRAM_ROW_BYTES - 1u) & ~(HCT_MRAM_ROW_BYTES - 1u)) : blob->byte_length;
+    if (staged && length < blob->byte_length)
+    {
+        return HCTP_STATUS_INVALID_ARGUMENT;
+    }
     if (!hct_checked_aligned_range(session->workspace_used_bytes,
-                               blob->alignment,
-                               blob->byte_length,
+                               alignment,
+                               length,
                                session->workspace_bytes,
                                &aligned,
                                &end))
@@ -1152,6 +1177,117 @@ static hctp_status_t handle_case_meta(hct_server_session_t *session, const uint8
     return queue_request_blob(session);
 }
 
+#if defined(HCT_PLACEMENT_MRAM)
+/* Pool sits past the image; 512 KiB. */
+#define HCT_MRAM_POOL_BYTES (512u * 1024u)
+#define HCT_MRAM_LINE_BYTES 32u
+/* NSX SBL script MCU_MRAM ends. */
+#if defined(HCT_MRAM_END)
+/* Host harness supplies its own. */
+#elif defined(AM_PART_APOLLO330P)
+#define HCT_MRAM_END 0x00600000u
+#else
+#define HCT_MRAM_END 0x00800000u
+#endif
+extern uint32_t _init_data, _sdata, _edata, _init_data_sram, _ssdata, _sedata;
+
+/* Pool start, or 0 when it overlaps. */
+static uintptr_t mram_pool_base(void)
+{
+    const uintptr_t data_end = (uintptr_t)&_init_data + ((uintptr_t)&_edata - (uintptr_t)&_sdata);
+    const uintptr_t sram_end = (uintptr_t)&_init_data_sram + ((uintptr_t)&_sedata - (uintptr_t)&_ssdata);
+    const uintptr_t image_end = data_end > sram_end ? data_end : sram_end;
+    const uintptr_t base = (image_end + 0xFFFFu) & ~(uintptr_t)0xFFFFu;
+    return (base + HCT_MRAM_POOL_BYTES <= HCT_MRAM_END) ? base : 0u;
+}
+
+volatile uint32_t hct_mram_rows_programmed;
+
+/* Row differs in its blob bytes. */
+static bool row_differs(const uint8_t *staged, uintptr_t address, uint32_t offset, uint32_t byte_length)
+{
+    const uint32_t span = byte_length - offset < HCT_MRAM_ROW_BYTES ? byte_length - offset : HCT_MRAM_ROW_BYTES;
+    return memcmp((const void *)(address + offset), staged + offset, span) != 0;
+}
+
+/* Program differing row runs only. */
+static int program_changed_rows(const uint8_t *staged, uintptr_t address, uint32_t byte_length, uint32_t length)
+{
+    uint32_t offset = 0u;
+    while (offset < length)
+    {
+        uint32_t end = offset;
+        if (!row_differs(staged, address, offset, byte_length))
+        {
+            offset += HCT_MRAM_ROW_BYTES;
+            continue;
+        }
+        while (end < length && row_differs(staged, address, end, byte_length))
+        {
+            end += HCT_MRAM_ROW_BYTES;
+        }
+        if (am_hal_mram_main_program(AM_HAL_MRAM_PROGRAM_KEY, (uint32_t *)(staged + offset), (uint32_t *)(address + offset), (end - offset) / 4u) != 0u)
+        {
+            return 1;
+        }
+        SCB_InvalidateDCache_by_Addr((volatile void *)(address + offset), (int32_t)(end - offset));
+        hct_mram_rows_programmed += (end - offset) / HCT_MRAM_ROW_BYTES;
+        offset = end;
+    }
+    return 0;
+}
+
+/* Program the staged copy into MRAM. */
+static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blob_t *blob)
+{
+    const uintptr_t base = mram_pool_base();
+    /* allocate_blob padded the stage to rows. */
+    const uint32_t length = (blob->byte_length + HCT_MRAM_ROW_BYTES - 1u) & ~(HCT_MRAM_ROW_BYTES - 1u);
+    uint8_t *staged = &session->workspace[blob->arena_offset];
+    uintptr_t address;
+    if (length == 0u)
+    {
+        return HCTP_STATUS_OK;
+    }
+    if (base == 0u || length > HCT_MRAM_POOL_BYTES || hct_window.cold_count >= HCT_SERVER_MAX_BLOBS)
+    {
+        return HCTP_STATUS_INVALID_ARGUMENT;
+    }
+    /* Spread writes by content: wear leveling. */
+    if (session->mram_cursor == 0u)
+    {
+        session->mram_cursor = base + ((blob->crc32 % (HCT_MRAM_POOL_BYTES / 2u)) & ~(HCT_MRAM_LINE_BYTES - 1u));
+    }
+    if (session->mram_cursor + length > base + HCT_MRAM_POOL_BYTES)
+    {
+        session->mram_cursor = base;
+    }
+    address = session->mram_cursor;
+    /* Each blob starts on a cache line. */
+    session->mram_cursor += (length + HCT_MRAM_LINE_BYTES - 1u) & ~(HCT_MRAM_LINE_BYTES - 1u);
+    if (program_changed_rows(staged, address, blob->byte_length, length) != 0)
+    {
+        return HCTP_STATUS_INVALID_ARGUMENT;
+    }
+    if (hctp_crc32((const uint8_t *)address, blob->byte_length) != blob->crc32)
+    {
+        return HCTP_STATUS_PAYLOAD_CRC_MISMATCH;
+    }
+    blob->placed = (const uint8_t *)address;
+    hct_window.cold_addr[hct_window.cold_count] = blob->placed;
+    hct_window.cold_bytes[hct_window.cold_count] = (int32_t)length;
+    hct_window.cold_count += 1u;
+    return HCTP_STATUS_OK;
+}
+#else
+static hctp_status_t place_in_mram(hct_server_session_t *session, hct_server_blob_t *blob)
+{
+    (void)session;
+    (void)blob;
+    return HCTP_STATUS_OK;
+}
+#endif
+
 static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint8_t *payload, size_t payload_length)
 {
     /* F006: converted to the bounded cursor API. */
@@ -1188,6 +1324,12 @@ static hctp_status_t handle_blob_chunk(hct_server_session_t *session, const uint
     if (hctp_crc32(blob_ptr(session, blob), blob->byte_length) != blob->crc32)
     {
         return HCTP_STATUS_PAYLOAD_CRC_MISMATCH;
+    }
+
+    if (blob_in_mram(blob))
+    {
+        const hctp_status_t placed = place_in_mram(session, blob);
+        if (placed != HCTP_STATUS_OK) return placed;
     }
 
     session->current_blob_index += 1u;

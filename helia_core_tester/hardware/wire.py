@@ -35,6 +35,8 @@ CAP_ABS_S8 = 1 << 5
 # Set only when the firmware was built for a core with the Armv8.1-M PMU
 # (__PMU_PRESENT == 1); absent on DWT-only targets such as Cortex-M4.
 CAP_PMU_ARMV8M = 1 << 6
+# Weights and bias live in cached MRAM.
+CAP_WEIGHTS_MRAM = 1 << 7
 
 CATALOG_HASH_SIZE = 32
 BLOB_MAX_RANK = 6
@@ -90,6 +92,10 @@ class TargetInfo:
     def has_pmu(self) -> bool:
         return bool(self.capability_flags & CAP_PMU_ARMV8M)
 
+    @property
+    def placement(self) -> str:
+        return "mram" if self.capability_flags & CAP_WEIGHTS_MRAM else "tcm"
+
 
 def clock_mhz(hz: int) -> str:
     """Clock as "250 MHz"."""
@@ -125,6 +131,24 @@ def boot_record(info: TargetInfo | None) -> dict:
         "fpscr_boot": info.fpscr_boot if info else None,
         "fpscr": info.fpscr if info else None,
         "fp_mode": fp_mode(info.fpscr if info else None),
+    }
+
+
+def placement_record(info: TargetInfo | None) -> dict:
+    """Operand memory and cache policy."""
+    if info is None:
+        return {"name": None, "weights": None, "activations": None, "dcache": None, "weights_cache": None}
+    mram = info.placement == "mram"
+    m4 = info.target_cpu == "cortex-m4"
+    # M4 static BSS lands in SRAM.
+    workspace = "sram" if m4 else "dtcm"
+    return {
+        "name": info.placement,
+        "weights": "mram" if mram else workspace,
+        "activations": workspace,
+        # Cortex-M4 has no D-cache; TCM bypasses it.
+        "dcache": "none" if m4 else "on",
+        "weights_cache": "cold" if mram else "uncached",
     }
 
 
