@@ -52,7 +52,15 @@ def test_bits_case_carries_both_nan_rules_and_compares_bits(name: str, tmp_path:
     )
 
 
-@pytest.mark.parametrize("name", ["dequantize_float_f16_bits_vec7_f32", "dequantize_float_f16_bits_vec1001_f32"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "dequantize_float_f16_bits_vec7_f32",
+        "dequantize_float_f16_bits_vec75_f32",
+        "dequantize_float_f16_bits_storage_vec75_f32",
+        "dequantize_float_f16_bits_vec1001_f32",
+    ],
+)
 def test_bits_case_ends_on_nans_so_every_tail_meets_the_rule(name: str, tmp_path: Path) -> None:
     header, _ = _sources(name, tmp_path)
     halves = _array(header, "input")
@@ -71,6 +79,10 @@ def test_bits_case_ends_on_nans_so_every_tail_meets_the_rule(name: str, tmp_path
         {"tensor_dtypes": {"input": "FP16", "output": "FP16"}},
         {"tensor_dtypes": {"input": "FP16", "output": "FP32", "bias": "U16"}},
         {"input_shape": [1, 70000]},
+        {"input_shape": [-1, -75]},
+        {"input_shape": [1, 7.9]},
+        {"input_shape": "75"},
+        {"scale": 0.5},
     ],
 )
 def test_bits_case_rejects_keys_it_would_ignore(overrides: dict, tmp_path: Path) -> None:

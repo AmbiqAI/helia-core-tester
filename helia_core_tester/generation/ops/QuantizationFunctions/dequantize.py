@@ -8,10 +8,10 @@ from pathlib import Path
 from helia_core_tester.generation.kernel_dispatch import check_entry_fault, resolve_direct_entry
 from helia_core_tester.generation.ops._shared.quantization_base import QuantizationFamilyBase
 
-# Binary16 patterns every bit-pattern case starts with, so that even a short case meets the NaN
-# rule: a signalling NaN, a negative quiet NaN, a payload NaN, +Inf, the smallest subnormal, -0 and
-# 1.0, then the remaining zeros, subnormals, normal-range ends, -Inf and NaNs of both signs. The rest
-# of a case is uniform random patterns.
+# Binary16 patterns a bit-pattern case starts with, as many as fit before its NaN tail, so that even
+# a short case meets the NaN rule: a signalling NaN, a negative quiet NaN, a payload NaN, +Inf, the
+# smallest subnormal, -0 and 1.0, then the remaining zeros, subnormals, normal-range ends, -Inf and
+# NaNs of both signs. Uniform random patterns fill the rest of a case up to its tail.
 _F16_BIT_CLASSES = (
     0x7C01, 0xFE00, 0x7FFF, 0x7C00, 0x0001, 0x8000, 0x3C00,
     0x0000, 0x8001, 0x0200, 0x03FF, 0x83FF, 0x0400, 0x8400, 0xC000, 0x3555,
@@ -20,6 +20,11 @@ _F16_BIT_CLASSES = (
 # The last elements of every case: a signalling NaN with payload, a negative signalling NaN and a
 # quiet NaN with payload.
 _F16_TAIL_NANS = (0x7D55, 0xFC01, 0x7E01)
+# What a bit-pattern descriptor may carry (keys the loader adds start with "_" or "resolved_").
+_F16_BITS_KEYS = frozenset(
+    {"operator", "name", "suite", "hint", "entry", "tensor_dtypes", "activation_dtype", "activation"}
+    | {"input_shape", "comparison"}
+)
 
 
 class OpDequantize(QuantizationFamilyBase):
@@ -316,28 +321,29 @@ class OpDequantize(QuantizationFamilyBase):
         its sign and payload and set the quiet bit. The C file picks the rule its build compiled.
         """
         name = self.desc["name"]
-        ignored = [key for key in ("input_min", "input_max", "input_mode", "expected_status", "fault") if key in self.desc]
-        ignored += sorted(key for key in self.desc if key.startswith("nonfinite_"))
+        unknown = sorted(k for k in self.desc if k not in _F16_BITS_KEYS and not k.startswith(("_", "resolved_")))
         if self.activation_name() != "NONE":
-            ignored.append("activation")
+            unknown.append("activation")
         if self.tensor_dtype("output") != "FP32":
-            ignored.append("tensor_dtypes.output (must be FP32)")
+            unknown.append("tensor_dtypes.output (must be FP32)")
         if any(role not in ("input", "output") for role in (self.desc.get("tensor_dtypes") or {})):
-            ignored.append("tensor_dtypes beyond input and output")
+            unknown.append("tensor_dtypes beyond input and output")
         comparison = self.desc.get("comparison")
         if comparison is not None and comparison != {"atol": 0.0, "rtol": 0.0}:
-            ignored.append("comparison (the check is bit-exact)")
-        if ignored:
-            raise ValueError(f"{name}: a bit-pattern case takes none of {ignored}")
-        size = int(np.prod([int(dim) for dim in self.desc["input_shape"]]))
+            unknown.append("comparison (the check is bit-exact)")
+        if unknown:
+            raise ValueError(f"{name}: a bit-pattern case takes none of {unknown}")
+        shape = self.desc["input_shape"]
+        dims_ok = isinstance(shape, list) and all(type(dim) is int and dim > 0 for dim in shape)
+        size = int(np.prod(shape, dtype=object)) if dims_ok else 0
         if not 1 <= size <= 1 << 16:
-            raise ValueError(f"{name}: a bit-pattern case holds 1 to 65536 halves, got {size}")
-        classes = np.array(_F16_BIT_CLASSES[:size], dtype=np.uint16)
-        rest = self.rng.integers(0, 1 << 16, size=size - classes.size).astype(np.uint16)
-        bits = np.concatenate([classes, rest])
+            raise ValueError(f"{name}: a bit-pattern case holds 1 to 65536 halves in positive int dims, got {shape}")
+        tail = min(3, size)
         # The MVE path converts four halves per iteration and the FPU path two, so the last elements
         # sit in the predicated or single-half tail; ending on NaNs puts the NaN rule there too.
-        bits[-min(3, size):] = np.array(_F16_TAIL_NANS[-min(3, size):], dtype=np.uint16)
+        classes = np.array(_F16_BIT_CLASSES[: size - tail], dtype=np.uint16)
+        rest = self.rng.integers(0, 1 << 16, size=size - tail - classes.size).astype(np.uint16)
+        bits = np.concatenate([classes, rest, np.array(_F16_TAIL_NANS[-tail:], dtype=np.uint16)])
 
         frac = (bits & 0x3FF).astype(np.uint32)
         sign = (bits >> 15).astype(np.uint32)
