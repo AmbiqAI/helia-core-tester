@@ -379,8 +379,8 @@ _OP_HELP = (
     "`generate --op`: operator, descriptor stem or name prefix, e.g. DepthwiseConv."
 )
 _DTYPE_HELP = (
-    "Only bridge cases using this dtype on any tensor (repeatable), "
-    "matched like `generate --dtype`, e.g. S8 or FP16."
+    "Only bridge cases of this dtype (repeatable), matched like `generate --dtype`: "
+    "the activation dtype, or S4 for s4-weight cases, e.g. S8 or FP16."
 )
 _CASE_ID_HELP = "Only bridge this exact case id or test name (repeatable)."
 _CASES_FROM_HELP = "File of case ids, one per line ('#' comments)."

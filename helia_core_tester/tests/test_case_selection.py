@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -11,8 +12,12 @@ from helia_core_tester.generation.test_ops import should_run_test
 from helia_core_tester.hardware.boards import resolve_board
 from helia_core_tester.hardware.cli import _read_case_ids
 from helia_core_tester.hardware.generated_test_bridge import CaseSelection, discover_generated_tests
-from helia_core_tester.hardware.hardware_pipeline import StreamOptions, resolved_selection
+from helia_core_tester.hardware import hardware_pipeline
+from helia_core_tester.hardware.hardware_pipeline import (
+    StreamOptions, generate_tests_for_board, resolved_selection, run_hardware_pipeline,
+)
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FAMILY = "ConvolutionFunctions"
 DESCRIPTORS = {
     "depthwise_conv_a_s8": {"operator": "DepthwiseConv", "resolved_tensor_dtypes": {"input": "S8", "output": "S8", "weights": "S8"}},
@@ -48,6 +53,76 @@ def test_selection_applies_before_limit(tmp_path: Path) -> None:
 
     assert _names(root, CaseSelection(ops=("DepthwiseConv",)), limit=1) == ["depthwise_conv_a_s8"]
     assert _names(root, CaseSelection(dtypes=("S4",)), limit=1) == ["depthwise_conv_c_s4"]
+
+
+def test_dtype_names_the_case_not_any_tensor(tmp_path: Path) -> None:
+    root = _tree(tmp_path)
+    quantize = {"name": "quantize_e_s8", "operator": "Quantize", "resolved_tensor_dtypes": {"input": "FP32", "output": "S8"}}
+
+    assert _names(root, CaseSelection(dtypes=("S8",))) == ["depthwise_conv_a_s8"]
+    assert _names(root, CaseSelection(dtypes=("S4",))) == ["depthwise_conv_c_s4"]
+    assert CaseSelection(dtypes=("S8",)).matches(quantize["name"], quantize)
+    assert not CaseSelection(dtypes=("FP32",)).matches(quantize["name"], quantize)
+
+
+def test_generate_filters_take_comma_lists() -> None:
+    desc = {"name": "depthwise_conv_c_s4", **DESCRIPTORS["depthwise_conv_c_s4"]}
+
+    assert should_run_test(desc, {"op": "Convolve, DepthwiseConv", "dtype": "S16,S4"})
+    assert should_run_test(desc, {"name": "other,depthwise_conv_c_s4"})
+    assert not should_run_test(desc, {"name": "depthwise_conv_c"})
+    assert not should_run_test(desc, {"dtype": "S8"})
+
+
+def _capture_generate(monkeypatch) -> list:
+    import helia_core_tester.core.steps as steps
+
+    configs: list = []
+
+    class _Step:
+        def __init__(self, config) -> None:
+            configs.append(config)
+
+        def execute(self):
+            return SimpleNamespace(success=True, skipped=False, message="")
+
+    monkeypatch.setattr(steps, "GenerateStep", _Step)
+    monkeypatch.delenv("HELIA_CORE_TESTER_CONFIG", raising=False)
+    return configs
+
+
+def _filters(config) -> tuple:
+    return config.op_filter, config.dtype_filter, config.name_filter, config.keep_unselected
+
+
+def test_generation_takes_the_selection(monkeypatch) -> None:
+    configs = _capture_generate(monkeypatch)
+    board = resolve_board("apollo510_evb")
+    select = CaseSelection(ops=("Convolve", "DepthwiseConv"), dtypes=("s8",), case_ids=("a_hw_generated", "b"))
+
+    generate_tests_for_board(PROJECT_ROOT, board, "int", select=select)
+    assert _filters(configs[-1]) == ("Convolve,DepthwiseConv", "S8", "a,b", True)
+    # Nightly: no selection, full generation.
+    generate_tests_for_board(PROJECT_ROOT, board, "int", select=CaseSelection())
+    assert _filters(configs[-1]) == (None, None, None, False)
+    generate_tests_for_board(PROJECT_ROOT, board, "both", select=select)
+    assert _filters(configs[-1]) == (None, None, None, False)
+
+
+def test_run_passes_selection_to_generation(tmp_path: Path, monkeypatch) -> None:
+    seen: list = []
+    monkeypatch.setattr(hardware_pipeline, "built_kernels", lambda *a: Path("/kernels"))
+    monkeypatch.setattr(hardware_pipeline, "generate_tests_for_board", lambda *a, select, **k: seen.append(select))
+    monkeypatch.setattr(
+        hardware_pipeline, "stream_generated_tests",
+        lambda *a, **k: hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[]),
+    )
+    options = StreamOptions(ops=("Convolve",), case_ids=("x",))
+    run_hardware_pipeline(
+        tmp_path, resolve_board("apollo510_evb"), 1, options=options, skip_flash=True, app_options=object(),
+        echo=lambda _msg: None,
+    )
+    assert seen == [CaseSelection(ops=("Convolve",), case_ids=("x",))]
 
 
 def test_case_ids_match_name_or_hw_id(tmp_path: Path) -> None:

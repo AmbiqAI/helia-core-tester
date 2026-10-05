@@ -66,6 +66,8 @@ class GenerateStep(StepBase):
             cmd.extend(["--seed", str(self.config.seed)])
         if self.config.force_generate:
             cmd.append("--force-generate")
+        if self.config.keep_unselected:
+            cmd.append("--keep-unselected")
         return cmd
     
     def _do_execute(self) -> StepResult:

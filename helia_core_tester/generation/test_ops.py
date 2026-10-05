@@ -60,6 +60,11 @@ def _float_precision_mode(filters: Dict[str, Any]) -> str:
     return str(filters.get("float_precision") or "both").strip().lower()
 
 
+def _split_filter(value: Any) -> List[str]:
+    """Comma-separated filter values; any one matches."""
+    return [part.strip() for part in str(value or "").split(",") if part.strip()]
+
+
 def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     """
     Determine if test should run based on filters.
@@ -71,15 +76,14 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
     Returns:
         True if test should run
     """
-    if filters.get('name'):
-        if desc['name'] != filters['name']:
-            return False
-
-    if filters.get('op') and not descriptor_matches_op(desc, str(filters['op'])):
+    if filters.get('name') and desc['name'] not in _split_filter(filters['name']):
         return False
 
-    # Filter by activation dtype
-    if filters.get('dtype') and not descriptor_matches_dtype_filter(desc, str(filters['dtype'])):
+    if filters.get('op') and not any(descriptor_matches_op(desc, op) for op in _split_filter(filters['op'])):
+        return False
+
+    dtypes = _split_filter(filters.get('dtype'))
+    if dtypes and not any(descriptor_matches_dtype_filter(desc, dtype) for dtype in dtypes):
         return False
 
     descriptor_suite = _descriptor_suite(desc).strip().lower()
@@ -573,10 +577,18 @@ def test_generation(test_filters):
     )
 
     produced_count = generated_count + reused_count
-    pruned_count = prune_unlisted_cases(
-        top_generated,
-        {str(entry["relative_test_dir"]) for entry in manifest_entries},
-    )
+    produced_dirs = {str(entry["relative_test_dir"]) for entry in manifest_entries}
+    if test_filters.get("keep_unselected"):
+        # Drop selected cases this run skipped.
+        stale = [
+            test_dir for test_dir in (_descriptor_test_dir(Path(top_generated), d) for d in filtered_descriptors)
+            if test_dir.is_dir() and str(test_dir.relative_to(top_generated)) not in produced_dirs
+        ]
+        for test_dir in stale:
+            reset_case_dir(test_dir)
+        pruned_count = len(stale)
+    else:
+        pruned_count = prune_unlisted_cases(top_generated, produced_dirs)
     if pruned_count:
         print(f"Pruned {pruned_count} case director(ies) outside the active filter")
 

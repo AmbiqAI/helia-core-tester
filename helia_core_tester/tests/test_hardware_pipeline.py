@@ -648,7 +648,7 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
     board = resolve_board("apollo510_evb")
     order: list[str] = []
 
-    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None):
+    def _generate(repo_root, spec, suite, float_precision=None, cmsis_nn_root=None, select=None):
         order.append(f"generate:{spec.cpu}:{suite}:{float_precision}:{cmsis_nn_root}")
 
     def _stage(spec, *, build_dir, options, force_sync, update_dependencies):
