@@ -32,7 +32,6 @@ from .case_bundle import (
 )
 from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_entry_id, lookup_kernel_id
 from .pathutil import display_path
-from helia_core_tester.core.cpu_targets import get_cpu_profile
 from helia_core_tester.generation.io.descriptors import descriptor_matches_op
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, normalize_dtype, resolve_comparison
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
@@ -550,48 +549,20 @@ def _is_convolve_1x1_fast(*, stride_h: int, stride_w: int) -> bool:
     return stride_w == 1 and stride_h == 1
 
 
-def _is_convolve_1_x_n(input_dims: dict[str, int], filter_dims: dict[str, int], *, stride_w: int, dilation_w: int) -> bool:
-    return (
-        input_dims["h"] == 1
-        and dilation_w == 1
-        and filter_dims["h"] == 1
-        and ((stride_w * input_dims["c"]) % 4 == 0)
-        and input_dims["c"] == filter_dims["c"]
-    )
-
-
 def _calculate_convolve_s4_scratch_bytes(
     input_dims: dict[str, int],
     filter_dims: dict[str, int],
     output_dims: dict[str, int],
     *,
-    stride_h: int,
-    stride_w: int,
     pad_h: int,
     pad_w: int,
     dilation_h: int,
     dilation_w: int,
-    mve: bool = True,
 ) -> int:
     if _is_convolve_1x1(input_dims, filter_dims, pad_h=pad_h, pad_w=pad_w, dilation_h=dilation_h, dilation_w=dilation_w):
         return 0
-
-    rhs_cols = filter_dims["w"] * filter_dims["h"] * input_dims["c"]
-    # DSP 1xN still needs im2col.
-    if mve and _is_convolve_1_x_n(input_dims, filter_dims, stride_w=stride_w, dilation_w=dilation_w):
-        input_x = input_dims["w"]
-        kernel_x = filter_dims["w"]
-        output_x = output_dims["w"]
-        total_pad = (output_x - 1) * stride_w + kernel_x - input_x
-        asym_pad = total_pad % 2
-        right_pad_num = max(1, (pad_w + asym_pad + stride_w - 1) // stride_w) if (pad_w + asym_pad) != 0 else 0
-        left_pad_num = max(1, (pad_w + stride_w - 1) // stride_w) if pad_w != 0 else 0
-        no_pad_num = max(output_x - (right_pad_num + left_pad_num), 0)
-        if right_pad_num + no_pad_num + left_pad_num == output_x:
-            return 0
-
-    col_length_mve = (rhs_cols + 15) // 16
-    return 4 * col_length_mve * 16
+    # Bound every non-1x1 route's sizer.
+    return TemplateContextBuilder.calculate_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
 
 
 def _calculate_depthwise_conv_s4_scratch_bytes(
@@ -1061,13 +1032,10 @@ def _build_convolve_case(
             input_dims_dict,
             filter_dims_dict,
             output_dims_dict,
-            stride_h=strides[0],
-            stride_w=strides[1],
             pad_h=pad_h,
             pad_w=pad_w,
             dilation_h=dilation_h,
             dilation_w=dilation_w,
-            mve=get_cpu_profile(generated_test.cpu).has_mve,
         )
     else:
         scratch_bytes = TemplateContextBuilder.calculate_buffer_size_max(

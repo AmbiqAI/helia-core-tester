@@ -14,6 +14,7 @@ from helia_core_tester.hardware.case_bundle import load_case_bundle
 from helia_core_tester.hardware.generated_test_bridge import (
     GeneratedTestCase,
     UnsupportedGeneratedTestError,
+    _calculate_convolve_s4_scratch_bytes,
     _extract_define_int,
     build_case_bundle_from_generated_test,
     discover_generated_tests,
@@ -268,3 +269,17 @@ def test_plain_s8_conv_times_wrapper(tmp_path: Path, name: str, wrapper: str) ->
     catalog = json.loads((PROJECT_ROOT / "cmake" / "hardware" / "kernel_catalog.json").read_text())
     names = {entry["kernel_id"]: entry["canonical_name"] for entry in catalog}
     assert names[manifest["kernel_id"]] == wrapper
+
+
+def test_s4_one_by_n_reserves_im2col() -> None:
+    # VALID stride 2 leaves input unused.
+    scratch = _calculate_convolve_s4_scratch_bytes(
+        {"n": 1, "h": 1, "w": 12, "c": 4},
+        {"n": 4, "h": 1, "w": 3, "c": 4},
+        {"n": 1, "h": 1, "w": 5, "c": 4},
+        pad_h=0, pad_w=0, dilation_h=1, dilation_w=1,
+    )
+    # arm_convolve_s4_get_buffer_size_mve: 4 * 16 * ceil(12 / 16).
+    assert scratch >= 64
+    # arm_convolve_s4_get_buffer_size: 2 * rhs_cols * 2.
+    assert scratch >= 2 * (3 * 4) * 2
