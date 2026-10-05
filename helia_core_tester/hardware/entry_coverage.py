@@ -2,7 +2,8 @@
 
 Public: kernels the build linked (kernel_symbol_refs.inc).
 Timed: each unrejected case's arm_* capability, else its registry
-`cmsis_function`. Deployed: assets/deployed_entry_points.json.
+`cmsis_function`, plus the kernel a wrapper routes to.
+Deployed: assets/deployed_entry_points.json.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from .adapter_specs import is_setup_call
 from .kernel_registry import load_kernel_registry
 from .pathutil import write_text_lf
 from .result_bundle import merge_summary
+from .wrapper_route import inner_symbol
 
 DEPLOYED_PATH = Path("assets/deployed_entry_points.json")
 COVERAGE_FILE = "coverage.json"
@@ -50,7 +52,9 @@ def build_coverage(project_root: Path, cases: Sequence, build_dir: Optional[Path
         named = {name for name in capabilities if name.startswith("arm_")}
         if not named and bundle.kernel_id in by_id:
             named = {by_id[bundle.kernel_id]}
-        timed_set.update(named)
+        # A wrapper also times its route.
+        inners = {inner_symbol(name, bundle.manifest) for name in named}
+        timed_set.update(named, inners - {None})
     timed = sorted(timed_set)
     deployed = json.loads((project_root / DEPLOYED_PATH).read_text(encoding="utf-8"))
     deployed_names = deployed["entry_points"]
