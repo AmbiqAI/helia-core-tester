@@ -577,7 +577,7 @@ def test_generation(test_filters):
     )
 
     produced_count = generated_count + reused_count
-    pruned_count = prune_unlisted_cases(
+    pruned_count = 0 if test_filters.get("keep_unselected") else prune_unlisted_cases(
         top_generated,
         {str(entry["relative_test_dir"]) for entry in manifest_entries},
     )

@@ -92,7 +92,7 @@ def _capture_generate(monkeypatch) -> list:
 
 
 def _filters(config) -> tuple:
-    return config.op_filter, config.dtype_filter, config.name_filter
+    return config.op_filter, config.dtype_filter, config.name_filter, config.keep_unselected
 
 
 def test_generation_takes_the_selection(monkeypatch) -> None:
@@ -101,12 +101,12 @@ def test_generation_takes_the_selection(monkeypatch) -> None:
     select = CaseSelection(ops=("Convolve", "DepthwiseConv"), dtypes=("s8",), case_ids=("a_hw_generated", "b"))
 
     generate_tests_for_board(PROJECT_ROOT, board, "int", select=select)
-    assert _filters(configs[-1]) == ("Convolve,DepthwiseConv", "S8", "a,b")
+    assert _filters(configs[-1]) == ("Convolve,DepthwiseConv", "S8", "a,b", True)
     # Nightly: no selection, full generation.
     generate_tests_for_board(PROJECT_ROOT, board, "int", select=CaseSelection())
-    assert _filters(configs[-1]) == (None, None, None)
+    assert _filters(configs[-1]) == (None, None, None, False)
     generate_tests_for_board(PROJECT_ROOT, board, "both", select=select)
-    assert _filters(configs[-1]) == (None, None, None)
+    assert _filters(configs[-1]) == (None, None, None, False)
 
 
 def test_run_passes_selection_to_generation(tmp_path: Path, monkeypatch) -> None:

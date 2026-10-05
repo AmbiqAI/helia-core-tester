@@ -287,3 +287,27 @@ def test_second_generation_reuses_every_case(tmp_path: Path, monkeypatch: pytest
         return stripped
 
     assert _without_reuse_state(warm_manifest) == _without_reuse_state(cold_manifest)
+
+
+@pytest.mark.parametrize("keep", [False, True])
+def test_keep_unselected_skips_the_prune(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep: bool) -> None:
+    generated_tests_dir = tmp_path / "artifacts" / "generated_tests" / "int" / "cortex-m55"
+    other = generated_tests_dir / "OtherFunctions" / "other_case"
+    other.mkdir(parents=True)
+    monkeypatch.setattr(generation_module, "find_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(generation_module, "find_descriptors_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        generation_module, "load_all_descriptors",
+        lambda _path: [{"name": "fc_keep", "operator": "FullyConnected", "activation_dtype": "S8", "weight_dtype": "S8",
+                        "_family": "FullyConnectedFunctions", "_parity_kind": "cmsis"}],
+    )
+
+    def _fake_generate_test(desc, out_dir, **_kwargs):
+        test_dir = Path(out_dir) / desc["_family"] / desc["name"]
+        test_dir.mkdir(parents=True, exist_ok=True)
+        (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
+
+    monkeypatch.setattr(generation_module, "generate_test", _fake_generate_test)
+    generation_module.test_generation({**_filters(generated_tests_dir), "keep_unselected": keep})
+
+    assert other.is_dir() is keep

@@ -35,6 +35,8 @@ def pytest_addoption(parser):
                     help="Float precision for float suite: f16, f32, or both")
     parser.addoption("--force-generate", action="store_true", default=False,
                     help="Regenerate every case, ignoring reuse stamps")
+    parser.addoption("--keep-unselected", action="store_true", default=False,
+                    help="Keep cases outside the filter instead of pruning")
 
 
 def pytest_configure(config):
@@ -97,4 +99,5 @@ def test_filters(request):
         'float_precision': request.config.getoption("--float-precision"),
         'generated_tests_dir': request.config.getoption("--generated-tests-dir"),
         'force_generate': request.config.getoption("--force-generate"),
+        'keep_unselected': request.config.getoption("--keep-unselected"),
     }

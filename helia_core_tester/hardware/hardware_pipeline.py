@@ -227,6 +227,9 @@ def _board_config(
             if values:
                 kwargs[key] = ",".join(values)
                 overrides.add(key)
+                # Other runs share this tree.
+                kwargs["keep_unselected"] = True
+                overrides.add("keep_unselected")
     if float_precision is not None:
         kwargs["float_precision"] = float_precision
         overrides.add("float_precision")
