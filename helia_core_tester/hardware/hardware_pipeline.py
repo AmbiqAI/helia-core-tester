@@ -261,6 +261,7 @@ def resolved_selection(repo_root: Path, board: BoardSpec, options: "StreamOption
         "precision": generation_precision(repo_root, board, options),
         "pmu_counters": options.pmu_counters,
         "fvp_gate": options.fvp_gate or DEFAULT_GATE,
+        "compare": options.compare_record(),
     }
 
 
@@ -280,6 +281,19 @@ class StreamOptions:
     session_id: Optional[str] = None
     float_precision: Optional[str] = None
     """Config.float_precision for the generate step when `--precision` was given (f16/f32)."""
+    strict_compare: bool = False
+    """Integer outputs must match exactly: no tolerance."""
+    golden_from: Optional[Path] = None
+    """Result bundle whose outputs replace the goldens; implies strict."""
+    golden_allow_failed: bool = False
+    """Accept golden cases the past run failed."""
+
+    def compare_record(self) -> dict[str, Any]:
+        """How outputs get judged, for the bundle."""
+        return {
+            "strict": self.strict_compare or self.golden_from is not None,
+            "golden_from": str(self.golden_from) if self.golden_from else None,
+        }
 
 
 def fit_to_board(board: BoardSpec, options: StreamOptions, *, explicit_pmu: bool) -> StreamOptions:
@@ -315,45 +329,13 @@ class HardwareRunOutcome:
         return [c.case_bundle.case_id for c in self.result.cases if not c.comparison.passed]
 
 
-def stream_generated_tests(
-    repo_root: Path,
-    board: BoardSpec,
-    serial_no: int,
-    *,
-    build_dir: Path,
-    options: StreamOptions,
-    echo: Callable[[str], None],
-    progress_to_stderr: bool = False,
-    allow_unverified_firmware: bool = False,
-) -> HardwareRunOutcome:
-    """Stream the generated suite to already-flashed firmware and write the bundle.
-
-    Preflight: the build dir must carry `hct_build_id.txt` so every session's TARGET_INFO
-    can be checked against it; a missing stamp is an error unless
-    `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
-    """
+def prepare_bundles(repo_root: Path, board: BoardSpec, options: StreamOptions) -> tuple[list, list]:
+    """Bridge the cases; apply the compare mode."""
+    from .case_bundle import golden_bundle, golden_failed, golden_usable, strict_bundle
     from .generated_test_bridge import HW_CASE_SUFFIX, CaseSelection
-    from .result_bundle import merge_summary
-    from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error, run_case_bundles
+    from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error
 
-    session_id = options.session_id or default_session_id(board)
-
-    expected_build_id = read_build_id(build_dir)
-    if expected_build_id is None:
-        stamp_missing = (
-            f"{build_id_path(build_dir)} not found, so the firmware on the board cannot be verified "
-            "against this build dir."
-        )
-        if not allow_unverified_firmware:
-            raise RuntimeError(
-                f"{stamp_missing} Rebuild with `hardware build --board {board.id}` (which stamps it), "
-                "or pass --allow-unverified-firmware to stream to legacy firmware unchecked."
-            )
-        echo(f"[hardware] WARNING: {stamp_missing} Continuing unverified (--allow-unverified-firmware).")
-
-    # Bridge the cases once, before any hardware I/O: bridging loads every case's
-    # arrays and runs the FVP gate, so the list is built here and handed to the
-    # session runner rather than rebuilt inside it.
+    # Bridge once; the runner reuses it.
     select = CaseSelection(ops=options.ops, dtypes=options.dtypes, case_ids=options.case_ids)
     bundles, skipped = build_generated_test_case_bundles(
         repo_root, cpu=board.cpu, family=options.family, name_filter=options.test_name,
@@ -371,6 +353,57 @@ def stream_generated_tests(
         raise no_bridgeable_cases_error(
             skipped, cpu=board.cpu, family=options.family, name_filter=options.test_name, suite=options.suite,
         )
+    golden_dir = options.golden_from
+    if golden_dir is not None:
+        failed = [b.case_id for b in bundles if golden_failed(b, golden_dir)]
+        if failed and not options.golden_allow_failed:
+            raise RuntimeError(f"Golden run failed these cases: {', '.join(failed)}")
+        unusable = [b.case_id for b in bundles if not golden_usable(b, golden_dir)]
+        if unusable:
+            raise RuntimeError(f"No usable golden output in {golden_dir} for: {', '.join(unusable)}")
+        bundles = [golden_bundle(bundle, golden_dir) for bundle in bundles]
+    elif options.strict_compare:
+        bundles = [strict_bundle(bundle) for bundle in bundles]
+    return bundles, skipped
+
+
+def stream_generated_tests(
+    repo_root: Path,
+    board: BoardSpec,
+    serial_no: int,
+    *,
+    build_dir: Path,
+    options: StreamOptions,
+    echo: Callable[[str], None],
+    progress_to_stderr: bool = False,
+    allow_unverified_firmware: bool = False,
+    prepared: Optional[tuple[list, list]] = None,
+) -> HardwareRunOutcome:
+    """Stream the generated suite to already-flashed firmware and write the bundle.
+
+    Preflight: the build dir must carry `hct_build_id.txt` so every session's TARGET_INFO
+    can be checked against it; a missing stamp is an error unless
+    `allow_unverified_firmware` says the caller knowingly streams to legacy firmware.
+    """
+    from .result_bundle import merge_summary
+    from .session_runner import run_case_bundles
+
+    session_id = options.session_id or default_session_id(board)
+
+    expected_build_id = read_build_id(build_dir)
+    if expected_build_id is None:
+        stamp_missing = (
+            f"{build_id_path(build_dir)} not found, so the firmware on the board cannot be verified "
+            "against this build dir."
+        )
+        if not allow_unverified_firmware:
+            raise RuntimeError(
+                f"{stamp_missing} Rebuild with `hardware build --board {board.id}` (which stamps it), "
+                "or pass --allow-unverified-firmware to stream to legacy firmware unchecked."
+            )
+        echo(f"[hardware] WARNING: {stamp_missing} Continuing unverified (--allow-unverified-firmware).")
+
+    bundles, skipped = prepared or prepare_bundles(repo_root, board, options)
     # The live progress printer aligns its [N/total] counter and case_id columns from
     # the first printed line instead of widening them as longer names show up mid-run.
     id_width = max(len(b.case_id) for b in bundles)
@@ -408,6 +441,7 @@ def stream_generated_tests(
         build_dir=build_dir,
         on_case_complete=on_case_complete,
         expected_build_id=expected_build_id,
+        compare=options.compare_record(),
     )
     merge_summary(bundle, "selection", resolved_selection(repo_root, board, options))
     timing = {
@@ -491,6 +525,8 @@ def run_hardware_pipeline(
         )
         generate_s = time.monotonic() - generate_started
 
+    # Check goldens before touching the board.
+    prepared = prepare_bundles(repo_root, board, options) if options.golden_from is not None else None
     flash: Optional[FlashDecision] = None
     if skip_flash:
         echo("[hardware] --skip-flash set; reusing firmware already running on the board.")
@@ -503,6 +539,7 @@ def run_hardware_pipeline(
     outcome = stream_generated_tests(
         repo_root, board, serial_no, build_dir=resolved_build_dir, options=options,
         echo=echo, progress_to_stderr=progress_to_stderr, allow_unverified_firmware=allow_unverified_firmware,
+        prepared=prepared,
     )
     outcome.flash = flash
     if outcome.result is not None:
