@@ -4821,6 +4821,222 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
 }
 '''
 
+_TAKE_SCRATCH = '''\
+/* Carve one aligned slice from scratch. */
+static bool take_scratch(hct_server_session_t *session, uint32_t *used, int32_t bytes, cmsis_nn_context *ctx)
+{
+    uint32_t offset;
+    uint32_t end;
+    if (bytes < 0 || !hct_checked_aligned_range(*used, 16u, (uint32_t)bytes, session->scratch_bytes, &offset, &end))
+    {
+        return false;
+    }
+    ctx->buf = (bytes > 0) ? &session->workspace[session->scratch_offset + offset] : NULL;
+    ctx->size = bytes;
+    *used = end;
+    return true;
+}'''
+
+_RUN_SVDF_ONCE = '''\
+/* meta_0: rank, in/out quant, input clamp. */
+static arm_cmsis_nn_status run_svdf_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+    hct_server_blob_t *state = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_1);
+    hct_server_blob_t *weights_time = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_2);
+    hct_server_blob_t *weights_feature = find_blob_by_role(session, HCT_BLOB_ROLE_WEIGHTS);
+    hct_server_blob_t *bias = find_blob_by_role(session, HCT_BLOB_ROLE_BIAS);
+    hct_server_blob_t *meta_blob = find_blob_by_role(session, HCT_BLOB_ROLE_META_0);
+    const bool state_s16 = (session->expected_kernel_id == HCT_KERNEL_ID_SVDF_STATE_S16_S8);
+    const uint32_t state_size = state_s16 ? (uint32_t)sizeof(int16_t) : 1u;
+    cmsis_nn_context ctx = {NULL, 0};
+    cmsis_nn_context input_ctx;
+    cmsis_nn_context output_ctx;
+    cmsis_nn_svdf_params params;
+    cmsis_nn_per_tensor_quant_params input_quant;
+    cmsis_nn_per_tensor_quant_params output_quant;
+    cmsis_nn_dims input_dims;
+    cmsis_nn_dims state_dims;
+    cmsis_nn_dims feature_dims;
+    cmsis_nn_dims time_dims;
+    cmsis_nn_dims bias_dims;
+    cmsis_nn_dims output_dims;
+    const int32_t *meta;
+    uint32_t used = 0u;
+    uint32_t bytes;
+
+    if (input == NULL || state == NULL || weights_time == NULL || weights_feature == NULL ||
+        !hct_validate_meta0_blob(meta_blob, 7u, -1, -1))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    meta = (const int32_t *)blob_ptr(session, meta_blob);
+    hct_fill_dims_from_blob(input, &input_dims);
+    hct_fill_dims_from_blob(state, &state_dims);
+    hct_fill_dims_from_blob(weights_feature, &feature_dims);
+    hct_fill_dims_from_blob(weights_time, &time_dims);
+    hct_fill_output_dims_from_session(session, &output_dims);
+    bias_dims.n = 1;
+    bias_dims.h = 1;
+    bias_dims.w = 1;
+    bias_dims.c = output_dims.h;
+    if (!hct_checked_dims_bytes(&input_dims, 1u, input->byte_length, &bytes) ||
+        !hct_checked_dims_bytes(&state_dims, state_size, state->byte_length, &bytes) ||
+        !hct_checked_dims_bytes(&feature_dims, 1u, weights_feature->byte_length, &bytes) ||
+        !hct_checked_dims_bytes(&time_dims, state_size, weights_time->byte_length, &bytes) ||
+        (bias != NULL && !hct_checked_count_bytes(bias_dims.c, sizeof(int32_t), bias->byte_length, &bytes)) ||
+        !hct_checked_dims_bytes(&output_dims, 1u, session->output_capacity_bytes, &session->output_length))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    params.rank = meta[0];
+    params.input_offset = session->input_offset;
+    params.output_offset = session->output_offset;
+    params.input_activation.min = meta[5];
+    params.input_activation.max = meta[6];
+    params.output_activation.min = session->activation_min;
+    params.output_activation.max = session->activation_max;
+    input_quant.multiplier = meta[1];
+    input_quant.shift = meta[2];
+    output_quant.multiplier = meta[3];
+    output_quant.shift = meta[4];
+
+    if (state_s16)
+    {
+        if (!take_scratch(session, &used, arm_svdf_state_s16_s8_input_ctx_get_buffer_size(&input_dims, &feature_dims), &input_ctx) ||
+            !take_scratch(session, &used, arm_svdf_state_s16_s8_output_ctx_get_buffer_size(&params, &input_dims, &feature_dims), &output_ctx))
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+        return arm_svdf_state_s16_s8(&input_ctx, &output_ctx, &params, &input_quant, &output_quant,
+                                     &input_dims, (const int8_t *)blob_ptr(session, input),
+                                     &state_dims, (int16_t *)blob_ptr(session, state),
+                                     &feature_dims, (const int8_t *)blob_ptr(session, weights_feature),
+                                     &time_dims, (const int16_t *)blob_ptr(session, weights_time),
+                                     &bias_dims, (bias != NULL) ? (const int32_t *)blob_ptr(session, bias) : NULL,
+                                     &output_dims, (int8_t *)hct_output_ptr(session));
+    }
+
+    if (!take_scratch(session, &used, arm_svdf_s8_input_ctx_get_buffer_size(&input_dims, &feature_dims), &input_ctx) ||
+        !take_scratch(session, &used, arm_svdf_s8_output_ctx_get_buffer_size(&params, &input_dims, &feature_dims), &output_ctx) ||
+        !take_scratch(session, &used, arm_svdf_s8_get_buffer_size(&feature_dims), &ctx))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+#if defined(ARM_MATH_MVEI)
+    /* Only MVE kernels read the sum. */
+    if (ctx.buf != NULL)
+    {
+        arm_vector_sum_s8((int32_t *)ctx.buf, feature_dims.h, feature_dims.n,
+                          (const int8_t *)blob_ptr(session, weights_feature), -params.input_offset, 0, NULL);
+    }
+#endif
+    return arm_svdf_s8(&ctx, &input_ctx, &output_ctx, &params, &input_quant, &output_quant,
+                       &input_dims, (const int8_t *)blob_ptr(session, input),
+                       &state_dims, (int8_t *)blob_ptr(session, state),
+                       &feature_dims, (const int8_t *)blob_ptr(session, weights_feature),
+                       &time_dims, (const int8_t *)blob_ptr(session, weights_time),
+                       &bias_dims, (bias != NULL) ? (const int32_t *)blob_ptr(session, bias) : NULL,
+                       &output_dims, (int8_t *)hct_output_ptr(session));
+}'''
+
+_RUN_LSTM_ONCE = '''\
+/* meta_0: lstm params, then per-gate quant. */
+static arm_cmsis_nn_status run_lstm_once(hct_server_session_t *session)
+{
+    hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+    hct_server_blob_t *weights = find_blob_by_role(session, HCT_BLOB_ROLE_WEIGHTS);
+    hct_server_blob_t *bias = find_blob_by_role(session, HCT_BLOB_ROLE_BIAS);
+    hct_server_blob_t *meta_blob = find_blob_by_role(session, HCT_BLOB_ROLE_META_0);
+    cmsis_nn_lstm_gate *gates[4];
+    cmsis_nn_lstm_params params;
+    cmsis_nn_lstm_context buffers;
+    cmsis_nn_context sums;
+    cmsis_nn_context temp1;
+    cmsis_nn_context temp2;
+    cmsis_nn_context cell;
+    const int32_t *meta;
+    const int8_t *weight_data;
+    const int32_t *bias_data;
+    int32_t hidden;
+    int32_t input_size;
+    int32_t gate;
+    uint32_t used = 0u;
+    uint32_t bytes;
+
+    if (input == NULL || weights == NULL || bias == NULL || !hct_validate_meta0_blob(meta_blob, 31u, -1, -1))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+    meta = (const int32_t *)blob_ptr(session, meta_blob);
+    params.time_major = meta[0];
+    params.batch_size = meta[1];
+    params.time_steps = meta[2];
+    params.input_size = input_size = meta[3];
+    params.hidden_size = hidden = meta[4];
+    params.input_offset = meta[5];
+    params.forget_to_cell_multiplier = meta[6];
+    params.forget_to_cell_shift = meta[7];
+    params.input_to_cell_multiplier = meta[8];
+    params.input_to_cell_shift = meta[9];
+    params.cell_clip = meta[10];
+    params.cell_scale_power = meta[11];
+    params.output_multiplier = meta[12];
+    params.output_shift = meta[13];
+    params.output_offset = meta[14];
+    if (params.batch_size <= 0 || params.time_steps <= 0 || input_size <= 0 || hidden <= 0 ||
+        !hct_checked_count_bytes(params.batch_size * params.time_steps * input_size, 1u, input->byte_length, &bytes) ||
+        !hct_checked_count_bytes(4 * hidden * (input_size + hidden), 1u, weights->byte_length, &bytes) ||
+        !hct_checked_count_bytes(4 * hidden, sizeof(int32_t), bias->byte_length, &bytes) ||
+        !hct_checked_count_bytes(params.batch_size * params.time_steps * hidden, 1u, session->output_capacity_bytes, &session->output_length) ||
+        !take_scratch(session, &used, 8 * hidden * (int32_t)sizeof(int32_t), &sums) ||
+        !take_scratch(session, &used, arm_lstm_unidirectional_s8_temp1_get_buffer_size(&params), &temp1) ||
+        !take_scratch(session, &used, arm_lstm_unidirectional_s8_temp2_get_buffer_size(&params), &temp2) ||
+        !take_scratch(session, &used, params.batch_size * hidden * (int32_t)sizeof(int16_t), &cell))
+    {
+        return ARM_CMSIS_NN_ARG_ERROR;
+    }
+
+    /* Blobs hold input, forget, cell, output. */
+    gates[0] = &params.input_gate;
+    gates[1] = &params.forget_gate;
+    gates[2] = &params.cell_gate;
+    gates[3] = &params.output_gate;
+    weight_data = (const int8_t *)blob_ptr(session, weights);
+    bias_data = (const int32_t *)blob_ptr(session, bias);
+    for (gate = 0; gate < 4; ++gate)
+    {
+        const int8_t *input_weights = &weight_data[gate * hidden * input_size];
+        const int8_t *hidden_weights = &weight_data[4 * hidden * input_size + gate * hidden * hidden];
+        int32_t *input_sum = &((int32_t *)sums.buf)[gate * hidden];
+        int32_t *hidden_sum = &((int32_t *)sums.buf)[(4 + gate) * hidden];
+        arm_vector_sum_s8(input_sum, input_size, hidden, input_weights, params.input_offset, 0, &bias_data[gate * hidden]);
+        arm_vector_sum_s8(hidden_sum, hidden, hidden, hidden_weights, -params.output_offset, 0, NULL);
+        gates[gate]->input_multiplier = meta[15 + 4 * gate];
+        gates[gate]->input_shift = meta[16 + 4 * gate];
+        gates[gate]->input_weights = input_weights;
+        gates[gate]->input_effective_bias = input_sum;
+        gates[gate]->hidden_multiplier = meta[17 + 4 * gate];
+        gates[gate]->hidden_shift = meta[18 + 4 * gate];
+        gates[gate]->hidden_weights = hidden_weights;
+        gates[gate]->hidden_effective_bias = hidden_sum;
+        gates[gate]->bias = &bias_data[gate * hidden];
+        gates[gate]->activation_type = (gate == 2) ? ARM_TANH : ARM_SIGMOID;
+    }
+
+    /* Each call starts from zero cell state. */
+    memset(cell.buf, 0, (size_t)cell.size);
+    buffers.temp1 = temp1.buf;
+    buffers.temp2 = temp2.buf;
+    buffers.cell_state = cell.buf;
+    buffers.hidden_state = NULL;
+    return arm_lstm_unidirectional_s8((const int8_t *)blob_ptr(session, input),
+                                      (int8_t *)hct_output_ptr(session),
+                                      &params,
+                                      &buffers);
+}'''
+
 
 # Ordered list -- rendering emits function bodies in this order. Entries with no
 # kernel_ids (`compute_convolve_output_dims`, `place_weight_sums`) are private helpers
@@ -5237,6 +5453,30 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         guard="HCT_HOST_ABS_ONLY",
         scalar_fields=("output_n", "output_h", "output_w", "output_c", "null_arg_mask"),
         c_body=_RUN_DATA_MOVEMENT_ONCE,
+    ),
+    FirmwareAdapterSpec(
+        label="SVDFunctions/SVDF,LSTMFunctions/LSTMUnidirectional (helper)",
+        function_name="take_scratch",
+        kernel_ids=(),
+        guard="HCT_HOST_ABS_ONLY",
+        scalar_fields=(),
+        c_body=_TAKE_SCRATCH,
+    ),
+    FirmwareAdapterSpec(
+        label="SVDFunctions/SVDF",
+        function_name="run_svdf_once",
+        kernel_ids=("HCT_KERNEL_ID_SVDF_S8", "HCT_KERNEL_ID_SVDF_STATE_S16_S8"),
+        guard="HCT_HOST_ABS_ONLY",
+        scalar_fields=("input_offset", "output_offset", "activation_min", "activation_max", "output_n", "output_h", "output_w", "output_c"),
+        c_body=_RUN_SVDF_ONCE,
+    ),
+    FirmwareAdapterSpec(
+        label="LSTMFunctions/LSTMUnidirectional",
+        function_name="run_lstm_once",
+        kernel_ids=("HCT_KERNEL_ID_LSTM_UNIDIRECTIONAL_S8",),
+        guard="HCT_HOST_ABS_ONLY",
+        scalar_fields=(),
+        c_body=_RUN_LSTM_ONCE,
     ),
 )
 

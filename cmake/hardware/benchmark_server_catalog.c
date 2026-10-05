@@ -14,11 +14,6 @@
 #define HCT_PMU_CAPABILITY_FLAGS 0u
 #define HCT_PMU_COUNTER_SLOTS 0u
 #endif
-#if defined(HCT_PLACEMENT_MRAM)
-#define HCT_PLACEMENT_CAPABILITY_FLAGS HCT_CAP_WEIGHTS_MRAM
-#else
-#define HCT_PLACEMENT_CAPABILITY_FLAGS 0u
-#endif
 
 #ifndef HCT_BENCHMARK_SERVER_BOARD_ID
 #define HCT_BENCHMARK_SERVER_BOARD_ID "apollo510_evb"
@@ -207,13 +202,16 @@ static const hct_kernel_catalog_entry_t g_hct_kernel_catalog[] = {
     {172u, "arm_convolve_f32", "ConvolutionFunctions", 1u, "FP32", 1u, true, true, false, 0u},
     {173u, "arm_convolve_f16", "ConvolutionFunctions", 1u, "FP16", 1u, true, true, false, 0u},
     {174u, "hct_empty_call", "Timing", 1u, "S8", 1u, true, true, false, 0u},
+    {175u, "arm_svdf_s8", "SVDFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {176u, "arm_svdf_state_s16_s8", "SVDFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {177u, "arm_lstm_unidirectional_s8", "LSTMFunctions", 1u, "S8", 1u, true, true, false, 0u},
 };
 
 static const uint8_t g_hct_kernel_catalog_hash[32] = {
-    0x2au, 0x32u, 0x00u, 0xaeu, 0x4du, 0x42u, 0xecu, 0x92u,
-    0x4au, 0x44u, 0x69u, 0xd5u, 0x61u, 0x1du, 0x3cu, 0x4au,
-    0x0au, 0x2au, 0xb3u, 0xedu, 0x8fu, 0x10u, 0xffu, 0x5du,
-    0xd1u, 0x7au, 0x8fu, 0xbeu, 0x0fu, 0x9fu, 0xd5u, 0x60u,
+    0xb2u, 0xbdu, 0xc9u, 0x82u, 0x48u, 0xaau, 0x80u, 0x6du,
+    0x89u, 0x83u, 0xfbu, 0x80u, 0xcau, 0xe9u, 0xe0u, 0xe2u,
+    0x77u, 0xd6u, 0xeeu, 0x0bu, 0x9fu, 0x1bu, 0xd3u, 0x4eu,
+    0x87u, 0x90u, 0x3cu, 0x87u, 0xcfu, 0x95u, 0x19u, 0xabu,
 };
 
 const hct_kernel_catalog_entry_t *hct_benchmark_server_catalog(size_t *count)
@@ -258,8 +256,7 @@ uint32_t hct_benchmark_server_capability_flags(void)
          | HCT_CAP_RTT_TRANSPORT
          | HCT_CAP_KERNEL_CATALOG
          | HCT_CAP_ABS_S8
-         | HCT_PMU_CAPABILITY_FLAGS
-         | HCT_PLACEMENT_CAPABILITY_FLAGS;
+         | HCT_PMU_CAPABILITY_FLAGS;
 }
 
 uint8_t hct_benchmark_server_pmu_counter_slots(void)

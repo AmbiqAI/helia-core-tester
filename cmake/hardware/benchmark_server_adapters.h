@@ -252,6 +252,9 @@ extern "C" {
 #define HCT_KERNEL_ID_CONVOLVE_F32 172u
 #define HCT_KERNEL_ID_CONVOLVE_F16 173u
 #define HCT_KERNEL_ID_EMPTY_CALL 174u
+#define HCT_KERNEL_ID_SVDF_S8 175u
+#define HCT_KERNEL_ID_SVDF_STATE_S16_S8 176u
+#define HCT_KERNEL_ID_LSTM_UNIDIRECTIONAL_S8 177u
 
 static inline hct_server_blob_t *find_blob_by_role(hct_server_session_t *session, uint8_t role)
 {

@@ -5003,6 +5003,181 @@ def _build_data_movement_case(
     raise UnsupportedGeneratedTestError(f"{generated_test.name}: unsupported phase 3e operator {operator!r}.")
 
 
+def _header_define(header_text: str, name: str) -> int:
+    """An int or bool `#define` from a header."""
+    match = re.search(rf"^\s*#define\s+{re.escape(name)}\s+(\S+)\s*$", header_text, re.MULTILINE)
+    if match is None:
+        raise UnsupportedGeneratedTestError(f"Could not find #define `{name}` in generated header")
+    value = match.group(1)
+    return {"true": 1, "false": 0}[value] if value in ("true", "false") else int(value)
+
+
+def _finish_recurrent_bundle(
+    project_root: Path,
+    generated_test: GeneratedTestCase,
+    output_root: Path | None,
+    *,
+    kernel_operator: str,
+    cmsis_function: str,
+    arrays: list,
+    scalar_parameters: dict,
+    scratch_bytes: int,
+) -> CaseBundle:
+    """Write blobs and manifest for SVDF and LSTM."""
+    family = generated_test.family
+    case_id = f"{generated_test.name}_hw_generated"
+    bundle_root = output_root if output_root is not None else project_root
+    case_root = _case_root(bundle_root, family, case_id, suite=generated_test.suite, target=generated_test.target)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+    blobs = _write_generated_blobs(blobs_dir, [(blob_id, *entry) for blob_id, entry in enumerate(arrays, start=1)])
+    descriptor_path = generated_test.directory / "descriptor.yaml"
+    manifest_header = _generated_manifest_header(
+        project_root, generated_test, case_id, descriptor_path, descriptor_path.read_text(encoding="utf-8")
+    )
+    return _finish_generated_bundle(
+        case_root, blobs, manifest_header,
+        operator=str(generated_test.descriptor["operator"]),
+        family=family,
+        target_cpu=generated_test.cpu,
+        kernel_id=_kernel_id(project_root, family=family, operator=kernel_operator, dtype="S8"),
+        scalar_parameters=scalar_parameters,
+        tensor_dtypes={blob.role: blob.dtype for blob in blobs},
+        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
+        expected_output={"dtype": "S8", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
+        comparison=dict(generated_test.descriptor["resolved_comparison"]),
+        scratch_bytes=scratch_bytes,
+        capabilities=[cmsis_function],
+    )
+
+
+def _require_s8_activation(generated_test: GeneratedTestCase, kernels: str) -> None:
+    dtype = str(generated_test.descriptor.get("activation_dtype", ""))
+    if dtype != "S8":
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: activation_dtype={dtype!r} has no hardware adapter; firmware runs {kernels} only."
+        )
+
+
+_SVDF_META = ("INPUT_MULTIPLIER", "INPUT_SHIFT", "OUTPUT_MULTIPLIER", "OUTPUT_SHIFT", "INPUT_ACTIVATION_MIN", "INPUT_ACTIVATION_MAX")
+
+
+def _build_svdf_case(project_root: Path, generated_test: GeneratedTestCase, *, output_root: Path | None = None) -> CaseBundle:
+    """Bridge an S8 SVDF case with an S8 or S16 state.
+
+    The kernel rewrites the state blob in place, so only the first call (the
+    correctness run) matches the golden; timed calls reuse the shifted state,
+    which leaves the kernel's work unchanged.
+    """
+    _require_s8_activation(generated_test, "arm_svdf_s8 and arm_svdf_state_s16_s8")
+    header = _find_header_file(generated_test.directory).read_text(encoding="utf-8")
+    prefix = generated_test.name
+    macro = prefix.upper() + "_"
+    state_s16 = re.search(rf"\bint16_t\s+{re.escape(prefix)}_state_init\b", header) is not None
+    state_dtype = "S16" if state_s16 else "S8"
+    dims = {key: _extract_dims(header, f"{prefix}_{key}_dims") for key in ("input", "state", "weights_feature", "weights_time", "output")}
+    # Header says n=1; the array holds every filter.
+    dims["weights_time"]["n"] = dims["weights_feature"]["n"]
+
+    def tensor(name: str, dtype: str, dims_key: str) -> tuple[tuple[int, ...], np.ndarray]:
+        shape = _dims_dict_to_shape(dims[dims_key])
+        flat = _extract_typed_array(header, f"{prefix}_{name}", dtype)
+        if flat.size != _shape_product(shape):
+            raise UnsupportedGeneratedTestError(f"{generated_test.name}: {name} has {flat.size} values, dims {shape}.")
+        return shape, flat.reshape(shape)
+
+    input_shape, input_data = tensor("input_data", "S8", "input")
+    state_shape, state_data = tensor("state_init", state_dtype, "state")
+    feature_shape, feature_data = tensor("weights_feature", "S8", "weights_feature")
+    time_shape, time_data = tensor("weights_time", state_dtype, "weights_time")
+    output_shape, expected = tensor("output_ref", "S8", "output")
+    bias = _extract_array_if_present(header, f"{prefix}_bias", "S32")
+    meta = [_header_define(header, macro + "RANK")] + [_header_define(header, macro + key) for key in _SVDF_META]
+    arrays = [
+        ("input_0", "S8", input_shape, input_data, False, False),
+        ("input_1", state_dtype, state_shape, state_data, True, False),
+        ("input_2", state_dtype, time_shape, time_data, False, False),
+        ("weights", "S8", feature_shape, feature_data, False, False),
+        *([("bias", "S32", (bias.size,), bias, False, False)] if bias is not None else []),
+        ("meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+        ("expected_output", "S8", output_shape, expected, False, True),
+    ]
+    # Input and output ctx, then kernel sums.
+    ctx_bytes = _align_up(dims["input"]["n"] * dims["weights_feature"]["n"] * 4, 16)
+    return _finish_recurrent_bundle(
+        project_root, generated_test, output_root,
+        kernel_operator="SVDFStateS16" if state_s16 else "SVDF",
+        cmsis_function="arm_svdf_state_s16_s8" if state_s16 else "arm_svdf_s8",
+        arrays=arrays,
+        scalar_parameters={
+            "input_offset": _header_define(header, macro + "INPUT_OFFSET"),
+            "output_offset": _header_define(header, macro + "OUTPUT_OFFSET"),
+            "activation_min": _header_define(header, macro + "OUTPUT_ACTIVATION_MIN"),
+            "activation_max": _header_define(header, macro + "OUTPUT_ACTIVATION_MAX"),
+            **{f"output_{key}": value for key, value in dims["output"].items()},
+        },
+        scratch_bytes=2 * ctx_bytes + dims["weights_feature"]["n"] * 4,
+    )
+
+
+_LSTM_GATES = ("INPUT", "FORGET", "CELL", "OUTPUT")
+_LSTM_PARAMS = (
+    "TIME_MAJOR", "BATCH_SIZE", "TIME_STEPS", "INPUT_SIZE", "HIDDEN_SIZE", "INPUT_ZERO_POINT",
+    "FORGET_TO_CELL_MULTIPLIER", "FORGET_TO_CELL_SHIFT", "INPUT_TO_CELL_MULTIPLIER", "INPUT_TO_CELL_SHIFT",
+    "CELL_CLIP", "CELL_SCALE_POWER", "OUTPUT_MULTIPLIER", "OUTPUT_SHIFT", "OUTPUT_ZERO_POINT",
+)
+
+
+def _build_lstm_case(project_root: Path, generated_test: GeneratedTestCase, *, output_root: Path | None = None) -> CaseBundle:
+    """Bridge an S8 unidirectional LSTM case.
+
+    meta_0 carries `_LSTM_PARAMS`, then each gate's input and hidden
+    multiplier/shift in `_LSTM_GATES` order. The weights blob packs the four
+    input matrices, then the four hidden ones; the bias blob packs four biases.
+    """
+    _require_s8_activation(generated_test, "arm_lstm_unidirectional_s8")
+    header = _find_header_file(generated_test.directory).read_text(encoding="utf-8")
+    dataset = str(generated_test.descriptor.get("dataset", ""))
+    macro = dataset.upper() + "_"
+
+    def array(name: str, dtype: str) -> np.ndarray:
+        return _extract_typed_array(header, f"{dataset.lower()}_{name}", dtype)
+
+    meta = [_header_define(header, macro + key) for key in _LSTM_PARAMS]
+    for gate in _LSTM_GATES:
+        for source in ("INPUT", "HIDDEN"):
+            meta += [_header_define(header, f"{macro}{gate}_GATE_{source}_{kind}") for kind in ("MULTIPLIER", "SHIFT")]
+    batch, steps, input_size, hidden = meta[1:5]
+    weights = np.concatenate(
+        [array(f"{gate.lower()}_gate_input_weights", "S8") for gate in _LSTM_GATES]
+        + [array(f"{gate.lower()}_gate_hidden_weights", "S8") for gate in _LSTM_GATES]
+    )
+    bias = np.concatenate([array(f"{gate.lower()}_gate_bias", "S32") for gate in _LSTM_GATES])
+    input_data = array("input_tensor", "S8")
+    expected = array("output", "S8")
+    sizes = {"input": batch * steps * input_size, "weights": 4 * hidden * (input_size + hidden), "bias": 4 * hidden, "output": batch * steps * hidden}
+    actual = {"input": input_data.size, "weights": weights.size, "bias": bias.size, "output": expected.size}
+    if sizes != actual:
+        raise UnsupportedGeneratedTestError(f"{generated_test.name}: LSTM tensor sizes {actual} do not match header params {sizes}.")
+    arrays = [
+        ("input_0", "S8", (input_data.size,), input_data, False, False),
+        ("weights", "S8", (weights.size,), weights, False, False),
+        ("bias", "S32", (bias.size,), bias, False, False),
+        ("meta_0", "S32", (len(meta),), np.array(meta, dtype=np.int32), False, False),
+        ("expected_output", "S8", (expected.size,), expected, False, True),
+    ]
+    # Kernel sums, temp1, temp2, cell state.
+    state_bytes = _align_up(batch * hidden * 2, 16)
+    return _finish_recurrent_bundle(
+        project_root, generated_test, output_root,
+        kernel_operator="LSTMUnidirectional",
+        cmsis_function="arm_lstm_unidirectional_s8",
+        arrays=arrays,
+        scalar_parameters={},
+        scratch_bytes=_align_up(8 * hidden * 4, 16) + 3 * state_bytes,
+    )
+
+
 # Dispatch table: (family, operator) -> builder. Add new bridged ops here (and a matching
 # entry in assets/kernel_registry.yaml + a firmware handler) to extend hardware coverage.
 _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
@@ -5067,6 +5242,8 @@ _BUILDERS: dict[tuple[str, str], Callable[..., CaseBundle]] = {
     ("BroadcastFunctions", "BroadcastTo"): _build_data_movement_case,
     ("DynamicUpdateSliceFunctions", "DynamicUpdateSlice"): _build_data_movement_case,
     ("StridedSliceFunctions", "StridedSlice"): _build_data_movement_case,
+    ("SVDFunctions", "SVDF"): _build_svdf_case,
+    ("LSTMFunctions", "LSTMUnidirectional"): _build_lstm_case,
 }
 
 

@@ -1078,3 +1078,21 @@ kernels:
     operator: EmptyCall
     dtype: S8
     cmsis_function: hct_empty_call
+
+  - kernel_id: 175
+    family: SVDFunctions
+    operator: SVDF
+    dtype: S8
+    cmsis_function: arm_svdf_s8
+
+  - kernel_id: 176
+    family: SVDFunctions
+    operator: SVDFStateS16
+    dtype: S8
+    cmsis_function: arm_svdf_state_s16_s8
+
+  - kernel_id: 177
+    family: LSTMFunctions
+    operator: LSTMUnidirectional
+    dtype: S8
+    cmsis_function: arm_lstm_unidirectional_s8
