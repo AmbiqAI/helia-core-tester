@@ -17,6 +17,8 @@ from helia_core_tester.generation.utils.litert_builder import build_unary_same_s
 RSQRT_CANONICAL_OUTPUT_SCALE = 1.0 / 32768.0
 # Wider inputs keep rsqrt mostly unsaturated.
 RSQRT_INPUT_SCALE = 1.0 / 512.0
+# Default input draw, in quantized units.
+RSQRT_INPUT_Q_RANGE = (4096, 32767)
 RSQRT_LUT_SIZE = 513
 RSQRT_SLOT_SHIFT = 7
 RSQRT_BASE_STEP_SHIFT = 6
@@ -153,8 +155,9 @@ class OpRsqrt(OperationBase):
 
     def _generate_positive_float_input(self, shape: Tuple[int, ...], input_scale: float) -> np.ndarray:
         # LUT error grows below q = 4096.
+        low, high = self.desc.get("hint", {}).get("input_q_range", RSQRT_INPUT_Q_RANGE)
         scale = float(input_scale)
-        return self._sample_uniform(shape, low=4096 * scale, high=32767 * scale, dtype=np.float32)
+        return self._sample_uniform(shape, low=low * scale, high=high * scale, dtype=np.float32)
 
     def _generate_negative_domain_input(self, shape: Tuple[int, ...], input_zp: int) -> np.ndarray:
         fill = np.int32(input_zp) - 1

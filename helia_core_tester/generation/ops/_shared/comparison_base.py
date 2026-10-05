@@ -22,6 +22,17 @@ _DTYPE_INFO = {
 }
 
 
+def _pin_near(rng, source, target, qmin, qmax) -> None:
+    """Tie or nudge target to source."""
+    src = source.reshape(-1)
+    flat = target.reshape(-1)
+    flat[::3] = src[::3]
+    step = rng.choice([-1, 1], size=flat[1::3].size)
+    near = src[1::3] + step
+    # Step inward at the dtype bounds.
+    flat[1::3] = np.where((near < qmin) | (near > qmax), src[1::3] - step, near)
+
+
 class ComparisonFamilyBase(OperationBase):
     """Shared implementation for the generic CMSIS-NN comparison API."""
 
@@ -75,13 +86,11 @@ class ComparisonFamilyBase(OperationBase):
             input_1[...] = np.median(input_2)
         elif input_2.size == 1:
             input_2[...] = np.median(input_1)
-        # Tie every third output element.
+        # Per three outputs: tie, off by one, free.
         if tuple(shape_2) == tuple(output_shape):
-            tied = np.broadcast_to(input_1, output_shape).reshape(-1)
-            input_2.reshape(-1)[::3] = tied[::3]
+            _pin_near(rng, np.broadcast_to(input_1, output_shape), input_2, qmin, qmax)
         elif tuple(shape_1) == tuple(output_shape):
-            tied = np.broadcast_to(input_2, output_shape).reshape(-1)
-            input_1.reshape(-1)[::3] = tied[::3]
+            _pin_near(rng, np.broadcast_to(input_2, output_shape), input_1, qmin, qmax)
         return input_1.astype(np_dtype), input_2.astype(np_dtype)
 
     def generate_c_files(self, output_dir) -> None:

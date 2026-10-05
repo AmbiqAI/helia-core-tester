@@ -26,6 +26,8 @@ RSQRT_PARITY_CASES = (
     ("rsqrt_long_row_universal_s16", "universal", (1, 1, 64, 1), "arm_rsqrt_s16_universal"),
     ("rsqrt_multi_batch_per_op_s16", "per_op", (2, 3, 5, 3), "arm_rsqrt_s16_per_op"),
     ("rsqrt_multi_batch_universal_s16", "universal", (2, 3, 5, 3), "arm_rsqrt_s16_universal"),
+    ("rsqrt_small_input_per_op_s16", "per_op", (1, 1, 64, 1), "arm_rsqrt_s16_per_op"),
+    ("rsqrt_small_input_universal_s16", "universal", (1, 1, 64, 1), "arm_rsqrt_s16_universal"),
 )
 
 
@@ -37,7 +39,7 @@ def test_rsqrt_descriptors_match_unit_test_parity() -> None:
     descriptors = load_descriptor(str(RSQRT_DESCRIPTOR_PATH))
 
     assert [desc["name"] for desc in descriptors] == [name for name, *_ in RSQRT_PARITY_CASES]
-    assert len(descriptors) == 6
+    assert len(descriptors) == 8
 
     for desc, (_, call_style, shape, _) in zip(descriptors, RSQRT_PARITY_CASES):
         assert desc["operator"] == "Rsqrt"
