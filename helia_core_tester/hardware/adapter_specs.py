@@ -4966,7 +4966,7 @@ static arm_cmsis_nn_status run_svdf_once(hct_server_session_t *session)
     blob_dims(state, &state_dims);
     blob_dims(weights_feature, &feature_dims);
     blob_dims(weights_time, &time_dims);
-    if (meta[0] <= 0 || feature_dims.n <= 0 || feature_dims.n % meta[0] != 0)
+    if (meta[0] <= 0 || feature_dims.n <= 0 || feature_dims.n % meta[0] != 0 || feature_dims.h != input_dims.h)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
     }
@@ -5034,7 +5034,7 @@ static arm_cmsis_nn_status run_svdf_once(hct_server_session_t *session)
     /* Only MVE kernels read the sum. */
     if (ctx.buf != NULL)
     {
-        arm_vector_sum_s8((int32_t *)ctx.buf, feature_dims.h, feature_dims.n,
+        arm_vector_sum_s8((int32_t *)ctx.buf, input_dims.h, feature_dims.n,
                           (const int8_t *)blob_ptr(session, weights_feature), -params.input_offset, 0, NULL);
     }
 #endif

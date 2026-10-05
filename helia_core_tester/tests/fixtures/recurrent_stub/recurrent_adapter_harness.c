@@ -5,6 +5,8 @@
 
 /* Stub kernels count calls. */
 static int kernel_calls;
+/* Weight bytes the sum prep read. */
+static int32_t sum_bytes;
 
 arm_cmsis_nn_status arm_svdf_s8(const cmsis_nn_context *ctx, const cmsis_nn_context *input_ctx,
                                 const cmsis_nn_context *output_ctx, const cmsis_nn_svdf_params *params,
@@ -59,7 +61,11 @@ int32_t arm_svdf_state_s16_s8_output_ctx_get_buffer_size(const cmsis_nn_svdf_par
 arm_cmsis_nn_status arm_vector_sum_s8(int32_t *sum, const int32_t cols, const int32_t rows, const int8_t *data,
                                       const int32_t lhs_offset, const int32_t rhs_offset, const int32_t *bias)
 {
-    (void)sum; (void)cols; (void)rows; (void)data; (void)lhs_offset; (void)rhs_offset; (void)bias;
+    (void)sum; (void)data; (void)lhs_offset; (void)rhs_offset;
+    if (bias == NULL)
+    {
+        sum_bytes = cols * rows;
+    }
     return ARM_CMSIS_NN_SUCCESS;
 }
 
@@ -81,6 +87,8 @@ int32_t arm_lstm_unidirectional_s8_temp2_get_buffer_size(const cmsis_nn_lstm_par
     return params->batch_size * params->hidden_size * 2;
 }
 
+/* Compile the MVE kernel-sum path too. */
+#define ARM_MATH_MVEI 1
 #include "benchmark_server_adapters.gen.c"
 
 hct_window_t hct_window;
@@ -116,10 +124,11 @@ static void reset(hct_server_session_t *session, uint32_t kernel_id)
     session->output_capacity_bytes = 1024u;
     session->expected_kernel_id = kernel_id;
     kernel_calls = 0;
+    sum_bytes = 0;
 }
 
 /* 2 batches, 4 inputs, 4 filters, rank 2. */
-static arm_cmsis_nn_status run_svdf(uint32_t time_n, uint32_t time_h, uint32_t time_bytes)
+static arm_cmsis_nn_status run_svdf(uint32_t time_n, uint32_t time_h, uint32_t time_bytes, uint32_t feature_h)
 {
     hct_server_session_t session;
     reset(&session, HCT_KERNEL_ID_SVDF_S8);
@@ -128,7 +137,7 @@ static arm_cmsis_nn_status run_svdf(uint32_t time_n, uint32_t time_h, uint32_t t
     add_blob(&session, HCT_BLOB_ROLE_INPUT_0, HCT_DTYPE_S8, 2u, 4u, 1u, 8u, operand);
     add_blob(&session, HCT_BLOB_ROLE_INPUT_1, HCT_DTYPE_S8, 2u, 4u, time_h, 2u * 4u * time_h, operand);
     add_blob(&session, HCT_BLOB_ROLE_INPUT_2, HCT_DTYPE_S8, time_n, time_h, 1u, time_bytes, operand);
-    add_blob(&session, HCT_BLOB_ROLE_WEIGHTS, HCT_DTYPE_S8, 4u, 4u, 1u, 16u, operand);
+    add_blob(&session, HCT_BLOB_ROLE_WEIGHTS, HCT_DTYPE_S8, 4u, feature_h, 1u, 16u, operand);
     add_blob(&session, HCT_BLOB_ROLE_META_0, HCT_DTYPE_S32, 7u, 1u, 1u, 7u * 4u, meta);
     return run_svdf_once(&session);
 }
@@ -163,10 +172,12 @@ static arm_cmsis_nn_status run_lstm(int32_t time_steps, uint32_t input_bytes)
 int main(void)
 {
     /* Valid shapes reach the kernel. */
-    EXPECT(1, run_svdf(4u, 3u, 12u) == ARM_CMSIS_NN_SUCCESS && kernel_calls == 1);
+    EXPECT(1, run_svdf(4u, 3u, 12u, 4u) == ARM_CMSIS_NN_SUCCESS && kernel_calls == 1 && sum_bytes == 16);
     EXPECT(2, run_lstm(2, 8u) == ARM_CMSIS_NN_SUCCESS && kernel_calls == 1);
     /* Kernel reads 4 x 32 time weights. */
-    EXPECT(3, run_svdf(1u, 32u, 32u) == ARM_CMSIS_NN_ARG_ERROR && kernel_calls == 0);
+    EXPECT(3, run_svdf(1u, 32u, 32u, 4u) == ARM_CMSIS_NN_ARG_ERROR && kernel_calls == 0);
+    /* Feature width must match input. */
+    EXPECT(5, run_svdf(4u, 3u, 12u, 32u) == ARM_CMSIS_NN_ARG_ERROR && sum_bytes == 0);
     /* Wrapped 1 x 1073741825 x 4 input. */
     EXPECT(4, run_lstm(1073741825, 4u) == ARM_CMSIS_NN_ARG_ERROR && kernel_calls == 0);
     printf("recurrent adapters ok\n");
