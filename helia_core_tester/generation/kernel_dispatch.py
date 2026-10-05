@@ -82,6 +82,9 @@ DIRECT_ENTRIES: Dict[str, DirectEntry] = {
     # ARM_CMSIS_NN_NO_IMPL_ERROR.
     "arm_add_row_broadcast_s8": DirectEntry("Add", "S8", "S8", "add_s8", ""),
     "arm_mul_row_broadcast_s8": DirectEntry("Mul", "S8", "S8", "mul_s8", ""),
+    # Widens binary16 bit patterns (uint16_t storage) to float32 with each build path's NaN rule;
+    # needs no float16 support, so its cases run on the f16 legs (FP16 input) and f32 legs (U16 input).
+    "arm_dequantize_f16_bits_f32": DirectEntry("Dequantize", "U16", "U16", "dequantize_f16_bits", ""),
 }
 
 

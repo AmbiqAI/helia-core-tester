@@ -123,8 +123,9 @@ so `mve:all` costs nine passes per case. One run takes up to 32 passes (the firm
 `cpu:all memory:all mve:all`, 18 passes) fits one run and one bundle.
 `ARM_PMU_CPU_CYCLES` is always reported from the PMU cycle counter alongside the DWT
 cycles. `case_summary.csv` gets one column per counter (median per invocation) plus
-`overflow_detected`, `valid_for_regression` and `timing_status`. `valid` and
-`degenerate_output` cases gate perf; the others are `error_path` (expects any non-success status, such as an argument or no-impl error), `overflow`,
+`overflow_detected`, `valid_for_regression` and `timing_status`. `valid_for_regression`
+is true only when the output matched and `timing_status` is `valid` or
+`degenerate_output`; the other statuses are `error_path` (expects any non-success status, such as an argument or no-impl error), `overflow`,
 `zero_cycles`, `below_floor` (median under 3x the board's empty-call floor, which
 `session_manifest.json` records as `timing_floor`). `degenerate_output` is
 informational only: the golden is constant, has at most two values, or is at
@@ -266,6 +267,11 @@ input_shape: [1, 4]
 Reference ops for float infrastructure:
 - `Quantize` is the source of truth for `FP32 -> S8/S16`
 - `Dequantize` is the source of truth for `S8/S16 -> FP32`
+- `Dequantize` with `entry: arm_dequantize_f16_bits_f32` widens binary16 bit patterns and checks
+  every output bit against the NaN rule its build compiles. Tag the input `FP16` to run it on the f16
+  legs or `U16` (binary16 storage, accepted for this entry only) to run it on the f32 legs. A case
+  holds 1 to 65536 halves: the special classes, random patterns, then three NaNs so the vector and
+  scalar tails meet the NaN rule. Keys its path would not use are refused.
 
 Future ops should consume resolved tensor roles rather than raw legacy dtype fields:
 - `self.tensor_dtype("input")`
