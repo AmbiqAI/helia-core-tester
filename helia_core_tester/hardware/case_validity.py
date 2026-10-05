@@ -1,7 +1,9 @@
 """Timing status: why cycles may not gate perf.
 
-Only "valid" cases gate perf; all stay correctness-checked. A descriptor's
-degenerate_golden_reason marks a constant golden as intended, so it stays valid. The floor is an empty
+Measurement statuses (error_path, overflow, zero_cycles, below_floor) drop
+a case from the perf gate. degenerate_output is informational: it judges the
+golden, not the cycles, so the case still gates. A descriptor's
+degenerate_golden_reason marks a constant golden as intended. The floor is an empty
 call through the same timed window as every kernel; it is recorded, never subtracted.
 FLOOR_FACTOR = 3 keeps the fixed window cost under a third of a valid reading.
 """
@@ -18,6 +20,8 @@ from .case_bundle import DEGENERATE_REASON_KEY, FLOOR_CASE_ID, blob_numpy
 from .measurement import SampleStatistics
 
 FLOOR_FACTOR = 3
+# Statuses whose cycles still gate perf.
+GATING_STATUSES = frozenset({"valid", "degenerate_output"})
 
 
 def golden_degenerate(golden: np.ndarray) -> bool:
@@ -52,7 +56,7 @@ def timing_status(case, floor_cycles: float | None) -> str:
 def classify_case(case, floor_cycles: float | None):
     """The case with timing_status and validity set."""
     status = timing_status(case, floor_cycles)
-    stats = replace(case.statistics, timing_status=status, valid_for_regression=status == "valid")
+    stats = replace(case.statistics, timing_status=status, valid_for_regression=status in GATING_STATUSES)
     return replace(case, statistics=stats)
 
 

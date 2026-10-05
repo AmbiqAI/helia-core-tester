@@ -11,7 +11,7 @@ from helia_core_tester.hardware.case_bundle import (
     DEGENERATE_REASON_KEY, EMPTY_CALL_KERNEL_ID, FLOOR_CASE_ID, build_abs_s8_case_bundle, build_floor_bundle,
     load_case_bundle,
 )
-from helia_core_tester.hardware.case_validity import apply_floor, golden_degenerate, timing_status
+from helia_core_tester.hardware.case_validity import apply_floor, classify_case, golden_degenerate, timing_status
 from helia_core_tester.hardware.kernel_registry import lookup_kernel_id
 from helia_core_tester.hardware.comparison import ComparisonResult
 from helia_core_tester.hardware.measurement import SampleStatistics
@@ -101,6 +101,8 @@ def test_degenerate_reason_keeps_case_valid(tmp_path: Path) -> None:
     golden_path.write_bytes(bytes(golden_path.stat().st_size))
     flat = load_case_bundle(flat.manifest_path)
     assert timing_status(_case(flat), None) == "degenerate_output"
+    # A boring golden still gates perf.
+    assert classify_case(_case(flat), None).statistics.valid_for_regression is True
     flat.manifest[DEGENERATE_REASON_KEY] = "constant by design"
     assert timing_status(_case(flat), None) == "valid"
 
