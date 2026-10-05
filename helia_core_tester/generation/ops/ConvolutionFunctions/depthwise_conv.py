@@ -232,6 +232,7 @@ class OpDepthwiseConv(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        self.round_float16_weights(model)
         weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
         if weight_dtype == "S4":
             from helia_core_tester.generation.utils.litert_builder import build_depthwise_conv2d_s4_op

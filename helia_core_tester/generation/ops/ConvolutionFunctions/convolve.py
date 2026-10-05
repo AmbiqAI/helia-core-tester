@@ -253,11 +253,7 @@ class OpConvolve(OperationBase):
             return
 
         activation_dtype = str(self.desc.get('activation_dtype', 'S8')).upper()
-        if activation_dtype == 'FP16':
-            # The kernel receives float16 weights and bias, so the golden output is computed
-            # from those same rounded values rather than the float32 draw.
-            for layer in model.layers:
-                layer.set_weights([w.astype(np.float16).astype(np.float32) for w in layer.get_weights()])
+        self.round_float16_weights(model)
 
         converter = converter_for_batched_model(model, [self.desc['input_shape']])
 
