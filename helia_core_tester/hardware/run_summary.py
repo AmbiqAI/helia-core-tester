@@ -12,6 +12,8 @@ from typing import Any, Callable, Iterator, Optional
 
 import typer
 
+from .comparison import finite_or_none
+from .entry_coverage import coverage_line, coverage_totals
 from .wire import boot_line, boot_record
 
 
@@ -54,7 +56,7 @@ def _format_case_line(case, *, id_width: int = 0) -> str:
     if case.rejection is not None:
         line += f"  {case.rejection.reason}"
     elif not passed:
-        line += f"  mismatches={case.comparison.mismatch_count}"
+        line += f"  mismatches={case.comparison.mismatch_count}  max_abs_diff={case.comparison.max_abs_diff:g}"
     return line
 
 
@@ -167,14 +169,20 @@ def print_skipped_summary(skipped: list[tuple], *, err: bool = False) -> None:
             typer.echo("      " + ", ".join(names[i : i + _NAMES_PER_LINE]), err=err)
 
 
-def print_run_report(result, skipped: list[tuple], bundle: Path, *, err: bool = False) -> list[str]:
+def print_run_report(
+    result, skipped: list[tuple], bundle: Path, *, err: bool = False, coverage: Optional[dict] = None,
+) -> list[str]:
     """The human report for `hardware run`/`hardware stream`. Returns the failed case ids."""
-    typer.echo(f"\nTarget boot: {boot_line(result.target_info)}", err=err)
+    info = result.target_info
+    fpscr = f", FPSCR {info.fpscr:#010x}" if info and info.fpscr is not None else ""
+    typer.echo(f"\nTarget boot: {boot_line(info)}{fpscr}", err=err)
     typer.echo("\nFinal per-case results:", err=err)
     passed_count, failed_case_ids = print_case_results(result.cases, err=err)
     if skipped:
         print_skipped_summary(skipped, err=err)
     print_result_summary(len(result.cases), passed_count, failed_case_ids, err=err)
+    if coverage is not None:
+        typer.echo(coverage_line(coverage), err=err)
     typer.echo(f"\n✓ Result bundle: {bundle}", err=err)
     return failed_case_ids
 
@@ -213,7 +221,7 @@ def github_record() -> Optional[dict[str, Any]]:
 
 def build_json_summary(
     result, skipped: list[tuple], *, session_id: str, board_id: str, bundle: Path,
-    selection: dict[str, Any], timing: Optional[dict] = None,
+    selection: dict[str, Any], timing: Optional[dict] = None, coverage: Optional[dict] = None,
 ) -> dict[str, Any]:
     """The single JSON document `--json` prints on stdout."""
     cases: list[dict[str, Any]] = []
@@ -227,6 +235,8 @@ def build_json_summary(
                 "passed": ok,
                 "median_cycles": float(case.statistics.median_cycles),
                 "valid_for_regression": bool(case.statistics.valid_for_regression),
+                "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
+                "diff_count": case.comparison.diff_count,
                 "skipped_reason": None,
             }
         )
@@ -237,6 +247,8 @@ def build_json_summary(
                 "passed": None,
                 "median_cycles": None,
                 "valid_for_regression": None,
+                "max_abs_diff": None,
+                "diff_count": None,
                 "skipped_reason": _clean_skip_reason(test.name, reason),
             }
         )
@@ -252,6 +264,7 @@ def build_json_summary(
         "totals": {"ran": ran, "passed": passed, "failed": ran - passed, "skipped": len(skipped)},
         "timing": dict(timing or {}),
         "selection": selection,
+        "coverage": coverage_totals(coverage),
         "github": github_record(),
         "cases": cases,
     }

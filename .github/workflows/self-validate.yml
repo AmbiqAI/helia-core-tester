@@ -44,6 +44,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   # The mutation catalog patches kernel source by literal text. Only a real
   # checkout can show that a pattern or its replacement count has drifted, so

@@ -360,6 +360,9 @@ class FakeTargetTransport:
             max_passes=self._max_passes,
             boot_status=self._boot_status,
             core_clock_hz=None if self._boot_status is None else self._core_clock_hz,
+            # Apollo330P boot FPSCR, then pinned.
+            fpscr_boot=None if self._boot_status is None else 0x03040000,
+            fpscr=None if self._boot_status is None else 0x00040000,
         )
         self._queue(MessageType.TARGET_INFO, encode_target_info(info))
 

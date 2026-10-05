@@ -34,13 +34,13 @@
  */
 static const hct_kernel_catalog_entry_t g_hct_kernel_catalog[] = {
     {1u, "arm_abs_s8", "BasicMathFunctions", 1u, "S8", 1u, true, true, false, 0u},
-    {2u, "arm_convolve_s8", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {2u, "arm_convolve_wrapper_s8", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {3u, "arm_add_s8", "BasicMathFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {4u, "arm_sub_s8", "BasicMathFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {5u, "arm_mul_s8", "BasicMathFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {6u, "arm_maximum_s8", "BasicMathFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {7u, "arm_minimum_s8", "BasicMathFunctions", 1u, "S8", 1u, true, true, false, 0u},
-    {8u, "arm_depthwise_conv_s8", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {8u, "arm_depthwise_conv_wrapper_s8", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {9u, "arm_add_s16", "BasicMathFunctions", 1u, "S16", 1u, true, true, false, 0u},
     {10u, "arm_sub_s16", "BasicMathFunctions", 1u, "S16", 1u, true, true, false, 0u},
     {11u, "arm_mul_s16", "BasicMathFunctions", 1u, "S16", 1u, true, true, false, 0u},
@@ -209,10 +209,10 @@ static const hct_kernel_catalog_entry_t g_hct_kernel_catalog[] = {
 };
 
 static const uint8_t g_hct_kernel_catalog_hash[32] = {
-    0x83u, 0x2bu, 0x22u, 0x63u, 0x9au, 0xe9u, 0xfcu, 0x14u,
-    0x14u, 0xb4u, 0x66u, 0xf3u, 0x51u, 0x69u, 0xebu, 0x60u,
-    0x1eu, 0x1eu, 0xe3u, 0x02u, 0xc2u, 0xa4u, 0xd3u, 0xf3u,
-    0xe9u, 0x63u, 0x75u, 0x2cu, 0xbfu, 0x00u, 0xdcu, 0xc2u,
+    0xeeu, 0x6fu, 0x84u, 0x79u, 0xadu, 0x72u, 0x3eu, 0x5fu,
+    0xc0u, 0xc4u, 0x3du, 0x87u, 0xe6u, 0x8au, 0xc1u, 0x71u,
+    0xc8u, 0x3bu, 0xcbu, 0x86u, 0x72u, 0x8au, 0xd0u, 0xa7u,
+    0x97u, 0x20u, 0xa1u, 0xd0u, 0x56u, 0x83u, 0x90u, 0xb4u,
 };
 
 const hct_kernel_catalog_entry_t *hct_benchmark_server_catalog(size_t *count)

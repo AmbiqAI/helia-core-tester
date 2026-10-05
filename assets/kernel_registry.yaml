@@ -26,7 +26,7 @@ kernels:
     family: ConvolutionFunctions
     operator: Convolve
     dtype: S8
-    cmsis_function: arm_convolve_s8
+    cmsis_function: arm_convolve_wrapper_s8
 
   - kernel_id: 3
     family: BasicMathFunctions
@@ -62,7 +62,7 @@ kernels:
     family: ConvolutionFunctions
     operator: DepthwiseConv
     dtype: S8
-    cmsis_function: arm_depthwise_conv_s8
+    cmsis_function: arm_depthwise_conv_wrapper_s8
 
   - kernel_id: 9
     family: BasicMathFunctions

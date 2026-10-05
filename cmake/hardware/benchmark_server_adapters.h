@@ -292,6 +292,8 @@ typedef struct
     uint32_t dwt_on;
     uint32_t dwt_off;
     bool armed;
+    /* Counter runs outside kernel calls. */
+    bool inverted;
     /* MRAM ranges evicted before each call. */
     const void *cold_addr[HCT_SERVER_MAX_BLOBS];
     int32_t cold_bytes[HCT_SERVER_MAX_BLOBS];
@@ -310,10 +312,21 @@ static inline bool hct_window_open(void)
     if (hct_window.armed)
     {
 #if defined(HCT_PLACEMENT_MRAM)
+        /* Evict while no window counts. */
+        if (hct_window.inverted)
+        {
+#ifdef HELIA_HARDWARE_BUILD
+            DWT->CTRL = hct_window.dwt_on;
+#endif
+        }
         /* Weights start cold, as in inference. */
         for (uint8_t index = 0u; index < hct_window.cold_count; ++index)
         {
             SCB_InvalidateDCache_by_Addr((volatile void *)hct_window.cold_addr[index], hct_window.cold_bytes[index]);
+        }
+        if (hct_window.inverted)
+        {
+            return true;
         }
 #endif
 #ifdef HELIA_HARDWARE_BUILD

@@ -30,6 +30,7 @@ from .generated_test_bridge import (
 from .measurement import CounterPass, check_pass_count, counter_passes_for_selection
 from .memory_report import generate_memory_report
 from .pmu_catalog import default_selection
+from .entry_coverage import NO_ADAPTER
 from .result_bundle import write_result_bundle
 from .session import (
     BootFailure, CaseRunResult, HostSession, SessionResult, TargetLimits, check_case_id_length,
@@ -170,7 +171,7 @@ def symbol_at(symbols: list[tuple[int, str, str]], address: int) -> str | None:
 _CONSISTENT_FIELDS = (
     "build_id", "catalog_hash", "board_id", "target_cpu", "capability_flags", "pmu_counter_slots",
     "max_rx_payload", "max_cases_per_session", "max_passes", "runtime_arena_capacity",
-    "boot_status", "core_clock_hz",
+    "boot_status", "core_clock_hz", "fpscr",
 )
 
 
@@ -201,6 +202,7 @@ def run_case_bundles(
     build_dir: Path | None = None,
     on_case_complete: OnCaseComplete | None = None,
     expected_build_id: str | None = None,
+    compare: dict | None = None,
 ) -> tuple[SessionResult, Path]:
     """Stream `case_bundles` to the board in as many sessions as the target's limits
     require, merge every case into one SessionResult, and write its result bundle.
@@ -303,6 +305,7 @@ def run_case_bundles(
         target_info=board.target_info(),
         host_log_text=host_log,
         target_log_text=target_log,
+        compare=compare,
         # Unverified firmware gets no provenance.
         build_dir=build_dir if expected_build_id is not None and build_id == expected_build_id else None,
     )
@@ -400,10 +403,13 @@ def build_generated_test_case_bundles(
 
     Returns (bridged_case_bundles, [(skipped_test, reason), ...]).
     """
-    families = bridged_families() if family is None else [family]
+    bridged = bridged_families()
     bundles: list[CaseBundle] = []
     skipped: list[tuple[GeneratedTestCase, str]] = []
     for suite_name in normalize_suites(suite):
+        families = [family] if family is not None else [
+            *bridged, *unbridged_families(project_root, cpu=cpu, suite=suite_name, bridged=bridged),
+        ]
         for fam in families:
             discovered = discover_generated_tests(
                 project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite_name,
@@ -411,12 +417,24 @@ def build_generated_test_case_bundles(
             )
             for test in discovered:
                 test = replace(test, board=board_id)
+                if fam not in bridged:
+                    # Unbridged families skip, not vanish.
+                    skipped.append((test, f"{NO_ADAPTER}: {fam} has no firmware adapter"))
+                    continue
                 try:
                     bundles.append(build_case_bundle_from_generated_test(
                         project_root, test, require_fvp_pass=require_fvp_pass, fvp_gate=fvp_gate))
                 except UnsupportedGeneratedTestError as exc:
                     skipped.append((test, str(exc)))
     return bundles, skipped
+
+
+def unbridged_families(project_root: Path, *, cpu: str, suite: str, bridged: Sequence[str]) -> list[str]:
+    """Generated families with no firmware adapter."""
+    root = project_root / "artifacts" / "generated_tests" / suite / cpu
+    if not root.is_dir():
+        return []
+    return sorted(p.name for p in root.iterdir() if p.is_dir() and p.name not in bridged)
 
 
 def no_bridgeable_cases_error(
@@ -432,30 +450,31 @@ def no_bridgeable_cases_error(
     or bypassing the gate, not by regenerating)."""
     base = (
         f"No bridgeable generated tests found for cpu={cpu} "
-        f"family={family if family is not None else '<all bridged families>'} "
+        f"family={family if family is not None else '<all generated families>'} "
         f"name_filter={name_filter!r} suite={suite!r} (skipped {len(skipped)})"
     )
     if not skipped:
         return RuntimeError(f"{base}; run `helia_core_tester generate` first.")
     fvp_skips = [(t, r) for t, r in skipped if "FVP" in r or "artifact" in r]
+    adapter_gaps = sum(r.startswith(NO_ADAPTER) for _, r in skipped)
     detail = "\n".join(f"  - {t.name}: {r}" for t, r in skipped[:5])
     if len(skipped) > 5:
         detail += f"\n  ... and {len(skipped) - 5} more"
     hint = ""
-    if len(fvp_skips) == len(skipped):
+    if fvp_skips and len(fvp_skips) + adapter_gaps == len(skipped):
         stale_only = all("does not match" in r or "no artifact_sha256" in r for _, r in fvp_skips)
         if stale_only:
             # Only --fvp-gate strict blocks on staleness, so the useful advice is
             # "stop being strict", not "bypass the gate".
             hint = (
-                "\nEvery case was rejected as stale by --fvp-gate strict. Either refresh the "
+                "\nEvery bridgeable case was rejected as stale by --fvp-gate strict. Either refresh the "
                 "report (`uv run helia_core_tester build && uv run helia_core_tester run`) or "
                 "drop back to --fvp-gate advisory, which runs stale cases and records them as "
                 "stale in case_summary.csv."
             )
         else:
             hint = (
-                "\nEvery case was rejected by the FVP gate because the FVP recorded a FAILURE "
+                "\nEvery bridgeable case was rejected by the FVP gate because the FVP recorded a FAILURE "
                 "for these exact artifacts -- that is evidence the kernel is wrong, not a stale "
                 "report. Investigate before overriding; --fvp-gate off will run them anyway and "
                 "record fvp_status=failed in case_summary.csv."

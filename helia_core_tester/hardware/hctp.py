@@ -13,7 +13,8 @@ HEADER_SIZE = 32
 # (the unused ACK/NACK/ABORT_CASE/RESET_SESSION/PING/PONG/LOG messages are gone) and
 # TARGET_INFO advertising the target's session limits (max_cases_per_session,
 # max_passes) next to its PMU slots and receive-buffer bound.
-SUPPORTED_VERSION = 3
+# v4: CASE_COMPLETE carries prepare cycles.
+SUPPORTED_VERSION = 4
 DEFAULT_MAX_PAYLOAD = 64 * 1024
 
 # F008: set on every non-final paginated KERNEL_CATALOG chunk; cleared on the final chunk.

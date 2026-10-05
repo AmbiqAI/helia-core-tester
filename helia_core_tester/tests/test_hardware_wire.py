@@ -76,6 +76,21 @@ def test_target_info_boot_tail() -> None:
         wire.decode_target_info(payload[:-1])
 
 
+def test_target_info_fpscr_tail() -> None:
+    boot = _target_info(boot_status=0, core_clock_hz=250_000_000)
+    info = _target_info(boot_status=0, core_clock_hz=250_000_000, fpscr_boot=0x03040000, fpscr=0x00040000)
+    payload = wire.encode_target_info(info)
+    # u32 fpscr_boot, u32 fpscr trail the clock.
+    assert payload == wire.encode_target_info(boot) + struct.pack("<II", 0x03040000, 0x00040000)
+    assert wire.decode_target_info(payload) == info
+    assert wire.decode_target_info(wire.encode_target_info(boot)).fpscr is None
+    record = wire.boot_record(info)
+    assert (record["fpscr_boot"], record["fpscr"]) == (0x03040000, 0x00040000)
+    assert record["fp_mode"] == {"ahp": 0, "dn": 0, "fz": 0, "rmode": 0, "fz16": 0}
+    assert wire.fp_mode(0x07C80000) == {"ahp": 1, "dn": 1, "fz": 1, "rmode": 3, "fz16": 1}
+    assert wire.boot_record(boot)["fp_mode"] is None
+
+
 def test_kernel_catalog_round_trip_and_hash() -> None:
     entries = (
         wire.CatalogEntry(1, "arm_abs_s8", "BasicMathFunctions", 1, "S8", 1, True, True, False, 0),
@@ -211,7 +226,7 @@ def test_sample_result_round_trip_resolves_names_from_catalog() -> None:
 
 
 def test_case_and_session_complete_round_trip() -> None:
-    complete = wire.CaseComplete(case_id="abs_default_s8_hw_generated", workspace_used_bytes=4096)
+    complete = wire.CaseComplete(case_id="abs_default_s8_hw_generated", workspace_used_bytes=4096, prepare_cycles=1234)
     assert wire.decode_case_complete(wire.encode_case_complete(complete)) == complete
     partial = wire.CaseComplete("c", 0, correctness_ran=True, performance_ran=False, kernel_status=-1)
     assert wire.decode_case_complete(wire.encode_case_complete(partial)) == partial
@@ -230,7 +245,7 @@ def test_error_round_trip() -> None:
 
 
 def test_every_decoder_rejects_trailing_bytes() -> None:
-    info = _target_info(boot_status=0, core_clock_hz=250_000_000)
+    info = _target_info(boot_status=0, core_clock_hz=250_000_000, fpscr_boot=0, fpscr=0)
     with pytest.raises(ValueError, match=r"TARGET_INFO payload carries 1 trailing byte"):
         wire.decode_target_info(wire.encode_target_info(info) + b"\x00")
     with pytest.raises(ValueError, match=r"REQUEST_CASE payload carries 2 trailing byte"):

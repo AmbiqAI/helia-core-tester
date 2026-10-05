@@ -25,7 +25,7 @@ static int write_file(const char *path, const uint8_t *data, size_t length)
 
 int main(int argc, char **argv)
 {
-    static const hct_boot_info_t kBoot = {0, 250000000u};
+    static const hct_boot_info_t kBoot = {0, 250000000u, 0x03040000u, 0x00040000u};
     uint8_t target_info[512];
     uint8_t catalog[16384];
     size_t target_info_len = 0u;

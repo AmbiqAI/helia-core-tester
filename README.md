@@ -52,7 +52,18 @@ correctness failure). Useful narrowing flags: `--suite int|float|both`,
 not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|strict`,
 `--op`/`--dtype` (repeatable, matched like `generate --op/--dtype`),
 `--case-id`/`--cases-from <file>` (exact case ids, e.g. a rerun list; not combinable with `--limit`),
-`--skip-generate`, `--skip-flash`, `--force-flash`. The steps are also available individually as
+`--skip-generate`, `--skip-flash`, `--force-flash`.
+
+Correctness: int cases use the per-operator LSB tolerance in
+`generation/io/dtypes.py`, and every case records `max_abs_diff` and `diff_count`
+(elements differing at all) in `case_summary.csv` and `cases.json`; both are null
+when unknown (unvalidated outputs, wrong output size).
+`--strict-compare` drops the tolerance so int outputs must match the golden
+exactly. `--golden-from <bundle dir>` judges each case against that past run's
+`outputs/` instead (bit-exact for int, the usual tolerance for float), which pins
+the current kernels' rounding where the TFLite golden differs by design. It refuses cases that run failed unless `--golden-allow-failed` is passed,
+and lists every missing or wrong-sized output before flashing. The
+session manifest's `compare` block records which mode ran. The steps are also available individually as
 `hardware build`, `hardware flash [--force]`, `hardware stream` and
 `hardware memory-report`.
 
@@ -90,7 +101,8 @@ measures kernel-only cost. `mram` (Apollo510, Apollo330P)
 programs each case's weights and bias into a reserved MRAM pool past the image
 and evicts them from the D-cache before every timed call, as a large model's
 layer sees them; activations, scratch, multipliers and shifts stay in DTCM, as
-hpx places a TCM-sized arena. Give each placement its own `--build-dir`. The
+hpx places a TCM-sized arena. Neither programming nor eviction counts toward
+the timed cycles or `prepare_cycles`. Give each placement its own `--build-dir`. The
 bundle records it in `session_manifest.json` `target.placement`.
 
 PMU counters are selected with `--pmu-counters GROUP:SELECTION` (repeatable, on
@@ -550,7 +562,7 @@ Behavior:
 - for a single suite (`--suite int` or `--suite float`), merge is strict and fails if any requested CPU input is missing.
 - for `--suite both`, merge requires both int and float inputs for every requested CPU; missing pairs are named in the failure output and reports.
 - `--include-mve-float` adds optional cortex-m55 float-MVE coverage; it cannot replace a missing required int/float input. Reports are still written when required inputs are missing.
-- `--include-mve-int` adds optional cortex-m55 integer-MVE coverage from a `--coverage --coverage-mve-int` run (`artifacts/reports/coverage/int-mve`), under the same rules. The default coverage build defines `ARM_MATH_AUTOVECTORIZE`, which compiles out integer MVE paths guarded by `!ARM_MATH_AUTOVECTORIZE`; `--coverage-mve-int` builds integer sources without it, except `arm_nn_mat_mul_core_4x_s8.c`.
+- `--include-mve-int` adds optional cortex-m55 integer-MVE coverage from a `--coverage --coverage-mve-int` run (`artifacts/reports/coverage/int-mve`), under the same rules. The default coverage build defines `ARM_MATH_AUTOVECTORIZE`, which compiles out integer MVE paths guarded by `!ARM_MATH_AUTOVECTORIZE`; `--coverage-mve-int` builds integer sources without it, except `arm_nn_mat_mul_core_4x_s8.c`. Float sources get the same define unless the run adds `--coverage-mve-float`; such a build sets `HELIA_CMSIS_NN_FLOAT_AUTOVECTORIZE` for the harness, and a float case marked `autovectorize_declines` then expects `ARM_CMSIS_NN_NO_IMPL_ERROR`, as it does on a core without MVE float.
 
 ## Clean Contract
 

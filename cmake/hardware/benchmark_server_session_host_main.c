@@ -189,12 +189,12 @@ static int expect_case_complete(hct_server_session_t *session, uint8_t correctne
             continue;
         }
         if (frame.header.message_type != HCTP_MSG_CASE_COMPLETE || samples != 0) return 61;
-        /* id, ran flags, workspace, [status]. */
+        /* id, ran flags, workspace, prepare, [status]. */
         id_length = (uint32_t)frame.payload[0] | ((uint32_t)frame.payload[1] << 8);
         if (frame.payload[2u + id_length] != correctness_ran || frame.payload[3u + id_length] != performance_ran) return 62;
-        if (performance_ran != 0u) return frame.header.payload_length == 2u + id_length + 6u ? 0 : 63;
-        if (frame.header.payload_length != 2u + id_length + 10u) return 64;
-        return (int32_t)read_u32(&frame.payload[2u + id_length + 6u]) == ARM_CMSIS_NN_ARG_ERROR ? 0 : 65;
+        if (performance_ran != 0u) return frame.header.payload_length == 2u + id_length + 10u ? 0 : 63;
+        if (frame.header.payload_length != 2u + id_length + 14u) return 64;
+        return (int32_t)read_u32(&frame.payload[2u + id_length + 10u]) == ARM_CMSIS_NN_ARG_ERROR ? 0 : 65;
     }
 }
 
@@ -273,12 +273,14 @@ int main(void)
     int status;
     hctp_frame_view_t frame;
 
-    static const hct_boot_info_t kBoot = {7, 96000000u};
+    static const hct_boot_info_t kBoot = {7, 96000000u, 0x03040000u, 0x00040000u};
     hct_server_session_init(&session, 0xC0DE1234u, 256u, workspace, (uint32_t)sizeof(workspace), &kBoot);
     if (drain_single_message(&session, HCTP_MSG_TARGET_INFO, outbound_payload, &outbound_length) != 0) return 10;
     /* Boot health trails TARGET_INFO. */
-    if (outbound_length < 8u || read_u32(&outbound_payload[outbound_length - 8u]) != 7u ||
-        read_u32(&outbound_payload[outbound_length - 4u]) != 96000000u) return 19;
+    if (outbound_length < 16u || read_u32(&outbound_payload[outbound_length - 16u]) != 7u ||
+        read_u32(&outbound_payload[outbound_length - 12u]) != 96000000u ||
+        read_u32(&outbound_payload[outbound_length - 8u]) != 0x03040000u ||
+        read_u32(&outbound_payload[outbound_length - 4u]) != 0x00040000u) return 19;
 
     offset = 0u;
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_TARGET_INFO_ACK, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 11;

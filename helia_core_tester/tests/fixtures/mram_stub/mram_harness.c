@@ -100,7 +100,7 @@ static uint16_t drain(hct_server_session_t *s)
 /* Init, handshake, one-case plan. */
 static int open_session(hct_server_session_t *s, uint8_t *ws, uint32_t ws_bytes, const char *case_id)
 {
-    static const hct_boot_info_t boot = {0, 96000000u};
+    static const hct_boot_info_t boot = {0, 96000000u, 0x03040000u, 0x00040000u};
     size_t at = 0u;
     next_sequence = 0u;
     hct_server_session_init(s, 0xC0DE1234u, 256u, ws, ws_bytes, &boot);

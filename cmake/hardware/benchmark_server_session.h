@@ -287,6 +287,8 @@ typedef struct
     hct_server_blob_t blobs[HCT_SERVER_MAX_BLOBS];
     uint8_t outbox[HCT_SERVER_MAX_OUTBOX_BYTES];
     size_t outbox_length;
+    /* Untimed adapter cycles; last keeps offsets. */
+    uint32_t prepare_cycles;
 } hct_server_session_t;
 
 void hct_server_session_init(hct_server_session_t *session,

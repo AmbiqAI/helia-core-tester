@@ -158,6 +158,29 @@ static uint32_t hct_core_clock_hz(void)
 #endif
 }
 
+/* AHP, DN, FZ, RMode, FZ16; wire.fp_mode matches. */
+#define HCT_FPSCR_CONTROL_MASK ((1u << 26) | (1u << 25) | (1u << 24) | (3u << 22) | (1u << 19))
+/* LTPSIZE; M4 keeps these zero. */
+#define HCT_FPSCR_LTPSIZE_MASK (7u << 16)
+
+/* Pin FP mode; return boot FPSCR. */
+static uint32_t hct_pin_fpscr(uint32_t *pinned)
+{
+#if defined(__FPU_PRESENT) && (__FPU_PRESENT == 1U) && defined(__FPU_USED) && (__FPU_USED == 1U)
+    const uint32_t boot = __get_FPSCR();
+    /* Reset FPDSCR: IEEE, round to nearest. */
+    FPU->FPDSCR &= ~HCT_FPSCR_CONTROL_MASK;
+    /* Clear flags too, so readback is stable. */
+    __set_FPSCR(boot & HCT_FPSCR_LTPSIZE_MASK);
+    __ISB();
+    *pinned = __get_FPSCR();
+    return boot;
+#else
+    *pinned = 0u;
+    return 0u;
+#endif
+}
+
 int main(void)
 {
     const nsx_system_config_t system_cfg = {
@@ -175,6 +198,7 @@ int main(void)
     hct_boot_info_t boot;
     boot.boot_status = (int32_t)nsx_system_init(&system_cfg);
     boot.core_clock_hz = hct_core_clock_hz();
+    boot.fpscr_boot = hct_pin_fpscr(&boot.fpscr);
     (void)hct_anchor_all_symbols();
     (void)hct_benchmark_server_catalog(&count);
     g_hct_catalog_entry_count = (uint32_t)count;

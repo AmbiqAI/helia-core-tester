@@ -45,6 +45,9 @@ env:
   HCT_NIGHTLY_LIMIT: ${{ inputs.limit }}
   HCT_NIGHTLY_PMU: ${{ inputs.pmu_counters || 'all' }}
 
+permissions:
+  contents: read
+
 jobs:
   plan:
     runs-on: ubuntu-latest

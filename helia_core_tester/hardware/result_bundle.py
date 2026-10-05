@@ -9,9 +9,11 @@ from pathlib import Path
 from typing import Any
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
+from .comparison import finite_or_none
 from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
 from .wire import boot_record, placement_record
+from .work_count import case_work, per_unit
 from .pathutil import write_text_lf
 
 CASE_SUMMARY_BASE_FIELDS = [
@@ -19,13 +21,18 @@ CASE_SUMMARY_BASE_FIELDS = [
     "kernel_id",
     "comparison_passed",
     "mismatch_count",
+    "max_abs_diff",
+    "diff_count",
     "sample_count",
     "median_cycles",
     "mad_cycles",
     "p90_cycles",
     "p99_cycles",
     "fvp_status",
+    "timed_symbol",
 ]
+# Work counts and prepare cost.
+CASE_SUMMARY_WORK_FIELDS = ["macs", "ops", "cycles_per_mac", "cycles_per_op", "prepare_cycles"]
 CASE_SUMMARY_FLAG_FIELDS = ["overflow_detected", "valid_for_regression"]
 
 
@@ -104,6 +111,18 @@ def _rejection_record(case) -> dict | None:
     return {"kernel_status": rejection.kernel_status, "stage": rejection.stage, "reason": rejection.reason}
 
 
+def _work_fields(case) -> dict[str, Any]:
+    """Work counts, per-unit cycles, prepare cycles."""
+    work = case_work(case.case_bundle)
+    median = case.statistics.median_cycles if case.samples else None
+    return {
+        **work,
+        "cycles_per_mac": per_unit(median, work["macs"]),
+        "cycles_per_op": per_unit(median, work["ops"]),
+        "prepare_cycles": case.prepare_cycles,
+    }
+
+
 def write_timing(bundle_root: Path, timing: dict) -> Path:
     """Merge wall-clock `timing` into an existing bundle's session_summary.json.
 
@@ -134,6 +153,7 @@ def write_result_bundle(
     target_log_text: str = "no physical target log captured\n",
     timing: dict | None = None,
     build_dir: Path | None = None,
+    compare: dict | None = None,
 ) -> Path:
     for case in result.cases:
         if len(case.samples) != len(case.normalized_samples):
@@ -165,6 +185,8 @@ def write_result_bundle(
         # Board-reported TARGET_INFO build id.
         "firmware_build_id": result.build_id,
         "boot": boot_record(result.target_info),
+        # How outputs were judged.
+        "compare": {"strict": False, "golden_from": None, **(compare or {})},
     }
     session_manifest["build"], lock_file = build_provenance(build_dir)
     if lock_file is not None:
@@ -186,11 +208,15 @@ def write_result_bundle(
     # fixed by the selection rather than by target support.
     counter_names: list[str] = counter_names_for_passes(result.counter_passes) if result.counter_passes else []
     pass_names: list[str] = [counter_pass.name for counter_pass in result.counter_passes]
+    # The kernel each sample timed.
+    timed_symbols = {int(entry["kernel_id"]): str(entry.get("canonical_name", "")) for entry in kernel_catalog}
     passed = 0
     for case in result.cases:
         passed += 1 if case.comparison.passed else 0
+        timed_symbol = timed_symbols.get(case.case_bundle.kernel_id, "")
         rejection = _rejection_record(case)
         counter_medians = compute_counter_medians(case.normalized_samples)
+        work_fields = _work_fields(case)
         for sample in case.samples:
             if sample.pass_name not in pass_names:
                 pass_names.append(sample.pass_name)
@@ -206,12 +232,17 @@ def write_result_bundle(
                 "kernel_id": case.case_bundle.kernel_id,
                 "comparison_passed": case.comparison.passed,
                 "mismatch_count": case.comparison.mismatch_count,
+                "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
+                "diff_count": case.comparison.diff_count,
                 "sample_count": len(case.samples),
                 "median_cycles": case.statistics.median_cycles,
                 "p90_cycles": case.statistics.p90_cycles,
                 "p99_cycles": case.statistics.p99_cycles,
                 "mad_cycles": case.statistics.mad_cycles,
                 "fvp_status": case.case_bundle.fvp_status,
+                "timed_symbol": timed_symbol,
+                **work_fields,
+                "shapes": {blob.role: list(blob.dimensions) for blob in case.case_bundle.blobs},
                 "unsupported_counters": list(case.statistics.unsupported_counters),
                 # Median per-invocation value of every supported counter across samples.
                 "counters": counter_medians,
@@ -225,12 +256,16 @@ def write_result_bundle(
             "kernel_id": case.case_bundle.kernel_id,
             "comparison_passed": str(case.comparison.passed).lower(),
             "mismatch_count": case.comparison.mismatch_count,
+            "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
+            "diff_count": case.comparison.diff_count,
             "sample_count": case.statistics.sample_count,
             "median_cycles": case.statistics.median_cycles,
             "mad_cycles": case.statistics.mad_cycles,
             "p90_cycles": case.statistics.p90_cycles,
             "p99_cycles": case.statistics.p99_cycles,
             "fvp_status": case.case_bundle.fvp_status,
+            "timed_symbol": timed_symbol,
+            **work_fields,
         }
         summary_row.update(counter_medians)
         summary_row["overflow_detected"] = str(case.statistics.overflow_detected).lower()
@@ -244,6 +279,8 @@ def write_result_bundle(
                     "case_id": case.case_bundle.case_id,
                     "passed": case.comparison.passed,
                     "mismatch_count": case.comparison.mismatch_count,
+                    "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
+                    "diff_count": case.comparison.diff_count,
                     "comparison": case.case_bundle.comparison,
                     "rejection": rejection,
                 },
@@ -290,7 +327,7 @@ def write_result_bundle(
     with (bundle_root / "case_summary.csv").open("w", encoding="utf-8", newline="") as handle:
         # One column per selected/reported counter name (a case with no supported
         # value for a counter leaves that cell empty), then the overflow/validity flags.
-        case_summary_fieldnames = CASE_SUMMARY_BASE_FIELDS + counter_names + CASE_SUMMARY_FLAG_FIELDS
+        case_summary_fieldnames = CASE_SUMMARY_BASE_FIELDS + CASE_SUMMARY_WORK_FIELDS + counter_names + CASE_SUMMARY_FLAG_FIELDS
         writer = csv.DictWriter(handle, fieldnames=case_summary_fieldnames, restval="")
         writer.writeheader()
         writer.writerows(case_summary_rows)

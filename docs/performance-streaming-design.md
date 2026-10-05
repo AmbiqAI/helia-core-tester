@@ -111,9 +111,9 @@ The protocol is target-driven after plan load:
 15. target sends `CASE_COMPLETE`
 16. loop until `SESSION_COMPLETE`
 
-### Messages (HCTP v3)
+### Messages (HCTP v4)
 
-Protocol version 3 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
+Protocol version 4 (`hctp.SUPPORTED_VERSION` / `HCTP_SUPPORTED_VERSION`); a peer on
 another version is refused at the header. Message ids are compact and in protocol
 order; every payload is encoded and decoded on the host by exactly one pair of
 functions in `helia_core_tester/hardware/wire.py`, which the host session and the
@@ -139,7 +139,7 @@ firmware byte for byte.
 | 15 | `CORRECTNESS_ACK` | host -> target | `u8 passed` (informational) |
 | 16 | `RUN_PERFORMANCE` | host -> target | empty |
 | 17 | `SAMPLE_RESULT` | target -> host | one sample of one pass (below) |
-| 18 | `CASE_COMPLETE` | target -> host | `text case_id, u8 correctness_ran, u8 performance_ran, u32 workspace_used_bytes`, then `i32 kernel_status` only when `performance_ran` is 0 |
+| 18 | `CASE_COMPLETE` | target -> host | `text case_id, u8 correctness_ran, u8 performance_ran, u32 workspace_used_bytes, u32 prepare_cycles` (DWT cycles the correctness run spent outside the timed kernel calls: setup calls such as scratch sizing and weight sums, plus adapter glue; one cold sample), then `i32 kernel_status` only when `performance_ran` is 0 |
 | 19 | `SESSION_COMPLETE` | target -> host | `u16 case_count` |
 | 20 | `ERROR` | target -> host | `text message` |
 
@@ -177,6 +177,17 @@ reports (250 MHz on apollo510_evb and apollo330mP_evb, 48 MHz on apollo3p_evb). 
 refused. Firmware without the tail still streams ("not reported"), and a row without
 `core_clock_hz` skips the clock check. The host stamps both fields in
 `session_manifest.json` (`boot`) and the run summary.
+An optional FPSCR tail follows: `u32 fpscr_boot` (what the boot ROM left) and
+`u32 fpscr` (read back after the firmware pins it). After `nsx_system_init()` the
+firmware clears AHP, DN, FZ, RMode and FZ16 in FPDSCR, and sets FPSCR to its LTPSIZE
+field alone (control bits and sticky flags cleared): the reset FPDSCR value, IEEE with
+round to nearest. No NSX, HAL or runtime code sets these bits, so without
+the pin kernels inherit the secure boot ROM's state, which differs per SoC (Apollo510
+leaves FZ=0 DN=0; Apollo330P leaves FZ=1 DN=1 in FPSCR only, with FPDSCR control bits still 0),
+and `arm_reduce_sum_f32` takes its MVE path only when FZ=1. The host stamps both
+values and the decoded control bits (`fp_mode`) in the manifest `boot` record; the
+board matrix shows the pinned `fpscr`. Batches must report the same pinned `fpscr`.
+A build without an FPU reports 0 for both.
 `capability_flags` bit 6 is `HCT_CAP_PMU_ARMV8M`, set only when the firmware was
 built for a core whose device header declares `__PMU_PRESENT == 1`;
 `pmu_counter_slots` is `__PMU_NUM_EVENTCNT` (8 on Cortex-M55, 0 without a PMU).
