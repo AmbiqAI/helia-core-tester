@@ -324,14 +324,16 @@ def _crafted_checkout(tmp_path: Path) -> Path:
     return checkout
 
 
-def _crafted_case(tmp_path: Path) -> Path:
-    case = tmp_path / "cases" / "CraftedFamily" / "crafted_case"
+def _crafted_case(
+    tmp_path: Path, name: str = "crafted_case", fn: str = "helia_mut_test_kernel", want: int = 42
+) -> Path:
+    case = tmp_path / "cases" / "CraftedFamily" / name
     (case / "includes").mkdir(parents=True)
-    (case / "crafted_case.c").write_text(
+    (case / f"{name}.c").write_text(
         "#include <stdint.h>\n"
         "extern void helia_test_finish(int32_t failures);\n"
-        "int32_t helia_mut_test_kernel(void);\n"
-        "int main(void) { helia_test_finish(helia_mut_test_kernel() == 42 ? 0 : 1); return 0; }\n"
+        f"int32_t {fn}(void);\n"
+        f"int main(void) {{ helia_test_finish({fn}() == {want} ? 0 : 1); return 0; }}\n"
     )
     return case
 
@@ -475,14 +477,7 @@ class TestHostSizerDefines:
             "int32_t arm_fake_get_buffer_size(void) { return 48; }\n"
             "int32_t arm_fake_get_buffer_size_mve(void) { return 16; }\n"
         )
-        case = tmp_path / "cases" / "CraftedFamily" / "sizer_case"
-        (case / "includes").mkdir(parents=True)
-        (case / "sizer_case.c").write_text(
-            "#include <stdint.h>\n"
-            "extern void helia_test_finish(int32_t failures);\n"
-            "int32_t arm_fake_get_buffer_size_mve(void);\n"
-            "int main(void) { helia_test_finish(arm_fake_get_buffer_size_mve() == 48 ? 0 : 1); return 0; }\n"
-        )
+        case = _crafted_case(tmp_path, "sizer_case", "arm_fake_get_buffer_size_mve", 48)
         report = run_mutation_scoring(
             cmsis_nn_root=checkout,
             case_dirs=[case],
