@@ -3,10 +3,10 @@
 
 Reads the CONV_2D, DEPTHWISE_CONV_2D, FULLY_CONNECTED and AVERAGE_POOL_2D
 operators of int8 `.tflite` models and emits one s8 descriptor per unique layer
-shape. Weights stay random; only shapes, strides, padding and the fused
-activation carry over. Each descriptor is named after the first layer with that
-shape (`<stem>_mlperf_<model>_l<op index>_s8`) and keeps that layer's activation;
-a comment lists the other layers.
+shape and fused activation. Weights stay random; only shapes, strides, padding
+and the fused activation carry over. Each descriptor is named after the first
+layer with that key (`<stem>_mlperf_<model>_l<op index>_s8`); a comment lists
+the other layers.
 The cases replace a marked block at the end of each operator's descriptor file.
 
 Usage, with M the helia-profiler checkout's tests/fixtures/mlperf_tiny
@@ -82,9 +82,9 @@ def model_layers(tag: str, path: Path):
         yield op_name, f"{tag}_l{index}", layer_fields(op_name, op.builtinOptions, shapes)
 
 
-def shape_key(fields: dict) -> tuple:
-    """Dedup key: every field but the activation."""
-    return tuple((k, str(v)) for k, v in fields.items() if k != "activation")
+def layer_key(fields: dict) -> tuple:
+    """Dedup key: every descriptor field."""
+    return tuple((k, str(v)) for k, v in fields.items())
 
 
 _BEGIN = "# BEGIN mlperf model shapes (scripts/extract_model_shapes.py)\n"
@@ -98,7 +98,7 @@ def render(stem: str, operator: str, layers: list[tuple[str, dict, list[str]]]) 
         desc = {"operator": operator, "name": f"{stem}_mlperf_{label}_s8",
                 "activation_dtype": "S8", "weight_dtype": "S8",
                 "hint": {"call_style": "per_tensor"}, **fields}
-        note = f"# Same shape: {', '.join(also)}\n" if also else ""
+        note = f"# Same layer: {', '.join(also)}\n" if also else ""
         docs.append(note + yaml.safe_dump(desc, sort_keys=False, default_flow_style=None))
     return "---\n" + _BEGIN + "---\n".join(docs) + _END
 
@@ -121,7 +121,7 @@ def main() -> None:
     for spec in args.models:
         tag, _, path = spec.partition("=")
         for op_name, label, fields in model_layers(tag, Path(path)):
-            key = shape_key(fields)
+            key = layer_key(fields)
             if key in groups[op_name]:
                 groups[op_name][key][2].append(label)
             else:

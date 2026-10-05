@@ -3313,13 +3313,24 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 ---
-# Same shape: ic_l2
 operator: Convolve
 name: convolve_mlperf_ic_l1_s8
 activation_dtype: S8
 weight_dtype: S8
 hint: {call_style: per_tensor}
 activation: RELU
+input_shape: [1, 32, 32, 16]
+filter_shape: [3, 3, 16, 16]
+strides: [1, 1]
+padding: SAME
+use_bias: true
+---
+operator: Convolve
+name: convolve_mlperf_ic_l2_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: NONE
 input_shape: [1, 32, 32, 16]
 filter_shape: [3, 3, 16, 16]
 strides: [1, 1]
@@ -3410,7 +3421,7 @@ strides: [2, 2]
 padding: SAME
 use_bias: true
 ---
-# Same shape: kws_l4, kws_l6, kws_l8
+# Same layer: kws_l4, kws_l6, kws_l8
 operator: Convolve
 name: convolve_mlperf_kws_l2_s8
 activation_dtype: S8
@@ -3507,7 +3518,7 @@ strides: [1, 1]
 padding: SAME
 use_bias: true
 ---
-# Same shape: vww_l16, vww_l18, vww_l20, vww_l22
+# Same layer: vww_l16, vww_l18, vww_l20, vww_l22
 operator: Convolve
 name: convolve_mlperf_vww_l14_s8
 activation_dtype: S8
