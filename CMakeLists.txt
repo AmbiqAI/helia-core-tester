@@ -189,6 +189,14 @@ add_library(helia_test_runtime STATIC src/test_runtime/helia_test_runtime.c)
 target_include_directories(helia_test_runtime PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_definitions(helia_test_runtime PRIVATE USING_FVP_CORSTONE_300)
 target_link_libraries(helia_test_runtime PRIVATE cmsis-nn)
+# Generated sources that include the library's inline float16 conversion take the VCVT form its
+# assembler probe chose (ns-cmsis-nn#427), as its own unit tests do; a static library keeps the
+# verdict private.
+get_target_property(_nn_gas_defs cmsis-nn COMPILE_DEFINITIONS)
+if(_nn_gas_defs)
+  list(FILTER _nn_gas_defs INCLUDE REGEX "^ARM_NN_GAS_")
+  target_compile_definitions(helia_test_runtime PUBLIC ${_nn_gas_defs})
+endif()
 if(ENABLE_COVERAGE AND NOT ENABLE_COVERAGE_MVE_INT)
   # This build gives ns-cmsis-nn's integer sources ARM_MATH_AUTOVECTORIZE, which compiles out their
   # MVE integer paths; a harness whose entry lives only on those paths expects it to decline.
