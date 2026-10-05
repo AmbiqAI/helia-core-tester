@@ -3,10 +3,10 @@
 
 Reads the CONV_2D, DEPTHWISE_CONV_2D, FULLY_CONNECTED and AVERAGE_POOL_2D
 operators of int8 `.tflite` models and emits one s8 descriptor per unique layer
-shape. Weights stay random; only shapes, strides, padding and the fused
-activation carry over. Each descriptor is named after the first layer with that
-shape (`<stem>_mlperf_<model>_l<op index>_s8`) and keeps that layer's activation;
-a comment lists the other layers.
+shape and fused activation. Weights stay random; only shapes, strides, padding
+and the fused activation carry over. Each descriptor is named after the first
+layer with that key (`<stem>_mlperf_<model>_l<op index>_s8`); a comment lists
+the other layers.
 The cases replace a marked block at the end of each operator's descriptor file.
 
 Usage, with M the helia-profiler checkout's tests/fixtures/mlperf_tiny
@@ -83,8 +83,8 @@ def model_layers(tag: str, path: Path):
 
 
 def shape_key(fields: dict) -> tuple:
-    """Dedup key: every field but the activation."""
-    return tuple((k, str(v)) for k, v in fields.items() if k != "activation")
+    """Dedup key: every descriptor field."""
+    return tuple((k, str(v)) for k, v in fields.items())
 
 
 _BEGIN = "# BEGIN mlperf model shapes (scripts/extract_model_shapes.py)\n"
