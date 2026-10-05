@@ -2074,5 +2074,17 @@
     "scratch_bytes": 0,
     "stateless": true,
     "supported_dtype": "FP16"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "hct_empty_call",
+    "kernel_id": 174,
+    "mutates_input": false,
+    "operator_family": "Timing",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "S8"
   }
 ]

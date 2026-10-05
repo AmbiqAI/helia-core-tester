@@ -88,7 +88,7 @@ def test_firmware_target_info_and_catalog_roundtrip_with_python_decoder(tmp_path
     # The emit tool passes a healthy boot.
     assert (target_info.boot_status, target_info.core_clock_hz) == (0, 250_000_000)
     assert (target_info.fpscr_boot, target_info.fpscr) == (0x03040000, 0x00040000)
-    assert len(catalog) == 173
+    assert len(catalog) == len(json.loads((PROJECT_ROOT / "cmake" / "hardware" / "kernel_catalog.json").read_text()))
     assert catalog[0].kernel_id == 1
     assert catalog[0].canonical_name == "arm_abs_s8"
     assert catalog[5].kernel_id == 6

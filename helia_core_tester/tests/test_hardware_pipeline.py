@@ -545,10 +545,11 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
     assert encoded["totals"] == {"ran": 1, "passed": 1, "failed": 0, "skipped": 1}
     assert encoded["timing"] == timing
     ran, skip = encoded["cases"]
-    assert set(ran) == {"case_id", "passed", "median_cycles", "valid_for_regression", "max_abs_diff", "diff_count", "skipped_reason"}
+    assert set(ran) == {"case_id", "passed", "median_cycles", "valid_for_regression", "timing_status", "max_abs_diff", "diff_count",
+                        "skipped_reason"}
     assert ran == {
         "case_id": "abs_json", "passed": True, "median_cycles": ran["median_cycles"], "valid_for_regression": True,
-        "max_abs_diff": 0.0, "diff_count": 0, "skipped_reason": None,
+        "timing_status": "valid", "max_abs_diff": 0.0, "diff_count": 0, "skipped_reason": None,
     }
     assert isinstance(ran["median_cycles"], float)
     assert skip["case_id"] == "conv_x" and skip["passed"] is None and skip["median_cycles"] is None

@@ -14,6 +14,7 @@ import numpy as np
 from .comparison import strict_comparison
 from .pathutil import write_text_lf
 
+from helia_core_tester.generation.golden_check import EDGE_CASE_KEY
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 from helia_core_tester.generation.utils.tflite_utils import calculate_per_channel_multiplier_shift, requantize_np
@@ -350,6 +351,53 @@ def build_abs_s8_case_bundle(
         "required_target_capabilities": [],
         "repeated_invocation_safe": True,
         "timing": {"warmups": 2, "samples": 3, "iterations_per_sample": 4, "min_cycles": 512, "max_iterations": 128},
+    }
+    return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=blobs)
+
+
+
+FLOOR_CASE_ID = "hct_empty_call_floor"
+DEGENERATE_REASON_KEY = EDGE_CASE_KEY
+# Matches assets/kernel_registry.yaml.
+EMPTY_CALL_KERNEL_ID = 174
+
+
+def build_floor_bundle(
+    project_root: Path, *, board_id: str | None = None, cpu: str = "cortex-m55",
+) -> CaseBundle:
+    """A no-op case timed like every kernel."""
+    case_root = _case_root(project_root, "Timing", FLOOR_CASE_ID, target=board_id or cpu)
+    blobs_dir = case_root / "blobs"
+    blobs_dir.mkdir(parents=True, exist_ok=True)
+    # Firmware ignores it; cases need one.
+    _write_blob(blobs_dir / "input_0.bin", np.zeros(4, dtype=np.int8))
+    _write_blob(blobs_dir / "expected_output.bin", np.zeros(0, dtype=np.int8))
+    blobs = (
+        _blob_info(blobs_dir / "input_0.bin", blob_id=1, role="input_0", dtype="S8", dimensions=(4,)),
+        _blob_info(blobs_dir / "expected_output.bin", blob_id=2, role="expected_output", dtype="S8",
+                   dimensions=(0,), host_only=True),
+    )
+    manifest = {
+        "schema_name": "hct.case_manifest",
+        "schema_version": 1,
+        "case_id": FLOOR_CASE_ID,
+        "descriptor_name": FLOOR_CASE_ID,
+        "descriptor_sha256": hashlib.sha256(FLOOR_CASE_ID.encode("utf-8")).hexdigest(),
+        "operator": "EmptyCall",
+        "family": "Timing",
+        "target_cpu": cpu,
+        "kernel_id": EMPTY_CALL_KERNEL_ID,
+        "adapter_metadata_schema": 1,
+        "serialized_scalar_parameters": {},
+        "tensor_dtypes": {"input": "S8", "output": "S8"},
+        "blob_roles": [_manifest_blob_entry(blob) for blob in blobs],
+        "expected_output": {"dtype": "S8", "byte_length": 0, "blob_id": 2},
+        "correctness_comparison": {"mode": "exact_int"},
+        "scratch_buffer": {"bytes": 0},
+        "required_target_capabilities": [],
+        "repeated_invocation_safe": True,
+        # Same timing plan as generated cases.
+        "timing": {"warmups": 2, "samples": 5, "iterations_per_sample": 4, "min_cycles": 1024, "max_iterations": 256},
     }
     return CaseBundle(root_dir=case_root, manifest_path=_write_manifest(case_root, manifest), manifest=manifest, blobs=blobs)
 

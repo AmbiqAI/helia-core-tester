@@ -25,7 +25,10 @@ import pytest
 
 from helia_core_tester.hardware import measurement, session, session_runner
 from helia_core_tester.hardware.boards import resolve_board
-from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, load_case_bundle
+from helia_core_tester.hardware.case_bundle import (
+    EMPTY_CALL_KERNEL_ID, FLOOR_CASE_ID, build_abs_s8_case_bundle, load_case_bundle,
+)
+from helia_core_tester.hardware.comparison import ComparisonResult
 from helia_core_tester.hardware.fake_target import FakeTargetTransport
 from helia_core_tester.hardware.hctp import HEADER_SIZE
 from helia_core_tester.hardware.measurement import (
@@ -34,13 +37,14 @@ from helia_core_tester.hardware.measurement import (
     OutboxOverflowError,
     RawCounterValue,
     RawSample,
+    SampleStatistics,
     case_tail_bytes,
     check_outbox_fits,
     counter_passes_for_selection,
     sample_frame_bytes,
 )
 from helia_core_tester.hardware.pmu_catalog import CPU_CYCLES_EVENT_ID, counter_by_name
-from helia_core_tester.hardware.session import HostSession, SessionResult, TargetLimits
+from helia_core_tester.hardware.session import CaseRunResult, HostSession, SessionResult, TargetLimits
 from helia_core_tester.hardware.wire import (
     CAP_PMU_ARMV8M,
     CaseComplete,
@@ -140,6 +144,7 @@ class _FakeSession:
         self._fail = fail
         self.target_info: TargetInfo | None = None
         self.expected_build_id: str | None = None
+        self.kernel_ids: frozenset[int] = frozenset()
 
     def handshake(self, *, expected_build_id: str | None = None, expected_clock_hz: int | None = None) -> TargetInfo:
         if self._fail is not None:
@@ -271,12 +276,14 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
 
     written: dict[str, Any] = {}
 
-    def _fake_write_result_bundle(result, *, session_id, output_root, memory_report, kernel_catalog, target_info, host_log_text, target_log_text, build_dir, compare):
+    def _fake_write_result_bundle(result, *, session_id, output_root, memory_report, kernel_catalog, target_info, host_log_text, target_log_text, build_dir, timing_floor, compare):
         written.update(result=result, session_id=session_id, target_info=target_info, host_log=host_log_text, build_dir=build_dir)
         return output_root / "artifacts" / "reports" / "hardware" / session_id
 
     monkeypatch.setattr(session_runner, "open_rtt_session", _open)
     monkeypatch.setattr(session_runner, "write_result_bundle", _fake_write_result_bundle)
+    # Placeholder results skip classification.
+    monkeypatch.setattr(session_runner, "apply_floor", lambda cases: (None, list(cases)))
     report_roots: list[Path] = []
 
     def _fake_memory_report(board, *, project_root, build_dir, output_root):
@@ -552,3 +559,64 @@ def test_duplicate_case_ids_are_refused_before_the_probe_opens(tmp_path: Path, m
             counter_passes=DEFAULT_PASSES, session_id="s", build_dir=tmp_path,
         )
     assert opened == []
+
+
+class _FloorSession(_FakeSession):
+    """Advertises the floor kernel; returns timed results."""
+
+    def __init__(self, info: TargetInfo, calls: list[list[Any]], kernel_ids: frozenset[int]) -> None:
+        super().__init__(info, calls)
+        self.kernel_ids = kernel_ids
+
+    def run_many(self, case_bundles, *, on_case_complete=None) -> SessionResult:
+        self._calls.append(list(case_bundles))
+        results = []
+        for bundle in case_bundles:
+            median = 40.0 if bundle.case_id == FLOOR_CASE_ID else 1000.0
+            stats = SampleStatistics(5, median, median, median, median, 1.0, True, False, ())
+            result = CaseRunResult(bundle, ComparisonResult(True, 0, 0.0, "exact_int"), b"", (), (), stats)
+            if on_case_complete is not None:
+                on_case_complete(result)
+            results.append(result)
+        return SessionResult(cases=tuple(results), protocol_trace=("t",), session_complete_cases=len(results))
+
+
+@pytest.mark.parametrize("kernel_ids", [frozenset({EMPTY_CALL_KERNEL_ID}), frozenset()])
+def test_runner_runs_and_hides_floor(tmp_path: Path, monkeypatch, kernel_ids) -> None:
+    bundles = [
+        build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id=f"abs_{i}", input_shape=(1, 4, 4, 2))
+        for i in range(3)
+    ]
+    calls: list[list[Any]] = []
+    written: dict[str, Any] = {}
+    monkeypatch.setattr(
+        session_runner, "open_rtt_session",
+        lambda *a, **k: (_FloorSession(_target_info(max_cases_per_session=2), calls, kernel_ids), _FakeTransport(), 0),
+    )
+    monkeypatch.setattr(session_runner, "write_result_bundle", lambda result, **kw: written.update(kw) or tmp_path)
+    monkeypatch.setattr(session_runner, "generate_memory_report", lambda *a, **k: tmp_path / "memory_report.json")
+    (tmp_path / "memory_report.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "cmake" / "hardware").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "cmake" / "hardware" / "kernel_catalog.json").write_text("[]", encoding="utf-8")
+    reported: list[str] = []
+
+    merged, _ = session_runner.run_case_bundles(
+        tmp_path, bundles, board=resolve_board("apollo3p_evb"), serial_no=1,
+        counter_passes=DEFAULT_PASSES, build_dir=tmp_path,
+        on_case_complete=lambda case: reported.append(case.case_bundle.case_id),
+    )
+
+    ran = [[b.case_id for b in call] for call in calls]
+    kernel_ids_run = ["abs_0", "abs_1", "abs_2"]
+    assert reported == kernel_ids_run
+    assert [c.case_bundle.case_id for c in merged.cases] == kernel_ids_run
+    assert merged.session_complete_cases == 3
+    assert [c.statistics.timing_status for c in merged.cases] == ["valid"] * 3
+    if kernel_ids:
+        # Floor leads the first batch.
+        assert ran == [[FLOOR_CASE_ID, "abs_0"], ["abs_1", "abs_2"]]
+        assert calls[0][0].manifest["target_cpu"] == "cortex-m4"
+        assert written["timing_floor"]["median_cycles"] == 40.0
+    else:
+        assert ran == [["abs_0", "abs_1"], ["abs_2"]]
+        assert written["timing_floor"] is None

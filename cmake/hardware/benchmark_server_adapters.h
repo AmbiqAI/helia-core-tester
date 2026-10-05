@@ -248,6 +248,7 @@ extern "C" {
 #define HCT_KERNEL_ID_BATCH_MATMUL_F16 171u
 #define HCT_KERNEL_ID_CONVOLVE_F32 172u
 #define HCT_KERNEL_ID_CONVOLVE_F16 173u
+#define HCT_KERNEL_ID_EMPTY_CALL 174u
 
 static inline hct_server_blob_t *find_blob_by_role(hct_server_session_t *session, uint8_t role)
 {
@@ -335,6 +336,9 @@ static inline void hct_window_close(bool *open)
 /* The hand-written abs adapter (benchmark_server_session.c), dispatched like every
  * generated one. */
 arm_cmsis_nn_status hct_run_abs_once(hct_server_session_t *session);
+
+/* Times an empty call: the floor. */
+arm_cmsis_nn_status hct_run_empty_once(hct_server_session_t *session);
 
 /* Kernel-id dispatch: runs the adapter for session->expected_kernel_id, or returns
  * ARM_CMSIS_NN_ARG_ERROR for an id it does not know. Generated into

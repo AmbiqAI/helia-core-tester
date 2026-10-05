@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import shutil
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from xml.etree.ElementTree import Element, SubElement, ElementTree
@@ -33,7 +34,7 @@ CASE_SUMMARY_BASE_FIELDS = [
 ]
 # Work counts and prepare cost.
 CASE_SUMMARY_WORK_FIELDS = ["macs", "ops", "cycles_per_mac", "cycles_per_op", "prepare_cycles"]
-CASE_SUMMARY_FLAG_FIELDS = ["overflow_detected", "valid_for_regression"]
+CASE_SUMMARY_FLAG_FIELDS = ["overflow_detected", "valid_for_regression", "timing_status"]
 
 
 def _split_protocol_trace_entry(entry: str) -> tuple[int | None, str, str]:
@@ -153,6 +154,7 @@ def write_result_bundle(
     target_log_text: str = "no physical target log captured\n",
     timing: dict | None = None,
     build_dir: Path | None = None,
+    timing_floor: dict | None = None,
     compare: dict | None = None,
 ) -> Path:
     for case in result.cases:
@@ -181,6 +183,8 @@ def write_result_bundle(
         # Board-reported TARGET_INFO build id.
         "firmware_build_id": result.build_id,
         "boot": boot_record(result.target_info),
+        # Empty-call cycles; null when unmeasured.
+        "timing_floor": timing_floor,
         # How outputs were judged.
         "compare": {"strict": False, "golden_from": None, **(compare or {})},
     }
@@ -244,6 +248,7 @@ def write_result_bundle(
                 "counters": counter_medians,
                 "overflow_detected": case.statistics.overflow_detected,
                 "valid_for_regression": case.statistics.valid_for_regression,
+                "timing_status": case.statistics.timing_status,
                 "rejection": rejection,
             }
         )
@@ -266,6 +271,7 @@ def write_result_bundle(
         summary_row.update(counter_medians)
         summary_row["overflow_detected"] = str(case.statistics.overflow_detected).lower()
         summary_row["valid_for_regression"] = str(case.statistics.valid_for_regression).lower()
+        summary_row["timing_status"] = case.statistics.timing_status
         case_summary_rows.append(summary_row)
         (bundle_root / "outputs" / f"{case.case_bundle.case_id}.bin").write_bytes(case.output_bytes)
         write_text_lf(
@@ -313,6 +319,7 @@ def write_result_bundle(
         "passes": pass_names,
         "cases_with_overflow": [row["case_id"] for row in case_rows if row["overflow_detected"]],
         "rejected_cases": [row["case_id"] for row in case_rows if row["rejection"]],
+        "timing_status_counts": dict(Counter(row["timing_status"] for row in case_rows)),
     }
     if timing is not None:
         session_summary["timing"] = timing

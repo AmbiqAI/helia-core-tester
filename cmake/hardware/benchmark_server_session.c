@@ -797,6 +797,19 @@ arm_cmsis_nn_status hct_run_abs_once(hct_server_session_t *session)
                                 (int32_t)input->byte_length));
 }
 
+/* Opaque, so the call stays. */
+__attribute__((noinline)) static arm_cmsis_nn_status hct_empty_call(void)
+{
+    __asm volatile("" ::: "memory");
+    return ARM_CMSIS_NN_SUCCESS;
+}
+
+arm_cmsis_nn_status hct_run_empty_once(hct_server_session_t *session)
+{
+    session->output_length = 0u;
+    return HCT_TIMED(hct_empty_call());
+}
+
 #ifdef HCT_HOST_ABS_ONLY
 /* The host harness compiles without benchmark_server_adapters.gen.c (there is no
  * CMSIS-NN library to link against), so only the hand-written abs adapter is

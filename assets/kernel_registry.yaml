@@ -1071,3 +1071,10 @@ kernels:
     dtype: FP16
     weight_dtype: FP16
     cmsis_function: arm_convolve_f16
+
+  # Times an empty call: the board's floor.
+  - kernel_id: 174
+    family: Timing
+    operator: EmptyCall
+    dtype: S8
+    cmsis_function: hct_empty_call
