@@ -1,4 +1,4 @@
-"""discover_or_skip() skips only for an absent generated input and fails for a broken one (#150).
+"""discover_or_skip() generates an absent named input, skips an unknown one, fails a broken one (#150).
 
 Each case records which outcome the helper produced rather than expecting one inside
 pytest.raises(): a skip raised where a failure is expected would otherwise make this
@@ -39,16 +39,34 @@ def _outcome(project_root: Path, name_filter: str) -> tuple[str, object]:
         return "failed", str(exc)
 
 
-def test_absent_corpus_skips_naming_the_input(tmp_path: Path) -> None:
+def test_absent_described_case_is_generated(tmp_path: Path) -> None:
     outcome, detail = _outcome(tmp_path, "abs_default_s8")
+    assert outcome == "returned", detail
+    (case,) = detail
+    assert case.name == "abs_default_s8"
+    assert (case.directory / "descriptor.yaml").is_file()
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_undescribed_case_skips_naming_the_input(tmp_path: Path) -> None:
+    outcome, detail = _outcome(tmp_path, "no_such_case_s8")
     assert outcome == "skipped", detail
-    assert "int/cortex-m55/BasicMathFunctions case matching 'abs_default_s8'" in detail
+    assert "int/cortex-m55/BasicMathFunctions case matching 'no_such_case_s8'" in detail
 
 
 def test_other_generated_cases_do_not_satisfy_the_filter(tmp_path: Path) -> None:
     (_case_dir(tmp_path, "add_default_s8") / "descriptor.yaml").write_text(VALID_DESCRIPTOR.replace("abs", "add"))
-    outcome, detail = _outcome(tmp_path, "abs_default_s8")
+    outcome, detail = _outcome(tmp_path, "no_such_case_s8")
     assert outcome == "skipped", detail
+
+
+def test_whole_family_request_skips_when_absent(tmp_path: Path) -> None:
+    try:
+        discover_or_skip(tmp_path, family=FAMILY)
+    except pytest.skip.Exception as exc:
+        assert "int/cortex-m55/BasicMathFunctions case under" in str(exc)
+    else:
+        pytest.fail("expected a skip for an absent family")
 
 
 def test_present_case_without_descriptor_fails(tmp_path: Path) -> None:

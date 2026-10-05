@@ -284,7 +284,7 @@ class TestFailureKinds:
             tmp_path / "runtime.o",
             TESTER_ROOT,
             tmp_path / "bin",
-            cc="/bin/false",  # every compile invocation fails
+            cc=shutil.which("false"),  # every compile fails
         )
         assert not result.passed
         assert result.kind == KIND_COMPILE_FAILED

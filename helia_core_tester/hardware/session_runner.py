@@ -335,7 +335,7 @@ def run_demo_session(
     session_id: str | None = None,
     build_dir: Path | None = None,
 ) -> tuple[SessionResult, Path]:
-    """Two-kernel synthetic demo session (arm_abs_s8 + arm_convolve_s8) on the board;
+    """Two-kernel synthetic demo session (arm_abs_s8 + arm_convolve_wrapper_s8) on the board;
     library code only, not exposed on the CLI. `counter_passes` defaults to every
     PMU group at its default selection, like the hardware CLI."""
     board = board or resolve_board(DEFAULT_BOARD_ID)
