@@ -4,6 +4,8 @@ Mirrors the dispatch of arm_convolve_wrapper_s8,
 arm_depthwise_conv_wrapper_s8 and arm_fully_connected_wrapper_s8 in
 ns-cmsis-nn main (GCC builds; MVE vs not). v7.38.0 lacks the 1xN
 padding gate, so there a gated-out layer runs arm_convolve_1_x_n_s8.
+Names the wrapper's direct callee. Off MVE,
+arm_convolve_1_x_n_s8 just forwards to arm_convolve_s8.
 Dims are cmsis_nn_dims tuples (n, h, w, c); stride, padding and
 dilation are (h, w).
 
