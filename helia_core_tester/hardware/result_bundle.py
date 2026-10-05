@@ -15,6 +15,7 @@ from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
 from .wire import boot_record, placement_record
 from .work_count import case_work, per_unit
+from .wrapper_route import build_gate, inner_symbol
 from .pathutil import write_text_lf
 
 CASE_SUMMARY_BASE_FIELDS = [
@@ -31,6 +32,7 @@ CASE_SUMMARY_BASE_FIELDS = [
     "p99_cycles",
     "fvp_status",
     "timed_symbol",
+    "inner_symbol",
 ]
 # Work counts and prepare cost.
 CASE_SUMMARY_WORK_FIELDS = ["macs", "ops", "cycles_per_mac", "cycles_per_op", "prepare_cycles"]
@@ -214,10 +216,14 @@ def write_result_bundle(
     pass_names: list[str] = [counter_pass.name for counter_pass in result.counter_passes]
     # The kernel each sample timed.
     timed_symbols = {int(entry["kernel_id"]): str(entry.get("canonical_name", "")) for entry in kernel_catalog}
+    # Route rules follow the built kernels.
+    gate_1xn = build_gate(build_dir)
     passed = 0
     for case in result.cases:
         passed += 1 if case.comparison.passed else 0
         timed_symbol = timed_symbols.get(case.case_bundle.kernel_id, "")
+        # The kernel the wrapper routes to.
+        inner = inner_symbol(timed_symbol, case.case_bundle.manifest, gate_1xn)
         rejection = _rejection_record(case)
         counter_medians = compute_counter_medians(case.normalized_samples)
         work_fields = _work_fields(case)
@@ -245,6 +251,7 @@ def write_result_bundle(
                 "mad_cycles": case.statistics.mad_cycles,
                 "fvp_status": case.case_bundle.fvp_status,
                 "timed_symbol": timed_symbol,
+                "inner_symbol": inner,
                 **work_fields,
                 "shapes": {blob.role: list(blob.dimensions) for blob in case.case_bundle.blobs},
                 "unsupported_counters": list(case.statistics.unsupported_counters),
@@ -270,6 +277,7 @@ def write_result_bundle(
             "p99_cycles": case.statistics.p99_cycles,
             "fvp_status": case.case_bundle.fvp_status,
             "timed_symbol": timed_symbol,
+            "inner_symbol": inner,
             **work_fields,
         }
         summary_row.update(counter_medians)
