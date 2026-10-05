@@ -72,6 +72,9 @@ class OpAdd(BinaryBasicMathBase):
         Returns:
             Dictionary with kernel_fn, input_c_type, output_c_type
         """
+        entry_kernel = self._direct_entry_kernel()
+        if entry_kernel:
+            return entry_kernel
         activation_dtype = self.tensor_dtype("input")
         
         if activation_dtype == 'S8':
@@ -284,6 +287,7 @@ class OpAdd(BinaryBasicMathBase):
             'input_dtype': kernel_info["input_c_type"],
             'output_dtype': kernel_info["output_c_type"],
             'kernel_fn': kernel_info["kernel_fn"],
+            'expected_status': self.expected_status(),
             'float_kernel': kernel_info["float_kernel"],
             'legacy_fp16_kernel': kernel_info.get("legacy_fp16_kernel", False),
         }

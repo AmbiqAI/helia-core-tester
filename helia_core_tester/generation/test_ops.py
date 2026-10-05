@@ -14,9 +14,10 @@ import yaml
 
 from helia_core_tester.core.discovery import find_descriptors_dir, find_generated_tests_dir, find_repo_root
 from helia_core_tester.core.cpu_targets import missing_required_capabilities, normalize_cpu
+from helia_core_tester.generation.golden_check import check_case_golden
 from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, resolve_comparison, resolve_tensor_dtypes
-from helia_core_tester.generation.io.descriptors import load_all_descriptors
+from helia_core_tester.generation.io.descriptors import descriptor_matches_op, load_all_descriptors
 from helia_core_tester.core.path_layout import generation_report_dir
 from helia_core_tester.generation.ops import get_op_map, get_operator_spec
 from helia_core_tester.generation.reuse import (
@@ -74,23 +75,9 @@ def should_run_test(desc: Dict[str, Any], filters: Dict[str, Any]) -> bool:
         if desc['name'] != filters['name']:
             return False
 
-    if filters.get('op'):
-        filter_op = filters['op']
-        desc_name = desc['name']
-        base_name = desc.get('_base_name', None)
-        source_stem = desc.get('_source_stem', None)
-        source_relpath = desc.get('_source_relpath', None)
-        desc_operator = desc.get('operator', None)
-        
-        name_matches = desc_name == filter_op or desc_name.startswith(filter_op + '_')
-        base_matches = base_name == filter_op if base_name else False
-        stem_matches = source_stem == filter_op if source_stem else False
-        relpath_matches = source_relpath == filter_op if source_relpath else False
-        operator_matches = desc_operator == filter_op if desc_operator else False
-        
-        if not name_matches and not base_matches and not stem_matches and not relpath_matches and not operator_matches:
-            return False
-        
+    if filters.get('op') and not descriptor_matches_op(desc, str(filters['op'])):
+        return False
+
     # Filter by activation dtype
     if filters.get('dtype') and not descriptor_matches_dtype_filter(desc, str(filters['dtype'])):
         return False
@@ -374,6 +361,7 @@ def generate_test(
     try:
         op.generate_c_files(test_dir)
         op.assert_input_mode_consumed()
+        check_case_golden(test_dir, desc)
     except NotImplementedError:
         # Operator doesn't support C file generation yet
         print(f"INFO: {name} - C file generation not implemented")

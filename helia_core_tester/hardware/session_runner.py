@@ -20,6 +20,7 @@ from .boards import DEFAULT_BOARD_ID, BoardSpec, default_session_id, resolve_boa
 from .case_bundle import CaseBundle, build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
 from .firmware_build import elf_path
 from .generated_test_bridge import (
+    CaseSelection,
     GeneratedTestCase,
     UnsupportedGeneratedTestError,
     bridged_families,
@@ -200,6 +201,7 @@ def run_case_bundles(
     build_dir: Path | None = None,
     on_case_complete: OnCaseComplete | None = None,
     expected_build_id: str | None = None,
+    compare: dict | None = None,
 ) -> tuple[SessionResult, Path]:
     """Stream `case_bundles` to the board in as many sessions as the target's limits
     require, merge every case into one SessionResult, and write its result bundle.
@@ -302,6 +304,7 @@ def run_case_bundles(
         target_info=board.target_info(),
         host_log_text=host_log,
         target_log_text=target_log,
+        compare=compare,
         # Unverified firmware gets no provenance.
         build_dir=build_dir if expected_build_id is not None and build_id == expected_build_id else None,
     )
@@ -373,6 +376,7 @@ def build_generated_test_case_bundles(
     require_fvp_pass: bool = True,
     fvp_gate: str | None = None,
     board_id: str | None = None,
+    select: CaseSelection | None = None,
 ) -> tuple[list[CaseBundle], list[tuple[GeneratedTestCase, str]]]:
     """Discover generated (`helia_core_tester generate`) kernel tests and bridge the
     ones with real hardware benchmark firmware dispatch support into CaseBundles.
@@ -394,6 +398,7 @@ def build_generated_test_case_bundles(
     gate would otherwise skip every case.
 
     `board_id` keys staged cases per board, so boards run concurrently.
+    `select` narrows by op, dtype or case id.
 
     Returns (bridged_case_bundles, [(skipped_test, reason), ...]).
     """
@@ -403,7 +408,8 @@ def build_generated_test_case_bundles(
     for suite_name in normalize_suites(suite):
         for fam in families:
             discovered = discover_generated_tests(
-                project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite_name
+                project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite_name,
+                select=select,
             )
             for test in discovered:
                 test = replace(test, board=board_id)
