@@ -7,7 +7,8 @@ kernel's real firmware C dispatch body is authored, and
 is produced from it by `scripts/generate_hardware_adapters.py`. See that module's docstring for the full
 rationale (and why the firmware still can't literally reuse the FVP-generated `.c.j2`
 per-descriptor test files -- that would reintroduce the "one ELF per case" scalability
-problem the streaming architecture exists to avoid).
+problem the streaming architecture exists to avoid). The `--check` test also covers
+`scripts/generate_kernel_catalog.py`.
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ ADAPTERS_C_PATH = PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_adapte
 ADAPTERS_H_PATH = PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_adapters.h"
 SESSION_C_PATH = PROJECT_ROOT / "cmake" / "hardware" / "benchmark_server_session.c"
 GENERATOR_SCRIPT = PROJECT_ROOT / "scripts" / "generate_hardware_adapters.py"
+CATALOG_SCRIPT = PROJECT_ROOT / "scripts" / "generate_kernel_catalog.py"
 
 
 def test_generated_file_is_marked_and_session_c_holds_no_generated_code() -> None:
@@ -117,9 +119,10 @@ def test_every_kernel_id_is_dispatched_exactly_once() -> None:
     assert "return hct_run_abs_once(session);" in rendered
 
 
-def test_generator_script_check_mode_passes_on_committed_file() -> None:
+@pytest.mark.parametrize("script", [GENERATOR_SCRIPT, CATALOG_SCRIPT], ids=lambda p: p.stem)
+def test_generator_script_check_mode_passes_on_committed_file(script: Path) -> None:
     result = subprocess.run(
-        [sys.executable, str(GENERATOR_SCRIPT), "--check"],
+        [sys.executable, str(script), "--check"],
         cwd=PROJECT_ROOT,
         capture_output=True,
         text=True,
