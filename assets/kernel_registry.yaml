@@ -1135,3 +1135,22 @@ kernels:
     dtype: S8
     cmsis_function: arm_fully_connected_per_channel_packed_s8
     direct_entry: true
+
+  - kernel_id: 183
+    family: SVDFunctions
+    operator: SVDF
+    dtype: S8
+    cmsis_function: arm_svdf_s8
+
+  - kernel_id: 184
+    family: SVDFunctions
+    operator: SVDF
+    dtype: S8
+    weight_dtype: S16
+    cmsis_function: arm_svdf_state_s16_s8
+
+  - kernel_id: 185
+    family: LSTMFunctions
+    operator: LSTMUnidirectional
+    dtype: S8
+    cmsis_function: arm_lstm_unidirectional_s8

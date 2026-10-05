@@ -260,6 +260,9 @@ extern "C" {
 #define HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_PLANAR 180u
 #define HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_CHANNELWISE 181u
 #define HCT_KERNEL_ID_FULLY_CONNECTED_PER_CHANNEL_PACKED_S8 182u
+#define HCT_KERNEL_ID_SVDF_S8 183u
+#define HCT_KERNEL_ID_SVDF_STATE_S16_S8 184u
+#define HCT_KERNEL_ID_LSTM_UNIDIRECTIONAL_S8 185u
 
 static inline hct_server_blob_t *find_blob_by_role(hct_server_session_t *session, uint8_t role)
 {

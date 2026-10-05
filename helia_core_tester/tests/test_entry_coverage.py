@@ -135,17 +135,18 @@ def _write_case(root: Path, family: str, name: str) -> None:
 
 
 def test_unbridged_families_are_skipped_not_dropped(tmp_path: Path) -> None:
-    _write_case(tmp_path, "LSTMFunctions", "lstm_one_s8")
-    _write_case(tmp_path, "SVDFunctions", "svdf_one_s8")
+    # Every real family bridges; use stand-ins.
+    _write_case(tmp_path, "AlphaFunctions", "alpha_one_s8")
+    _write_case(tmp_path, "BetaFunctions", "beta_one_s8")
     bundles, skipped = build_generated_test_case_bundles(tmp_path, family=None, board_id="b1")
 
     assert bundles == []
     assert [(t.name, t.board, r) for t, r in skipped] == [
-        ("lstm_one_s8", "b1", f"{NO_ADAPTER}: LSTMFunctions has no firmware adapter"),
-        ("svdf_one_s8", "b1", f"{NO_ADAPTER}: SVDFunctions has no firmware adapter"),
+        ("alpha_one_s8", "b1", f"{NO_ADAPTER}: AlphaFunctions has no firmware adapter"),
+        ("beta_one_s8", "b1", f"{NO_ADAPTER}: BetaFunctions has no firmware adapter"),
     ]
-    explicit = build_generated_test_case_bundles(tmp_path, family="LSTMFunctions")[1]
-    assert [r for _, r in explicit] == [f"{NO_ADAPTER}: LSTMFunctions has no firmware adapter"]
+    explicit = build_generated_test_case_bundles(tmp_path, family="AlphaFunctions")[1]
+    assert [r for _, r in explicit] == [f"{NO_ADAPTER}: AlphaFunctions has no firmware adapter"]
 
 
 def test_adapter_gaps_keep_the_fvp_hint() -> None:

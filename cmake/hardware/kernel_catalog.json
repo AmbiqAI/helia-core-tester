@@ -2182,5 +2182,41 @@
     "scratch_bytes": 0,
     "stateless": true,
     "supported_dtype": "S8"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_svdf_s8",
+    "kernel_id": 183,
+    "mutates_input": false,
+    "operator_family": "SVDFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "S8"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_svdf_state_s16_s8",
+    "kernel_id": 184,
+    "mutates_input": false,
+    "operator_family": "SVDFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "S8"
+  },
+  {
+    "adapter_schema_version": 1,
+    "api_version": 1,
+    "canonical_name": "arm_lstm_unidirectional_s8",
+    "kernel_id": 185,
+    "mutates_input": false,
+    "operator_family": "LSTMFunctions",
+    "repeated_invocation_safe": true,
+    "scratch_bytes": 0,
+    "stateless": true,
+    "supported_dtype": "S8"
   }
 ]

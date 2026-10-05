@@ -215,13 +215,16 @@ static const hct_kernel_catalog_entry_t g_hct_kernel_catalog[] = {
     {180u, "arm_depthwise_conv_s8_opt_planar", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {181u, "arm_depthwise_conv_s8_opt_channelwise", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
     {182u, "arm_fully_connected_per_channel_packed_s8", "FullyConnectedFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {183u, "arm_svdf_s8", "SVDFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {184u, "arm_svdf_state_s16_s8", "SVDFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {185u, "arm_lstm_unidirectional_s8", "LSTMFunctions", 1u, "S8", 1u, true, true, false, 0u},
 };
 
 static const uint8_t g_hct_kernel_catalog_hash[32] = {
-    0x29u, 0x0eu, 0x93u, 0xc1u, 0x89u, 0xf8u, 0xedu, 0x93u,
-    0x8fu, 0xe1u, 0x30u, 0x38u, 0xb5u, 0x39u, 0xe2u, 0xc8u,
-    0x06u, 0xc2u, 0xd1u, 0x9du, 0xeau, 0x95u, 0x5cu, 0x4fu,
-    0xc4u, 0xb0u, 0x30u, 0xd7u, 0xabu, 0xdau, 0x66u, 0x7cu,
+    0x6cu, 0x4cu, 0x8bu, 0x1du, 0x80u, 0xfau, 0xe5u, 0xcdu,
+    0x19u, 0xa3u, 0x16u, 0x23u, 0x44u, 0xe9u, 0x8au, 0x53u,
+    0xe8u, 0x8cu, 0xa9u, 0x50u, 0x4au, 0x99u, 0xdeu, 0xf9u,
+    0x9du, 0x55u, 0xe9u, 0x54u, 0x7au, 0x4bu, 0x1du, 0xc1u,
 };
 
 const hct_kernel_catalog_entry_t *hct_benchmark_server_catalog(size_t *count)
