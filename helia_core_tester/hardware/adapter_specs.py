@@ -5625,7 +5625,7 @@ def generated_test_bridge_scalar_fields(function_name: str) -> tuple[str, ...]:
 
 # Weak: older kernels lack these.
 _NEWER_ENTRIES = """\
-/* Entries newer than the pinned kernels. */
+/* Entries missing before v7.39.3. */
 arm_cmsis_nn_status arm_convolve_1x1_s8_short_k(const cmsis_nn_context *ctx,
                                                 const cmsis_nn_context *weight_sum_ctx,
                                                 const cmsis_nn_conv_params *conv_params,

@@ -125,7 +125,7 @@ def test_inner_symbol_applies_firmware_defaults() -> None:
         assert inner_symbol(conv, _manifest("cortex-m55", [1, 1, 16, 16], **unset), True) == fast
 
 
-def test_pinned_tree_skips_the_1xn_padding_gate() -> None:
+def test_old_tree_skips_the_1xn_padding_gate() -> None:
     # M4: v7.38.0 calls 1xN; v7.38.1 gates it out.
     args = ((1, 1, 9, 4), (8, 1, 3, 4), (1, 3, 7, 8), (1, 1), (0, 1), (1, 1), False)
     assert conv_route(*args, gate_1xn=False) == "arm_convolve_1_x_n_s8"

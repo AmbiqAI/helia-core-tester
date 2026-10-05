@@ -18,7 +18,7 @@ static bool hct_checked_dims_bytes(const cmsis_nn_dims *dims,
                                    uint32_t capacity,
                                    uint32_t *output_bytes);
 static float quant_scale_from_bits(int32_t bits);
-/* Entries newer than the pinned kernels. */
+/* Entries missing before v7.39.3. */
 arm_cmsis_nn_status arm_convolve_1x1_s8_short_k(const cmsis_nn_context *ctx,
                                                 const cmsis_nn_context *weight_sum_ctx,
                                                 const cmsis_nn_conv_params *conv_params,
