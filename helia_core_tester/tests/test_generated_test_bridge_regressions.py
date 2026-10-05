@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -196,3 +197,33 @@ def test_direct_entry_cases_are_refused(tmp_path: Path) -> None:
     )
     with pytest.raises(UnsupportedGeneratedTestError, match=rf"direct-entry case \({desc['entry']}\)"):
         build_case_bundle_from_generated_test(PROJECT_ROOT, case, require_fvp_pass=False)
+
+
+def _s8_conv_entry_descriptors() -> list[dict]:
+    descs = load_all_descriptors(str(PROJECT_ROOT / "assets" / "descriptors"))
+    return [d for d in descs if d.get("entry") and d.get("operator") in ("Convolve", "DepthwiseConv")
+            and d.get("activation_dtype", "S8") == "S8" and d.get("weight_dtype", "S8") == "S8"]
+
+
+@pytest.mark.parametrize("desc", _s8_conv_entry_descriptors(), ids=lambda d: d["name"])
+def test_s8_conv_entry_never_times_wrapper(tmp_path: Path, desc: dict) -> None:
+    # Refusal keeps wrapper cycles off entry names.
+    case = GeneratedTestCase(
+        name=desc["name"], cpu="cortex-m55", family="ConvolutionFunctions", directory=tmp_path, descriptor=desc
+    )
+    with pytest.raises(UnsupportedGeneratedTestError, match=rf"direct-entry case \({desc['entry']}\)"):
+        build_case_bundle_from_generated_test(PROJECT_ROOT, case, require_fvp_pass=False)
+
+
+@pytest.mark.parametrize(
+    ("name", "wrapper"),
+    [
+        ("convolve_1x1_short_k8_12x12_co16_s8", "arm_convolve_wrapper_s8"),
+        ("depthwise_conv_kernel_3x3_s8", "arm_depthwise_conv_wrapper_s8"),
+    ],
+)
+def test_plain_s8_conv_times_wrapper(tmp_path: Path, name: str, wrapper: str) -> None:
+    manifest = _bridge(tmp_path, "ConvolutionFunctions", name)
+    catalog = json.loads((PROJECT_ROOT / "cmake" / "hardware" / "kernel_catalog.json").read_text())
+    names = {entry["kernel_id"]: entry["canonical_name"] for entry in catalog}
+    assert names[manifest["kernel_id"]] == wrapper
