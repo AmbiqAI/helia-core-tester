@@ -21,11 +21,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STATS = SampleStatistics(5, 900.0, 1000.0, 1000.0, 1000.0, 1.0, True, False, ())
 
 
-def _case(bundle, *, median=1000.0, overflow=False, samples=5, status=None):
+def _case(bundle, *, median=1000.0, overflow=False, samples=5, status=None, passed=True):
     if status is not None:
         bundle = SimpleNamespace(case_id="err", expected_status_code=status)
     stats = replace(STATS, median_cycles=median, overflow_detected=overflow, sample_count=samples)
-    return CaseRunResult(bundle, ComparisonResult(True, 0, 0.0, "exact_int"), b"", (), (), stats)
+    return CaseRunResult(bundle, ComparisonResult(passed, 0 if passed else 3, 0.0, "exact_int"), b"", (), (), stats)
 
 
 @pytest.fixture()
@@ -85,6 +85,12 @@ def test_apply_floor_records_and_classifies(abs_bundle, tmp_path: Path) -> None:
     assert [c.statistics.valid_for_regression for c in rest] == [False, True]
     record, rest = apply_floor(cases[1:])
     assert record is None and [c.statistics.timing_status for c in rest] == ["valid", "valid"]
+
+
+def test_wrong_output_never_gates(abs_bundle) -> None:
+    stats = classify_case(_case(abs_bundle, passed=False), 30.0).statistics
+    # Timing stays clean; validity drops.
+    assert (stats.timing_status, stats.valid_for_regression) == ("valid", False)
 
 
 def test_floor_bundle_loads_and_matches_registry(tmp_path: Path) -> None:
