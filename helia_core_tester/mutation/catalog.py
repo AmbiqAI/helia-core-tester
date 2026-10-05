@@ -900,14 +900,14 @@ MUTANTS_V1: Tuple[Mutant, ...] = (
             # Both the MVE and the non-MVE arm_avgpool_s8 body carry the check.
             Edit(
                 relpath="Source/PoolingFunctions/arm_avgpool_s8.c",
-                pattern="    if (batch_cnt < 1)\n",
-                replacement="    if (0) /* MUTANT drop_pool_batch_guard */\n",
+                pattern="    if ((batch_cnt < 1) || (ch_src < 0))\n",
+                replacement="    if (ch_src < 0) /* MUTANT drop_pool_batch_guard */\n",
                 count=2,
             ),
             Edit(
                 relpath="Source/PoolingFunctions/arm_avgpool_s16.c",
-                pattern="    if (batch_cnt < 1)\n",
-                replacement="    if (0) /* MUTANT drop_pool_batch_guard */\n",
+                pattern="    if ((batch_cnt < 1) || (ch_src < 0))\n",
+                replacement="    if (ch_src < 0) /* MUTANT drop_pool_batch_guard */\n",
                 count=1,
             ),
             Edit(
