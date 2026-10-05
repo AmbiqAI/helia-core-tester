@@ -198,7 +198,8 @@ class FakeConvolveS8Adapter(FakeKernelAdapter):
         # Dims read HWIO; data sits OHWI, like CMSIS.
         filt_h, filt_w, filt_c, out_c = blobs["weights"].shape
         weights = blobs["weights"].reshape(out_c, filt_h, filt_w, filt_c).astype(np.int32)
-        bias = blobs["bias"].astype(np.int32) if "bias" in blobs else np.zeros(out_c, dtype=np.int32)
+        # Firmware rejects a missing bias too.
+        bias = blobs["bias"].astype(np.int32)
         multiplier = blobs["multiplier"].astype(np.int32)
         shift = blobs["shift"].astype(np.int32)
         batch, in_h, in_w, in_c = input_data.shape
