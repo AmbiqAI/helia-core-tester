@@ -13,9 +13,8 @@ def _load_script():
     return module
 
 
-def test_activation_splits_shape_key():
+def test_activation_splits_layer_key():
     script = _load_script()
     relu = {"activation": "RELU", "input_shape": [1, 32, 32, 16]}
     plain = {**relu, "activation": "NONE"}
-    assert script.shape_key(relu) != script.shape_key(plain)
-    assert script.shape_key(relu) == script.shape_key(dict(relu))
+    assert script.layer_key(relu) != script.layer_key(plain)

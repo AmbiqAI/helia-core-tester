@@ -82,7 +82,7 @@ def model_layers(tag: str, path: Path):
         yield op_name, f"{tag}_l{index}", layer_fields(op_name, op.builtinOptions, shapes)
 
 
-def shape_key(fields: dict) -> tuple:
+def layer_key(fields: dict) -> tuple:
     """Dedup key: every descriptor field."""
     return tuple((k, str(v)) for k, v in fields.items())
 
@@ -98,7 +98,7 @@ def render(stem: str, operator: str, layers: list[tuple[str, dict, list[str]]]) 
         desc = {"operator": operator, "name": f"{stem}_mlperf_{label}_s8",
                 "activation_dtype": "S8", "weight_dtype": "S8",
                 "hint": {"call_style": "per_tensor"}, **fields}
-        note = f"# Same shape: {', '.join(also)}\n" if also else ""
+        note = f"# Same layer: {', '.join(also)}\n" if also else ""
         docs.append(note + yaml.safe_dump(desc, sort_keys=False, default_flow_style=None))
     return "---\n" + _BEGIN + "---\n".join(docs) + _END
 
@@ -121,7 +121,7 @@ def main() -> None:
     for spec in args.models:
         tag, _, path = spec.partition("=")
         for op_name, label, fields in model_layers(tag, Path(path)):
-            key = shape_key(fields)
+            key = layer_key(fields)
             if key in groups[op_name]:
                 groups[op_name][key][2].append(label)
             else:
