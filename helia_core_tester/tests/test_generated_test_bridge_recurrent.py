@@ -84,7 +84,7 @@ def test_svdf_s16_state_without_bias(tmp_path: Path) -> None:
                  _svdf_header(name, state_type="int16_t", bias=False))
     bundle = build_case_bundle_from_generated_test(PROJECT_ROOT, case, output_root=tmp_path / "out", require_fvp_pass=False)
 
-    assert bundle.kernel_id == lookup_kernel_id(PROJECT_ROOT, family="SVDFunctions", operator="SVDFStateS16")
+    assert bundle.kernel_id == lookup_kernel_id(PROJECT_ROOT, family="SVDFunctions", operator="SVDF", weight_dtype="S16")
     assert {blob.role: blob.dtype for blob in bundle.blobs}["input_1"] == "S16"
     assert "bias" not in {blob.role for blob in bundle.blobs}
 

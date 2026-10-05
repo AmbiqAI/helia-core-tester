@@ -398,11 +398,11 @@ def _extract_bare_scalar(header_text: str, variable_name: str) -> int | None:
 
 
 def _extract_define_int(source_text: str, name: str) -> int:
-    pattern = re.compile(rf"^\s*#define\s+{re.escape(name)}\s+\(?(-?\d+)\)?\s*$", re.MULTILINE)
+    pattern = re.compile(rf"^\s*#define\s+{re.escape(name)}\s+\(?(-?\d+|true|false)\)?\s*$", re.MULTILINE)
     match = pattern.search(source_text)
     if match is None:
         raise UnsupportedGeneratedTestError(f"Could not find #define `{name}` in generated source")
-    return int(match.group(1))
+    return {"true": 1, "false": 0}.get(match.group(1)) if match.group(1) in ("true", "false") else int(match.group(1))
 
 
 def _extract_null_pointer_decl(header_text: str, variable_name: str) -> bool:
@@ -4419,6 +4419,7 @@ def _build_data_movement_bundle(
     scalar_parameters: dict[str, int],
     scratch_bytes: int = 0,
     output_root: Path | None = None,
+    weight_dtype: str | None = None,
 ) -> CaseBundle:
     case_id = f"{generated_test.name}_hw_generated"
     bundle_root = output_root if output_root is not None else project_root
@@ -4438,7 +4439,7 @@ def _build_data_movement_bundle(
         operator=str(generated_test.descriptor.get("operator", "")),
         family=generated_test.family,
         target_cpu=generated_test.cpu,
-        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=str(generated_test.descriptor.get("operator", "")), dtype=lookup_dtype),
+        kernel_id=_kernel_id(project_root, family=generated_test.family, operator=str(generated_test.descriptor.get("operator", "")), dtype=lookup_dtype, weight_dtype=weight_dtype),
         scalar_parameters=scalar_parameters,
         tensor_dtypes=tensor_dtypes,
         blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
@@ -5003,54 +5004,6 @@ def _build_data_movement_case(
     raise UnsupportedGeneratedTestError(f"{generated_test.name}: unsupported phase 3e operator {operator!r}.")
 
 
-def _header_define(header_text: str, name: str) -> int:
-    """An int or bool `#define` from a header."""
-    match = re.search(rf"^\s*#define\s+{re.escape(name)}\s+(\S+)\s*$", header_text, re.MULTILINE)
-    if match is None:
-        raise UnsupportedGeneratedTestError(f"Could not find #define `{name}` in generated header")
-    value = match.group(1)
-    return {"true": 1, "false": 0}[value] if value in ("true", "false") else int(value)
-
-
-def _finish_recurrent_bundle(
-    project_root: Path,
-    generated_test: GeneratedTestCase,
-    output_root: Path | None,
-    *,
-    kernel_operator: str,
-    cmsis_function: str,
-    arrays: list,
-    scalar_parameters: dict,
-    scratch_bytes: int,
-) -> CaseBundle:
-    """Write blobs and manifest for SVDF and LSTM."""
-    family = generated_test.family
-    case_id = f"{generated_test.name}_hw_generated"
-    bundle_root = output_root if output_root is not None else project_root
-    case_root = _case_root(bundle_root, family, case_id, suite=generated_test.suite, target=generated_test.target)
-    blobs_dir = case_root / "blobs"
-    blobs_dir.mkdir(parents=True, exist_ok=True)
-    blobs = _write_generated_blobs(blobs_dir, [(blob_id, *entry) for blob_id, entry in enumerate(arrays, start=1)])
-    descriptor_path = generated_test.directory / "descriptor.yaml"
-    manifest_header = _generated_manifest_header(
-        project_root, generated_test, case_id, descriptor_path, descriptor_path.read_text(encoding="utf-8")
-    )
-    return _finish_generated_bundle(
-        case_root, blobs, manifest_header,
-        operator=str(generated_test.descriptor["operator"]),
-        family=family,
-        target_cpu=generated_test.cpu,
-        kernel_id=_kernel_id(project_root, family=family, operator=kernel_operator, dtype="S8"),
-        scalar_parameters=scalar_parameters,
-        tensor_dtypes={blob.role: blob.dtype for blob in blobs},
-        blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
-        expected_output={"dtype": "S8", "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
-        comparison=dict(generated_test.descriptor["resolved_comparison"]),
-        scratch_bytes=scratch_bytes,
-        capabilities=[cmsis_function],
-    )
-
-
 def _require_s8_activation(generated_test: GeneratedTestCase, kernels: str) -> None:
     dtype = str(generated_test.descriptor.get("activation_dtype", ""))
     if dtype != "S8":
@@ -5092,7 +5045,7 @@ def _build_svdf_case(project_root: Path, generated_test: GeneratedTestCase, *, o
     time_shape, time_data = tensor("weights_time", state_dtype, "weights_time")
     output_shape, expected = tensor("output_ref", "S8", "output")
     bias = _extract_array_if_present(header, f"{prefix}_bias", "S32")
-    meta = [_header_define(header, macro + "RANK")] + [_header_define(header, macro + key) for key in _SVDF_META]
+    meta = [_extract_define_int(header, macro + "RANK")] + [_extract_define_int(header, macro + key) for key in _SVDF_META]
     arrays = [
         ("input_0", "S8", input_shape, input_data, False, False),
         ("input_1", state_dtype, state_shape, state_data, True, False),
@@ -5104,16 +5057,20 @@ def _build_svdf_case(project_root: Path, generated_test: GeneratedTestCase, *, o
     ]
     # Input and output ctx, then kernel sums.
     ctx_bytes = _align_up(dims["input"]["n"] * dims["weights_feature"]["n"] * 4, 16)
-    return _finish_recurrent_bundle(
-        project_root, generated_test, output_root,
-        kernel_operator="SVDFStateS16" if state_s16 else "SVDF",
+    return _build_data_movement_bundle(
+        project_root, generated_test,
+        lookup_dtype="S8",
+        weight_dtype=state_dtype if state_s16 else None,
         cmsis_function="arm_svdf_state_s16_s8" if state_s16 else "arm_svdf_s8",
-        arrays=arrays,
+        arrays=[(blob_id, *entry) for blob_id, entry in enumerate(arrays, start=1)],
+        tensor_dtypes={entry[0]: entry[1] for entry in arrays},
+        comparison=dict(generated_test.descriptor["resolved_comparison"]),
+        output_root=output_root,
         scalar_parameters={
-            "input_offset": _header_define(header, macro + "INPUT_OFFSET"),
-            "output_offset": _header_define(header, macro + "OUTPUT_OFFSET"),
-            "activation_min": _header_define(header, macro + "OUTPUT_ACTIVATION_MIN"),
-            "activation_max": _header_define(header, macro + "OUTPUT_ACTIVATION_MAX"),
+            "input_offset": _extract_define_int(header, macro + "INPUT_OFFSET"),
+            "output_offset": _extract_define_int(header, macro + "OUTPUT_OFFSET"),
+            "activation_min": _extract_define_int(header, macro + "OUTPUT_ACTIVATION_MIN"),
+            "activation_max": _extract_define_int(header, macro + "OUTPUT_ACTIVATION_MAX"),
             **{f"output_{key}": value for key, value in dims["output"].items()},
         },
         scratch_bytes=2 * ctx_bytes + dims["weights_feature"]["n"] * 4,
@@ -5143,10 +5100,10 @@ def _build_lstm_case(project_root: Path, generated_test: GeneratedTestCase, *, o
     def array(name: str, dtype: str) -> np.ndarray:
         return _extract_typed_array(header, f"{dataset.lower()}_{name}", dtype)
 
-    meta = [_header_define(header, macro + key) for key in _LSTM_PARAMS]
+    meta = [_extract_define_int(header, macro + key) for key in _LSTM_PARAMS]
     for gate in _LSTM_GATES:
         for source in ("INPUT", "HIDDEN"):
-            meta += [_header_define(header, f"{macro}{gate}_GATE_{source}_{kind}") for kind in ("MULTIPLIER", "SHIFT")]
+            meta += [_extract_define_int(header, f"{macro}{gate}_GATE_{source}_{kind}") for kind in ("MULTIPLIER", "SHIFT")]
     batch, steps, input_size, hidden = meta[1:5]
     weights = np.concatenate(
         [array(f"{gate.lower()}_gate_input_weights", "S8") for gate in _LSTM_GATES]
@@ -5168,11 +5125,14 @@ def _build_lstm_case(project_root: Path, generated_test: GeneratedTestCase, *, o
     ]
     # Kernel sums, temp1, temp2, cell state.
     state_bytes = _align_up(batch * hidden * 2, 16)
-    return _finish_recurrent_bundle(
-        project_root, generated_test, output_root,
-        kernel_operator="LSTMUnidirectional",
+    return _build_data_movement_bundle(
+        project_root, generated_test,
+        lookup_dtype="S8",
         cmsis_function="arm_lstm_unidirectional_s8",
-        arrays=arrays,
+        arrays=[(blob_id, *entry) for blob_id, entry in enumerate(arrays, start=1)],
+        tensor_dtypes={entry[0]: entry[1] for entry in arrays},
+        comparison=dict(generated_test.descriptor["resolved_comparison"]),
+        output_root=output_root,
         scalar_parameters={},
         scratch_bytes=_align_up(8 * hidden * 4, 16) + 3 * state_bytes,
     )

@@ -1087,8 +1087,9 @@ kernels:
 
   - kernel_id: 176
     family: SVDFunctions
-    operator: SVDFStateS16
+    operator: SVDF
     dtype: S8
+    weight_dtype: S16
     cmsis_function: arm_svdf_state_s16_s8
 
   - kernel_id: 177
