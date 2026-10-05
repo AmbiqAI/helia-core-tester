@@ -22,7 +22,7 @@ import yaml
 
 from helia_core_tester.core.config import Config
 from helia_core_tester.generation.io.descriptors import load_all_descriptors
-from helia_core_tester.generation.test_ops import generate_test
+from helia_core_tester.generation.test_ops import generate_test, should_run_test
 from helia_core_tester.hardware.generated_test_bridge import GeneratedTestCase, discover_generated_tests
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -58,11 +58,17 @@ def generate_matching(*, cpu: str, family: str, name_filter: str, suite: str) ->
     root = _session_root()
     out_dir = root / "artifacts" / "generated_tests" / suite / cpu
     for desc in _descriptors():
-        is_float = str(desc.get("_descriptor_suite", "")).lower() == "float"
-        if desc["_family"] != family or is_float != (suite == "float") or name_filter not in desc["name"]:
+        if desc["_family"] != family or name_filter not in desc["name"] or not should_run_test(desc, {"suite": suite}):
             continue
-        if not (out_dir / family / desc["name"] / "descriptor.yaml").is_file():
+        case_dir = out_dir / family / desc["name"]
+        if case_dir.is_dir():
+            continue
+        try:
             generate_test(desc, str(out_dir), seed=Config.seed, cpu=cpu)
+        except BaseException:
+            # Drop half-written cases; reuse would mislead.
+            shutil.rmtree(case_dir, ignore_errors=True)
+            raise
     return root
 
 

@@ -30,7 +30,7 @@ def _case_dir(project_root: Path, name: str) -> Path:
     return directory
 
 
-def _outcome(project_root: Path, name_filter: str) -> tuple[str, object]:
+def _outcome(project_root: Path, name_filter: str | None) -> tuple[str, object]:
     try:
         return "returned", discover_or_skip(project_root, family=FAMILY, name_filter=name_filter)
     except pytest.skip.Exception as exc:
@@ -61,12 +61,9 @@ def test_other_generated_cases_do_not_satisfy_the_filter(tmp_path: Path) -> None
 
 
 def test_whole_family_request_skips_when_absent(tmp_path: Path) -> None:
-    try:
-        discover_or_skip(tmp_path, family=FAMILY)
-    except pytest.skip.Exception as exc:
-        assert "int/cortex-m55/BasicMathFunctions case under" in str(exc)
-    else:
-        pytest.fail("expected a skip for an absent family")
+    outcome, detail = _outcome(tmp_path, None)
+    assert outcome == "skipped", detail
+    assert "int/cortex-m55/BasicMathFunctions case under" in detail
 
 
 def test_present_case_without_descriptor_fails(tmp_path: Path) -> None:
