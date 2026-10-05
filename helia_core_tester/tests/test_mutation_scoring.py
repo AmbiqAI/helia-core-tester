@@ -277,6 +277,10 @@ class TestFailureKinds:
         (case / "includes").mkdir(parents=True)
         (case / "case_a.c").write_text("int main(void){return 0;}\n")
         (tmp_path / "tree" / "Include").mkdir(parents=True)
+        # A compiler that always fails.
+        cc = tmp_path / "fail-cc"
+        cc.write_text("#!/bin/sh\nexit 1\n")
+        cc.chmod(0o755)
         result = build_and_run_case(
             case,
             tmp_path / "tree",
@@ -284,7 +288,7 @@ class TestFailureKinds:
             tmp_path / "runtime.o",
             TESTER_ROOT,
             tmp_path / "bin",
-            cc=shutil.which("false"),  # every compile fails
+            cc=str(cc),
         )
         assert not result.passed
         assert result.kind == KIND_COMPILE_FAILED
