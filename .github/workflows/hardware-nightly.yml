@@ -29,6 +29,11 @@ on:
         required: true
         default: all
         type: string
+      cmsis_nn_ref:
+        description: "ns-cmsis-nn branch, tag or full SHA for the kernel leg"
+        required: true
+        default: main
+        type: string
 
 defaults:
   run:
@@ -44,6 +49,7 @@ env:
   HCT_NIGHTLY_SUITE: ${{ inputs.suite || 'both' }}
   HCT_NIGHTLY_LIMIT: ${{ inputs.limit }}
   HCT_NIGHTLY_PMU: ${{ inputs.pmu_counters || 'all' }}
+  HCT_NIGHTLY_REF: ${{ inputs.cmsis_nn_ref || 'main' }}
 
 permissions:
   contents: read
@@ -55,11 +61,15 @@ jobs:
     outputs:
       boards: ${{ steps.matrix.outputs.boards }}
       date: ${{ steps.matrix.outputs.date }}
+      kernel_leg: ${{ steps.ref.outputs.leg }}
+      kernel_sha: ${{ steps.ref.outputs.sha }}
     steps:
       - name: Checkout the board table
         uses: actions/checkout@v4
         with:
-          sparse-checkout: assets/hardware_boards.yaml
+          sparse-checkout: |
+            assets/hardware_boards.yaml
+            scripts/resolve_kernel_ref.sh
           sparse-checkout-cone-mode: false
       - name: Build the board matrix
         id: matrix
@@ -84,6 +94,12 @@ jobs:
             echo "boards=${boards}"
             echo "date=$(date -u +%Y%m%d)"
           } >> "${GITHUB_OUTPUT}"
+      # A SHA keeps every board on one commit.
+      - name: Resolve the kernel ref
+        id: ref
+        # No ref skips the kernel leg only.
+        continue-on-error: true
+        run: scripts/resolve_kernel_ref.sh
 
   run:
     needs: plan
@@ -93,19 +109,22 @@ jobs:
         board: ${{ fromJSON(needs.plan.outputs.boards) }}
     # Board label picks its owning runner.
     runs-on: [self-hosted, hpx-hardware, "${{ matrix.board }}"]
-    # Full catalog: ~16 min warm.
-    timeout-minutes: 120
+    # Lock wait plus three legs.
+    timeout-minutes: 150
     env:
       HCT_NIGHTLY_BOARD: ${{ matrix.board }}
       HCT_RUN_JSON: ${{ github.workspace }}/artifacts/reports/hardware-nightly-run.json
       HCT_MRAM_RUN_JSON: ${{ github.workspace }}/artifacts/reports/hardware-nightly-mram-run.json
+      HCT_KERNEL_RUN_JSON: ${{ github.workspace }}/artifacts/reports/hardware-nightly-kernel-run.json
+      HCT_KERNEL_LEG: ${{ needs.plan.outputs.kernel_leg }}
     steps:
       # Every attempt replaces its artifact.
       - name: Stage a no-result marker
         run: |
-          mkdir -p "${RUNNER_TEMP}/hct-upload" "${RUNNER_TEMP}/hct-mram-upload"
-          echo "no result" > "${RUNNER_TEMP}/hct-upload/NO_RESULT"
-          echo "no result" > "${RUNNER_TEMP}/hct-mram-upload/NO_RESULT"
+          for upload in hct-upload hct-mram-upload hct-kernel-upload; do
+            mkdir -p "${RUNNER_TEMP}/${upload}"
+            echo "no result" > "${RUNNER_TEMP}/${upload}/NO_RESULT"
+          done
 
       - name: Resolve board and probe from the runner
         run: |
@@ -121,8 +140,11 @@ jobs:
           if [[ -z "${SSL_CERT_FILE:-}" && -f /etc/ssl/certs/ca-certificates.crt ]]; then
             echo "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" >> "${GITHUB_ENV}"
           fi
-          echo "HCT_SESSION_ID=nightly-${GITHUB_RUN_ID}-${HPX_BOARD}" >> "${GITHUB_ENV}"
-          echo "HCT_MRAM_SESSION_ID=nightly-mram-${GITHUB_RUN_ID}-${HPX_BOARD}" >> "${GITHUB_ENV}"
+          {
+            echo "HCT_SESSION_ID=nightly-${GITHUB_RUN_ID}-${HPX_BOARD}"
+            echo "HCT_MRAM_SESSION_ID=nightly-mram-${GITHUB_RUN_ID}-${HPX_BOARD}"
+            echo "HCT_KERNEL_SESSION_ID=nightly-${HCT_KERNEL_LEG}-${GITHUB_RUN_ID}-${HPX_BOARD}"
+          } >> "${GITHUB_ENV}"
 
       # hpx's bench lock; ttl frees it.
       - name: Take the board lock
@@ -187,6 +209,19 @@ jobs:
           scripts/nightly_leg.sh "${HCT_MRAM_SESSION_ID}" "${HCT_CACHE_DIR}/hardware/${HPX_BOARD}-mram" "${HCT_MRAM_RUN_JSON}" \
             --placement mram --skip-generate
 
+      # Non-gating: main may break; summary shows it.
+      - name: Run the kernel-ref leg
+        id: kernel
+        if: ${{ !cancelled() && needs.plan.outputs.kernel_sha != '' && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure') }}
+        continue-on-error: true
+        # A stall must not sink the job.
+        timeout-minutes: 45
+        env:
+          KERNEL_SHA: ${{ needs.plan.outputs.kernel_sha }}
+        run: |
+          scripts/nightly_leg.sh "${HCT_KERNEL_SESSION_ID}" "${HCT_CACHE_DIR}/hardware/${HPX_BOARD}-${HCT_KERNEL_LEG}" \
+            "${HCT_KERNEL_RUN_JSON}" --placement tcm --skip-generate --cmsis-nn-ref "${KERNEL_SHA}"
+
       - name: Release the board lock
         if: always() && steps.lock.outcome == 'success'
         run: |
@@ -203,7 +238,8 @@ jobs:
         if: always() && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure')
         run: |
           # One leg's session per artifact.
-          for leg in "${HCT_SESSION_ID}:${HCT_RUN_JSON}:hct-upload" "${HCT_MRAM_SESSION_ID}:${HCT_MRAM_RUN_JSON}:hct-mram-upload"; do
+          for leg in "${HCT_SESSION_ID}:${HCT_RUN_JSON}:hct-upload" "${HCT_MRAM_SESSION_ID}:${HCT_MRAM_RUN_JSON}:hct-mram-upload" \
+              "${HCT_KERNEL_SESSION_ID}:${HCT_KERNEL_RUN_JSON}:hct-kernel-upload"; do
             IFS=: read -r session run_json upload <<< "${leg}"
             if [[ -d "artifacts/reports/hardware/${session}" ]]; then
               mkdir -p "${RUNNER_TEMP}/${upload}/hardware"
@@ -238,6 +274,17 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
 
+      # hct-main-* for main, hct-ref-* otherwise.
+      - name: Upload the kernel-ref bundle
+        if: always() && steps.kernel.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hct-${{ needs.plan.outputs.kernel_leg }}-${{ matrix.board }}-${{ needs.plan.outputs.date }}-${{ github.run_id }}
+          overwrite: true
+          path: ${{ runner.temp }}/hct-kernel-upload/
+          include-hidden-files: true
+          if-no-files-found: warn
+
   # Minimal per-board table; board-matrix may replace it.
   summary:
     needs: [plan, run]
@@ -247,13 +294,15 @@ jobs:
     env:
       BOARDS: ${{ needs.plan.outputs.boards }}
       RUN_TAG: ${{ needs.plan.outputs.date }}-${{ github.run_id }}
+      KERNEL_LEG: ${{ needs.plan.outputs.kernel_leg }}
+      KERNEL_SHA: ${{ needs.plan.outputs.kernel_sha }}
     steps:
       # No artifacts: boards show "no result".
       - uses: actions/download-artifact@v4
         id: download
         continue-on-error: true
         with:
-          pattern: hct-hardware-*-${{ github.run_id }}
+          pattern: hct-*-${{ github.run_id }}
           path: bundles
       - name: Summarise per board
         env:
@@ -266,24 +315,38 @@ jobs:
               echo "Artifact download failed or found none; see the download step."
               echo ""
             fi
-            echo "| Board | Ran | Passed | Failed | Skipped | Boot | Core MHz | Build id | Kernel |"
-            echo "|---|---|---|---|---|---|---|---|---|"
+            if [[ -n "${KERNEL_LEG}" ]]; then
+              echo "Leg ${KERNEL_LEG} built ns-cmsis-nn ${KERNEL_SHA}; it does not gate the run."
+            else
+              echo "Kernel ref did not resolve; kernel leg skipped."
+            fi
+            echo ""
+            echo "| Board | Leg | Ran | Passed | Failed | Skipped | Boot | Core MHz | Build id | Kernel |"
+            echo "|---|---|---|---|---|---|---|---|---|---|"
             for board in $(jq -r '.[]' <<< "${BOARDS}"); do
-              run_json="bundles/hct-hardware-${board}-${RUN_TAG}/hardware-nightly-run.json"
-              if [[ ! -s "${run_json}" ]]; then
-                echo "| ${board} | no result | | | | | | | |"
-                continue
-              fi
-              manifest="$(dirname "${run_json}")/hardware/$(jq -r .session_id "${run_json}")/session_manifest.json"
-              [[ -f "${manifest}" ]] || manifest=/dev/null
-              jq -r --slurpfile m "${manifest}" '
-                ($m[0] // {}) as $m
-                | [ .board, .totals.ran, .totals.passed, .totals.failed, .totals.skipped,
-                    (.boot.status // "n/a"),
-                    (if .boot.core_clock_hz then .boot.core_clock_hz / 1e6 else "n/a" end),
-                    ($m.firmware_build_id // "n/a"),
-                    ($m.build.kernels.commit // $m.build.kernels.ref // "n/a") ]
-                | "| " + (map(tostring) | join(" | ")) + " |"
-              ' "${run_json}"
+              # Leg name, then its artifact prefix.
+              for leg in tcm:hct-hardware mram:hct-mram "${KERNEL_LEG}:hct-${KERNEL_LEG}"; do
+                IFS=: read -r name prefix <<< "${leg}"
+                [[ -n "${name}" ]] || continue
+                dir="bundles/${prefix}-${board}-${RUN_TAG}"
+                run_json="${dir}/hardware-nightly-run.json"
+                if [[ ! -s "${run_json}" ]]; then
+                  # MRAM leg skips non-MRAM boards.
+                  [[ "${name}" == mram && ! -d "${dir}" ]] && continue
+                  echo "| ${board} | ${name} | no result | | | | | | | |"
+                  continue
+                fi
+                manifest="${dir}/hardware/$(jq -r .session_id "${run_json}")/session_manifest.json"
+                [[ -f "${manifest}" ]] || manifest=/dev/null
+                jq -r --arg leg "${name}" --slurpfile m "${manifest}" '
+                  ($m[0] // {}) as $m
+                  | [ .board, $leg, .totals.ran, .totals.passed, .totals.failed, .totals.skipped,
+                      (.boot.status // "n/a"),
+                      (if .boot.core_clock_hz then .boot.core_clock_hz / 1e6 else "n/a" end),
+                      ($m.firmware_build_id // "n/a"),
+                      ($m.build.kernels.commit // $m.build.kernels.ref // "n/a") ]
+                  | "| " + (map(tostring) | join(" | ")) + " |"
+                ' "${run_json}"
+              done
             done
           } >> "${GITHUB_STEP_SUMMARY}"

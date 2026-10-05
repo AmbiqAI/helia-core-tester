@@ -200,6 +200,12 @@ the full catalog every night at 05:00 UTC on the lab runners, one job per board
 on PMU boards), and uploads each board's result bundle with the `--json`
 document as `hardware-nightly-run.json` (schemas and version policy:
 `docs/performance-streaming-design.md`, "Result bundle").
+Under the same board lock each job then runs an MRAM-placement leg (MRAM
+boards; `hct-mram-<board>-...`) and a kernel leg built from ns-cmsis-nn `main`,
+resolved to one SHA at plan time (`hct-main-<board>-...`, session
+`nightly-main-<run>-<board>`). `-f cmsis_nn_ref=<branch, tag or full SHA>` swaps the
+ref; any ref but `main` uploads as `hct-ref-<board>-...`. The kernel leg does not
+gate the run: its failures show only in the summary table.
 `gh workflow run hardware-nightly.yml -f boards=apollo510_evb -f limit=2` runs
 it by hand.
 
