@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import yaml
 
 from helia_core_tester.hardware import entry_coverage
+from helia_core_tester.hardware.nsx_app import CMSIS_NN_REF
 from helia_core_tester.hardware.entry_coverage import (
     DEPLOYED_PATH,
     NO_ADAPTER,
@@ -75,6 +76,7 @@ def test_built_entry_points_drop_setup_calls(tmp_path: Path) -> None:
 def test_deployed_data_file_is_pinned() -> None:
     data = json.loads((PROJECT_ROOT / DEPLOYED_PATH).read_text(encoding="utf-8"))
     assert re.fullmatch(r"[0-9a-f]{40}", data["source"]["commit"])
+    assert data["source"]["cmsis_nn"] == CMSIS_NN_REF
     names = data["entry_points"]
     assert names == sorted(set(names)) and "arm_svdf_s8" in names
     assert not any(n.endswith("_get_buffer_size") for n in names)
