@@ -87,6 +87,14 @@ class OperationBase(ABC):
         self._tflite_path = None
         self._input_mode_consumed = False
         self._nonfinite_policy_applied = False
+        declared = {**(desc.get("tensor_dtypes") or {})}
+        declared.update({key: desc[key] for key in ("activation_dtype", "weight_dtype") if key in desc})
+        storage_only = [role for role, dtype in declared.items() if str(dtype).upper() == "U16"]
+        if storage_only and not (desc.get("operator") == "Dequantize" and desc.get("entry")):
+            raise ValueError(
+                f"{desc.get('name')!r}: U16 ({', '.join(storage_only)}) is binary16 storage for the "
+                "Dequantize bit-pattern entry only"
+            )
 
     @abstractmethod
     def build_keras_model(self):

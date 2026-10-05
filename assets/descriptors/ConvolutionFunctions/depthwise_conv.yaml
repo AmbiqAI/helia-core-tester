@@ -2661,7 +2661,7 @@ fault: channel_mismatch
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
 # BEGIN mlperf model shapes (scripts/extract_model_shapes.py)
-# Same shape: kws_l3, kws_l5, kws_l7
+# Same layer: kws_l3, kws_l5, kws_l7
 operator: DepthwiseConv
 name: depthwise_conv_mlperf_kws_l1_s8
 activation_dtype: S8
@@ -2753,7 +2753,7 @@ strides: [2, 2]
 padding: SAME
 use_bias: true
 ---
-# Same shape: vww_l15, vww_l17, vww_l19, vww_l21
+# Same layer: vww_l15, vww_l17, vww_l19, vww_l21
 operator: DepthwiseConv
 name: depthwise_conv_mlperf_vww_l13_s8
 activation_dtype: S8
