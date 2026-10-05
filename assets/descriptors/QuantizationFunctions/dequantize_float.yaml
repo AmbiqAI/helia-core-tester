@@ -129,7 +129,8 @@ hint: {call_style: per_tensor}
 # expectations and compares bits against the one its build compiled. The FP16-tagged cases run on
 # the f16 legs; the U16-tagged ones (the same bit patterns as storage) on the f32 legs, cortex-m0's
 # integer widening and cortex-m4's FPU among them.
-# Every lane is a special class: signed zeros, subnormal ends and a normal; under one MVE block.
+# Seven special classes: a signalling and a negative quiet NaN, a payload NaN, +Inf, a subnormal, -0 and 1.0; one
+# four-half MVE block and a three-half tail.
 operator: Dequantize
 name: dequantize_float_f16_bits_vec7_f32
 entry: arm_dequantize_f16_bits_f32
@@ -137,10 +138,11 @@ suite: float
 tensor_dtypes:
   input: FP16
   output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
 input_shape: [1, 7]
 hint: {call_style: per_tensor}
 ---
-# All 26 special classes (zeros, subnormals, normal ends, infinities, quiet and signalling NaNs of both signs) then random patterns; nine blocks and a tail.
+# All 26 special classes, then random patterns: 18 four-half MVE blocks and a three-half tail.
 operator: Dequantize
 name: dequantize_float_f16_bits_vec75_f32
 entry: arm_dequantize_f16_bits_f32
@@ -148,10 +150,11 @@ suite: float
 tensor_dtypes:
   input: FP16
   output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
 input_shape: [1, 75]
 hint: {call_style: per_tensor}
 ---
-# Special classes then 975 random patterns, about 3% of them NaN: 125 blocks and a one-element tail.
+# Special classes, then 975 random patterns, about 3% of them NaN: 250 four-half blocks and a one-half tail.
 operator: Dequantize
 name: dequantize_float_f16_bits_vec1001_f32
 entry: arm_dequantize_f16_bits_f32
@@ -159,6 +162,7 @@ suite: float
 tensor_dtypes:
   input: FP16
   output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
 input_shape: [1, 1001]
 hint: {call_style: per_tensor}
 ---
@@ -169,6 +173,7 @@ suite: float
 tensor_dtypes:
   input: U16
   output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
 input_shape: [1, 75]
 hint: {call_style: per_tensor}
 ---
@@ -179,5 +184,6 @@ suite: float
 tensor_dtypes:
   input: U16
   output: FP32
+comparison: {atol: 0.0, rtol: 0.0}
 input_shape: [1, 1001]
 hint: {call_style: per_tensor}

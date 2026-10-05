@@ -8,13 +8,14 @@ from pathlib import Path
 from helia_core_tester.generation.kernel_dispatch import check_entry_fault, resolve_direct_entry
 from helia_core_tester.generation.ops._shared.quantization_base import QuantizationFamilyBase
 
-# Binary16 patterns every bit-pattern case starts with: signed zeros, subnormal ends and middle,
-# normal-range ends, signed infinities, then quiet and signalling NaNs of both signs, with and
-# without payload. The rest of the case is uniform random patterns.
+# Binary16 patterns every bit-pattern case starts with, so that even a short case meets the NaN
+# rule: a signalling NaN, a negative quiet NaN, a payload NaN, +Inf, the smallest subnormal, -0 and
+# 1.0, then the remaining zeros, subnormals, normal-range ends, -Inf and NaNs of both signs. The rest
+# of a case is uniform random patterns.
 _F16_BIT_CLASSES = (
-    0x0000, 0x8000, 0x0001, 0x8001, 0x0200, 0x03FF, 0x83FF, 0x0400, 0x8400, 0x3C00, 0xC000, 0x3555,
-    0x7BFF, 0xFBFF, 0x7C00, 0xFC00, 0x7E00, 0xFE00, 0x7E01, 0x7FFF, 0xFFFF, 0x7C01, 0xFC01, 0x7D55,
-    0x7DFF, 0xFD00,
+    0x7C01, 0xFE00, 0x7FFF, 0x7C00, 0x0001, 0x8000, 0x3C00,
+    0x0000, 0x8001, 0x0200, 0x03FF, 0x83FF, 0x0400, 0x8400, 0xC000, 0x3555,
+    0x7BFF, 0xFBFF, 0xFC00, 0x7E00, 0x7E01, 0xFFFF, 0xFC01, 0x7D55, 0x7DFF, 0xFD00,
 )
 
 
@@ -312,6 +313,13 @@ class OpDequantize(QuantizationFamilyBase):
         its sign and payload and set the quiet bit. The C file picks the rule its build compiled.
         """
         name = self.desc["name"]
+        ignored = [key for key in ("input_min", "input_max", "input_mode") if key in self.desc]
+        if self.activation_name() != "NONE":
+            ignored.append("activation")
+        if self.tensor_dtype("output") != "FP32":
+            ignored.append("tensor_dtypes.output (must be FP32)")
+        if ignored:
+            raise ValueError(f"{name}: a bit-pattern case takes none of {ignored}")
         size = int(np.prod([int(dim) for dim in self.desc["input_shape"]]))
         classes = np.array(_F16_BIT_CLASSES[:size], dtype=np.uint16)
         rest = self.rng.integers(0, 1 << 16, size=size - classes.size).astype(np.uint16)

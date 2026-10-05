@@ -2167,6 +2167,9 @@ expected_status: ARM_CMSIS_NN_ARG_ERROR
 # filter depths positive, the input depth a whole number of filter depths, and the output depth a
 # whole number of groups. Each fault breaks one condition on the grouped control below; the 1x1
 # case reaches the route that checked no depths before. A rejected call must not write the output.
+# The partial-group and negative-output-depth faults returned success before the rule; the zero and
+# deeper filter depths already came back ARG_ERROR, but only through a division by zero (which
+# Cortex-M evaluates to 0), so those two pin the rejection rather than a change.
 operator: Convolve
 name: convolve_grouped_2_s16
 activation_dtype: S16
