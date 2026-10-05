@@ -23,8 +23,10 @@ def _generate(tmp_path: Path, name: str) -> dict[str, np.ndarray]:
     (case_dir,) = tmp_path.glob(f"*/{name}")
     arrays = {}
     for header in (case_dir / "includes").glob("*.h"):
-        for array, body in re.findall(r"const\s+int\w+\s+(\w+)\s*\[\s*\]\s*=\s*\{([^}]*)\}", header.read_text()):
-            arrays[array.removeprefix(name + "_")] = np.array([int(t, 0) for t in body.split(",") if t.strip()])
+        for array, body in re.findall(r"const\s+(?:int\w+|bool)\s+(\w+)\s*\[\s*\]\s*=\s*\{([^}]*)\}", header.read_text()):
+            tokens = [t.strip() for t in body.split(",") if t.strip()]
+            values = [int({"true": "1", "false": "0"}.get(t, t), 0) for t in tokens]
+            arrays[array.removeprefix(name + "_")] = np.array(values)
     return arrays
 
 
@@ -35,6 +37,7 @@ def _generate(tmp_path: Path, name: str) -> dict[str, np.ndarray]:
         ("maximum_default_s8", 100),
         ("minimum_dual_s8", 64),
         ("mul_default_s8", 32),
+        ("sub_dual_inputs_s8", 100),
     ],
 )
 def test_s8_inputs_span_range(tmp_path, name, reach):
@@ -43,16 +46,18 @@ def test_s8_inputs_span_range(tmp_path, name, reach):
     assert np.abs(inputs).max() >= reach
 
 
-@pytest.mark.parametrize("name", ["comparison_equal_nhwc_s16", "comparison_less_nhwc_s8"])
-def test_comparison_has_near_pairs(tmp_path, name):
+@pytest.mark.parametrize(("name", "step"), [("comparison_equal_nhwc_s16", 128), ("comparison_equal_s8", 1)])
+def test_comparison_has_near_pairs(tmp_path, name, step):
     arrays = _generate(tmp_path, name)
     gap = np.abs(arrays["input_1"] - arrays["input_2"])
-    assert np.any(gap == 0)
-    assert np.any(gap == 1)
+    equal = arrays["expected_output"].astype(bool)
+    assert np.any(equal & (gap == 0))
+    # One rescale step apart, not equal.
+    assert np.any(~equal & (gap == step))
 
 
 @pytest.mark.parametrize("name", ["rsqrt_small_input_per_op_s16", "rsqrt_small_input_universal_s16"])
 def test_rsqrt_small_inputs(tmp_path, name):
     arrays = _generate(tmp_path, name)
-    assert arrays["input"].max() < 2048
+    assert arrays["input"].max() <= 1024
     assert arrays["input"].min() < 512
