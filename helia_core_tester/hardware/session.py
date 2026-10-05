@@ -510,7 +510,8 @@ class HostSession:
                     # Drop samples from a partial measurement.
                     samples = []
                     comparison_result = replace(comparison_result, passed=False) if comparison_result else ComparisonResult(
-                        passed=False, mismatch_count=0, max_abs_diff=float("nan"), mode=str(bundle.comparison["mode"])
+                        passed=False, mismatch_count=0, max_abs_diff=float("nan"), mode=str(bundle.comparison["mode"]),
+                        diff_count=None,
                     )
                 raw_samples = tuple(samples)
                 normalized_samples = tuple(normalize_samples(raw_samples))
@@ -704,6 +705,7 @@ def _compare_output_bytes(case_id: str, actual_output_bytes: bytes, bundle: Case
             mismatch_count=abs(actual_size - expected_size),
             max_abs_diff=float("nan"),
             mode=str(bundle.comparison.get("mode", "unknown")),
+            diff_count=None,
         )
     actual = np.frombuffer(actual_output_bytes, dtype=expected_output.dtype).reshape(expected_output.shape)
     return compare_output(actual, expected_output, bundle.comparison)

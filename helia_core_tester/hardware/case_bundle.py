@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -11,6 +11,7 @@ import zlib
 
 import numpy as np
 
+from .comparison import strict_comparison
 from .pathutil import write_text_lf
 
 from helia_core_tester.generation.io.descriptors import load_descriptor
@@ -113,6 +114,47 @@ class CaseBundle:
 
     def blob_by_role(self, role: str) -> BlobInfo:
         return next(blob for blob in self.blobs if blob.role == role)
+
+
+def strict_bundle(bundle: CaseBundle) -> CaseBundle:
+    """The bundle, judged with no int tolerance."""
+    manifest = {**bundle.manifest, "correctness_comparison": strict_comparison(bundle.comparison)}
+    return replace(bundle, manifest=manifest)
+
+
+def golden_failed(bundle: CaseBundle, golden_dir: Path) -> bool:
+    """True if the past run failed this case."""
+    record = golden_dir / "correctness" / f"{bundle.case_id}.json"
+    # Unreadable records count as unjudged.
+    try:
+        doc = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    return not isinstance(doc, dict) or doc.get("passed") is not True
+
+
+def golden_usable(bundle: CaseBundle, golden_dir: Path) -> bool:
+    """True if the past output fits this case."""
+    if bundle.expected_status_code is not None:
+        return True
+    path = golden_dir / "outputs" / f"{bundle.case_id}.bin"
+    # Read now; fail before the board.
+    try:
+        return len(path.read_bytes()) == bundle.expected_output.byte_length
+    except OSError:
+        return False
+
+
+def golden_bundle(bundle: CaseBundle, golden_dir: Path) -> CaseBundle:
+    """The bundle, judged against a past run's output."""
+    if bundle.expected_status_code is not None:
+        return bundle
+    if not golden_usable(bundle, golden_dir):
+        raise RuntimeError(f"No usable golden output for {bundle.case_id} in {golden_dir}")
+    path = golden_dir / "outputs" / f"{bundle.case_id}.bin"
+    expected = bundle.expected_output
+    blobs = tuple(replace(blob, path=path) if blob is expected else blob for blob in bundle.blobs)
+    return replace(strict_bundle(bundle), blobs=blobs)
 
 
 

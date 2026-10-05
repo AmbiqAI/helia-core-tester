@@ -477,7 +477,10 @@ def test_session_checks_core_clock(tmp_path: Path, boot_status, clock_hz, refusa
 
 @pytest.mark.parametrize(
     "boot_status, expected",
-    [(0, {"status": 0, "core_clock_hz": 250_000_000}), (None, {"status": None, "core_clock_hz": None})],
+    [
+        (0, {"status": 0, "core_clock_hz": 250_000_000, "fpscr_boot": 0x03040000, "fpscr": 0x00040000, "fp_mode": {"ahp": 0, "dn": 0, "fz": 0, "rmode": 0, "fz16": 0}}),
+        (None, {"status": None, "core_clock_hz": None, "fpscr_boot": None, "fpscr": None, "fp_mode": None}),
+    ],
     ids=["healthy", "old-firmware"],
 )
 def test_boot_health_is_stamped_in_bundle(tmp_path: Path, boot_status, expected, capsys) -> None:
@@ -487,7 +490,7 @@ def test_boot_health_is_stamped_in_bundle(tmp_path: Path, boot_status, expected,
     bundle_root = write_result_bundle(result, session_id="boot", output_root=tmp_path, memory_report={}, kernel_catalog=[])
     assert json.loads((bundle_root / "session_manifest.json").read_text())["boot"] == expected
     print_run_report(result, [], bundle_root)
-    line = "status 0, core 250 MHz" if boot_status == 0 else "not reported"
+    line = "status 0, core 250 MHz, FPSCR 0x00040000" if boot_status == 0 else "not reported"
     assert f"Target boot: {line}" in capsys.readouterr().out
 
 
@@ -534,15 +537,18 @@ def test_json_summary_shape_from_fake_target_session(tmp_path: Path) -> None:
         "schema", "schema_version", "generated_at", "session_id", "board", "boot", "bundle", "totals", "timing",
         "selection", "github", "cases",
     }
-    assert encoded["boot"] == {"status": 0, "core_clock_hz": 250_000_000}
+    assert encoded["boot"] == {"status": 0, "core_clock_hz": 250_000_000, "fpscr_boot": 0x03040000, "fpscr": 0x00040000, "fp_mode": {"ahp": 0, "dn": 0, "fz": 0, "rmode": 0, "fz16": 0}}
     assert encoded["session_id"] == "apollo510_evb-20260912T000000Z"
     assert encoded["board"] == "apollo510_evb"
     assert encoded["bundle"].endswith("apollo510_evb-20260912T000000Z")
     assert encoded["totals"] == {"ran": 1, "passed": 1, "failed": 0, "skipped": 1}
     assert encoded["timing"] == timing
     ran, skip = encoded["cases"]
-    assert set(ran) == {"case_id", "passed", "median_cycles", "valid_for_regression", "skipped_reason"}
-    assert ran == {"case_id": "abs_json", "passed": True, "median_cycles": ran["median_cycles"], "valid_for_regression": True, "skipped_reason": None}
+    assert set(ran) == {"case_id", "passed", "median_cycles", "valid_for_regression", "max_abs_diff", "diff_count", "skipped_reason"}
+    assert ran == {
+        "case_id": "abs_json", "passed": True, "median_cycles": ran["median_cycles"], "valid_for_regression": True,
+        "max_abs_diff": 0.0, "diff_count": 0, "skipped_reason": None,
+    }
     assert isinstance(ran["median_cycles"], float)
     assert skip["case_id"] == "conv_x" and skip["passed"] is None and skip["median_cycles"] is None
     assert skip["skipped_reason"].startswith("operator='Foo' is not bridgeable")
@@ -581,6 +587,7 @@ def test_json_summary_identifies_its_schema(tmp_path: Path, monkeypatch) -> None
         "suite": "float", "limit": 2, "family": "ActivationFunctions", "test_name": None,
         "ops": [], "dtypes": [], "case_ids": [], "precision": "f32",
         "pmu_counters": {"cpu": "all"}, "fvp_gate": "strict",
+        "compare": {"strict": False, "golden_from": None},
     }
     assert encoded["github"] is None
 
@@ -645,7 +652,7 @@ def test_run_hardware_pipeline_generates_flashes_then_streams(tmp_path: Path, mo
         order.append(f"flash:{serial}:{build_dir.relative_to(tmp_path)}:force={force}")
         return firmware_build.FlashDecision(True, "abc", "test")
 
-    def _stream(repo_root, spec, serial, *, build_dir, options, echo, progress_to_stderr, allow_unverified_firmware):
+    def _stream(repo_root, spec, serial, *, build_dir, options, echo, progress_to_stderr, allow_unverified_firmware, prepared):
         order.append(f"stream:{options.suite}:{options.test_name}:unverified={allow_unverified_firmware}")
         return hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[])
 
@@ -748,6 +755,110 @@ def test_stream_passes_build_dir_build_id_to_the_session(tmp_path: Path, monkeyp
     # Bridged exactly once: the preview list is what the session runner gets.
     assert bridged == ["bridge"]
     assert seen["bundles"] is preview[0] and outcome.skipped is preview[1]
+
+
+def test_strict_compare_drops_int_tolerance(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.hardware import hardware_pipeline
+    from helia_core_tester.hardware.case_bundle import CaseBundle
+
+    seen: dict = {}
+    tolerant = CaseBundle(tmp_path, tmp_path / "m.json", {
+        "case_id": "conv", "timing": {"samples": 5}, "correctness_comparison": {"mode": "tolerant_int", "tolerance": 1},
+    }, ())
+    monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([tolerant], []))
+    monkeypatch.setattr(
+        "helia_core_tester.hardware.session_runner.run_case_bundles",
+        lambda repo_root, bundles, **kwargs: (seen.update(kwargs, bundles=bundles), (object(), tmp_path))[1],
+    )
+    build_dir = tmp_path / "bd"
+    _write_elf(build_dir, b"fw", "hct-strict")
+    hardware_pipeline.stream_generated_tests(
+        tmp_path, BOARD, 5, build_dir=build_dir, options=StreamOptions(strict_compare=True), echo=lambda _msg: None,
+    )
+    assert [bundle.comparison for bundle in seen["bundles"]] == [{"mode": "exact_int"}]
+    assert seen["compare"] == {"strict": True, "golden_from": None}
+    assert tolerant.comparison["mode"] == "tolerant_int"
+
+
+def test_golden_from_judges_against_past_output(tmp_path: Path) -> None:
+    from helia_core_tester.hardware.case_bundle import blob_numpy, golden_bundle
+
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_gold").manifest_path)
+    golden_dir = tmp_path / "past"
+    with pytest.raises(RuntimeError, match="No usable golden output for abs_gold"):
+        golden_bundle(bundle, golden_dir)
+    (golden_dir / "outputs").mkdir(parents=True)
+    past = blob_numpy(bundle.expected_output).copy()
+    (golden_dir / "outputs" / "abs_gold.bin").write_bytes(past.tobytes())
+    assert HostSession(FakeTargetTransport()).run_many([golden_bundle(bundle, golden_dir)]).cases[0].comparison.passed
+    past.flat[0] += 1
+    (golden_dir / "outputs" / "abs_gold.bin").write_bytes(past.tobytes())
+    case = HostSession(FakeTargetTransport()).run_many([golden_bundle(bundle, golden_dir)]).cases[0]
+    assert (case.comparison.passed, case.comparison.diff_count, case.comparison.max_abs_diff) == (False, 1, 1.0)
+
+
+@pytest.mark.parametrize("record", [{"passed": False}, None, '{"passed": tr', "[true]"])
+def test_golden_from_refuses_failed_cases(tmp_path: Path, monkeypatch, record) -> None:
+    from helia_core_tester.hardware import hardware_pipeline
+    from helia_core_tester.hardware.case_bundle import blob_numpy
+
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_bad").manifest_path)
+    golden_dir = tmp_path / "past"
+    (golden_dir / "outputs").mkdir(parents=True)
+    (golden_dir / "outputs" / "abs_bad.bin").write_bytes(blob_numpy(bundle.expected_output).tobytes())
+    if record is not None:
+        (golden_dir / "correctness").mkdir()
+        text = record if isinstance(record, str) else json.dumps(record)
+        (golden_dir / "correctness" / "abs_bad.json").write_text(text)
+    seen: dict = {}
+    monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([bundle], []))
+    monkeypatch.setattr(
+        "helia_core_tester.hardware.session_runner.run_case_bundles",
+        lambda repo_root, bundles, **kwargs: (seen.update(bundles=bundles), (object(), tmp_path))[1],
+    )
+    build_dir = tmp_path / "bd"
+    _write_elf(build_dir, b"fw", "hct-gold")
+
+    def stream(**flags):
+        options = StreamOptions(golden_from=golden_dir, **flags)
+        hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=build_dir, options=options, echo=lambda _m: None)
+
+    with pytest.raises(RuntimeError, match="Golden run failed these cases: abs_bad"):
+        stream()
+    assert "bundles" not in seen
+    stream(golden_allow_failed=True)
+    assert [b.case_id for b in seen["bundles"]] == ["abs_bad"]
+
+
+def test_golden_gaps_fail_before_flash(tmp_path: Path, monkeypatch) -> None:
+    from helia_core_tester.hardware import hardware_pipeline
+    from helia_core_tester.hardware.case_bundle import blob_numpy
+
+    bundles = [
+        load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path / name, case_id=name).manifest_path)
+        for name in ("abs_gone", "abs_short", "abs_unread")
+    ]
+    golden_dir = tmp_path / "past"
+    (golden_dir / "outputs").mkdir(parents=True)
+    (golden_dir / "correctness").mkdir()
+    for bundle in bundles:
+        (golden_dir / "correctness" / f"{bundle.case_id}.json").write_text(json.dumps({"passed": True}))
+    (golden_dir / "outputs" / "abs_short.bin").write_bytes(blob_numpy(bundles[1].expected_output).tobytes()[:-1])
+    # A directory cannot be read.
+    (golden_dir / "outputs" / "abs_unread.bin").mkdir()
+    order: list[str] = []
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: (bundles, []))
+    monkeypatch.setattr(hardware_pipeline, "generate_tests_for_board", lambda *a, **k: order.append("generate"))
+    monkeypatch.setattr(hardware_pipeline, "stage_kernels", lambda *a, **k: Path("/kernels"))
+    monkeypatch.setattr(hardware_pipeline, "flash_firmware", lambda *a, **k: order.append("flash"))
+    with pytest.raises(RuntimeError, match="for: abs_gone, abs_short, abs_unread$"):
+        run_hardware_pipeline(
+            tmp_path, BOARD, SERIAL, options=StreamOptions(golden_from=golden_dir), build_dir=tmp_path / "bd",
+            app_options=object(), echo=lambda _msg: None,
+        )
+    assert order == ["generate"]
 
 
 def test_stream_refuses_an_unstamped_build_dir_unless_opted_out(tmp_path: Path, monkeypatch) -> None:
@@ -918,3 +1029,10 @@ def test_skip_flash_refuses_dependency_updates(tmp_path: Path, monkeypatch) -> N
     build_dir, _ = _built_app(tmp_path, monkeypatch)
     with pytest.raises(HardwareBuildError, match="cannot update dependencies"):
         _skip_flash_run(tmp_path, monkeypatch, build_dir, app_options=nsx_app.AppOptions(), update_dependencies=True)
+
+
+def test_status_compare_has_no_output_diff() -> None:
+    from helia_core_tester.hardware.comparison import compare_status
+
+    result = compare_status(-1, {"mode": "exact_status", "expected_status": 0})
+    assert (result.passed, result.mismatch_count, result.diff_count) == (False, 1, None)
