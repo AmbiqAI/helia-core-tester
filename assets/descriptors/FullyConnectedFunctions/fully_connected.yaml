@@ -662,3 +662,86 @@ filter_shape: [5, 13]
 use_bias: true
 comparison: {tolerance: 0}
 expected_status: ARM_CMSIS_NN_NO_IMPL_ERROR
+---
+# BEGIN mlperf model shapes (scripts/extract_model_shapes.py)
+operator: FullyConnected
+name: fully_connected_mlperf_ad_l0_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 640]
+filter_shape: [128, 640]
+use_bias: true
+---
+# Same shape: ad_l2, ad_l3, ad_l6, ad_l7, ad_l8
+operator: FullyConnected
+name: fully_connected_mlperf_ad_l1_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 128]
+filter_shape: [128, 128]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_mlperf_ad_l4_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 128]
+filter_shape: [8, 128]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_mlperf_ad_l5_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: RELU
+input_shape: [1, 8]
+filter_shape: [128, 8]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_mlperf_ad_l9_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: NONE
+input_shape: [1, 128]
+filter_shape: [640, 128]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_mlperf_ic_l14_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: NONE
+input_shape: [1, 64]
+filter_shape: [10, 64]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_mlperf_kws_l11_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: NONE
+input_shape: [1, 64]
+filter_shape: [12, 64]
+use_bias: true
+---
+operator: FullyConnected
+name: fully_connected_mlperf_vww_l29_s8
+activation_dtype: S8
+weight_dtype: S8
+hint: {call_style: per_tensor}
+activation: NONE
+input_shape: [1, 256]
+filter_shape: [2, 256]
+use_bias: true
+# END mlperf model shapes
