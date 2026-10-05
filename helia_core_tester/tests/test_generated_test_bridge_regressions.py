@@ -17,7 +17,7 @@ from helia_core_tester.hardware.generated_test_bridge import (
     build_case_bundle_from_generated_test,
     discover_generated_tests,
 )
-from helia_core_tester.hardware.kernel_registry import lookup_kernel_id
+from helia_core_tester.hardware.kernel_registry import lookup_entry_id, lookup_kernel_id
 from helia_core_tester.tests.generated_inputs import discover_or_skip
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -188,31 +188,71 @@ def test_packed_selection_covers_the_board_failures() -> None:
     } <= names
 
 
-def test_direct_entry_cases_are_refused(tmp_path: Path) -> None:
-    # The firmware calls an operator's default function, so a bundled entry case would report
-    # that function's result under the entry's name.
-    desc = next(d for d in load_all_descriptors(str(PROJECT_ROOT / "assets" / "descriptors")) if d.get("entry"))
+def _entry_descriptors() -> list[dict]:
+    return [d for d in load_all_descriptors(str(PROJECT_ROOT / "assets" / "descriptors")) if d.get("entry")]
+
+
+def test_unadapted_entry_cases_are_refused(tmp_path: Path) -> None:
+    # Otherwise the wrapper's cycles carry the entry's name.
+    desc = next(d for d in _entry_descriptors() if lookup_entry_id(PROJECT_ROOT, d["entry"]) is None)
     case = GeneratedTestCase(
         name=desc["name"], cpu="cortex-m55", family="ConvolutionFunctions", directory=tmp_path, descriptor=desc
     )
-    with pytest.raises(UnsupportedGeneratedTestError, match=rf"direct-entry case \({desc['entry']}\)"):
+    with pytest.raises(UnsupportedGeneratedTestError, match=rf"direct-entry case \({desc['entry']}\) has no firmware adapter"):
         build_case_bundle_from_generated_test(PROJECT_ROOT, case, require_fvp_pass=False)
 
 
-def _s8_conv_entry_descriptors() -> list[dict]:
-    descs = load_all_descriptors(str(PROJECT_ROOT / "assets" / "descriptors"))
-    return [d for d in descs if d.get("entry") and d.get("operator") in ("Convolve", "DepthwiseConv")
-            and d.get("activation_dtype", "S8") == "S8" and d.get("weight_dtype", "S8") == "S8"]
-
-
-@pytest.mark.parametrize("desc", _s8_conv_entry_descriptors(), ids=lambda d: d["name"])
-def test_s8_conv_entry_never_times_wrapper(tmp_path: Path, desc: dict) -> None:
-    # Refusal keeps wrapper cycles off entry names.
+@pytest.mark.parametrize(
+    "desc",
+    [d for d in _entry_descriptors() if lookup_entry_id(PROJECT_ROOT, d["entry"]) and d.get("expected_status")],
+    ids=lambda d: d["name"],
+)
+def test_declining_entry_cases_are_refused(tmp_path: Path, desc: dict) -> None:
     case = GeneratedTestCase(
         name=desc["name"], cpu="cortex-m55", family="ConvolutionFunctions", directory=tmp_path, descriptor=desc
     )
-    with pytest.raises(UnsupportedGeneratedTestError, match=rf"direct-entry case \({desc['entry']}\)"):
+    with pytest.raises(UnsupportedGeneratedTestError, match="nothing to time"):
         build_case_bundle_from_generated_test(PROJECT_ROOT, case, require_fvp_pass=False)
+
+
+def _bridge_entry(tmp_path: Path, family: str, name: str) -> tuple[GeneratedTestCase, dict]:
+    desc = next(d for d in _entry_descriptors() if d["name"] == name)
+    generate_test(desc, str(tmp_path / "artifacts" / "generated_tests" / "int" / "cortex-m55"), seed=Config.seed)
+    (case,) = discover_generated_tests(tmp_path, family=family, name_filter=name)
+    bundle = build_case_bundle_from_generated_test(
+        PROJECT_ROOT, case, output_root=tmp_path / "bundle", require_fvp_pass=False
+    )
+    return case, bundle.manifest
+
+
+@pytest.mark.parametrize(
+    ("family", "name", "entry"),
+    [
+        ("ConvolutionFunctions", "convolve_entry_small_cin3_8x8_k3x3_co16_s8", "arm_convolve_s8_small_cin"),
+        ("ConvolutionFunctions", "convolve_entry_3x3_c16_16x16_k3x3_co16_s8", "arm_convolve_s8_3x3_c16_s1"),
+        ("ConvolutionFunctions", "convolve_entry_1x1_short_k_c8_2x4_co16_s8", "arm_convolve_1x1_s8_short_k"),
+        ("ConvolutionFunctions", "depthwise_conv_entry_3x3_25x5_c64_s8", "arm_depthwise_conv_s8_opt_3x3"),
+        ("ConvolutionFunctions", "depthwise_conv_entry_3x3_c64_s1_25x5_s8", "arm_depthwise_conv_s8_opt_3x3_c64_s1"),
+        ("ConvolutionFunctions", "depthwise_conv_entry_planar_48x48_c8_s8", "arm_depthwise_conv_s8_opt_planar"),
+        ("ConvolutionFunctions", "depthwise_conv_entry_channelwise_25x5_c64_s8", "arm_depthwise_conv_s8_opt_channelwise"),
+        ("FullyConnectedFunctions", "fully_connected_entry_packed_k29_c7_b2_bias_s8",
+         "arm_fully_connected_per_channel_packed_s8"),
+    ],
+)
+def test_entry_case_times_its_entry(tmp_path: Path, family: str, name: str, entry: str) -> None:
+    _case, manifest = _bridge_entry(tmp_path, family, name)
+    catalog = json.loads((PROJECT_ROOT / "cmake" / "hardware" / "kernel_catalog.json").read_text())
+    names = {item["kernel_id"]: item["canonical_name"] for item in catalog}
+    assert names[manifest["kernel_id"]] == entry
+
+
+def test_packed_fc_scratch_holds_sums_and_stream(tmp_path: Path) -> None:
+    name = "fully_connected_entry_packed_k29_c7_b2_bias_s8"
+    case, manifest = _bridge_entry(tmp_path, "FullyConnectedFunctions", name)
+    (source,) = case.directory.glob("*.c")
+    stream = int(re.search(rf"#define {name.upper()}_BUFFER_SIZE_MAX (\d+)", source.read_text()).group(1))
+    # Seven int32 sums pad to 32 bytes.
+    assert manifest["scratch_buffer"]["bytes"] == 32 + stream
 
 
 @pytest.mark.parametrize(

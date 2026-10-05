@@ -25,6 +25,8 @@ class KernelEntry:
     dtype: str
     weight_dtype: str | None
     cmsis_function: str
+    # Reached only through a descriptor's `entry:`.
+    direct_entry: bool = False
 
 
 class UnknownKernelError(Exception):
@@ -57,6 +59,7 @@ def load_kernel_registry(project_root: Path) -> list[KernelEntry]:
             dtype=str(entry["dtype"]),
             weight_dtype=(None if entry.get("weight_dtype") is None else str(entry["weight_dtype"])),
             cmsis_function=str(entry.get("cmsis_function", "")),
+            direct_entry=bool(entry.get("direct_entry", False)),
         )
         for entry in data.get("kernels", [])
     ]
@@ -79,7 +82,7 @@ def lookup_kernel_id(
     """
     candidates: list[KernelEntry] = []
     for entry in load_kernel_registry(project_root):
-        if entry.family == family and entry.operator == operator and entry.dtype == dtype:
+        if entry.family == family and entry.operator == operator and entry.dtype == dtype and not entry.direct_entry:
             candidates.append(entry)
 
     if weight_dtype is not None:
@@ -108,3 +111,11 @@ def lookup_kernel_id(
         f"No registered kernel_id for family={family!r} operator={operator!r} "
         f"dtype={dtype!r} weight_dtype={weight_dtype!r}"
     )
+
+
+def lookup_entry_id(project_root: Path, entry: str) -> int | None:
+    """The kernel_id that runs direct entry `entry`, if any."""
+    for kernel in load_kernel_registry(project_root):
+        if kernel.direct_entry and kernel.cmsis_function == entry:
+            return kernel.kernel_id
+    return None
