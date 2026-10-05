@@ -112,6 +112,31 @@ static hctp_status_t compute_convolve_output_dims(const hct_server_session_t *se
     return HCTP_STATUS_OK;
 }'''
 
+_PLACE_WEIGHT_SUMS = '''\
+/* Weight sums go after the kernel scratch. */
+static bool place_weight_sums(const hct_server_session_t *session,
+                              int32_t required_scratch,
+                              int32_t channels,
+                              cmsis_nn_context *ctx,
+                              cmsis_nn_context *weight_sum_ctx)
+{
+    const int32_t weight_sum_shape[1] = {channels};
+    uint32_t offset;
+    uint32_t bytes;
+    uint32_t end;
+    if (required_scratch < 0 ||
+        !hct_checked_shape_bytes(weight_sum_shape, 1, sizeof(int32_t), session->scratch_bytes, &bytes) ||
+        !hct_checked_aligned_range((uint32_t)required_scratch, 16u, bytes, session->scratch_bytes, &offset, &end))
+    {
+        return false;
+    }
+    ctx->buf = (required_scratch > 0) ? &session->workspace[session->scratch_offset] : NULL;
+    ctx->size = required_scratch;
+    weight_sum_ctx->buf = &session->workspace[session->scratch_offset + offset];
+    weight_sum_ctx->size = (int32_t)bytes;
+    return true;
+}'''
+
 _RUN_CONVOLVE_ONCE = '''\
 static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
 {
@@ -271,7 +296,7 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
     if (session->expected_kernel_id == HCT_KERNEL_ID_CONVOLVE_S16)
     {
         /* arm_convolve_wrapper_s16 needs no weight-sum precompute (unlike S8's
-         * arm_convolve_s8, whose bias must be pre-adjusted via arm_convolve_weight_sum())
+         * wrapper, whose bias must be pre-adjusted via arm_convolve_weight_sum())
          * and its bias is a cmsis_nn_bias_data struct wrapping a plain int64_t payload
          * (see arm_nnfunctions.h), not S8's raw int32_t* bias pointer. */
         cmsis_nn_bias_data bias_data = {blob_ptr(session, bias), false};
@@ -344,47 +369,21 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
     }
 
     {
-        /* S8 path: arm_convolve_s8 requires a precomputed per-output-channel weight sum
-         * (via arm_convolve_weight_sum()) placed in its own scratch region, distinct from
-         * the general im2col-style `ctx` scratch above. */
+        /* S8: the wrapper TFLM calls. */
         cmsis_nn_context weight_sum_ctx;
-        int32_t required_scratch;
-        uint32_t weight_sum_relative_offset;
-        uint32_t weight_sum_bytes;
-        uint32_t weight_sum_end;
         uint32_t operand_bytes_needed;
 
         if (!hct_checked_dims_bytes(&input_dims, sizeof(int8_t), input->byte_length, &operand_bytes_needed) ||
             !hct_checked_dims_bytes(&filter_dims, sizeof(int8_t), weights->byte_length, &operand_bytes_needed) ||
-            !hct_checked_count_bytes(bias_dims.c, sizeof(int32_t), bias->byte_length, &operand_bytes_needed))
+            !hct_checked_count_bytes(bias_dims.c, sizeof(int32_t), bias->byte_length, &operand_bytes_needed) ||
+            !place_weight_sums(session,
+                               arm_convolve_wrapper_s8_get_buffer_size(&conv_params, &input_dims, &filter_dims, &output_dims),
+                               output_dims.c,
+                               &ctx,
+                               &weight_sum_ctx))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-
-        required_scratch = arm_convolve_s8_get_buffer_size(&input_dims, &filter_dims);
-        if (required_scratch < 0 || (uint32_t)required_scratch > session->scratch_bytes)
-        {
-            return ARM_CMSIS_NN_ARG_ERROR;
-        }
-        {
-            const int32_t weight_sum_shape[1] = {output_dims.c};
-            if (!hct_checked_shape_bytes(weight_sum_shape, 1, sizeof(int32_t),
-                                         session->scratch_bytes, &weight_sum_bytes) ||
-                !hct_checked_aligned_range((uint32_t)required_scratch,
-                                           16u,
-                                           weight_sum_bytes,
-                                           session->scratch_bytes,
-                                           &weight_sum_relative_offset,
-                                           &weight_sum_end))
-            {
-                return ARM_CMSIS_NN_ARG_ERROR;
-            }
-        }
-
-        ctx.buf = (required_scratch > 0) ? &session->workspace[session->scratch_offset] : NULL;
-        ctx.size = required_scratch;
-        weight_sum_ctx.buf = &session->workspace[session->scratch_offset + weight_sum_relative_offset];
-        weight_sum_ctx.size = (int32_t)weight_sum_bytes;
 #if defined(ARM_MATH_MVEI)
         /* Only MVE kernels read the sum. */
         if (arm_convolve_weight_sum((int32_t *)weight_sum_ctx.buf,
@@ -398,19 +397,18 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
             return ARM_CMSIS_NN_ARG_ERROR;
         }
 #endif
-        return arm_convolve_s8(&ctx,
-                               &weight_sum_ctx,
-                               &conv_params,
-                               &quant_params,
-                               &input_dims,
-                               (const int8_t *)blob_ptr(session, input),
-                               &filter_dims,
-                               (const int8_t *)blob_ptr(session, weights),
-                               &bias_dims,
-                               (const int32_t *)blob_ptr(session, bias),
-                               NULL,
-                               &output_dims,
-                               (int8_t *)hct_output_ptr(session));
+        return arm_convolve_wrapper_s8(&ctx,
+                                       &weight_sum_ctx,
+                                       &conv_params,
+                                       &quant_params,
+                                       &input_dims,
+                                       (const int8_t *)blob_ptr(session, input),
+                                       &filter_dims,
+                                       (const int8_t *)blob_ptr(session, weights),
+                                       &bias_dims,
+                                       (const int32_t *)blob_ptr(session, bias),
+                                       &output_dims,
+                                       (int8_t *)hct_output_ptr(session));
     }
 }'''
 
@@ -642,25 +640,48 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
         return ARM_CMSIS_NN_ARG_ERROR;
     }
     {
-        cmsis_nn_context ctx = {NULL, 0};
+        /* S8: the wrapper TFLM calls. */
+        cmsis_nn_context ctx;
+        cmsis_nn_context weight_sum_ctx;
         uint32_t operand_bytes_needed;
         if (!hct_checked_dims_bytes(&input_dims, sizeof(int8_t), input->byte_length, &operand_bytes_needed) ||
             !hct_checked_dims_bytes(&filter_dims, sizeof(int8_t), weights->byte_length, &operand_bytes_needed) ||
-            !hct_checked_count_bytes(bias_dims.c, sizeof(int32_t), bias->byte_length, &operand_bytes_needed))
+            !hct_checked_count_bytes(bias_dims.c, sizeof(int32_t), bias->byte_length, &operand_bytes_needed) ||
+            !place_weight_sums(session,
+                               arm_depthwise_conv_wrapper_s8_get_buffer_size(&dw_conv_params, &input_dims, &filter_dims, &output_dims),
+                               output_dims.c,
+                               &ctx,
+                               &weight_sum_ctx))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
-        return arm_depthwise_conv_s8(&ctx,
-                                     &dw_conv_params,
-                                     &quant_params,
-                                     &input_dims,
-                                     (const int8_t *)blob_ptr(session, input),
-                                     &filter_dims,
-                                     (const int8_t *)blob_ptr(session, weights),
-                                     &bias_dims,
-                                     (const int32_t *)blob_ptr(session, bias),
-                                     &output_dims,
-                                     (int8_t *)hct_output_ptr(session));
+#if defined(ARM_MATH_MVEI)
+        /* Only MVE kernels read the sum. */
+        if (arm_depthwise_convolve_weight_sum((int32_t *)weight_sum_ctx.buf,
+                                              NULL,
+                                              (const int8_t *)blob_ptr(session, weights),
+                                              &dw_conv_params,
+                                              &input_dims,
+                                              &filter_dims,
+                                              &output_dims,
+                                              session->input_offset,
+                                              (const int32_t *)blob_ptr(session, bias)) != ARM_CMSIS_NN_SUCCESS)
+        {
+            return ARM_CMSIS_NN_ARG_ERROR;
+        }
+#endif
+        return arm_depthwise_conv_wrapper_s8(&ctx,
+                                             &weight_sum_ctx,
+                                             &dw_conv_params,
+                                             &quant_params,
+                                             &input_dims,
+                                             (const int8_t *)blob_ptr(session, input),
+                                             &filter_dims,
+                                             (const int8_t *)blob_ptr(session, weights),
+                                             &bias_dims,
+                                             (const int32_t *)blob_ptr(session, bias),
+                                             &output_dims,
+                                             (int8_t *)hct_output_ptr(session));
     }
 }
 '''
@@ -4800,10 +4821,9 @@ static arm_cmsis_nn_status run_data_movement_once(hct_server_session_t *session)
 '''
 
 
-# Ordered list -- rendering emits function bodies in this order. `compute_convolve_output_dims`
-# is a private helper of `run_convolve_once` (not a dispatched adapter itself, no scalar_fields
-# of its own beyond what run_convolve_once already declares) but lives in this same generated
-# block since it's only ever called from there.
+# Ordered list -- rendering emits function bodies in this order. Entries with no
+# kernel_ids (`compute_convolve_output_dims`, `place_weight_sums`) are private helpers
+# of the convolution adapters, not dispatched adapters themselves.
 FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
     FirmwareAdapterSpec(
         label="ConvolutionFunctions/Convolve (helper)",
@@ -4812,6 +4832,14 @@ FIRMWARE_ADAPTERS: tuple[FirmwareAdapterSpec, ...] = (
         guard="HCT_HOST_ABS_ONLY",
         scalar_fields=(),
         c_body=_COMPUTE_CONVOLVE_OUTPUT_DIMS,
+    ),
+    FirmwareAdapterSpec(
+        label="ConvolutionFunctions/Convolve,DepthwiseConv (helper)",
+        function_name="place_weight_sums",
+        kernel_ids=(),
+        guard="HCT_HOST_ABS_ONLY",
+        scalar_fields=(),
+        c_body=_PLACE_WEIGHT_SUMS,
     ),
     FirmwareAdapterSpec(
         label="ConvolutionFunctions/Convolve",

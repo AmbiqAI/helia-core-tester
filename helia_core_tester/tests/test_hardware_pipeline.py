@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import importlib.util
+import csv
 import json
 import struct
 from datetime import datetime, timedelta
@@ -492,6 +493,16 @@ def test_boot_health_is_stamped_in_bundle(tmp_path: Path, boot_status, expected,
     print_run_report(result, [], bundle_root)
     line = "status 0, core 250 MHz, FPSCR 0x00040000" if boot_status == 0 else "not reported"
     assert f"Target boot: {line}" in capsys.readouterr().out
+
+
+def test_bundle_names_the_timed_kernel(tmp_path: Path) -> None:
+    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_timed").manifest_path)
+    result = HostSession(FakeTargetTransport()).run_many([bundle])
+    catalog = json.loads((PROJECT_ROOT / "cmake" / "hardware" / "kernel_catalog.json").read_text())
+    bundle_root = write_result_bundle(result, session_id="timed", output_root=tmp_path, memory_report={}, kernel_catalog=catalog)
+    assert json.loads((bundle_root / "cases.json").read_text())[0]["timed_symbol"] == "arm_abs_s8"
+    with (bundle_root / "case_summary.csv").open(encoding="utf-8") as handle:
+        assert next(csv.DictReader(handle))["timed_symbol"] == "arm_abs_s8"
 
 
 def test_read_target_info_returns_the_full_payload_without_acknowledging() -> None:
