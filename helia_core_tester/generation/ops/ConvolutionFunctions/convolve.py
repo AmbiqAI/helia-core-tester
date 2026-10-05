@@ -36,9 +36,20 @@ class OpConvolve(OperationBase):
         "filter_deeper_than_input",
         "partial_filter_group",
         "negative_output_depth",
+        "output_not_whole_groups",
+        "negative_input_depth",
+        "negative_filter_depth",
     )
     # Shapes that break the whole-group rule arm_convolve_wrapper_s16 checks first (ns-cmsis-nn#725).
-    S16_GROUP_FAULTS = ("zero_filter_depth", "filter_deeper_than_input", "partial_filter_group", "negative_output_depth")
+    S16_GROUP_FAULTS = (
+        "zero_filter_depth",
+        "filter_deeper_than_input",
+        "partial_filter_group",
+        "negative_output_depth",
+        "output_not_whole_groups",
+        "negative_input_depth",
+        "negative_filter_depth",
+    )
 
     def _hint(self) -> Dict[str, Any]:
         hint = self.desc.get("hint", {})
@@ -60,6 +71,8 @@ class OpConvolve(OperationBase):
             raise self.fault_unreachable(kind, f"{kernel_fn} takes no weight-sum context")
         if kind == "partial_filter_group" and int(context["filter_dims"]["c"]) < 2:
             raise self.fault_unreachable(kind, "needs a filter depth of at least 2")
+        if kind == "output_not_whole_groups" and int(context["input_dims"]["c"]) < 2 * int(context["filter_dims"]["c"]):
+            raise self.fault_unreachable(kind, "needs at least two groups")
         if kind == "channel_group_mismatch" and kernel_fn == "arm_convolve_wrapper_s4":
             raise self.fault_unreachable(kind, f"{kernel_fn} has no group divisibility guard")
         input_dims = context["input_dims"]

@@ -57,6 +57,13 @@ static int32_t run_convolve(void)
     input_dims.c = filter_dims.c + 1;
 {% elif fault == "negative_output_depth" %}
     output_dims.c = -output_dims.c;
+{% elif fault == "output_not_whole_groups" %}
+    /* One output channel past a whole number of groups */
+    output_dims.c = output_dims.c + 1;
+{% elif fault == "negative_input_depth" %}
+    input_dims.c = -input_dims.c;
+{% elif fault == "negative_filter_depth" %}
+    filter_dims.c = -filter_dims.c;
 {% endif %}
     const {{ input_dtype }} *input_arg = {% if fault == "null_input" %}NULL{% else %}{{ name }}_input{% endif %};
     {{ output_dtype }} *output_arg = {% if fault == "null_output" %}NULL{% else %}{{ name }}_output{% endif %};

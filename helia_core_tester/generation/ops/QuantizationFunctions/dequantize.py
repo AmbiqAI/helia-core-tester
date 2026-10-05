@@ -17,6 +17,9 @@ _F16_BIT_CLASSES = (
     0x0000, 0x8001, 0x0200, 0x03FF, 0x83FF, 0x0400, 0x8400, 0xC000, 0x3555,
     0x7BFF, 0xFBFF, 0xFC00, 0x7E00, 0x7E01, 0xFFFF, 0xFC01, 0x7D55, 0x7DFF, 0xFD00,
 )
+# The last elements of every case: a signalling NaN with payload, a negative signalling NaN and a
+# quiet NaN with payload.
+_F16_TAIL_NANS = (0x7D55, 0xFC01, 0x7E01)
 
 
 class OpDequantize(QuantizationFamilyBase):
@@ -313,17 +316,28 @@ class OpDequantize(QuantizationFamilyBase):
         its sign and payload and set the quiet bit. The C file picks the rule its build compiled.
         """
         name = self.desc["name"]
-        ignored = [key for key in ("input_min", "input_max", "input_mode") if key in self.desc]
+        ignored = [key for key in ("input_min", "input_max", "input_mode", "expected_status", "fault") if key in self.desc]
+        ignored += sorted(key for key in self.desc if key.startswith("nonfinite_"))
         if self.activation_name() != "NONE":
             ignored.append("activation")
         if self.tensor_dtype("output") != "FP32":
             ignored.append("tensor_dtypes.output (must be FP32)")
+        if any(role not in ("input", "output") for role in (self.desc.get("tensor_dtypes") or {})):
+            ignored.append("tensor_dtypes beyond input and output")
+        comparison = self.desc.get("comparison")
+        if comparison is not None and comparison != {"atol": 0.0, "rtol": 0.0}:
+            ignored.append("comparison (the check is bit-exact)")
         if ignored:
             raise ValueError(f"{name}: a bit-pattern case takes none of {ignored}")
         size = int(np.prod([int(dim) for dim in self.desc["input_shape"]]))
+        if not 1 <= size <= 1 << 16:
+            raise ValueError(f"{name}: a bit-pattern case holds 1 to 65536 halves, got {size}")
         classes = np.array(_F16_BIT_CLASSES[:size], dtype=np.uint16)
         rest = self.rng.integers(0, 1 << 16, size=size - classes.size).astype(np.uint16)
         bits = np.concatenate([classes, rest])
+        # The MVE path converts four halves per iteration and the FPU path two, so the last elements
+        # sit in the predicated or single-half tail; ending on NaNs puts the NaN rule there too.
+        bits[-min(3, size):] = np.array(_F16_TAIL_NANS[-min(3, size):], dtype=np.uint16)
 
         frac = (bits & 0x3FF).astype(np.uint32)
         sign = (bits >> 15).astype(np.uint32)
