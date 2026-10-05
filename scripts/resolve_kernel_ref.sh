@@ -5,12 +5,15 @@ set -euo pipefail
 ref="${HCT_NIGHTLY_REF//[[:space:]]/}"
 if [[ "${ref}" =~ ^[0-9a-fA-F]{40}$ ]]; then
   sha="${ref,,}"
+elif [[ "${ref}" =~ [*?\[] ]]; then
+  # ls-remote would glob-match these.
+  sha=""
 else
   refs="$(git ls-remote https://github.com/AmbiqAI/ns-cmsis-nn.git \
     "refs/heads/${ref}" "refs/tags/${ref}" "refs/tags/${ref}^{}")"
   # Annotated tags: take the peeled commit.
   sha="$(awk -v t="refs/tags/${ref}^{}" '$2 == t { print $1 }' <<< "${refs}")"
-  sha="${sha:-$(awk 'NR == 1 { print $1 }' <<< "${refs}")}"
+  sha="${sha:-$(awk -v h="refs/heads/${ref}" -v t="refs/tags/${ref}" '$2 == h || $2 == t { print $1; exit }' <<< "${refs}")}"
 fi
 if [[ -z "${sha}" ]]; then
   echo "::error::ns-cmsis-nn has no ref '${ref}'" >&2

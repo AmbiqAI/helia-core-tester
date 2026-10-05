@@ -99,6 +99,8 @@ jobs:
         id: ref
         # No ref skips the kernel leg only.
         continue-on-error: true
+        # A stalled lookup must not sink plan.
+        timeout-minutes: 2
         run: scripts/resolve_kernel_ref.sh
 
   run:
@@ -203,9 +205,9 @@ jobs:
           mram="$(uv run python -c 'import sys; from helia_core_tester.hardware.boards import resolve_board; print(resolve_board(sys.argv[1]).has_mram)' "${HPX_BOARD}")"
           if [[ "${mram}" != "True" ]]; then
             echo "${HPX_BOARD} has no cached MRAM; skipping"
+            echo "absent=true" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          echo "ran=true" >> "${GITHUB_OUTPUT}"
           scripts/nightly_leg.sh "${HCT_MRAM_SESSION_ID}" "${HCT_CACHE_DIR}/hardware/${HPX_BOARD}-mram" "${HCT_MRAM_RUN_JSON}" \
             --placement mram --skip-generate
 
@@ -265,7 +267,8 @@ jobs:
 
       # Own prefix: the dashboard keys hct-hardware-* by board.
       - name: Upload the MRAM-leg bundle
-        if: always() && steps.mram.outputs.ran == 'true'
+        # Early failures still show no result.
+        if: always() && steps.mram.outcome != 'skipped' && steps.mram.outputs.absent != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: hct-mram-${{ matrix.board }}-${{ needs.plan.outputs.date }}-${{ github.run_id }}
@@ -316,7 +319,7 @@ jobs:
               echo ""
             fi
             if [[ -n "${KERNEL_LEG}" ]]; then
-              echo "Leg ${KERNEL_LEG} built ns-cmsis-nn ${KERNEL_SHA}; it does not gate the run."
+              echo "Leg ${KERNEL_LEG} targets ns-cmsis-nn ${KERNEL_SHA}; it does not gate the run."
             else
               echo "Kernel ref did not resolve; kernel leg skipped."
             fi
