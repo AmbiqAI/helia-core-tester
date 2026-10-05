@@ -41,7 +41,7 @@ def _golden_constants(name: str, out_dir: Path) -> list[np.ndarray]:
 )
 def test_fp16_golden_model_holds_float16_weights_and_bias(name: str, tmp_path: Path) -> None:
     for values in _golden_constants(name, tmp_path):
-        assert np.any(values != 0)
+        assert np.count_nonzero(values) == values.size
         assert np.array_equal(values, values.astype(np.float16).astype(np.float32))
 
 
