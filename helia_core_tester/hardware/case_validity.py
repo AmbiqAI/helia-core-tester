@@ -6,6 +6,8 @@ golden, not the cycles, so the case still gates. A descriptor's
 degenerate_golden_reason marks a constant golden as intended. The floor is an empty
 call through the same timed window as every kernel; it is recorded, never subtracted.
 FLOOR_FACTOR = 3 keeps the fixed window cost under a third of a valid reading.
+valid_for_regression also needs a passing comparison: cycles from wrong
+output never gate, while timing_status still describes the cycles alone.
 """
 
 from __future__ import annotations
@@ -56,7 +58,8 @@ def timing_status(case, floor_cycles: float | None) -> str:
 def classify_case(case, floor_cycles: float | None):
     """The case with timing_status and validity set."""
     status = timing_status(case, floor_cycles)
-    stats = replace(case.statistics, timing_status=status, valid_for_regression=status in GATING_STATUSES)
+    valid = status in GATING_STATUSES and bool(case.comparison.passed)
+    stats = replace(case.statistics, timing_status=status, valid_for_regression=valid)
     return replace(case, statistics=stats)
 
 
