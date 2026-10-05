@@ -19,6 +19,7 @@ from helia_core_tester.hardware.generated_test_bridge import (
     build_case_bundle_from_generated_test,
 )
 from helia_core_tester.hardware.kernel_registry import lookup_kernel_id
+from helia_core_tester.hardware.wrapper_route import inner_symbol
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CMSIS_NN_ROOT = Path(os.environ.get("CMSIS_NN_ROOT") or PROJECT_ROOT.parent.parent)
@@ -99,6 +100,8 @@ def test_svdf_sends_every_time_filter(tmp_path: Path) -> None:
     scalars = bundle.manifest["serialized_scalar_parameters"]
     assert set(scalars) <= set(generated_test_bridge_scalar_fields("run_svdf_once"))
     assert (scalars["input_offset"], scalars["output_offset"]) == (3, -4)
+    # Not a wrapper: no inner route.
+    assert inner_symbol("arm_svdf_s8", bundle.manifest, True) is None
 
 
 def test_svdf_s16_state_without_bias(tmp_path: Path) -> None:

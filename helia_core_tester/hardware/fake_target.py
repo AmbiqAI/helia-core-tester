@@ -187,46 +187,42 @@ class FakeAbsS8Adapter(FakeKernelAdapter):
 
 
 class FakeConvolveS8Adapter(FakeKernelAdapter):
-    entry = CatalogEntry(2, "arm_convolve_s8", "ConvolutionFunctions", 1, "S8", 1, True, True, False, 64)
+    entry = CatalogEntry(2, "arm_convolve_wrapper_s8", "ConvolutionFunctions", 1, "S8", 1, True, True, False, 64)
     supported_groups = ("cpu", "memory")
     base_cycles_per_iteration = 19
 
     def invoke(self, blobs: dict[str, np.ndarray], scalar_parameters: dict[str, Any]) -> np.ndarray:
-        input_data = blobs["input_0"].astype(np.int32)
-        weights = blobs["weights"].astype(np.int32)
+        # Mirror the firmware: host sends pads and dims.
+        params = {key: int(value) for key, value in scalar_parameters.items() if key != "padding"}
+        input_data = blobs["input_0"].astype(np.int32) + params.get("input_offset", 0)
+        # Dims read HWIO; data sits OHWI, like CMSIS.
+        filt_h, filt_w, filt_c, out_c = blobs["weights"].shape
+        weights = blobs["weights"].reshape(out_c, filt_h, filt_w, filt_c).astype(np.int32)
+        # Firmware rejects a missing bias too.
         bias = blobs["bias"].astype(np.int32)
         multiplier = blobs["multiplier"].astype(np.int32)
         shift = blobs["shift"].astype(np.int32)
-        stride_h = int(scalar_parameters["stride_h"])
-        stride_w = int(scalar_parameters["stride_w"])
-        padding = str(scalar_parameters["padding"])
         batch, in_h, in_w, in_c = input_data.shape
-        filt_h, filt_w, filt_c, out_c = weights.shape
-        assert batch == 1 and filt_c == in_c
-        pad_top = pad_bottom = pad_left = pad_right = 0
-        if padding == "SAME":
-            out_h = (in_h + stride_h - 1) // stride_h
-            out_w = (in_w + stride_w - 1) // stride_w
-            pad_h = max((out_h - 1) * stride_h + filt_h - in_h, 0)
-            pad_w = max((out_w - 1) * stride_w + filt_w - in_w, 0)
-            pad_top = pad_h // 2
-            pad_bottom = pad_h - pad_top
-            pad_left = pad_w // 2
-            pad_right = pad_w - pad_left
-        padded = np.pad(input_data, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode="constant")
-        out_h = ((padded.shape[1] - filt_h) // stride_h) + 1
-        out_w = ((padded.shape[2] - filt_w) // stride_w) + 1
-        activation_min = int(scalar_parameters.get("activation_min", -128))
-        activation_max = int(scalar_parameters.get("activation_max", 127))
-        output_offset = int(scalar_parameters.get("output_offset", 0))
+        assert batch == 1 and in_c % filt_c == 0
+        group_out = out_c // (in_c // filt_c)
+        stride_h, stride_w = params["stride_h"], params["stride_w"]
+        dil_h, dil_w = params.get("dilation_h", 1), params.get("dilation_w", 1)
+        pad_h, pad_w = params.get("pad_h", 0), params.get("pad_w", 0)
+        out_h, out_w = params["output_h"], params["output_w"]
+        # Padding taps add zero after offset.
+        padded = np.zeros((in_h + 2 * pad_h + filt_h * dil_h, in_w + 2 * pad_w + filt_w * dil_w, in_c), dtype=np.int32)
+        padded[pad_h : pad_h + in_h, pad_w : pad_w + in_w] = input_data[0]
         output = np.zeros((batch, out_h, out_w, out_c), dtype=np.int8)
         for oy in range(out_h):
             for ox in range(out_w):
-                window = padded[0, oy * stride_h : oy * stride_h + filt_h, ox * stride_w : ox * stride_w + filt_w, :]
+                y, x = oy * stride_h, ox * stride_w
+                window = padded[y : y + filt_h * dil_h : dil_h, x : x + filt_w * dil_w : dil_w]
                 for oc in range(out_c):
-                    acc = int(np.sum(window * weights[:, :, :, oc])) + int(bias[oc])
+                    first = (oc // group_out) * filt_c
+                    acc = int(np.sum(window[:, :, first : first + filt_c] * weights[oc])) + int(bias[oc])
                     value = int(requantize_np(np.array([acc], dtype=np.int32), int(multiplier[oc]), int(shift[oc]))[0])
-                    output[0, oy, ox, oc] = np.int8(np.clip(value + output_offset, activation_min, activation_max))
+                    value += params.get("output_offset", 0)
+                    output[0, oy, ox, oc] = np.clip(value, params.get("activation_min", -128), params.get("activation_max", 127))
         return output
 
 

@@ -15,6 +15,15 @@ class BinaryBasicMathBase(OperationBase):
     # (arm_elementwise_{sub,add,mul}_broadcast_{f32,f16}, ns-cmsis-nn#415).
     FLOAT_BROADCAST_CALL_STYLE = "broadcast"
 
+    # s8 draw reach, in quantized units.
+    S8_REACH = 128
+
+    def _widen_s8(self, unit: np.ndarray, scale: float, c_type: str) -> np.ndarray:
+        """Stretch [-1, 1] draws over s8."""
+        if c_type != "int8_t":
+            return unit
+        return unit * np.float32(self.S8_REACH * float(scale))
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         # Fail at load for an entry this operator does not call, rather than gating the case on it.

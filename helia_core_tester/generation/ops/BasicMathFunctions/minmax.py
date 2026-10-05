@@ -200,6 +200,8 @@ class OpMinMax(BinaryBasicMathBase):
         else:
             raise ValueError(f"Unsupported input_c_type: {kernel_info['input_c_type']}")
         if not float_kernel:
+            input1_data = self._widen_s8(input1_data, input1_scale, kernel_info["input_c_type"])
+            input2_data = self._widen_s8(input2_data, input2_scale, kernel_info["input_c_type"])
             input1_q = np.round(input1_data / float(input1_scale) + float(input1_zp)).astype(np.int32)
             input1_q = np.clip(input1_q, qmin, qmax).astype(np_in_dtype)
 

@@ -207,16 +207,24 @@ static const hct_kernel_catalog_entry_t g_hct_kernel_catalog[] = {
     {172u, "arm_convolve_f32", "ConvolutionFunctions", 1u, "FP32", 1u, true, true, false, 0u},
     {173u, "arm_convolve_f16", "ConvolutionFunctions", 1u, "FP16", 1u, true, true, false, 0u},
     {174u, "hct_empty_call", "Timing", 1u, "S8", 1u, true, true, false, 0u},
-    {175u, "arm_svdf_s8", "SVDFunctions", 1u, "S8", 1u, true, true, false, 0u},
-    {176u, "arm_svdf_state_s16_s8", "SVDFunctions", 1u, "S8", 1u, true, true, false, 0u},
-    {177u, "arm_lstm_unidirectional_s8", "LSTMFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {175u, "arm_convolve_s8_small_cin", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {176u, "arm_convolve_s8_3x3_c16_s1", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {177u, "arm_convolve_1x1_s8_short_k", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {178u, "arm_depthwise_conv_s8_opt_3x3", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {179u, "arm_depthwise_conv_s8_opt_3x3_c64_s1", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {180u, "arm_depthwise_conv_s8_opt_planar", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {181u, "arm_depthwise_conv_s8_opt_channelwise", "ConvolutionFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {182u, "arm_fully_connected_per_channel_packed_s8", "FullyConnectedFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {183u, "arm_svdf_s8", "SVDFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {184u, "arm_svdf_state_s16_s8", "SVDFunctions", 1u, "S8", 1u, true, true, false, 0u},
+    {185u, "arm_lstm_unidirectional_s8", "LSTMFunctions", 1u, "S8", 1u, true, true, false, 0u},
 };
 
 static const uint8_t g_hct_kernel_catalog_hash[32] = {
-    0xb2u, 0xbdu, 0xc9u, 0x82u, 0x48u, 0xaau, 0x80u, 0x6du,
-    0x89u, 0x83u, 0xfbu, 0x80u, 0xcau, 0xe9u, 0xe0u, 0xe2u,
-    0x77u, 0xd6u, 0xeeu, 0x0bu, 0x9fu, 0x1bu, 0xd3u, 0x4eu,
-    0x87u, 0x90u, 0x3cu, 0x87u, 0xcfu, 0x95u, 0x19u, 0xabu,
+    0x6cu, 0x4cu, 0x8bu, 0x1du, 0x80u, 0xfau, 0xe5u, 0xcdu,
+    0x19u, 0xa3u, 0x16u, 0x23u, 0x44u, 0xe9u, 0x8au, 0x53u,
+    0xe8u, 0x8cu, 0xa9u, 0x50u, 0x4au, 0x99u, 0xdeu, 0xf9u,
+    0x9du, 0x55u, 0xe9u, 0x54u, 0x7au, 0x4bu, 0x1du, 0xc1u,
 };
 
 const hct_kernel_catalog_entry_t *hct_benchmark_server_catalog(size_t *count)
