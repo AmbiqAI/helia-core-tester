@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -279,7 +280,7 @@ class TestFailureKinds:
         (tmp_path / "tree" / "Include").mkdir(parents=True)
         # A compiler that always fails.
         cc = tmp_path / "fail-cc"
-        cc.write_text("#!/bin/sh\nexit 1\n")
+        cc.write_text(f"#!{sys.executable}\nraise SystemExit(1)\n")
         cc.chmod(0o755)
         result = build_and_run_case(
             case,
