@@ -8,6 +8,7 @@ from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
 from helia_core_tester.generation.ops._shared.bias_init import SignedMagnitudeUniform
 from helia_core_tester.generation.kernel_dispatch import (
+    autovectorize_declines_if,
     check_entry_fault,
     resolve_direct_entry,
     resolve_fully_connected_kernel,
@@ -146,6 +147,7 @@ class OpFullyConnected(OperationBase):
 
     def convert_to_tflite(self, model, out_path: str, rep_seed: int) -> None:
         """Convert Keras model to TFLite with quantization."""
+        self.round_float16_weights(model)
         weight_dtype = str(self.desc.get("weight_dtype", "S8")).upper()
         if weight_dtype == "S4":
             from helia_core_tester.generation.utils.litert_builder import build_fully_connected_s4_op
@@ -291,14 +293,15 @@ class OpFullyConnected(OperationBase):
         else:  # int8
             default_min, default_max = -128, 127
         
+        # Real zero sits at the output zero point.
         if activation_str == 'RELU':
-            activation_min = max(0, default_min)
+            activation_min = max(output_zp, default_min)
             activation_max = default_max
         elif activation_str == 'RELU6':
             # RELU6: clamp to [0, 6] in float, then quantize
             relu6_max_float = 6.0
             relu6_max_quantized = int(np.round(relu6_max_float / output_scale + output_zp))
-            activation_min = max(0, default_min)
+            activation_min = max(output_zp, default_min)
             activation_max = min(relu6_max_quantized, default_max)
         else:  # NONE, TANH, SIGMOID, etc.
             activation_min = default_min
@@ -700,6 +703,7 @@ class OpFullyConnected(OperationBase):
                 ),
             )
 
+            self.reject_autovectorize_declines()
             context = {
                 'name': name,
                 'input_dims': input_dims,
@@ -1045,6 +1049,17 @@ class OpFullyConnected(OperationBase):
                     filter_dims,
                     output_dtype=activation_dtype
                 )
+        entry_family = kernel_info.get("entry_family")
+        if entry_family == "fully_connected_packed_s8":
+            if not quant_params_dict.get('per_channel', False):
+                raise ValueError(
+                    f"{name}: entry {kernel_info['kernel_fn']!r} takes per-channel quantization only; "
+                    "a single output channel is generated per-tensor"
+                )
+            # The buffer holds the packed weight stream, not scratch: a bound in whole words on
+            # ceil(C/4) blocks of four K-rows padded to 16 bytes plus 48 bytes of parameters. The
+            # run-time size query must fit it, and the slack past that answer is guarded.
+            buffer_size_max = ((filter_dims['c'] + 3) * (filter_dims['n'] + 27) + 3) // 4 * 4
         
         # Build template context
         context = {
@@ -1069,6 +1084,11 @@ class OpFullyConnected(OperationBase):
             'buffer_size_max': buffer_size_max,
             'weight_sum_array': weight_sum_array_str,
             'has_weight_sum': has_weight_sum,
+            'entry_family': entry_family,
+            'expected_status': self.expected_status(),
+            # The entry lives only on ns-cmsis-nn's MVE paths, so it declines on a build without them.
+            'autovectorize_declines': bool(self.desc.get("autovectorize_declines", False)),
+            'autovectorize_declines_if': autovectorize_declines_if(kernel_info["input_c_type"]),
         }
         fault = self.fault_kind()
         c_template = "FullyConnectedFunctions/fully_connected/fully_connected.c.j2"

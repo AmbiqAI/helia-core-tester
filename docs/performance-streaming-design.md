@@ -177,6 +177,17 @@ reports (250 MHz on apollo510_evb and apollo330mP_evb, 48 MHz on apollo3p_evb). 
 refused. Firmware without the tail still streams ("not reported"), and a row without
 `core_clock_hz` skips the clock check. The host stamps both fields in
 `session_manifest.json` (`boot`) and the run summary.
+An optional FPSCR tail follows: `u32 fpscr_boot` (what the boot ROM left) and
+`u32 fpscr` (read back after the firmware pins it). After `nsx_system_init()` the
+firmware clears AHP, DN, FZ, RMode and FZ16 in FPDSCR, and sets FPSCR to its LTPSIZE
+field alone (control bits and sticky flags cleared): the reset FPDSCR value, IEEE with
+round to nearest. No NSX, HAL or runtime code sets these bits, so without
+the pin kernels inherit the secure boot ROM's state, which differs per SoC (Apollo510
+leaves FZ=0 DN=0; Apollo330P leaves FZ=1 DN=1 in FPSCR only, with FPDSCR control bits still 0),
+and `arm_reduce_sum_f32` takes its MVE path only when FZ=1. The host stamps both
+values and the decoded control bits (`fp_mode`) in the manifest `boot` record; the
+board matrix shows the pinned `fpscr`. Batches must report the same pinned `fpscr`.
+A build without an FPU reports 0 for both.
 `capability_flags` bit 6 is `HCT_CAP_PMU_ARMV8M`, set only when the firmware was
 built for a core whose device header declares `__PMU_PRESENT == 1`;
 `pmu_counter_slots` is `__PMU_NUM_EVENTCNT` (8 on Cortex-M55, 0 without a PMU).
@@ -429,6 +440,9 @@ values after defaults and board fitting: `precision` is the float precision
 generation resolves for the board's CPU (null when the run has no float cases),
 `fvp_gate` is `advisory` unless set, and `pmu_counters` is the group selection
 (`session_summary.json` lists the counters). Null `family` or `limit` means all.
+`ops`, `dtypes` and `case_ids` list the `--op`, `--dtype` and `--case-id`/
+`--cases-from` filters; empty means all. The bundle's `session_summary.json`
+carries the same `selection`, with or without `--json`.
 
 Schema versions: bump `schema_version` when a field changes meaning, type or
 goes away. New optional fields keep the version; readers must accept missing

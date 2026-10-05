@@ -204,19 +204,15 @@ def default_input_scale(activation_dtype: str) -> float:
     return 0.125
 
 
-def comparison_quant_params(
-    lhs_scale: float,
-    rhs_scale: float,
-    activation_dtype: str,
-) -> Tuple[int, int, int, int, int]:
-    activation_dtype = str(activation_dtype).upper()
-    left_shift = 15 if activation_dtype == "S16" else 20
-    twice_max_input_scale = 2.0 * max(lhs_scale, rhs_scale)
-    lhs_multiplier = lhs_scale / twice_max_input_scale
-    rhs_multiplier = rhs_scale / twice_max_input_scale
-    lhs_mult, lhs_shift = calculate_multiplier_shift(lhs_multiplier)
-    rhs_mult, rhs_shift = calculate_multiplier_shift(rhs_multiplier)
-    return left_shift, lhs_mult, lhs_shift, rhs_mult, rhs_shift
+def comparison_quant_params(scale_1: float, zp_1: int, scale_2: float, zp_2: int) -> Dict[str, int]:
+    """Compare params as the runtime derives them."""
+    params = {"left_shift": 8}
+    for index, (scale, zp) in enumerate(((scale_1, zp_1), (scale_2, zp_2)), start=1):
+        mult, shift = calculate_multiplier_shift(float(scale))
+        params[f"input_{index}_offset"] = -int(zp)
+        params[f"input_{index}_mult"] = int(mult)
+        params[f"input_{index}_shift"] = int(shift)
+    return params
 
 
 def requantize_np(values: np.ndarray, multiplier: int, shift: int) -> np.ndarray:

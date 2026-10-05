@@ -50,6 +50,7 @@ output_shape: [2, 3]
 ---
 operator: BroadcastTo
 name: broadcast_to_last_dim_s8
+degenerate_golden_reason: a two-value input copied across rows
 activation_dtype: S8
 weight_dtype: S8
 activation: NONE
@@ -70,6 +71,7 @@ output_shape: [2, 3]
 ---
 operator: BroadcastTo
 name: broadcast_to_last_dim_s16
+degenerate_golden_reason: a two-value input copied across rows
 activation_dtype: S16
 weight_dtype: S8
 activation: NONE

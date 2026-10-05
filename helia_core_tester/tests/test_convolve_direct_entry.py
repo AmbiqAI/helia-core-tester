@@ -13,6 +13,7 @@ from helia_core_tester.generation.test_ops import _required_kernel_symbols, gene
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _CONVOLVE_ENTRIES = [name for name, spec in DIRECT_ENTRIES.items() if spec.family == "convolve_s8"]
+_CONVOLVE_1X1_ENTRIES = [name for name, spec in DIRECT_ENTRIES.items() if spec.family == "convolve_1x1_s8"]
 
 
 def _descriptor(name: str) -> dict:
@@ -60,6 +61,31 @@ def test_entry_case_calls_the_entry_with_arm_convolve_s8_arguments(tmp_path: Pat
     assert call and call.group(1) == "arm_convolve_s8_small_cin"
     assert "NULL,  // upscale_dims" in call.group(2)
     assert re.search(r"arm_convolve_s8_get_buffer_size\(\s*&\w+_input_dims,\s*&\w+_filter_dims\s*\)", source)
+    assert "arm_convolve_weight_sum(" in source
+    assert "arm_convolve_wrapper_s8(" not in source
+
+
+def test_1x1_entries_resolve_to_the_arm_convolve_1x1_s8_fast_family() -> None:
+    assert _CONVOLVE_1X1_ENTRIES
+    for entry in _CONVOLVE_1X1_ENTRIES:
+        assert resolve_direct_entry("Convolve", entry, "S8", "S8") == {
+            "kernel_fn": entry,
+            "kernel_get_buffer_size_fn": "arm_convolve_1x1_s8_fast_get_buffer_size",
+            "entry_family": "convolve_1x1_s8",
+        }
+
+
+def test_1x1_entry_case_calls_the_entry_with_arm_convolve_1x1_s8_fast_arguments(tmp_path: Path) -> None:
+    name = "convolve_entry_1x1_short_k_c8_2x4_co16_s8"
+    assert _required_kernel_symbols(_descriptor(name)) == ["arm_convolve_1x1_s8_short_k"]
+    source = _source(name, tmp_path)
+
+    call = re.search(r"return (\w+)\(\s*&\w+_ctx,\s*&\w+_weight_sum_ctx,(.*?)\);", source, re.S)
+    assert call and call.group(1) == "arm_convolve_1x1_s8_short_k"
+    # arm_convolve_1x1_s8_fast's arguments: no upscale_dims between the bias and the output dims.
+    assert re.search(r"_biases,\s*&\w+_output_dims,", call.group(2))
+    assert "upscale_dims" not in source
+    assert re.search(r"arm_convolve_1x1_s8_fast_get_buffer_size\(&\w+_input_dims\)", source)
     assert "arm_convolve_weight_sum(" in source
     assert "arm_convolve_wrapper_s8(" not in source
 

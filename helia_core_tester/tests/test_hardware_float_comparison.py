@@ -12,7 +12,7 @@ import yaml
 from helia_core_tester.generation.io.descriptors import load_descriptor
 from helia_core_tester.generation.ops.BasicMathFunctions.abs import OpAbs
 from helia_core_tester.hardware.case_bundle import blob_numpy, load_case_bundle
-from helia_core_tester.hardware.comparison import compare_output
+from helia_core_tester.hardware.comparison import compare_output, strict_comparison
 from helia_core_tester.hardware.fake_target import (
     FakeKernelAdapter,
     FakeTargetTransport,
@@ -58,6 +58,31 @@ def test_finite_tolerance_and_other_modes():
         assert (
             compare_output(np.array(actual), np.array(expected), mode).passed == passed
         )
+
+
+def test_diffs_recorded_within_tolerance():
+    actual, expected = np.array([3, 5, -2], dtype=np.int8), np.array([3, 4, -1], dtype=np.int8)
+    tolerant = compare_output(actual, expected, {"mode": "tolerant_int", "tolerance": 1})
+    assert (tolerant.passed, tolerant.mismatch_count, tolerant.diff_count, tolerant.max_abs_diff) == (True, 0, 2, 1.0)
+    strict = compare_output(actual, expected, strict_comparison({"mode": "tolerant_int", "tolerance": 1}))
+    assert (strict.passed, strict.mismatch_count, strict.diff_count) == (False, 2, 2)
+    assert strict_comparison(FLOAT) == FLOAT
+    loose = compare_output(np.array([1.125, 2.0]), np.array([1.0, 2.0]), {"mode": "float", "atol": 0.125, "rtol": 0})
+    assert (loose.passed, loose.diff_count) == (True, 1)
+
+
+def test_s64_extremes_never_overflow():
+    lo, hi = np.iinfo(np.int64).min, np.iinfo(np.int64).max
+    actual, expected = np.array([lo, hi, 0], dtype=np.int64), np.array([0, lo, 0], dtype=np.int64)
+    for mode in ({"mode": "exact_int"}, {"mode": "tolerant_int", "tolerance": 1}):
+        result = compare_output(actual, expected, mode)
+        assert (result.passed, result.mismatch_count, result.diff_count) == (False, 2, 2)
+        assert result.max_abs_diff == float(2**64 - 1)
+
+
+def test_none_mode_reports_no_metrics():
+    result = compare_output(np.array([1]), np.array([2]), {"mode": "none"})
+    assert (result.passed, result.diff_count, np.isnan(result.max_abs_diff)) == (True, None, True)
 
 
 def test_mask_precedes_classification_and_metrics():
@@ -289,3 +314,13 @@ def test_invalid_generated_mask_fails_admission(generated_abs, tmp_path, damage)
     source.write_text(text)
     with pytest.raises(ValueError, match="mask"):
         _bridge(generated_abs, tmp_path)
+
+
+def test_size_mismatch_has_no_diff_count(tmp_path):
+    from helia_core_tester.hardware.session import _compare_output_bytes
+    from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle
+
+    bundle = load_case_bundle(build_abs_s8_case_bundle(ROOT, output_root=tmp_path).manifest_path)
+    payload = blob_numpy(bundle.expected_output).tobytes() + b"\0"
+    result = _compare_output_bytes(bundle.case_id, payload, bundle)
+    assert (result.passed, result.diff_count) == (False, None)

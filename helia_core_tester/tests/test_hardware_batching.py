@@ -276,7 +276,7 @@ def test_run_case_bundles_batches_from_each_sessions_target_info(tmp_path: Path,
 
     written: dict[str, Any] = {}
 
-    def _fake_write_result_bundle(result, *, session_id, output_root, memory_report, kernel_catalog, target_info, host_log_text, target_log_text, build_dir, timing_floor):
+    def _fake_write_result_bundle(result, *, session_id, output_root, memory_report, kernel_catalog, target_info, host_log_text, target_log_text, build_dir, timing_floor, compare):
         written.update(result=result, session_id=session_id, target_info=target_info, host_log=host_log_text, build_dir=build_dir)
         return output_root / "artifacts" / "reports" / "hardware" / session_id
 
@@ -437,6 +437,12 @@ def test_consistency_check_covers_boot_health() -> None:
     first = _target_info(boot_status=0, core_clock_hz=250_000_000)
     with pytest.raises(RuntimeError, match=r"core_clock_hz: 250000000 -> 96000000"):
         session_runner.check_target_info_consistent(first, replace(first, core_clock_hz=96_000_000), batch_index=1)
+
+
+def test_consistency_check_covers_fpscr() -> None:
+    first = _target_info(fpscr_boot=0x03040000, fpscr=0x00040000)
+    with pytest.raises(RuntimeError, match=r"fpscr: 262144 -> 50593792"):
+        session_runner.check_target_info_consistent(first, replace(first, fpscr=0x03040000), batch_index=1)
 
 
 def test_boot_failure_skips_batch_context(tmp_path: Path, monkeypatch) -> None:

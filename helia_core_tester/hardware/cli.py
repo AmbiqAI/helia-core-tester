@@ -355,6 +355,18 @@ _PRECISION_HELP = (
 )
 
 
+_OP_HELP = (
+    "Only bridge cases of this operator (repeatable), matched like "
+    "`generate --op`: operator, descriptor stem or name prefix, e.g. DepthwiseConv."
+)
+_DTYPE_HELP = (
+    "Only bridge cases using this dtype on any tensor (repeatable), "
+    "matched like `generate --dtype`, e.g. S8 or FP16."
+)
+_CASE_ID_HELP = "Only bridge this exact case id or test name (repeatable)."
+_CASES_FROM_HELP = "File of case ids, one per line ('#' comments)."
+
+
 _PMU_COUNTERS_HELP = (
     "PMU counters to capture, as GROUP:SELECTION (repeatable; hpx syntax). GROUP is cpu, "
     "memory or mve; SELECTION is 'all', 'default', or a comma-separated list of ARM_PMU_* "
@@ -365,12 +377,43 @@ _PMU_COUNTERS_HELP = (
     "Default: cpu:default memory:default mve:default."
 )
 _PMU_GROUPS_HELP = "Deprecated alias for --pmu-counters GROUP:default per listed group."
+_STRICT_HELP = (
+    "Require bit-exact integer outputs: ignore per-operator LSB tolerances. "
+    "Every bundle records max_abs_diff and diff_count either way."
+)
+_GOLDEN_FROM_HELP = (
+    "Result bundle dir whose outputs/ become the goldens (self-golden). "
+    "Implies --strict-compare: every int case must match that run bit for bit; "
+    "float cases keep their tolerance. Refuses a case the bundle lacks, "
+    "or one that run failed (see --golden-allow-failed)."
+)
+_GOLDEN_ALLOW_HELP = "With --golden-from, accept cases the golden run failed."
 
 
-def _stream_options(spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id):
+def _read_case_ids(case_ids: Optional[list[str]], cases_from: Optional[Path]) -> tuple[str, ...]:
+    """Join --case-id with --cases-from lines."""
+    ids = list(case_ids or [])
+    if cases_from is not None:
+        try:
+            lines = cases_from.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            _fail(f"Cannot read --cases-from: {exc}")
+        listed = [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
+        # Empty would mean "run everything".
+        if not listed:
+            _fail(f"--cases-from lists no case ids: {cases_from}")
+        ids += listed
+    return tuple(ids)
+
+
+def _stream_options(
+    spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
+    ops, dtypes, case_ids, cases_from, strict_compare, golden_from, golden_allow_failed,
+):
     from .hardware_pipeline import (
         StreamOptions, apply_precision, fit_to_board, float_precision_for, resolve_pmu_options, validate_fvp_gate,
     )
+    from .generated_test_bridge import CaseSelection
     from .session_runner import canonical_suite
 
     try:
@@ -379,11 +422,17 @@ def _stream_options(spec, suite, family, test_name, limit, precision, pmu_counte
         suite = canonical_suite(suite)
         suite, test_name = apply_precision(precision, suite, test_name)
         validate_fvp_gate(fvp_gate)
+        cases = CaseSelection(tuple(ops or ()), tuple(dtypes or ()), _read_case_ids(case_ids, cases_from))
+        # Exact ids already bound the run.
+        if cases.case_ids and limit is not None:
+            raise ValueError("--limit cannot combine with --case-id or --cases-from.")
         selection = resolve_pmu_options(pmu_counters or [], pmu_groups, warn=lambda msg: typer.echo(msg, err=True))
         options = StreamOptions(
             suite=suite, family=family, test_name=test_name, limit=limit,
+            ops=cases.ops, dtypes=cases.dtypes, case_ids=cases.case_ids,
             pmu_counters=selection, fvp_gate=fvp_gate, session_id=session_id,
-            float_precision=float_precision_for(precision),
+            float_precision=float_precision_for(precision), strict_compare=strict_compare, golden_from=golden_from,
+            golden_allow_failed=golden_allow_failed,
         )
         return fit_to_board(spec, options, explicit_pmu=bool(pmu_counters) or pmu_groups is not None)
     except ValueError as exc:
@@ -425,10 +474,19 @@ def stream(
     family: Optional[str] = typer.Option(None, "--family", help="Operator family under artifacts/generated_tests to bridge. Omit to bridge every family with real firmware dispatch support (see generated_test_bridge.bridged_families())."),
     test_name: Optional[str] = typer.Option(None, "--test-name", help="Only bridge generated tests whose directory name contains this substring."),
     limit: Optional[int] = typer.Option(None, "--limit", help="Only bridge the first N discovered generated tests (per suite/family)."),
+    op: Optional[list[str]] = typer.Option(None, "--op", help=_OP_HELP),
+    dtype: Optional[list[str]] = typer.Option(None, "--dtype", help=_DTYPE_HELP),
+    case_id: Optional[list[str]] = typer.Option(None, "--case-id", help=_CASE_ID_HELP),
+    cases_from: Optional[Path] = typer.Option(None, "--cases-from", help=_CASES_FROM_HELP),
     precision: Optional[str] = typer.Option(None, "--precision", help=_PRECISION_HELP),
     pmu_counters: Optional[list[str]] = typer.Option(None, "--pmu-counters", help=_PMU_COUNTERS_HELP),
     pmu_groups: Optional[str] = typer.Option(None, "--pmu-groups", help=_PMU_GROUPS_HELP, hidden=True),
     fvp_gate: Optional[str] = typer.Option(None, "--fvp-gate", help=_FVP_GATE_HELP),
+    strict_compare: bool = typer.Option(False, "--strict-compare", help=_STRICT_HELP),
+    golden_from: Optional[Path] = typer.Option(
+        None, "--golden-from", help=_GOLDEN_FROM_HELP, exists=True, file_okay=False, resolve_path=True,
+    ),
+    golden_allow_failed: bool = typer.Option(False, "--golden-allow-failed", help=_GOLDEN_ALLOW_HELP),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP + " Must hold the flashed firmware's ELF."),
     allow_unverified_firmware: bool = typer.Option(False, "--allow-unverified-firmware", help=_ALLOW_UNVERIFIED_HELP),
@@ -447,12 +505,20 @@ def stream(
     one result bundle.
     """
     from .firmware_build import resolve_build_dir
-    from .hardware_pipeline import finalize_timing, stream_generated_tests
+    from .hardware_pipeline import finalize_timing, prepare_bundles, stream_generated_tests
 
     # Options first, probe last: a bad flag combination must fail with its own
     # message, not with whatever probe enumeration happens to hit.
     spec = _board(board)
-    options = _stream_options(spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
+    options = _stream_options(
+        spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
+        op, dtype, case_id, cases_from, strict_compare, golden_from, golden_allow_failed,
+    )
+    prepared = None
+    if golden_from is not None:
+        # Check goldens before probe access.
+        with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):
+            prepared = prepare_bundles(repo_root(), spec, options)
     serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
@@ -461,6 +527,7 @@ def stream(
         outcome = stream_generated_tests(
             repo_root(), spec, serial, build_dir=build_dir,
             options=options, echo=echo, progress_to_stderr=as_json, allow_unverified_firmware=allow_unverified_firmware,
+            prepared=prepared,
         )
         finalize_timing(outcome, echo=echo)
     _report(outcome, spec, options, as_json=as_json)
@@ -474,10 +541,19 @@ def run(
     family: Optional[str] = typer.Option(None, "--family", help="Operator family under artifacts/generated_tests to bridge. Omit to bridge every family with real firmware dispatch support."),
     test_name: Optional[str] = typer.Option(None, "--test-name", help="Only bridge generated tests whose directory name contains this substring."),
     limit: Optional[int] = typer.Option(None, "--limit", help="Only bridge the first N discovered generated tests (per suite/family)."),
+    op: Optional[list[str]] = typer.Option(None, "--op", help=_OP_HELP),
+    dtype: Optional[list[str]] = typer.Option(None, "--dtype", help=_DTYPE_HELP),
+    case_id: Optional[list[str]] = typer.Option(None, "--case-id", help=_CASE_ID_HELP),
+    cases_from: Optional[Path] = typer.Option(None, "--cases-from", help=_CASES_FROM_HELP),
     precision: Optional[str] = typer.Option(None, "--precision", help=_PRECISION_HELP),
     pmu_counters: Optional[list[str]] = typer.Option(None, "--pmu-counters", help=_PMU_COUNTERS_HELP),
     pmu_groups: Optional[str] = typer.Option(None, "--pmu-groups", help=_PMU_GROUPS_HELP, hidden=True),
     fvp_gate: Optional[str] = typer.Option(None, "--fvp-gate", help=_FVP_GATE_HELP),
+    strict_compare: bool = typer.Option(False, "--strict-compare", help=_STRICT_HELP),
+    golden_from: Optional[Path] = typer.Option(
+        None, "--golden-from", help=_GOLDEN_FROM_HELP, exists=True, file_okay=False, resolve_path=True,
+    ),
+    golden_allow_failed: bool = typer.Option(False, "--golden-allow-failed", help=_GOLDEN_ALLOW_HELP),
     session_id: Optional[str] = typer.Option(None, "--session-id", help="Session ID; also the result-bundle directory name (default: <board>-<UTC timestamp>)."),
     skip_generate: bool = typer.Option(False, "--skip-generate", help="Reuse existing artifacts/generated_tests instead of regenerating."),
     skip_flash: bool = typer.Option(False, "--skip-flash", help="Skip build+flash and reuse whatever firmware is already running on the board (its TARGET_INFO build id is still checked against the build dir)."),
@@ -502,7 +578,10 @@ def run(
     if skip_flash and force_flash:
         _fail("--skip-flash and --force-flash cannot be combined.")
     spec = _board(board)
-    options = _stream_options(spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id)
+    options = _stream_options(
+        spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
+        op, dtype, case_id, cases_from, strict_compare, golden_from, golden_allow_failed,
+    )
     build_dir = resolve_build_dir(repo_root(), spec, build_dir)
     # Neither builds nor generates: nothing to resolve.
     streams_only = skip_generate and skip_flash

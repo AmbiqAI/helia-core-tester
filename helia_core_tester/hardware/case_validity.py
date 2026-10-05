@@ -12,30 +12,23 @@ from dataclasses import replace
 
 import numpy as np
 
+from helia_core_tester.generation.golden_check import MIN_ELEMENTS, golden_problem
+
 from .case_bundle import DEGENERATE_REASON_KEY, FLOOR_CASE_ID, blob_numpy
 from .measurement import SampleStatistics
 
 FLOOR_FACTOR = 3
-# Smaller goldens are too short to judge.
-MIN_JUDGED_ELEMENTS = 8
-SATURATED_FRACTION = 0.9
 
 
 def golden_degenerate(golden: np.ndarray) -> bool:
     """True when the golden cannot catch a broken kernel."""
-    values = np.asarray(golden).reshape(-1)
-    if values.size < MIN_JUDGED_ELEMENTS:
-        return False
-    distinct = np.unique(values).size
+    values = np.asarray(golden)
     if values.dtype == np.bool_:
-        return distinct == 1
-    if distinct <= 2:
-        return True
-    if values.dtype.kind != "i":
-        return False
-    bounds = np.iinfo(values.dtype)
-    saturated = np.count_nonzero((values == bounds.min) | (values == bounds.max))
-    return saturated >= SATURATED_FRACTION * values.size
+        return golden_problem(values, "bool") is not None
+    if values.dtype.kind in "iu":
+        return golden_problem(values, f"{values.dtype.name}_t") is not None
+    # Non-integer: spread check only.
+    return values.size >= MIN_ELEMENTS and np.unique(values).size <= 2
 
 
 def timing_status(case, floor_cycles: float | None) -> str:

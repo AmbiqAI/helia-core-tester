@@ -152,7 +152,7 @@ def board_entry(bundle: Path) -> dict:
             "session_id": manifest.get("session_id", bundle.name),
             "bundle": str(bundle),
             "golden": {"total": summary["case_count"], "passed": summary["passed_cases"], "failed": failed, "rejected": rejected},
-            "boot": {"status": boot.get("status"), "core_clock_hz": boot.get("core_clock_hz")},
+            "boot": {key: boot.get(key) for key in ("status", "core_clock_hz", "fpscr")},
             "build_id": manifest.get("firmware_build_id"),
             "kernels": {key: kernels.get(key) for key in ("ref", "commit", "root")},
         })
@@ -220,13 +220,14 @@ def render_markdown(summary: dict) -> str:
     rows = []
     for entry in summary["boards"]:
         golden, boot = entry.get("golden") or {}, entry.get("boot") or {}
-        clock = boot.get("core_clock_hz")
+        clock, fpscr = boot.get("core_clock_hz"), boot.get("fpscr")
         rows.append([
             entry["board"], entry["status"], _cell(golden.get("passed")), _cell(golden.get("failed")),
             _cell(golden.get("rejected")), _cell(boot.get("status")), _cell(clock / 1e6 if isinstance(clock, (int, float)) and clock else clock),
+            _cell(f"{fpscr:#010x}" if isinstance(fpscr, int) else None),
             _cell(entry.get("build_id")), _kernels(entry.get("kernels")), entry.get("note") or "",
         ])
-    header = ["board", "status", "passed", "failed", "rejected", "boot", "clock MHz", "build id", "kernels", "note"]
+    header = ["board", "status", "passed", "failed", "rejected", "boot", "clock MHz", "FPSCR", "build id", "kernels", "note"]
     lines += _table(header, rows)
     boards = [entry["board"] for entry in summary["boards"]]
     for counter in ("median_cycles", MVE_RETIRED):

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
+from .comparison import finite_or_none
 from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
 from .wire import boot_record
@@ -20,6 +21,8 @@ CASE_SUMMARY_BASE_FIELDS = [
     "kernel_id",
     "comparison_passed",
     "mismatch_count",
+    "max_abs_diff",
+    "diff_count",
     "sample_count",
     "median_cycles",
     "mad_cycles",
@@ -111,9 +114,14 @@ def write_timing(bundle_root: Path, timing: dict) -> Path:
     The bundle is written by the batched runner before the pipeline knows the stage
     totals, so the pipeline adds them afterwards instead of threading a callback
     through every layer."""
+    return merge_summary(bundle_root, "timing", timing)
+
+
+def merge_summary(bundle_root: Path, key: str, value: Any) -> Path:
+    """Set one key in session_summary.json."""
     path = bundle_root / "session_summary.json"
     summary = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    summary["timing"] = timing
+    summary[key] = value
     write_text_lf(path, json.dumps(summary, indent=2))
     return path
 
@@ -131,6 +139,7 @@ def write_result_bundle(
     timing: dict | None = None,
     build_dir: Path | None = None,
     timing_floor: dict | None = None,
+    compare: dict | None = None,
 ) -> Path:
     for case in result.cases:
         if len(case.samples) != len(case.normalized_samples):
@@ -160,6 +169,8 @@ def write_result_bundle(
         "boot": boot_record(result.target_info),
         # Empty-call cycles; null when unmeasured.
         "timing_floor": timing_floor,
+        # How outputs were judged.
+        "compare": {"strict": False, "golden_from": None, **(compare or {})},
     }
     session_manifest["build"], lock_file = build_provenance(build_dir)
     if lock_file is not None:
@@ -201,6 +212,8 @@ def write_result_bundle(
                 "kernel_id": case.case_bundle.kernel_id,
                 "comparison_passed": case.comparison.passed,
                 "mismatch_count": case.comparison.mismatch_count,
+                "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
+                "diff_count": case.comparison.diff_count,
                 "sample_count": len(case.samples),
                 "median_cycles": case.statistics.median_cycles,
                 "p90_cycles": case.statistics.p90_cycles,
@@ -221,6 +234,8 @@ def write_result_bundle(
             "kernel_id": case.case_bundle.kernel_id,
             "comparison_passed": str(case.comparison.passed).lower(),
             "mismatch_count": case.comparison.mismatch_count,
+            "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
+            "diff_count": case.comparison.diff_count,
             "sample_count": case.statistics.sample_count,
             "median_cycles": case.statistics.median_cycles,
             "mad_cycles": case.statistics.mad_cycles,
@@ -241,6 +256,8 @@ def write_result_bundle(
                     "case_id": case.case_bundle.case_id,
                     "passed": case.comparison.passed,
                     "mismatch_count": case.comparison.mismatch_count,
+                    "max_abs_diff": finite_or_none(case.comparison.max_abs_diff),
+                    "diff_count": case.comparison.diff_count,
                     "comparison": case.case_bundle.comparison,
                     "rejection": rejection,
                 },
