@@ -2163,6 +2163,154 @@ use_bias: true
 fault: channel_group_mismatch
 expected_status: ARM_CMSIS_NN_ARG_ERROR
 ---
+# arm_convolve_wrapper_s16 checks the whole-group rule (ns-cmsis-nn#725) before it routes: input and
+# filter depths positive, output depth not negative, the input depth a whole number of filter depths,
+# and the output depth a whole number of groups. Each fault breaks one condition on the grouped
+# control below (zero, negative and deeper filter depths, a negative input depth, an input depth one
+# channel past a filter depth, an output depth one channel past a whole number of groups, a negative
+# output depth); the 1x1 case breaks it on the route that skips the general kernel. A rejected call
+# must not write the output.
+operator: Convolve
+name: convolve_grouped_2_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 5, 5, 6]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+groups: 2
+---
+operator: Convolve
+name: convolve_fault_zero_filter_depth_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 5, 5, 6]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+groups: 2
+fault: zero_filter_depth
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_fault_filter_deeper_than_input_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 5, 5, 6]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+groups: 2
+fault: filter_deeper_than_input
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_fault_partial_filter_group_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 5, 5, 6]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+groups: 2
+fault: partial_filter_group
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_fault_negative_output_depth_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 5, 5, 6]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+groups: 2
+fault: negative_output_depth
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_fault_output_not_whole_groups_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 5, 5, 6]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+groups: 2
+fault: output_not_whole_groups
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_fault_negative_input_depth_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 5, 5, 6]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+groups: 2
+fault: negative_input_depth
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_fault_negative_filter_depth_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 5, 5, 6]
+filter_shape: [3, 3, 3, 4]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+groups: 2
+fault: negative_filter_depth
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
+operator: Convolve
+name: convolve_fault_negative_output_depth_1x1_s16
+activation_dtype: S16
+weight_dtype: S8
+activation: NONE
+hint:
+  call_style: per_tensor
+input_shape: [1, 4, 4, 8]
+filter_shape: [1, 1, 8, 8]
+strides: [1, 1]
+padding: VALID
+use_bias: true
+fault: negative_output_depth
+expected_status: ARM_CMSIS_NN_ARG_ERROR
+---
 # arm_convolve_s8 small input depth (MVE; Cin 1-3, kernel_w*Cin <= 16, K <= 48,
 # out_c % 4 == 0) and 3x3 with 16 input channels at stride 1. The stride-2 Cin16 case
 # stays on the general path.

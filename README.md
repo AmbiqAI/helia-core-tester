@@ -266,6 +266,11 @@ input_shape: [1, 4]
 Reference ops for float infrastructure:
 - `Quantize` is the source of truth for `FP32 -> S8/S16`
 - `Dequantize` is the source of truth for `S8/S16 -> FP32`
+- `Dequantize` with `entry: arm_dequantize_f16_bits_f32` widens binary16 bit patterns and checks
+  every output bit against the NaN rule its build compiles. Tag the input `FP16` to run it on the f16
+  legs or `U16` (binary16 storage, accepted for this entry only) to run it on the f32 legs. A case
+  holds 1 to 65536 halves: the special classes, random patterns, then three NaNs so the vector and
+  scalar tails meet the NaN rule. Keys its path would not use are refused.
 
 Future ops should consume resolved tensor roles rather than raw legacy dtype fields:
 - `self.tensor_dtype("input")`
