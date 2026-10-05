@@ -30,7 +30,7 @@ import yaml
 from .case_bundle import (
     DEGENERATE_REASON_KEY, BlobInfo, CaseBundle, _blob_info, _case_root, _manifest_blob_entry, _write_blob, _write_manifest,
 )
-from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_kernel_id
+from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_entry_id, lookup_kernel_id
 from .pathutil import display_path
 from helia_core_tester.generation.io.descriptors import descriptor_matches_op
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, normalize_dtype, resolve_comparison
@@ -729,10 +729,14 @@ def build_case_bundle_from_generated_test(
         )
 
     entry = generated_test.descriptor.get("entry")
-    if entry:
+    if entry and lookup_entry_id(project_root, str(entry)) is None:
         raise UnsupportedGeneratedTestError(
-            f"{generated_test.name}: direct-entry case ({entry}); the firmware calls the operator's "
-            "default function, not the named entry"
+            f"{generated_test.name}: direct-entry case ({entry}) has no firmware adapter"
+        )
+    expected_status = generated_test.descriptor.get("expected_status", "ARM_CMSIS_NN_SUCCESS")
+    if entry and expected_status != "ARM_CMSIS_NN_SUCCESS":
+        raise UnsupportedGeneratedTestError(
+            f"{generated_test.name}: direct-entry case ({entry}) expects {expected_status}; nothing to time"
         )
 
     policy = fvp_gate if fvp_gate is not None else (DEFAULT_GATE if require_fvp_pass else "off")
@@ -777,6 +781,14 @@ def build_case_bundle_from_generated_test(
     # Gate provenance is attached after assembly and mask persistence.
     bundle.manifest["fvp_status"] = outcome.status
     return bundle
+
+
+def _case_kernel_id(project_root: Path, generated_test: GeneratedTestCase, **lookup) -> int:
+    """The named entry's kernel_id, else the operator's."""
+    entry = generated_test.descriptor.get("entry")
+    if entry:
+        return lookup_entry_id(project_root, str(entry))
+    return _kernel_id(project_root, **lookup)
 
 
 def _write_generated_blobs(blobs_dir: Path, arrays: list, *, numpy_dtype=None) -> list[BlobInfo]:
@@ -1069,8 +1081,9 @@ def _build_convolve_case(
         operator=operator,
         family="ConvolutionFunctions",
         target_cpu=generated_test.cpu,
-        kernel_id=_kernel_id(
+        kernel_id=_case_kernel_id(
             project_root,
+            generated_test,
             family="ConvolutionFunctions",
             operator="Convolve",
             dtype=activation_dtype,
@@ -1597,8 +1610,9 @@ def _build_depthwise_conv_case(
         operator=operator,
         family="ConvolutionFunctions",
         target_cpu=generated_test.cpu,
-        kernel_id=_kernel_id(
+        kernel_id=_case_kernel_id(
             project_root,
+            generated_test,
             family="ConvolutionFunctions",
             operator="DepthwiseConv",
             dtype=activation_dtype,
@@ -4166,13 +4180,28 @@ def _build_fully_connected_case(
     manifest_header = _generated_manifest_header(
         project_root, generated_test, case_id, descriptor_path, descriptor_text
     )
+    is_packed = descriptor.get("entry") == "arm_fully_connected_per_channel_packed_s8"
+    source_max = None
+    if is_float or is_packed:
+        source_text = _find_source_file(generated_test.directory).read_text(encoding="utf-8")
+        source_max = int(_extract_define_int(source_text, f"{prefix.upper()}_BUFFER_SIZE_MAX"))
+    if weight_dtype == "S4":
+        scratch_bytes = 0
+    elif is_float:
+        scratch_bytes = source_max
+    elif is_packed:
+        # Kernel sums, then the packed stream.
+        scratch_bytes = _align_up(output_units * 4, 16) + source_max
+    else:
+        scratch_bytes = output_units * 4
     return _finish_generated_bundle(
         case_root, blobs, manifest_header,
         operator=operator,
         family="FullyConnectedFunctions",
         target_cpu=generated_test.cpu,
-        kernel_id=_kernel_id(
+        kernel_id=_case_kernel_id(
             project_root,
+            generated_test,
             family="FullyConnectedFunctions",
             operator="FullyConnected",
             dtype=activation_dtype,
@@ -4198,7 +4227,7 @@ def _build_fully_connected_case(
         blob_roles=[_manifest_blob_entry(blob) for blob in blobs],
         expected_output={"dtype": activation_dtype, "byte_length": blobs[-1].byte_length, "blob_id": blobs[-1].blob_id},
         comparison=dict(descriptor["resolved_comparison"]),
-        scratch_bytes=0 if weight_dtype == "S4" else (int(_extract_define_int(_find_source_file(generated_test.directory).read_text(encoding="utf-8"), f"{prefix.upper()}_BUFFER_SIZE_MAX")) if is_float else output_units * 4),
+        scratch_bytes=scratch_bytes,
         capabilities=[
             "fully_connected_s4"
             if weight_dtype == "S4"

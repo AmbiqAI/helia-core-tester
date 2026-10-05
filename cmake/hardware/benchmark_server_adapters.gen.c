@@ -18,6 +18,33 @@ static bool hct_checked_dims_bytes(const cmsis_nn_dims *dims,
                                    uint32_t capacity,
                                    uint32_t *output_bytes);
 static float quant_scale_from_bits(int32_t bits);
+/* Entries newer than the pinned kernels. */
+arm_cmsis_nn_status arm_convolve_1x1_s8_short_k(const cmsis_nn_context *ctx,
+                                                const cmsis_nn_context *weight_sum_ctx,
+                                                const cmsis_nn_conv_params *conv_params,
+                                                const cmsis_nn_per_channel_quant_params *quant_params,
+                                                const cmsis_nn_dims *input_dims,
+                                                const int8_t *input_data,
+                                                const cmsis_nn_dims *filter_dims,
+                                                const int8_t *filter_data,
+                                                const cmsis_nn_dims *bias_dims,
+                                                const int32_t *bias_data,
+                                                const cmsis_nn_dims *output_dims,
+                                                int8_t *output_data) __attribute__((weak));
+int32_t arm_fully_connected_per_channel_packed_s8_get_packed_size(const cmsis_nn_dims *filter_dims)
+    __attribute__((weak));
+arm_cmsis_nn_status arm_fully_connected_per_channel_packed_s8_pack(const cmsis_nn_dims *filter_dims,
+                                                                   const int8_t *filter_data,
+                                                                   const int32_t *kernel_sum,
+                                                                   const cmsis_nn_per_channel_quant_params *quant_params,
+                                                                   int8_t *packed_data) __attribute__((weak));
+arm_cmsis_nn_status arm_fully_connected_per_channel_packed_s8(const cmsis_nn_fc_params *fc_params,
+                                                              const cmsis_nn_dims *input_dims,
+                                                              const int8_t *input_data,
+                                                              const cmsis_nn_dims *filter_dims,
+                                                              const int8_t *packed_data,
+                                                              const cmsis_nn_dims *output_dims,
+                                                              int8_t *output_data) __attribute__((weak));
 #endif
 
 /* Only these calls count in a sample. */
@@ -58,8 +85,11 @@ static float quant_scale_from_bits(int32_t bits);
 #define arm_concatenation_s8_x(...) HCT_TIMED(arm_concatenation_s8_x(__VA_ARGS__))
 #define arm_concatenation_s8_y(...) HCT_TIMED(arm_concatenation_s8_y(__VA_ARGS__))
 #define arm_concatenation_s8_z(...) HCT_TIMED(arm_concatenation_s8_z(__VA_ARGS__))
+#define arm_convolve_1x1_s8_short_k(...) HCT_TIMED(arm_convolve_1x1_s8_short_k(__VA_ARGS__))
 #define arm_convolve_f16(...) HCT_TIMED(arm_convolve_f16(__VA_ARGS__))
 #define arm_convolve_f32(...) HCT_TIMED(arm_convolve_f32(__VA_ARGS__))
+#define arm_convolve_s8_3x3_c16_s1(...) HCT_TIMED(arm_convolve_s8_3x3_c16_s1(__VA_ARGS__))
+#define arm_convolve_s8_small_cin(...) HCT_TIMED(arm_convolve_s8_small_cin(__VA_ARGS__))
 #define arm_convolve_wrapper_s16(...) HCT_TIMED(arm_convolve_wrapper_s16(__VA_ARGS__))
 #define arm_convolve_wrapper_s4(...) HCT_TIMED(arm_convolve_wrapper_s4(__VA_ARGS__))
 #define arm_convolve_wrapper_s8(...) HCT_TIMED(arm_convolve_wrapper_s8(__VA_ARGS__))
@@ -67,6 +97,10 @@ static float quant_scale_from_bits(int32_t bits);
 #define arm_depth_to_space_s8(...) HCT_TIMED(arm_depth_to_space_s8(__VA_ARGS__))
 #define arm_depthwise_conv_f16(...) HCT_TIMED(arm_depthwise_conv_f16(__VA_ARGS__))
 #define arm_depthwise_conv_f32(...) HCT_TIMED(arm_depthwise_conv_f32(__VA_ARGS__))
+#define arm_depthwise_conv_s8_opt_3x3(...) HCT_TIMED(arm_depthwise_conv_s8_opt_3x3(__VA_ARGS__))
+#define arm_depthwise_conv_s8_opt_3x3_c64_s1(...) HCT_TIMED(arm_depthwise_conv_s8_opt_3x3_c64_s1(__VA_ARGS__))
+#define arm_depthwise_conv_s8_opt_channelwise(...) HCT_TIMED(arm_depthwise_conv_s8_opt_channelwise(__VA_ARGS__))
+#define arm_depthwise_conv_s8_opt_planar(...) HCT_TIMED(arm_depthwise_conv_s8_opt_planar(__VA_ARGS__))
 #define arm_depthwise_conv_wrapper_s16(...) HCT_TIMED(arm_depthwise_conv_wrapper_s16(__VA_ARGS__))
 #define arm_depthwise_conv_wrapper_s4(...) HCT_TIMED(arm_depthwise_conv_wrapper_s4(__VA_ARGS__))
 #define arm_depthwise_conv_wrapper_s8(...) HCT_TIMED(arm_depthwise_conv_wrapper_s8(__VA_ARGS__))
@@ -84,6 +118,7 @@ static float quant_scale_from_bits(int32_t bits);
 #define arm_equal_s8(...) HCT_TIMED(arm_equal_s8(__VA_ARGS__))
 #define arm_fully_connected_f16(...) HCT_TIMED(arm_fully_connected_f16(__VA_ARGS__))
 #define arm_fully_connected_f32(...) HCT_TIMED(arm_fully_connected_f32(__VA_ARGS__))
+#define arm_fully_connected_per_channel_packed_s8(...) HCT_TIMED(arm_fully_connected_per_channel_packed_s8(__VA_ARGS__))
 #define arm_fully_connected_s4(...) HCT_TIMED(arm_fully_connected_s4(__VA_ARGS__))
 #define arm_fully_connected_wrapper_s16(...) HCT_TIMED(arm_fully_connected_wrapper_s16(__VA_ARGS__))
 #define arm_fully_connected_wrapper_s8(...) HCT_TIMED(arm_fully_connected_wrapper_s8(__VA_ARGS__))
@@ -486,18 +521,28 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
     }
 
     {
-        /* S8: the wrapper TFLM calls. */
+        /* S8: the wrapper TFLM calls, or an entry. */
+        const uint32_t kernel_id = session->expected_kernel_id;
         cmsis_nn_context weight_sum_ctx;
         uint32_t operand_bytes_needed;
+        int32_t required_scratch;
 
+        if (kernel_id == HCT_KERNEL_ID_CONVOLVE_S8)
+        {
+            required_scratch = arm_convolve_wrapper_s8_get_buffer_size(&conv_params, &input_dims, &filter_dims, &output_dims);
+        }
+        else if (kernel_id == HCT_KERNEL_ID_CONVOLVE_1X1_S8_SHORT_K)
+        {
+            required_scratch = arm_convolve_1x1_s8_fast_get_buffer_size(&input_dims);
+        }
+        else
+        {
+            required_scratch = arm_convolve_s8_get_buffer_size(&input_dims, &filter_dims);
+        }
         if (!hct_checked_dims_bytes(&input_dims, sizeof(int8_t), input->byte_length, &operand_bytes_needed) ||
             !hct_checked_dims_bytes(&filter_dims, sizeof(int8_t), weights->byte_length, &operand_bytes_needed) ||
             !hct_checked_count_bytes(bias_dims.c, sizeof(int32_t), bias->byte_length, &operand_bytes_needed) ||
-            !place_weight_sums(session,
-                               arm_convolve_wrapper_s8_get_buffer_size(&conv_params, &input_dims, &filter_dims, &output_dims),
-                               output_dims.c,
-                               &ctx,
-                               &weight_sum_ctx))
+            !place_weight_sums(session, required_scratch, output_dims.c, &ctx, &weight_sum_ctx))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
@@ -514,18 +559,29 @@ static arm_cmsis_nn_status run_convolve_once(hct_server_session_t *session)
             return ARM_CMSIS_NN_ARG_ERROR;
         }
 #endif
-        return arm_convolve_wrapper_s8(&ctx,
-                                       &weight_sum_ctx,
-                                       &conv_params,
-                                       &quant_params,
-                                       &input_dims,
-                                       (const int8_t *)blob_ptr(session, input),
-                                       &filter_dims,
-                                       (const int8_t *)blob_ptr(session, weights),
-                                       &bias_dims,
-                                       (const int32_t *)blob_ptr(session, bias),
-                                       &output_dims,
-                                       (int8_t *)hct_output_ptr(session));
+#define HCT_CONV_S8_ARGS &ctx, &weight_sum_ctx, &conv_params, &quant_params, \
+    &input_dims, (const int8_t *)blob_ptr(session, input), \
+    &filter_dims, (const int8_t *)blob_ptr(session, weights), \
+    &bias_dims, (const int32_t *)blob_ptr(session, bias)
+#define HCT_CONV_S8_OUT &output_dims, (int8_t *)hct_output_ptr(session)
+        switch (kernel_id)
+        {
+            case HCT_KERNEL_ID_CONVOLVE_S8_SMALL_CIN:
+                return arm_convolve_s8_small_cin(HCT_CONV_S8_ARGS, NULL, HCT_CONV_S8_OUT);
+            case HCT_KERNEL_ID_CONVOLVE_S8_3X3_C16_S1:
+                return arm_convolve_s8_3x3_c16_s1(HCT_CONV_S8_ARGS, NULL, HCT_CONV_S8_OUT);
+            case HCT_KERNEL_ID_CONVOLVE_1X1_S8_SHORT_K:
+                /* Absent from older kernels. */
+                if (arm_convolve_1x1_s8_short_k == NULL)
+                {
+                    return ARM_CMSIS_NN_NO_IMPL_ERROR;
+                }
+                return arm_convolve_1x1_s8_short_k(HCT_CONV_S8_ARGS, HCT_CONV_S8_OUT);
+            default:
+                return arm_convolve_wrapper_s8(HCT_CONV_S8_ARGS, HCT_CONV_S8_OUT);
+        }
+#undef HCT_CONV_S8_ARGS
+#undef HCT_CONV_S8_OUT
     }
 }
 
@@ -756,18 +812,18 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
         return ARM_CMSIS_NN_ARG_ERROR;
     }
     {
-        /* S8: the wrapper TFLM calls. */
+        /* S8: the wrapper TFLM calls, or an entry. */
+        const uint32_t kernel_id = session->expected_kernel_id;
         cmsis_nn_context ctx;
         cmsis_nn_context weight_sum_ctx;
         uint32_t operand_bytes_needed;
+        const int32_t required_scratch = (kernel_id == HCT_KERNEL_ID_DEPTHWISE_CONV_S8)
+            ? arm_depthwise_conv_wrapper_s8_get_buffer_size(&dw_conv_params, &input_dims, &filter_dims, &output_dims)
+            : arm_depthwise_conv_s8_opt_get_buffer_size(&input_dims, &filter_dims);
         if (!hct_checked_dims_bytes(&input_dims, sizeof(int8_t), input->byte_length, &operand_bytes_needed) ||
             !hct_checked_dims_bytes(&filter_dims, sizeof(int8_t), weights->byte_length, &operand_bytes_needed) ||
             !hct_checked_count_bytes(bias_dims.c, sizeof(int32_t), bias->byte_length, &operand_bytes_needed) ||
-            !place_weight_sums(session,
-                               arm_depthwise_conv_wrapper_s8_get_buffer_size(&dw_conv_params, &input_dims, &filter_dims, &output_dims),
-                               output_dims.c,
-                               &ctx,
-                               &weight_sum_ctx))
+            !place_weight_sums(session, required_scratch, output_dims.c, &ctx, &weight_sum_ctx))
         {
             return ARM_CMSIS_NN_ARG_ERROR;
         }
@@ -786,18 +842,25 @@ static arm_cmsis_nn_status run_depthwise_conv_once(hct_server_session_t *session
             return ARM_CMSIS_NN_ARG_ERROR;
         }
 #endif
-        return arm_depthwise_conv_wrapper_s8(&ctx,
-                                             &weight_sum_ctx,
-                                             &dw_conv_params,
-                                             &quant_params,
-                                             &input_dims,
-                                             (const int8_t *)blob_ptr(session, input),
-                                             &filter_dims,
-                                             (const int8_t *)blob_ptr(session, weights),
-                                             &bias_dims,
-                                             (const int32_t *)blob_ptr(session, bias),
-                                             &output_dims,
-                                             (int8_t *)hct_output_ptr(session));
+#define HCT_DW_S8_ARGS &ctx, &weight_sum_ctx, &dw_conv_params, &quant_params, \
+    &input_dims, (const int8_t *)blob_ptr(session, input), \
+    &filter_dims, (const int8_t *)blob_ptr(session, weights), \
+    &bias_dims, (const int32_t *)blob_ptr(session, bias), \
+    &output_dims, (int8_t *)hct_output_ptr(session)
+        switch (kernel_id)
+        {
+            case HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3:
+                return arm_depthwise_conv_s8_opt_3x3(HCT_DW_S8_ARGS);
+            case HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3_C64_S1:
+                return arm_depthwise_conv_s8_opt_3x3_c64_s1(HCT_DW_S8_ARGS);
+            case HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_PLANAR:
+                return arm_depthwise_conv_s8_opt_planar(HCT_DW_S8_ARGS);
+            case HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_CHANNELWISE:
+                return arm_depthwise_conv_s8_opt_channelwise(HCT_DW_S8_ARGS);
+            default:
+                return arm_depthwise_conv_wrapper_s8(HCT_DW_S8_ARGS);
+        }
+#undef HCT_DW_S8_ARGS
     }
 }
 
@@ -2408,6 +2471,43 @@ static arm_cmsis_nn_status run_fully_connected_once(hct_server_session_t *sessio
                                         session->output_capacity_bytes, &session->output_length))
             {
                 return ARM_CMSIS_NN_ARG_ERROR;
+            }
+            if (session->expected_kernel_id == HCT_KERNEL_ID_FULLY_CONNECTED_PER_CHANNEL_PACKED_S8)
+            {
+                /* Pack untimed, as Prepare would. */
+                const cmsis_nn_per_channel_quant_params channel_quant = {quant_params.multiplier, quant_params.shift};
+                int32_t packed_size;
+                uint32_t stream_offset;
+                uint32_t stream_end;
+                int8_t *stream;
+                if (arm_fully_connected_per_channel_packed_s8 == NULL)
+                {
+                    return ARM_CMSIS_NN_NO_IMPL_ERROR;
+                }
+                packed_size = arm_fully_connected_per_channel_packed_s8_get_packed_size(&filter_dims);
+                if (packed_size < 0 ||
+                    !hct_checked_aligned_range(required_scratch, 16u, (uint32_t)packed_size, session->scratch_bytes,
+                                               &stream_offset, &stream_end))
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
+                stream = (int8_t *)&session->workspace[session->scratch_offset + stream_offset];
+                /* Packs the MVE kernel sums above. */
+                if (arm_fully_connected_per_channel_packed_s8_pack(&filter_dims,
+                                                                   (const int8_t *)blob_ptr(session, weights),
+                                                                   (const int32_t *)ctx.buf,
+                                                                   &channel_quant,
+                                                                   stream) != ARM_CMSIS_NN_SUCCESS)
+                {
+                    return ARM_CMSIS_NN_ARG_ERROR;
+                }
+                return arm_fully_connected_per_channel_packed_s8(&fc_params,
+                                                                 &input_dims,
+                                                                 (const int8_t *)blob_ptr(session, input),
+                                                                 &filter_dims,
+                                                                 stream,
+                                                                 &output_dims,
+                                                                 (int8_t *)hct_output_ptr(session));
             }
             return arm_fully_connected_wrapper_s8(&ctx,
                                                   &fc_params,
@@ -4928,12 +5028,19 @@ arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
         case HCT_KERNEL_ID_EMPTY_CALL:
             return hct_run_empty_once(session);
         case HCT_KERNEL_ID_CONVOLVE_S8:
+        case HCT_KERNEL_ID_CONVOLVE_S8_SMALL_CIN:
+        case HCT_KERNEL_ID_CONVOLVE_S8_3X3_C16_S1:
+        case HCT_KERNEL_ID_CONVOLVE_1X1_S8_SHORT_K:
         case HCT_KERNEL_ID_CONVOLVE_S4:
         case HCT_KERNEL_ID_CONVOLVE_S16:
         case HCT_KERNEL_ID_CONVOLVE_F32:
         case HCT_KERNEL_ID_CONVOLVE_F16:
             return run_convolve_once(session);
         case HCT_KERNEL_ID_DEPTHWISE_CONV_S8:
+        case HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3:
+        case HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_3X3_C64_S1:
+        case HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_PLANAR:
+        case HCT_KERNEL_ID_DEPTHWISE_CONV_S8_OPT_CHANNELWISE:
         case HCT_KERNEL_ID_DEPTHWISE_CONV_S4:
         case HCT_KERNEL_ID_DEPTHWISE_CONV_S16:
         case HCT_KERNEL_ID_DEPTHWISE_CONV_F32:
@@ -5005,6 +5112,7 @@ arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
         case HCT_KERNEL_ID_SOFTMAX_F16:
             return run_softmax_once(session);
         case HCT_KERNEL_ID_FULLY_CONNECTED_S8:
+        case HCT_KERNEL_ID_FULLY_CONNECTED_PER_CHANNEL_PACKED_S8:
         case HCT_KERNEL_ID_FULLY_CONNECTED_S4:
         case HCT_KERNEL_ID_FULLY_CONNECTED_S16:
         case HCT_KERNEL_ID_FULLY_CONNECTED_F32:
