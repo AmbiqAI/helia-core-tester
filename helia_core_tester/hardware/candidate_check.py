@@ -20,8 +20,9 @@ Include/, nothing else. Rules, each a finding in the JSON report:
   .incbin and .include in assembly.
 - hidden_index_entry: any path flagged skip-worktree or
   assume-unchanged, which git diff and status would skip.
-- guard_change: an added #if/#ifdef/#else/#define/#undef in a file
-  that already holds a forbidden construct, which it could enable.
+- guard_change: an added or removed #if/#ifdef/#else/#define/#undef
+  in a file that already holds a forbidden construct, which it could
+  enable.
 
 Rules also run on text with adjacent string literals joined, per line
 and over all added lines of a file, as C joins them before asm sees them.
@@ -216,6 +217,18 @@ def added_lines(tree: Path, base: dict, path: str, status: str) -> Iterator[tupl
             yield index + 1, text
 
 
+def _removed_guard(tree: Path, base: dict, path: str, status: str) -> bool:
+    """A deleted line was a guard."""
+    if status == "D" or path not in base:
+        return False
+    new = (tree / path).read_text(encoding="utf-8", errors="replace").splitlines()
+    old = _git(tree, "cat-file", "blob", base[path][1]).decode(errors="replace").splitlines()
+    for tag, first, last, _, _ in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if tag in ("replace", "delete") and any(_GUARD.match(line) for line in old[first:last]):
+            return True
+    return False
+
+
 def _unsafe_attribute(text: str) -> bool:
     """Any attribute outside the safe list."""
     if not _ATTRIBUTE_HINT.search(text):
@@ -315,9 +328,11 @@ def check_candidate(tree: Path, base: str) -> dict:
                 hit_rules.add(rule)
                 findings.append({"rule": rule, "path": path, "line": line_no, "text": text.strip()[:200]})
         # Guard edits can enable old lines.
-        if any(_GUARD.match(text) for _, text in added) and _grandfathered(tree, path):
-            line_no = next(n for n, text in added if _GUARD.match(text))
-            findings.append({"rule": "guard_change", "path": path, "line": line_no,
+        guard_line = next((n for n, text in added if _GUARD.match(text)), None)
+        if guard_line is None and _removed_guard(tree, base_blobs, path, status):
+            guard_line = added[0][0] if added else 0
+        if guard_line is not None and _grandfathered(tree, path):
+            findings.append({"rule": "guard_change", "path": path, "line": guard_line,
                              "text": "preprocessor change in a file with forbidden constructs"})
         # Literals split across lines.
         if added:

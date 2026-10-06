@@ -287,6 +287,8 @@ def test_guard_edit_near_old_pragma_fails(tmp_path: Path) -> None:
     assert _rules(root) == {"guard_change"}
     (root / "Source/Conv/a.c").write_text('#if 0\n#pragma GCC optimize("O3")\n#endif\nint a; /* faster */\n', encoding="utf-8")
     assert check_candidate(root, _sha(root))["ok"]
+    (root / "Source/Conv/a.c").write_text('#pragma GCC optimize("O3")\nint a;\n', encoding="utf-8")
+    assert _rules(root) == {"guard_change"}
 
 
 def test_base_must_be_full_sha(kernels: Path) -> None:
