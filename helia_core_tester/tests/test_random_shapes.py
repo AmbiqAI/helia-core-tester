@@ -181,3 +181,99 @@ def test_largest_seed_case_id_fits_firmware() -> None:
     longest = f"rs{MAX_SHAPE_SEED}_{max(rs.TAGS.values(), key=len)}_9999{HW_CASE_SUFFIX}"
     assert len(longest.encode()) <= MAX_CASE_ID_BYTES
 
+
+
+SECRET = "s3cret-hidden-seed-0123"
+
+
+def test_hidden_cases_are_opaque() -> None:
+    import re
+
+    cases = rs.hidden_cases(6, SECRET.encode(), "cortex-m55")
+    assert cases == rs.hidden_cases(6, SECRET.encode(), "cortex-m55")
+    assert cases != rs.hidden_cases(6, (SECRET + "x").encode(), "cortex-m55")
+    for case in cases:
+        assert re.fullmatch(r"h[0-9a-f]{12}", case["name"]) and "shape_seed" not in case
+    assert len({c["name"] for c in cases}) == len(cases)
+
+
+@pytest.mark.parametrize("raw", ["", "short", " " * 20])
+def test_short_secret_refused(raw: str) -> None:
+    with pytest.raises(ValueError, match="16"):
+        rs.hidden_secret(raw)
+
+
+def test_hidden_summary_keeps_only_commitment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(rs.SECRET_ENV, SECRET)
+    descriptors = rs.prepare_hidden(tmp_path, 3, "cortex-m55")
+    assert descriptors.parent == tmp_path / "artifacts" / "random_shapes" / "cortex-m55"
+    text = (descriptors.parent / "summary.json").read_text()
+    assert json.loads(text)["seed_commitment"] == rs.seed_commitment(SECRET.encode())
+    written = text + "".join(p.read_text() for p in descriptors.rglob("*.yaml"))
+    assert SECRET not in written and "shape_seed" not in written
+
+
+@pytest.mark.parametrize(("settings", "message"), [
+    ({"hidden_dir": "/tmp/hidden"}, "needs random_shapes"),
+    ({"random_shapes": 2, "hidden_dir": "artifacts/hidden"}, "outside the tester tree"),
+    ({"random_shapes": 2, "hidden_dir": "/tmp/h", "hidden_seed_file": "seed.txt"}, "outside the tester tree"),
+    ({"random_shapes": 2, "hidden_seed_file": "/tmp/seed"}, "needs hidden_dir"),
+])
+def test_bad_hidden_settings_refused(settings: dict, message: str) -> None:
+    from helia_core_tester.core.errors import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match=message):
+        Config(project_root=Path.cwd(), **settings)
+
+
+def test_hidden_refuses_shape_seed(tmp_path: Path) -> None:
+    from helia_core_tester.cli import get_config
+    from helia_core_tester.core.errors import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match="not shape_seed"):
+        get_config(project_root=Path.cwd(), random_shapes=2, shape_seed=4, hidden_dir=tmp_path)
+
+
+def test_step_passes_hidden_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(rs.SECRET_ENV, raising=False)
+    seed_file = tmp_path / "seed"
+    config = Config(project_root=Path.cwd(), random_shapes=4, hidden_dir=tmp_path / "h", hidden_seed_file=seed_file)
+    step = GenerateStep(config)
+    cmd = step._build_cmd("cortex-m55", "int")
+    assert "--shape-seed" not in cmd and cmd[cmd.index("--hidden-dir") + 1] == str(tmp_path / "h")
+    assert cmd[cmd.index("--generated-tests-dir") + 1] == str(tmp_path / "h/artifacts/generated_tests/int/cortex-m55")
+    assert step.validate()
+    seed_file.write_text(SECRET + "\n")
+    assert step.validate() is None
+    assert step._hidden_env()[rs.SECRET_ENV] == SECRET
+    assert SECRET not in json.dumps(config.to_dict())
+
+
+def test_hidden_generation_stays_outside(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    hidden = tmp_path / "hidden"
+    generated = hidden / "artifacts" / "generated_tests" / "int" / "cortex-m55"
+    old_draw = generated / "ConvolutionFunctions" / "h000000000000"
+    old_draw.mkdir(parents=True)
+    monkeypatch.setenv(rs.SECRET_ENV, SECRET)
+    monkeypatch.setattr(generation_module, "find_repo_root", lambda: tmp_path / "repo")
+    monkeypatch.setattr(rs, "prepare_hidden", lambda *_args: tmp_path)
+    base = {"operator": "Convolve", "activation_dtype": "S8", "weight_dtype": "S8",
+            "_family": "ConvolutionFunctions", "_parity_kind": "cmsis"}
+    monkeypatch.setattr(generation_module, "load_all_descriptors", lambda _path: [{"name": "habcdefabcdef", **base}])
+
+    def _fake_generate_test(desc, out_dir, **_kwargs):
+        test_dir = Path(out_dir) / desc["_family"] / desc["name"]
+        test_dir.mkdir(parents=True, exist_ok=True)
+        (test_dir / f"{desc['name']}.tflite").write_bytes(b"\x01")
+
+    monkeypatch.setattr(generation_module, "generate_test", _fake_generate_test)
+    filters = {"op": None, "dtype": None, "wtype": None, "name": None, "limit": None, "seed": 1,
+               "cpu": "cortex-m55", "suite": "int", "float_precision": "both", "generated_tests_dir": str(generated),
+               "random_shapes": 1, "shape_seed": 0, "hidden_dir": str(hidden), "keep_unselected": False}
+    generation_module.test_generation(filters)
+
+    report = hidden / "artifacts" / "reports" / "generation" / "int" / "cortex-m55"
+    summary = json.loads((report / "generation_summary.json").read_text())
+    assert summary["filters"]["seed_commitment"] == rs.seed_commitment(SECRET.encode())
+    assert "shape_seed" not in summary["filters"]
+    assert not old_draw.exists() and not (tmp_path / "repo").exists()

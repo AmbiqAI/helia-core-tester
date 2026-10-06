@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import os
 import shutil
 from collections import Counter
 from dataclasses import dataclass
@@ -42,6 +45,10 @@ CONV_ROUTES = (
 )
 # One input channel runs as conv.
 DW_AS_CONV = "as_conv"
+SECRET_ENV = "HCT_HIDDEN_SEED"
+# Short secrets fall to brute force.
+MIN_SECRET = 16
+HIDDEN_ID_HEX = 12
 
 
 @dataclass
@@ -336,10 +343,8 @@ def route_counts(cases: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
     return {op: dict(sorted(c.items())) for op, c in sorted(counts.items())}
 
 
-def prepare_shapes(repo_root: Path, n: int, seed: int, cpu: str) -> Path:
-    """Sample and write cases; return descriptors dir."""
-    cases = sample_cases(n, seed, cpu)
-    root = artifacts_root(repo_root) / "random_shapes" / f"s{seed}" / normalize_cpu(cpu)
+def write_cases(root: Path, cases: list[dict[str, Any]], header: dict[str, Any], cpu: str) -> Path:
+    """Write descriptors and summary; return descriptors dir."""
     shutil.rmtree(root, ignore_errors=True)
     descriptors = root / "descriptors"
     by_file: dict[str, list] = {}
@@ -349,12 +354,50 @@ def prepare_shapes(repo_root: Path, n: int, seed: int, cpu: str) -> Path:
         path = descriptors / relpath
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(yaml.safe_dump_all(docs, sort_keys=False))
-    summary = {
-        "shape_seed": seed,
-        "cpu": normalize_cpu(cpu),
-        "cases": len(cases),
-        "routes": route_counts(cases),
-    }
+    summary = {**header, "cpu": normalize_cpu(cpu), "cases": len(cases), "routes": route_counts(cases)}
     (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    print(f"Random shapes (seed {seed}): {json.dumps(summary['routes'])}")
+    print(f"Random shapes ({json.dumps(header)}): {json.dumps(summary['routes'])}")
     return descriptors
+
+
+def prepare_shapes(repo_root: Path, n: int, seed: int, cpu: str) -> Path:
+    """Sample and write cases; return descriptors dir."""
+    root = artifacts_root(repo_root) / "random_shapes" / f"s{seed}" / normalize_cpu(cpu)
+    return write_cases(root, sample_cases(n, seed, cpu), {"shape_seed": seed}, cpu)
+
+
+def hidden_secret(raw: str | None = None) -> bytes:
+    """Secret seed, by default from the environment."""
+    secret = (os.environ.get(SECRET_ENV, "") if raw is None else raw).strip()
+    if len(secret) < MIN_SECRET:
+        raise ValueError(f"{SECRET_ENV} needs {MIN_SECRET}+ characters")
+    return secret.encode()
+
+
+def seed_commitment(secret: bytes) -> str:
+    """Public hash of the secret."""
+    return hashlib.sha256(b"hct-hidden-commit\0" + secret).hexdigest()
+
+
+def hidden_cases(n: int, secret: bytes, cpu: str) -> list[dict[str, Any]]:
+    """Secret-seeded cases with opaque ids."""
+    seed = int.from_bytes(hashlib.sha256(b"hct-hidden-seed\0" + secret).digest(), "big")
+    cases = sample_cases(n, seed, cpu)
+    for case in cases:
+        # Keyed hash hides seed and index.
+        case["name"] = "h" + hmac.new(secret, case["name"].encode(), "sha256").hexdigest()[:HIDDEN_ID_HEX]
+        del case["shape_seed"]
+    return cases
+
+
+def prepare_hidden(hidden_dir: Path, n: int, cpu: str) -> Path:
+    """Write hidden cases; return descriptors dir."""
+    secret = hidden_secret()
+    root = hidden_root(hidden_dir, cpu)
+    return write_cases(root, hidden_cases(n, secret, cpu), {"seed_commitment": seed_commitment(secret)}, cpu)
+
+
+def hidden_root(hidden_dir: Path, cpu: str) -> Path:
+    """Hidden descriptors and summary for cpu."""
+    # The hidden dir mirrors a tester root.
+    return artifacts_root(hidden_dir) / "random_shapes" / normalize_cpu(cpu)

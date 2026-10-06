@@ -69,6 +69,11 @@ def _shape_filters(filters: Dict[str, Any]) -> Dict[str, Any]:
     """Random-shape count and seed, if set."""
     if not filters.get("random_shapes"):
         return {}
+    if filters.get("hidden_dir"):
+        from helia_core_tester.generation.random_shapes import hidden_secret, seed_commitment
+
+        # Never the seed itself.
+        return {"random_shapes": filters["random_shapes"], "seed_commitment": seed_commitment(hidden_secret())}
     return {"random_shapes": filters["random_shapes"], "shape_seed": filters.get("shape_seed") or 0}
 
 
@@ -412,7 +417,14 @@ def test_generation(test_filters):
     """
     # Load all descriptors using discovery
     random_shapes = test_filters.get("random_shapes")
-    if random_shapes:
+    hidden_dir = test_filters.get("hidden_dir")
+    if random_shapes and hidden_dir:
+        from helia_core_tester.generation.random_shapes import prepare_hidden
+
+        descriptors_dir = prepare_hidden(
+            Path(hidden_dir), random_shapes, normalize_cpu(test_filters.get("cpu") or "cortex-m55"),
+        )
+    elif random_shapes:
         from helia_core_tester.generation.random_shapes import prepare_shapes
 
         descriptors_dir = prepare_shapes(
@@ -449,7 +461,8 @@ def test_generation(test_filters):
     top_generated.mkdir(parents=True, exist_ok=True)
     print(f"Generated tests output dir: {top_generated}")
     repo_root = find_repo_root()
-    report_dir = generation_report_dir(repo_root, target_cpu, suite=suite_mode)
+    # Hidden reports stay outside the tree.
+    report_dir = generation_report_dir(Path(hidden_dir) if hidden_dir else repo_root, target_cpu, suite=suite_mode)
     report_dir.mkdir(parents=True, exist_ok=True)
 
     # Place models in generated tests root

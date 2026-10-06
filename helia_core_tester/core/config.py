@@ -56,6 +56,8 @@ PATH_KEYS = frozenset(
         "generated_tests_root",
         "reports_root",
         "cmsis_nn_root",
+        "hidden_dir",
+        "hidden_seed_file",
     }
 )
 
@@ -108,6 +110,10 @@ class Config:
     random_shapes: Optional[int] = None
     # None until precedence settles; then 0.
     shape_seed: Optional[int] = None
+    # Secret-seeded shapes go here.
+    hidden_dir: Optional[Path] = None
+    # Else the secret comes from HCT_HIDDEN_SEED.
+    hidden_seed_file: Optional[Path] = None
     skip_generation: bool = False
     skip_build: bool = False
     skip_run: bool = False
@@ -211,6 +217,10 @@ class Config:
 
         if self.cmsis_nn_root is not None:
             self.cmsis_nn_root = Path(self.cmsis_nn_root).resolve()
+        if self.hidden_dir is not None:
+            self.hidden_dir = Path(self.hidden_dir).resolve()
+        if self.hidden_seed_file is not None:
+            self.hidden_seed_file = Path(self.hidden_seed_file).resolve()
 
     def _parse_bool(self, key: str, value: str) -> bool:
         normalized = value.strip().lower()
@@ -311,11 +321,26 @@ class Config:
         if not 0 <= self.shape_seed <= MAX_SHAPE_SEED:
             raise ConfigurationError(f"shape_seed must be in 0..{MAX_SHAPE_SEED}, got {self.shape_seed}")
         if self.random_shapes is None:
+            if self.hidden_dir is not None:
+                raise ConfigurationError("hidden_dir needs random_shapes")
             return
         if self.random_shapes < 1:
             raise ConfigurationError(f"random_shapes must be >= 1, got {self.random_shapes}")
         if "int" not in self.suites:
             raise ConfigurationError("random_shapes needs the int suite")
+        self._validate_hidden()
+
+    def _validate_hidden(self) -> None:
+        if self.hidden_dir is None:
+            if self.hidden_seed_file is not None:
+                raise ConfigurationError("hidden_seed_file needs hidden_dir")
+            return
+        if "shape_seed" in self._explicit_overrides:
+            raise ConfigurationError("hidden_dir takes a secret, not shape_seed")
+        # The agent may read the tree.
+        for path in (self.hidden_dir, self.hidden_seed_file):
+            if path is not None and path.is_relative_to(self.project_root):
+                raise ConfigurationError(f"{path} must sit outside the tester tree")
 
     def _normalize_suite_mode(self, suite: str) -> str:
         normalized = str(suite).strip().lower()
@@ -512,6 +537,7 @@ class Config:
             "keep_unselected": self.keep_unselected,
             "random_shapes": self.random_shapes,
             "shape_seed": self.shape_seed,
+            "hidden_dir": str(self.hidden_dir) if self.hidden_dir else None,
             "skip_generation": self.skip_generation,
             "skip_build": self.skip_build,
             "skip_run": self.skip_run,
