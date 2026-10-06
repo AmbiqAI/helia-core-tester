@@ -193,7 +193,7 @@ jobs:
       - name: Run the hardware kernel suite
         id: suite
         run: |
-          # Build dir keeps placement; force TCM.
+          # Pass placement; switches do not persist.
           scripts/nightly_leg.sh "${HCT_SESSION_ID}" "${HCT_CACHE_DIR}/hardware/${HPX_BOARD}" "${HCT_RUN_JSON}" \
             --placement tcm
 
