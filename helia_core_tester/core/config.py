@@ -102,6 +102,9 @@ class Config:
     force_generate: bool = False
     # Shared trees: keep other runs' cases.
     keep_unselected: bool = False
+    # Held-out shapes: N per op, seeded.
+    random_shapes: Optional[int] = None
+    shape_seed: int = 0
     skip_generation: bool = False
     skip_build: bool = False
     skip_run: bool = False
@@ -220,7 +223,7 @@ class Config:
     def _parse_env_value(self, key: str, value: str) -> Any:
         if key in PATH_KEYS:
             return Path(value)
-        if key in {"jobs", "run_jobs", "limit", "seed", "verbosity"}:
+        if key in {"jobs", "run_jobs", "limit", "seed", "verbosity", "random_shapes", "shape_seed"}:
             return int(value)
         if key == "timeout":
             return float(value)
@@ -490,6 +493,8 @@ class Config:
             "seed": self.seed,
             "force_generate": self.force_generate,
             "keep_unselected": self.keep_unselected,
+            "random_shapes": self.random_shapes,
+            "shape_seed": self.shape_seed,
             "skip_generation": self.skip_generation,
             "skip_build": self.skip_build,
             "skip_run": self.skip_run,

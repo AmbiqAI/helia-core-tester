@@ -56,6 +56,15 @@ activation dtype, or `S4` for s4-weight cases),
 with `--suite int` or `float`, `--op`/`--dtype`/`--case-id` also narrow generation; other cases stay in the tree),
 `--skip-generate`, `--skip-flash`, `--force-flash`.
 
+Held-out shapes: `generate --random-shapes N --shape-seed S` draws N s8
+Convolve and N s8 DepthwiseConv cases (`rs<S>_conv_*`, `rs<S>_dw_*`) instead of
+the `assets/` descriptors, cycling through every wrapper route and sized to fit
+the smallest board workspace. The descriptors and a per-route count land in
+`artifacts/random_shapes/s<S>/<cpu>/`; the cases join the generated tree beside
+the fixed ones. Run them with
+`hardware run --skip-generate --test-name rs<S>_`. A draw with a flat golden is
+dropped and counted as `skipped_degenerate`.
+
 Correctness: int cases use the per-operator LSB tolerance in
 `generation/io/dtypes.py`, and every case records `max_abs_diff` and `diff_count`
 (elements differing at all) in `case_summary.csv` and `cases.json`; both are null

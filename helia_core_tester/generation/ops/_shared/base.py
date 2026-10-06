@@ -1086,6 +1086,11 @@ class OperationBase(ABC):
             Input data as numpy array
         """
         input_shape = self.desc.get('input_shape', [1, 1, 1, 1])
+        if self.desc.get('input_range'):
+            from helia_core_tester.generation.ops._shared.quant_knobs import value_range
+
+            lo, hi = value_range(self.desc, 'input_range', ())
+            return self._seeded_rng().uniform(lo, hi, size=input_shape).astype(np.float32)
         return self._seeded_rng().integers(-32, 32, size=input_shape).astype(np.float32)
     
     def render_template(

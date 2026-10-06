@@ -68,6 +68,9 @@ class GenerateStep(StepBase):
             cmd.append("--force-generate")
         if self.config.keep_unselected:
             cmd.append("--keep-unselected")
+        if self.config.random_shapes:
+            cmd.extend(["--random-shapes", str(self.config.random_shapes)])
+            cmd.extend(["--shape-seed", str(self.config.shape_seed)])
         return cmd
     
     def _do_execute(self) -> StepResult:
@@ -86,6 +89,9 @@ class GenerateStep(StepBase):
         try:
             commands = []
             generation_targets = self.config.iter_generation_targets()
+            if self.config.random_shapes:
+                # Random shapes are int only.
+                generation_targets = [t for t in generation_targets if t[1] == "int"]
             for cpu, suite, float_precision in generation_targets:
                 cmd = self._build_cmd(
                     cpu=cpu,
