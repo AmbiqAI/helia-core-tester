@@ -1,0 +1,20 @@
+# Kernel family weights for `helia_core_tester score`.
+# Score = sum over families of weight * ln(geomean speedup).
+# Bump `version` whenever a weight or rule changes.
+schema: hct.scoring.family_weights
+schema_version: 1
+version: 1
+# First match on the timed symbol wins.
+families:
+  - {name: depthwise, match: depthwise}
+  - {name: fully_connected, match: fully_connected}
+  - {name: conv, match: convolve}
+default_family: other
+# Boards without a row use this one.
+fallback_board: apollo510_evb
+boards:
+  apollo510_evb:
+    # Measured: share of MLPerf-Tiny model time,
+    # from the mlperf layer cases on apollo510 (s8).
+    source: MLPerf-Tiny layer cases, apollo510 cycle share
+    weights: {conv: 0.50, fully_connected: 0.25, depthwise: 0.23, other: 0.02}

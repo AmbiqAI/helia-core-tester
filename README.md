@@ -56,6 +56,15 @@ activation dtype, or `S4` for s4-weight cases),
 with `--suite int` or `float`, `--op`/`--dtype`/`--case-id` also narrow generation; other cases stay in the tree),
 `--skip-generate`, `--skip-flash`, `--force-flash`.
 
+Held-out shapes: `generate --random-shapes N --shape-seed S` draws N s8
+Convolve and N s8 DepthwiseConv cases (`rs<S>_conv_*`, `rs<S>_dw_*`) instead of
+the `assets/` descriptors, cycling through every wrapper route and sized to fit
+the smallest board workspace. The descriptors and a per-route count land in
+`artifacts/random_shapes/s<S>/<cpu>/`; the cases join the generated tree beside
+the fixed ones. Run them with
+`hardware run --skip-generate --test-name rs<S>_`. A draw with a flat golden is
+dropped and counted as `skipped_degenerate`.
+
 Correctness: int cases use the per-operator LSB tolerance in
 `generation/io/dtypes.py`, and every case records `max_abs_diff` and `diff_count`
 (elements differing at all) in `case_summary.csv` and `cases.json`; both are null
@@ -63,9 +72,25 @@ when unknown (unvalidated outputs, wrong output size).
 `--strict-compare` drops the tolerance so int outputs must match the golden
 exactly. `--golden-from <bundle dir>` judges each case against that past run's
 `outputs/` instead (bit-exact for int, the usual tolerance for float), which pins
-the current kernels' rounding where the TFLite golden differs by design. It refuses cases that run failed unless `--golden-allow-failed` is passed,
-and lists every missing or wrong-sized output before flashing. The
-session manifest's `compare` block records which mode ran. The steps are also available individually as
+the current kernels' rounding where the TFLite golden differs by design.
+
+`--golden-from` is the compare mode for kernel changes: run the baseline
+kernels once, then judge the changed kernels against that bundle. Strict
+compare against the generated goldens does not work there, because 40 of 131
+s8 conv/depthwise cases differ from the TFLite goldens by 1 LSB on apollo510
+(ns-cmsis-nn v7.39.3; issue #220).
+
+Every bundle records a per-case `input_digest` in `cases.json` and
+`correctness/<case>.json` (also in each `case_manifest.json`): the sha256 of
+everything streamed to the board except the expected output (input, weight,
+bias and quant blobs, scalar parameters, kernel id). Before flashing,
+`--golden-from` refuses a case that the baseline lacks, that the baseline run
+failed (unless `--golden-allow-failed`), whose baseline `input_digest` differs
+or is absent (bundles from before this field must be rerun), or whose output is
+missing or wrong-sized. The session manifest's `compare` block records which
+mode ran, plus the baseline path (`golden_from`) and `golden_session_id`; each
+case's `expected_output_sha256` is the digest of the output it was compared
+against. The steps are also available individually as
 `hardware build`, `hardware flash [--force]`, `hardware stream` and
 `hardware memory-report`.
 

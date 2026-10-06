@@ -26,6 +26,8 @@ from helia_core_tester.core.path_layout import (
 )
 
 ENV_PREFIX = "HELIA_CORE_TESTER_"
+# 32-bit seeds keep case ids short.
+MAX_SHAPE_SEED = 2**32 - 1
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
 VALID_SUITE_MODES = {"int", "float", "both"}
@@ -102,6 +104,10 @@ class Config:
     force_generate: bool = False
     # Shared trees: keep other runs' cases.
     keep_unselected: bool = False
+    # Held-out shapes: N per op, seeded.
+    random_shapes: Optional[int] = None
+    # None until precedence settles; then 0.
+    shape_seed: Optional[int] = None
     skip_generation: bool = False
     skip_build: bool = False
     skip_run: bool = False
@@ -220,7 +226,7 @@ class Config:
     def _parse_env_value(self, key: str, value: str) -> Any:
         if key in PATH_KEYS:
             return Path(value)
-        if key in {"jobs", "run_jobs", "limit", "seed", "verbosity"}:
+        if key in {"jobs", "run_jobs", "limit", "seed", "verbosity", "random_shapes", "shape_seed"}:
             return int(value)
         if key == "timeout":
             return float(value)
@@ -282,6 +288,7 @@ class Config:
 
         if not 0 <= self.verbosity <= 3:
             raise ValueError(f"verbosity must be between 0 and 3, got {self.verbosity}")
+        self._validate_random_shapes()
 
         if self.jobs is None:
             self.jobs = os.cpu_count() or 4
@@ -296,6 +303,19 @@ class Config:
         self.downloads_dir.parent.mkdir(parents=True, exist_ok=True)
         self.generated_tests_root.mkdir(parents=True, exist_ok=True)
         self.reports_root.mkdir(parents=True, exist_ok=True)
+
+    def _validate_random_shapes(self) -> None:
+        if self.shape_seed is None:
+            self.shape_seed = 0
+        # Seed sits in hardware case ids.
+        if not 0 <= self.shape_seed <= MAX_SHAPE_SEED:
+            raise ConfigurationError(f"shape_seed must be in 0..{MAX_SHAPE_SEED}, got {self.shape_seed}")
+        if self.random_shapes is None:
+            return
+        if self.random_shapes < 1:
+            raise ConfigurationError(f"random_shapes must be >= 1, got {self.random_shapes}")
+        if "int" not in self.suites:
+            raise ConfigurationError("random_shapes needs the int suite")
 
     def _normalize_suite_mode(self, suite: str) -> str:
         normalized = str(suite).strip().lower()
@@ -490,6 +510,8 @@ class Config:
             "seed": self.seed,
             "force_generate": self.force_generate,
             "keep_unselected": self.keep_unselected,
+            "random_shapes": self.random_shapes,
+            "shape_seed": self.shape_seed,
             "skip_generation": self.skip_generation,
             "skip_build": self.skip_build,
             "skip_run": self.skip_run,

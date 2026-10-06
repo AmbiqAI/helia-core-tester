@@ -22,6 +22,7 @@ from helia_core_tester.reporting.coverage_merge import run_coverage_merge
 from helia_core_tester.hardware.cli import boards as boards_command
 from helia_core_tester.hardware.cli import hardware_app, probes_app
 from helia_core_tester.hardware.candidate_check import candidate_app
+from helia_core_tester.hardware.score import score as score_command
 
 # Once, for every subcommand (including the hardware group's) for the lifetime of
 # this process -- see ensure_arm_toolchain_on_path()'s own docstring for why this
@@ -38,6 +39,7 @@ app.add_typer(hardware_app, name="hardware")
 app.add_typer(probes_app, name="probes")
 app.add_typer(candidate_app, name="candidate")
 app.command(name="boards")(boards_command)
+app.command(name="score")(score_command)
 
 
 def _print_plan_item(plan_item) -> None:
@@ -129,6 +131,8 @@ def generate(
     suite: str = typer.Option("int", "--suite", help="Test suite selection: int, float, or both"),
     float_precision: str = typer.Option("both", "--float-precision", help="Float precision filter: f16, f32, or both"),
     force_generate: bool = typer.Option(False, "--force-generate", help="Regenerate every case even when its reuse stamp still matches"),
+    random_shapes: Optional[int] = typer.Option(None, "--random-shapes", help="Draw N random s8 conv shapes per op"),
+    shape_seed: Optional[int] = typer.Option(None, "--shape-seed", help="Seed for --random-shapes, 0 to 2**32-1 (default 0)"),
     verbosity: Optional[int] = typer.Option(None, "--verbosity", "-v", help="Verbosity level (0-3)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     plan: bool = typer.Option(False, "--plan", help="Print execution plan and exit"),
@@ -149,6 +153,8 @@ def generate(
         suite=suite,
         float_precision=float_precision,
         force_generate=force_generate,
+        random_shapes=random_shapes,
+        shape_seed=shape_seed,
     )
     if config.plan:
         _print_plan_item(GenerateStep(config).plan())
