@@ -239,6 +239,16 @@ DEPTHWISE_CONV_S8_DIRECT_ENTRIES = tuple(
 )
 DEPTHWISE_CONV_S8_PLANAR_RULE = "arm_depthwise_conv_s8_opt_planar_supported"
 
+# The 3x3 entries also need their own size, which grows with input W x C.
+DEPTHWISE_CONV_S8_3X3_ENTRIES = ("arm_depthwise_conv_s8_opt_3x3", "arm_depthwise_conv_s8_opt_3x3_c64_s1")
+DEPTHWISE_CONV_S8_3X3_SIZER = "arm_depthwise_conv_s8_opt_3x3_get_buffer_size"
+
+
+def dw3x3_scratch_bytes(input_dims: Dict[str, int]) -> int:
+    """Mirror arm_depthwise_conv_s8_opt_3x3_get_buffer_size."""
+    # 16 groups x (3 x 52 + 32) + pad row + align.
+    return 16 * (3 * 52 + 32) + int(input_dims["w"]) * int(input_dims["c"]) + 16
+
 _OPERATOR_LABELS = {"DepthwiseConv": "depthwise", "Convolve": "convolve", "FullyConnected": "fully connected"}
 
 

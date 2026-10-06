@@ -66,6 +66,21 @@ def test_entry_case_calls_the_entry_with_weight_sums_and_its_scratch_query(tmp_p
     assert "HELIA_VALIDATE_OUTPUTS(" in source
 
 
+@pytest.mark.parametrize(
+    ("name", "calls_3x3_sizer"),
+    [
+        ("depthwise_conv_entry_3x3_28x28_c64_stride2_s8", True),
+        ("depthwise_conv_entry_3x3_c64_s1_14x28_s8", True),
+        ("depthwise_conv_entry_channelwise_25x5_c64_s8", False),
+    ],
+)
+def test_3x3_entries_also_query_their_own_size(tmp_path: Path, name: str, calls_3x3_sizer: bool) -> None:
+    source = _source(name, tmp_path)
+
+    assert re.search(r"arm_depthwise_conv_s8_opt_get_buffer_size\(", source)
+    assert bool(re.search(r"arm_depthwise_conv_s8_opt_3x3_get_buffer_size\(\s*&\w+_input_dims\s*\)", source)) == calls_3x3_sizer
+
+
 def test_declined_case_checks_the_status_and_an_untouched_output(tmp_path: Path) -> None:
     source = _source("depthwise_conv_entry_3x3_declines_c62_s8", tmp_path)
 
