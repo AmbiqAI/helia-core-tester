@@ -126,6 +126,7 @@ def test_explicit_zero_seed_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
     ({"random_shapes": 2, "hidden_dir": "artifacts/hidden"}, "outside the tester tree"),
     ({"random_shapes": 2, "hidden_dir": "/tmp/h", "hidden_seed_file": "seed.txt"}, "outside the tester tree"),
     ({"random_shapes": 2, "hidden_seed_file": "/tmp/seed"}, "needs hidden_dir"),
+    ({"hidden_seed_file": "/tmp/seed"}, "needs hidden_dir"),
 ])
 def test_bad_random_settings_refused(settings: dict, message: str) -> None:
     from helia_core_tester.core.errors import ConfigurationError
@@ -285,3 +286,26 @@ def test_hidden_dir_owns_its_tree(tmp_path: Path) -> None:
     assert conftest._generated_override(hidden) == str(tmp_path / "artifacts/generated_tests/int/cortex-m55")
     public = _Options(**{"--random-shapes": 2})
     assert conftest._keeps_unselected(public) and conftest._generated_override(public) is None
+
+
+def _guard_options(**values):
+    from types import SimpleNamespace
+
+    options = SimpleNamespace(tbstyle="long", showlocals=True, fulltrace=True)
+    values = {"--cpu": "m55", "--suite": "int", **values}
+    return SimpleNamespace(option=options, getoption=values.get)
+
+
+def test_direct_pytest_hidden_guard(tmp_path: Path) -> None:
+    from helia_core_tester.generation import conftest
+
+    config = _guard_options(**{"--hidden-dir": str(tmp_path)})
+    conftest._guard_hidden(config)
+    assert (config.option.tbstyle, config.option.showlocals, config.option.fulltrace) == ("native", False, False)
+    in_tree = _guard_options(**{"--hidden-dir": str(Path.cwd() / "artifacts" / "h")})
+    with pytest.raises(pytest.UsageError, match="outside the tester tree"):
+        conftest._guard_hidden(in_tree)
+    escaped = _guard_options(**{"--hidden-dir": str(tmp_path), "--generated-tests-dir": str(Path.cwd() / "artifacts")})
+    with pytest.raises(pytest.UsageError, match="under --hidden-dir"):
+        conftest._guard_hidden(escaped)
+    conftest._guard_hidden(_guard_options())
