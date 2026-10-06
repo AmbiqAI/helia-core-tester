@@ -192,6 +192,21 @@ def snapshot(candidate: Path, baseline: Path, base: str) -> Path:
     return snap
 
 
+def object_check(snap: Path, base: str, board: str) -> Optional[dict]:
+    """Recheck with the built objects."""
+    from .firmware_build import resolve_build_dir
+
+    # TODO(object-scan): always run once merged.
+    if "build_dir" not in inspect.signature(check_candidate).parameters:
+        return None
+    build_dir = resolve_build_dir(repo_root(), resolve_board(board), None)
+    report = check_candidate(snap, base, build_dir=build_dir)
+    if (report.get("objects") or {}).get("kernels_hash") != report.get("tree_hash"):
+        report["ok"] = False
+        report["findings"].append({"rule": "objects_mismatch", "message": "built objects differ from the snapshot"})
+    return report
+
+
 def _hidden_ids(bundles: list) -> set[str]:
     return {case_id for b in bundles for case_id, row in b.rows.items() if row.get("hidden") == "true"}
 
@@ -264,6 +279,9 @@ def evaluate(kernels: Path, baseline: Path, meta: dict, min_score: float, run=No
     if summary is None:
         verdict = "refused" if rc == RUN_REFUSED else "error"
         return {**head, "verdict": verdict, "stage": "run", "reason": f"hardware run exited {rc}"}
+    built = object_check(snap, meta["base_commit"], head["board"])
+    if built is not None and not built["ok"]:
+        return {**head, "verdict": "rejected", "stage": "objects", "findings": built["findings"]}
     baselines, candidate = [load_bundle(path) for path in bundles], load_bundle(Path(summary["bundle"]))
     scoring = load_scoring(head["board"]) | {"min_score": min_score}
     report = _score(baselines, candidate, scoring, check)

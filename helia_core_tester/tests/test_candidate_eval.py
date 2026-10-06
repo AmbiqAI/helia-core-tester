@@ -158,3 +158,12 @@ def test_baseline_cli_refuses_used_out(tmp_path, kernels) -> None:
     (out / "x").write_text("x")
     result = runner.invoke(app, ["candidate", "baseline", "--kernels", str(kernels), "--board", "apollo510_evb", "--out", str(out)])
     assert result.exit_code == 2
+
+
+def test_object_check_rejects_after_build(tmp_path, kernels, monkeypatch) -> None:
+    """The post-build scan can still reject."""
+    out, _ = _baseline(tmp_path, kernels)
+    report = {"ok": False, "findings": [{"rule": "scs_address", "path": "Source/Conv/a.c"}]}
+    monkeypatch.setattr(candidate_eval, "object_check", lambda *a: report)
+    verdict = _eval(kernels, out, FakeRun(tmp_path / "reports"))
+    assert verdict["verdict"] == "rejected" and verdict["stage"] == "objects"
