@@ -206,3 +206,29 @@ def test_explain_cli_json(tmp_path):
     assert result.exit_code == 0 and "softmax" in result.output
     result = CliRunner().invoke(app, ["explain", str(tmp_path), "--op", "depthwise"])
     assert result.exit_code == 0 and "c:" not in result.output
+
+
+def test_degenerate_output_still_explained():
+    row = _row()
+    row["timing_status"] = "degenerate_output"
+    assert _rules(row) == ["no_bottleneck"]
+
+
+def test_int_case_needs_no_fp_counter():
+    row = _row()
+    del row["counters"]["ARM_PMU_MVE_FP_MAC_RETIRED"]
+    assert explain_case(row, cpu=M55).missing_counters == []
+
+
+def test_partial_counters_without_finding():
+    row = _row()
+    row["counters"] = {"ARM_PMU_MVE_PRED": 0}
+    assert _rules(row) == ["partial_counters"]
+
+
+def test_ceilings_version_must_match(tmp_path):
+    path = tmp_path / "ceilings.yaml"
+    path.write_text("schema: hct.scoring.ceilings\nschema_version: 2\ncpus: {}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported ceilings version"):
+        load_ceilings(path)
+

@@ -21,6 +21,9 @@ from .boards import repo_root
 
 SCHEMA = "hct.pmu_explain"
 SCHEMA_VERSION = 1
+CEILINGS_VERSION = 1
+# Statuses with usable timing (case_validity GATING_STATUSES).
+TIMED_STATUSES = (None, "valid", "degenerate_output")
 
 # Counters the agent loop should request.
 AGENT_PMU_SELECTION: dict[str, list[str]] = {
@@ -58,6 +61,8 @@ def load_ceilings(path: Path = _CEILINGS_PATH) -> dict[str, Any]:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if data.get("schema") != "hct.scoring.ceilings":
         raise ValueError(f"{path}: not a ceilings file")
+    if data.get("schema_version") != CEILINGS_VERSION:
+        raise ValueError(f"{path}: unsupported ceilings version {data.get('schema_version')!r}")
     return data
 
 
@@ -179,7 +184,14 @@ def _metrics(row: Mapping[str, Any], cycles: Optional[float], macs: Optional[flo
         "refill_kb": refills * _LINE_BYTES / 1024 if refills is not None else None,
         "prepare_share": _ratio(_number(row.get("prepare_cycles")), cycles),
     }
-    return metrics, [name for name in _WANTED if _number(source.get(name)) is None]
+    return metrics, [name for name in _wanted(dtype) if _number(source.get(name)) is None]
+
+
+def _wanted(dtype: Optional[str]) -> tuple[str, ...]:
+    """Counters the rules read for this dtype."""
+    # Only one MAC event applies.
+    unused = "ARM_PMU_MVE_INT_MAC_RETIRED" if dtype in ("f16", "f32") else "ARM_PMU_MVE_FP_MAC_RETIRED"
+    return tuple(name for name in _WANTED if name != unused)
 
 
 Rule = Callable[[Explanation], Optional[Finding]]
@@ -305,16 +317,20 @@ def explain_case(
         pct_of_peak=_ratio(ceiling["cycles_per_mac"], cpm) if ceiling and cpm else None,
         metrics=metrics, missing_counters=missing,
     )
-    if result.timing_status not in (None, "valid"):
+    if result.timing_status not in TIMED_STATUSES:
         result.findings = [Finding("timing_invalid", 0.0, f"Timing {result.timing_status}: no diagnosis",
                                    "Fix the case before tuning it")]
         return result
-    if len(missing) == len(_WANTED):
+    if len(missing) == len(_wanted(dtype)):
         result.findings = [Finding("no_counters", 0.0, "Cycles only: no PMU counters in bundle",
                                    "Run on a Cortex-M55 board for counters")]
         return result
     findings = [finding for rule in RULES if (finding := rule(result))]
     findings.sort(key=lambda finding: finding.impact, reverse=True)
+    if not findings and missing:
+        # Most rules could not run.
+        findings = [Finding("partial_counters", 0.0, f"No finding; {len(missing)} counters missing",
+                            "Rerun with the agent counter set")]
     result.findings = findings or [Finding("no_bottleneck", 0.0, "No dominant bottleneck in counters",
                                            "Compare the inner loop with the best route")]
     return result
