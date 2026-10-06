@@ -31,6 +31,7 @@ from helia_core_tester.mutation.host_build import (
     CaseResult,
     build_and_run_case,
     discover_cases,
+    host_sizer_defines,
 )
 from helia_core_tester.mutation.patching import AppliedMutant, MutantApplyError, verify_pristine
 from helia_core_tester.mutation.runner import (
@@ -328,14 +329,16 @@ def _crafted_checkout(tmp_path: Path) -> Path:
     return checkout
 
 
-def _crafted_case(tmp_path: Path) -> Path:
-    case = tmp_path / "cases" / "CraftedFamily" / "crafted_case"
+def _crafted_case(
+    tmp_path: Path, name: str = "crafted_case", fn: str = "helia_mut_test_kernel", want: int = 42
+) -> Path:
+    case = tmp_path / "cases" / "CraftedFamily" / name
     (case / "includes").mkdir(parents=True)
-    (case / "crafted_case.c").write_text(
+    (case / f"{name}.c").write_text(
         "#include <stdint.h>\n"
         "extern void helia_test_finish(int32_t failures);\n"
-        "int32_t helia_mut_test_kernel(void);\n"
-        "int main(void) { helia_test_finish(helia_mut_test_kernel() == 42 ? 0 : 1); return 0; }\n"
+        f"int32_t {fn}(void);\n"
+        f"int main(void) {{ helia_test_finish({fn}() == {want} ? 0 : 1); return 0; }}\n"
     )
     return case
 
@@ -457,6 +460,38 @@ class TestRunnerFailureClassification:
                 log=lambda *_: None,
             )
 
+
+
+class TestHostSizerDefines:
+    def test_maps_only_mve_sizers(self, tmp_path: Path):
+        src = tmp_path / "case.c"
+        src.write_text(
+            "n = arm_convolve_wrapper_s8_get_buffer_size_mve(&p, &i, &f, &o);\n"
+            "m = arm_avgpool_s8_get_buffer_size(w, c);\n"
+        )
+        assert host_sizer_defines([src]) == [
+            "-Darm_convolve_wrapper_s8_get_buffer_size_mve=arm_convolve_wrapper_s8_get_buffer_size"
+        ]
+
+    @needs_gcc
+    def test_m55_case_gets_the_host_size(self, tmp_path: Path):
+        # The MVE sizer answers smaller than the DSP kernel needs.
+        checkout = _crafted_checkout(tmp_path)
+        (checkout / "Source" / "BasicMathFunctions" / "kernel.c").write_text(
+            "#include <stdint.h>\n"
+            "int32_t arm_fake_get_buffer_size(void) { return 48; }\n"
+            "int32_t arm_fake_get_buffer_size_mve(void) { return 16; }\n"
+        )
+        case = _crafted_case(tmp_path, "sizer_case", "arm_fake_get_buffer_size_mve", 48)
+        report = run_mutation_scoring(
+            cmsis_nn_root=checkout,
+            case_dirs=[case],
+            mutants=[],
+            tester_root=TESTER_ROOT,
+            workdir=tmp_path / "work",
+            log=lambda *_: None,
+        )
+        assert report.baseline_failed == []
 
 
 
