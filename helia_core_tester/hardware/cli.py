@@ -18,7 +18,7 @@ run_summary.py.
 Exit codes, shared with `score`: 0 pass; 1 a case failed correctness; 2 bad
 flags; 3 refused before running (dirty tester, a --skip-flash or --golden-from
 mismatch, no case matches); 5 error (cmake, J-Link, transport, probe, or a
-tester bug). Failures print one line;
+tester bug); 130 interrupted (Ctrl-C). Failures print one line;
 the traceback is shown with `--verbosity 1` or higher (also
 `$HELIA_CORE_TESTER_VERBOSITY`, the same knob the generate/build/run commands
 use).
@@ -74,7 +74,8 @@ _ALLOW_UNVERIFIED_HELP = (
 
 
 # Score's codes, plus usage and error.
-EXIT_USAGE, EXIT_ERROR = 2, 5
+# 130: interrupted, as shells report.
+EXIT_USAGE, EXIT_ERROR, EXIT_INTERRUPTED = 2, 5, 130
 
 
 def _fail(message: str, code: int = EXIT_USAGE) -> None:
@@ -92,8 +93,14 @@ def _bugs_exit_error(command):
         try:
             return command(*args, **kwargs)
         # Usage, refusal and normal exits.
-        except (click.exceptions.ClickException, click.exceptions.Exit, click.exceptions.Abort):
+        except (click.exceptions.ClickException, click.exceptions.Exit):
             raise
+        except KeyboardInterrupt:
+            typer.echo("✗ Interrupted", err=True)
+            sys.exit(EXIT_INTERRUPTED)
+        except click.exceptions.Abort:
+            typer.echo("✗ Aborted", err=True)
+            sys.exit(EXIT_ERROR)
         except Exception:
             traceback.print_exc()
             sys.exit(EXIT_ERROR)

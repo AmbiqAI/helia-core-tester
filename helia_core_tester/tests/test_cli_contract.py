@@ -487,3 +487,16 @@ def test_bugs_outside_the_pipeline_exit_five(monkeypatch, tmp_path, where) -> No
     result = runner.invoke(app, ["hardware", "run", "--skip-generate"])
     text = _result_text(result)
     assert result.exit_code == 5 and "KeyError: 'bug'" in text, text
+
+
+@pytest.mark.parametrize(("error", "code"), [(KeyboardInterrupt, 130), (__import__("click").exceptions.Abort, 5)])
+def test_cancel_never_exits_one(monkeypatch, error, code) -> None:
+    """Cancelling is not a correctness failure."""
+    from helia_core_tester.hardware import hardware_pipeline
+
+    def _stop(*args, **kwargs):
+        raise error()
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _stop)
+    assert runner.invoke(app, ["hardware", "run", "--skip-generate"]).exit_code == code

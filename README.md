@@ -50,7 +50,7 @@ and prints the pass/fail summary (`--json` prints one JSON document on stdout
 instead, with the human output on stderr). Exit codes match `score`: 0 pass,
 1 a case failed correctness, 2 bad flags, 3 refused before running (dirty
 tester, a `--skip-flash` or `--golden-from` mismatch, no case matches the
-selection), 5 error (cmake, J-Link, transport, probe, or a tester bug). Useful narrowing flags: `--suite int|float|both`,
+selection), 5 error (cmake, J-Link, transport, probe, or a tester bug), 130 interrupted (Ctrl-C). Useful narrowing flags: `--suite int|float|both`,
 `--family`, `--test-name`, `--limit`, `--precision fp16|fp32` (float-only shortcut,
 not combinable with `--suite both` or `--test-name`), `--fvp-gate off|advisory|strict`,
 `--op`/`--dtype` (repeatable, matched like `generate --op/--dtype`; a case's dtype is its
