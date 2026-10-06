@@ -414,7 +414,9 @@ class HardwareRunOutcome:
         return [c.case_bundle.case_id for c in self.result.cases if not c.comparison.passed]
 
 
-def prepare_bundles(repo_root: Path, board: BoardSpec, options: StreamOptions) -> tuple[list, list]:
+def prepare_bundles(
+    repo_root: Path, board: BoardSpec, options: StreamOptions, hidden: Optional[list] = None,
+) -> tuple[list, list]:
     """Bridge the cases; apply the compare mode."""
     from .case_bundle import strict_bundle
     from .generated_test_bridge import HW_CASE_SUFFIX, CaseSelection
@@ -439,7 +441,7 @@ def prepare_bundles(repo_root: Path, board: BoardSpec, options: StreamOptions) -
             skipped, cpu=board.cpu, family=options.family, name_filter=options.test_name, suite=options.suite,
         )
     if options.hidden_set is not None:
-        bundles += hidden_bundles(repo_root, board, options)
+        bundles += hidden if hidden is not None else hidden_bundles(repo_root, board, options)
     if options.golden_from is not None:
         bundles = golden_bundles(bundles, options.golden_from, allow_failed=options.golden_allow_failed)
     elif options.strict_compare:
@@ -608,9 +610,8 @@ def run_hardware_pipeline(
         # Same resolution as the CLI.
         app_options = resolve_options(nsx_app_dir(resolved_build_dir), repo_root, follow_pin=not skip_flash)
 
-    if options.hidden_set is not None:
-        # Refuse before touching the board.
-        hidden_summary(options.hidden_set, board.cpu)
+    # Refuse a bad hidden set first.
+    hidden = hidden_bundles(repo_root, board, options) if options.hidden_set is not None else None
     generate_s = 0.0
     if skip_generate:
         echo("[hardware] --skip-generate set; reusing existing artifacts/generated_tests.")
@@ -641,7 +642,7 @@ def run_hardware_pipeline(
 
     # Check goldens and hidden cases before touching the board.
     checked = options.golden_from is not None or options.hidden_set is not None
-    prepared = prepare_bundles(repo_root, board, options) if checked else None
+    prepared = prepare_bundles(repo_root, board, options, hidden) if checked else None
     flash: Optional[FlashDecision] = None
     if skip_flash:
         echo("[hardware] --skip-flash set; reusing firmware already running on the board.")
