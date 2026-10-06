@@ -55,6 +55,13 @@ def test_entry_and_planar_rule_gate_the_case_on_the_checkout() -> None:
     assert _required_kernel_symbols(_descriptor("depthwise_conv_dilated_1d_k7_d2_c24_s8")) == []
 
 
+def test_3x3_entry_gates_on_its_sizer() -> None:
+    assert _required_kernel_symbols(_descriptor("depthwise_conv_entry_3x3_25x5_c64_s8")) == [
+        "arm_depthwise_conv_s8_opt_3x3",
+        "arm_depthwise_conv_s8_opt_3x3_get_buffer_size",
+    ]
+
+
 def test_entry_case_calls_the_entry_with_weight_sums_and_its_scratch_query(tmp_path: Path) -> None:
     name = "depthwise_conv_entry_3x3_25x5_c64_s8"
     source = _source(name, tmp_path)
