@@ -200,6 +200,11 @@ def opt_scratch_size(i: Dims, f: Dims, o: Dims, stride: Pair, pad: Pair, dil: Pa
     """
     if not mve or i[3] != o[3] or i[0] != 1 or not _dil_ok(i, f, o, stride, pad, dil):
         return 0
+    return _opt_bytes(f)
+
+
+def _opt_bytes(f: Dims) -> int:
+    """arm_depthwise_conv_s8_opt_get_buffer_size_mve."""
     return 4 * CH_IN_BLOCK_MVE * f[1] * f[2]
 
 
@@ -237,7 +242,7 @@ def dw_opt_variant(
     or the MVE opt scratch; channelwise then runs.
     """
     plane = planar_bytes(i, f, o, stride, pad, dil, ch_mult)
-    if not mve or plane < 0 or ctx_size <= 0 or plane > ctx_size or plane > 4 * CH_IN_BLOCK_MVE * f[1] * f[2]:
+    if not mve or plane < 0 or ctx_size <= 0 or plane > ctx_size or plane > _opt_bytes(f):
         return CHANNELWISE
     return PLANAR
 
@@ -279,9 +284,10 @@ def inner_symbol(timed_symbol: str, manifest: Mapping, gate_1xn: Optional[bool])
     return conv_route(i, f, o, stride, pad, dil, mve, gate_1xn)
 
 
-def inner_variant(timed_symbol: str, manifest: Mapping, gate_1xn: Optional[bool]) -> Optional[str]:
+def inner_variant(inner: Optional[str], manifest: Mapping) -> Optional[str]:
     """The algorithm opt runs, else None."""
-    if timed_symbol != DW_WRAPPER or inner_symbol(timed_symbol, manifest, gate_1xn) != DW_OPT:
+    # Without DSP, opt runs the reference kernel.
+    if inner != DW_OPT or not get_cpu_profile(manifest["target_cpu"]).has_dsp:
         return None
     i, f, o, stride, pad, dil, ch_mult, mve = _layer(manifest)
     ctx_size = opt_scratch_size(i, f, o, stride, pad, dil, mve)

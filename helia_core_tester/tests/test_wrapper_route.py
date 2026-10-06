@@ -211,23 +211,30 @@ def test_inner_symbol_names_s4_and_s16_routes() -> None:
         "arm_depthwise_conv_s16"
     )
     # Variants exist only under the s8 opt route.
-    assert inner_variant("arm_depthwise_conv_wrapper_s16", dw, True) is None
+    s16 = "arm_depthwise_conv_wrapper_s16"
+    assert inner_variant(inner_symbol(s16, dw, True), dw) is None
+
+
+def _variant(wrapper: str, manifest: dict):
+    return inner_variant(inner_symbol(wrapper, manifest, True), manifest)
 
 
 def test_inner_variant_splits_the_opt_route() -> None:
     dw = "arm_depthwise_conv_wrapper_s8"
     # C = 16 above 8 on a 8x8 plane: channelwise.
-    assert inner_variant(dw, _manifest("cortex-m55", [1, 3, 3, 16], pad_h=1, pad_w=1), True) == CHANNELWISE
+    assert _variant(dw, _manifest("cortex-m55", [1, 3, 3, 16], pad_h=1, pad_w=1)) == CHANNELWISE
     eight = _manifest("cortex-m55", [1, 3, 3, 8], pad_h=1, pad_w=1, output_c=8)
     eight["blob_roles"][0]["dimensions"] = [1, 8, 8, 8]
-    assert inner_variant(dw, eight, True) == PLANAR
+    assert _variant(dw, eight) == PLANAR
     # Off MVE, 3x3 skips opt; other opt layers are channelwise.
-    assert inner_variant(dw, {**eight, "target_cpu": "cortex-m4"}, True) is None
+    assert _variant(dw, {**eight, "target_cpu": "cortex-m4"}) is None
     five = _manifest("cortex-m4", [1, 5, 5, 8], pad_h=2, pad_w=2, output_c=8)
     five["blob_roles"][0]["dimensions"] = [1, 8, 8, 8]
-    assert inner_variant(dw, five, True) == CHANNELWISE
-    assert inner_variant(dw, {**five, "target_cpu": "cortex-m55"}, True) == PLANAR
-    assert inner_variant("arm_convolve_wrapper_s8", eight, True) is None
+    assert _variant(dw, five) == CHANNELWISE
+    assert _variant(dw, {**five, "target_cpu": "cortex-m55"}) == PLANAR
+    assert _variant("arm_convolve_wrapper_s8", eight) is None
+    # Without DSP, opt runs the reference kernel.
+    assert _variant(dw, {**five, "target_cpu": "cortex-m0"}) is None
 
 
 def test_planar_declines_past_ctx() -> None:

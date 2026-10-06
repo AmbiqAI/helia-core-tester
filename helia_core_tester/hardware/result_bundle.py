@@ -226,7 +226,7 @@ def write_result_bundle(
         # The kernel the wrapper routes to.
         inner = inner_symbol(timed_symbol, case.case_bundle.manifest, gate_1xn)
         # Planar or channelwise inside opt.
-        variant = inner_variant(timed_symbol, case.case_bundle.manifest, gate_1xn)
+        variant = inner_variant(inner, case.case_bundle.manifest)
         rejection = _rejection_record(case)
         counter_medians = compute_counter_medians(case.normalized_samples)
         work_fields = _work_fields(case)
