@@ -60,20 +60,23 @@ SAFE_ATTRIBUTES = frozenset((
 ))
 _ATTRIBUTE = re.compile(r"__attribute__\s*\(\((.*?)\)\)|\[\[(.*?)\]\]")
 _ATTRIBUTE_HINT = re.compile(r"__attribute|__declspec|\[\[")
-_PRAGMA = re.compile(r"#\s*pragma|_Pragma|__pragma")
-_SAFE_PRAGMA = re.compile(r"#\s*pragma\s+(?:once|GCC\s+unroll\s+\d+|GCC\s+diagnostic\b)")
+# "%:" is the "#" digraph.
+_PRAGMA = re.compile(r"(?:#|%:)\s*pragma|_Pragma|__pragma")
+_SAFE_PRAGMA = re.compile(r"(?:#|%:)\s*pragma\s+(?:once|GCC\s+unroll\s+\d+|GCC\s+diagnostic\b)")
 LINE_RULES = (
     ("special_section", re.compile(
         r"\.(?:push)?section\b|\b_*section_*\s*\(|\b(?:ITCM|DTCM|__RAMFUNC|RAMFUNC|AM_SHARED_RW|NS_PUT_IN_TCM)\b",
     )),
     ("measurement_access", re.compile(
         r"\b(?:DWT|CoreDebug|DCB|SysTick|ITM|TPI|NVIC|SCB|PMU|MEMSYSCTL|CYCCNT)\b|\bARM_PMU_|\bam_hal_"
-        r"|__(?:disable|enable)_(?:irq|fault_irq)|__WF[IE]\b|__set_(?:BASEPRI|PRIMASK|FAULTMASK)",
+        r"|__(?:disable|enable)_(?:irq|fault_irq)|__WF[IE]\b|__set_(?:BASEPRI|PRIMASK|FAULTMASK)"
+        # Same, as assembly.
+        r"|(?i:\bcpsi[de]\b|\bmsr\s+(?:primask|basepri(?:_max)?|faultmask|control)\b|\bwf[ie]\b)",
     )),
     ("harness_reference", re.compile(
         r"golden|\bhct_|\bhctp|benchmark_server|unittest|RefactoredTestGen", re.IGNORECASE,
     )),
-    ("include_escape", re.compile(r'#\s*include\s*(?:["<](?:/|[^">]*\.\.)|[^"<\s])|\.(?:incbin|include)\b')),
+    ("include_escape", re.compile(r'(?:#|%:)\s*include\s*(?:["<](?:/|[^">]*\.\.)|[^"<\s])|\.(?:incbin|include)\b')),
 )
 # Ignore user and system git config.
 _GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_NO_REPLACE_OBJECTS": "1"}

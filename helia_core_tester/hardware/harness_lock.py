@@ -180,8 +180,23 @@ def firmware_record(repo_root: Path, build_dir: Path, options: Any, toolchain: A
         "nsx_version": nsx_version,
         "nsx_lock": lock_modules(app_dir),
         "app_trees": {rel: path_hash(app_dir / rel) for rel in APP_TREES},
+        "module_trees": module_trees(app_dir),
         "toolchain": toolchain,
     }
+
+
+def module_trees(app_dir: Path) -> dict[str, str]:
+    """Content hash of each synced non-kernel module."""
+    from neuralspotx.nsx_lock import hash_tree
+
+    from .nsx_app import CMSIS_NN_MODULE, CMSIS_NN_PROJECT
+
+    root = app_dir / "modules"
+    if not root.is_dir():
+        return {}
+    # Lock pins revisions; sources can drift.
+    kernels = {CMSIS_NN_MODULE, CMSIS_NN_PROJECT}
+    return {path.name: hash_tree(path) for path in sorted(root.iterdir()) if path.is_dir() and path.name not in kernels}
 
 
 def harness_record(firmware: Optional[dict], repo_root: Path) -> tuple[Optional[str], dict[str, Any]]:

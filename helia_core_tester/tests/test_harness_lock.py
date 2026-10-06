@@ -117,6 +117,16 @@ def test_kernel_change_keeps_digest(tester: Path, tmp_path: Path) -> None:
     assert harness_lock.kernel_digest(base) != harness_lock.kernel_digest(candidate)
 
 
+def test_module_source_edit_moves_digest(tester: Path, tmp_path: Path) -> None:
+    sdk = nsx_app_dir(tmp_path / "b") / "modules" / "nsx-ambiq-sdk" / "hal.c"
+    sdk.parent.mkdir(parents=True)
+    sdk.write_text("int hal;\n", encoding="utf-8")
+    first = _build(tmp_path / "b")
+    sdk.write_text("int hal_edited;\n", encoding="utf-8")
+    assert not harness_lock.same_harness(first, _build(tmp_path / "b"))
+    assert "nsx-cmsis-nn" not in first["harness"]["inputs"]["firmware"]["module_trees"]
+
+
 @pytest.mark.parametrize("change", ["source", "flags", "switch", "board"])
 def test_harness_change_moves_digest(tester: Path, tmp_path: Path, change: str) -> None:
     base = _build(tmp_path / "b")
@@ -225,6 +235,10 @@ def test_source_change_passes(kernels: Path) -> None:
     ("Source/Conv/a.c", '_Pragma("GCC optimize(\\"O3\\")")\n', "pragma"),
     ("Source/Conv/a.c", "void g(void) { DWT->CYCCNT = 0; }\n", "measurement_access"),
     ("Source/Conv/a.c", "#include KERNEL_PATH\n", "include_escape"),
+    ("Source/Conv/a.c", '%:include "../../Tests/t.c"\n', "include_escape"),
+    ("Source/Conv/a.c", '%:pragma GCC optimize("O3")\n', "pragma"),
+    ("Source/Conv/a.c", '__asm__("cpsid i");\n', "measurement_access"),
+    ("Source/Conv/k.S", "    MSR PRIMASK, r0\n", "measurement_access"),
     ("Source/Conv/k.s", '.incbin "/etc/x"\n', "include_escape"),
     ("Source/Conv/a.c", "static const int golden[4];\n", "harness_reference"),
     ("Source/Conv/a.c", '#include "../../Tests/t.c"\n', "include_escape"),
