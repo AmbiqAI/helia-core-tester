@@ -239,6 +239,8 @@ def test_source_change_passes(kernels: Path) -> None:
     ("Source/Conv/a.c", '%:pragma GCC optimize("O3")\n', "pragma"),
     ("Source/Conv/a.c", '__asm__("cpsid i");\n', "measurement_access"),
     ("Source/Conv/k.S", "    MSR PRIMASK, r0\n", "measurement_access"),
+    ("Source/Conv/a.c", '__asm__("cps" "id i");\n', "measurement_access"),
+    ("Source/Conv/a.c", '__asm__(".push"\n        "section .itcm");\n', "special_section"),
     ("Source/Conv/k.s", '.incbin "/etc/x"\n', "include_escape"),
     ("Source/Conv/a.c", "static const int golden[4];\n", "harness_reference"),
     ("Source/Conv/a.c", '#include "../../Tests/t.c"\n', "include_escape"),
@@ -267,6 +269,12 @@ def test_git_tricks_cannot_hide_changes(kernels: Path) -> None:
     assert ("Tests/t.c", "outside_allowlist") in rules
     assert ("Source/Conv/a.c", "pragma") in rules
     assert ("Source/Conv/hidden.c", "attribute") in rules
+
+
+def test_hidden_index_entry_fails(kernels: Path) -> None:
+    _git(kernels, "update-index", "--skip-worktree", ".gitignore")
+    report = check_candidate(kernels, "base")
+    assert [(f["rule"], f["path"]) for f in report["findings"]] == [("hidden_index_entry", ".gitignore")]
 
 
 def test_symlink_fails(kernels: Path) -> None:

@@ -18,6 +18,11 @@ Include/, nothing else. Rules, each a finding in the JSON report:
 - harness_reference: added lines naming harness or golden internals.
 - include_escape: #include with an absolute path, "..", or a macro;
   .incbin and .include in assembly.
+- hidden_index_entry: any path flagged skip-worktree or
+  assume-unchanged, which git diff and status would skip.
+
+Rules also run on text with adjacent string literals joined, per line
+and over all added lines of a file, as C joins them before asm sees them.
 
 Literal tensor shapes from descriptors are not grepped: too many false
 hits on common dims. Trees the build copies (Source, Include, cmake, nsx)
@@ -59,6 +64,7 @@ SAFE_ATTRIBUTES = frozenset((
     "const", "pure", "nonnull", "may_alias", "inline",
 ))
 _ATTRIBUTE = re.compile(r"__attribute__\s*\(\((.*?)\)\)|\[\[(.*?)\]\]")
+_ADJACENT_LITERALS = re.compile(r'"\s*"')
 _ATTRIBUTE_HINT = re.compile(r"__attribute|__declspec|\[\[")
 # "%:" is the "#" digraph.
 _PRAGMA = re.compile(r"(?:#|%:)\s*pragma|_Pragma|__pragma")
@@ -220,11 +226,27 @@ def _unsafe_attribute(text: str) -> bool:
 
 def line_rules(text: str) -> Iterator[str]:
     """Rule names one added line hits."""
+    seen = set()
+    # C joins adjacent string literals.
+    for variant in (text, _ADJACENT_LITERALS.sub("", text)):
+        for rule in _raw_rules(variant):
+            if rule not in seen:
+                seen.add(rule)
+                yield rule
+
+
+def _raw_rules(text: str) -> Iterator[str]:
     if _unsafe_attribute(text):
         yield "attribute"
     if _PRAGMA.search(text) and not _SAFE_PRAGMA.search(text):
         yield "pragma"
     yield from (rule for rule, pattern in LINE_RULES if pattern.search(text))
+
+
+def hidden_entries(tree: Path) -> list[str]:
+    """Paths with skip-worktree or assume-unchanged."""
+    out = _split(_git(tree, "ls-files", "-v", "-z"))
+    return [entry[2:] for entry in out if entry[:1] == "S" or entry[:1].islower()]
 
 
 def check_candidate(tree: Path, base: str) -> dict:
@@ -239,9 +261,19 @@ def check_candidate(tree: Path, base: str) -> dict:
         findings += hits
         if hits:
             continue
-        for line_no, text in added_lines(tree, base_blobs, path, status):
-            findings += ({"rule": rule, "path": path, "line": line_no, "text": text.strip()[:200]}
-                         for rule in line_rules(text))
+        added = list(added_lines(tree, base_blobs, path, status))
+        hit_rules: set[str] = set()
+        for line_no, text in added:
+            for rule in line_rules(text):
+                hit_rules.add(rule)
+                findings.append({"rule": rule, "path": path, "line": line_no, "text": text.strip()[:200]})
+        # Literals split across lines.
+        if added:
+            joined = " ".join(text.strip() for _, text in added)
+            findings += ({"rule": rule, "path": path, "line": added[0][0], "text": "joined added lines"}
+                         for rule in line_rules(joined) if rule not in hit_rules)
+    findings += ({"rule": "hidden_index_entry", "path": path, "message": "skip-worktree or assume-unchanged set"}
+                 for path in hidden_entries(tree))
     return {
         "schema": "hct.candidate_check",
         "schema_version": 1,
