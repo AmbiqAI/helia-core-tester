@@ -1,0 +1,13 @@
+# Per-board noise floors for `helia_core_tester score`.
+# Band: max(floor_pct, mad_k * baseline sigma).
+# Floors sit just above the max run-to-run change measured on
+# identical firmware (adjacent nightlies, 2026-10), so one noisy
+# case in a full run does not fail the gate.
+schema: hct.scoring.noise_floors
+schema_version: 1
+mad_k: 3.0
+default_floor_pct: 5.0
+boards:
+  apollo510_evb: {floor_pct: 3.0, measured: "p99 0.6 %, max 2.7 %"}
+  apollo330mP_evb: {floor_pct: 4.5, measured: "p99 1.4 %, max 3.9 %"}
+  apollo3p_evb: {floor_pct: 0.5, measured: "p99 0.0 %, max 0.1 % (5 samples)"}
