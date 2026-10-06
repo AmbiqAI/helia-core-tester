@@ -11,7 +11,7 @@ baseline but not in the candidate fails. Only timing_status "valid" cases are ti
 The score is sum(weight * ln(family geomean speedup)) with weights from
 assets/scoring/family_weights.yaml; with weights that sum to 1 it
 approximates ln(whole-model speedup). A candidate with no failures
-but score <= min_score (default 0) gets verdict no_gain. JSON schema: see `score_bundles`.
+but score <= min_score (default 0.005, about ln 1.005) gets verdict no_gain. JSON schema: see `score_bundles`.
 """
 
 from __future__ import annotations
@@ -38,6 +38,8 @@ SCORING_DIR = repo_root() / "assets" / "scoring"
 MAD_SIGMA = 1.4826
 # Typer usage errors already exit 2.
 EXIT_PASS, EXIT_FAIL, EXIT_REFUSED, EXIT_NO_GAIN = 0, 1, 3, 4
+# About a 0.5 % weighted speedup.
+DEFAULT_MIN_SCORE = 0.005
 EXITS = {"pass": EXIT_PASS, "fail": EXIT_FAIL, "not_comparable": EXIT_REFUSED, "no_gain": EXIT_NO_GAIN}
 # INST_RETIRED plus every MVE retired counter.
 _RETIRED = re.compile(r"^ARM_PMU_(INST|MVE_\w+)_RETIRED$")
@@ -167,7 +169,7 @@ def load_scoring(board: str | None, directory: Path = SCORING_DIR) -> dict:
         "default_family": weights["default_family"],
         "floor_pct": float(floor_row.get("floor_pct", floors["default_floor_pct"])),
         "mad_k": float(floors["mad_k"]),
-        "min_score": 0.0,
+        "min_score": DEFAULT_MIN_SCORE,
     }
 
 
@@ -343,7 +345,7 @@ def score(
     as_json: bool = typer.Option(False, "--json", help="Print the JSON report."),
     floor_pct: Optional[float] = typer.Option(None, "--floor-pct", min=0.0, help="Noise floor in percent (default: per board)."),
     mad_k: Optional[float] = typer.Option(None, "--mad-k", min=0.0, help="MAD multiplier for the band."),
-    min_score: float = typer.Option(0.0, "--min-score", help="Score a passing candidate must beat."),
+    min_score: float = typer.Option(DEFAULT_MIN_SCORE, "--min-score", help="Score to beat; 0.005 is about 0.5 % gain."),
 ) -> None:
     """Score a kernel candidate against a baseline.
 

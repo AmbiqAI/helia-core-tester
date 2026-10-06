@@ -195,3 +195,13 @@ def test_min_score_sets_no_gain(tmp_path):
     assert _score([base], [cand], min_score=0.01)["verdict"] == "no_gain"
     slower = _bundle(tmp_path, "c", cycles={"conv_a": 1020.0})
     assert _score([base], [slower], min_score=0.0)["verdict"] == "no_gain"
+
+
+def test_default_min_score_needs_half_percent(tmp_path):
+    base = _bundle(tmp_path, "a")
+    scoring = load_scoring("apollo510_evb")
+    assert scoring["min_score"] == 0.005
+    small = _bundle(tmp_path, "b", cycles={"conv_a": 995.0})
+    big = _bundle(tmp_path, "c", cycles={"conv_a": 980.0})
+    assert score_bundles([load_bundle(base)], [load_bundle(small)], scoring)["verdict"] == "no_gain"
+    assert score_bundles([load_bundle(base)], [load_bundle(big)], scoring)["verdict"] == "pass"
