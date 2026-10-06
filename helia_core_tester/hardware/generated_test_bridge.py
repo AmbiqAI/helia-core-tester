@@ -33,6 +33,7 @@ from .case_bundle import (
 from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_entry_id, lookup_kernel_id
 from .pathutil import display_path
 from helia_core_tester.generation.io.descriptors import descriptor_matches_op
+from helia_core_tester.generation.kernel_dispatch import entry_scratch_bytes
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, normalize_dtype, resolve_comparison
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -593,9 +594,12 @@ def _with_weight_sums(scratch: int, channels: int) -> int:
     return _align_up(int(scratch), 16) + channels * 4
 
 
-def _depthwise_s8_scratch_bytes(input_dims: dict[str, int], filter_dims: dict[str, int], output_dims: dict[str, int]) -> int:
-    """Bound wrapper scratch plus weight sums."""
+def _depthwise_s8_scratch_bytes(
+    input_dims: dict[str, int], filter_dims: dict[str, int], output_dims: dict[str, int], entry: str | None = None
+) -> int:
+    """Bound wrapper or entry scratch plus weight sums."""
     scratch = TemplateContextBuilder.calculate_depthwise_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
+    scratch = max(scratch, entry_scratch_bytes(entry, input_dims))
     # One input channel may run as conv.
     if input_dims["c"] == 1:
         conv = TemplateContextBuilder.calculate_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
@@ -1571,7 +1575,9 @@ def _build_depthwise_conv_case(
             output_dtype=activation_dtype,
         )
     else:
-        scratch_bytes = _depthwise_s8_scratch_bytes(input_dims, filter_dims, output_dims)
+        scratch_bytes = _depthwise_s8_scratch_bytes(
+            input_dims, filter_dims, output_dims, entry=generated_test.descriptor.get("entry")
+        )
 
     arrays = [
         (1, "input_0", activation_dtype, input_shape, input_data, False, False),
