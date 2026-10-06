@@ -227,7 +227,8 @@ def header_closure(read: Callable[[str], Optional[str]]) -> list[str]:
             continue
         seen.add(rel)
         here = posixpath.dirname(rel)
-        for name in _INCLUDE.findall(text):
+        # Splice backslash-newline first.
+        for name in _INCLUDE.findall(re.sub(r"\\\r?\n", "", text)):
             paths = (posixpath.normpath(posixpath.join(here, name)), posixpath.normpath(f"Include/{name}"))
             todo.extend(next(([path] for path in paths if load(path) is not None), []))
     return sorted(seen)

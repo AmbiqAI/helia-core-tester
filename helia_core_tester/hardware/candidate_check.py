@@ -172,14 +172,19 @@ def changed_paths(tree: Path, commit: str) -> dict[str, str]:
 
 
 def frozen_files(tree: Path, base: dict[str, tuple[str, str]]) -> frozenset[str]:
-    """Files the harness reads, at base."""
+    """Files the harness reads, base or candidate."""
 
     def read(rel: str) -> Optional[str]:
         if rel not in base or base[rel][0] not in ("100644", "100755"):
             return None
         return _git(tree, "cat-file", "blob", base[rel][1]).decode(errors="replace")
 
-    return frozenset((*FROZEN_FILES, *header_closure(read)))
+    def read_disk(rel: str) -> Optional[str]:
+        path = tree / rel
+        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
+
+    # A new header can shadow a base one.
+    return frozenset((*FROZEN_FILES, *header_closure(read), *header_closure(read_disk)))
 
 
 def path_findings(path: str, status: str, tree: Path, frozen: frozenset[str]) -> Iterator[dict]:

@@ -164,10 +164,12 @@ def test_header_closure_follows_includes() -> None:
         "Include/arm_nn_math_types.h": '#if 0\n  #include "Internal/arm_nn_config.h"\n#endif\n',
         "Include/Internal/arm_nn_config.h": '#include "arm_nnfunctions.h"\n',
         "Include/Internal/arm_nnfunctions.h": "beside wins\n",
+        "Include/arm_nnfunctions_flt.h": "spliced\n",
     }
+    files["Include/arm_nnfunctions.h"] += '#include \\\n  "arm_nnfunctions_flt.h"\n'
     assert harness_lock.header_closure(files.get) == [
         "Include/Internal/arm_nn_config.h", "Include/Internal/arm_nnfunctions.h",
-        "Include/arm_nn_math_types.h", "Include/arm_nnfunctions.h",
+        "Include/arm_nn_math_types.h", "Include/arm_nnfunctions.h", "Include/arm_nnfunctions_flt.h",
     ]
 
 
@@ -243,7 +245,8 @@ def kernels(tmp_path: Path) -> Path:
         "Include/arm_nnsupportfunctions.h": "int s;\n",
         "Include/arm_nnfunctions.h": '#include "arm_nn_math_types.h"\nint f;\n',
         "Include/arm_nn_math_types.h": '#include <stdint.h>\n#include "Internal/arm_nn_config.h"\n',
-        "Include/Internal/arm_nn_config.h": "#define HELIA_HARDWARE_BUILD 1\n",
+        "Include/Internal/arm_nn_config.h": '#include "common.h"\n#define HELIA_HARDWARE_BUILD 1\n',
+        "Include/common.h": "int c;\n",
         "Tests/t.c": "int t;\n",
         "nsx/CMakeLists.txt": "x\n",
         "nsx/nsx-module.yaml": "m\n",
@@ -280,6 +283,8 @@ def test_source_change_passes(kernels: Path) -> None:
     ("Include/Internal/arm_nn_config.h", "#undef HELIA_HARDWARE_BUILD\n", "frozen_file"),
     ("Include/arm_nn_math_types.h", "\n", "frozen_file"),
     ("Include/string.h", "int s;\n", "header_shadow"),
+    # Beside-first lookup shadows Include/common.h.
+    ("Include/Internal/common.h", "int s;\n", "frozen_file"),
     ("Source/Conv/a.c", '__attribute__((section(".itcm"))) int a;\n', "attribute"),
     ("Source/Conv/a.c", '__attribute__((__section__(".itcm"))) int a;\n', "special_section"),
     ("Source/Conv/a.c", '[[gnu::section(".itcm")]] int a;\n', "attribute"),
