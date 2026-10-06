@@ -331,7 +331,7 @@ the agent's view.
 
 The verdict (schema `hct.candidate_eval`) has these fields:
 
-- `verdict`, `exit_code`, and `stage` (`check`, `run` or `score`).
+- `verdict`, `exit_code`, and `stage` (`check`, `run`, `objects` or `score`).
 - `findings`: the check's findings, on rejection.
 - `score`, `families` and `failures`.
 - `cases`: one entry per public case, with cycles, speedup, delta and noise
