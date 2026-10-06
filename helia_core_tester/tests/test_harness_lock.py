@@ -206,14 +206,18 @@ def kernels(tmp_path: Path) -> Path:
     return root
 
 
+def _sha(root: Path) -> str:
+    return _git(root, "rev-parse", "base").strip()
+
+
 def _rules(root: Path) -> set[str]:
-    return {finding["rule"] for finding in check_candidate(root, "base")["findings"]}
+    return {finding["rule"] for finding in check_candidate(root, _sha(root))["findings"]}
 
 
 def test_source_change_passes(kernels: Path) -> None:
     (kernels / "Source/Conv/a.c").write_text("int a; /* faster */\n", encoding="utf-8")
     (kernels / "Source/Conv/new.c").write_text("int b;\n", encoding="utf-8")
-    report = check_candidate(kernels, "base")
+    report = check_candidate(kernels, _sha(kernels))
     assert report["ok"], report
     assert {f["path"] for f in report["files"]} == {"Source/Conv/a.c", "Source/Conv/new.c"}
 
@@ -259,7 +263,7 @@ def test_forbidden_change_fails(kernels: Path, rel: str, text: str, rule: str) -
 def test_safe_attributes_pass(kernels: Path) -> None:
     text = "__attribute__((always_inline, aligned(4))) static int a;\n#pragma GCC unroll 4\n"
     (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
-    assert check_candidate(kernels, "base")["ok"]
+    assert check_candidate(kernels, _sha(kernels))["ok"]
 
 
 def test_git_tricks_cannot_hide_changes(kernels: Path) -> None:
@@ -269,7 +273,7 @@ def test_git_tricks_cannot_hide_changes(kernels: Path) -> None:
     _git(kernels, "config", "diff.external", "true")
     (kernels / ".git/info/exclude").write_text("Source/Conv/hidden.c\n", encoding="utf-8")
     (kernels / "Source/Conv/hidden.c").write_text('__attribute__((section(".x"))) int h;\n', encoding="utf-8")
-    report = check_candidate(kernels, "base")
+    report = check_candidate(kernels, _sha(kernels))
     rules = {(f["path"], f["rule"]) for f in report["findings"]}
     assert ("Tests/t.c", "outside_allowlist") in rules
     assert ("Source/Conv/a.c", "pragma") in rules
@@ -282,12 +286,27 @@ def test_guard_edit_near_old_pragma_fails(tmp_path: Path) -> None:
     (root / "Source/Conv/a.c").write_text('#if 1\n#pragma GCC optimize("O3")\n#endif\nint a;\n', encoding="utf-8")
     assert _rules(root) == {"guard_change"}
     (root / "Source/Conv/a.c").write_text('#if 0\n#pragma GCC optimize("O3")\n#endif\nint a; /* faster */\n', encoding="utf-8")
-    assert check_candidate(root, "base")["ok"]
+    assert check_candidate(root, _sha(root))["ok"]
+
+
+def test_base_must_be_full_sha(kernels: Path) -> None:
+    from helia_core_tester.hardware.candidate_check import CheckError
+
+    with pytest.raises(CheckError, match="full commit SHA"):
+        check_candidate(kernels, "base")
+
+
+def test_token_inside_unchanged_attribute_fails(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "nn", {"Source/Conv/a.c": "__attribute__((\n    noinline))\nint a(void);\n"})
+    _git(root, "tag", "base")
+    text = '__attribute__((\n    noinline,\n    optimize("O3")))\nint a(void);\n'
+    (root / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    assert "attribute" in _rules(root)
 
 
 def test_hidden_index_entry_fails(kernels: Path) -> None:
     _git(kernels, "update-index", "--skip-worktree", ".gitignore")
-    report = check_candidate(kernels, "base")
+    report = check_candidate(kernels, _sha(kernels))
     assert [(f["rule"], f["path"]) for f in report["findings"]] == [("hidden_index_entry", ".gitignore")]
 
 
@@ -312,7 +331,7 @@ def test_symlinked_root_fails(kernels: Path, tmp_path: Path) -> None:
 ])
 def test_spliced_lines_cannot_hide_tokens(kernels: Path, text: str) -> None:
     (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
-    report = check_candidate(kernels, "base")
+    report = check_candidate(kernels, _sha(kernels))
     assert not report["ok"] and report["findings"][0]["line"] == 1
 
 
@@ -347,7 +366,7 @@ def test_modules_cmake_hash_ignores_kernel_location(tmp_path: Path) -> None:
 
 def test_cli_prints_json(kernels: Path) -> None:
     (kernels / "Tests/t.c").write_text("int t2;\n", encoding="utf-8")
-    result = runner.invoke(app, ["candidate", "check", "--base", "base", str(kernels)])
+    result = runner.invoke(app, ["candidate", "check", "--base", _sha(kernels), str(kernels)])
     assert result.exit_code == 1
     assert json.loads(result.output)["findings"][0]["rule"] == "outside_allowlist"
     bad = runner.invoke(app, ["candidate", "check", "--base", "nope", str(kernels)])

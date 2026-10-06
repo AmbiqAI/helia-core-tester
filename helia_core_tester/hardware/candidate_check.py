@@ -42,6 +42,7 @@ import json
 import os
 import re
 import subprocess
+from collections import Counter
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -272,6 +273,20 @@ def _grandfathered(tree: Path, path: str) -> bool:
     return any(next(line_rules(text), None) for text in joined.values())
 
 
+def rule_counts(source: str) -> Counter:
+    """Rule matches over a whole file."""
+    lines = source.splitlines()
+    text = _literal_text(" ".join(line[:-1] if line.endswith("\\") else line for line in lines))
+    counts: Counter = Counter()
+    counts["attribute"] = sum(_unsafe_attribute("".join(groups).join(("__attribute__((", "))")))
+                              for groups in _ATTRIBUTE.findall(text))
+    code = _COMMENT.sub(" ", text)
+    counts["pragma"] = sum(not _SAFE_PRAGMA.match(code, hit.start()) for hit in _PRAGMA.finditer(code))
+    for rule, pattern in LINE_RULES:
+        counts[rule] += len(pattern.findall(text))
+    return counts
+
+
 def hidden_entries(tree: Path) -> list[str]:
     """Paths with skip-worktree or assume-unchanged."""
     out = _split(_git(tree, "ls-files", "-v", "-z"))
@@ -282,6 +297,9 @@ def check_candidate(tree: Path, base: str) -> dict:
     """The JSON report for one candidate."""
     tree = tree.resolve()
     commit = _git(tree, "rev-parse", "--verify", f"{base}^{{commit}}").decode().strip()
+    # Branches and tags can be moved.
+    if base.lower() != commit:
+        raise CheckError(f"--base must be a full commit SHA, got {base!r}")
     changes = changed_paths(tree, commit)
     base_blobs = base_files(tree, commit)
     findings: list[dict] = []
@@ -304,8 +322,15 @@ def check_candidate(tree: Path, base: str) -> dict:
         # Literals split across lines.
         if added:
             joined = " ".join(text.strip() for _, text in added)
-            findings += ({"rule": rule, "path": path, "line": added[0][0], "text": "joined added lines"}
-                         for rule in line_rules(joined) if rule not in hit_rules)
+            for rule in line_rules(joined):
+                if rule not in hit_rules:
+                    hit_rules.add(rule)
+                    findings.append({"rule": rule, "path": path, "line": added[0][0], "text": "joined added lines"})
+            # Edits inside unchanged constructs.
+            old = _git(tree, "cat-file", "blob", base_blobs[path][1]).decode(errors="replace") if path in base_blobs else ""
+            before, after = rule_counts(old), rule_counts((tree / path).read_text(encoding="utf-8", errors="replace"))
+            findings += ({"rule": rule, "path": path, "line": added[0][0], "text": "more matches in whole file"}
+                         for rule in sorted(after) if after[rule] > before[rule] and rule not in hit_rules)
     findings += ({"rule": "hidden_index_entry", "path": path, "message": "skip-worktree or assume-unchanged set"}
                  for path in hidden_entries(tree))
     return {
