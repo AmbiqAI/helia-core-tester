@@ -91,7 +91,8 @@ class GenerateStep(StepBase):
         if self.config.random_shapes:
             cmd.extend(["--random-shapes", str(self.config.random_shapes)])
         if self.config.hidden_dir is not None:
-            cmd.extend(["--hidden-dir", str(self.config.hidden_dir)])
+            # Long tracebacks print the derived seed.
+            cmd.extend(["--hidden-dir", str(self.config.hidden_dir), "--tb=native"])
         elif self.config.random_shapes:
             cmd.extend(["--shape-seed", str(self.config.shape_seed)])
         return cmd

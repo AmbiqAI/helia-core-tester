@@ -122,6 +122,10 @@ def test_explicit_zero_seed_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
     ({"random_shapes": 2, "shape_seed": -1}, "shape_seed must be in"),
     ({"random_shapes": 2, "shape_seed": 2**32}, "shape_seed must be in"),
     ({"random_shapes": 2, "suite": "float"}, "needs the int suite"),
+    ({"hidden_dir": "/tmp/hidden"}, "needs random_shapes"),
+    ({"random_shapes": 2, "hidden_dir": "artifacts/hidden"}, "outside the tester tree"),
+    ({"random_shapes": 2, "hidden_dir": "/tmp/h", "hidden_seed_file": "seed.txt"}, "outside the tester tree"),
+    ({"random_shapes": 2, "hidden_seed_file": "/tmp/seed"}, "needs hidden_dir"),
 ])
 def test_bad_random_settings_refused(settings: dict, message: str) -> None:
     from helia_core_tester.core.errors import ConfigurationError
@@ -213,19 +217,6 @@ def test_hidden_summary_keeps_only_commitment(tmp_path: Path, monkeypatch: pytes
     assert SECRET not in written and "shape_seed" not in written
 
 
-@pytest.mark.parametrize(("settings", "message"), [
-    ({"hidden_dir": "/tmp/hidden"}, "needs random_shapes"),
-    ({"random_shapes": 2, "hidden_dir": "artifacts/hidden"}, "outside the tester tree"),
-    ({"random_shapes": 2, "hidden_dir": "/tmp/h", "hidden_seed_file": "seed.txt"}, "outside the tester tree"),
-    ({"random_shapes": 2, "hidden_seed_file": "/tmp/seed"}, "needs hidden_dir"),
-])
-def test_bad_hidden_settings_refused(settings: dict, message: str) -> None:
-    from helia_core_tester.core.errors import ConfigurationError
-
-    with pytest.raises(ConfigurationError, match=message):
-        Config(project_root=Path.cwd(), **settings)
-
-
 def test_hidden_refuses_shape_seed(tmp_path: Path) -> None:
     from helia_core_tester.cli import get_config
     from helia_core_tester.core.errors import ConfigurationError
@@ -277,3 +268,20 @@ def test_hidden_generation_stays_outside(tmp_path: Path, monkeypatch: pytest.Mon
     assert summary["filters"]["seed_commitment"] == rs.seed_commitment(SECRET.encode())
     assert "shape_seed" not in summary["filters"]
     assert not old_draw.exists() and not (tmp_path / "repo").exists()
+
+
+def test_hidden_dir_owns_its_tree(tmp_path: Path) -> None:
+    from helia_core_tester.generation import conftest
+
+    class _Options:
+        def __init__(self, **values):
+            self.values = {"--cpu": "m55", "--suite": "int", **values}
+
+        def getoption(self, name):
+            return self.values.get(name)
+
+    hidden = _Options(**{"--hidden-dir": str(tmp_path), "--random-shapes": 2, "--keep-unselected": True})
+    assert not conftest._keeps_unselected(hidden)
+    assert conftest._generated_override(hidden) == str(tmp_path / "artifacts/generated_tests/int/cortex-m55")
+    public = _Options(**{"--random-shapes": 2})
+    assert conftest._keeps_unselected(public) and conftest._generated_override(public) is None

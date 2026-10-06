@@ -68,7 +68,7 @@ dropped and counted as `skipped_degenerate`.
 
 Hidden shapes: `generate --random-shapes N --hidden-dir DIR` draws the same
 kind of cases from a secret seed instead (env `HCT_HIDDEN_SEED`, or
-`--hidden-seed-file F`; 16+ characters, e.g. `openssl rand -hex 16`). DIR and
+`--hidden-seed-file F`; 16+ characters, e.g. `python -c "import secrets; print(secrets.token_hex(16))"`). DIR and
 F must sit outside the tester tree. DIR mirrors a tester root: descriptors in
 `DIR/artifacts/random_shapes/<cpu>/`, cases in `DIR/artifacts/generated_tests/`,
 reports in `DIR/artifacts/reports/`. Case ids are opaque keyed hashes

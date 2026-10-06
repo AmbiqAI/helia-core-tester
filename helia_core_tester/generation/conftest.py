@@ -8,7 +8,9 @@ import shutil
 import sys
 from pathlib import Path
 
+from helia_core_tester.core.cpu_targets import normalize_cpu
 from helia_core_tester.core.discovery import find_generated_tests_dir
+from helia_core_tester.core.path_layout import generated_tests_dir
 
 
 def pytest_addoption(parser):
@@ -45,14 +47,26 @@ def pytest_addoption(parser):
                     help="Write secret-seeded shapes here instead")
 
 
-def _shares_fixed_tree(config) -> bool:
+def _keeps_unselected(config) -> bool:
     """Public random shapes join the fixed tree."""
-    return bool(config.getoption("--random-shapes")) and not config.getoption("--hidden-dir")
+    if config.getoption("--hidden-dir"):
+        # Hidden trees hold one draw.
+        return False
+    return bool(config.getoption("--keep-unselected") or config.getoption("--random-shapes"))
+
+
+def _generated_override(config):
+    """Explicit output dir, else the hidden tree."""
+    hidden = config.getoption("--hidden-dir")
+    if config.getoption("--generated-tests-dir") or not hidden:
+        return config.getoption("--generated-tests-dir")
+    cpu = normalize_cpu(config.getoption("--cpu") or "cortex-m55")
+    return str(generated_tests_dir(Path(hidden), cpu, suite=config.getoption("--suite") or "int"))
 
 
 def pytest_configure(config):
     """Configure pytest with custom options."""
-    generated_override = config.getoption("--generated-tests-dir")
+    generated_override = _generated_override(config)
     target_cpu = config.getoption("--cpu") or "cortex-m55"
     target_suite = config.getoption("--suite") or "int"
     generated_tests_dir = (
@@ -65,7 +79,7 @@ def pytest_configure(config):
     # their stamp are kept and the run prunes whatever falls outside the active
     # filter (see generation/reuse.py). Only a forced run starts from empty,
     # unless --keep-unselected keeps other cases.
-    keep = config.getoption("--keep-unselected") or _shares_fixed_tree(config)
+    keep = _keeps_unselected(config)
     if not config.getoption("--force-generate") or keep:
         generated_tests_dir.mkdir(parents=True, exist_ok=True)
         print("Reusing generated tests directory (stamp-checked per case)")
@@ -110,9 +124,9 @@ def test_filters(request):
         'cpu': request.config.getoption("--cpu"),
         'suite': request.config.getoption("--suite"),
         'float_precision': request.config.getoption("--float-precision"),
-        'generated_tests_dir': request.config.getoption("--generated-tests-dir"),
+        'generated_tests_dir': _generated_override(request.config),
         'force_generate': request.config.getoption("--force-generate"),
-        'keep_unselected': bool(request.config.getoption("--keep-unselected") or _shares_fixed_tree(request.config)),
+        'keep_unselected': _keeps_unselected(request.config),
         'random_shapes': request.config.getoption("--random-shapes"),
         'shape_seed': request.config.getoption("--shape-seed"),
         'hidden_dir': request.config.getoption("--hidden-dir"),

@@ -390,14 +390,14 @@ def hidden_cases(n: int, secret: bytes, cpu: str) -> list[dict[str, Any]]:
     return cases
 
 
+def hidden_root(hidden_dir: Path, cpu: str) -> Path:
+    """Hidden descriptors and summary for cpu."""
+    # The hidden dir mirrors a tester root.
+    return artifacts_root(hidden_dir) / "random_shapes" / normalize_cpu(cpu)
+
+
 def prepare_hidden(hidden_dir: Path, n: int, cpu: str) -> Path:
     """Write hidden cases; return descriptors dir."""
     secret = hidden_secret()
     root = hidden_root(hidden_dir, cpu)
     return write_cases(root, hidden_cases(n, secret, cpu), {"seed_commitment": seed_commitment(secret)}, cpu)
-
-
-def hidden_root(hidden_dir: Path, cpu: str) -> Path:
-    """Hidden descriptors and summary for cpu."""
-    # The hidden dir mirrors a tester root.
-    return artifacts_root(hidden_dir) / "random_shapes" / normalize_cpu(cpu)
