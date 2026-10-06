@@ -9,7 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
-from helia_core_tester.hardware.score import load_bundle, load_scoring, parse_focus, score_bundles
+from helia_core_tester.hardware.score import kernel_commit, load_bundle, load_scoring, parse_focus, score_bundles
 
 FIELDS = ["case_id", "kernel_id", "comparison_passed", "median_cycles", "mad_cycles", "timed_symbol", "inner_symbol", "macs",
           "ARM_PMU_INST_RETIRED", "ARM_PMU_MVE_INST_RETIRED", "timing_status", "prepare_cycles"]
@@ -446,3 +446,14 @@ def test_cli_refuses_unknown_focus(tmp_path):
     result = CliRunner().invoke(app, [*argv, "arm_convolve_typo_s8"])
     assert result.exit_code == 2 and "no baseline case matches" in result.output
     assert CliRunner().invoke(app, [*argv, "s8"]).exit_code == 4
+
+
+@pytest.mark.parametrize(("kernels", "commit"), [
+    ({"root": "/k", "root_head": None, "root_dirty": None}, None),
+    ({"root": "/k", "root_head": BASE, "root_dirty": True}, None),
+    ({"root": "/k", "root_head": BASE, "root_dirty": False}, BASE),
+    ({"ref": "v1", "root": None}, "a"),
+])
+def test_kernel_commit_needs_clean_root(tmp_path, kernels, commit):
+    build = {"options": {}, "modules": [{"name": "nsx-cmsis-nn", "commit": "a"}], "kernels": kernels}
+    assert kernel_commit(load_bundle(_bundle(tmp_path, "a", build=build))) == commit
