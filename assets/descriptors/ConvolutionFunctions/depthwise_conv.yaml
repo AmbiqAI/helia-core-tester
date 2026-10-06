@@ -2260,6 +2260,37 @@ required_capabilities:
 - mve
 ---
 operator: DepthwiseConv
+name: depthwise_conv_entry_3x3_28x28_c64_stride2_s8
+# W x C 1792: scratch above the opt size.
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_3x3
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 28
+- 28
+- 64
+filter_shape:
+- 3
+- 3
+- 64
+- 1
+strides:
+- 2
+- 2
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+required_capabilities:
+- mve
+---
+operator: DepthwiseConv
 name: depthwise_conv_entry_3x3_declines_c62_s8
 activation_dtype: S8
 weight_dtype: S8
@@ -2330,6 +2361,37 @@ input_shape:
 - 1
 - 12
 - 12
+- 64
+filter_shape:
+- 3
+- 3
+- 64
+- 1
+strides:
+- 1
+- 1
+padding: SAME
+use_bias: true
+depth_multiplier: 1
+dilation:
+- 1
+- 1
+required_capabilities:
+- mve
+---
+operator: DepthwiseConv
+name: depthwise_conv_entry_3x3_c64_s1_14x28_s8
+# W x C 1792: scratch above the opt size.
+activation_dtype: S8
+weight_dtype: S8
+activation: NONE
+entry: arm_depthwise_conv_s8_opt_3x3_c64_s1
+hint:
+  call_style: per_tensor
+input_shape:
+- 1
+- 14
+- 28
 - 64
 filter_shape:
 - 3
