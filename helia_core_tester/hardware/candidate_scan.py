@@ -65,6 +65,10 @@ def _preprocess(gcc: str, root: Path, unit: str, flags: tuple[str, ...]) -> Opti
     return {origin: "".join(chunks) for origin, chunks in by_file.items()}
 
 
+def _unit_flags(config: tuple | dict, unit: str) -> tuple[str, ...]:
+    return config.get(unit, config["*"]) if isinstance(config, dict) else config
+
+
 def _tree_counts(gcc: str, root: Path, rule_counts: Callable[[str], Counter], configs: dict) -> tuple[dict, set[str]]:
     """Max rule counts per origin, plus failed units."""
     counts: dict[tuple[str, str], Counter] = {}
@@ -73,7 +77,8 @@ def _tree_counts(gcc: str, root: Path, rule_counts: Callable[[str], Counter], co
     jobs = [(config, unit) for config in configs for unit in _units(root)]
     # Parsing gcc -E output is CPU bound.
     with ProcessPoolExecutor() as pool:
-        flags = [configs[config] for config, _ in jobs]
+        # A dict config holds per-unit flags.
+        flags = [_unit_flags(configs[config], unit) for config, unit in jobs]
         results = pool.map(_preprocess, repeat(gcc), repeat(root), [unit for _, unit in jobs], flags, chunksize=8)
         for (config, unit), by_file in zip(jobs, results):
             if by_file is None:
@@ -105,7 +110,7 @@ def preprocess_findings(
         except (OSError, tarfile.TarError) as exc:
             return [{"rule": "scan_error", "path": "", "message": f"preprocess failed: {exc}"[:200]}]
     findings = [{"rule": "scan_error", "path": unit.split(":", 1)[1], "message": f"gcc -E failed for {unit}"}
-                for unit in sorted(failed - base_failed)]
+                for unit in sorted(failed - base_failed | {u for u in failed if u.startswith("build:")})]
     # A config that never runs scans nothing.
     findings += [{"rule": "scan_error", "path": "", "message": f"gcc -E failed for all of {config}"}
                  for config in configs if _units(tree) and not any(key[0] == config for key in after)]
@@ -200,6 +205,8 @@ def _section_bytes(obj: Path, names: list[str]) -> dict[str, bytes]:
 def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
     """Section, SCS and reference hits."""
     hits, sections = [], {}
+    # Locals resolve only inside this object.
+    local = _defined_symbols([obj], local=True)
     for row in run_tool("arm-none-eabi-readelf", ["-SW", str(obj)]).splitlines():
         match = _SECTION_ROW.match(row)
         if not match:
@@ -243,19 +250,21 @@ def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
             addend = int.from_bytes(contents[section][offset:offset + 4], "little", signed=True)
             if not 0 <= addend < _ADDEND_MAX:
                 hit(f"{symbol}{addend:+#x} in {section}")
-        if kind not in _CALLS and not symbol.startswith(".") and symbol not in defined:
+        if kind not in _CALLS and not symbol.startswith(".") and symbol not in defined | local:
             hit(f"{kind} to {symbol} in {section}")
     return hits
 
 
-def _defined_symbols(objects: list[Path]) -> frozenset[str]:
-    """Symbols the kernel objects define."""
+def _defined_symbols(objects: list[Path], local: bool = False) -> frozenset[str]:
+    """Strong global (or local) definitions."""
     out = run_tool("arm-none-eabi-nm", ["--defined-only", *map(str, objects)])
-    return frozenset(parts[2] for parts in map(str.split, out.splitlines()) if len(parts) == 3)
+    # Weak and common can lose to harness.
+    kinds = "bdrt" if local else "BDRT"
+    return frozenset(parts[2] for parts in map(str.split, out.splitlines()) if len(parts) == 3 and parts[1] in kinds)
 
 
-def object_findings(build_dir: Path) -> tuple[list[dict], dict, tuple[str, ...]]:
-    """Object hits, a summary, the build's -E flags."""
+def object_findings(build_dir: Path) -> tuple[list[dict], dict, dict]:
+    """Object hits, a summary, per-unit -E flags."""
     from .firmware_build import built_record, nsx_app_dir
 
     summary = {"build_dir": str(build_dir), "count": 0,
@@ -265,13 +274,14 @@ def object_findings(build_dir: Path) -> tuple[list[dict], dict, tuple[str, ...]]
         missing = [source for source, obj, _ in units if not obj.is_file()]
         if not units or missing:
             message = f"kernel object missing: {missing[0]}" if missing else "no kernel objects found"
-            return [{"rule": "scan_error", "path": "", "message": message}], summary, ()
+            return [{"rule": "scan_error", "path": "", "message": message}], summary, {}
         defined = _defined_symbols([obj for _, obj, _ in units])
         with ThreadPoolExecutor() as pool:
             found = pool.map(lambda unit: _object_hits(unit[0], unit[1], defined), units)
             findings = [hit for hits in found for hit in hits]
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
-        return [{"rule": "scan_error", "path": "", "message": f"object scan failed: {exc}"[:200]}], summary, ()
+        return [{"rule": "scan_error", "path": "", "message": f"object scan failed: {exc}"[:200]}], summary, {}
     summary["count"] = len(units)
-    source, _, args = units[0]
-    return findings, summary, _preprocess_args(args, source)
+    flags = {source: _preprocess_args(args, source) for source, _, args in units}
+    # New units get the first unit's flags.
+    return findings, summary, {"*": flags[units[0][0]], **flags}

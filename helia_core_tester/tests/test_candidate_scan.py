@@ -96,7 +96,7 @@ def test_object_scan_flags_sections_and_scs(tmp_path: Path) -> None:
     texts = {f["text"].split()[0] for f in findings if f["rule"] == "object_section"}
     assert texts == {".itcm_text", ".data.fast"} and summary["count"] == 1
     assert len([f for f in findings if f["rule"] == "object_address"]) >= 2
-    assert flags == ("-DBOARD_X", "-IInclude")
+    assert flags["*"] == flags["Source/k.c"] == ("-DBOARD_X", "-IInclude")
 
 
 def test_object_scan_clean(tmp_path: Path) -> None:
@@ -110,6 +110,8 @@ def test_object_scan_clean(tmp_path: Path) -> None:
     "const unsigned short h[3] = {0, 0xE010, 0xE000};\n",
     "extern char __Vectors[];\nchar *const v = __Vectors + 0xDFBFE010u;\n",
     "extern int harness_var;\nint *const w = &harness_var;\n",
+    # Weak loses to a harness definition.
+    "__attribute__((weak)) int harness_w;\nint *const w = &harness_w;\n",
 ])
 def test_object_scan_hidden_addresses(tmp_path: Path, source: str) -> None:
     findings, _, _ = candidate_scan.object_findings(_build(tmp_path, source))
@@ -130,6 +132,30 @@ def test_build_macros_reach_gcc_e(kernels: Path, tmp_path: Path, monkeypatch) ->
     report = check_candidate(kernels, _git(kernels, "rev-parse", "HEAD").strip(), build_dir=_build(tmp_path, "int k;\n"))
     assert {(f["rule"], f["path"]) for f in report["findings"]} == {("pragma", "Source/Conv/a.c")}
     assert report["objects"]["count"] == 1
+
+
+def test_local_name_hides_no_global(tmp_path: Path) -> None:
+    build = _build(tmp_path, "static int x;\nint *const p = &x;\n")
+    other = build / "nsx_app/modules/nsx-cmsis-nn/Source/o.c"
+    other.write_text("extern int x;\nint *const q = &x;\n", encoding="utf-8")
+    gcc = arm_tool("arm-none-eabi-gcc")
+    subprocess.run([gcc, "-mcpu=cortex-m55", "-O2", "-c", str(other), "-o", str(build / "o.c.obj")], check=True)
+    entries = json.loads((build / "compile_commands.json").read_text(encoding="utf-8"))
+    entries.append({**entries[0], "file": str(other), "output": "o.c.obj", "arguments": ["gcc", "-c", str(other)]})
+    (build / "compile_commands.json").write_text(json.dumps(entries), encoding="utf-8")
+    findings, _, flags = candidate_scan.object_findings(build)
+    assert {f["path"] for f in findings} == {"Source/o.c"}
+    assert flags["Source/o.c"] == () and flags["Source/k.c"][0] == "-DBOARD_X"
+
+
+def test_per_unit_flags_reach_gcc_e(kernels: Path, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(candidate_check, "kernels_match", lambda tree, module: True)
+    text = PASTE + '#ifdef BOARD_B\nCAT(_Pra, gma)("GCC optimize(\\"O3\\")")\n#endif\nint b;\n'
+    (kernels / "Source/Conv/b.c").write_text(text, encoding="utf-8")
+    flags = {"*": ("-DBOARD_X",), "Source/Conv/a.c": ("-DBOARD_X",), "Source/Conv/b.c": ("-DBOARD_B",)}
+    monkeypatch.setattr(candidate_check, "object_findings", lambda build: ([], {"count": 2}, flags))
+    report = check_candidate(kernels, _git(kernels, "rev-parse", "HEAD").strip(), build_dir=tmp_path)
+    assert ("pragma", "Source/Conv/b.c") in {(f["rule"], f["path"]) for f in report["findings"]}
 
 
 def test_stale_build_fails(kernels: Path, tmp_path: Path) -> None:
