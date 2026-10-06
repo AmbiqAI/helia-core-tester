@@ -187,7 +187,7 @@ def test_missing_records_leave_nulls(tmp_path: Path, with_dir: bool) -> None:
         "toolchain": None,
     }
     assert "nsx_lock" not in manifest["artifacts"]
-    assert manifest["harness"]["digest"] is None
+    assert manifest["harness_digest"] is None
     assert not (bundle_root / "nsx.lock").exists()
 
 

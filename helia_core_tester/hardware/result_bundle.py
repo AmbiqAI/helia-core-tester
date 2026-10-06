@@ -11,7 +11,7 @@ from typing import Any
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
 from .comparison import finite_or_none
-from .harness_lock import HARNESS_FIELD
+from .harness_lock import HARNESS_FIELD, HARNESS_INPUTS
 from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
 from .wire import boot_record, placement_record
@@ -113,7 +113,7 @@ def build_provenance(build_dir: Path | None) -> tuple[dict, Path | None]:
     return provenance, app_dir / "nsx.lock"
 
 
-def harness_section(build_dir: Path | None) -> dict:
+def harness_section(build_dir: Path | None) -> tuple[str | None, dict]:
     """Harness digest over the build's inputs."""
     from .boards import repo_root
     from .firmware_build import built_record, nsx_app_dir
@@ -212,7 +212,7 @@ def write_result_bundle(
         "compare": {"strict": False, "golden_from": None, **(compare or {})},
     }
     session_manifest["build"], lock_file = build_provenance(build_dir)
-    session_manifest[HARNESS_FIELD] = harness_section(build_dir)
+    session_manifest[HARNESS_FIELD], session_manifest[HARNESS_INPUTS] = harness_section(build_dir)
     if lock_file is not None:
         shutil.copyfile(lock_file, bundle_root / "nsx.lock")
         session_manifest["artifacts"]["nsx_lock"] = "nsx.lock"

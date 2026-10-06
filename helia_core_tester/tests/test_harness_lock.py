@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -104,7 +105,7 @@ def _build(build_dir: Path, kernel: str = "k", flags: str = "-O2", stamp: str = 
 def test_digest_is_stable_across_reruns(tester: Path, tmp_path: Path) -> None:
     first = _build(tmp_path / "b", stamp="t0")
     second = _build(tmp_path / "b", stamp="t1")
-    assert harness_lock.harness_digest(first) is not None
+    assert re.fullmatch(r"[0-9a-f]{64}", first["harness_digest"])
     assert harness_lock.same_harness(first, second)
     assert first["harness"]["tester_dirty"] is False
 
@@ -142,7 +143,7 @@ def test_dirty_tester_marks_bundle(tester: Path, tmp_path: Path) -> None:
 
 
 def test_no_build_means_no_digest(tester: Path) -> None:
-    assert harness_lock.harness_record(None, tester)["digest"] is None
+    assert harness_lock.harness_record(None, tester)[0] is None
     assert not harness_lock.same_harness({}, {})
 
 

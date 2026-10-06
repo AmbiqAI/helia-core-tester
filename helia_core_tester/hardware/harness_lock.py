@@ -2,7 +2,9 @@
 
 A build records the firmware inputs (tester files, NSX lock minus the
 kernel module, build options and flags, toolchain); the bundle adds the
-tester state at run time and hashes both into one digest. Two bundles
+tester state at run time and hashes both into one hex digest, written
+to the session manifest's top-level `harness_digest` (null for
+unverified firmware). The inputs sit under `harness`. Two bundles
 compare fairly only when their digests match. Scorers call
 `harness_digest(manifest)` or `same_harness(a, b)`.
 """
@@ -18,8 +20,9 @@ from typing import Any, Optional
 
 import yaml
 
-# Session manifest key; scorers read this.
-HARNESS_FIELD = "harness"
+# Session manifest keys; scorers read the digest.
+HARNESS_FIELD = "harness_digest"
+HARNESS_INPUTS = "harness"
 HARNESS_SCHEMA = 1
 
 # Tester files the firmware build reads.
@@ -48,10 +51,6 @@ def _git(root: Path, *args: str) -> Optional[bytes]:
     except OSError:
         return None
     return done.stdout if done.returncode == 0 else None
-
-
-def _sha(data: bytes) -> str:
-    return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 def tester_state(repo_root: Path) -> dict[str, Any]:
@@ -156,22 +155,23 @@ def firmware_record(repo_root: Path, build_dir: Path, options: Any, toolchain: A
     }
 
 
-def harness_record(firmware: Optional[dict], repo_root: Path) -> dict[str, Any]:
-    """Digest plus inputs, for the manifest."""
+def harness_record(firmware: Optional[dict], repo_root: Path) -> tuple[Optional[str], dict[str, Any]]:
+    """Hex digest, plus inputs for the manifest."""
     host = tester_state(repo_root)
     # Unknown state counts as dirty.
     clean = host["dirty"] is False and (not firmware or firmware["tester"]["dirty"] is False)
+    record = {"schema": HARNESS_SCHEMA, "tester_dirty": not clean, "inputs": None}
     if not firmware:
-        return {"schema": HARNESS_SCHEMA, "digest": None, "tester_dirty": not clean, "inputs": None}
-    inputs = {"firmware": firmware, "host": host}
-    canonical = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return {"schema": HARNESS_SCHEMA, "digest": _sha(canonical), "tester_dirty": not clean, "inputs": inputs}
+        return None, record
+    record["inputs"] = {"firmware": firmware, "host": host}
+    canonical = json.dumps(record["inputs"], sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest(), record
 
 
 def harness_digest(manifest: dict) -> Optional[str]:
     """A session manifest's harness digest."""
-    record = manifest.get(HARNESS_FIELD)
-    return record.get("digest") if isinstance(record, dict) else None
+    digest = manifest.get(HARNESS_FIELD)
+    return digest if isinstance(digest, str) and digest else None
 
 
 def same_harness(first: dict, second: dict) -> bool:
