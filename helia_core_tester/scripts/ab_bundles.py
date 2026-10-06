@@ -84,17 +84,6 @@ def _section(title: str, entries: list[str]) -> list[str]:
     return ["", f"== {title} ({len(entries)})", *(f"  {entry}" for entry in entries)] if entries else []
 
 
-def find_regressions(a: Bundle, b: Bundle) -> list[str]:
-    """Cases B broke or dropped."""
-    dropped = [f"{case_id} missing in B" for case_id in a.rows if case_id not in b.rows]
-    broken = [
-        f"{case_id} mismatch in B only"
-        for case_id in a.rows
-        if case_id in b.rows and "mismatch" in b.flags(case_id) and "mismatch" not in a.flags(case_id)
-    ]
-    return broken + dropped
-
-
 def compare(
     a: Bundle, b: Bundle, counters: list[str], *, retired_limit: float, cycle_limit: float | None, allow_regressions: bool = False
 ) -> tuple[list[str], int]:
@@ -103,11 +92,15 @@ def compare(
     shared = [case_id for case_id in a.rows if case_id in b.rows]
     deltas: dict[str, list[float]] = {counter: [] for counter in counters}
     violations: list[str] = []
+    regressions: list[str] = []
     flagged: list[str] = []
     eligible = 0
     width = max(len("counter"), *(len(counter) for counter in counters))
     for case_id in shared:
-        case_flags = sorted(set(a.flags(case_id)) | set(b.flags(case_id)))
+        flags_a, flags_b = a.flags(case_id), b.flags(case_id)
+        case_flags = sorted(set(flags_a) | set(flags_b))
+        if not allow_regressions and "mismatch" in flags_b and "mismatch" not in flags_a:
+            regressions.append(f"{case_id} mismatch in B only")
         if case_flags:
             flagged.append(f"{case_id} ({', '.join(case_flags)})")
         else:
@@ -140,25 +133,27 @@ def compare(
 
     lines += _section("counters only in A", [c for c in a.counters if c not in b.counters])
     lines += _section("counters only in B", [c for c in b.counters if c not in a.counters])
-    lines += _section("cases only in A", [c for c in a.rows if c not in b.rows])
+    only_a = [c for c in a.rows if c not in b.rows]
+    if not allow_regressions:
+        regressions += [f"{case_id} missing in B" for case_id in only_a]
+    lines += _section("cases only in A", only_a)
     lines += _section("cases only in B", [c for c in b.rows if c not in a.rows])
     lines += _section("flagged, not gated", flagged)
 
-    regressions = [] if allow_regressions else find_regressions(a, b)
     lines.append("")
+    if regressions:
+        lines.append(f"== FAIL: {len(regressions)} cases regressed in B")
+        lines.extend(f"  {entry}" for entry in regressions)
     if not shared:
         lines.append("== FAIL: no shared cases")
         return lines, 1
     if not eligible:
         lines.append("== FAIL: every shared case is flagged")
         return lines, 1
-    if regressions:
-        lines.append(f"== FAIL: {len(regressions)} cases regressed in B")
-        lines.extend(f"  {entry}" for entry in regressions)
     if violations:
         lines.append(f"== FAIL: {len(violations)} counter deltas over limit")
         lines.extend(f"  {entry}" for entry in violations)
-    if regressions or violations:
+    if violations or regressions:
         return lines, 1
     lines.append(f"== PASS: {eligible} eligible cases within limits")
     return lines, 0
