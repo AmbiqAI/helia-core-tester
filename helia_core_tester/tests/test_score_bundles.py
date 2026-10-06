@@ -205,3 +205,20 @@ def test_default_min_score_needs_half_percent(tmp_path):
     big = _bundle(tmp_path, "c", cycles={"conv_a": 980.0})
     assert score_bundles([load_bundle(base)], [load_bundle(small)], scoring)["verdict"] == "no_gain"
     assert score_bundles([load_bundle(base)], [load_bundle(big)], scoring)["verdict"] == "pass"
+
+
+def test_repeats_without_kernel_identity_refused(tmp_path):
+    builds = [{"options": {}, "kernels": {"commit": c}} for c in ("x", "y")]
+    report = _score([_bundle(tmp_path, "a", build=builds[0])], [_bundle(tmp_path, f"b{i}", build=b) for i, b in enumerate(builds)])
+    assert report["verdict"] == "not_comparable"
+    unknown = [{"options": {}, "kernels": {}} for _ in range(2)]
+    report = _score([_bundle(tmp_path, f"c{i}", build=b) for i, b in enumerate(unknown)], [_bundle(tmp_path, "d", build=unknown[0])])
+    assert [f["reason"] for f in report["failures"]] == ["baseline repeats lack kernel identity"]
+
+
+def test_missing_baseline_repeat_excludes_case(tmp_path):
+    bases = [_bundle(tmp_path, "a0"), _bundle(tmp_path, "a1", drop=("conv_a",))]
+    report = _score(bases, [_bundle(tmp_path, "b", cycles={"conv_a": 500.0})])
+    conv = next(case for case in report["cases"] if case["case_id"] == "conv_a")
+    assert not conv["eligible"] and conv["excluded_by"] == "missing_baseline_repeat"
+    assert "conv" not in report["families"]

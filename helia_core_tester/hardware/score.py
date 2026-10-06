@@ -123,10 +123,23 @@ def refusals(baselines: list[Bundle], candidates: list[Bundle]) -> list[str]:
         if changed:
             reasons.append(f"{bundle.session_id}: harness differs in {', '.join(changed)}")
     for side, bundles in (("baseline", baselines), ("candidate", candidates)):
-        trees = {((b.manifest.get("build") or {}).get("kernels") or {}).get("tree_hash") for b in bundles}
-        if len(trees) > 1:
+        kernels = [_kernel_id(b) for b in bundles]
+        if len(bundles) > 1 and None in kernels:
+            reasons.append(f"{side} repeats lack kernel identity")
+        elif len(set(kernels)) > 1:
             reasons.append(f"{side} repeats built different kernels")
     return reasons
+
+
+def _kernel_id(bundle: Bundle) -> tuple | None:
+    """Kernel tree identity; None when unknown."""
+    build = bundle.manifest.get("build") or {}
+    kernels = build.get("kernels") or {}
+    if kernels.get("tree_hash"):
+        return ("tree_hash", kernels["tree_hash"])
+    module = next((m.get("commit") for m in build.get("modules") or [] if m.get("name") == CMSIS_NN_MODULE), None)
+    known = (kernels.get("commit") or module, kernels.get("ref"), kernels.get("root_head"), kernels.get("root_dirty"))
+    return ("provenance", known) if any(v is not None for v in known) else None
 
 
 def _num(row: dict, key: str) -> float | None:
@@ -191,6 +204,9 @@ def _case(case_id: str, baselines: list[Bundle], candidates: list[Bundle], scori
     base = [b.rows[case_id] for b in baselines if case_id in b.rows]
     cand = [c.rows[case_id] for c in candidates]
     statuses = sorted({_status(row) for row in base + cand} - {"valid"})
+    # A baseline repeat lacks this case.
+    if len(base) != len(baselines):
+        statuses.insert(0, "missing_baseline_repeat")
     # Valid baseline, untimed candidate: a failure.
     lost = sorted({_status(row) for row in cand} - {_status(row) for row in base} - {"valid"})
     if any(row.get("comparison_passed") != "true" for row in base + cand):
