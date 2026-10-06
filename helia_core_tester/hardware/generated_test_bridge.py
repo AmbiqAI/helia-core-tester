@@ -33,7 +33,7 @@ from .case_bundle import (
 from .kernel_registry import AmbiguousKernelError, UnknownKernelError, lookup_entry_id, lookup_kernel_id
 from .pathutil import display_path
 from helia_core_tester.generation.io.descriptors import descriptor_matches_op
-from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_3X3_ENTRIES, dw3x3_scratch_bytes
+from helia_core_tester.generation.kernel_dispatch import entry_scratch_bytes
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, normalize_dtype, resolve_comparison
 from helia_core_tester.generation.utils.template_context import TemplateContextBuilder
 
@@ -599,8 +599,7 @@ def _depthwise_s8_scratch_bytes(
 ) -> int:
     """Bound wrapper or entry scratch plus weight sums."""
     scratch = TemplateContextBuilder.calculate_depthwise_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")
-    if entry in DEPTHWISE_CONV_S8_3X3_ENTRIES:
-        scratch = max(scratch, dw3x3_scratch_bytes(input_dims))
+    scratch = max(scratch, entry_scratch_bytes(entry, input_dims))
     # One input channel may run as conv.
     if input_dims["c"] == 1:
         conv = TemplateContextBuilder.calculate_buffer_size_max(input_dims, filter_dims, output_dims, output_dtype="S8")

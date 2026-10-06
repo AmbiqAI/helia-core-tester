@@ -37,6 +37,8 @@ class DirectEntry:
     # Float entries: whether the call and the scratch query take a trailing layout argument.
     kernel_needs_layout: bool = False
     buffer_size_needs_layout: bool = False
+    # Second scratch query, from (input_dims); scratch takes the larger.
+    entry_buffer_size_fn: str = ""
 
 
 # Public entries that no wrapper routes to. The depthwise_s8 family takes
@@ -47,10 +49,12 @@ class DirectEntry:
 # quantization; the case builds it once with <entry>_pack, as an ahead-of-time caller does.
 DIRECT_ENTRIES: Dict[str, DirectEntry] = {
     "arm_depthwise_conv_s8_opt_3x3": DirectEntry(
-        "DepthwiseConv", "S8", "S8", "depthwise_s8", "arm_depthwise_conv_s8_opt_get_buffer_size"
+        "DepthwiseConv", "S8", "S8", "depthwise_s8", "arm_depthwise_conv_s8_opt_get_buffer_size",
+        entry_buffer_size_fn="arm_depthwise_conv_s8_opt_3x3_get_buffer_size",
     ),
     "arm_depthwise_conv_s8_opt_3x3_c64_s1": DirectEntry(
-        "DepthwiseConv", "S8", "S8", "depthwise_s8", "arm_depthwise_conv_s8_opt_get_buffer_size"
+        "DepthwiseConv", "S8", "S8", "depthwise_s8", "arm_depthwise_conv_s8_opt_get_buffer_size",
+        entry_buffer_size_fn="arm_depthwise_conv_s8_opt_3x3_get_buffer_size",
     ),
     "arm_depthwise_conv_s8_opt_planar": DirectEntry(
         "DepthwiseConv", "S8", "S8", "depthwise_s8", "arm_depthwise_conv_s8_opt_get_buffer_size"
@@ -239,14 +243,14 @@ DEPTHWISE_CONV_S8_DIRECT_ENTRIES = tuple(
 )
 DEPTHWISE_CONV_S8_PLANAR_RULE = "arm_depthwise_conv_s8_opt_planar_supported"
 
-# The 3x3 entries also need their own size, which grows with input W x C.
-DEPTHWISE_CONV_S8_3X3_ENTRIES = ("arm_depthwise_conv_s8_opt_3x3", "arm_depthwise_conv_s8_opt_3x3_c64_s1")
-DEPTHWISE_CONV_S8_3X3_SIZER = "arm_depthwise_conv_s8_opt_3x3_get_buffer_size"
 
 
-def dw3x3_scratch_bytes(input_dims: Dict[str, int]) -> int:
-    """Mirror arm_depthwise_conv_s8_opt_3x3_get_buffer_size."""
-    # 16 groups x (3 x 52 + 32) + pad row + align.
+def entry_scratch_bytes(entry: str | None, input_dims: Dict[str, int]) -> int:
+    """Mirror an entry's second scratch query."""
+    spec = DIRECT_ENTRIES.get(str(entry))
+    if spec is None or spec.entry_buffer_size_fn != "arm_depthwise_conv_s8_opt_3x3_get_buffer_size":
+        return 0
+    # 16 groups x (3 x 52 + 32), pad row, align.
     return 16 * (3 * 52 + 32) + int(input_dims["w"]) * int(input_dims["c"]) + 16
 
 _OPERATOR_LABELS = {"DepthwiseConv": "depthwise", "Convolve": "convolve", "FullyConnected": "fully connected"}
@@ -283,6 +287,8 @@ def resolve_direct_entry(operator: str, entry: str, activation_dtype: str, weigh
         "kernel_get_buffer_size_fn": spec.buffer_size_fn,
         "entry_family": spec.family,
     }
+    if spec.entry_buffer_size_fn:
+        resolved["entry_buffer_size_fn"] = spec.entry_buffer_size_fn
     if spec.family == "float":
         resolved["kernel_needs_layout"] = spec.kernel_needs_layout
         resolved["buffer_size_needs_layout"] = spec.buffer_size_needs_layout

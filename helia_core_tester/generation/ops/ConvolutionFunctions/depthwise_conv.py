@@ -12,12 +12,10 @@ from helia_core_tester.generation.ops._shared.bias_init import (
     inject_hoisted_dilation_bias,
 )
 from helia_core_tester.generation.kernel_dispatch import (
-    DEPTHWISE_CONV_S8_3X3_ENTRIES,
-    DEPTHWISE_CONV_S8_3X3_SIZER,
     DEPTHWISE_CONV_S8_PLANAR_RULE,
     autovectorize_declines_if,
     check_entry_fault,
-    dw3x3_scratch_bytes,
+    entry_scratch_bytes,
     resolve_depthwise_conv_kernel,
     resolve_direct_entry,
 )
@@ -998,9 +996,7 @@ class OpDepthwiseConv(OperationBase):
             input_dims, filter_dims, output_dims,
             output_dtype=activation_dtype
         )
-        dw3x3_sizer = kernel_info["kernel_fn"] in DEPTHWISE_CONV_S8_3X3_ENTRIES
-        if dw3x3_sizer:
-            buffer_size_max = max(buffer_size_max, dw3x3_scratch_bytes(input_dims))
+        buffer_size_max = max(buffer_size_max, entry_scratch_bytes(self.desc.get("entry"), input_dims))
         
         
         # Build template context
@@ -1031,7 +1027,7 @@ class OpDepthwiseConv(OperationBase):
             'takes_weight_sum_ctx': kernel_info["kernel_fn"] == "arm_depthwise_conv_wrapper_s8"
             or bool(kernel_info.get("direct_entry")),
             'direct_entry': bool(kernel_info.get("direct_entry")),
-            'dw3x3_sizer_fn': DEPTHWISE_CONV_S8_3X3_SIZER if dw3x3_sizer else None,
+            'entry_buffer_size_fn': kernel_info.get("entry_buffer_size_fn"),
             'expected_status': self.expected_status(),
             'planar_supported': self.desc.get("planar_supported"),
             'planar_rule_fn': DEPTHWISE_CONV_S8_PLANAR_RULE,
