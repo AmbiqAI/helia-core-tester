@@ -209,11 +209,8 @@ def module_trees(app_dir: Path) -> dict[str, str]:
 
 
 def header_closure(read: Callable[[str], Optional[str]]) -> list[str]:
-    """Kernel headers the harness includes.
-
-    Follows every #include, taken or not, first beside the includer, then
-    under Include/; system headers drop out.
-    """
+    """Kernel headers the harness includes."""
+    # Every #include: beside, then Include/.
     found: dict[str, Optional[str]] = {}
 
     def load(rel: str) -> Optional[str]:
@@ -238,20 +235,16 @@ def header_closure(read: Callable[[str], Optional[str]]) -> list[str]:
 
 def kernel_inputs(module: Path) -> dict[str, Optional[str]]:
     """Kernel build files and harness headers."""
-    from neuralspotx.nsx_lock import hash_file, hash_tree
-
     def read(rel: str) -> Optional[str]:
         path = module / rel
         return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
 
-    # Vendored copies keep the manifest at the root.
-    files = {rel: module / rel for rel in KERNEL_BUILD_FILES}
-    if not files["nsx/nsx-module.yaml"].is_file():
+    files = {rel: module / rel for rel in (*KERNEL_BUILD_FILES, "cmake")}
+    # Vendored builds read the root manifest.
+    if (module / "nsx-module.yaml").is_file():
         files["nsx/nsx-module.yaml"] = module / "nsx-module.yaml"
     files.update((rel, module / rel) for rel in header_closure(read))
-    record = {rel: hash_file(path) if path.is_file() else None for rel, path in files.items()}
-    record["cmake"] = hash_tree(module / "cmake") if (module / "cmake").is_dir() else None
-    return record
+    return {rel: path_hash(path) for rel, path in files.items()}
 
 
 def harness_record(firmware: Optional[dict], repo_root: Path) -> tuple[Optional[str], dict[str, Any]]:

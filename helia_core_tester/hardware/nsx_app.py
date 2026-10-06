@@ -313,12 +313,26 @@ def _check_no_overlap(root: Path, module_dir: Path) -> None:
         raise AppRenderError(f"Kernel root overlaps the app: {root}")
 
 
+def _drop_stale(module_dir: Path) -> None:
+    """Remove files a vendored copy lacks."""
+    keep = {*KERNEL_TREES, "nsx", "nsx-module.yaml", "CMakeLists.txt"}
+    # An old clone may share the dir.
+    stale = [p for p in module_dir.glob("*") if p.name not in keep]
+    stale += [p for p in module_dir.glob("nsx/*") if p.name != "CMakeLists.txt"]
+    for path in stale:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
+
 def write_kernels(root: Path, module_dir: Path) -> None:
     """Vendor a local checkout, as hpx does."""
     missing = _checkout_missing(root)
     if missing:
         raise AppRenderError(f"Not an ns-cmsis-nn checkout: {root} lacks {missing[0]}")
     _check_no_overlap(root, module_dir)
+    _drop_stale(module_dir)
     (module_dir / "nsx").mkdir(parents=True, exist_ok=True)
     # Native manifest at the module root.
     shutil.copy2(root / "nsx" / "nsx-module.yaml", module_dir / "nsx-module.yaml")

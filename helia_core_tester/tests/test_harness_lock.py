@@ -55,11 +55,15 @@ def _git(root: Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout
 
 
-def _repo(root: Path, files: dict[str, str]) -> Path:
-    """A committed git repo with files."""
+def _write(root: Path, files: dict[str, str]) -> None:
     for rel, text in files.items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text(text, encoding="utf-8")
+
+
+def _repo(root: Path, files: dict[str, str]) -> Path:
+    """A committed git repo with files."""
+    _write(root, files)
     _git(root.parent, "init", "-q", str(root))
     _git(root, "add", "-A")
     _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
@@ -135,7 +139,7 @@ def test_module_source_edit_moves_digest(tester: Path, tmp_path: Path) -> None:
 ])
 def test_kernel_harness_edit_moves_digest(tester: Path, tmp_path: Path, rel: str, text: str) -> None:
     module = kernel_dir(nsx_app_dir(tmp_path / "b"), AppOptions(cmsis_nn_root=tmp_path / "kernels"))
-    files = {
+    _write(module, {
         "nsx/CMakeLists.txt": "add_library(nsx_cmsis_nn)\n",
         "nsx-module.yaml": "m\n",
         "cmake/ns_cmsis_nn.cmake": "c\n",
@@ -143,10 +147,9 @@ def test_kernel_harness_edit_moves_digest(tester: Path, tmp_path: Path, rel: str
         "Include/arm_nn_math_types.h": '#include "Internal/arm_nn_config.h"\n',
         "Include/Internal/arm_nn_config.h": "#define HELIA_HARDWARE_BUILD 1\n",
         "Include/arm_nnsupportfunctions.h": "int s;\n",
-    }
-    for name, body in files.items():
-        (module / name).parent.mkdir(parents=True, exist_ok=True)
-        (module / name).write_text(body, encoding="utf-8")
+        # A stale clone's manifest.
+        "nsx/nsx-module.yaml": "stale\n",
+    })
     base = _build(tmp_path / "b")
     # Non-harness headers are kernel code.
     (module / "Include/arm_nnsupportfunctions.h").write_text("int s2;\n", encoding="utf-8")
@@ -317,6 +320,7 @@ def test_tree_hash_matches_vendored_copy(kernels: Path, tmp_path: Path) -> None:
     from helia_core_tester.hardware.nsx_app import write_kernels
     from helia_core_tester.hardware.nsx_cli import tree_hash
 
+    _write(tmp_path / "module", {"AGENTS.md": "old clone\n", "nsx/nsx-module.yaml": "old\n"})
     write_kernels(kernels, tmp_path / "module")
     assert check_candidate(kernels, _sha(kernels))["tree_hash"] == tree_hash(tmp_path / "module")
     (kernels / "Source/Conv/a.c").write_text("int a2;\n", encoding="utf-8")

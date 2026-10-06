@@ -52,16 +52,15 @@ from typing import Iterator, Optional
 
 import typer
 
-from .harness_lock import header_closure
+from .harness_lock import HARNESS_HEADERS, header_closure
 from .nsx_app import KERNEL_TREES, checkout_hash
 
 ALLOWED_DIRS = ("Source/", "Include/")
 ALLOWED_SUFFIXES = (".c", ".h", ".s", ".S")
 # Adapters and goldens read these.
 FROZEN_FILES = (
-    "Include/arm_nnfunctions.h",
+    *HARNESS_HEADERS,
     "Include/arm_nnfunctions_flt.h",
-    "Include/arm_nn_types.h",
     "Include/arm_nn_types_flt.h",
     "Source/NNSupportFunctions/arm_nntables.c",
 )
