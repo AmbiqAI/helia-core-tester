@@ -165,13 +165,13 @@ def list_mutants():
 
 @app.command()
 def run(
-    cmsis_nn_root: Path = typer.Option(..., "--cmsis-nn-root", help="Path to an ns-cmsis-nn checkout (read-only; mutants are applied to a copy)"),
+    cmsis_nn_root: Path = typer.Option(..., "--cmsis-nn-root", resolve_path=True, help="Path to an ns-cmsis-nn checkout (read-only; mutants are applied to a copy)"),
     ops: Optional[str] = typer.Option(
         None, "--ops", help=f"Comma-separated op filter; also filters --cases-root (generation default: {DEFAULT_OPS})"
     ),
     cases_root: Optional[Path] = typer.Option(None, "--cases-root", help="Reuse already-generated cases under this directory instead of generating"),
     mutants: Optional[str] = typer.Option(None, "--mutants", help="Comma-separated mutant ids (default: full v1 catalog)"),
-    workdir: Path = typer.Option(Path("artifacts/mutation"), "--workdir", help="Scratch + report directory"),
+    workdir: Path = typer.Option(Path("artifacts/mutation"), "--workdir", resolve_path=True, help="Scratch + report directory"),
     cpu: Optional[str] = typer.Option(
         None,
         "--cpu",
@@ -191,9 +191,6 @@ def run(
 ):
     """Score the generated cases against the mutant catalog on the host."""
     tester_root = _tester_root()
-    # Generation runs with another cwd.
-    workdir = workdir.resolve()
-    cmsis_nn_root = cmsis_nn_root.resolve()
     if shutil.which(cc) is None:
         typer.echo(f"✗ host compiler '{cc}' not found", err=True)
         raise typer.Exit(1)
