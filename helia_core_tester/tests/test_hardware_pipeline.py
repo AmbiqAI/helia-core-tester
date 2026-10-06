@@ -594,7 +594,7 @@ def test_json_summary_identifies_its_schema(tmp_path: Path, monkeypatch) -> None
         "suite": "float", "limit": 2, "family": "ActivationFunctions", "test_name": None,
         "ops": [], "dtypes": [], "case_ids": [], "precision": "f32",
         "pmu_counters": {"cpu": "all"}, "fvp_gate": "strict",
-        "compare": {"strict": False, "golden_from": None},
+        "compare": {"strict": False, "golden_from": None, "golden_session_id": None},
     }
     assert encoded["github"] is None
 
@@ -792,7 +792,7 @@ def test_strict_compare_drops_int_tolerance(tmp_path: Path, monkeypatch) -> None
         tmp_path, BOARD, 5, build_dir=build_dir, options=StreamOptions(strict_compare=True), echo=lambda _msg: None,
     )
     assert [bundle.comparison for bundle in seen["bundles"]] == [{"mode": "exact_int"}]
-    assert seen["compare"] == {"strict": True, "golden_from": None}
+    assert seen["compare"] == {"strict": True, "golden_from": None, "golden_session_id": None}
     assert tolerant.comparison["mode"] == "tolerant_int"
 
 
@@ -813,56 +813,141 @@ def test_golden_from_judges_against_past_output(tmp_path: Path) -> None:
     assert (case.comparison.passed, case.comparison.diff_count, case.comparison.max_abs_diff) == (False, 1, 1.0)
 
 
-@pytest.mark.parametrize("record", [{"passed": False}, None, '{"passed": tr', "[true]"])
-def test_golden_from_refuses_failed_cases(tmp_path: Path, monkeypatch, record) -> None:
-    from helia_core_tester.hardware import hardware_pipeline
-    from helia_core_tester.hardware.case_bundle import blob_numpy
+def _write_golden(golden_dir: Path, bundle, *, output: bytes | None = None, **record) -> None:
+    """A past run's output and record."""
+    from helia_core_tester.hardware.case_bundle import blob_numpy, input_digest
 
-    bundle = load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path, case_id="abs_bad").manifest_path)
-    golden_dir = tmp_path / "past"
-    (golden_dir / "outputs").mkdir(parents=True)
-    (golden_dir / "outputs" / "abs_bad.bin").write_bytes(blob_numpy(bundle.expected_output).tobytes())
-    if record is not None:
-        (golden_dir / "correctness").mkdir()
-        text = record if isinstance(record, str) else json.dumps(record)
-        (golden_dir / "correctness" / "abs_bad.json").write_text(text)
+    (golden_dir / "outputs").mkdir(parents=True, exist_ok=True)
+    (golden_dir / "correctness").mkdir(exist_ok=True)
+    payload = blob_numpy(bundle.expected_output).tobytes() if output is None else output
+    (golden_dir / "outputs" / f"{bundle.case_id}.bin").write_bytes(payload)
+    doc = {"passed": True, "input_digest": input_digest(bundle), **record}
+    (golden_dir / "correctness" / f"{bundle.case_id}.json").write_text(json.dumps(doc))
+
+
+def _stream_golden(tmp_path: Path, monkeypatch, bundles: list, golden_dir: Path, **flags) -> dict:
+    """Stream bundles judged by golden_dir."""
+    from helia_core_tester.hardware import hardware_pipeline
+
     seen: dict = {}
     monkeypatch.setattr(hardware_pipeline, "make_live_progress_printer", lambda *a, **k: None)
     _skip_coverage(monkeypatch)
-    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: ([bundle], []))
+    monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: (bundles, []))
     monkeypatch.setattr(
         "helia_core_tester.hardware.session_runner.run_case_bundles",
-        lambda repo_root, bundles, **kwargs: (seen.update(bundles=bundles), (SimpleNamespace(cases=[]), tmp_path))[1],
+        lambda repo_root, bundles, **kwargs: (seen.update(kwargs, bundles=bundles), (SimpleNamespace(cases=[]), tmp_path))[1],
     )
     build_dir = tmp_path / "bd"
     _write_elf(build_dir, b"fw", "hct-gold")
+    options = StreamOptions(golden_from=golden_dir, **flags)
+    hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=build_dir, options=options, echo=lambda _m: None)
+    return seen
 
-    def stream(**flags):
-        options = StreamOptions(golden_from=golden_dir, **flags)
-        hardware_pipeline.stream_generated_tests(tmp_path, BOARD, 5, build_dir=build_dir, options=options, echo=lambda _m: None)
 
+def _abs_bundles(tmp_path: Path, *names: str) -> list:
+    return [
+        load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path / name, case_id=name).manifest_path)
+        for name in names
+    ]
+
+
+def test_golden_from_refuses_failed_cases(tmp_path: Path, monkeypatch) -> None:
+    (bundle,) = _abs_bundles(tmp_path, "abs_bad")
+    golden_dir = tmp_path / "past"
+    _write_golden(golden_dir, bundle, passed=False)
     with pytest.raises(RuntimeError, match="Golden run failed these cases: abs_bad"):
-        stream()
-    assert "bundles" not in seen
-    stream(golden_allow_failed=True)
+        _stream_golden(tmp_path, monkeypatch, [bundle], golden_dir)
+    seen = _stream_golden(tmp_path, monkeypatch, [bundle], golden_dir, golden_allow_failed=True)
     assert [b.case_id for b in seen["bundles"]] == ["abs_bad"]
+
+
+@pytest.mark.parametrize("record", ['{"passed": tr', "[true]"])
+def test_golden_from_refuses_unreadable_records(tmp_path: Path, monkeypatch, record) -> None:
+    (bundle,) = _abs_bundles(tmp_path, "abs_bad")
+    golden_dir = tmp_path / "past"
+    _write_golden(golden_dir, bundle)
+    (golden_dir / "correctness" / "abs_bad.json").write_text(record)
+    with pytest.raises(RuntimeError, match="Golden run failed these cases: abs_bad"):
+        _stream_golden(tmp_path, monkeypatch, [bundle], golden_dir)
+    # Unreadable records carry no digest.
+    with pytest.raises(RuntimeError, match="no input digest for: abs_bad$"):
+        _stream_golden(tmp_path, monkeypatch, [bundle], golden_dir, golden_allow_failed=True)
+
+
+def test_golden_from_matches_inputs(tmp_path: Path, monkeypatch) -> None:
+    import hashlib
+
+    from helia_core_tester.hardware.case_bundle import blob_numpy
+
+    (bundle,) = _abs_bundles(tmp_path, "abs_ok")
+    golden_dir = tmp_path / "past"
+    past = blob_numpy(bundle.expected_output).copy()
+    past.flat[0] += 1
+    _write_golden(golden_dir, bundle, output=past.tobytes())
+    (golden_dir / "session_manifest.json").write_text(json.dumps({"session_id": "base-1"}))
+    seen = _stream_golden(tmp_path, monkeypatch, [bundle], golden_dir)
+    (judged,) = seen["bundles"]
+    digest = hashlib.sha256(past.tobytes()).hexdigest()
+    assert judged.expected_output.sha256 == digest
+    assert judged.comparison == {"mode": "exact_int"}
+    assert seen["compare"] == {"strict": True, "golden_from": str(golden_dir), "golden_session_id": "base-1"}
+
+
+def test_golden_from_refuses_other_inputs(tmp_path: Path, monkeypatch) -> None:
+    bundles = _abs_bundles(tmp_path, "abs_same", "abs_moved")
+    golden_dir = tmp_path / "past"
+    _write_golden(golden_dir, bundles[0])
+    _write_golden(golden_dir, bundles[1], input_digest="0" * 64)
+    with pytest.raises(RuntimeError, match="Golden run used other inputs for: abs_moved$"):
+        _stream_golden(tmp_path, monkeypatch, bundles, golden_dir)
+
+
+def test_golden_from_needs_input_digest(tmp_path: Path, monkeypatch) -> None:
+    (bundle,) = _abs_bundles(tmp_path, "abs_old")
+    golden_dir = tmp_path / "past"
+    _write_golden(golden_dir, bundle, input_digest=None)
+    with pytest.raises(RuntimeError, match="Golden run has no input digest for: abs_old$"):
+        _stream_golden(tmp_path, monkeypatch, [bundle], golden_dir)
+
+
+def test_golden_from_names_missing_cases(tmp_path: Path, monkeypatch) -> None:
+    bundles = _abs_bundles(tmp_path, "abs_here", "abs_gone")
+    golden_dir = tmp_path / "past"
+    golden_dir.mkdir()
+    with pytest.raises(RuntimeError, match="Golden bundle has no results"):
+        _stream_golden(tmp_path, monkeypatch, bundles, golden_dir)
+    _write_golden(golden_dir, bundles[0])
+    with pytest.raises(RuntimeError, match="Golden run is missing these cases: abs_gone$"):
+        _stream_golden(tmp_path, monkeypatch, bundles, golden_dir)
+    # Disjoint selection: missing, not empty.
+    with pytest.raises(RuntimeError, match="Golden run is missing these cases: abs_gone$"):
+        _stream_golden(tmp_path, monkeypatch, bundles[1:], golden_dir)
+
+
+def test_input_digest_ignores_golden(tmp_path: Path) -> None:
+    from helia_core_tester.hardware.case_bundle import golden_bundle, input_digest
+
+    (bundle,) = _abs_bundles(tmp_path, "abs_dig")
+    assert bundle.manifest["input_digest"] == input_digest(bundle)
+    golden_dir = tmp_path / "past"
+    _write_golden(golden_dir, bundle, output=bytes(bundle.expected_output.byte_length))
+    assert input_digest(golden_bundle(bundle, golden_dir)) == input_digest(bundle)
+    (bundle.root_dir / "blobs" / "input_0.bin").write_bytes(bytes(bundle.input_blob.byte_length))
+    assert input_digest(load_case_bundle(bundle.manifest_path)) != input_digest(bundle)
 
 
 def test_golden_gaps_fail_before_flash(tmp_path: Path, monkeypatch) -> None:
     from helia_core_tester.hardware import hardware_pipeline
     from helia_core_tester.hardware.case_bundle import blob_numpy
 
-    bundles = [
-        load_case_bundle(build_abs_s8_case_bundle(PROJECT_ROOT, output_root=tmp_path / name, case_id=name).manifest_path)
-        for name in ("abs_gone", "abs_short", "abs_unread")
-    ]
+    bundles = _abs_bundles(tmp_path, "abs_gone", "abs_short", "abs_unread")
     golden_dir = tmp_path / "past"
-    (golden_dir / "outputs").mkdir(parents=True)
-    (golden_dir / "correctness").mkdir()
     for bundle in bundles:
-        (golden_dir / "correctness" / f"{bundle.case_id}.json").write_text(json.dumps({"passed": True}))
+        _write_golden(golden_dir, bundle)
+    (golden_dir / "outputs" / "abs_gone.bin").unlink()
     (golden_dir / "outputs" / "abs_short.bin").write_bytes(blob_numpy(bundles[1].expected_output).tobytes()[:-1])
     # A directory cannot be read.
+    (golden_dir / "outputs" / "abs_unread.bin").unlink()
     (golden_dir / "outputs" / "abs_unread.bin").mkdir()
     order: list[str] = []
     monkeypatch.setattr("helia_core_tester.hardware.session_runner.build_generated_test_case_bundles", lambda *a, **k: (bundles, []))

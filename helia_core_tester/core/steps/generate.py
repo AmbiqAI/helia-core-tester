@@ -5,6 +5,7 @@ TFLite model generation step.
 import os
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 from helia_core_tester.core.steps.base import StepBase, StepPlan, StepResult, StepStatus
 from helia_core_tester.core.errors import GenerationError
@@ -68,6 +69,9 @@ class GenerateStep(StepBase):
             cmd.append("--force-generate")
         if self.config.keep_unselected:
             cmd.append("--keep-unselected")
+        if self.config.random_shapes:
+            cmd.extend(["--random-shapes", str(self.config.random_shapes)])
+            cmd.extend(["--shape-seed", str(self.config.shape_seed)])
         return cmd
     
     def _do_execute(self) -> StepResult:
@@ -85,7 +89,7 @@ class GenerateStep(StepBase):
             subprocess_env = {**os.environ, "CMSIS_NN_ROOT": str(self.config.cmsis_nn_root)}
         try:
             commands = []
-            generation_targets = self.config.iter_generation_targets()
+            generation_targets = self._targets()
             for cpu, suite, float_precision in generation_targets:
                 cmd = self._build_cmd(
                     cpu=cpu,
@@ -140,6 +144,14 @@ class GenerateStep(StepBase):
                 details={"cpus": self.config.cpus},
             )
     
+    def _targets(self) -> list[tuple[str, str, Optional[str]]]:
+        """Targets execute, dry run and plan share."""
+        targets = self.config.iter_generation_targets()
+        if self.config.random_shapes:
+            # Random shapes are int only.
+            targets = [target for target in targets if target[1] == "int"]
+        return targets
+
     def dry_run(self) -> StepResult:
         """Dry run of generation step."""
         cmd_preview = [
@@ -149,7 +161,7 @@ class GenerateStep(StepBase):
                 include_seed=False,
                 float_precision=float_precision,
             )
-            for cpu, suite, float_precision in self.config.iter_generation_targets()
+            for cpu, suite, float_precision in self._targets()
         ]
         return StepResult(
             name=self.name,
@@ -169,7 +181,7 @@ class GenerateStep(StepBase):
                 include_seed=True,
                 float_precision=float_precision,
             )
-            for cpu, suite, float_precision in self.config.iter_generation_targets()
+            for cpu, suite, float_precision in self._targets()
         ]
         return StepPlan(
             name=self.name,

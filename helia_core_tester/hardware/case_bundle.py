@@ -129,15 +129,38 @@ def strict_bundle(bundle: CaseBundle) -> CaseBundle:
     return replace(bundle, manifest=manifest)
 
 
-def golden_failed(bundle: CaseBundle, golden_dir: Path) -> bool:
-    """True if the past run failed this case."""
+def input_digest(bundle: CaseBundle) -> str:
+    """Hash of everything streamed but the golden."""
+    entries = [_manifest_blob_entry(blob) for blob in bundle.blobs]
+    return _digest_inputs(bundle.manifest, entries)
+
+
+def _digest_inputs(manifest: dict[str, Any], entries: list[dict[str, Any]]) -> str:
+    # Golden and host-only blobs excluded.
+    blobs = [
+        {key: entry.get(key) for key in ("role", "dtype", "dimensions", "sha256")}
+        for entry in entries
+        if entry.get("role") != "expected_output" and not entry.get("host_only")
+    ]
+    doc = {
+        "kernel_id": manifest.get("kernel_id"),
+        "scalars": manifest.get("serialized_scalar_parameters", {}),
+        "blobs": blobs,
+    }
+    return _sha256_bytes(json.dumps(doc, sort_keys=True).encode("utf-8"))
+
+
+def golden_record(bundle: CaseBundle, golden_dir: Path) -> dict[str, Any] | None:
+    """The past run's record; None if absent."""
     record = golden_dir / "correctness" / f"{bundle.case_id}.json"
+    if not record.is_file():
+        return None
     # Unreadable records count as unjudged.
     try:
         doc = json.loads(record.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return True
-    return not isinstance(doc, dict) or doc.get("passed") is not True
+        return {}
+    return doc if isinstance(doc, dict) else {}
 
 
 def golden_usable(bundle: CaseBundle, golden_dir: Path) -> bool:
@@ -156,13 +179,20 @@ def golden_bundle(bundle: CaseBundle, golden_dir: Path) -> CaseBundle:
     """The bundle, judged against a past run's output."""
     if bundle.expected_status_code is not None:
         return bundle
-    if not golden_usable(bundle, golden_dir):
-        raise RuntimeError(f"No usable golden output for {bundle.case_id} in {golden_dir}")
     path = golden_dir / "outputs" / f"{bundle.case_id}.bin"
     expected = bundle.expected_output
-    blobs = tuple(replace(blob, path=path) if blob is expected else blob for blob in bundle.blobs)
+    try:
+        payload = path.read_bytes()
+    except OSError:
+        payload = None
+    if payload is None or len(payload) != expected.byte_length:
+        raise RuntimeError(f"No usable golden output for {bundle.case_id} in {golden_dir}")
+    # Bundles record the compared digest.
+    swapped = replace(
+        expected, path=path, expected_crc32=zlib.crc32(payload) & 0xFFFFFFFF, sha256=_sha256_bytes(payload),
+    )
+    blobs = tuple(swapped if blob is expected else blob for blob in bundle.blobs)
     return replace(strict_bundle(bundle), blobs=blobs)
-
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -284,6 +314,7 @@ def _write_manifest(case_root: Path, manifest: dict[str, Any]) -> Path:
             raise ValueError(
                 f"expected_output.{key}={expected.get(key)!r} does not match referenced blob {blob.get(key)!r}"
             )
+    manifest["input_digest"] = _digest_inputs(manifest, manifest.get("blob_roles", []))
     manifest_path = case_root / "case_manifest.json"
     write_text_lf(manifest_path, json.dumps(manifest, indent=2))
     return manifest_path

@@ -4,6 +4,7 @@ Thin generator that discovers YAML descriptors and generates TFLite models.
 """
 
 import hashlib
+import re
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,7 +15,7 @@ import yaml
 
 from helia_core_tester.core.discovery import find_descriptors_dir, find_generated_tests_dir, find_repo_root
 from helia_core_tester.core.cpu_targets import missing_required_capabilities, normalize_cpu
-from helia_core_tester.generation.golden_check import check_case_golden
+from helia_core_tester.generation.golden_check import DegenerateGoldenError, check_case_golden
 from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE, DIRECT_ENTRIES
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, resolve_comparison, resolve_tensor_dtypes
 from helia_core_tester.generation.io.descriptors import descriptor_matches_op, load_all_descriptors, unmatched_ops
@@ -29,6 +30,10 @@ from helia_core_tester.generation.reuse import (
     write_stamp,
 )
 from helia_core_tester.generation.utils.temp_sizer_probe import kernel_source_exists, missing_header_symbols
+
+
+# Random-shape case names.
+RANDOM_CASE = re.compile(r"rs\d+_(conv|dw)_\d+")
 
 
 def default_seed_for_case(name: str) -> int:
@@ -58,6 +63,13 @@ def _suite_mode(filters: Dict[str, Any]) -> str:
 
 def _float_precision_mode(filters: Dict[str, Any]) -> str:
     return str(filters.get("float_precision") or "both").strip().lower()
+
+
+def _shape_filters(filters: Dict[str, Any]) -> Dict[str, Any]:
+    """Random-shape count and seed, if set."""
+    if not filters.get("random_shapes"):
+        return {}
+    return {"random_shapes": filters["random_shapes"], "shape_seed": filters.get("shape_seed") or 0}
 
 
 def _split_filter(value: Any) -> List[str]:
@@ -399,7 +411,16 @@ def test_generation(test_filters):
     Generate TFLite models for all descriptors.
     """
     # Load all descriptors using discovery
-    descriptors_dir = find_descriptors_dir()
+    random_shapes = test_filters.get("random_shapes")
+    if random_shapes:
+        from helia_core_tester.generation.random_shapes import prepare_shapes
+
+        descriptors_dir = prepare_shapes(
+            find_repo_root(), random_shapes, int(test_filters.get("shape_seed") or 0),
+            normalize_cpu(test_filters.get("cpu") or "cortex-m55"),
+        )
+    else:
+        descriptors_dir = find_descriptors_dir()
     descriptors = load_all_descriptors(str(descriptors_dir))
     unknown_ops = unmatched_ops(descriptors, _split_filter(test_filters.get("op")))
     assert not unknown_ops, f"No descriptor matches --op: {', '.join(unknown_ops)}"
@@ -557,6 +578,15 @@ def test_generation(test_filters):
             write_stamp(test_dir, stamp)
             generated_count += 1
         except Exception as e:
+            if random_shapes and isinstance(e, DegenerateGoldenError):
+                # A flat random draw is dropped.
+                generation_failures[:] = [f for f in generation_failures if f.get("name") != case_name]
+                reset_case_dir(test_dir)
+                skipped_entries.append(
+                    _skip_manifest_entry(desc, cpu=target_cpu, missing_capabilities=[], status="skipped_degenerate")
+                )
+                print(f"Dropping {case_name}: {e}")
+                continue
             print(f"Failed to generate TFLite model for {desc['name']}: {e}")
             # Continue with other models
             continue
@@ -590,6 +620,12 @@ def test_generation(test_filters):
             test_dir for test_dir in (_descriptor_test_dir(Path(top_generated), d) for d in filtered_descriptors)
             if test_dir.is_dir() and str(test_dir.relative_to(top_generated)) not in produced_dirs
         ]
+        if random_shapes:
+            # Drop earlier random draws.
+            stale += [
+                d for d in Path(top_generated).glob("*/rs*")
+                if RANDOM_CASE.fullmatch(d.name) and str(d.relative_to(top_generated)) not in produced_dirs
+            ]
         for test_dir in stale:
             reset_case_dir(test_dir)
         pruned_count = len(stale)
@@ -687,6 +723,7 @@ def test_generation(test_filters):
             "suite": suite_mode,
             "float_precision": float_precision_mode,
             "force_generate": force_generate,
+            **_shape_filters(test_filters),
         },
         "counts": {
             "descriptors_total": len(descriptors),
@@ -700,6 +737,9 @@ def test_generation(test_filters):
             ),
             "skipped_kernel_symbol": sum(
                 1 for entry in skipped_entries if entry.get("status") == "skipped_kernel_symbol"
+            ),
+            "skipped_degenerate": sum(
+                1 for entry in skipped_entries if entry.get("status") == "skipped_degenerate"
             ),
             "conversion_failures": len(conversion_failures),
             "generation_failures": len(generation_failures),
@@ -759,6 +799,7 @@ def _write_manifest_and_cmake(
             "cpu": cpu,
             "suite": _suite_mode(test_filters),
             "float_precision": _float_precision_mode(test_filters),
+            **_shape_filters(test_filters),
         },
         "tests": entries,
         "skipped": skipped_entries,
