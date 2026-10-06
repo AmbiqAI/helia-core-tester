@@ -142,6 +142,16 @@ def test_dirty_tester_marks_bundle(tester: Path, tmp_path: Path) -> None:
     assert not harness_lock.same_harness(clean, dirty)
 
 
+@pytest.mark.parametrize("flag", ["--skip-worktree", "--assume-unchanged"])
+def test_hidden_edit_marks_tester_dirty(tester: Path, flag: str) -> None:
+    assert harness_lock.tester_state(tester)["dirty"] is False
+    _git(tester, "update-index", flag, "cmake/hardware/main.c")
+    (tester / "cmake/hardware/main.c").write_text("int hidden;\n", encoding="utf-8")
+    assert _git(tester, "status", "--porcelain") == ""
+    state = harness_lock.tester_state(tester)
+    assert state["dirty"] is True and state["diff"]
+
+
 def test_no_build_means_no_digest(tester: Path) -> None:
     assert harness_lock.harness_record(None, tester)[0] is None
     assert not harness_lock.same_harness({}, {})

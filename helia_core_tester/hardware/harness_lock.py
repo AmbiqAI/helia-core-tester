@@ -68,18 +68,35 @@ def tester_state(repo_root: Path) -> dict[str, Any]:
     state["commit"] = head.decode().strip() if head else None
     if status is None:
         return state
-    state["dirty"] = bool(status)
-    if status:
-        state["diff"] = _dirty_hash(repo_root, status)
+    hidden = _hidden_files(repo_root)
+    if hidden is None:
+        return state
+    state["dirty"] = bool(status or hidden)
+    if state["dirty"]:
+        state["diff"] = _dirty_hash(repo_root, status, hidden)
     return state
 
 
-def _dirty_hash(repo_root: Path, status: bytes) -> Optional[str]:
-    """Hash tracked edits plus untracked files."""
-    diff = _git(repo_root, "diff", "HEAD", "--binary")
+def _hidden_files(repo_root: Path) -> Optional[list[bytes]]:
+    """Tracked files git status skips."""
+    listing = _git(repo_root, "ls-files", "-v", "-z")
+    if listing is None:
+        return None
+    # S: skip-worktree; lowercase: assume-unchanged.
+    return [entry[2:] for entry in listing.split(b"\0") if entry and (entry[:1] == b"S" or entry[:1].islower())]
+
+
+def _dirty_hash(repo_root: Path, status: bytes, hidden: list[bytes]) -> Optional[str]:
+    """Hash tracked edits, hidden and untracked files."""
+    diff = _git(repo_root, "diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv")
     if diff is None:
         return None
     digest = hashlib.sha256(diff)
+    for rel in hidden:
+        path = repo_root / rel.decode()
+        digest.update(b"hidden\0" + rel + b"\0")
+        if path.is_file():
+            digest.update(path.read_bytes())
     for entry in status.split(b"\0"):
         if not entry.startswith(b"?? "):
             continue
