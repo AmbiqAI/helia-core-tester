@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import shutil
+import stat
 import subprocess
 import sys
 import traceback
@@ -174,6 +176,31 @@ def read_baseline(path: Path) -> dict:
 # --- eval ---------------------------------------------------------------------------
 
 
+def copy_tree(src: Path, dst: Path) -> None:
+    """Copy by dir fd; never follow links.
+
+    A racing agent cannot swap a dir for a symlink mid-copy. Symlinks
+    copy as links; FIFOs, sockets and devices are skipped.
+    """
+    for root, dirs, files, root_fd in os.fwalk(src, follow_symlinks=False):
+        out = dst / Path(root).relative_to(src)
+        out.mkdir(parents=True, exist_ok=True)
+        for name in dirs + files:
+            mode = os.stat(name, dir_fd=root_fd, follow_symlinks=False).st_mode
+            if stat.S_ISLNK(mode):
+                (out / name).symlink_to(os.readlink(name, dir_fd=root_fd))
+            elif stat.S_ISREG(mode):
+                _copy_file(name, root_fd, out / name)
+
+
+def _copy_file(name: str, dir_fd: int, dst: Path) -> None:
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+    with os.fdopen(fd, "rb") as handle:
+        # Swapped for a FIFO since stat.
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            dst.write_bytes(handle.read())
+
+
 def snapshot(candidate: Path, baseline: Path, base: str) -> Path:
     """Base checkout with the candidate's trees copied in."""
     snap = baseline / "snapshot"
@@ -188,7 +215,7 @@ def snapshot(candidate: Path, baseline: Path, base: str) -> Path:
             # The check flags symlinks.
             dst.symlink_to(src.readlink())
         elif src.is_dir():
-            shutil.copytree(src, dst, symlinks=True)
+            copy_tree(src, dst)
     return snap
 
 

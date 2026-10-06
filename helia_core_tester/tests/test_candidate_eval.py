@@ -167,3 +167,19 @@ def test_object_check_rejects_after_build(tmp_path, kernels, monkeypatch) -> Non
     monkeypatch.setattr(candidate_eval, "object_check", lambda *a: report)
     verdict = _eval(kernels, out, FakeRun(tmp_path / "reports"))
     assert verdict["verdict"] == "rejected" and verdict["stage"] == "objects"
+
+
+def test_snapshot_skips_fifos_and_links(tmp_path, kernels) -> None:
+    """No hang, no followed links."""
+    import os
+
+    out, _ = _baseline(tmp_path, kernels)
+    os.mkfifo(kernels / "Source/Conv/pipe.c")
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (secret / "s.c").write_text("hidden\n")
+    (kernels / "Source/Leak").symlink_to(secret)
+    snap = candidate_eval.snapshot(kernels, out, candidate_eval.read_baseline(out)["base_commit"])
+    assert (snap / "Source/Conv/a.c").is_file() and not (snap / "Source/Conv/pipe.c").exists()
+    # Linked dirs stay links, unread.
+    assert (snap / "Source/Leak").is_symlink() and not (snap / "Source/Leak").resolve().is_relative_to(snap)
