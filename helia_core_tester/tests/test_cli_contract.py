@@ -213,7 +213,9 @@ def test_unexpected_exceptions_keep_their_traceback(monkeypatch) -> None:
     monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
     monkeypatch.setattr(hardware_pipeline, "stream_generated_tests", _bug)
     result = runner.invoke(app, ["hardware", "stream"])
-    assert result.exit_code != 0 and isinstance(result.exception, KeyError)
+    text = _result_text(result)
+    # Bugs exit 5, never correctness's 1.
+    assert result.exit_code == 5 and "Traceback" in text and "KeyError: 'case_id'" in text, text
 
 
 def test_run_precision_reaches_the_generate_step(monkeypatch) -> None:

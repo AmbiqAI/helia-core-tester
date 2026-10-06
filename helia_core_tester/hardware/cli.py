@@ -17,7 +17,8 @@ run_summary.py.
 
 Exit codes, shared with `score`: 0 pass; 1 a case failed correctness; 2 bad
 flags; 3 refused before running (dirty tester, a --skip-flash or --golden-from
-mismatch, no case matches); 5 error (cmake, J-Link, transport, probe). Failures print one line;
+mismatch, no case matches); 5 error (cmake, J-Link, transport, probe, or a
+tester bug). Failures print one line;
 the traceback is shown with `--verbosity 1` or higher (also
 `$HELIA_CORE_TESTER_VERBOSITY`, the same knob the generate/build/run commands
 use).
@@ -103,7 +104,8 @@ def _pipeline_errors(verbosity: int) -> Iterator[None]:
     config, session/protocol failures); CalledProcessError is cmake or the J-Link
     flash target; pylink's JLinkException is the probe/RTT layer; TimeoutError and
     FileNotFoundError are the transport write timeout and a missing ELF. These
-    exit EXIT_ERROR. Anything else is a bug and keeps its traceback.
+    exit EXIT_ERROR. Anything else is a bug: it prints its traceback and
+    also exits EXIT_ERROR, never the correctness code.
     """
     from .errors import RunRefused
 
@@ -124,7 +126,9 @@ def _pipeline_errors(verbosity: int) -> Iterator[None]:
         _fail(str(exc), EXIT_ERROR)
     except Exception as exc:
         if not _is_jlink_exception(exc):
-            raise
+            # A bug: keep the traceback, exit 5.
+            traceback.print_exc()
+            sys.exit(EXIT_ERROR)
         if verbosity >= 1:
             traceback.print_exc()
         _fail(f"J-Link error: {exc}", EXIT_ERROR)
