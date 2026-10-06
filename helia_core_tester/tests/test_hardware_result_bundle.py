@@ -71,7 +71,7 @@ def test_result_bundle_writer_emits_spec_artifacts(tmp_path: Path) -> None:
         rows = list(csv.DictReader(handle))
     header = list(rows[0].keys())
     assert header[:14] == ["case_id", "kernel_id", "comparison_passed", "mismatch_count", "max_abs_diff", "diff_count",
-                           "sample_count", "median_cycles", "mad_cycles", "p90_cycles", "p99_cycles", "fvp_status", "timed_symbol", "inner_symbol"]
+                           "sample_count", "median_cycles", "mad_cycles", "p90_cycles", "p99_cycles", "fvp_status", "timed_symbol", "inner_symbol", "inner_variant"]
     assert header[14:19] == ["macs", "ops", "cycles_per_mac", "cycles_per_op", "prepare_cycles"]
     assert header[19] == "ARM_PMU_CPU_CYCLES"
     assert header[-3:] == ["overflow_detected", "valid_for_regression", "timing_status"]
@@ -138,6 +138,6 @@ def test_result_bundle_writer_handles_empty_session(tmp_path: Path) -> None:
 
     case_summary_text = (bundle_root / "case_summary.csv").read_text(encoding="utf-8")
     raw_samples_text = (bundle_root / "raw_samples.csv").read_text(encoding="utf-8")
-    assert case_summary_text.splitlines() == ["case_id,kernel_id,comparison_passed,mismatch_count,max_abs_diff,diff_count,sample_count,median_cycles,mad_cycles,p90_cycles,p99_cycles,fvp_status,timed_symbol,inner_symbol,macs,ops,cycles_per_mac,cycles_per_op,prepare_cycles,overflow_detected,valid_for_regression,timing_status"]
+    assert case_summary_text.splitlines() == ["case_id,kernel_id,comparison_passed,mismatch_count,max_abs_diff,diff_count,sample_count,median_cycles,mad_cycles,p90_cycles,p99_cycles,fvp_status,timed_symbol,inner_symbol,inner_variant,macs,ops,cycles_per_mac,cycles_per_op,prepare_cycles,overflow_detected,valid_for_regression,timing_status"]
     assert raw_samples_text.splitlines() == ["case_id,sample_index,pass_name,iterations,cycles,cycles_per_invocation,counter_name,event_id,counter_value,overflow,supported"]
     assert (bundle_root / "junit.xml").exists()
