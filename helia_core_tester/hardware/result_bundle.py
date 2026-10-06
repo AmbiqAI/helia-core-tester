@@ -16,7 +16,7 @@ from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
 from .wire import boot_record, placement_record
 from .work_count import case_work, per_unit
-from .wrapper_route import build_gate, inner_symbol
+from .wrapper_route import build_gate, inner_symbol, inner_variant
 from .pathutil import write_text_lf
 
 CASE_SUMMARY_BASE_FIELDS = [
@@ -34,6 +34,7 @@ CASE_SUMMARY_BASE_FIELDS = [
     "fvp_status",
     "timed_symbol",
     "inner_symbol",
+    "inner_variant",
 ]
 # Work counts and prepare cost.
 CASE_SUMMARY_WORK_FIELDS = ["macs", "ops", "cycles_per_mac", "cycles_per_op", "prepare_cycles"]
@@ -242,6 +243,8 @@ def write_result_bundle(
         timed_symbol = timed_symbols.get(case.case_bundle.kernel_id, "")
         # The kernel the wrapper routes to.
         inner = inner_symbol(timed_symbol, case.case_bundle.manifest, gate_1xn)
+        # Planar or channelwise inside opt.
+        variant = inner_variant(inner, case.case_bundle.manifest)
         rejection = _rejection_record(case)
         counter_medians = compute_counter_medians(case.normalized_samples)
         work_fields = _work_fields(case)
@@ -270,6 +273,7 @@ def write_result_bundle(
                 "fvp_status": case.case_bundle.fvp_status,
                 "timed_symbol": timed_symbol,
                 "inner_symbol": inner,
+                "inner_variant": variant,
                 **work_fields,
                 "shapes": {blob.role: list(blob.dimensions) for blob in case.case_bundle.blobs},
                 "unsupported_counters": list(case.statistics.unsupported_counters),
@@ -296,6 +300,7 @@ def write_result_bundle(
             "fvp_status": case.case_bundle.fvp_status,
             "timed_symbol": timed_symbol,
             "inner_symbol": inner,
+            "inner_variant": variant,
             **work_fields,
         }
         summary_row.update(counter_medians)
