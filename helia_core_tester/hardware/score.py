@@ -205,8 +205,9 @@ def _module_commit(bundle: Bundle) -> str | None:
 def kernel_commit(bundle: Bundle) -> str | None:
     """The clean commit a bundle built."""
     kernels = _kernels(bundle)
-    if kernels.get("root_head"):
-        return kernels["root_head"] if kernels.get("root_dirty") is False else None
+    # Local roots need a known clean HEAD.
+    if any(kernels.get(k) is not None for k in ("root", "root_head", "root_dirty")):
+        return kernels.get("root_head") if kernels.get("root_dirty") is False else None
     return kernels.get("commit") or _module_commit(bundle)
 
 

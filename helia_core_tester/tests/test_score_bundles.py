@@ -9,7 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
-from helia_core_tester.hardware.score import load_bundle, load_scoring, parse_focus, score_bundles
+from helia_core_tester.hardware.score import kernel_commit, load_bundle, load_scoring, parse_focus, score_bundles
 
 FIELDS = ["case_id", "kernel_id", "comparison_passed", "median_cycles", "mad_cycles", "timed_symbol", "inner_symbol", "macs",
           "ARM_PMU_INST_RETIRED", "ARM_PMU_MVE_INST_RETIRED", "timing_status", "prepare_cycles", "hidden"]
@@ -475,3 +475,14 @@ def test_hidden_cases_score_apart(tmp_path):
 def test_hidden_sets_must_match(tmp_path, cases, commitment, reason):
     report = _score([_hide(tmp_path, "a")], [_hide(tmp_path, "b", cases, commitment)])
     assert report["verdict"] == "not_comparable" and reason in report["failures"][0]["reason"]
+
+
+@pytest.mark.parametrize(("kernels", "commit"), [
+    ({"root": "/k", "root_head": None, "root_dirty": None}, None),
+    ({"root": "/k", "root_head": BASE, "root_dirty": True}, None),
+    ({"root": "/k", "root_head": BASE, "root_dirty": False}, BASE),
+    ({"ref": "v1", "root": None}, "a"),
+])
+def test_kernel_commit_needs_clean_root(tmp_path, kernels, commit):
+    build = {"options": {}, "modules": [{"name": "nsx-cmsis-nn", "commit": "a"}], "kernels": kernels}
+    assert kernel_commit(load_bundle(_bundle(tmp_path, "a", build=build))) == commit
