@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 
+from .case_bundle import input_digest
 from .comparison import finite_or_none
 from .measurement import compute_counter_medians, counter_names_for_passes
 from .session import SessionResult
@@ -192,7 +193,7 @@ def write_result_bundle(
         # Empty-call cycles; null when unmeasured.
         "timing_floor": timing_floor,
         # How outputs were judged.
-        "compare": {"strict": False, "golden_from": None, **(compare or {})},
+        "compare": {"strict": False, "golden_from": None, "golden_session_id": None, **(compare or {})},
     }
     session_manifest["build"], lock_file = build_provenance(build_dir)
     if lock_file is not None:
@@ -225,6 +226,10 @@ def write_result_bundle(
         # The kernel the wrapper routes to.
         inner = inner_symbol(timed_symbol, case.case_bundle.manifest, gate_1xn)
         rejection = _rejection_record(case)
+        digests = {
+            "input_sha256": input_digest(case.case_bundle),
+            "expected_output_sha256": case.case_bundle.expected_output.sha256,
+        }
         counter_medians = compute_counter_medians(case.normalized_samples)
         work_fields = _work_fields(case)
         for sample in case.samples:
@@ -261,6 +266,7 @@ def write_result_bundle(
                 "valid_for_regression": case.statistics.valid_for_regression,
                 "timing_status": case.statistics.timing_status,
                 "rejection": rejection,
+                **digests,
             }
         )
         summary_row = {
@@ -297,6 +303,7 @@ def write_result_bundle(
                     "diff_count": case.comparison.diff_count,
                     "comparison": case.case_bundle.comparison,
                     "rejection": rejection,
+                    **digests,
                 },
                 indent=2,
             ),

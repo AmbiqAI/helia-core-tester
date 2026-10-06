@@ -9,7 +9,7 @@ import pytest
 from helia_core_tester.hardware.boards import DEFAULT_BOARD_ID, resolve_board
 from helia_core_tester.hardware.firmware_build import elf_path
 from helia_core_tester.hardware.memory_report import generate_memory_report
-from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
+from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, build_convolve_s8_case_bundle, input_digest, load_case_bundle
 from helia_core_tester.hardware.fake_target import FakeTargetTransport
 from helia_core_tester.hardware.measurement import counter_names_for_passes, counter_passes_for_selection
 from helia_core_tester.hardware.result_bundle import write_result_bundle, write_timing
@@ -107,8 +107,13 @@ def test_result_bundle_writer_emits_spec_artifacts(tmp_path: Path) -> None:
     assert cases[0]["overflow_detected"] is False and cases[0]["valid_for_regression"] is True
     assert cases[1]["macs"] == int(conv_row["macs"]) and cases[1]["shapes"]["weights"]
     assert (cases[0]["max_abs_diff"], cases[0]["diff_count"]) == (0.0, 0)
+    # Per-case digests for --golden-from.
+    record = json.loads((bundle_root / "correctness" / "abs_bundle.json").read_text())
+    assert record["input_sha256"] == cases[0]["input_sha256"] == input_digest(abs_bundle)
+    assert record["expected_output_sha256"] == abs_bundle.expected_output.sha256
+    assert cases[0]["input_sha256"] != cases[1]["input_sha256"]
     manifest = json.loads((bundle_root / "session_manifest.json").read_text())
-    assert manifest["compare"] == {"strict": False, "golden_from": None}
+    assert manifest["compare"] == {"strict": False, "golden_from": None, "golden_session_id": None}
 
     summary = json.loads((bundle_root / "session_summary.json").read_text())
     assert summary["counters"] == header[19:-3]

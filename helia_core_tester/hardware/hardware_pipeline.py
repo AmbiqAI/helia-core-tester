@@ -8,6 +8,7 @@ RTT session runner) -- never a subprocess into the tester's own CLI.
 from __future__ import annotations
 
 import contextlib
+import json
 import sys
 import time
 from dataclasses import dataclass, field
@@ -312,7 +313,20 @@ class StreamOptions:
         return {
             "strict": self.strict_compare or self.golden_from is not None,
             "golden_from": str(self.golden_from) if self.golden_from else None,
+            "golden_session_id": golden_session_id(self.golden_from),
         }
+
+
+def golden_session_id(golden_dir: Optional[Path]) -> Optional[str]:
+    """The baseline bundle's session id."""
+    if golden_dir is None:
+        return None
+    try:
+        manifest = json.loads((golden_dir / "session_manifest.json").read_text(encoding="utf-8"))
+        return str(manifest["session_id"])
+    except (OSError, ValueError, KeyError, TypeError):
+        # Bundles are named by session.
+        return golden_dir.name
 
 
 def fit_to_board(board: BoardSpec, options: StreamOptions, *, explicit_pmu: bool) -> StreamOptions:
@@ -352,7 +366,7 @@ class HardwareRunOutcome:
 
 def prepare_bundles(repo_root: Path, board: BoardSpec, options: StreamOptions) -> tuple[list, list]:
     """Bridge the cases; apply the compare mode."""
-    from .case_bundle import golden_bundle, golden_failed, golden_usable, strict_bundle
+    from .case_bundle import strict_bundle
     from .generated_test_bridge import HW_CASE_SUFFIX, CaseSelection
     from .session_runner import build_generated_test_case_bundles, no_bridgeable_cases_error
 
@@ -374,18 +388,35 @@ def prepare_bundles(repo_root: Path, board: BoardSpec, options: StreamOptions) -
         raise no_bridgeable_cases_error(
             skipped, cpu=board.cpu, family=options.family, name_filter=options.test_name, suite=options.suite,
         )
-    golden_dir = options.golden_from
-    if golden_dir is not None:
-        failed = [b.case_id for b in bundles if golden_failed(b, golden_dir)]
-        if failed and not options.golden_allow_failed:
-            raise RuntimeError(f"Golden run failed these cases: {', '.join(failed)}")
-        unusable = [b.case_id for b in bundles if not golden_usable(b, golden_dir)]
-        if unusable:
-            raise RuntimeError(f"No usable golden output in {golden_dir} for: {', '.join(unusable)}")
-        bundles = [golden_bundle(bundle, golden_dir) for bundle in bundles]
+    if options.golden_from is not None:
+        bundles = golden_bundles(bundles, options.golden_from, allow_failed=options.golden_allow_failed)
     elif options.strict_compare:
         bundles = [strict_bundle(bundle) for bundle in bundles]
     return bundles, skipped
+
+
+def golden_bundles(bundles: list, golden_dir: Path, *, allow_failed: bool) -> list:
+    """Swap in past outputs; refuse misfits."""
+    from .case_bundle import golden_bundle, golden_record, golden_usable, input_digest
+
+    records = {b.case_id: golden_record(b, golden_dir) for b in bundles}
+    if all(record is None for record in records.values()):
+        raise RuntimeError(f"Golden bundle has no results: {golden_dir}")
+    _refuse("Golden run is missing these cases", [i for i, r in records.items() if r is None])
+    if not allow_failed:
+        _refuse("Golden run failed these cases", [i for i, r in records.items() if r.get("passed") is not True])
+    # Status-only cases use no past output.
+    judged = [b for b in bundles if b.expected_status_code is None]
+    digests = {b.case_id: records[b.case_id].get("input_sha256") for b in judged}
+    _refuse("Golden run has no input digest for", [i for i, d in digests.items() if not d])
+    _refuse("Golden run used other inputs for", [b.case_id for b in judged if digests[b.case_id] != input_digest(b)])
+    _refuse(f"No usable golden output in {golden_dir} for", [b.case_id for b in bundles if not golden_usable(b, golden_dir)])
+    return [golden_bundle(bundle, golden_dir) for bundle in bundles]
+
+
+def _refuse(reason: str, case_ids: list[str]) -> None:
+    if case_ids:
+        raise RuntimeError(f"{reason}: {', '.join(case_ids)}")
 
 
 def stream_generated_tests(
