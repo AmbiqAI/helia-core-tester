@@ -428,11 +428,15 @@ def _read_case_ids(case_ids: Optional[list[str]], cases_from: Optional[Path]) ->
 def _check_ops(ops: tuple[str, ...]) -> None:
     """Fail on an op no descriptor matches."""
     from ..core.discovery import find_descriptors_dir
-    from ..generation.io.descriptors import load_all_descriptors, unmatched_ops
+    from ..generation.io.descriptors import DescriptorLoadError, load_all_descriptors, unmatched_ops
 
     if not ops:
         return
-    unknown = unmatched_ops(load_all_descriptors(str(find_descriptors_dir(repo_root()))), list(ops))
+    try:
+        catalog = load_all_descriptors(str(find_descriptors_dir(repo_root())))
+    except DescriptorLoadError as exc:
+        raise ValueError(f"Descriptor catalog failed to load: {exc}") from exc
+    unknown = unmatched_ops(catalog, list(ops))
     if unknown:
         raise ValueError(f"No descriptor matches --op: {', '.join(unknown)}")
 

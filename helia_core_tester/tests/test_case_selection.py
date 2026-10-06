@@ -217,3 +217,19 @@ def test_hardware_refuses_one_typo_among_ops(capsys) -> None:
             ["DepthwiseConv", "Depthwse"], None, None, None, False, None, False,
         )
     assert "No descriptor matches --op: Depthwse" in capsys.readouterr().err
+
+
+def test_hardware_reports_bad_catalog(monkeypatch, capsys) -> None:
+    from helia_core_tester.generation.io import descriptors
+    from helia_core_tester.hardware.cli import _stream_options
+
+    def broken(_root):
+        raise descriptors.DescriptorLoadError([("bad.yaml", ValueError("boom"))])
+
+    monkeypatch.setattr(descriptors, "load_all_descriptors", broken)
+    with pytest.raises(SystemExit):
+        _stream_options(
+            None, "int", None, None, None, None, None, None, None, None,
+            ["DepthwiseConv"], None, None, None, False, None, False,
+        )
+    assert "Descriptor catalog failed to load" in capsys.readouterr().err
