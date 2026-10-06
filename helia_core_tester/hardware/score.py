@@ -417,6 +417,13 @@ def _family_band(cases: list[dict], scoring: dict) -> float:
     return max(scoring["family_floor_pct"], spread)
 
 
+def _family_gate(subset: str, cases: list[dict], scoring: dict) -> dict:
+    """Fail a subset slower than its band."""
+    band = _family_band(cases, scoring)
+    slowdown = (1.0 / _geomean(cases) - 1.0) * 100.0
+    return {"subset": subset, "cases": len(cases), "slowdown_pct": slowdown, "band_pct": band, "regression": slowdown > band}
+
+
 def score_bundles(
     baselines: list[Bundle], candidates: list[Bundle], scoring: dict, check: dict | None = None, focus: dict | None = None
 ) -> dict:
@@ -425,8 +432,9 @@ def score_bundles(
     Keys: schema, schema_version, verdict (pass | fail | not_comparable | no_gain),
     score (null unless comparable), board, placement, baseline and
     candidate session ids, settings, families {name: {weight, cases,
-    geomean_speedup, gated_cases, band_pct, regression, focus_cases,
-    focus_geomean, contribution}}, cases (eligible and excluded rows), failures [{kind,
+    geomean_speedup, band_pct, gates [{subset, cases, slowdown_pct,
+    band_pct, regression}], regression, focus_cases, focus_geomean,
+    contribution}}, cases (eligible and excluded rows), failures [{kind,
     case_id, reason}]. settings.check is the trusted {tree_hash,
     base_commit}, or null when unchecked; settings.focus is {routes,
     dtypes} or null. Failure kinds: not_comparable, comparison_failed,
@@ -434,7 +442,7 @@ def score_bundles(
     family_regression, prepare_regression, no_eligible_cases.
 
     Correctness, case, family and prepare gates cover every case; under
-    focus the family gate judges the unfocused members. The score covers
+    focus the family gate judges the focus and rest subsets apart. The score covers
     focus cases only (by baseline route), with family weights
     renormalized over the families they hit.
     """
@@ -510,18 +518,17 @@ def score_bundles(
     for family in sorted({case["family"] for case in eligible}):
         members = [case for case in eligible if case["family"] == family]
         hits = [case for case in members if case["in_focus"]]
-        # Focus wins must not hide slowdowns.
-        gated = [case for case in members if not case["in_focus"]] if focus else members
-        gated = gated or members
-        geomean, band = _geomean(members), _family_band(gated, scoring)
-        slowdown = (1.0 / _geomean(gated) - 1.0) * 100.0
-        if slowdown > band:
-            reason = f"{family}: {slowdown:+.2f}% slower than band {band:.2f}%"
-            failures.append({"kind": "family_regression", "case_id": None, "reason": reason})
+        # Gate focus and rest apart.
+        subsets = {"focus": hits, "rest": [c for c in members if not c["in_focus"]]} if focus else {"all": members}
+        gates = [_family_gate(name, part, scoring) for name, part in subsets.items() if part]
+        for gate in gates:
+            if gate["regression"]:
+                reason = f"{family} {gate['subset']}: {gate['slowdown_pct']:+.2f}% slower than band {gate['band_pct']:.2f}%"
+                failures.append({"kind": "family_regression", "case_id": None, "reason": reason})
         report["families"][family] = {
-            "weight": scoring["weights"].get(family, 0.0), "cases": len(members), "geomean_speedup": geomean,
-            "gated_cases": len(gated), "band_pct": band, "regression": slowdown > band, "focus_cases": len(hits),
-            "focus_geomean": _geomean(hits) if hits else None, "contribution": 0.0,
+            "weight": scoring["weights"].get(family, 0.0), "cases": len(members), "geomean_speedup": _geomean(members),
+            "band_pct": _family_band(members, scoring), "gates": gates, "regression": any(g["regression"] for g in gates),
+            "focus_cases": len(hits), "focus_geomean": _geomean(hits) if hits else None, "contribution": 0.0,
         }
     hit_families = {name: fam for name, fam in report["families"].items() if fam["focus_cases"]}
     norm = sum(fam["weight"] for fam in hit_families.values()) if focus else 1.0

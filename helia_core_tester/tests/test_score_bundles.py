@@ -431,7 +431,8 @@ def test_focus_wins_cannot_hide_slowdowns(tmp_path):
     cand = _conv3(tmp_path, "b", {"conv_a": 1.025, "conv_b": 1.025, "conv_mlperf_c": 0.8}, rows=fast)
     assert _score([base], [cand])["verdict"] == "pass"
     report = _score([base], [cand], focus=parse_focus(["arm_convolve_1x1_s8_fast"]))
-    assert _pairs(report) == [("family_regression", None)] and report["families"]["conv"]["gated_cases"] == 2
+    assert _pairs(report) == [("family_regression", None)]
+    assert [g["subset"] for g in report["families"]["conv"]["gates"] if g["regression"]] == ["rest"]
 
 
 def test_focus_uses_baseline_route(tmp_path):
@@ -473,3 +474,31 @@ def test_old_scoring_schema_refused(tmp_path, name):
     path.write_text(path.read_text().replace("schema_version: 2", "schema_version: 1"))
     with pytest.raises(ValueError, match="need schema_version 2"):
         load_scoring("apollo510_evb", tmp_path)
+
+
+FOCUS_MIX = {
+    "conv_a": ("arm_convolve_wrapper_s8", 1000.0),
+    "conv_b": ("arm_convolve_wrapper_s8", 1000.0),
+    "conv_c": ("arm_convolve_wrapper_s8", 1000.0),
+    "conv_d": ("arm_convolve_wrapper_s8", 1000.0),
+    "dw_a": ("arm_depthwise_conv_wrapper_s8", 1000.0),
+}
+FAST = {c: {"inner_symbol": "arm_convolve_1x1_s8_fast"} for c in ("conv_a", "conv_b")}
+
+
+def _mix(root: Path, name: str, scale: dict) -> Path:
+    cycles = {c: 1000.0 * scale.get(c, 1.0) for c in FOCUS_MIX}
+    return _bundle(root, name, cases=FOCUS_MIX, cycles=cycles, rows=FAST)
+
+
+@pytest.mark.parametrize(("scale", "failed"), [
+    # Focused conv slower, masked by DW win.
+    ({"conv_a": 1.028, "conv_b": 1.028, "dw_a": 0.5}, ["conv focus"]),
+    ({"conv_a": 0.9, "conv_b": 0.9}, []),
+    ({"conv_c": 1.028, "conv_d": 1.028, "conv_a": 0.8, "conv_b": 0.8}, ["conv rest"]),
+])
+def test_focus_subsets_gate_apart(tmp_path, scale, failed):
+    focus = parse_focus(["arm_convolve_1x1_s8_fast", "arm_depthwise_conv_wrapper_s8"])
+    report = _score([_mix(tmp_path, "a", {})], [_mix(tmp_path, "b", scale)], focus=focus)
+    reasons = [f["reason"].split(":")[0] for f in report["failures"] if f["kind"] == "family_regression"]
+    assert reasons == failed and (report["verdict"] == "pass") == (not failed)
