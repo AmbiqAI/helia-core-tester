@@ -46,6 +46,7 @@ UNDERFILLED = 1.5
 SCALAR = 0.5
 LOW_MVE_SHARE = 0.3
 DEP_STALL = 0.05
+MEM_STALL = 0.1
 FRONTEND_STALL = 0.1
 PREPARE_HEAVY = 0.5
 OVERHEAD = 1.5
@@ -198,8 +199,12 @@ def _rule_memory_bound(e: Explanation) -> Optional[Finding]:
     if e.placement == "mram" and m["refill_kb"]:
         return Finding("memory_bound", be, f"MRAM-bound: {be:.0%} backend stall, {m['refill_kb']:.0f} KB refilled",
                        "Prefetch weights or stage them in TCM")
-    return Finding("memory_bound", be, f"Memory-bound: {be:.0%} of cycles in backend stall",
-                   "Interleave loads with MACs; keep operands in DTCM")
+    # Backend stall alone is not memory.
+    if m["refill_kb"] or (m["mve_stall_mem"] or 0) >= MEM_STALL:
+        return Finding("memory_bound", be, f"Memory-bound: {be:.0%} of cycles in backend stall",
+                       "Interleave loads with MACs; keep operands in DTCM")
+    return Finding("backend_bound", be, f"Backend-bound: {be:.0%} stall, no memory signal",
+                   "Break dependency chains; spread work across MVE units")
 
 
 def _rule_overhead(e: Explanation) -> Optional[Finding]:
@@ -209,9 +214,11 @@ def _rule_overhead(e: Explanation) -> Optional[Finding]:
     # Scalar MACs explain this better.
     if ratio is None or not target or ratio < target * OVERHEAD or (fill is not None and fill < SCALAR):
         return None
-    scalar = 1 - (e.metrics["mve_share"] or 0)
+    share = e.metrics["mve_share"]
+    # Unmeasured share: no scalar clause.
+    scalar = f", {1 - share:.0%} scalar" if share is not None else ""
     return Finding("instruction_overhead", 1 - target / ratio,
-                   f"{ratio:.1f} inst per MVE MAC (best {target}), {scalar:.0%} scalar",
+                   f"{ratio:.1f} inst per MVE MAC (best {target}){scalar}",
                    "Cut non-MAC work: hoist address math, reuse loaded vectors")
 
 
@@ -220,9 +227,10 @@ def _rule_underfilled(e: Explanation) -> Optional[Finding]:
     if ratio is None or ratio < UNDERFILLED:
         return None
     lanes = e.ceiling["lanes"]
-    pred = e.metrics["pred_cycle_share"] or 0
+    pred = e.metrics["pred_cycle_share"]
+    predicated = f", {pred:.0%} cycles predicated" if pred is not None else ""
     return Finding("underfilled_vectors", 1 - 1 / ratio,
-                   f"MVE MACs fill {1 / ratio:.0%} of {lanes} lanes, {pred:.0%} cycles predicated",
+                   f"MVE MACs fill {1 / ratio:.0%} of {lanes} lanes{predicated}",
                    "Block channels so each MAC fills all lanes")
 
 

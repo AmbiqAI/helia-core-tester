@@ -74,6 +74,23 @@ def test_memory_bound_tcm_and_mram():
     assert explain_case(row, cpu=M55, placement="mram").diagnosis.startswith("MRAM-bound")
 
 
+def test_backend_stall_without_memory_signal():
+    row = _row(INST_RETIRED=1000, STALL_BACKEND=3000, MVE_STALL_RESOURCE_MEM=0)
+    assert _rules(row)[0] == "backend_bound"
+    assert _rules(_row(INST_RETIRED=1000, STALL_BACKEND=3000, MVE_STALL_RESOURCE_MEM=800))[0] == "memory_bound"
+
+
+def test_missing_counters_drop_clauses():
+    row = _row(INST_RETIRED=8000, MVE_INST_RETIRED=6000, MVE_INT_MAC_RETIRED=2000)
+    del row["counters"]["ARM_PMU_MVE_PRED"]
+    findings = {f.rule: f.diagnosis for f in explain_case(row, cpu=M55).findings}
+    assert "predicated" not in findings["underfilled_vectors"]
+    row = _row(INST_RETIRED=8000, MVE_INST_RETIRED=6000)
+    del row["counters"]["ARM_PMU_MVE_INST_RETIRED"]
+    overhead = next(f for f in explain_case(row, cpu=M55).findings if f.rule == "instruction_overhead")
+    assert "scalar" not in overhead.diagnosis
+
+
 def test_instruction_overhead():
     assert _rules(_row(INST_RETIRED=8000, MVE_INST_RETIRED=6000))[0] == "instruction_overhead"
 
