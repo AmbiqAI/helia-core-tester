@@ -17,7 +17,7 @@ run_summary.py.
 
 Exit codes, shared with `score`: 0 pass; 1 a case failed correctness; 2 bad
 flags; 3 refused before running (dirty tester, a --skip-flash or --golden-from
-mismatch); 5 error (cmake, J-Link, transport, probe). Failures print one line;
+mismatch, no case matches); 5 error (cmake, J-Link, transport, probe). Failures print one line;
 the traceback is shown with `--verbosity 1` or higher (also
 `$HELIA_CORE_TESTER_VERBOSITY`, the same knob the generate/build/run commands
 use).
@@ -39,6 +39,7 @@ import typer
 from .boards import BoardSpec, UnknownBoardError, default_board_id, load_board_table, repo_root, resolve_board
 from .memory_report import generate_memory_report
 from .probes import ProbeResolutionError, list_probes, resolve_serial
+from .score import EXIT_FAIL, EXIT_REFUSED
 from .wire import clock_mhz
 
 hardware_app = typer.Typer(
@@ -69,8 +70,8 @@ _ALLOW_UNVERIFIED_HELP = (
 )
 
 
-# Match score's codes; 4 is no_gain there.
-EXIT_PASS, EXIT_FAIL, EXIT_USAGE, EXIT_REFUSED, EXIT_ERROR = 0, 1, 2, 3, 5
+# Score's codes, plus usage and error.
+EXIT_USAGE, EXIT_ERROR = 2, 5
 
 
 def _fail(message: str, code: int = EXIT_USAGE) -> None:
@@ -104,7 +105,7 @@ def _pipeline_errors(verbosity: int) -> Iterator[None]:
     FileNotFoundError are the transport write timeout and a missing ELF. These
     exit EXIT_ERROR. Anything else is a bug and keeps its traceback.
     """
-    from .nsx_cli import RunRefused
+    from .errors import RunRefused
 
     try:
         yield
@@ -697,10 +698,11 @@ def run(
         app_options = _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
     else:
         app_options = _app_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
-    serial = _serial(serial_no)
     echo = lambda msg: typer.echo(msg, err=as_json)  # noqa: E731
+    # Refuse before probing the board.
     if cmsis_nn_root is not None:
         _check_tester_clean(allow_dirty_tester, echo)
+    serial = _serial(serial_no)
     if streams_only:
         _saved_kernels(build_dir, echo)
     with _pipeline_errors(_verbosity(verbosity)), _quiet_stdout(as_json):

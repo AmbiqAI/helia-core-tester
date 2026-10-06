@@ -27,6 +27,7 @@ from .firmware_build import (
     resolve_build_dir,
     stage_kernels,
 )
+from .errors import RunRefused
 from .measurement import (
     TooManyPassesError,
     UnsupportedCounterError,
@@ -35,7 +36,6 @@ from .measurement import (
     counter_passes_for_selection,
     resolve_counter_selection,
 )
-from .nsx_cli import RunRefused
 from .pmu_catalog import CPU_CYCLES_NAME, GROUPS, default_selection
 from .result_bundle import write_timing
 from .run_summary import make_live_progress_printer
@@ -564,9 +564,7 @@ def run_hardware_pipeline(
         # Generate against the firmware's kernels.
         if skip_flash:
             if update_dependencies:
-                from .nsx_cli import HardwareBuildError
-
-                raise HardwareBuildError("--skip-flash cannot update dependencies.")
+                raise RunRefused("--skip-flash cannot update dependencies.")
             # Board keeps the built image.
             kernel_root = built_kernels(board, resolved_build_dir, app_options)
         else:

@@ -429,7 +429,7 @@ def test_skip_flash_refusal_is_one_line(monkeypatch, tmp_path) -> None:
 def test_golden_refusal_exits_refused(monkeypatch) -> None:
     """Refusals exit 3, not the correctness 1."""
     from helia_core_tester.hardware import hardware_pipeline
-    from helia_core_tester.hardware.nsx_cli import RunRefused
+    from helia_core_tester.hardware.errors import RunRefused
 
     def _refuse(*args, **kwargs):
         raise RunRefused("Golden run failed these cases: c")
@@ -438,3 +438,15 @@ def test_golden_refusal_exits_refused(monkeypatch) -> None:
     monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", _refuse)
     result = runner.invoke(app, ["hardware", "run", "--skip-generate"])
     assert result.exit_code == 3 and "Golden run failed these cases" in _result_text(result)
+
+
+def test_correctness_failure_exits_one(monkeypatch, tmp_path) -> None:
+    """Exit 1 means a case failed."""
+    from helia_core_tester.hardware import hardware_pipeline, run_summary
+
+    outcome = hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[])
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", lambda *a, **k: outcome)
+    monkeypatch.setattr(run_summary, "print_run_report", lambda *a, **k: True)
+    result = runner.invoke(app, ["hardware", "run", "--skip-generate"])
+    assert result.exit_code == 1 and "failed correctness" in _result_text(result)

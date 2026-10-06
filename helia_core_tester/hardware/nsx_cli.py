@@ -32,14 +32,6 @@ class HardwareBuildError(RuntimeError):
     """An NSX lock, sync, configure, build or flash step failed."""
 
 
-class RunRefused(RuntimeError):
-    """Inputs do not fit; nothing ran."""
-
-
-class StaleBuildError(HardwareBuildError, RunRefused):
-    """The build changed since the flash."""
-
-
 def _quiet_emitter(event: Event) -> None:
     """Drop NSX notes at verbosity 0."""
 

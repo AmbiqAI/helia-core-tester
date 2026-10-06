@@ -455,6 +455,7 @@ def built_record(app_dir: Path) -> dict[str, Any]:
 def built_kernels(board: BoardSpec, build_dir: Path, options: "AppOptions") -> Path:
     """Kernels the last build used, unchanged."""
     from . import nsx_cli
+    from .errors import RunRefused
     from .nsx_app import kernel_dir, kernels_match
 
     app_dir = nsx_app_dir(build_dir)
@@ -465,12 +466,12 @@ def built_kernels(board: BoardSpec, build_dir: Path, options: "AppOptions") -> P
         or built != _built_record(app_dir, options)
         or not nsx_cli.lock_is_current(app_dir, board.nsx_board)
     ):
-        raise nsx_cli.StaleBuildError("Kernels changed since the build; rebuild first.")
+        raise RunRefused("Kernels changed since the build; rebuild first.")
     module = kernel_dir(app_dir, options)
     if options.cmsis_nn_root is None:
         return module
     if not kernels_match(options.cmsis_nn_root, module):
-        raise nsx_cli.StaleBuildError("Kernel checkout edited since the build; rebuild first.")
+        raise RunRefused("Kernel checkout edited since the build; rebuild first.")
     return options.cmsis_nn_root
 
 
