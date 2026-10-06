@@ -91,11 +91,12 @@ def _dirty_hash(repo_root: Path, status: bytes) -> Optional[str]:
 
 def path_hash(path: Path) -> Optional[str]:
     """Content hash of a file or tree."""
-    from .nsx_cli import tree_hash
+    from neuralspotx.nsx_lock import hash_file, hash_tree
 
     if path.is_dir():
-        return tree_hash(path)
-    return _sha(path.read_bytes()) if path.is_file() else None
+        # Lists the kernel module dir name.
+        return hash_tree(path, exclude_names=frozenset({"modules.cmake"}))
+    return hash_file(path) if path.is_file() else None
 
 
 def cache_flags(build_dir: Path) -> dict[str, str]:
@@ -158,12 +159,13 @@ def firmware_record(repo_root: Path, build_dir: Path, options: Any, toolchain: A
 def harness_record(firmware: Optional[dict], repo_root: Path) -> dict[str, Any]:
     """Digest plus inputs, for the manifest."""
     host = tester_state(repo_root)
-    dirty = bool(host["dirty"] or (firmware and firmware["tester"]["dirty"]))
+    # Unknown state counts as dirty.
+    clean = host["dirty"] is False and (not firmware or firmware["tester"]["dirty"] is False)
     if not firmware:
-        return {"schema": HARNESS_SCHEMA, "digest": None, "tester_dirty": dirty, "inputs": None}
+        return {"schema": HARNESS_SCHEMA, "digest": None, "tester_dirty": not clean, "inputs": None}
     inputs = {"firmware": firmware, "host": host}
     canonical = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return {"schema": HARNESS_SCHEMA, "digest": _sha(canonical), "tester_dirty": dirty, "inputs": inputs}
+    return {"schema": HARNESS_SCHEMA, "digest": _sha(canonical), "tester_dirty": not clean, "inputs": inputs}
 
 
 def harness_digest(manifest: dict) -> Optional[str]:

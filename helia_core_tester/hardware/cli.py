@@ -169,7 +169,8 @@ def _check_tester_clean(allow: bool, echo) -> None:
     """Candidate runs need a committed tester."""
     from .harness_lock import tester_state
 
-    if not tester_state(repo_root())["dirty"]:
+    # Unknown state counts as dirty.
+    if tester_state(repo_root())["dirty"] is False:
         return
     if not allow:
         _fail("Tester worktree is dirty; commit or pass --allow-dirty-tester.")

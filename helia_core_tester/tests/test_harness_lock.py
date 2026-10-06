@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from helia_core_tester.hardware.result_bundle import write_result_bundle
 from helia_core_tester.hardware.session import SessionResult
 
 runner = CliRunner()
+pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 
 LOCK = """schema_version: 4
 targets:
@@ -203,8 +205,16 @@ def test_source_change_passes(kernels: Path) -> None:
     ("Source/CMakeLists.txt", "y\n", "file_type"),
     ("Source/Conv/a.o", "y\n", "file_type"),
     ("Include/arm_nnfunctions.h", "int g;\n", "frozen_file"),
-    ("Source/Conv/a.c", '__attribute__((section(".itcm"))) int a;\n', "special_section"),
-    ("Source/Conv/a.c", "#pragma GCC optimize(\"O3\")\n", "build_flags"),
+    ("Source/Conv/a.c", '__attribute__((section(".itcm"))) int a;\n', "attribute"),
+    ("Source/Conv/a.c", '__attribute__((__section__(".itcm"))) int a;\n', "special_section"),
+    ("Source/Conv/a.c", '[[gnu::section(".itcm")]] int a;\n', "attribute"),
+    ("Source/Conv/a.c", "__attribute__((noinline,\n", "attribute"),
+    ("Source/Conv/a.c", '__asm__(".pushsection .itcm");\n', "special_section"),
+    ("Source/Conv/a.c", "#pragma GCC optimize(\"O3\")\n", "pragma"),
+    ("Source/Conv/a.c", '_Pragma("GCC optimize(\\"O3\\")")\n', "pragma"),
+    ("Source/Conv/a.c", "void g(void) { DWT->CYCCNT = 0; }\n", "measurement_access"),
+    ("Source/Conv/a.c", "#include KERNEL_PATH\n", "include_escape"),
+    ("Source/Conv/k.s", '.incbin "/etc/x"\n', "include_escape"),
     ("Source/Conv/a.c", "static const int golden[4];\n", "harness_reference"),
     ("Source/Conv/a.c", '#include "../../Tests/t.c"\n', "include_escape"),
 ])
@@ -212,6 +222,26 @@ def test_forbidden_change_fails(kernels: Path, rel: str, text: str, rule: str) -
     (kernels / rel).parent.mkdir(parents=True, exist_ok=True)
     (kernels / rel).write_text(text, encoding="utf-8")
     assert rule in _rules(kernels)
+
+
+def test_safe_attributes_pass(kernels: Path) -> None:
+    text = "__attribute__((always_inline, aligned(4))) static int a;\n#pragma GCC unroll 4\n"
+    (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
+    assert check_candidate(kernels, "base")["ok"]
+
+
+def test_git_tricks_cannot_hide_changes(kernels: Path) -> None:
+    (kernels / "Tests/t.c").write_text("int t2;\n", encoding="utf-8")
+    _git(kernels, "update-index", "--skip-worktree", "Tests/t.c")
+    (kernels / "Source/Conv/a.c").write_text('#pragma GCC optimize("O3")\n', encoding="utf-8")
+    _git(kernels, "config", "diff.external", "true")
+    (kernels / ".git/info/exclude").write_text("Source/Conv/hidden.c\n", encoding="utf-8")
+    (kernels / "Source/Conv/hidden.c").write_text('__attribute__((section(".x"))) int h;\n', encoding="utf-8")
+    report = check_candidate(kernels, "base")
+    rules = {(f["path"], f["rule"]) for f in report["findings"]}
+    assert ("Tests/t.c", "outside_allowlist") in rules
+    assert ("Source/Conv/a.c", "pragma") in rules
+    assert ("Source/Conv/hidden.c", "attribute") in rules
 
 
 def test_symlink_fails(kernels: Path) -> None:

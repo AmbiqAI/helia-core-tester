@@ -427,12 +427,13 @@ def _record_built(build_dir: Path, options: "AppOptions") -> None:
     _replace_json(app_dir / BUILT_LOCK, _built_record(app_dir, options))
     version = gcc_version(_built_compiler(build_dir))
     toolchain = {"name": GCC_NAME, "version": version} if version else None
+    nsx_version = nsx_cli.nsx_version()
     info = {
-        "nsx_version": nsx_cli.nsx_version(),
+        "nsx_version": nsx_version,
         "toolchain": toolchain,
         **_checkout_state(options.cmsis_nn_root, options.cmsis_nn_ref),
         # Measurement inputs, minus kernels.
-        "harness": firmware_record(tester_repo_root(), build_dir, options, toolchain, nsx_cli.nsx_version()),
+        "harness": firmware_record(tester_repo_root(), build_dir, options, toolchain, nsx_version),
     }
     _replace_json(app_dir / BUILT_INFO, info)
 
