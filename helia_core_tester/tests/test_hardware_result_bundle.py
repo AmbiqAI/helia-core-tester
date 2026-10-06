@@ -9,7 +9,7 @@ import pytest
 from helia_core_tester.hardware.boards import DEFAULT_BOARD_ID, resolve_board
 from helia_core_tester.hardware.firmware_build import elf_path
 from helia_core_tester.hardware.memory_report import generate_memory_report
-from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, build_convolve_s8_case_bundle, load_case_bundle
+from helia_core_tester.hardware.case_bundle import build_abs_s8_case_bundle, build_convolve_s8_case_bundle, input_digest, load_case_bundle
 from helia_core_tester.hardware.fake_target import FakeTargetTransport
 from helia_core_tester.hardware.measurement import counter_names_for_passes, counter_passes_for_selection
 from helia_core_tester.hardware.result_bundle import write_result_bundle, write_timing
@@ -107,8 +107,13 @@ def test_result_bundle_writer_emits_spec_artifacts(tmp_path: Path) -> None:
     assert cases[0]["overflow_detected"] is False and cases[0]["valid_for_regression"] is True
     assert cases[1]["macs"] == int(conv_row["macs"]) and cases[1]["shapes"]["weights"]
     assert (cases[0]["max_abs_diff"], cases[0]["diff_count"]) == (0.0, 0)
+    # Per-case digests for --golden-from.
+    record = json.loads((bundle_root / "correctness" / "abs_bundle.json").read_text())
+    assert record["input_digest"] == cases[0]["input_digest"] == input_digest(abs_bundle)
+    assert record["expected_output_sha256"] == abs_bundle.expected_output.sha256
+    assert cases[0]["input_digest"] != cases[1]["input_digest"]
     manifest = json.loads((bundle_root / "session_manifest.json").read_text())
-    assert manifest["compare"] == {"strict": False, "golden_from": None}
+    assert manifest["compare"] == {"strict": False, "golden_from": None, "golden_session_id": None}
 
     summary = json.loads((bundle_root / "session_summary.json").read_text())
     assert summary["counters"] == header[20:-3]
@@ -141,3 +146,17 @@ def test_result_bundle_writer_handles_empty_session(tmp_path: Path) -> None:
     assert case_summary_text.splitlines() == ["case_id,kernel_id,comparison_passed,mismatch_count,max_abs_diff,diff_count,sample_count,median_cycles,mad_cycles,p90_cycles,p99_cycles,fvp_status,timed_symbol,inner_symbol,inner_variant,macs,ops,cycles_per_mac,cycles_per_op,prepare_cycles,overflow_detected,valid_for_regression,timing_status"]
     assert raw_samples_text.splitlines() == ["case_id,sample_index,pass_name,iterations,cycles,cycles_per_invocation,counter_name,event_id,counter_value,overflow,supported"]
     assert (bundle_root / "junit.xml").exists()
+
+
+def test_status_only_case_records_no_output_digest(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from helia_core_tester.hardware import result_bundle
+
+    monkeypatch.setattr(result_bundle, "input_digest", lambda bundle: "in")
+    output = SimpleNamespace(sha256="placeholder")
+    status_only = SimpleNamespace(expected_status_code=-2, expected_output=output)
+    judged = SimpleNamespace(expected_status_code=None, expected_output=output)
+    assert result_bundle.case_digests(status_only) == {"input_digest": "in", "expected_output_sha256": None}
+    assert result_bundle.case_digests(judged)["expected_output_sha256"] == "placeholder"
+
