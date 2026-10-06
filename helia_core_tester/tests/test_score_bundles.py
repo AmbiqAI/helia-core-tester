@@ -222,3 +222,28 @@ def test_missing_baseline_repeat_excludes_case(tmp_path):
     conv = next(case for case in report["cases"] if case["case_id"] == "conv_a")
     assert not conv["eligible"] and conv["excluded_by"] == "missing_baseline_repeat"
     assert "conv" not in report["families"]
+
+
+@pytest.mark.parametrize("cycles", ["nan", "inf", 0.0])
+def test_non_finite_or_zero_candidate_cycles_fail(tmp_path, cycles):
+    report = _score([_bundle(tmp_path, "a")], [_bundle(tmp_path, "b", cycles={"conv_a": cycles})])
+    assert report["verdict"] == "fail"
+    assert ("timing_lost", "conv_a") in [(f["kind"], f["case_id"]) for f in report["failures"]]
+    conv = next(case for case in report["cases"] if case["case_id"] == "conv_a")
+    assert conv["candidate_cycles"] in (None, 0.0) and not conv["eligible"]
+
+
+def test_one_sided_repeat_digests_not_compared(tmp_path):
+    bases = [_bundle(tmp_path, f"a{i}", digests={"conv_a": "sha256:1"}) for i in range(2)]
+    assert _score(bases, [_bundle(tmp_path, "b")])["verdict"] == "pass"
+    mixed = [_bundle(tmp_path, "c0", digests={"conv_a": "sha256:1"}), _bundle(tmp_path, "c1", digests={"conv_a": "sha256:2"})]
+    report = _score(mixed, [_bundle(tmp_path, "d")])
+    assert [(f["kind"], f["reason"]) for f in report["failures"]] == [("input_digest", "inputs differ between repeats")]
+
+
+@pytest.mark.parametrize("flag", ["--min-score", "--floor-pct", "--mad-k"])
+def test_cli_refuses_non_finite_settings(tmp_path, flag):
+    base, cand = _bundle(tmp_path, "a"), _bundle(tmp_path, "b")
+    result = CliRunner().invoke(app, ["score", str(base), "--candidate", str(cand), flag, "nan"])
+    assert result.exit_code == 2 and "must be finite" in result.output
+

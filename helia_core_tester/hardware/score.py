@@ -143,8 +143,25 @@ def _kernel_id(bundle: Bundle) -> tuple | None:
 
 
 def _num(row: dict, key: str) -> float | None:
+    """A finite number, else None."""
     cell = row.get(key)
-    return None if cell in ("", None) else float(cell)
+    if cell in ("", None):
+        return None
+    try:
+        value = float(cell)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _lost(lost: list[str], base: list[dict], a: float | None, b: float | None) -> str | None:
+    """Why a valid baseline case lost timing."""
+    if not all(_status(row) == "valid" for row in base):
+        return None
+    if lost:
+        return lost[0]
+    # Zero, missing or non-finite cycles.
+    return "no_cycles" if a and not b else None
 
 
 def _status(row: dict) -> str:
@@ -220,7 +237,7 @@ def _case(case_id: str, baselines: list[Bundle], candidates: list[Bundle], scori
         "inner_symbol": cand[0].get("inner_symbol") or None,
         "eligible": not statuses and bool(a) and bool(b),
         "excluded_by": statuses[0] if statuses else None,
-        "timing_lost": lost[0] if lost and all(_status(row) == "valid" for row in base) else None,
+        "timing_lost": _lost(lost, base, a, b),
         "baseline_cycles": a,
         "candidate_cycles": b,
         "cycles_per_mac_baseline": per_unit(a, _num(base[0], "macs")),
@@ -281,8 +298,12 @@ def score_bundles(baselines: list[Bundle], candidates: list[Bundle], scoring: di
             failures.append({"kind": "missing_case", "case_id": case_id, "reason": f"absent from {', '.join(missing)}"})
             continue
         present.append(case_id)
-        digests = {b.digests[case_id] for b in baselines + candidates if case_id in b.digests}
-        if len(digests) > 1:
+        base_digests = {b.digests[case_id] for b in baselines if case_id in b.digests}
+        cand_digests = {c.digests[case_id] for c in candidates if case_id in c.digests}
+        # One side only: nothing to compare.
+        if len(base_digests) > 1 or len(cand_digests) > 1:
+            failures.append({"kind": "input_digest", "case_id": case_id, "reason": "inputs differ between repeats"})
+        elif base_digests and cand_digests and base_digests != cand_digests:
             failures.append({"kind": "input_digest", "case_id": case_id, "reason": "inputs differ between runs"})
 
     report["cases"] = cases = [_case(case_id, baselines, candidates, scoring) for case_id in present]
@@ -367,6 +388,9 @@ def score(
 
     Exit 0 pass, 1 fail, 3 not comparable, 4 no gain.
     """
+    for flag, value in (("--floor-pct", floor_pct), ("--mad-k", mad_k), ("--min-score", min_score)):
+        if value is not None and not math.isfinite(value):
+            raise typer.BadParameter(f"{flag} must be finite", param_hint=flag)
     baselines = [load_bundle(path) for path in baseline]
     candidates = [load_bundle(path) for path in candidate]
     scoring = load_scoring(_identity(baselines[0])["board"])
