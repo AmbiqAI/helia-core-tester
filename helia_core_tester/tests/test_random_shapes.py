@@ -119,7 +119,8 @@ def test_explicit_zero_seed_beats_env(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(("settings", "message"), [
     ({"random_shapes": 0}, "random_shapes must be >= 1"),
     ({"random_shapes": -3}, "random_shapes must be >= 1"),
-    ({"random_shapes": 2, "shape_seed": -1}, "shape_seed must be >= 0"),
+    ({"random_shapes": 2, "shape_seed": -1}, "shape_seed must be in"),
+    ({"random_shapes": 2, "shape_seed": 2**32}, "shape_seed must be in"),
     ({"random_shapes": 2, "suite": "float"}, "needs the int suite"),
 ])
 def test_bad_random_settings_refused(settings: dict, message: str) -> None:
@@ -171,3 +172,12 @@ def test_flat_random_draw_is_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert summary["filters"]["shape_seed"] == 3
     assert fixed.is_dir() and not old_draw.exists()
     assert not (generated / "ConvolutionFunctions" / "rs3_conv_001").exists()
+
+
+def test_largest_seed_case_id_fits_firmware() -> None:
+    from helia_core_tester.core.config import MAX_SHAPE_SEED
+    from helia_core_tester.hardware.session import MAX_CASE_ID_BYTES
+
+    longest = f"rs{MAX_SHAPE_SEED}_{max(rs.TAGS.values(), key=len)}_9999{HW_CASE_SUFFIX}"
+    assert len(longest.encode()) <= MAX_CASE_ID_BYTES
+

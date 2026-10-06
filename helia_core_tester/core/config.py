@@ -26,6 +26,8 @@ from helia_core_tester.core.path_layout import (
 )
 
 ENV_PREFIX = "HELIA_CORE_TESTER_"
+# 32-bit seeds keep case ids short.
+MAX_SHAPE_SEED = 2**32 - 1
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
 VALID_SUITE_MODES = {"int", "float", "both"}
@@ -305,8 +307,9 @@ class Config:
     def _validate_random_shapes(self) -> None:
         if self.shape_seed is None:
             self.shape_seed = 0
-        if self.shape_seed < 0:
-            raise ConfigurationError(f"shape_seed must be >= 0, got {self.shape_seed}")
+        # Seed sits in hardware case ids.
+        if not 0 <= self.shape_seed <= MAX_SHAPE_SEED:
+            raise ConfigurationError(f"shape_seed must be in 0..{MAX_SHAPE_SEED}, got {self.shape_seed}")
         if self.random_shapes is None:
             return
         if self.random_shapes < 1:
