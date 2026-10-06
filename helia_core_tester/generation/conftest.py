@@ -75,6 +75,10 @@ def _guard_hidden(config) -> None:
     config.option.fulltrace = False
     from helia_core_tester.generation.random_shapes import check_hidden_paths
 
+    # Else public cases replace the draw.
+    if (config.getoption("--random-shapes") or 0) < 1:
+        raise pytest.UsageError("--hidden-dir needs --random-shapes N >= 1")
+
     try:
         check_hidden_paths(
             Path(hidden), find_repo_root(), config.getoption("--cpu") or "cortex-m55",
