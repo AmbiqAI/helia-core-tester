@@ -694,3 +694,72 @@ class TestCorpusCapabilityDerivation:
         explicit = _invoke_run(tmp_path, root, ["--cpu", "cortex-m4"])
         assert explicit.exit_code == 0, explicit.output
         assert captured["capabilities"] == get_cpu_profile("cortex-m4").capabilities
+
+
+def _described_case(root: Path, name: str, operator: str) -> Path:
+    case_dir = root / "ConvolutionFunctions" / name
+    (case_dir / "includes").mkdir(parents=True)
+    (case_dir / f"{name}_conv.c").write_text("int main(void){return 0;}\n")
+    (case_dir / "descriptor.yaml").write_text(f"operator: {operator}\nname: {name}\n")
+    return case_dir
+
+
+def _capture_scoring(monkeypatch) -> dict:
+    captured = {}
+
+    def fake_scoring(**kwargs):
+        captured.update(kwargs)
+        return _StubReport()
+
+    monkeypatch.setattr(mutation_cli, "run_mutation_scoring", fake_scoring)
+    return captured
+
+
+class TestRunOptions:
+    """Issue #373: --ops, --workdir and --cmsis-nn-root plumbing."""
+
+    def test_ops_filters_cases_root(self, tmp_path: Path, monkeypatch):
+        root = tmp_path / "artifacts" / "generated_tests" / "int" / "cortex-m55"
+        dw = _described_case(root, "depthwise_conv_a_s8", "DepthwiseConv")
+        conv = _described_case(root, "convolve_a_s8", "Convolve")
+        captured = _capture_scoring(monkeypatch)
+        result = _invoke_run(tmp_path, root, ["--ops", "DepthwiseConv"])
+        assert result.exit_code == 0, result.output
+        assert captured["case_dirs"] == [dw]
+        # No --ops keeps every case.
+        result = _invoke_run(tmp_path, root)
+        assert result.exit_code == 0, result.output
+        assert captured["case_dirs"] == [conv, dw]
+
+    def test_ops_matching_nothing_fails(self, tmp_path: Path, monkeypatch):
+        root = tmp_path / "artifacts" / "generated_tests" / "int" / "cortex-m55"
+        _described_case(root, "convolve_a_s8", "Convolve")
+        _capture_scoring(monkeypatch)
+        result = _invoke_run(tmp_path, root, ["--ops", "DepthwiseConv"])
+        assert result.exit_code == 1
+        assert "no generated cases found" in result.output
+
+    def test_generation_gets_absolute_paths(self, tmp_path: Path, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, cwd=None, env=None):
+            calls.append((cmd, cwd, env))
+            out_dir = Path(cmd[cmd.index("--generated-tests-dir") + 1])
+            _described_case(out_dir / "int" / "cortex-m55", "depthwise_conv_a_s8", "DepthwiseConv")
+            return type("Proc", (), {"returncode": 0})()
+
+        monkeypatch.setattr(mutation_cli.subprocess, "run", fake_run)
+        captured = _capture_scoring(monkeypatch)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("CMSIS_NN_ROOT", raising=False)
+        result = CliRunner().invoke(
+            mutation_cli.app,
+            ["run", "--cmsis-nn-root", "checkout", "--ops", "DepthwiseConv", "--workdir", "rel/work", "--cc", "sh"],
+        )
+        assert result.exit_code == 0, result.output
+        (cmd, cwd, env), = calls
+        assert Path(cmd[cmd.index("--generated-tests-dir") + 1]) == tmp_path / "rel" / "work" / "gen" / "DepthwiseConv"
+        assert Path(cwd).name == "generation"
+        assert env["CMSIS_NN_ROOT"] == str(tmp_path / "checkout")
+        assert captured["workdir"] == tmp_path / "rel" / "work"
+        assert captured["cmsis_nn_root"] == tmp_path / "checkout"
