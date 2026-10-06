@@ -332,6 +332,20 @@ def write_kernels(root: Path, module_dir: Path) -> None:
             shutil.copytree(root / name, module_dir / name)
 
 
+def checkout_hash(root: Path) -> Optional[str]:
+    """Tree hash a vendored build records."""
+    import tempfile
+
+    from .nsx_cli import tree_hash
+
+    if _checkout_missing(root):
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        module = Path(tmp) / CMSIS_NN_MODULE
+        write_kernels(root, module)
+        return tree_hash(module)
+
+
 def kernels_match(root: Path, module_dir: Path) -> bool:
     """The checkout still equals the vendored copy."""
     from .nsx_cli import tree_hash

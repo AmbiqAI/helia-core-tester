@@ -127,6 +127,47 @@ def test_module_source_edit_moves_digest(tester: Path, tmp_path: Path) -> None:
     assert "nsx-cmsis-nn" not in first["harness"]["inputs"]["firmware"]["module_trees"]
 
 
+@pytest.mark.parametrize(("rel", "text"), [
+    ("nsx/CMakeLists.txt", "target_compile_options(nsx_cmsis_nn PRIVATE -O3)\n"),
+    ("nsx-module.yaml", "edited\n"),
+    ("cmake/ns_cmsis_nn.cmake", "edited\n"),
+    ("Include/Internal/arm_nn_config.h", "#undef HELIA_HARDWARE_BUILD\n"),
+])
+def test_kernel_harness_edit_moves_digest(tester: Path, tmp_path: Path, rel: str, text: str) -> None:
+    module = kernel_dir(nsx_app_dir(tmp_path / "b"), AppOptions(cmsis_nn_root=tmp_path / "kernels"))
+    files = {
+        "nsx/CMakeLists.txt": "add_library(nsx_cmsis_nn)\n",
+        "nsx-module.yaml": "m\n",
+        "cmake/ns_cmsis_nn.cmake": "c\n",
+        "Include/arm_nnfunctions.h": '#include "arm_nn_math_types.h"\n',
+        "Include/arm_nn_math_types.h": '#include "Internal/arm_nn_config.h"\n',
+        "Include/Internal/arm_nn_config.h": "#define HELIA_HARDWARE_BUILD 1\n",
+        "Include/arm_nnsupportfunctions.h": "int s;\n",
+    }
+    for name, body in files.items():
+        (module / name).parent.mkdir(parents=True, exist_ok=True)
+        (module / name).write_text(body, encoding="utf-8")
+    base = _build(tmp_path / "b")
+    # Non-harness headers are kernel code.
+    (module / "Include/arm_nnsupportfunctions.h").write_text("int s2;\n", encoding="utf-8")
+    assert harness_lock.same_harness(base, _build(tmp_path / "b"))
+    (module / rel).write_text(text, encoding="utf-8")
+    assert not harness_lock.same_harness(base, _build(tmp_path / "b"))
+
+
+def test_header_closure_follows_includes() -> None:
+    files = {
+        "Include/arm_nnfunctions.h": '#include "arm_nn_math_types.h"\n#include <stdint.h>\n',
+        "Include/arm_nn_math_types.h": '#if 0\n  #include "Internal/arm_nn_config.h"\n#endif\n',
+        "Include/Internal/arm_nn_config.h": '#include "arm_nnfunctions.h"\n',
+        "Include/Internal/arm_nnfunctions.h": "beside wins\n",
+    }
+    assert harness_lock.header_closure(files.get) == [
+        "Include/Internal/arm_nn_config.h", "Include/Internal/arm_nnfunctions.h",
+        "Include/arm_nn_math_types.h", "Include/arm_nnfunctions.h",
+    ]
+
+
 @pytest.mark.parametrize("change", ["source", "flags", "switch", "board"])
 def test_harness_change_moves_digest(tester: Path, tmp_path: Path, change: str) -> None:
     base = _build(tmp_path / "b")
@@ -197,9 +238,12 @@ def kernels(tmp_path: Path) -> Path:
     root = _repo(tmp_path / "nn", {
         "Source/Conv/a.c": "int a;\n",
         "Include/arm_nnsupportfunctions.h": "int s;\n",
-        "Include/arm_nnfunctions.h": "int f;\n",
+        "Include/arm_nnfunctions.h": '#include "arm_nn_math_types.h"\nint f;\n',
+        "Include/arm_nn_math_types.h": '#include <stdint.h>\n#include "Internal/arm_nn_config.h"\n',
+        "Include/Internal/arm_nn_config.h": "#define HELIA_HARDWARE_BUILD 1\n",
         "Tests/t.c": "int t;\n",
         "nsx/CMakeLists.txt": "x\n",
+        "nsx/nsx-module.yaml": "m\n",
         ".gitignore": "*.o\n",
     })
     _git(root, "tag", "base")
@@ -230,6 +274,9 @@ def test_source_change_passes(kernels: Path) -> None:
     ("Source/CMakeLists.txt", "y\n", "file_type"),
     ("Source/Conv/a.o", "y\n", "file_type"),
     ("Include/arm_nnfunctions.h", "int g;\n", "frozen_file"),
+    ("Include/Internal/arm_nn_config.h", "#undef HELIA_HARDWARE_BUILD\n", "frozen_file"),
+    ("Include/arm_nn_math_types.h", "\n", "frozen_file"),
+    ("Include/string.h", "int s;\n", "header_shadow"),
     ("Source/Conv/a.c", '__attribute__((section(".itcm"))) int a;\n', "attribute"),
     ("Source/Conv/a.c", '__attribute__((__section__(".itcm"))) int a;\n', "special_section"),
     ("Source/Conv/a.c", '[[gnu::section(".itcm")]] int a;\n', "attribute"),
@@ -258,6 +305,22 @@ def test_forbidden_change_fails(kernels: Path, rel: str, text: str, rule: str) -
     (kernels / rel).parent.mkdir(parents=True, exist_ok=True)
     (kernels / rel).write_text(text, encoding="utf-8")
     assert rule in _rules(kernels)
+
+
+def test_internal_header_passes(kernels: Path) -> None:
+    (kernels / "Include/Internal/new.h").write_text("int n;\n", encoding="utf-8")
+    (kernels / "Include/arm_nnsupportfunctions.h").write_text("int s2;\n", encoding="utf-8")
+    assert check_candidate(kernels, _sha(kernels))["ok"]
+
+
+def test_tree_hash_matches_vendored_copy(kernels: Path, tmp_path: Path) -> None:
+    from helia_core_tester.hardware.nsx_app import write_kernels
+    from helia_core_tester.hardware.nsx_cli import tree_hash
+
+    write_kernels(kernels, tmp_path / "module")
+    assert check_candidate(kernels, _sha(kernels))["tree_hash"] == tree_hash(tmp_path / "module")
+    (kernels / "Source/Conv/a.c").write_text("int a2;\n", encoding="utf-8")
+    assert check_candidate(kernels, _sha(kernels))["tree_hash"] != tree_hash(tmp_path / "module")
 
 
 def test_safe_attributes_pass(kernels: Path) -> None:
