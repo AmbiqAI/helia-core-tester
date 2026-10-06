@@ -37,6 +37,10 @@ def pytest_addoption(parser):
                     help="Regenerate every case, ignoring reuse stamps")
     parser.addoption("--keep-unselected", action="store_true", default=False,
                     help="Keep cases outside the filter instead of pruning")
+    parser.addoption("--random-shapes", action="store", type=int, default=None,
+                    help="Draw N random shapes per op instead")
+    parser.addoption("--shape-seed", action="store", type=int, default=0,
+                    help="Seed for --random-shapes")
 
 
 def pytest_configure(config):
@@ -54,7 +58,8 @@ def pytest_configure(config):
     # their stamp are kept and the run prunes whatever falls outside the active
     # filter (see generation/reuse.py). Only a forced run starts from empty,
     # unless --keep-unselected keeps other cases.
-    if not config.getoption("--force-generate") or config.getoption("--keep-unselected"):
+    keep = config.getoption("--keep-unselected") or config.getoption("--random-shapes")
+    if not config.getoption("--force-generate") or keep:
         generated_tests_dir.mkdir(parents=True, exist_ok=True)
         print("Reusing generated tests directory (stamp-checked per case)")
         return
@@ -100,5 +105,8 @@ def test_filters(request):
         'float_precision': request.config.getoption("--float-precision"),
         'generated_tests_dir': request.config.getoption("--generated-tests-dir"),
         'force_generate': request.config.getoption("--force-generate"),
-        'keep_unselected': request.config.getoption("--keep-unselected"),
+        # Random shapes share the fixed tree.
+        'keep_unselected': bool(request.config.getoption("--keep-unselected") or request.config.getoption("--random-shapes")),
+        'random_shapes': request.config.getoption("--random-shapes"),
+        'shape_seed': request.config.getoption("--shape-seed"),
     }

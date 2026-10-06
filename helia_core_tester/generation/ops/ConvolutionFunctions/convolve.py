@@ -7,6 +7,7 @@ import numpy as np
 import tensorflow as tf
 from helia_core_tester.generation.ops._shared.base import OperationBase
 from helia_core_tester.generation.ops._shared.fixed_batch import converter_for_batched_model
+from helia_core_tester.generation.ops._shared.quant_knobs import clamp_golden, kernel_init, value_range
 from helia_core_tester.generation.ops._shared.bias_init import (
     HoistedBiasInjectionError,
     SignedMagnitudeUniform,
@@ -216,7 +217,7 @@ class OpConvolve(OperationBase):
             groups=groups,
             use_bias=use_bias,
             activation=act,
-            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=1234),
+            kernel_initializer=kernel_init(self.desc, 1234),
             bias_initializer=bias_initializer,
             name='conv_2d'
         )(x)
@@ -301,7 +302,10 @@ class OpConvolve(OperationBase):
         def representative_data_gen():
             rep_rng = np.random.default_rng(42)
             for _ in range(100):
-                if 'input_shape' in self.desc:
+                if 'input_shape' in self.desc and 'calibration_range' in self.desc:
+                    lo, hi = value_range(self.desc, 'calibration_range', ())
+                    yield [rep_rng.uniform(lo, hi, size=self.desc['input_shape']).astype(np.float32)]
+                elif 'input_shape' in self.desc:
                     inputs = rep_rng.integers(-32, 32, size=self.desc['input_shape']).astype(np.float32)
                     yield [inputs]
                 elif 'input_1_shape' in self.desc and 'input_2_shape' in self.desc:
@@ -512,10 +516,12 @@ class OpConvolve(OperationBase):
             output_tensor = subgraph.tensors[int(subgraph.outputs[0])]
 
         expected_tensor = None
+        golden_index = int(subgraph.outputs[0])
         if bts_op_index is not None:
             bts_outs = subgraph.operators[bts_op_index].outputs
             if bts_outs is not None and len(bts_outs) > 0:
                 expected_tensor = subgraph.tensors[int(bts_outs[0])]
+                golden_index = int(bts_outs[0])
 
         input_shape = get_tensor_shape_from_litert(input_tensor) if input_tensor is not None else None
         output_shape = (
@@ -719,8 +725,14 @@ class OpConvolve(OperationBase):
             input_q = np.round(input_data / float(input_scale) + float(input_zp)).astype(np.int32)
             input_q = np.clip(input_q, qmin, qmax).astype(np_in_dtype)
 
-            # Run inference (dtype must match interpreter input)
-            output_data = self.run_inference(str(tflite_path), input_q)
+            # Reference kernels; XNNPACK diverges on some shapes.
+            from ai_edge_litert.interpreter import OpResolverType
+            from helia_core_tester.generation.utils.litert_utils import run_inference_litert_tensor
+
+            output_data = run_inference_litert_tensor(
+                str(tflite_path), input_q, golden_index, op_resolver_type=OpResolverType.BUILTIN_REF
+            )
+            output_data = clamp_golden(self.desc, output_data)
 
         # Bias handling (S16 wrapper expects int64 bias)
         has_biases = biases is not None and getattr(biases, "size", 0) > 0

@@ -22,6 +22,10 @@ _GOLDEN_RE = re.compile(
 )
 
 
+class DegenerateGoldenError(ValueError):
+    """A golden too flat to catch bugs."""
+
+
 def golden_problem(values: np.ndarray, c_type: str) -> str | None:
     """Say why a golden is degenerate, else None."""
     flat = np.asarray(values).reshape(-1)
@@ -69,7 +73,7 @@ def check_case_golden(case_dir: Path, desc: Mapping[str, Any]) -> None:
         return
     problems = case_problems(case_dir)
     if problems:
-        raise ValueError(
+        raise DegenerateGoldenError(
             f"{desc.get('name')}: degenerate golden ({'; '.join(problems)}); "
             f"fix the data or set {EDGE_CASE_KEY}"
         )
