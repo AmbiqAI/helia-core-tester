@@ -392,6 +392,7 @@ def build_generated_test_case_bundles(
     fvp_gate: str | None = None,
     board_id: str | None = None,
     select: CaseSelection | None = None,
+    tests_root: Path | None = None,
 ) -> tuple[list[CaseBundle], list[tuple[GeneratedTestCase, str]]]:
     """Discover generated (`helia_core_tester generate`) kernel tests and bridge the
     ones with real hardware benchmark firmware dispatch support into CaseBundles.
@@ -414,6 +415,7 @@ def build_generated_test_case_bundles(
 
     `board_id` keys staged cases per board, so boards run concurrently.
     `select` narrows by op, dtype or case id.
+    `tests_root` reads and stages cases under another root.
 
     Returns (bridged_case_bundles, [(skipped_test, reason), ...]).
     """
@@ -422,12 +424,12 @@ def build_generated_test_case_bundles(
     skipped: list[tuple[GeneratedTestCase, str]] = []
     for suite_name in normalize_suites(suite):
         families = [family] if family is not None else [
-            *bridged, *unbridged_families(project_root, cpu=cpu, suite=suite_name, bridged=bridged),
+            *bridged, *unbridged_families(tests_root or project_root, cpu=cpu, suite=suite_name, bridged=bridged),
         ]
         for fam in families:
             discovered = discover_generated_tests(
                 project_root, cpu=cpu, family=fam, name_filter=name_filter, limit=limit, suite=suite_name,
-                select=select,
+                select=select, tests_root=tests_root,
             )
             for test in discovered:
                 test = replace(test, board=board_id)
@@ -437,7 +439,8 @@ def build_generated_test_case_bundles(
                     continue
                 try:
                     bundles.append(build_case_bundle_from_generated_test(
-                        project_root, test, require_fvp_pass=require_fvp_pass, fvp_gate=fvp_gate))
+                        project_root, test, output_root=tests_root, require_fvp_pass=require_fvp_pass,
+                        fvp_gate=fvp_gate))
                 except UnsupportedGeneratedTestError as exc:
                     skipped.append((test, str(exc)))
     return bundles, skipped

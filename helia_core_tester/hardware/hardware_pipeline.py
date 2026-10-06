@@ -11,11 +11,11 @@ import contextlib
 import json
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
-from ..core.cpu_targets import get_cpu_profile
+from ..core.cpu_targets import get_cpu_profile, normalize_cpu
 from .boards import BoardSpec, default_session_id
 from .firmware_build import (
     FlashDecision,
@@ -264,7 +264,7 @@ def resolved_selection(repo_root: Path, board: BoardSpec, options: "StreamOption
     """The case and counter selection the run used."""
     from .fvp_gate import DEFAULT_GATE
 
-    return {
+    selection = {
         "suite": options.suite,
         "limit": options.limit,
         "family": options.family,
@@ -277,6 +277,51 @@ def resolved_selection(repo_root: Path, board: BoardSpec, options: "StreamOption
         "fvp_gate": options.fvp_gate or DEFAULT_GATE,
         "compare": options.compare_record(),
     }
+    if options.hidden_set is not None:
+        selection["hidden_set"] = hidden_record(options.hidden_set, board.cpu)
+    return selection
+
+
+class HiddenSetError(RuntimeError):
+    """The hidden set cannot serve this run."""
+
+
+def hidden_summary(hidden_set: Path, cpu: str) -> dict[str, Any]:
+    """The hidden set's summary for cpu."""
+    from ..generation.random_shapes import hidden_root
+
+    path = hidden_root(hidden_set, cpu) / "summary.json"
+    try:
+        summary = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        summary = {}
+    if not isinstance(summary, dict) or not summary.get("seed_commitment"):
+        raise HiddenSetError(f"No {cpu} hidden set in {hidden_set}")
+    return summary
+
+
+def hidden_record(hidden_set: Path, cpu: str) -> dict[str, Any]:
+    """Seed commitment and case count."""
+    from ..core.path_layout import generated_tests_dir
+
+    root = generated_tests_dir(hidden_set, normalize_cpu(cpu))
+    cases = sum(1 for case in root.glob("*/*") if (case / "descriptor.yaml").is_file())
+    return {"seed_commitment": hidden_summary(hidden_set, cpu)["seed_commitment"], "cases": cases}
+
+
+def hidden_bundles(repo_root: Path, board: BoardSpec, options: "StreamOptions") -> list:
+    """Bridge the hidden set; mark each case."""
+    from .session_runner import build_generated_test_case_bundles
+
+    hidden_summary(options.hidden_set, board.cpu)
+    bundles, skipped = build_generated_test_case_bundles(
+        repo_root, cpu=normalize_cpu(board.cpu), family=None, suite="int", fvp_gate=options.fvp_gate,
+        board_id=board.id, tests_root=options.hidden_set,
+    )
+    # A partial set skews the score.
+    if skipped or not bundles:
+        raise HiddenSetError(f"{len(skipped)} hidden case(s) cannot run; {len(bundles)} can")
+    return [replace(bundle, manifest={**bundle.manifest, "hidden": True}) for bundle in bundles]
 
 
 @dataclass
@@ -301,6 +346,8 @@ class StreamOptions:
     """Result bundle whose outputs replace the goldens; implies strict."""
     golden_allow_failed: bool = False
     """Accept golden cases the past run failed."""
+    hidden_set: Optional[Path] = None
+    """Root from `generate --hidden-dir`; its cases join the run."""
 
     def selection(self) -> CaseSelection:
         """The op, dtype and id filters."""
@@ -388,6 +435,8 @@ def prepare_bundles(repo_root: Path, board: BoardSpec, options: StreamOptions) -
         raise no_bridgeable_cases_error(
             skipped, cpu=board.cpu, family=options.family, name_filter=options.test_name, suite=options.suite,
         )
+    if options.hidden_set is not None:
+        bundles += hidden_bundles(repo_root, board, options)
     if options.golden_from is not None:
         bundles = golden_bundles(bundles, options.golden_from, allow_failed=options.golden_allow_failed)
     elif options.strict_compare:
@@ -556,6 +605,9 @@ def run_hardware_pipeline(
         # Same resolution as the CLI.
         app_options = resolve_options(nsx_app_dir(resolved_build_dir), repo_root, follow_pin=not skip_flash)
 
+    if options.hidden_set is not None:
+        # Refuse before touching the board.
+        hidden_summary(options.hidden_set, board.cpu)
     generate_s = 0.0
     if skip_generate:
         echo("[hardware] --skip-generate set; reusing existing artifacts/generated_tests.")

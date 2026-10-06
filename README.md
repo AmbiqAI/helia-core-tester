@@ -73,6 +73,12 @@ F must sit outside the tester tree. DIR mirrors a tester root: descriptors in
 `DIR/artifacts/random_shapes/<cpu>/`, cases in `DIR/artifacts/generated_tests/`,
 reports in `DIR/artifacts/reports/`. Case ids are opaque keyed hashes
 (`h<12 hex>`), and summaries record only `seed_commitment`, a SHA-256 of the secret.
+`hardware run --hidden-set DIR` adds every DIR case for the board's CPU to
+the run, whatever the other filters; it needs only DIR, not the secret. Pass the
+same DIR to baseline and candidate runs. The bundle marks them with a `hidden`
+column (`true`/`false`) in `case_summary.csv` and cases.json, and records
+`selection.hidden_set` (`seed_commitment`, `cases`) in session_summary.json. A DIR
+with no set for the board's CPU, or with a case that cannot run, is refused.
 
 Correctness: int cases use the per-operator LSB tolerance in
 `generation/io/dtypes.py`, and every case records `max_abs_diff` and `diff_count`

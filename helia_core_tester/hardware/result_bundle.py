@@ -39,7 +39,7 @@ CASE_SUMMARY_BASE_FIELDS = [
 ]
 # Work counts and prepare cost.
 CASE_SUMMARY_WORK_FIELDS = ["macs", "ops", "cycles_per_mac", "cycles_per_op", "prepare_cycles"]
-CASE_SUMMARY_FLAG_FIELDS = ["overflow_detected", "valid_for_regression", "timing_status"]
+CASE_SUMMARY_FLAG_FIELDS = ["overflow_detected", "valid_for_regression", "timing_status", "hidden"]
 
 
 def _split_protocol_trace_entry(entry: str) -> tuple[int | None, str, str]:
@@ -259,6 +259,8 @@ def write_result_bundle(
         for name in counter_medians:
             if name not in counter_names:
                 counter_names.append(name)
+        # Scorer splits hidden from public.
+        hidden = bool(case.case_bundle.manifest.get("hidden"))
         case_rows.append(
             {
                 "case_id": case.case_bundle.case_id,
@@ -285,6 +287,7 @@ def write_result_bundle(
                 "valid_for_regression": case.statistics.valid_for_regression,
                 "timing_status": case.statistics.timing_status,
                 "rejection": rejection,
+                "hidden": hidden,
                 **digests,
             }
         )
@@ -310,6 +313,7 @@ def write_result_bundle(
         summary_row["overflow_detected"] = str(case.statistics.overflow_detected).lower()
         summary_row["valid_for_regression"] = str(case.statistics.valid_for_regression).lower()
         summary_row["timing_status"] = case.statistics.timing_status
+        summary_row["hidden"] = str(hidden).lower()
         case_summary_rows.append(summary_row)
         (bundle_root / "outputs" / f"{case.case_bundle.case_id}.bin").write_bytes(case.output_bytes)
         write_text_lf(

@@ -616,12 +616,13 @@ def discover_generated_tests(
     limit: int | None = None,
     suite: str = "int",
     select: CaseSelection | None = None,
+    tests_root: Path | None = None,
 ) -> list[GeneratedTestCase]:
     """Discover generated-test directories with a parseable descriptor.yaml under
     artifacts/generated_tests/<suite>/<cpu>/<family>. `suite="int"` (default) covers the
     quantized/S4/S8/S16/S32 test tree; `suite="float"` covers the FP16/FP32 tree.
-    `select` filters before `limit` counts."""
-    root = project_root / "artifacts" / "generated_tests" / suite / cpu / family
+    `select` filters before `limit` counts. `tests_root` replaces project_root as the tree."""
+    root = (tests_root or project_root) / "artifacts" / "generated_tests" / suite / cpu / family
     if not root.is_dir():
         return []
     results: list[GeneratedTestCase] = []
