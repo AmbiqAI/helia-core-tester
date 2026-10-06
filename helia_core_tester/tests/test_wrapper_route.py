@@ -44,8 +44,16 @@ def _rows(seed: int = 7, count: int = 20000) -> list[tuple]:
         stride = (pick((1, 1, 2)), pick((1, 1, 2, 3)))
         pad = (pick((0, 0, 0, 1, 2)), pick((0, 0, 0, 1, 2)))
         dil = (pick((1, 1, 1, 2)), pick((1, 1, 1, 2, 4)))
+        # Partial groups are argument errors.
+        if kind in "cpr" and _partial_groups(i, f, o):
+            continue
         rows.append((kind, i, f, o, stride, pad, dil, ch_mult))
     return rows + _EDGE_ROWS
+
+
+def _partial_groups(i: tuple, f: tuple, o: tuple) -> bool:
+    """ns-cmsis-nn's arm_nn_convolve_groups_invalid."""
+    return i[3] % f[3] != 0 or o[3] % (i[3] // f[3]) != 0
 
 
 # Rare branches the random rows miss.
