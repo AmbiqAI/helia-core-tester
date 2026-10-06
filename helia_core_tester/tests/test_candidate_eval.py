@@ -183,3 +183,14 @@ def test_snapshot_skips_fifos_and_links(tmp_path, kernels) -> None:
     assert (snap / "Source/Conv/a.c").is_file() and not (snap / "Source/Conv/pipe.c").exists()
     # Linked dirs stay links, unread.
     assert (snap / "Source/Leak").is_symlink() and not (snap / "Source/Leak").resolve().is_relative_to(snap)
+
+
+def test_eval_cli_interrupt_exits_130(tmp_path, kernels, monkeypatch) -> None:
+    out, _ = _baseline(tmp_path, kernels)
+
+    def _stop(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(candidate_eval, "evaluate", _stop)
+    result, _ = _cli_eval(kernels, out)
+    assert result.exit_code == 130

@@ -15,7 +15,8 @@ to `hardware run --json`; its stderr, which names every case, goes to
 and in family totals, but their ids never print.
 
 Exit codes: 0 pass, 1 fail, 2 usage, 3 refused, rejected or not
-comparable, 4 no_gain, 5 error (build, board, transport).
+comparable, 4 no_gain, 5 error (build, board, transport), 130
+interrupted (no verdict).
 """
 
 from __future__ import annotations
@@ -373,6 +374,9 @@ def eval_command(
         raise typer.BadParameter(f"baseline ran on {meta['run']['board']}", param_hint="--board")
     try:
         verdict = evaluate(kernels, baseline, meta, min_score)
+    except KeyboardInterrupt:
+        # Shells report Ctrl-C as 130.
+        raise typer.Exit(130)
     except Exception as exc:  # noqa: BLE001 -- one verdict, always
         log = baseline / "logs" / f"eval-error-{_stamp()}.log"
         log.parent.mkdir(parents=True, exist_ok=True)
