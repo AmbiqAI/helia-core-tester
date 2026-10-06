@@ -230,6 +230,8 @@ def header_closure(read: Callable[[str], Optional[str]]) -> list[str]:
         # Splice backslash-newline first.
         for name in _INCLUDE.findall(re.sub(r"\\\r?\n", "", text)):
             paths = (posixpath.normpath(posixpath.join(here, name)), posixpath.normpath(f"Include/{name}"))
+            # Only kernel headers: no absolute, no "..".
+            paths = tuple(path for path in paths if path.startswith("Include/") and not posixpath.isabs(name))
             todo.extend(next(([path] for path in paths if load(path) is not None), []))
     return sorted(seen)
 

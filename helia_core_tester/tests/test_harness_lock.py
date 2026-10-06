@@ -158,6 +158,26 @@ def test_kernel_harness_edit_moves_digest(tester: Path, tmp_path: Path, rel: str
     assert not harness_lock.same_harness(base, _build(tmp_path / "b"))
 
 
+@pytest.mark.parametrize("name", ["/etc/hosts", "../../../../../../etc/hosts", "../Source/a.c"])
+def test_header_closure_stays_in_include(name: str) -> None:
+    files = {"Include/arm_nnfunctions.h": f'#include "{name}"\n', "Source/a.c": "int a;\n"}
+    read = []
+    closure = harness_lock.header_closure(lambda rel: read.append(rel) or files.get(rel))
+    assert closure == ["Include/arm_nnfunctions.h"]
+    assert all(rel.startswith("Include/") for rel in read)
+
+
+@pytest.mark.parametrize("name", ["/etc/hosts", "../../../../../../../../etc/hosts"])
+def test_escaping_include_not_read(kernels: Path, name: str, monkeypatch) -> None:
+    (kernels / "Include/arm_nn_math_types.h").write_text(f'#include "{name}"\n', encoding="utf-8")
+    real = Path.read_text
+    opened = []
+    monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: opened.append(self) or real(self, *a, **k))
+    rules = _rules(kernels)
+    assert "frozen_file" in rules
+    assert not [path for path in opened if not path.resolve().is_relative_to(kernels.resolve())]
+
+
 def test_header_closure_follows_includes() -> None:
     files = {
         "Include/arm_nnfunctions.h": '#include "arm_nn_math_types.h"\n#include <stdint.h>\n',
