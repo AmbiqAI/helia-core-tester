@@ -106,6 +106,9 @@ static uint8_t inbound_frame[1024];
 static uint32_t next_host_sequence = 0u;
 extern uint32_t hct_host_fail_call;
 extern uint32_t hct_host_skip_call;
+extern uint32_t hct_host_mutate_call;
+extern uint32_t hct_host_input_moves;
+extern const uint8_t *hct_host_last_input;
 
 static hctp_status_t send_frame(hct_server_session_t *session, uint16_t message_type, const uint8_t *payload, size_t payload_length)
 {
@@ -228,7 +231,7 @@ static int run_next_case(hct_server_session_t *session)
 }
 
 /* A refused case ends alone, with its status. */
-static int probe_rejection(const hct_server_session_t *session, uint16_t trigger, uint32_t fail_call, uint32_t skip_call, uint8_t correctness_ran, int samples, const char *label)
+static int probe_rejection(const hct_server_session_t *session, uint16_t trigger, uint32_t fail_call, uint32_t skip_call, uint32_t mutate_call, uint8_t correctness_ran, int samples, const char *label)
 {
     static hct_server_session_t probe;
     static uint8_t probe_workspace[sizeof(workspace)];
@@ -243,10 +246,14 @@ static int probe_rejection(const hct_server_session_t *session, uint16_t trigger
     probe.planned_kernel_ids[1] = 1u;
     hct_host_fail_call = fail_call;
     hct_host_skip_call = skip_call;
+    hct_host_mutate_call = mutate_call;
     if (send_frame(&probe, trigger, payload, 0u) != HCTP_STATUS_OK) return 50;
     hct_host_skip_call = 0u;
+    hct_host_mutate_call = 0u;
     status = expect_case_complete(&probe, correctness_ran, 0u, samples,
-                                  skip_call != 0u ? HCT_STATUS_OUTPUT_CHANGED : ARM_CMSIS_NN_ARG_ERROR);
+                                  skip_call != 0u     ? HCT_STATUS_OUTPUT_CHANGED
+                                  : mutate_call != 0u ? HCT_STATUS_OPERAND_CHANGED
+                                                      : ARM_CMSIS_NN_ARG_ERROR);
     if (status == 0) status = run_next_case(&probe);
     if (status == 0) printf("rejected %s samples_dropped=%d\n", label, samples);
     return status;
@@ -355,7 +362,7 @@ int main(void)
 
     /* Kernel refusals: correctness, warmup, mid-sampling. */
     session.output_capacity_bytes = 4u;
-    status = probe_rejection(&session, HCTP_MSG_RUN_CORRECTNESS, 0u, 0u, 0u, 0, "correctness");
+    status = probe_rejection(&session, HCTP_MSG_RUN_CORRECTNESS, 0u, 0u, 0u, 0u, 0, "correctness");
     session.output_capacity_bytes = (uint32_t)sizeof(kExpected);
     if (status != 0) return status;
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_RUN_CORRECTNESS, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 20;
@@ -398,14 +405,20 @@ int main(void)
     write_u8(inbound_payload, &offset, 1u);
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_CORRECTNESS_ACK, session.session_id, next_host_sequence++, inbound_payload, offset, inbound_frame)) != HCTP_STATUS_OK) return 27;
     /* Call 1: warmup. Call 19: pass 1 sampling. */
-    status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 1u, 0u, 1u, 0, "warmup");
-    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 19u, 0u, 1u, 3, "sampling");
+    status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 1u, 0u, 0u, 1u, 0, "warmup");
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 19u, 0u, 0u, 1u, 3, "sampling");
     /* Call 3, the first timed call, skips. */
-    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 3u, 1u, 0, "memoized");
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 3u, 0u, 1u, 0, "memoized");
     /* Last timed call skips. */
-    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 26u, 1u, 5, "memoized-late");
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 26u, 0u, 1u, 5, "memoized-late");
+    /* Last call corrupts its input after running. */
+    if (status == 0) status = probe_rejection(&session, HCTP_MSG_RUN_PERFORMANCE, 0u, 0u, 28u, 1u, 6, "mutated");
     if (status != 0) return status;
+    hct_host_input_moves = 0u;
+    hct_host_last_input = NULL;
     if (hct_server_session_accept_frame(&session, inbound_frame, encode_frame(HCTP_MSG_RUN_PERFORMANCE, session.session_id, next_host_sequence++, inbound_payload, 0u, inbound_frame)) != HCTP_STATUS_OK) return 28;
+    /* Every timed call reads the other copy. */
+    printf("input_moves=%u\n", (unsigned)hct_host_input_moves);
     {
         int sample_count = 0;
         int cpu_pass_samples = 0;

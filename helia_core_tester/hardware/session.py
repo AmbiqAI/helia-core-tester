@@ -88,8 +88,9 @@ def check_case_ids_unique(case_ids: Sequence[str]) -> None:
         raise ValueError(f"Duplicate case id(s) in one run: {duplicates}. Every case id must be unique.")
 
 
-# HCT_STATUS_OUTPUT_CHANGED in benchmark_server_session.h.
+# HCT_STATUS_* in benchmark_server_session.h.
 OUTPUT_CHANGED_STATUS = -1000
+OPERAND_CHANGED_STATUS = -1001
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,8 @@ class CaseRejection:
     def reason(self) -> str:
         if self.kernel_status == OUTPUT_CHANGED_STATUS:
             return "timed output differs from first call"
+        if self.kernel_status == OPERAND_CHANGED_STATUS:
+            return "timed run changed a read-only operand"
         return f"kernel returned {self.kernel_status} in {self.stage} run"
 
 

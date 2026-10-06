@@ -616,11 +616,13 @@ static hctp_status_t queue_session_complete(hct_server_session_t *session)
 
 static void reset_case_buffers(hct_server_session_t *session)
 {
-    const uint32_t previous_workspace_used = session->workspace_used_bytes;
+    const uint32_t previous_workspace_used =
+        (session->twin_end > session->workspace_used_bytes) ? session->twin_end : session->workspace_used_bytes;
     if (session->workspace != NULL && previous_workspace_used <= session->workspace_bytes)
     {
         memset(session->workspace, 0, previous_workspace_used);
     }
+    session->twin_end = 0u;
     memset(session->blobs, 0, sizeof(session->blobs));
     session->blob_count = 0u;
     session->current_blob_index = 0u;
@@ -844,9 +846,19 @@ arm_cmsis_nn_status hct_run_empty_once(hct_server_session_t *session)
 uint32_t hct_host_fail_call;
 /* Host tests: Nth call on skips work. */
 uint32_t hct_host_skip_call;
+/* Host tests: Nth call flips an input bit. */
+uint32_t hct_host_mutate_call;
+/* Host tests: calls with a new input address. */
+uint32_t hct_host_input_moves;
+const uint8_t *hct_host_last_input;
 
 arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
 {
+    const hct_server_blob_t *input = find_blob_by_role(session, HCT_BLOB_ROLE_INPUT_0);
+    uint8_t *data = (input != NULL) ? blob_ptr(session, input) : NULL;
+    arm_cmsis_nn_status status;
+    hct_host_input_moves += (hct_host_last_input != NULL && data != hct_host_last_input) ? 1u : 0u;
+    hct_host_last_input = data;
     if (hct_host_fail_call != 0u && --hct_host_fail_call == 0u)
     {
         return ARM_CMSIS_NN_ARG_ERROR;
@@ -865,10 +877,17 @@ arm_cmsis_nn_status hct_run_kernel_once(hct_server_session_t *session)
         case HCT_KERNEL_ID_ABS_S16:
         case HCT_KERNEL_ID_ABS_F32:
         case HCT_KERNEL_ID_ABS_F16:
-            return hct_run_abs_once(session);
+            status = hct_run_abs_once(session);
+            break;
         default:
             return ARM_CMSIS_NN_ARG_ERROR;
     }
+    /* After the call: only the CRC sees it. */
+    if (data != NULL && hct_host_mutate_call != 0u && --hct_host_mutate_call == 0u)
+    {
+        data[0] ^= 1u;
+    }
+    return status;
 }
 #endif
 
@@ -1428,6 +1447,80 @@ static void poison_output(hct_server_session_t *session)
     }
 }
 
+/* Twins keep the address phase mod this. */
+#define HCT_TWIN_PHASE_BYTES 32u
+
+static bool is_input_role(uint8_t role)
+{
+    return role == HCT_BLOB_ROLE_INPUT_0 || role == HCT_BLOB_ROLE_INPUT_1 || role == HCT_BLOB_ROLE_INPUT_2;
+}
+
+/* Copy inputs; keep cache-line phase. */
+static void place_input_twins(hct_server_session_t *session)
+{
+    uint32_t cursor = session->workspace_used_bytes;
+    uint32_t index;
+    for (index = 0u; index < session->blob_count; ++index)
+    {
+        hct_server_blob_t *blob = &session->blobs[index];
+        const uint32_t phase = blob->arena_offset & (HCT_TWIN_PHASE_BYTES - 1u);
+        uint32_t base;
+        uint32_t end;
+        if (!is_input_role(blob->role) || blob->mutable_data != 0u || blob->placed != NULL || blob->byte_length == 0u ||
+            !hct_checked_aligned_range(cursor, HCT_TWIN_PHASE_BYTES, phase + blob->byte_length, session->workspace_bytes,
+                                       &base, &end))
+        {
+            continue;
+        }
+        memcpy(&session->workspace[base + phase], &session->workspace[blob->arena_offset], blob->byte_length);
+        blob->twin_offset = base + phase;
+        blob->twinned = 1u;
+        cursor = end;
+    }
+    session->twin_end = cursor;
+}
+
+/* Next call reads the other copy. */
+static void swap_input_twins(hct_server_session_t *session)
+{
+    uint32_t index;
+    for (index = 0u; index < session->blob_count; ++index)
+    {
+        hct_server_blob_t *blob = &session->blobs[index];
+        if (blob->twinned != 0u)
+        {
+            const uint32_t offset = blob->arena_offset;
+            blob->arena_offset = blob->twin_offset;
+            blob->twin_offset = offset;
+        }
+    }
+}
+
+static bool blob_crc_ok(const uint8_t *data, const hct_server_blob_t *blob)
+{
+    return hctp_crc32(data, blob->byte_length) == blob->crc32;
+}
+
+/* Read-only blobs still match host CRCs. */
+static bool operands_intact(hct_server_session_t *session)
+{
+    uint32_t index;
+    for (index = 0u; index < session->blob_count; ++index)
+    {
+        const hct_server_blob_t *blob = &session->blobs[index];
+        if (blob->mutable_data != 0u)
+        {
+            continue;
+        }
+        if (!blob_crc_ok(blob_ptr(session, blob), blob) ||
+            (blob->twinned != 0u && !blob_crc_ok(&session->workspace[blob->twin_offset], blob)))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Own function: stable window layout. */
 __attribute__((noinline)) static bool time_one_sample(hct_server_session_t *session,
                                                       const hct_pmu_pass_t *pass,
@@ -1448,6 +1541,7 @@ __attribute__((noinline)) static bool time_one_sample(hct_server_session_t *sess
         arm_cmsis_nn_status status;
         /* Counters pause between kernel calls. */
         poison_output(session);
+        swap_input_twins(session);
         status = hct_run_kernel_once(session);
         session->last_kernel_status = status;
         if (status == ARM_CMSIS_NN_SUCCESS &&
@@ -1478,6 +1572,8 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
     uint32_t warmup;
     const uint32_t iterations = resolve_iterations(session);
 
+    place_input_twins(session);
+
     for (pass_index = 0u; pass_index < session->pass_count; ++pass_index)
     {
         const hct_pmu_pass_t *pass = &session->passes[pass_index];
@@ -1507,6 +1603,11 @@ static hctp_status_t handle_run_performance(hct_server_session_t *session)
         }
     }
 
+    if (!operands_intact(session))
+    {
+        session->last_kernel_status = HCT_STATUS_OPERAND_CHANGED;
+        return finish_case(session, 1u, 0u);
+    }
     return finish_case(session, 1u, 1u);
 }
 
