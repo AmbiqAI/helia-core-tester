@@ -172,3 +172,16 @@ def test_cli_json_and_exit_codes(tmp_path, change, code, verdict):
     assert (report["schema"], report["schema_version"], report["verdict"]) == ("hct.score", 1, verdict)
     table = CliRunner().invoke(app, ["score", str(base), "--candidate", str(cand)])
     assert f"== {verdict.upper()}" in table.output
+
+
+def test_candidate_noise_keeps_band(tmp_path):
+    cand = _bundle(tmp_path, "b", cycles={"add_a": 330.0}, rows={"add_a": {"mad_cycles": 30}})
+    report = _score([_bundle(tmp_path, "a")], [cand])
+    assert [(f["kind"], f["case_id"]) for f in report["failures"]] == [("regression", "add_a")]
+
+
+@pytest.mark.parametrize("status", ["overflow", "below_floor", "zero_cycles"])
+def test_lost_timing_fails(tmp_path, status):
+    cand = _bundle(tmp_path, "b", cycles={"conv_a": 9000.0}, rows={"conv_a": {"timing_status": status}})
+    report = _score([_bundle(tmp_path, "a")], [cand])
+    assert [(f["kind"], f["case_id"]) for f in report["failures"]] == [("timing_lost", "conv_a")]

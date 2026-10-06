@@ -5,8 +5,9 @@ cycles pool as the median of per-run medians. Bundles from another
 board, placement or harness are refused. The candidate fails on a failed
 comparison, a dropped case, an input digest change, or a timed case that
 is slower than its noise band: max(board floor, mad_k * 1.4826 * MAD /
-baseline median), where MAD is the larger of the in-run MAD and the
-spread of repeat medians. Only timing_status "valid" cases are timed.
+baseline median), with the baseline's MAD: the larger of its in-run
+MAD and the spread of its repeat medians. A case timed valid in the
+baseline but not in the candidate fails. Only timing_status "valid" cases are timed.
 The score is sum(weight * ln(family geomean speedup)) with weights from
 assets/scoring/family_weights.yaml; with weights that sum to 1 it
 approximates ln(whole-model speedup). JSON schema: see `score_bundles`.
@@ -26,11 +27,13 @@ from typing import Any, Optional
 import typer
 import yaml
 
+from .boards import repo_root
 from .nsx_app import CMSIS_NN_MODULE
+from .work_count import per_unit
 
 SCHEMA = "hct.score"
 SCHEMA_VERSION = 1
-SCORING_DIR = Path(__file__).resolve().parents[2] / "assets" / "scoring"
+SCORING_DIR = repo_root() / "assets" / "scoring"
 MAD_SIGMA = 1.4826
 EXIT_PASS, EXIT_FAIL, EXIT_REFUSED = 0, 1, 3
 # INST_RETIRED plus every MVE retired counter.
@@ -178,15 +181,12 @@ def _retired(base: list[dict], cand: list[dict]) -> dict:
     return out
 
 
-def _per_mac(cycles: float | None, row: dict) -> float | None:
-    macs = _num(row, "macs")
-    return round(cycles / macs, 4) if cycles and macs else None
-
-
 def _case(case_id: str, baselines: list[Bundle], candidates: list[Bundle], scoring: dict) -> dict:
     base = [b.rows[case_id] for b in baselines if case_id in b.rows]
     cand = [c.rows[case_id] for c in candidates]
     statuses = sorted({_status(row) for row in base + cand} - {"valid"})
+    # Valid baseline, untimed candidate: a failure.
+    lost = sorted({_status(row) for row in cand} - {_status(row) for row in base} - {"valid"})
     if any(row.get("comparison_passed") != "true" for row in base + cand):
         statuses.insert(0, "comparison_failed")
     symbol = baselines[0].symbol(case_id) if case_id in baselines[0].rows else candidates[0].symbol(case_id)
@@ -198,14 +198,15 @@ def _case(case_id: str, baselines: list[Bundle], candidates: list[Bundle], scori
         "inner_symbol": cand[0].get("inner_symbol") or None,
         "eligible": not statuses and bool(a) and bool(b),
         "excluded_by": statuses[0] if statuses else None,
+        "timing_lost": lost[0] if lost and all(_status(row) == "valid" for row in base) else None,
         "baseline_cycles": a,
         "candidate_cycles": b,
-        "cycles_per_mac_baseline": _per_mac(a, base[0]),
-        "cycles_per_mac_candidate": _per_mac(b, cand[0]),
+        "cycles_per_mac_baseline": per_unit(a, _num(base[0], "macs")),
+        "cycles_per_mac_candidate": per_unit(b, _num(cand[0], "macs")),
         "retired": _retired(base, cand),
     }
     if case["eligible"]:
-        band = max(scoring["floor_pct"], scoring["mad_k"] * max(_spread(base), _spread(cand)) / a * 100.0)
+        band = max(scoring["floor_pct"], scoring["mad_k"] * _spread(base) / a * 100.0)
         delta = (b - a) / a * 100.0
         case.update(speedup=a / b, delta_pct=delta, band_pct=band, within_noise=abs(delta) <= band, regression=delta > band)
     elif case["excluded_by"] is None:
@@ -221,7 +222,7 @@ def score_bundles(baselines: list[Bundle], candidates: list[Bundle], scoring: di
     candidate session ids, settings, families {name: {weight, cases,
     geomean_speedup, contribution}}, cases (eligible and excluded rows),
     failures [{kind, case_id, reason}]. Failure kinds: not_comparable,
-    comparison_failed, missing_case, input_digest, regression,
+    comparison_failed, missing_case, input_digest, timing_lost, regression,
     no_eligible_cases.
     """
     identity = _identity(baselines[0])
@@ -264,6 +265,9 @@ def score_bundles(baselines: list[Bundle], candidates: list[Bundle], scoring: di
 
     report["cases"] = cases = [_case(case_id, baselines, candidates, scoring) for case_id in present]
     eligible = [case for case in cases if case["eligible"]]
+    for case in cases:
+        if case["timing_lost"]:
+            failures.append({"kind": "timing_lost", "case_id": case["case_id"], "reason": f"candidate timing is {case['timing_lost']}"})
     for case in eligible:
         if case["regression"]:
             reason = f"{case['delta_pct']:+.2f}% slower than band {case['band_pct']:.2f}%"

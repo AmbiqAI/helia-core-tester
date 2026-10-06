@@ -1,6 +1,5 @@
 # Per-board noise floors for `helia_core_tester score`.
-# A case regresses when it is slower than
-# max(floor_pct, mad_k * 1.4826 * MAD / baseline median).
+# Band: max(floor_pct, mad_k * baseline sigma).
 # Floors sit just above the max run-to-run change measured on
 # identical firmware (adjacent nightlies, 2026-10), so one noisy
 # case in a full run does not fail the gate.
