@@ -17,7 +17,7 @@ from helia_core_tester.core.cpu_targets import missing_required_capabilities, no
 from helia_core_tester.generation.golden_check import check_case_golden
 from helia_core_tester.generation.kernel_dispatch import DEPTHWISE_CONV_S8_PLANAR_RULE
 from helia_core_tester.generation.io.dtypes import descriptor_matches_dtype_filter, resolve_comparison, resolve_tensor_dtypes
-from helia_core_tester.generation.io.descriptors import descriptor_matches_op, load_all_descriptors
+from helia_core_tester.generation.io.descriptors import descriptor_matches_op, load_all_descriptors, unmatched_ops
 from helia_core_tester.core.path_layout import generation_report_dir
 from helia_core_tester.generation.ops import get_op_map, get_operator_spec
 from helia_core_tester.generation.reuse import (
@@ -397,6 +397,8 @@ def test_generation(test_filters):
     # Load all descriptors using discovery
     descriptors_dir = find_descriptors_dir()
     descriptors = load_all_descriptors(str(descriptors_dir))
+    unknown_ops = unmatched_ops(descriptors, _split_filter(test_filters.get("op")))
+    assert not unknown_ops, f"No descriptor matches --op: {', '.join(unknown_ops)}"
 
     # Apply filters
     filtered_descriptors = []

@@ -425,6 +425,18 @@ def _read_case_ids(case_ids: Optional[list[str]], cases_from: Optional[Path]) ->
     return tuple(ids)
 
 
+def _check_ops(ops: tuple[str, ...]) -> None:
+    """Fail on an op no descriptor matches."""
+    from ..core.discovery import find_descriptors_dir
+    from ..generation.io.descriptors import load_all_descriptors, unmatched_ops
+
+    if not ops:
+        return
+    unknown = unmatched_ops(load_all_descriptors(str(find_descriptors_dir(repo_root()))), list(ops))
+    if unknown:
+        raise ValueError(f"No descriptor matches --op: {', '.join(unknown)}")
+
+
 def _stream_options(
     spec, suite, family, test_name, limit, precision, pmu_counters, pmu_groups, fvp_gate, session_id,
     ops, dtypes, case_ids, cases_from, strict_compare, golden_from, golden_allow_failed,
@@ -442,6 +454,7 @@ def _stream_options(
         suite, test_name = apply_precision(precision, suite, test_name)
         validate_fvp_gate(fvp_gate)
         cases = CaseSelection(tuple(ops or ()), tuple(dtypes or ()), _read_case_ids(case_ids, cases_from))
+        _check_ops(cases.ops)
         # Exact ids already bound the run.
         if cases.case_ids and limit is not None:
             raise ValueError("--limit cannot combine with --case-id or --cases-from.")

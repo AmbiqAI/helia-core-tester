@@ -191,3 +191,29 @@ def test_empty_cases_from_refused(tmp_path: Path, capsys) -> None:
     with pytest.raises(SystemExit):
         _read_case_ids(None, listing)
     assert "lists no case ids" in capsys.readouterr().err
+
+
+def test_unmatched_ops_lists_typos() -> None:
+    from helia_core_tester.generation.io.descriptors import unmatched_ops
+
+    descriptors = [{"name": name, **desc} for name, desc in DESCRIPTORS.items()]
+    assert unmatched_ops(descriptors, ["DepthwiseConv", "Depthwse", "convolve", "Convolv"]) == ["Depthwse", "Convolv"]
+    assert unmatched_ops(descriptors, []) == []
+
+
+def test_generation_refuses_one_typo_among_ops() -> None:
+    from helia_core_tester.generation.test_ops import test_generation
+
+    with pytest.raises(AssertionError, match="No descriptor matches --op: Depthwse"):
+        test_generation({"op": "DepthwiseConv,Depthwse", "suite": "int"})
+
+
+def test_hardware_refuses_one_typo_among_ops(capsys) -> None:
+    from helia_core_tester.hardware.cli import _stream_options
+
+    with pytest.raises(SystemExit):
+        _stream_options(
+            None, "int", None, None, None, None, None, None, None, None,
+            ["DepthwiseConv", "Depthwse"], None, None, None, False, None, False,
+        )
+    assert "No descriptor matches --op: Depthwse" in capsys.readouterr().err
