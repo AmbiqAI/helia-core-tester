@@ -57,7 +57,8 @@ from typing import Iterator, Optional
 import typer
 
 from .candidate_scan import CONFIGS, object_findings, preprocess_findings
-from .nsx_app import KERNEL_TREES
+from .firmware_build import nsx_app_dir
+from .nsx_app import CMSIS_NN_MODULE, KERNEL_TREES, kernels_match
 
 ALLOWED_DIRS = ("Source/", "Include/")
 ALLOWED_SUFFIXES = (".c", ".h", ".s", ".S")
@@ -373,6 +374,9 @@ def check_candidate(tree: Path, base: str, *, build_dir: Optional[Path] = None) 
     if build_dir is not None:
         hits, objects, flags = object_findings(build_dir)
         findings += hits
+        module = nsx_app_dir(build_dir) / "modules" / CMSIS_NN_MODULE
+        if not kernels_match(tree, module):
+            findings.append({"rule": "scan_error", "path": "", "message": "build dir holds other kernels"})
         configs = {**CONFIGS, "build": flags} if flags else CONFIGS
     if any(path.startswith(ALLOWED_DIRS) for path in changes):
         tops = sorted({path.split("/", 1)[0] + "/" for path in base_blobs if path.startswith(ALLOWED_DIRS)})
@@ -386,7 +390,6 @@ def check_candidate(tree: Path, base: str, *, build_dir: Optional[Path] = None) 
         "base_commit": commit,
         "ok": not findings,
         "files": [{"path": path, "status": status} for path, status in sorted(changes.items())],
-        # Callers match kernels_hash to the tree.
         "objects": objects,
         "findings": findings,
     }

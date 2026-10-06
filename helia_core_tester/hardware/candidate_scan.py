@@ -106,6 +106,9 @@ def preprocess_findings(
             return [{"rule": "scan_error", "path": "", "message": f"preprocess failed: {exc}"[:200]}]
     findings = [{"rule": "scan_error", "path": unit.split(":", 1)[1], "message": f"gcc -E failed for {unit}"}
                 for unit in sorted(failed - base_failed)]
+    # A config that never runs scans nothing.
+    findings += [{"rule": "scan_error", "path": "", "message": f"gcc -E failed for all of {config}"}
+                 for config in configs if _units(tree) and not any(key[0] == config for key in after)]
     seen: set[tuple[str, str]] = set()
     for (config, origin), found in sorted(after.items()):
         old = before.get((config, origin), Counter())
@@ -118,13 +121,19 @@ def preprocess_findings(
 SCS_LOW, SCS_HIGH = 0xE0000000, 0xE00FFFFF
 # Sections the linker scripts map normally.
 _SECTION_OK = re.compile(
-    r"^(?:\.rela?(?=\.))?(?:(?:\.text|\.rodata|\.data|\.bss)(?:\..*)?$|\.ARM\.(?:attributes|exidx|extab)|\.debug)"
-    r"|^\.comment$|^\.note\.GNU-stack$|^\.group$|^\.(?:sym|str|shstr)tab$|^$"
+    r"^(?:\.rela?(?=\.))?(?:(?:\.text|\.rodata|\.data|\.bss|\.debug_\w+)(?:\..*)?"
+    r"|\.ARM\.(?:attributes|exidx|extab)|\.comment|\.note\.GNU-stack|\.group|\.(?:sym|str|shstr)tab|)$"
 )
 _SECTION_ROW = re.compile(r"^\s*\[\s*\d+\]\s+(\S*)\s+([A-Z][A-Z0-9_]*)\s+[0-9a-f]{8}\s+\S+\s+\S+\s+\S+\s+([A-Z]*)")
 _ADDRESS_INSN = re.compile(r"\t(?:mov|movw|movt|ldr)\S*\t|\t\.word\t")
 _IMMEDIATE = re.compile(r"#(-?(?:0x[0-9a-fA-F]+|\d+))|\.word\t(0x[0-9a-fA-F]+)")
+_CONTENTS = re.compile(r"^Contents of section (\S+):")
 _DUMP_ROW = re.compile(r"^ [0-9a-f]+ ((?:[0-9a-f]{2,8} ){1,4})")
+_RELOC_SECTION = re.compile(r"^Relocation section '\.rela?(\S+)'")
+_RELOC_ROW = re.compile(r"^([0-9a-f]{8})\s+[0-9a-f]{8}\s+(R_ARM_\w+)\s+[0-9a-f]{8}\s+(\S+)")
+_CALLS = frozenset(("R_ARM_THM_CALL", "R_ARM_THM_JUMP24", "R_ARM_THM_JUMP19", "R_ARM_CALL", "R_ARM_JUMP24"))
+# Kernel tables stay below 1 MiB.
+_ADDEND_MAX = 1 << 20
 # Compile args that are not -E flags.
 _DROP_ARGS = frozenset(("-c", "-MD", "-MMD", "-MP"))
 _DROP_WITH_VALUE = frozenset(("-o", "-MF", "-MT", "-MQ"))
@@ -155,13 +164,13 @@ def _kernel_units(build_dir: Path) -> list[tuple[str, Path, list[str]]]:
 
 def _preprocess_args(args: list[str], source: str) -> tuple[str, ...]:
     """A unit's compile args as -E flags."""
-    kept, skip = [], False
+    kept, skip, markers = [], False, _markers()
     for arg in args[1:]:
         if skip or arg in _DROP_ARGS or arg.endswith(source):
             skip = False
             continue
         skip = arg in _DROP_WITH_VALUE
-        marker = next((m for m in _markers() if m in arg), None)
+        marker = next((m for m in markers if m in arg), None)
         # Kernel paths point at the scanned tree.
         if marker and arg.startswith("-I"):
             arg = "-I" + arg.split(marker, 1)[1]
@@ -170,9 +179,27 @@ def _preprocess_args(args: list[str], source: str) -> tuple[str, ...]:
     return tuple(kept)
 
 
-def _object_hits(source: str, obj: Path) -> list[dict]:
-    """Section and SCS hits in one object."""
-    hits, data = [], []
+def _section_bytes(obj: Path, names: list[str]) -> dict[str, bytes]:
+    """Contents of the named sections."""
+    if not names:
+        return {}
+    found: dict[str, bytearray] = {}
+    current = None
+    args = [arg for name in names for arg in ("-j", name)]
+    for line in run_tool("arm-none-eabi-objdump", ["-s", *args, str(obj)]).splitlines():
+        header = _CONTENTS.match(line)
+        if header:
+            current = found.setdefault(header.group(1), bytearray())
+            continue
+        row = _DUMP_ROW.match(line)
+        if row and current is not None:
+            current += bytes.fromhex("".join(row.group(1).split()))
+    return {name: bytes(data) for name, data in found.items()}
+
+
+def _object_hits(source: str, obj: Path, defined: frozenset[str]) -> list[dict]:
+    """Section, SCS and reference hits."""
+    hits, sections = [], {}
     for row in run_tool("arm-none-eabi-readelf", ["-SW", str(obj)]).splitlines():
         match = _SECTION_ROW.match(row)
         if not match:
@@ -181,8 +208,12 @@ def _object_hits(source: str, obj: Path) -> list[dict]:
         # Code may live in .text only.
         if not _SECTION_OK.match(name) or ("X" in flags and not name.startswith(".text")):
             hits.append({"rule": "object_section", "path": source, "text": f"{name} {flags}"})
-        if kind == "PROGBITS" and "A" in flags and "X" not in flags:
-            data += ["-j", name]
+        if kind == "PROGBITS" and "A" in flags:
+            sections[name] = flags
+
+    def hit(text: str) -> None:
+        hits.append({"rule": "object_address", "path": source, "text": text[:200]})
+
     for line in run_tool("arm-none-eabi-objdump", ["-d", "--no-show-raw-insn", str(obj)]).splitlines():
         if not _ADDRESS_INSN.search(line):
             continue
@@ -190,20 +221,44 @@ def _object_hits(source: str, obj: Path) -> list[dict]:
             value = int(match.group(1) or match.group(2), 0) & 0xFFFFFFFF
             # movt loads the top half.
             if SCS_LOW <= value <= SCS_HIGH or ("\tmovt" in line and SCS_LOW >> 16 <= value <= SCS_HIGH >> 16):
-                hits.append({"rule": "object_address", "path": source, "text": line.strip()[:200]})
-    for line in run_tool("arm-none-eabi-objdump", ["-s", *data, str(obj)]).splitlines() if data else ():
-        row = _DUMP_ROW.match(line)
-        words = [int.from_bytes(bytes.fromhex(w), "little") for w in (row.group(1).split() if row else ()) if len(w) == 8]
-        if any(SCS_LOW <= word <= SCS_HIGH for word in words):
-            hits.append({"rule": "object_address", "path": source, "text": line.strip()[:200]})
+                hit(line.strip())
+    contents = _section_bytes(obj, list(sections))
+    for name, data in contents.items():
+        # Any byte offset: loads may be unaligned.
+        words = (int.from_bytes(data[i:i + 4], "little") for i in range(len(data) - 3))
+        if "X" not in sections[name] and any(SCS_LOW <= word <= SCS_HIGH for word in words):
+            hit(f"SCS address in {name}")
+    section = None
+    for line in run_tool("arm-none-eabi-readelf", ["-rW", str(obj)]).splitlines():
+        header = _RELOC_SECTION.match(line)
+        if header:
+            section = header.group(1)
+            continue
+        row = _RELOC_ROW.match(line)
+        if not row or section not in contents:
+            continue
+        offset, kind, symbol = int(row.group(1), 16), row.group(2), row.group(3)
+        # Symbol plus addend can reach any address.
+        if kind == "R_ARM_ABS32":
+            addend = int.from_bytes(contents[section][offset:offset + 4], "little", signed=True)
+            if not 0 <= addend < _ADDEND_MAX:
+                hit(f"{symbol}{addend:+#x} in {section}")
+        if kind not in _CALLS and not symbol.startswith(".") and symbol not in defined:
+            hit(f"{kind} to {symbol} in {section}")
     return hits
+
+
+def _defined_symbols(objects: list[Path]) -> frozenset[str]:
+    """Symbols the kernel objects define."""
+    out = run_tool("arm-none-eabi-nm", ["--defined-only", *map(str, objects)])
+    return frozenset(parts[2] for parts in map(str.split, out.splitlines()) if len(parts) == 3)
 
 
 def object_findings(build_dir: Path) -> tuple[list[dict], dict, tuple[str, ...]]:
     """Object hits, a summary, the build's -E flags."""
     from .firmware_build import built_record, nsx_app_dir
 
-    summary = {"build_dir": str(build_dir), "objects": 0,
+    summary = {"build_dir": str(build_dir), "count": 0,
                "kernels_hash": built_record(nsx_app_dir(build_dir)).get("kernels") or None}
     try:
         units = _kernel_units(build_dir)
@@ -211,10 +266,12 @@ def object_findings(build_dir: Path) -> tuple[list[dict], dict, tuple[str, ...]]
         if not units or missing:
             message = f"kernel object missing: {missing[0]}" if missing else "no kernel objects found"
             return [{"rule": "scan_error", "path": "", "message": message}], summary, ()
+        defined = _defined_symbols([obj for _, obj, _ in units])
         with ThreadPoolExecutor() as pool:
-            findings = [hit for hits in pool.map(lambda unit: _object_hits(*unit[:2]), units) for hit in hits]
+            found = pool.map(lambda unit: _object_hits(unit[0], unit[1], defined), units)
+            findings = [hit for hits in found for hit in hits]
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
         return [{"rule": "scan_error", "path": "", "message": f"object scan failed: {exc}"[:200]}], summary, ()
-    summary["objects"] = len(units)
+    summary["count"] = len(units)
     source, _, args = units[0]
     return findings, summary, _preprocess_args(args, source)

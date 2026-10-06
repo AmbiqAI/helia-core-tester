@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from test_harness_lock import _git, _repo
 
-from helia_core_tester.hardware import candidate_scan
+from helia_core_tester.hardware import candidate_check, candidate_scan
 from helia_core_tester.hardware.candidate_check import check_candidate, rule_counts
 from helia_core_tester.hardware.toolchain import arm_tool
 
@@ -94,7 +94,7 @@ def test_object_scan_flags_sections_and_scs(tmp_path: Path) -> None:
     )
     findings, summary, flags = candidate_scan.object_findings(_build(tmp_path, source))
     texts = {f["text"].split()[0] for f in findings if f["rule"] == "object_section"}
-    assert texts == {".itcm_text", ".data.fast"} and summary["objects"] == 1
+    assert texts == {".itcm_text", ".data.fast"} and summary["count"] == 1
     assert len([f for f in findings if f["rule"] == "object_address"]) >= 2
     assert flags == ("-DBOARD_X", "-IInclude")
 
@@ -102,7 +102,18 @@ def test_object_scan_flags_sections_and_scs(tmp_path: Path) -> None:
 def test_object_scan_clean(tmp_path: Path) -> None:
     source = "unsigned f(unsigned x) { return x > 0xE0000000u ? x : ~x; }\nconst int t[2] = {1, 2};\n"
     findings, summary, _ = candidate_scan.object_findings(_build(tmp_path, source))
-    assert findings == [] and summary["objects"] == 1
+    assert findings == [] and summary["count"] == 1
+
+
+@pytest.mark.parametrize("source", [
+    # Unaligned bytes: e0 10 e0 00.
+    "const unsigned short h[3] = {0, 0xE010, 0xE000};\n",
+    "extern char __Vectors[];\nchar *const v = __Vectors + 0xDFBFE010u;\n",
+    "extern int harness_var;\nint *const w = &harness_var;\n",
+])
+def test_object_scan_hidden_addresses(tmp_path: Path, source: str) -> None:
+    findings, _, _ = candidate_scan.object_findings(_build(tmp_path, source))
+    assert [f["rule"] for f in findings] and {f["rule"] for f in findings} == {"object_address"}
 
 
 def test_object_scan_needs_objects(tmp_path: Path) -> None:
@@ -111,10 +122,16 @@ def test_object_scan_needs_objects(tmp_path: Path) -> None:
     assert [f["rule"] for f in findings] == ["scan_error"]
 
 
-def test_build_macros_reach_gcc_e(kernels: Path, tmp_path: Path) -> None:
+def test_build_macros_reach_gcc_e(kernels: Path, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(candidate_check, "kernels_match", lambda tree, module: True)
     text = PASTE + '#ifdef BOARD_X\nCAT(_Pra, gma)("GCC optimize(\\"O3\\")")\n#endif\nint a;\n'
     (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
     assert _hits(kernels) == set()
     report = check_candidate(kernels, _git(kernels, "rev-parse", "HEAD").strip(), build_dir=_build(tmp_path, "int k;\n"))
     assert {(f["rule"], f["path"]) for f in report["findings"]} == {("pragma", "Source/Conv/a.c")}
-    assert report["objects"]["objects"] == 1
+    assert report["objects"]["count"] == 1
+
+
+def test_stale_build_fails(kernels: Path, tmp_path: Path) -> None:
+    report = check_candidate(kernels, _git(kernels, "rev-parse", "HEAD").strip(), build_dir=_build(tmp_path, "int k;\n"))
+    assert {f.get("message") for f in report["findings"]} == {"build dir holds other kernels"}
