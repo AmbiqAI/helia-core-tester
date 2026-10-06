@@ -7,23 +7,16 @@ schema_version: 1
 cpus:
   cortex-m55:
     # apollo510 TCM: mlperf_ad_l0 FC, 13501/5152.
+    # Measured s8 cyc/MAC: conv best 0.196.
+    # DW opt median 3.5, MLPerf DW 2.9.
     target_inst_per_mac_instr: 2.6
-    reference:
-      # Measured: apollo510 nightly, TCM placement.
-      best_s8_conv_cycles_per_mac: 0.196
-      s8_depthwise_opt_median_cycles_per_mac: 3.5
-      s8_depthwise_mlperf_cycles_per_mac: 2.9
     ops:
-      conv:
+      conv: &m55_mac
         s8: {cycles_per_mac: 0.125, lanes: 16, basis: "dual-beat MVE, 64 bits/cycle: VMLADAV.S8 16 MACs per 2 cycles"}
         s16: {cycles_per_mac: 0.25, lanes: 8, basis: "VMLALDAV.S16 8 MACs per 2 cycles"}
         f16: {cycles_per_mac: 0.25, lanes: 8, basis: "VFMA.F16 8 MACs per 2 cycles"}
         f32: {cycles_per_mac: 0.5, lanes: 4, basis: "VFMA.F32 4 MACs per 2 cycles"}
-      fc:
-        s8: {cycles_per_mac: 0.125, lanes: 16, basis: "dual-beat MVE, 64 bits/cycle: VMLADAV.S8 16 MACs per 2 cycles"}
-        s16: {cycles_per_mac: 0.25, lanes: 8, basis: "VMLALDAV.S16 8 MACs per 2 cycles"}
-        f16: {cycles_per_mac: 0.25, lanes: 8, basis: "VFMA.F16 8 MACs per 2 cycles"}
-        f32: {cycles_per_mac: 0.5, lanes: 4, basis: "VFMA.F32 4 MACs per 2 cycles"}
+      fc: *m55_mac
       depthwise:
         s8: {cycles_per_mac: 0.5, lanes: 4, basis: "widened VMLA.S32 4 MACs per 2 cycles (per-channel, no reduction)"}
         s16: {cycles_per_mac: 0.5, lanes: 4, basis: "widened VMLA.S32 4 MACs per 2 cycles (assumed as s8)"}
@@ -31,15 +24,10 @@ cpus:
         f32: {cycles_per_mac: 0.5, lanes: 4, basis: "VFMA.F32 4 MACs per 2 cycles"}
   cortex-m4:
     ops:
-      conv:
+      conv: &m4_mac
         s8: {cycles_per_mac: 0.75, lanes: 0, basis: "SMLAD 2 MACs/cycle plus s8 unpack (SXTB16)"}
         s16: {cycles_per_mac: 0.5, lanes: 0, basis: "SMLAD 2 MACs/cycle, no unpack"}
         f32: {cycles_per_mac: 1.0, lanes: 0, basis: "VFMA.F32 1 MAC/cycle (assumed pipelined)"}
-      fc:
-        s8: {cycles_per_mac: 0.75, lanes: 0, basis: "SMLAD 2 MACs/cycle plus s8 unpack (SXTB16)"}
-        s16: {cycles_per_mac: 0.5, lanes: 0, basis: "SMLAD 2 MACs/cycle, no unpack"}
-        f32: {cycles_per_mac: 1.0, lanes: 0, basis: "VFMA.F32 1 MAC/cycle (assumed pipelined)"}
-      depthwise:
-        s8: {cycles_per_mac: 0.75, lanes: 0, basis: "SMLAD 2 MACs/cycle plus s8 unpack (assumed as conv)"}
-        s16: {cycles_per_mac: 0.5, lanes: 0, basis: "SMLAD 2 MACs/cycle (assumed as conv)"}
-        f32: {cycles_per_mac: 1.0, lanes: 0, basis: "VFMA.F32 1 MAC/cycle (assumed pipelined)"}
+      fc: *m4_mac
+      # Assumed as conv.
+      depthwise: *m4_mac

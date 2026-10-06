@@ -8,7 +8,6 @@ Rules are the `_rule_*` functions below; each returns a Finding whose
 
 from __future__ import annotations
 
-import csv
 import json
 import re
 from dataclasses import asdict, dataclass, field
@@ -16,8 +15,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
-import typer
 import yaml
+
+from .boards import repo_root
 
 SCHEMA = "hct.pmu_explain"
 SCHEMA_VERSION = 1
@@ -31,9 +31,10 @@ AGENT_PMU_SELECTION: dict[str, list[str]] = {
         "ARM_PMU_MVE_PRED", "ARM_PMU_MVE_STALL_RESOURCE_MEM", "ARM_PMU_MVE_STALL_DEPENDENCY",
     ],
 }
-AGENT_PMU_ARGS = tuple(f"{group}:{','.join(names)}" for group, names in AGENT_PMU_SELECTION.items())
 
-_CEILINGS_PATH = Path(__file__).resolve().parents[2] / "assets" / "scoring" / "ceilings.yaml"
+_WANTED = tuple(name for names in AGENT_PMU_SELECTION.values() for name in names)
+_CEILINGS_PATH = repo_root() / "assets" / "scoring" / "ceilings.yaml"
+_OPS = ("conv", "depthwise", "fc")
 _DTYPE_RE = re.compile(r"_(s4|s8|s16|f16|f32)(?=_|$)")
 # Cortex-M55 L1D line size.
 _LINE_BYTES = 32
@@ -175,8 +176,7 @@ def _metrics(row: Mapping[str, Any], cycles: Optional[float], macs: Optional[flo
         "refill_kb": refills * _LINE_BYTES / 1024 if refills is not None else None,
         "prepare_share": _ratio(_number(row.get("prepare_cycles")), cycles),
     }
-    wanted = [name for names in AGENT_PMU_SELECTION.values() for name in names]
-    return metrics, [name for name in wanted if _number(source.get(name)) is None]
+    return metrics, [name for name in _WANTED if _number(source.get(name)) is None]
 
 
 Rule = Callable[[Explanation], Optional[Finding]]
@@ -285,7 +285,7 @@ def explain_case(
     if entry:
         ceiling = dict(entry, key=f"{cpu}/{op}/{dtype}",
                        target_inst_per_mac_instr=cpu_table.get("target_inst_per_mac_instr"))
-    cpm = _ratio(cycles, macs)
+    cpm = _number(row.get("cycles_per_mac")) or _ratio(cycles, macs)
     lanes = int(ceiling["lanes"]) if ceiling else 0
     metrics, missing = _metrics(row, cycles, macs, lanes, dtype)
     result = Explanation(
@@ -294,7 +294,11 @@ def explain_case(
         pct_of_peak=_ratio(ceiling["cycles_per_mac"], cpm) if ceiling and cpm else None,
         metrics=metrics, missing_counters=missing,
     )
-    if metrics["ipc"] is None:
+    if result.timing_status not in (None, "valid"):
+        result.findings = [Finding("timing_invalid", 0.0, f"Timing {result.timing_status}: no diagnosis",
+                                   "Fix the case before tuning it")]
+        return result
+    if len(missing) == len(_WANTED):
         result.findings = [Finding("no_counters", 0.0, "Cycles only: no PMU counters in bundle",
                                    "Run on a Cortex-M55 board for counters")]
         return result
@@ -305,52 +309,27 @@ def explain_case(
     return result
 
 
-def _bundle_cases(bundle: Path) -> list[dict[str, Any]]:
-    if (bundle / "cases.json").is_file():
-        return json.loads((bundle / "cases.json").read_text(encoding="utf-8"))
-    with (bundle / "case_summary.csv").open(newline="", encoding="utf-8") as handle:
-        return list(csv.DictReader(handle))
-
-
 def _selected(row: Mapping[str, Any], cases: tuple[str, ...], ops: tuple[str, ...], all_cases: bool) -> bool:
-    text = " ".join(str(row.get(key) or "") for key in ("case_id", "timed_symbol", "inner_symbol")).lower()
-    text += " " + (classify_route(row.get("inner_symbol") or row.get("timed_symbol") or "")[0] or "")
     if cases and not any(c.lower() in str(row.get("case_id", "")).lower() for c in cases):
         return False
-    if ops and not any(o.lower() in text for o in ops):
+    route = row.get("inner_symbol") or row.get("timed_symbol") or ""
+    text = f"{row.get('case_id')} {row.get('timed_symbol')} {route}".lower()
+    op = classify_route(route)[0]
+    # Op names match exactly, else substring.
+    if ops and not any(o == op if o in _OPS else o.lower() in text for o in ops):
         return False
     return bool(cases) or all_cases or bool(_number(row.get("macs")))
 
 
-def explain_bundle(bundle: Path, cases: tuple[str, ...] = (), ops: tuple[str, ...] = (), all_cases: bool = False) -> dict[str, Any]:
+def explain_bundle(
+    bundle: Path, cases: tuple[str, ...] = (), ops: tuple[str, ...] = (), all_cases: bool = False
+) -> dict[str, Any]:
     """Explain the selected cases of one bundle."""
     target = json.loads((bundle / "session_manifest.json").read_text(encoding="utf-8"))["target"]
     placement = (target.get("placement") or {}).get("name")
-    rows = [row for row in _bundle_cases(bundle) if _selected(row, cases, ops, all_cases)]
+    rows = json.loads((bundle / "cases.json").read_text(encoding="utf-8"))
     return {
         "bundle": str(bundle), "board": target.get("board"), "cpu": target["cpu"], "placement": placement,
-        "cases": [explain_case(row, cpu=target["cpu"], placement=placement) for row in rows],
+        "cases": [explain_case(row, cpu=target["cpu"], placement=placement)
+                  for row in rows if _selected(row, cases, ops, all_cases)],
     }
-
-
-def explain_command(
-    bundle: Path = typer.Argument(..., help="Bundle dir, or a dir holding bundles."),
-    case: Optional[list[str]] = typer.Option(None, "--case", help="Case id substring (repeatable)."),
-    op: Optional[list[str]] = typer.Option(None, "--op", help="Op, symbol or case substring (repeatable)."),
-    all_cases: bool = typer.Option(False, "--all", help="Include cases without MAC counts."),
-    as_json: bool = typer.Option(False, "--json", help="Print one JSON document."),
-) -> None:
-    """Explain PMU counters per case: peak, stalls, hints."""
-    manifests = sorted(bundle.rglob("session_manifest.json"))
-    if not manifests:
-        raise typer.BadParameter(f"No session_manifest.json under {bundle}")
-    results = [explain_bundle(path.parent, tuple(case or ()), tuple(op or ()), all_cases) for path in manifests]
-    if as_json:
-        for result in results:
-            result["cases"] = [explanation.to_dict() for explanation in result["cases"]]
-        typer.echo(json.dumps({"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "bundles": results}, indent=2))
-        return
-    for result in results:
-        typer.echo(f"# {result['board']} ({result['cpu']}, {result['placement']}): {result['bundle']}")
-        for explanation in result["cases"]:
-            typer.echo("\n".join(explanation.lines()))

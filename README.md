@@ -219,13 +219,13 @@ it by hand.
 bundles) and prints at most four lines per MAC case: cycles/MAC against a ceiling
 from `assets/scoring/ceilings.yaml`, where the cycles go (IPC, MVE share, MVE MAC
 instructions against the ideal count, stall shares, L1D refills, prepare share), a
-diagnosis and up to three ranked hints. `--json` emits schema `hct.pmu_explain`
+diagnosis and up to three ranked hints. `--op` takes conv, depthwise or fc. `--json` emits schema `hct.pmu_explain`
 v1; `pmu_explain.explain_case` gives the same result for one case row. Rules live
 in `helia_core_tester/hardware/pmu_explain.py` (`_rule_*`); each ranks by the share
 of cycles it explains. Cycles-only bundles (Cortex-M4) get % of peak only.
 
 The nightly captures the full catalog (`all`, 18 passes). For a tuning loop, request
-only what the rules read (4 passes, `pmu_explain.AGENT_PMU_ARGS`):
+only what the rules read (4 passes, `pmu_explain.AGENT_PMU_SELECTION`):
 
 ```
 --pmu-counters cpu:ARM_PMU_INST_RETIRED,ARM_PMU_STALL_FRONTEND,ARM_PMU_STALL_BACKEND

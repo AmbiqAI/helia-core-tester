@@ -221,6 +221,36 @@ def _saved_kernels(build_dir: Path, echo) -> None:
     echo(f"[hardware] Kernels: {saved.summary() if saved else 'unknown, no saved options'}")
 
 
+# --- explain -----------------------------------------------------------------------
+
+
+def explain(
+    bundle: Path = typer.Argument(..., help="Bundle dir, or a dir holding bundles."),
+    case: Optional[list[str]] = typer.Option(None, "--case", help="Case id substring (repeatable)."),
+    op: Optional[list[str]] = typer.Option(
+        None, "--op", help="conv, depthwise or fc; else a case or symbol substring (repeatable)."
+    ),
+    all_cases: bool = typer.Option(False, "--all", help="Include cases without MAC counts."),
+    as_json: bool = typer.Option(False, "--json", help="Print one JSON document."),
+) -> None:
+    """Explain PMU counters per case: peak, stalls, hints."""
+    from .pmu_explain import SCHEMA, SCHEMA_VERSION, explain_bundle
+
+    dirs = sorted(path.parent for path in bundle.rglob("cases.json") if (path.parent / "session_manifest.json").is_file())
+    if not dirs:
+        raise typer.BadParameter(f"No result bundle under {bundle}")
+    results = [explain_bundle(path, tuple(case or ()), tuple(op or ()), all_cases) for path in dirs]
+    if as_json:
+        for result in results:
+            result["cases"] = [explanation.to_dict() for explanation in result["cases"]]
+        typer.echo(json.dumps({"schema": SCHEMA, "schema_version": SCHEMA_VERSION, "bundles": results}, indent=2))
+        return
+    for result in results:
+        typer.echo(f"# {result['board']} ({result['cpu']}, {result['placement']}): {result['bundle']}")
+        for explanation in result["cases"]:
+            typer.echo("\n".join(explanation.lines()))
+
+
 # --- boards / probes ---------------------------------------------------------------
 
 

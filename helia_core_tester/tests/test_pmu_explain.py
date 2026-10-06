@@ -127,6 +127,18 @@ def test_cycles_only_row_degrades():
     json.dumps(result.to_dict())
 
 
+def test_invalid_timing_skips_rules():
+    row = _row(STALL_FRONTEND=800)
+    row["timing_status"] = "below_floor"
+    assert _rules(row) == ["timing_invalid"]
+
+
+def test_partial_counters_still_run_rules():
+    row = _row(MVE_STALL_DEPENDENCY=800)
+    del row["counters"]["ARM_PMU_INST_RETIRED"]
+    assert _rules(row) == ["dependency_stall"]
+
+
 def test_csv_row_matches_nested_row():
     nested = _row(STALL_FRONTEND=800)
     flat = {key: str(value) for key, value in nested.items() if key != "counters"}
@@ -162,3 +174,5 @@ def test_explain_cli_json(tmp_path):
     assert [case["case_id"] for case in data["bundles"][0]["cases"]] == ["c"]
     result = CliRunner().invoke(app, ["explain", str(tmp_path), "--op", "softmax", "--all"])
     assert result.exit_code == 0 and "softmax" in result.output
+    result = CliRunner().invoke(app, ["explain", str(tmp_path), "--op", "depthwise"])
+    assert result.exit_code == 0 and "c:" not in result.output
