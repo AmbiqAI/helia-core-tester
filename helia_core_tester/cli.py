@@ -20,6 +20,7 @@ from helia_core_tester.core.pipeline import FullTestPipeline
 from helia_core_tester.core.steps import BuildStep, CleanStep, GenerateStep, RunStep
 from helia_core_tester.reporting.coverage_merge import run_coverage_merge
 from helia_core_tester.hardware.cli import boards as boards_command
+from helia_core_tester.hardware.cli import explain as explain_command
 from helia_core_tester.hardware.cli import hardware_app, probes_app
 from helia_core_tester.hardware.score import score as score_command
 
@@ -37,6 +38,7 @@ app = typer.Typer(
 app.add_typer(hardware_app, name="hardware")
 app.add_typer(probes_app, name="probes")
 app.command(name="boards")(boards_command)
+app.command(name="explain")(explain_command)
 app.command(name="score")(score_command)
 
 

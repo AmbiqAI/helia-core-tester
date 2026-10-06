@@ -21,6 +21,7 @@ uv run helia_core_tester --help
 - `uv run helia_core_tester coverage-merge`
 - `uv run helia_core_tester boards` / `probes list` / `probes match`
 - `uv run helia_core_tester hardware run|build|flash|stream|memory-report`
+- `uv run helia_core_tester explain <bundle> [--case ID] [--op OP] [--json]`
 
 Removed interfaces:
 - `gap-check` subcommand
@@ -236,6 +237,26 @@ ref; any ref but `main` uploads as `hct-ref-<board>-...`. The kernel leg does no
 gate the run: its failures show only in the summary table.
 `gh workflow run hardware-nightly.yml -f boards=apollo510_evb -f limit=2` runs
 it by hand.
+
+### PMU feedback
+
+`helia_core_tester explain <bundle>` reads a hardware bundle (or a directory of
+bundles) and prints at most four lines per MAC case: cycles/MAC against a ceiling
+from `assets/scoring/ceilings.yaml`, where the cycles go (IPC, MVE share, MVE MAC
+instructions against the ideal count, stall shares, L1D refills, prepare share), a
+diagnosis and up to three ranked hints. `--op` takes conv, depthwise or fc. `--json` emits schema `hct.pmu_explain`
+v1; `pmu_explain.explain_case` gives the same result for one case row. Rules live
+in `helia_core_tester/hardware/pmu_explain.py` (`_rule_*`); each ranks by the share
+of cycles it explains. Cycles-only bundles (Cortex-M4) get % of peak only.
+
+The nightly captures the full catalog (`all`, 18 passes). For a tuning loop, request
+only what the rules read (4 passes, `pmu_explain.AGENT_PMU_SELECTION`):
+
+```
+--pmu-counters cpu:ARM_PMU_INST_RETIRED,ARM_PMU_STALL_FRONTEND,ARM_PMU_STALL_BACKEND
+--pmu-counters memory:ARM_PMU_L1D_CACHE_REFILL
+--pmu-counters mve:ARM_PMU_MVE_INST_RETIRED,ARM_PMU_MVE_INT_MAC_RETIRED,ARM_PMU_MVE_FP_MAC_RETIRED,ARM_PMU_MVE_PRED,ARM_PMU_MVE_STALL_RESOURCE_MEM,ARM_PMU_MVE_STALL_DEPENDENCY
+```
 
 ## Suite-Based Runs
 
