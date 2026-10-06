@@ -181,7 +181,10 @@ def frozen_files(tree: Path, base: dict[str, tuple[str, str]]) -> frozenset[str]
 
     def read_disk(rel: str) -> Optional[str]:
         path = tree / rel
-        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
+        # Never follow candidate symlinks.
+        if path.resolve() != path or not path.is_file():
+            return None
+        return path.read_text(encoding="utf-8", errors="replace")
 
     # A new header can shadow a base one.
     return frozenset((*FROZEN_FILES, *header_closure(read), *header_closure(read_disk)))
@@ -376,8 +379,8 @@ def check_candidate(tree: Path, base: str) -> dict:
         "tree": str(tree),
         "base": base,
         "base_commit": commit,
-        # Equals the bundle's build.kernels.tree_hash.
-        "tree_hash": checkout_hash(tree),
+        # Equals build.kernels.tree_hash; null on failure.
+        "tree_hash": None if findings else checkout_hash(tree),
         "ok": not findings,
         "files": [{"path": path, "status": status} for path, status in sorted(changes.items())],
         "findings": findings,

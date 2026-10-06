@@ -314,16 +314,26 @@ def _check_no_overlap(root: Path, module_dir: Path) -> None:
 
 
 def _drop_stale(module_dir: Path) -> None:
-    """Remove files a vendored copy lacks."""
+    """Remove links and files a vendored copy lacks."""
     keep = {*KERNEL_TREES, "nsx", "nsx-module.yaml", "CMakeLists.txt"}
     # An old clone may share the dir.
-    stale = [p for p in module_dir.glob("*") if p.name not in keep]
-    stale += [p for p in module_dir.glob("nsx/*") if p.name != "CMakeLists.txt"]
-    for path in stale:
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
+    stale = [e for e in _entries(module_dir) if e.is_symlink() or e.name not in keep]
+    nsx = module_dir / "nsx"
+    if nsx.is_dir() and not nsx.is_symlink():
+        stale += [e for e in _entries(nsx) if e.name != "CMakeLists.txt" or not e.is_file(follow_symlinks=False)]
+    for entry in stale:
+        if entry.is_dir(follow_symlinks=False):
+            shutil.rmtree(entry.path)
         else:
-            path.unlink()
+            os.unlink(entry.path)
+
+
+def _entries(path: Path) -> list[os.DirEntry]:
+    """Dir entries; links stay unfollowed."""
+    if not path.is_dir() or path.is_symlink():
+        return []
+    with os.scandir(path) as scan:
+        return list(scan)
 
 
 def write_kernels(root: Path, module_dir: Path) -> None:

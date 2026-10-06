@@ -12,7 +12,7 @@ import pytest
 from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
-from helia_core_tester.hardware import boards, firmware_build, harness_lock
+from helia_core_tester.hardware import boards, candidate_check, firmware_build, harness_lock
 from helia_core_tester.hardware.candidate_check import check_candidate
 from helia_core_tester.hardware.firmware_build import nsx_app_dir
 from helia_core_tester.hardware.nsx_app import AppOptions, kernel_dir, save_options
@@ -389,13 +389,43 @@ def test_symlink_fails(kernels: Path) -> None:
     assert "symlink" in _rules(kernels)
 
 
-def test_symlinked_root_fails(kernels: Path, tmp_path: Path) -> None:
+def test_symlinked_root_fails(kernels: Path, tmp_path: Path, monkeypatch) -> None:
     import shutil
 
     shutil.copytree(kernels / "Source", tmp_path / "elsewhere")
     shutil.rmtree(kernels / "Source")
     (kernels / "Source").symlink_to(tmp_path / "elsewhere")
     assert "symlink" in _rules(kernels)
+    # A failed check never vendors the tree.
+    monkeypatch.setattr(candidate_check, "checkout_hash", lambda root: pytest.fail("hashed a failed tree"))
+    assert check_candidate(kernels, _sha(kernels))["tree_hash"] is None
+
+
+def test_symlinked_header_not_followed(kernels: Path, tmp_path: Path) -> None:
+    (tmp_path / "host.h").write_text('#include "Internal/new.h"\n', encoding="utf-8")
+    (kernels / "Include/Internal/new.h").write_text("int n;\n", encoding="utf-8")
+    (kernels / "Include/arm_nn_math_types.h").unlink()
+    (kernels / "Include/arm_nn_math_types.h").symlink_to(tmp_path / "host.h")
+    findings = {(f["rule"], f["path"]) for f in check_candidate(kernels, _sha(kernels))["findings"]}
+    assert ("symlink", "Include/arm_nn_math_types.h") in findings
+    assert ("frozen_file", "Include/Internal/new.h") not in findings
+
+
+def test_stale_nsx_link_spares_target(tmp_path: Path) -> None:
+    from helia_core_tester.hardware.nsx_app import write_kernels
+
+    root = _repo(tmp_path / "nn", {"Source/a.c": "int a;\n", "Include/a.h": "\n", "nsx/CMakeLists.txt": "x\n",
+                                   "nsx/nsx-module.yaml": "m\n"})
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep\n", encoding="utf-8")
+    module = tmp_path / "module"
+    module.mkdir()
+    (module / "nsx").symlink_to(outside)
+    (module / "CMakeLists.txt").symlink_to(outside / "keep.txt")
+    write_kernels(root, module)
+    assert (outside / "keep.txt").read_text(encoding="utf-8") == "keep\n"
+    assert not (module / "nsx").is_symlink() and not (module / "CMakeLists.txt").is_symlink()
 
 
 @pytest.mark.parametrize("text", [
