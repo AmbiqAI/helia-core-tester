@@ -240,6 +240,8 @@ def test_source_change_passes(kernels: Path) -> None:
     ("Source/Conv/a.c", '__asm__("cpsid i");\n', "measurement_access"),
     ("Source/Conv/k.S", "    MSR PRIMASK, r0\n", "measurement_access"),
     ("Source/Conv/a.c", '__asm__("cps" "id i");\n', "measurement_access"),
+    ("Source/Conv/a.c", '_Pragma("GCC optimize(\\"O3\\")") /* #pragma once */\n', "pragma"),
+    ("Source/Conv/a.c", "#pragma once\n_Pragma(\"GCC unroll 4\")\n", "pragma"),
     ("Source/Conv/a.c", '__asm__(".push"\n        "section .itcm");\n', "special_section"),
     ("Source/Conv/k.s", '.incbin "/etc/x"\n', "include_escape"),
     ("Source/Conv/a.c", "static const int golden[4];\n", "harness_reference"),
@@ -271,6 +273,15 @@ def test_git_tricks_cannot_hide_changes(kernels: Path) -> None:
     assert ("Source/Conv/hidden.c", "attribute") in rules
 
 
+def test_guard_edit_near_old_pragma_fails(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "nn", {"Source/Conv/a.c": '#if 0\n#pragma GCC optimize("O3")\n#endif\nint a;\n'})
+    _git(root, "tag", "base")
+    (root / "Source/Conv/a.c").write_text('#if 1\n#pragma GCC optimize("O3")\n#endif\nint a;\n', encoding="utf-8")
+    assert _rules(root) == {"guard_change"}
+    (root / "Source/Conv/a.c").write_text('#if 0\n#pragma GCC optimize("O3")\n#endif\nint a; /* faster */\n', encoding="utf-8")
+    assert check_candidate(root, "base")["ok"]
+
+
 def test_hidden_index_entry_fails(kernels: Path) -> None:
     _git(kernels, "update-index", "--skip-worktree", ".gitignore")
     report = check_candidate(kernels, "base")
@@ -300,6 +311,15 @@ def test_spliced_lines_cannot_hide_tokens(kernels: Path, text: str) -> None:
     (kernels / "Source/Conv/a.c").write_text(text, encoding="utf-8")
     report = check_candidate(kernels, "base")
     assert not report["ok"] and report["findings"][0]["line"] == 1
+
+
+def test_modules_cmake_keeps_unknown_kernel_location(tmp_path: Path) -> None:
+    from helia_core_tester.hardware.harness_lock import modules_print
+
+    known = 'set(NSX_APP_MODULE_DIR_nsx_cmsis_nn "modules/nsx-cmsis-nn")\n'
+    assert "<kernels>" in modules_print(known)
+    moved = 'set(NSX_APP_MODULE_DIR_nsx_cmsis_nn "/elsewhere/kernels")\n'
+    assert modules_print(moved) == moved
 
 
 def test_modules_cmake_hash_ignores_kernel_location(tmp_path: Path) -> None:

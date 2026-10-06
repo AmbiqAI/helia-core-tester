@@ -20,6 +20,8 @@ Include/, nothing else. Rules, each a finding in the JSON report:
   .incbin and .include in assembly.
 - hidden_index_entry: any path flagged skip-worktree or
   assume-unchanged, which git diff and status would skip.
+- guard_change: an added #if/#ifdef/#else/#define/#undef in a file
+  that already holds a forbidden construct, which it could enable.
 
 Rules also run on text with adjacent string literals joined, per line
 and over all added lines of a file, as C joins them before asm sees them.
@@ -68,7 +70,10 @@ _ADJACENT_LITERALS = re.compile(r'"\s*"')
 _ATTRIBUTE_HINT = re.compile(r"__attribute|__declspec|\[\[")
 # "%:" is the "#" digraph.
 _PRAGMA = re.compile(r"(?:#|%:)\s*pragma|_Pragma|__pragma")
+# Checked per occurrence; _Pragma is never safe.
 _SAFE_PRAGMA = re.compile(r"(?:#|%:)\s*pragma\s+(?:once|GCC\s+unroll\s+\d+|GCC\s+diagnostic\b)")
+_COMMENT = re.compile(r"/\*.*?\*/|//.*$")
+_GUARD = re.compile(r"^\s*(?:#|%:)\s*(?:if|ifdef|ifndef|elif|elifdef|elifndef|else|endif|define|undef)\b")
 LINE_RULES = (
     ("special_section", re.compile(
         r"\.(?:push)?section\b|\b_*section_*\s*\(|\b(?:ITCM|DTCM|__RAMFUNC|RAMFUNC|AM_SHARED_RW|NS_PUT_IN_TCM)\b",
@@ -238,9 +243,20 @@ def line_rules(text: str) -> Iterator[str]:
 def _raw_rules(text: str) -> Iterator[str]:
     if _unsafe_attribute(text):
         yield "attribute"
-    if _PRAGMA.search(text) and not _SAFE_PRAGMA.search(text):
+    code = _COMMENT.sub(" ", text)
+    if any(not _SAFE_PRAGMA.match(code, hit.start()) for hit in _PRAGMA.finditer(code)):
         yield "pragma"
     yield from (rule for rule, pattern in LINE_RULES if pattern.search(text))
+
+
+def _grandfathered(tree: Path, path: str) -> bool:
+    """File already holds a rule hit."""
+    lines = (tree / path).read_text(encoding="utf-8", errors="replace").splitlines()
+    starts = _logical_lines(lines)
+    joined: dict[int, str] = {}
+    for index, line in enumerate(lines):
+        joined[starts[index]] = joined.get(starts[index], "") + (line[:-1] if line.endswith("\\") else line)
+    return any(next(line_rules(text), None) for text in joined.values())
 
 
 def hidden_entries(tree: Path) -> list[str]:
@@ -267,6 +283,11 @@ def check_candidate(tree: Path, base: str) -> dict:
             for rule in line_rules(text):
                 hit_rules.add(rule)
                 findings.append({"rule": rule, "path": path, "line": line_no, "text": text.strip()[:200]})
+        # Guard edits can enable old lines.
+        if any(_GUARD.match(text) for _, text in added) and _grandfathered(tree, path):
+            line_no = next(n for n, text in added if _GUARD.match(text))
+            findings.append({"rule": "guard_change", "path": path, "line": line_no,
+                             "text": "preprocessor change in a file with forbidden constructs"})
         # Literals split across lines.
         if added:
             joined = " ".join(text.strip() for _, text in added)

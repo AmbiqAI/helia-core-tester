@@ -247,3 +247,17 @@ def test_cli_refuses_non_finite_settings(tmp_path, flag):
     result = CliRunner().invoke(app, ["score", str(base), "--candidate", str(cand), flag, "nan"])
     assert result.exit_code == 2 and "must be finite" in result.output
 
+
+def test_digest_keeps_strict_compare_check(tmp_path):
+    def manifest_with(path, strict):
+        data = json.loads((path / "session_manifest.json").read_text())
+        data["harness_digest"] = "d" * 64
+        data["compare"] = {"strict": strict}
+        (path / "session_manifest.json").write_text(json.dumps(data))
+        return path
+
+    base = manifest_with(_bundle(tmp_path, "a"), False)
+    report = _score([base], [manifest_with(_bundle(tmp_path, "b"), True)])
+    assert report["verdict"] == "not_comparable"
+    assert "strict_compare" in report["failures"][0]["reason"]
+

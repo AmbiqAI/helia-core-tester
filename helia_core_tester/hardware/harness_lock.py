@@ -35,7 +35,7 @@ FIRMWARE_INPUTS = (
 # NSX-owned app trees: board, flags.
 APP_TREES = ("boards", "cmake/nsx")
 # Kernel module location: ref vs root.
-_KERNEL_MODULE_DIR = re.compile(r'(NSX_APP_MODULE_DIR_nsx_cmsis_nn\s+)"[^"]*"')
+_KERNEL_MODULE_DIR = re.compile(r'(NSX_APP_MODULE_DIR_nsx_cmsis_nn\s+)"(?:modules/nsx-cmsis-nn|modules/ns-cmsis-nn/nsx)"')
 _KERNEL_PROJECT_DIR = re.compile(r"(?m)^[ \t]*modules/nsx?-cmsis-nn[ \t]*\n")
 # Cache entries that set compile flags.
 _FLAG_CACHE = re.compile(

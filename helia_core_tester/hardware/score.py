@@ -88,16 +88,20 @@ def load_bundle(path: Path) -> Bundle:
 
 def harness_print(manifest: dict) -> dict:
     """Everything in the build except kernels."""
+    # Run options stay beside the digest.
+    runtime = {
+        "core_clock_hz": (manifest.get("boot") or {}).get("core_clock_hz"),
+        "strict_compare": (manifest.get("compare") or {}).get("strict"),
+    }
     if manifest.get("harness_digest"):
-        return {"harness_digest": manifest["harness_digest"]}
+        return {"harness_digest": manifest["harness_digest"], **runtime}
     build = manifest.get("build") or {}
     return {
         "options": {k: v for k, v in (build.get("options") or {}).items() if not k.startswith("cmsis_nn_") and k != "placement"},
         "modules": [m for m in build.get("modules") or [] if m.get("name") != CMSIS_NN_MODULE],
         "neuralspotx_version": build.get("neuralspotx_version"),
         "toolchain": build.get("toolchain"),
-        "core_clock_hz": (manifest.get("boot") or {}).get("core_clock_hz"),
-        "strict_compare": (manifest.get("compare") or {}).get("strict"),
+        **runtime,
     }
 
 
