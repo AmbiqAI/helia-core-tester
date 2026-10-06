@@ -390,6 +390,25 @@ def hidden_cases(n: int, secret: bytes, cpu: str) -> list[dict[str, Any]]:
     return cases
 
 
+def check_hidden_paths(hidden_dir: Path, repo_root: Path, cpu: str, suite: str = "int", generated: Path | None = None) -> None:
+    """Refuse hidden writes that escape DIR."""
+    from helia_core_tester.core.path_layout import generated_tests_dir, generation_report_dir
+
+    root, repo = Path(hidden_dir).resolve(), Path(repo_root).resolve()
+    if root.is_relative_to(repo):
+        raise ValueError(f"{root} must sit outside the tester tree")
+    targets = (
+        generated or generated_tests_dir(root, normalize_cpu(cpu), suite=suite),
+        hidden_root(root, cpu),
+        generation_report_dir(root, normalize_cpu(cpu), suite=suite),
+    )
+    # Resolve symlinks before checking containment.
+    for target in targets:
+        real = Path(target).resolve()
+        if not real.is_relative_to(root) or real.is_relative_to(repo):
+            raise ValueError(f"{target} must stay under {root}")
+
+
 def hidden_root(hidden_dir: Path, cpu: str) -> Path:
     """Hidden descriptors and summary for cpu."""
     # The hidden dir mirrors a tester root.
