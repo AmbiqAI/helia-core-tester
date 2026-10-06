@@ -27,6 +27,7 @@ use).
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import os
 import subprocess
@@ -78,6 +79,25 @@ EXIT_USAGE, EXIT_ERROR = 2, 5
 def _fail(message: str, code: int = EXIT_USAGE) -> None:
     typer.echo(f"✗ {message}", err=True)
     sys.exit(code)
+
+
+def _bugs_exit_error(command):
+    """Unexpected errors exit 5, not 1."""
+
+    @functools.wraps(command)
+    def wrapper(*args, **kwargs):
+        import click
+
+        try:
+            return command(*args, **kwargs)
+        # Usage, refusal and normal exits.
+        except (click.exceptions.ClickException, click.exceptions.Exit, click.exceptions.Abort):
+            raise
+        except Exception:
+            traceback.print_exc()
+            sys.exit(EXIT_ERROR)
+
+    return wrapper
 
 
 def _verbosity(explicit: Optional[int]) -> int:
@@ -338,6 +358,7 @@ def probes_match(
 
 
 @hardware_app.command()
+@_bugs_exit_error
 def build(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
@@ -366,6 +387,7 @@ def build(
 
 
 @hardware_app.command()
+@_bugs_exit_error
 def flash(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     serial_no: Optional[int] = typer.Option(None, "--serial-no", help=_SERIAL_HELP),
@@ -403,6 +425,7 @@ def flash(
 
 
 @hardware_app.command(name="memory-report")
+@_bugs_exit_error
 def memory_report(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     build_dir: Optional[Path] = typer.Option(None, "--build-dir", help=_BUILD_DIR_HELP),
@@ -572,6 +595,7 @@ def _report(outcome, spec: BoardSpec, options, *, as_json: bool) -> None:
 
 
 @hardware_app.command()
+@_bugs_exit_error
 def stream(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     serial_no: Optional[int] = typer.Option(None, "--serial-no", help=_SERIAL_HELP),
@@ -639,6 +663,7 @@ def stream(
 
 
 @hardware_app.command()
+@_bugs_exit_error
 def run(
     board: Optional[str] = typer.Option(None, "--board", help=_BOARD_HELP),
     serial_no: Optional[int] = typer.Option(None, "--serial-no", help=_SERIAL_HELP),

@@ -452,3 +452,21 @@ def test_correctness_failure_exits_one(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(run_summary, "print_run_report", lambda *a, **k: True)
     result = runner.invoke(app, ["hardware", "run", "--skip-generate"])
     assert result.exit_code == 1 and "failed correctness" in _result_text(result)
+
+
+@pytest.mark.parametrize("where", ["preflight", "report"])
+def test_bugs_outside_the_pipeline_exit_five(monkeypatch, tmp_path, where) -> None:
+    """Exit 1 stays correctness only."""
+    from helia_core_tester.hardware import cli as hardware_cli, hardware_pipeline, run_summary
+
+    def _bug(*args, **kwargs):
+        raise KeyError("bug")
+
+    monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
+    outcome = hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[])
+    monkeypatch.setattr(hardware_pipeline, "run_hardware_pipeline", lambda *a, **k: outcome)
+    target = (hardware_cli, "_stream_options") if where == "preflight" else (run_summary, "print_run_report")
+    monkeypatch.setattr(*target, _bug)
+    result = runner.invoke(app, ["hardware", "run", "--skip-generate"])
+    text = _result_text(result)
+    assert result.exit_code == 5 and "KeyError: 'bug'" in text, text
