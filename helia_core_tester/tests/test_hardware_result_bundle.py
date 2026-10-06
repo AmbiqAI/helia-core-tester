@@ -109,9 +109,9 @@ def test_result_bundle_writer_emits_spec_artifacts(tmp_path: Path) -> None:
     assert (cases[0]["max_abs_diff"], cases[0]["diff_count"]) == (0.0, 0)
     # Per-case digests for --golden-from.
     record = json.loads((bundle_root / "correctness" / "abs_bundle.json").read_text())
-    assert record["input_sha256"] == cases[0]["input_sha256"] == input_digest(abs_bundle)
+    assert record["input_digest"] == cases[0]["input_digest"] == input_digest(abs_bundle)
     assert record["expected_output_sha256"] == abs_bundle.expected_output.sha256
-    assert cases[0]["input_sha256"] != cases[1]["input_sha256"]
+    assert cases[0]["input_digest"] != cases[1]["input_digest"]
     manifest = json.loads((bundle_root / "session_manifest.json").read_text())
     assert manifest["compare"] == {"strict": False, "golden_from": None, "golden_session_id": None}
 

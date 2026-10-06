@@ -821,7 +821,7 @@ def _write_golden(golden_dir: Path, bundle, *, output: bytes | None = None, **re
     (golden_dir / "correctness").mkdir(exist_ok=True)
     payload = blob_numpy(bundle.expected_output).tobytes() if output is None else output
     (golden_dir / "outputs" / f"{bundle.case_id}.bin").write_bytes(payload)
-    doc = {"passed": True, "input_sha256": input_digest(bundle), **record}
+    doc = {"passed": True, "input_digest": input_digest(bundle), **record}
     (golden_dir / "correctness" / f"{bundle.case_id}.json").write_text(json.dumps(doc))
 
 
@@ -897,7 +897,7 @@ def test_golden_from_refuses_other_inputs(tmp_path: Path, monkeypatch) -> None:
     bundles = _abs_bundles(tmp_path, "abs_same", "abs_moved")
     golden_dir = tmp_path / "past"
     _write_golden(golden_dir, bundles[0])
-    _write_golden(golden_dir, bundles[1], input_sha256="0" * 64)
+    _write_golden(golden_dir, bundles[1], input_digest="0" * 64)
     with pytest.raises(RuntimeError, match="Golden run used other inputs for: abs_moved$"):
         _stream_golden(tmp_path, monkeypatch, bundles, golden_dir)
 
@@ -905,7 +905,7 @@ def test_golden_from_refuses_other_inputs(tmp_path: Path, monkeypatch) -> None:
 def test_golden_from_needs_input_digest(tmp_path: Path, monkeypatch) -> None:
     (bundle,) = _abs_bundles(tmp_path, "abs_old")
     golden_dir = tmp_path / "past"
-    _write_golden(golden_dir, bundle, input_sha256=None)
+    _write_golden(golden_dir, bundle, input_digest=None)
     with pytest.raises(RuntimeError, match="Golden run has no input digest for: abs_old$"):
         _stream_golden(tmp_path, monkeypatch, [bundle], golden_dir)
 
@@ -925,7 +925,7 @@ def test_input_digest_ignores_golden(tmp_path: Path) -> None:
     from helia_core_tester.hardware.case_bundle import golden_bundle, input_digest
 
     (bundle,) = _abs_bundles(tmp_path, "abs_dig")
-    assert bundle.manifest["input_sha256"] == input_digest(bundle)
+    assert bundle.manifest["input_digest"] == input_digest(bundle)
     golden_dir = tmp_path / "past"
     _write_golden(golden_dir, bundle, output=bytes(bundle.expected_output.byte_length))
     assert input_digest(golden_bundle(bundle, golden_dir)) == input_digest(bundle)

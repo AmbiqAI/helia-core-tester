@@ -63,7 +63,7 @@ def test_bundle_order_bytes_and_per_case_defaults(abs_case, tmp_path):
         "descriptor_sha256", "operator", "family", "target_cpu", "kernel_id",
         "adapter_metadata_schema", "source", "serialized_scalar_parameters", "tensor_dtypes",
         "blob_roles", "expected_output", "correctness_comparison", "scratch_buffer",
-        "required_target_capabilities", "repeated_invocation_safe", "timing", "input_sha256",
+        "required_target_capabilities", "repeated_invocation_safe", "timing", "input_digest",
     ]
     assert first.input_blob.path.read_bytes() == struct.pack("<hh", -32768, 2)
     assert first.expected_output.path.read_bytes() == struct.pack("<hh", 32767, 2)

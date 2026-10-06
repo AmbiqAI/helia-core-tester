@@ -227,7 +227,7 @@ def write_result_bundle(
         inner = inner_symbol(timed_symbol, case.case_bundle.manifest, gate_1xn)
         rejection = _rejection_record(case)
         digests = {
-            "input_sha256": input_digest(case.case_bundle),
+            "input_digest": input_digest(case.case_bundle),
             "expected_output_sha256": case.case_bundle.expected_output.sha256,
         }
         counter_medians = compute_counter_medians(case.normalized_samples)

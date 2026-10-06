@@ -71,12 +71,12 @@ compare against the generated goldens does not work there, because 40 of 131
 s8 conv/depthwise cases differ from the TFLite goldens by 1 LSB on apollo510
 (ns-cmsis-nn v7.39.3; issue #220).
 
-Every bundle records a per-case `input_sha256` in `cases.json` and
+Every bundle records a per-case `input_digest` in `cases.json` and
 `correctness/<case>.json` (also in each `case_manifest.json`): the sha256 of
 everything streamed to the board except the expected output (input, weight,
 bias and quant blobs, scalar parameters, kernel id). Before flashing,
 `--golden-from` refuses a case that the baseline lacks, that the baseline run
-failed (unless `--golden-allow-failed`), whose baseline `input_sha256` differs
+failed (unless `--golden-allow-failed`), whose baseline `input_digest` differs
 or is absent (bundles from before this field must be rerun), or whose output is
 missing or wrong-sized. The session manifest's `compare` block records which
 mode ran, plus the baseline path (`golden_from`) and `golden_session_id`; each

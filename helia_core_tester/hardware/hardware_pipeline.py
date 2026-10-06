@@ -407,7 +407,7 @@ def golden_bundles(bundles: list, golden_dir: Path, *, allow_failed: bool) -> li
         _refuse("Golden run failed these cases", [i for i, r in records.items() if r.get("passed") is not True])
     # Status-only cases use no past output.
     judged = [b for b in bundles if b.expected_status_code is None]
-    digests = {b.case_id: records[b.case_id].get("input_sha256") for b in judged}
+    digests = {b.case_id: records[b.case_id].get("input_digest") for b in judged}
     _refuse("Golden run has no input digest for", [i for i, d in digests.items() if not d])
     _refuse("Golden run used other inputs for", [b.case_id for b in judged if digests[b.case_id] != input_digest(b)])
     _refuse(f"No usable golden output in {golden_dir} for", [b.case_id for b in bundles if not golden_usable(b, golden_dir)])

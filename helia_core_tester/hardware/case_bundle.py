@@ -314,7 +314,7 @@ def _write_manifest(case_root: Path, manifest: dict[str, Any]) -> Path:
             raise ValueError(
                 f"expected_output.{key}={expected.get(key)!r} does not match referenced blob {blob.get(key)!r}"
             )
-    manifest["input_sha256"] = _digest_inputs(manifest, manifest.get("blob_roles", []))
+    manifest["input_digest"] = _digest_inputs(manifest, manifest.get("blob_roles", []))
     manifest_path = case_root / "case_manifest.json"
     write_text_lf(manifest_path, json.dumps(manifest, indent=2))
     return manifest_path
