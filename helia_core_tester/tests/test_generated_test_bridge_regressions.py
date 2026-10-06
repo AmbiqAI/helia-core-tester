@@ -259,6 +259,23 @@ def test_packed_fc_scratch_holds_sums_and_stream(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("name", "scratch"),
+    [
+        # opt size 4464 + 64 sums.
+        ("depthwise_conv_entry_3x3_25x5_c64_s8", 4464 + 256),
+        # 3x3 size 3024 + 28 x 64 + 64 sums.
+        ("depthwise_conv_entry_3x3_28x28_c64_stride2_s8", 4816 + 256),
+        ("depthwise_conv_entry_3x3_c64_s1_14x28_s8", 4816 + 256),
+    ],
+)
+def test_3x3_entry_scratch_takes_larger_size(tmp_path: Path, name: str, scratch: int) -> None:
+    case, manifest = _bridge_entry(tmp_path, "ConvolutionFunctions", name)
+    assert manifest["scratch_buffer"]["bytes"] == scratch
+    (source,) = case.directory.glob("*.c")
+    assert _extract_define_int(source.read_text(), f"{name.upper()}_BUFFER_SIZE_MAX") >= scratch - 256
+
+
+@pytest.mark.parametrize(
     ("name", "wrapper"),
     [
         ("convolve_1x1_short_k8_12x12_co16_s8", "arm_convolve_wrapper_s8"),

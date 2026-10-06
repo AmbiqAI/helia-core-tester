@@ -3,7 +3,7 @@
     "repo": "AmbiqAI/helia-rt",
     "commit": "6291218ee5922453bef72e9b926112371973fd9e",
     "path": "tensorflow/lite/micro/kernels/helia",
-    "cmsis_nn": "v7.39.3"
+    "cmsis_nn": "v7.40.0"
   },
   "entry_points": [
     "arm_add_s16",

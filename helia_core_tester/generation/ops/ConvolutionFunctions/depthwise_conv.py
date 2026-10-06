@@ -15,6 +15,7 @@ from helia_core_tester.generation.kernel_dispatch import (
     DEPTHWISE_CONV_S8_PLANAR_RULE,
     autovectorize_declines_if,
     check_entry_fault,
+    entry_scratch_bytes,
     resolve_depthwise_conv_kernel,
     resolve_direct_entry,
 )
@@ -995,6 +996,7 @@ class OpDepthwiseConv(OperationBase):
             input_dims, filter_dims, output_dims,
             output_dtype=activation_dtype
         )
+        buffer_size_max = max(buffer_size_max, entry_scratch_bytes(self.desc.get("entry"), input_dims))
         
         
         # Build template context
@@ -1025,6 +1027,7 @@ class OpDepthwiseConv(OperationBase):
             'takes_weight_sum_ctx': kernel_info["kernel_fn"] == "arm_depthwise_conv_wrapper_s8"
             or bool(kernel_info.get("direct_entry")),
             'direct_entry': bool(kernel_info.get("direct_entry")),
+            'entry_buffer_size_fn': kernel_info.get("entry_buffer_size_fn"),
             'expected_status': self.expected_status(),
             'planar_supported': self.desc.get("planar_supported"),
             'planar_rule_fn': DEPTHWISE_CONV_S8_PLANAR_RULE,
