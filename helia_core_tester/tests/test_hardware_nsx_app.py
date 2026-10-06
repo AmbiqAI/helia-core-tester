@@ -363,5 +363,7 @@ def test_placement_is_a_saved_option(tmp_path: Path) -> None:
     app_dir = tmp_path / "app"
     app_dir.mkdir()
     nsx_app.save_options(app_dir, options)
-    assert nsx_app.resolve_options(app_dir, tmp_path).placement == "mram"
-    assert nsx_app.resolve_options(app_dir, tmp_path, placement="tcm").placement == "tcm"
+    # Only a passed placement or the flashed build.
+    assert nsx_app.resolve_options(app_dir, tmp_path).placement == "tcm"
+    assert nsx_app.resolve_options(app_dir, tmp_path, placement="mram").placement == "mram"
+    assert nsx_app.resolve_options(app_dir, tmp_path, follow_pin=False).placement == "mram"

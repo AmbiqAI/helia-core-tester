@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib.util
 import csv
+import dataclasses
 import json
 import struct
 from datetime import datetime, timedelta
@@ -724,7 +725,9 @@ def test_run_generates_from_the_saved_kernels(tmp_path: Path, monkeypatch) -> No
         lambda *a, **k: hardware_pipeline.HardwareRunOutcome(session_id="s", result=None, bundle=tmp_path, skipped=[]),
     )
     run_hardware_pipeline(tmp_path, BOARD, SERIAL, options=StreamOptions(), build_dir=build_dir, echo=lambda _msg: None)
-    assert seen == {"stage": saved, "generate": saved.cmsis_nn_root, "flash": saved}
+    # Saved kernels, default switches.
+    wanted = dataclasses.replace(saved, requantize_inline_asm=True)
+    assert seen == {"stage": wanted, "generate": saved.cmsis_nn_root, "flash": wanted}
 
 
 def _skip_coverage(monkeypatch) -> None:

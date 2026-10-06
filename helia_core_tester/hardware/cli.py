@@ -27,6 +27,7 @@ use).
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import functools
 import json
 import os
@@ -184,14 +185,11 @@ _CMSIS_NN_ROOT_HELP = (
 _PLACEMENT_HELP = (
     "Operand memory: tcm (one workspace: DTCM on Apollo5, SRAM on Apollo3P) "
     "or mram (weights and bias in cached MRAM, evicted before each call; "
-    "activations and scratch in DTCM). Default: the last build's, else tcm."
+    "activations and scratch in DTCM). Default: tcm."
 )
 _JOBS_HELP = "Parallel build jobs (default: CPU count + 2, like ninja)."
 _UPDATE_DEPS_HELP = "Re-resolve NSX modules and rewrite nsx.lock before building."
-_INLINE_ASM_HELP = (
-    "Build requantize with or without inline assembly (default: the last "
-    "build's setting in this build dir, else on)."
-)
+_INLINE_ASM_HELP = "Build requantize with or without inline assembly (default: on)."
 
 
 def _check_placement(placement, spec: BoardSpec) -> None:
@@ -240,7 +238,7 @@ def _app_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, place
     return options
 
 
-def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None):
+def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement=None, stream_only=False):
     """The flashed build's options, unchanged."""
     from .firmware_build import nsx_app_dir
     from .nsx_app import AppRenderError, resolve_options, saved_options
@@ -257,7 +255,11 @@ def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, pla
             placement=placement, follow_pin=False,
         )
     except AppRenderError as exc:
-        _fail(f"{exc}; pass --skip-generate to stream only.", EXIT_REFUSED)
+        if not stream_only:
+            _fail(f"{exc}; pass --skip-generate to stream only.", EXIT_REFUSED)
+        # Streaming never reads the checkout.
+        passed = {"requantize_inline_asm": inline_asm, "placement": placement}
+        wanted = dataclasses.replace(saved, **{k: v for k, v in passed.items() if v is not None})
     # Generation must match the flashed firmware.
     changes = wanted.changes_from(saved)
     if changes:
@@ -719,9 +721,9 @@ def run(
     # Neither builds nor generates: nothing to resolve.
     streams_only = skip_generate and skip_flash
     if streams_only:
-        # A passed placement must match the build.
-        if placement is not None:
-            _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
+        # Passed build flags must match it.
+        if any(flag is not None for flag in (cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)):
+            _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement, stream_only=True)
         app_options = None
     elif skip_flash:
         app_options = _built_options(build_dir, cmsis_nn_ref, cmsis_nn_root, inline_asm, placement)
