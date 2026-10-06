@@ -47,15 +47,16 @@ def _bundle(root: Path, name: str, *, cycles: dict | None = None, rows: dict | N
                            "modules": [{"name": "nsx-cmsis-nn", "commit": "a"}], "kernels": {"tree_hash": None}},
     }
     (path / "session_manifest.json").write_text(json.dumps(manifest))
-    (path / "cases.json").write_text(json.dumps([{"case_id": c, "input_digest": d} for c, d in (digests or {}).items()]))
+    digests = {c: f"sha256:{c}" for c in CASES} | (digests or {})
+    (path / "cases.json").write_text(json.dumps([{"case_id": c, "input_digest": d} for c, d in digests.items() if d]))
     return path
 
 
-def _score(baselines: list[Path], candidates: list[Path], **settings) -> dict:
+def _score(baselines: list[Path], candidates: list[Path], check: dict | None = None, **settings) -> dict:
     """Score with the gain gate off."""
     scoring = load_scoring("apollo510_evb") | {"min_score": -math.inf}
     scoring.update(settings)
-    return score_bundles([load_bundle(p) for p in baselines], [load_bundle(p) for p in candidates], scoring)
+    return score_bundles([load_bundle(p) for p in baselines], [load_bundle(p) for p in candidates], scoring, check)
 
 
 def _kinds(report: dict) -> set[str]:
@@ -117,8 +118,15 @@ def test_input_digest_mismatch_fails(tmp_path):
     base = _bundle(tmp_path, "a", digests={"conv_a": "sha256:1"})
     report = _score([base], [_bundle(tmp_path, "b", digests={"conv_a": "sha256:2"})])
     assert [(f["kind"], f["case_id"]) for f in report["failures"]] == [("input_digest", "conv_a")]
-    # One side only: nothing to check.
-    assert _score([base], [_bundle(tmp_path, "c")])["verdict"] == "pass"
+
+
+@pytest.mark.parametrize("side", ["baseline", "candidate"])
+def test_missing_input_digest_fails(tmp_path, side):
+    bare = {"conv_a": None}
+    base = _bundle(tmp_path, "a", digests=bare if side == "baseline" else None)
+    cand = _bundle(tmp_path, "b", digests=bare if side == "candidate" else None)
+    report = _score([base], [cand])
+    assert [(f["kind"], f["case_id"]) for f in report["failures"]] == [("input_digest", "conv_a")]
 
 
 def test_regression_past_floor_fails(tmp_path):
@@ -168,11 +176,11 @@ def test_retired_deltas_reported(tmp_path):
 ])
 def test_cli_json_and_exit_codes(tmp_path, change, code, verdict):
     base, cand = _bundle(tmp_path, "a"), _bundle(tmp_path, "b", **change)
-    result = CliRunner().invoke(app, ["score", str(base), "--candidate", str(cand), "--json"])
+    result = CliRunner().invoke(app, ["score", str(base), "--candidate", str(cand), "--no-check", "--json"])
     assert result.exit_code == code, result.output
     report = json.loads(result.output)
     assert (report["schema"], report["schema_version"], report["verdict"]) == ("hct.score", 1, verdict)
-    table = CliRunner().invoke(app, ["score", str(base), "--candidate", str(cand)])
+    table = CliRunner().invoke(app, ["score", str(base), "--candidate", str(cand), "--no-check"])
     assert f"== {verdict.upper()}" in table.output
 
 
@@ -233,9 +241,7 @@ def test_non_finite_or_zero_candidate_cycles_fail(tmp_path, cycles):
     assert conv["candidate_cycles"] in (None, 0.0) and not conv["eligible"]
 
 
-def test_one_sided_repeat_digests_not_compared(tmp_path):
-    bases = [_bundle(tmp_path, f"a{i}", digests={"conv_a": "sha256:1"}) for i in range(2)]
-    assert _score(bases, [_bundle(tmp_path, "b")])["verdict"] == "pass"
+def test_repeat_digests_must_agree(tmp_path):
     mixed = [_bundle(tmp_path, "c0", digests={"conv_a": "sha256:1"}), _bundle(tmp_path, "c1", digests={"conv_a": "sha256:2"})]
     report = _score(mixed, [_bundle(tmp_path, "d")])
     assert [(f["kind"], f["reason"]) for f in report["failures"]] == [("input_digest", "inputs differ between repeats")]
@@ -244,7 +250,7 @@ def test_one_sided_repeat_digests_not_compared(tmp_path):
 @pytest.mark.parametrize("flag", ["--min-score", "--floor-pct", "--mad-k"])
 def test_cli_refuses_non_finite_settings(tmp_path, flag):
     base, cand = _bundle(tmp_path, "a"), _bundle(tmp_path, "b")
-    result = CliRunner().invoke(app, ["score", str(base), "--candidate", str(cand), flag, "nan"])
+    result = CliRunner().invoke(app, ["score", str(base), "--candidate", str(cand), "--no-check", flag, "nan"])
     assert result.exit_code == 2 and "must be finite" in result.output
 
 
@@ -270,3 +276,64 @@ def test_candidate_goldens_must_come_from_baseline(tmp_path):
     report = _score([base], [_with_compare(_bundle(tmp_path, "b"), True, "elsewhere")])
     assert report["verdict"] == "not_comparable" and "not a baseline" in report["failures"][0]["reason"]
 
+
+
+TREE, BASE = "sha256:cand", "c" * 40
+
+
+def _trusted(root: Path, name: str, tree: str, strict: bool = True, dirty: bool = True, **kwargs) -> Path:
+    """A bundle built from a clean or dirty tree."""
+    kernels = {"root_head": BASE, "root_dirty": dirty, "tree_hash": tree}
+    path = _bundle(root, name, build={"options": {}, "kernels": kernels}, **kwargs)
+    return _with_compare(path, strict, "a" if strict else None)
+
+
+def _check(**change) -> dict:
+    return {"schema": "hct.candidate_check", "ok": True, "tree_hash": TREE, "base_commit": BASE} | change
+
+
+@pytest.mark.parametrize(("check", "reason"), [
+    (_check(), None),
+    (_check(ok=False), "did not pass"),
+    (_check(tree_hash=None), "lacks tree_hash"),
+    (_check(tree_hash="sha256:other"), "tree hash"),
+    (_check(base_commit="d" * 40), "kernel commit"),
+    (_check(schema="other"), "wrong schema"),
+])
+def test_check_ties_score_to_tree(tmp_path, check, reason):
+    base = _trusted(tmp_path, "a", "sha256:base", strict=False, dirty=False)
+    cand = _trusted(tmp_path, "b", TREE, cycles={"conv_a": 800.0})
+    report = _score([base], [cand], check)
+    if reason is None:
+        assert report["verdict"] == "pass" and report["settings"]["check"] == {"tree_hash": TREE, "base_commit": BASE}
+    else:
+        assert report["verdict"] == "not_comparable" and reason in report["failures"][0]["reason"]
+
+
+def test_check_refuses_dirty_baseline(tmp_path):
+    base = _trusted(tmp_path, "a", "sha256:dirty", strict=False)
+    cand = _trusted(tmp_path, "b", TREE)
+    report = _score([base], [cand], _check())
+    assert [f["reason"] for f in report["failures"]] == [f"a: kernel commit None != check base {BASE}"]
+
+
+def test_check_refuses_tolerant_candidate(tmp_path):
+    base = _trusted(tmp_path, "a", "sha256:base", strict=False, dirty=False)
+    cand = _trusted(tmp_path, "b", TREE, strict=False)
+    report = _score([base], [cand], _check())
+    assert report["verdict"] == "not_comparable" and "tolerant compare" in report["failures"][0]["reason"]
+
+
+def test_cli_needs_check_or_opt_out(tmp_path):
+    base = _trusted(tmp_path, "a", "sha256:base", strict=False, dirty=False)
+    cand = _trusted(tmp_path, "b", TREE, cycles={"conv_a": 800.0})
+    argv = ["score", str(base), "--candidate", str(cand)]
+    assert CliRunner().invoke(app, argv).exit_code == 2
+    report = tmp_path / "check.json"
+    report.write_text(json.dumps(_check()))
+    assert CliRunner().invoke(app, [*argv, "--check", str(report), "--no-check"]).exit_code == 2
+    assert CliRunner().invoke(app, [*argv, "--check", str(report)]).exit_code == 0
+    report.write_text(json.dumps(_check(ok=False)))
+    assert CliRunner().invoke(app, [*argv, "--check", str(report)]).exit_code == 3
+    report.write_text("[")
+    assert CliRunner().invoke(app, [*argv, "--check", str(report)]).exit_code == 2
