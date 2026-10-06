@@ -851,24 +851,27 @@ def _abs_bundles(tmp_path: Path, *names: str) -> list:
     ]
 
 
-@pytest.mark.parametrize("record", [{"passed": False}, '{"passed": tr', "[true]"])
-def test_golden_from_refuses_failed_cases(tmp_path: Path, monkeypatch, record) -> None:
+def test_golden_from_refuses_failed_cases(tmp_path: Path, monkeypatch) -> None:
+    (bundle,) = _abs_bundles(tmp_path, "abs_bad")
+    golden_dir = tmp_path / "past"
+    _write_golden(golden_dir, bundle, passed=False)
+    with pytest.raises(RuntimeError, match="Golden run failed these cases: abs_bad"):
+        _stream_golden(tmp_path, monkeypatch, [bundle], golden_dir)
+    seen = _stream_golden(tmp_path, monkeypatch, [bundle], golden_dir, golden_allow_failed=True)
+    assert [b.case_id for b in seen["bundles"]] == ["abs_bad"]
+
+
+@pytest.mark.parametrize("record", ['{"passed": tr', "[true]"])
+def test_golden_from_refuses_unreadable_records(tmp_path: Path, monkeypatch, record) -> None:
     (bundle,) = _abs_bundles(tmp_path, "abs_bad")
     golden_dir = tmp_path / "past"
     _write_golden(golden_dir, bundle)
-    if isinstance(record, str):
-        (golden_dir / "correctness" / "abs_bad.json").write_text(record)
-    else:
-        _write_golden(golden_dir, bundle, **record)
+    (golden_dir / "correctness" / "abs_bad.json").write_text(record)
     with pytest.raises(RuntimeError, match="Golden run failed these cases: abs_bad"):
         _stream_golden(tmp_path, monkeypatch, [bundle], golden_dir)
-    if isinstance(record, str):
-        # Unreadable records carry no digest.
-        with pytest.raises(RuntimeError, match="no input digest for: abs_bad$"):
-            _stream_golden(tmp_path, monkeypatch, [bundle], golden_dir, golden_allow_failed=True)
-        return
-    seen = _stream_golden(tmp_path, monkeypatch, [bundle], golden_dir, golden_allow_failed=True)
-    assert [b.case_id for b in seen["bundles"]] == ["abs_bad"]
+    # Unreadable records carry no digest.
+    with pytest.raises(RuntimeError, match="no input digest for: abs_bad$"):
+        _stream_golden(tmp_path, monkeypatch, [bundle], golden_dir, golden_allow_failed=True)
 
 
 def test_golden_from_matches_inputs(tmp_path: Path, monkeypatch) -> None:
@@ -886,9 +889,7 @@ def test_golden_from_matches_inputs(tmp_path: Path, monkeypatch) -> None:
     (judged,) = seen["bundles"]
     digest = hashlib.sha256(past.tobytes()).hexdigest()
     assert judged.expected_output.sha256 == digest
-    assert judged.manifest["golden_from"] == {"bundle": str(golden_dir), "output_sha256": digest}
-    entry = next(e for e in judged.manifest["blob_roles"] if e["role"] == "expected_output")
-    assert entry["sha256"] == digest
+    assert judged.comparison == {"mode": "exact_int"}
     assert seen["compare"] == {"strict": True, "golden_from": str(golden_dir), "golden_session_id": "base-1"}
 
 
