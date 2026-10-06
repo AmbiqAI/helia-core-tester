@@ -317,7 +317,7 @@ def test_stream_requires_the_build_id_stamp_unless_allowed(monkeypatch, tmp_path
 
 @pytest.mark.parametrize("command", ["build", "flash", "run"])
 def test_inline_asm_flag_is_tri_state(monkeypatch, tmp_path, command) -> None:
-    """Unset reuses the build dir's saved setting."""
+    """Unset builds the default, not the saved setting."""
     from helia_core_tester.hardware import firmware_build, hardware_pipeline, nsx_app
 
     monkeypatch.setenv("HPX_JLINK_SERIAL", "1")
@@ -335,7 +335,7 @@ def test_inline_asm_flag_is_tri_state(monkeypatch, tmp_path, command) -> None:
     built = nsx_app.AppOptions(cmsis_nn_ref="v9", cmsis_nn_ref_explicit=True, requantize_inline_asm=False)
     nsx_app.save_options(app_dir, built)
     base = ["hardware", command, "--build-dir", str(tmp_path)]
-    for flags, inline_asm in (([], False), (["--inline-asm"], True), (["--no-inline-asm"], False)):
+    for flags, inline_asm in (([], True), (["--inline-asm"], True), (["--no-inline-asm"], False)):
         runner.invoke(app, base + flags)
         assert seen["options"] == dataclasses.replace(built, requantize_inline_asm=inline_asm), flags
 

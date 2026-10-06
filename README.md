@@ -115,9 +115,12 @@ checkout, or for a ref the clone NSX syncs into `nsx_app/modules/ns-cmsis-nn`.
 `--no-inline-asm` builds requantize without inline assembly (`--inline-asm`
 turns it back on); `--update-dependencies` re-resolves the NSX modules into
 `nsx.lock`. Each build saves its kernel options in `nsx_app/.hct-options.json`.
-`hardware build`, `flash` and `run` reuse them for any kernel flag you leave
-out, so a bare `hardware flash` flashes what `hardware build` built. A flag that
-differs from the saved options rebuilds and prints one line naming the change. A
+`hardware build`, `flash` and `run` reuse the saved kernel source
+(`--cmsis-nn-root` or `--cmsis-nn-ref`) when you leave it out. Switches
+(`--inline-asm`, `--placement`) do not persist: an unpassed switch builds its
+default, so pass the same switches to `build` and `flash`. An option that
+differs from the saved build rebuilds and prints one line naming the change.
+`--skip-flash` keeps the flashed build's options and refuses a different flag. A
 saved ref you did not pass with `--cmsis-nn-ref` follows the pinned release, so
 a pin bump rebuilds those build dirs the same way. Every build, flash, run and
 stream prints the kernel source, inline asm setting and placement.

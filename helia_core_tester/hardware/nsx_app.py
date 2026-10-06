@@ -208,9 +208,19 @@ def resolve_options(
     inline_asm: Optional[bool] = None,
     placement: Optional[str] = None,
     follow_pin: bool = True,
+    keep_switches: bool = False,
 ) -> AppOptions:
-    """Given flags win, then saved, then defaults."""
+    """Flags win; kernel source then saved, switches then defaults.
+
+    keep_switches keeps the saved switches too, for the flashed build.
+    """
     saved = saved_options(app_dir)
+    if saved and not keep_switches:
+        # Unpassed switches reset each build.
+        saved = AppOptions(
+            cmsis_nn_ref=saved.cmsis_nn_ref, cmsis_nn_ref_explicit=saved.cmsis_nn_ref_explicit,
+            cmsis_nn_root=saved.cmsis_nn_root,
+        )
     base = saved or AppOptions(cmsis_nn_root=nested_kernel_root(repo_root))
     if cmsis_nn_ref or cmsis_nn_root:
         base = dataclasses.replace(

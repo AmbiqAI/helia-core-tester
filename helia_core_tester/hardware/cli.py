@@ -146,14 +146,11 @@ _CMSIS_NN_ROOT_HELP = (
 _PLACEMENT_HELP = (
     "Operand memory: tcm (one workspace: DTCM on Apollo5, SRAM on Apollo3P) "
     "or mram (weights and bias in cached MRAM, evicted before each call; "
-    "activations and scratch in DTCM). Default: the last build's, else tcm."
+    "activations and scratch in DTCM). Default: tcm."
 )
 _JOBS_HELP = "Parallel build jobs (default: CPU count + 2, like ninja)."
 _UPDATE_DEPS_HELP = "Re-resolve NSX modules and rewrite nsx.lock before building."
-_INLINE_ASM_HELP = (
-    "Build requantize with or without inline assembly (default: the last "
-    "build's setting in this build dir, else on)."
-)
+_INLINE_ASM_HELP = "Build requantize with or without inline assembly (default: on)."
 
 
 def _check_placement(placement, spec: BoardSpec) -> None:
@@ -216,7 +213,7 @@ def _built_options(build_dir: Path, cmsis_nn_ref, cmsis_nn_root, inline_asm, pla
     try:
         wanted = resolve_options(
             app_dir, repo_root(), cmsis_nn_ref=cmsis_nn_ref, cmsis_nn_root=cmsis_nn_root, inline_asm=inline_asm,
-            placement=placement, follow_pin=False,
+            placement=placement, follow_pin=False, keep_switches=True,
         )
     except AppRenderError as exc:
         _fail(f"{exc}; pass --skip-generate to stream only.")
