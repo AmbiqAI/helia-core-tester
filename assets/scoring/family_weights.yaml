@@ -3,7 +3,7 @@
 # Bump `version` whenever a weight or rule changes.
 schema: hct.scoring.family_weights
 schema_version: 2
-version: 1
+version: 2
 # First match on the timed symbol wins.
 families:
   - {name: depthwise, match: depthwise}
