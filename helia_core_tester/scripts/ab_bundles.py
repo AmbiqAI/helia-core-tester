@@ -10,6 +10,9 @@ overflow, valid_for_regression=false or a correctness mismatch are
 reported but excluded from gating; a pair with no unflagged shared
 case fails outright. A gated counter that is empty on
 one side only, or non-finite on either side, counts as a violation.
+A case that passed in A but mismatches in B, or a case missing
+from B, also fails the run unless --allow-regressions is set
+(harness-only work).
 """
 
 from __future__ import annotations
@@ -81,7 +84,20 @@ def _section(title: str, entries: list[str]) -> list[str]:
     return ["", f"== {title} ({len(entries)})", *(f"  {entry}" for entry in entries)] if entries else []
 
 
-def compare(a: Bundle, b: Bundle, counters: list[str], *, retired_limit: float, cycle_limit: float | None) -> tuple[list[str], int]:
+def find_regressions(a: Bundle, b: Bundle) -> list[str]:
+    """Cases B broke or dropped."""
+    dropped = [f"{case_id} missing in B" for case_id in a.rows if case_id not in b.rows]
+    broken = [
+        f"{case_id} mismatch in B only"
+        for case_id in a.rows
+        if case_id in b.rows and "mismatch" in b.flags(case_id) and "mismatch" not in a.flags(case_id)
+    ]
+    return broken + dropped
+
+
+def compare(
+    a: Bundle, b: Bundle, counters: list[str], *, retired_limit: float, cycle_limit: float | None, allow_regressions: bool = False
+) -> tuple[list[str], int]:
     """Return report lines and exit status."""
     lines = [f"A: {a.session_id}", f"B: {b.session_id}", ""]
     shared = [case_id for case_id in a.rows if case_id in b.rows]
@@ -128,6 +144,7 @@ def compare(a: Bundle, b: Bundle, counters: list[str], *, retired_limit: float, 
     lines += _section("cases only in B", [c for c in b.rows if c not in a.rows])
     lines += _section("flagged, not gated", flagged)
 
+    regressions = [] if allow_regressions else find_regressions(a, b)
     lines.append("")
     if not shared:
         lines.append("== FAIL: no shared cases")
@@ -135,9 +152,13 @@ def compare(a: Bundle, b: Bundle, counters: list[str], *, retired_limit: float, 
     if not eligible:
         lines.append("== FAIL: every shared case is flagged")
         return lines, 1
+    if regressions:
+        lines.append(f"== FAIL: {len(regressions)} cases regressed in B")
+        lines.extend(f"  {entry}" for entry in regressions)
     if violations:
         lines.append(f"== FAIL: {len(violations)} counter deltas over limit")
         lines.extend(f"  {entry}" for entry in violations)
+    if regressions or violations:
         return lines, 1
     lines.append(f"== PASS: {eligible} eligible cases within limits")
     return lines, 0
@@ -172,6 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--counter", action="append", dest="counters", metavar="NAME", help="Counter to compare (repeatable); default: all shared.")
     parser.add_argument("--max-delta-pct", type=parse_limit, default=0.0, help="Limit for *_RETIRED counters (default 0).")
     parser.add_argument("--max-cycle-delta-pct", type=parse_limit, default=None, help="Limit for every other counter (default none).")
+    parser.add_argument("--allow-regressions", action="store_true", help="Do not fail on new mismatches or dropped cases.")
     return parser
 
 
@@ -179,7 +201,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     bundle_a, bundle_b = load_bundle(args.bundle_a), load_bundle(args.bundle_b)
     counters = select_counters(bundle_a, bundle_b, args.counters)
-    lines, status = compare(bundle_a, bundle_b, counters, retired_limit=args.max_delta_pct, cycle_limit=args.max_cycle_delta_pct)
+    lines, status = compare(
+        bundle_a, bundle_b, counters, retired_limit=args.max_delta_pct, cycle_limit=args.max_cycle_delta_pct, allow_regressions=args.allow_regressions
+    )
     print("\n".join(lines))
     return status
 
