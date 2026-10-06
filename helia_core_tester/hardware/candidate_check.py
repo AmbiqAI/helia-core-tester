@@ -18,6 +18,9 @@ Include/, nothing else. Rules, each a finding in the JSON report:
 - harness_reference: added lines naming harness or golden internals.
 - include_escape: #include with an absolute path, "..", or a macro;
   .incbin and .include in assembly.
+- build_probe: #line, line markers, __has_include and macros the
+  build flags set (__OPTIMIZE__, __FAST_MATH__), which can hide code
+  from the gcc -E scan.
 - hidden_index_entry: any path flagged skip-worktree or
   assume-unchanged, which git diff and status would skip.
 - guard_change: an added or removed #if/#ifdef/#else/#define/#undef
@@ -25,7 +28,9 @@ Include/, nothing else. Rules, each a finding in the JSON report:
   enable.
 
 Rules also run on text with adjacent string literals joined, per line
-and over all added lines of a file, as C joins them before asm sees them.
+and over all added lines of a file, as C joins them before asm sees them,
+and on text with `##` pastes joined. candidate_scan then reruns the
+rules on `gcc -E` output of base and candidate.
 
 Literal tensor shapes from descriptors are not grepped: too many false
 hits on common dims. Trees the build copies (Source, Include, cmake, nsx)
@@ -44,11 +49,13 @@ import os
 import re
 import subprocess
 from collections import Counter
+from functools import partial
 from pathlib import Path
 from typing import Iterator, Optional
 
 import typer
 
+from .candidate_scan import preprocess_findings
 from .nsx_app import KERNEL_TREES
 
 ALLOWED_DIRS = ("Source/", "Include/")
@@ -67,15 +74,16 @@ SAFE_ATTRIBUTES = frozenset((
     "always_inline", "noinline", "noipa", "unused", "maybe_unused", "aligned", "packed", "fallthrough",
     "const", "pure", "nonnull", "may_alias", "inline",
 ))
-_ATTRIBUTE = re.compile(r"__attribute__\s*\(\((.*?)\)\)|\[\[(.*?)\]\]")
+_ATTRIBUTE = re.compile(r"__attribute(?:__)?\s*\(\s*\((.*?)\)\s*\)|\[\[(.*?)\]\]", re.DOTALL)
 _ADJACENT_LITERALS = re.compile(r'"\s*"')
+_PASTE = re.compile(r"\s*##\s*")
 _ESCAPE = re.compile(r"\\([0-7]{1,3}|[xX][0-9a-fA-F]+)")
 _ATTRIBUTE_HINT = re.compile(r"__attribute|__declspec|\[\[")
 # "%:" is the "#" digraph.
 _PRAGMA = re.compile(r"(?:#|%:)\s*pragma|_Pragma|__pragma")
 # Checked per occurrence; _Pragma is never safe.
 _SAFE_PRAGMA = re.compile(r"(?:#|%:)\s*pragma\s+(?:once|GCC\s+unroll\s+\d+|GCC\s+diagnostic\b)")
-_COMMENT = re.compile(r"/\*.*?\*/|//.*$")
+_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
 _GUARD = re.compile(r"^\s*(?:#|%:)\s*(?:if|ifdef|ifndef|elif|elifdef|elifndef|else|endif|define|undef)\b")
 LINE_RULES = (
     ("special_section", re.compile(
@@ -84,6 +92,8 @@ LINE_RULES = (
     ("measurement_access", re.compile(
         r"\b(?:DWT|CoreDebug|DCB|SysTick|ITM|TPI|NVIC|SCB|PMU|MEMSYSCTL|CYCCNT)\b|\bARM_PMU_|\bam_hal_"
         r"|__(?:disable|enable)_(?:irq|fault_irq)|__WF[IE]\b|__set_(?:BASEPRI|PRIMASK|FAULTMASK)"
+        # SCS addresses: 0xE0000000-0xE00FFFFF.
+        r"|\b0[xX]0*[eE]00[0-9a-fA-F]{5}(?![0-9a-fA-F])|\b375[89]\d{6}(?!\d)"
         # Same, as assembly.
         r"|(?i:\bcpsi[de]\b|\bmsr\s+(?:primask|basepri(?:_max)?|faultmask|control)\b|\bwf[ie]\b)",
     )),
@@ -91,7 +101,12 @@ LINE_RULES = (
         r"golden|\bhct_|\bhctp|benchmark_server|unittest|RefactoredTestGen", re.IGNORECASE,
     )),
     ("include_escape", re.compile(r'(?:#|%:)\s*include\s*(?:["<](?:/|[^">]*\.\.)|[^"<\s])|\.(?:incbin|include)\b')),
+    ("build_probe", re.compile(
+        r"(?:^|\n)\s*(?:#|%:)\s*(?:line\b|\d)|__has_include|__OPTIMIZE(?:_SIZE)?__|__FAST_MATH__|__NO_INLINE__",
+    )),
 )
+# An empty tar: 1024 zero bytes.
+_EMPTY_TAR = bytes(1024)
 # Ignore user and system git config.
 _GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_NO_REPLACE_OBJECTS": "1"}
 
@@ -247,17 +262,17 @@ def _unsafe_attribute(text: str) -> bool:
 def line_rules(text: str) -> Iterator[str]:
     """Rule names one added line hits."""
     seen = set()
-    # C joins adjacent string literals.
-    for variant in (text, _literal_text(text)):
+    # C joins literals and pasted tokens.
+    for variant in (text, _literal_text(text), _PASTE.sub("", text)):
         for rule in _raw_rules(variant):
             if rule not in seen:
                 seen.add(rule)
                 yield rule
 
 
-def _literal_text(text: str) -> str:
+def _literal_text(text: str, comments: bool = True) -> str:
     """Text as the compiler sees literals."""
-    joined = _ADJACENT_LITERALS.sub("", _COMMENT.sub(" ", text))
+    joined = _ADJACENT_LITERALS.sub("", _COMMENT.sub(" ", text) if comments else text)
     return _ESCAPE.sub(_unescape, joined)
 
 
@@ -286,14 +301,19 @@ def _grandfathered(tree: Path, path: str) -> bool:
     return any(next(line_rules(text), None) for text in joined.values())
 
 
-def rule_counts(source: str) -> Counter:
-    """Rule matches over a whole file."""
+def rule_counts(source: str, preprocessed: bool = False) -> Counter:
+    """Rule matches over a whole file.
+
+    Preprocessed text has no comments: a "//" literal stays.
+    """
     lines = source.splitlines()
-    text = _literal_text(" ".join(line[:-1] if line.endswith("\\") else line for line in lines))
+    text = _literal_text("\n".join(line[:-1] if line.endswith("\\") else line for line in lines), not preprocessed)
     counts: Counter = Counter()
-    counts["attribute"] = sum(_unsafe_attribute("".join(groups).join(("__attribute__((", "))")))
-                              for groups in _ATTRIBUTE.findall(text))
-    code = _COMMENT.sub(" ", text)
+    found = _ATTRIBUTE.findall(text)
+    # Unparsed attribute spellings count as unsafe.
+    counts["attribute"] = sum(_unsafe_attribute("".join(groups).join(("__attribute__((", "))"))) for groups in found)
+    counts["attribute"] += max(0, len(_ATTRIBUTE_HINT.findall(text)) - len(found))
+    code = text if preprocessed else _COMMENT.sub(" ", text)
     counts["pragma"] = sum(not _SAFE_PRAGMA.match(code, hit.start()) for hit in _PRAGMA.finditer(code))
     for rule, pattern in LINE_RULES:
         counts[rule] += len(pattern.findall(text))
@@ -348,6 +368,10 @@ def check_candidate(tree: Path, base: str) -> dict:
                          for rule in sorted(after) if after[rule] > before[rule] and rule not in hit_rules)
     findings += ({"rule": "hidden_index_entry", "path": path, "message": "skip-worktree or assume-unchanged set"}
                  for path in hidden_entries(tree))
+    if any(path.startswith(ALLOWED_DIRS) for path in changes):
+        tops = sorted({path.split("/", 1)[0] + "/" for path in base_blobs if path.startswith(ALLOWED_DIRS)})
+        archive = _git(tree, "archive", commit, "--", *tops) if tops else _EMPTY_TAR
+        findings += preprocess_findings(tree, archive, partial(rule_counts, preprocessed=True))
     return {
         "schema": "hct.candidate_check",
         "schema_version": 1,

@@ -12,7 +12,7 @@ import pytest
 from typer.testing import CliRunner
 
 from helia_core_tester.cli import app
-from helia_core_tester.hardware import boards, firmware_build, harness_lock
+from helia_core_tester.hardware import boards, candidate_check, firmware_build, harness_lock
 from helia_core_tester.hardware.candidate_check import check_candidate
 from helia_core_tester.hardware.firmware_build import nsx_app_dir
 from helia_core_tester.hardware.nsx_app import AppOptions, kernel_dir, save_options
@@ -21,6 +21,12 @@ from helia_core_tester.hardware.session import SessionResult
 
 runner = CliRunner()
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+
+
+@pytest.fixture(autouse=True)
+def _line_rules_only(monkeypatch) -> None:
+    """test_candidate_scan covers gcc -E."""
+    monkeypatch.setattr(candidate_check, "preprocess_findings", lambda *args: [])
 
 LOCK = """schema_version: 4
 targets:
@@ -238,6 +244,15 @@ def test_source_change_passes(kernels: Path) -> None:
     ("Source/Conv/a.c", "#pragma GCC optimize(\"O3\")\n", "pragma"),
     ("Source/Conv/a.c", '_Pragma("GCC optimize(\\"O3\\")")\n', "pragma"),
     ("Source/Conv/a.c", "void g(void) { DWT->CYCCNT = 0; }\n", "measurement_access"),
+    ("Source/Conv/a.c", "volatile int *c = (volatile int *)0xE0001004UL;\n", "measurement_access"),
+    ("Source/Conv/a.c", "volatile int *c = (volatile int *)3758100484u;\n", "measurement_access"),
+    ("Source/Conv/a.c", '#define P _Pra##gma("GCC optimize(\\"O3\\")")\n', "pragma"),
+    ("Source/Conv/a.c", '#define A __attri ## bute__((optimize("O3")))\n', "attribute"),
+    ("Source/Conv/a.c", '__attribute ( (section(".s")) ) int a;\n', "attribute"),
+    ("Source/Conv/a.c", '#line 1 "/usr/include/x.h"\n', "build_probe"),
+    ("Source/Conv/a.c", '# 1 "<x>"\n', "build_probe"),
+    ("Source/Conv/a.c", "#ifdef __OPTIMIZE__\n", "build_probe"),
+    ("Source/Conv/a.c", '#if __has_include("am_bsp.h")\n', "build_probe"),
     ("Source/Conv/a.c", "#include KERNEL_PATH\n", "include_escape"),
     ("Source/Conv/a.c", '%:include "../../Tests/t.c"\n', "include_escape"),
     ("Source/Conv/a.c", '%:pragma GCC optimize("O3")\n', "pragma"),
